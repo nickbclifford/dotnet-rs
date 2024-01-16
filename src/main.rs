@@ -1,3 +1,6 @@
+mod vm;
+mod value;
+
 use dotnetdll::prelude::*;
 use std::{env::args, fs::File, io::prelude::*};
 
@@ -14,5 +17,14 @@ fn main() {
         .expect("failed to read input file");
     let resolution = Resolution::parse(&input_buf, ReadOptions::default())
         .expect("failed to parse input file as .NET metadata");
+
+    let entry_method = match resolution.entry_point {
+        Some(EntryPoint::Method(m)) => m,
+        Some(EntryPoint::File(f)) => todo!("find entry point in file {}", resolution[f].name),
+        None => panic!("expected input module to have an entry point, received one without")
+    };
+
+    // https://craftinginterpreters.com/a-bytecode-virtual-machine.html
+
     println!("{:#?}", resolution)
 }
