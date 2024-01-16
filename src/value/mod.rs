@@ -1,9 +1,10 @@
-// TODO
-pub enum Value {
+pub enum StackValue {
     Int32(i32),
     Int64(i64),
     NativeInt(isize),
-    F(f64),
-    O() // TODO: reference representation
-
+    NativeFloat(f64),
+    ObjectRef(), // TODO
+    UnmanagedPtr(usize),
+    ManagedPtr() // TODO
 }
+
