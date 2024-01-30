@@ -22,6 +22,35 @@ pub struct MethodInfo {
 pub type ExecutionResult = Result<StackValue, StackValue>;
 
 macro_rules! binary_arith_op {
+    ($self:ident, $method:ident, { $($pat:pat => $arm:expr, )* }) => {
+        match ($self.pop(), $self.pop()) {
+            (StackValue::Int32(i1), StackValue::Int32(i2)) => {
+                $self.stack.push(StackValue::Int32(i1.$method(i2)))
+            }
+            (StackValue::Int32(i1), StackValue::NativeInt(i2)) => {
+                $self.stack.push(StackValue::NativeInt((i1 as isize).$method(i2)))
+            }
+            (StackValue::Int64(i1), StackValue::Int64(i2)) => {
+                $self.stack.push(StackValue::Int64(i1.$method(i2)))
+            }
+            (StackValue::NativeInt(i1), StackValue::Int32(i2)) => {
+                $self.stack.push(StackValue::NativeInt(i1.$method(i2 as isize)))
+            }
+            (StackValue::NativeInt(i1), StackValue::NativeInt(i2)) => {
+                $self.stack.push(StackValue::NativeInt(i1.$method(i2)))
+            }
+            (StackValue::NativeFloat(f1), StackValue::NativeFloat(f2)) => {
+                $self.stack.push(StackValue::NativeFloat(f1.$method(i2)))
+            }
+            $($pat => $arm,)*
+            (v1, v2) => todo!(
+                "invalid types on stack ({:?}, {:?}) for {} operation",
+                v1,
+                v2,
+                stringify!($method)
+            ),
+        }
+    };
     ($self:ident, $op:tt, { $($pat:pat => $arm:expr, )* }) => {
         match ($self.pop(), $self.pop()) {
             (StackValue::Int32(i1), StackValue::Int32(i2)) => {
@@ -48,6 +77,64 @@ macro_rules! binary_arith_op {
                 v1,
                 v2,
                 stringify!($op)
+            ),
+        }
+    };
+}
+macro_rules! binary_checked_op {
+    ($self:ident, $sign:expr, $method:ident, { $($pat:pat => $arm:expr, )* }) => {
+        match ($self.pop(), $self.pop(), $sign) {
+            (StackValue::Int32(i1), StackValue::Int32(i2), NumberSign::Signed) => {
+                let Some(val) = i1.$method(i2) else todo!("OverflowException in {}", stringify!($method));
+                $self.stack.push(StackValue::Int32(val))
+            }
+            (StackValue::Int32(i1), StackValue::NativeInt(i2), NumberSign::Signed) => {
+                let Some(val) = (i1 as isize).$method(i2) else todo!("OverflowException in {}", stringify!($method));
+                $self.stack.push(StackValue::NativeInt(val))
+            }
+            (StackValue::Int64(i1), StackValue::Int64(i2), NumberSign::Signed) => {
+                let Some(val) = i1.$method(i2) else todo!("OverflowException in {}", stringify!($method));
+                $self.stack.push(StackValue::Int64(val));
+            }
+            (StackValue::NativeInt(i1), StackValue::Int32(i2), NumberSign::Signed) => {
+                let Some(val) = i1.$method(i2 as isize) else todo!("OverflowException in {}", stringify!($method));
+                $self.stack.push(StackValue::NativeInt(val));
+            }
+            (StackValue::NativeInt(i1), StackValue::NativeInt(i2), NumberSign::Signed) => {
+                let Some(val) = i1.$method(i2) else todo!("OverflowException in {}", stringify!($method));
+                $self.stack.push(StackValue::NativeInt(val));
+            }
+            (StackValue::NativeFloat(f1), StackValue::NativeFloat(f2), NumberSign::Signed) => {
+                let Some(val) = f1.$method(f2) else todo!("OverflowException in {}", stringify!($method));
+                $self.stack.push(StackValue::NativeFloat(val));
+            }
+            (StackValue::Int32(i1), StackValue::Int32(i2), NumberSign::Unsigned) => {
+                let Some(val) = (i1 as u32).$method(i2 as u32) else todo!("OverflowException in {}", stringify!($method));
+                $self.stack.push(StackValue::Int32(val as i32))
+            }
+            (StackValue::Int32(i1), StackValue::NativeInt(i2), NumberSign::Unsigned) => {
+                let Some(val) = (i1 as usize).$method(i2 as usize) else todo!("OverflowException in {}", stringify!($method));
+                $self.stack.push(StackValue::NativeInt(val as isize))
+            }
+            (StackValue::Int64(i1), StackValue::Int64(i2), NumberSign::Unsigned) => {
+                let Some(val) = (i1 as u64).$method(i2 as u64) else todo!("OverflowException in {}", stringify!($method));
+                $self.stack.push(StackValue::Int64(val as i64));
+            }
+            (StackValue::NativeInt(i1), StackValue::Int32(i2), NumberSign::Unsigned) => {
+                let Some(val) = i1.$method(i2 as isize) else todo!("OverflowException in {}", stringify!($method));
+                $self.stack.push(StackValue::NativeInt(val as isize));
+            }
+            (StackValue::NativeInt(i1), StackValue::NativeInt(i2), NumberSign::Unsigned) => {
+                let Some(val) = i1.$method(i2) else todo!("OverflowException in {}", stringify!($method));
+                $self.stack.push(StackValue::NativeInt(val as isize));
+            }
+            $($pat => $arm,)*
+            (v1, v2) => todo!(
+                "invalid types on stack ({:?}, {:?}) for {} {:?} operation",
+                v1,
+                v2,
+                stringify!($method),
+                $sign
             ),
         }
     };
@@ -104,6 +191,66 @@ macro_rules! binary_int_op {
         }
     };
 }
+
+macro_rules! shift_op {
+    ($self:ident, $op:tt) => {
+        match ($self.pop(), $self.pop()) {
+            (StackValue::Int32(i1), StackValue::Int32(i2)) => {
+                $self.stack.push(StackValue::Int32(i1 $op i2))
+            }
+            (StackValue::Int32(i1), StackValue::NativeInt(i2)) => {
+                $self.stack.push(StackValue::Int32(i1 $op i2))
+            }
+            (StackValue::Int64(i1), StackValue::Int32(i2)) => {
+                $self.stack.push(StackValue::Int64(i1 $op i2))
+            }
+            (StackValue::Int64(i1), StackValue::NativeInt(i2)) => {
+                $self.stack.push(StackValue::Int64(i1 $op i2))
+            }
+            (StackValue::NativeInt(i1), StackValue::Int32(i2)) => {
+                $self.stack.push(StackValue::NativeInt(i1 $op i2))
+            }
+            (StackValue::NativeInt(i1), StackValue::NativeInt(i2)) => {
+                $self.stack.push(StackValue::NativeInt(i1 $op i2))
+            }
+            (v1, v2) => todo!(
+                "invalid types on stack ({:?}, {:?}) for {} operation",
+                v1,
+                v2,
+                stringify!($op)
+            ),
+        }
+    };
+    ($self:ident, $op:tt as unsigned) => {
+       match ($self.pop(), $self.pop()) {
+            (StackValue::Int32(i1), StackValue::Int32(i2)) => {
+                $self.stack.push(StackValue::Int32(((i1 as u32) $op (i2 as u32)) as i32))
+            }
+            (StackValue::Int32(i1), StackValue::NativeInt(i2)) => {
+                $self.stack.push(StackValue::Int32(((i1 as u32) $op (i2 as u32)) as i32))
+            }
+            (StackValue::Int64(i1), StackValue::Int32(i2)) => {
+                $self.stack.push(StackValue::Int64(((i1 as u64) $op (i2 as u64)) as i64))
+            }
+            (StackValue::Int64(i1), StackValue::NativeInt(i2)) => {
+                $self.stack.push(StackValue::Int64(((i1 as u64) $op (i2 as u64)) as i64))
+            }
+            (StackValue::NativeInt(i1), StackValue::Int32(i2)) => {
+                $self.stack.push(StackValue::NativeInt(((i1 as usize) $op (i2 as usize)) as isize))
+            }
+            (StackValue::NativeInt(i1), StackValue::NativeInt(i2)) => {
+                $self.stack.push(StackValue::NativeInt(((i1 as usize) $op (i2 as usize)) as isize))
+            }
+            (v1, v2) => todo!(
+                "invalid types on stack ({:?}, {:?}) for {} operation",
+                v1,
+                v2,
+                stringify!($op)
+            ),
+        }
+    };
+}
+
 impl MethodState {
     fn pop(&mut self) -> StackValue {
         match self.stack.pop() {
@@ -115,7 +262,7 @@ impl MethodState {
     fn execute(&mut self, i: &Instruction) -> Option<ExecutionResult> {
         use Instruction::*;
         match i {
-            Add => binary_arith_op!(self, +, {
+            Add => binary_arith_op!(self, wrapping_add, {
                 (StackValue::Int32(i), StackValue::ManagedPtr(p)) => {
                     // TODO: proper mechanisms for safety and pointer arithmetic
                     unsafe {
@@ -134,7 +281,9 @@ impl MethodState {
                     self.stack.push(StackValue::ManagedPtr(p.offset(i)))
                 },
             }),
-            AddOverflow(_) => todo!("add with overflow"),
+            AddOverflow(sgn) => binary_checked_op!(self, sgn, checked_add, {
+                // TODO: pointer stuff
+            }),
             And => binary_int_op!(self, &),
             ArgumentList => {}
             BranchEqual(_) => {}
@@ -154,7 +303,15 @@ impl MethodState {
             CallIndirect { .. } => {}
             CompareEqual => {}
             CompareGreater(_) => {}
-            CheckFinite => {}
+            CheckFinite => match self.pop() {
+                StackValue::NativeFloat(f) => {
+                    if f.is_infinite() || f.is_nan() {
+                        return Some(Err(todo!("ArithmeticException in ckfinite")));
+                    }
+                    self.stack.push(StackValue::NativeFloat(f))
+                }
+                v => todo!("invalid type on stack ({:?}) for ckfinite operation", v),
+            },
             CompareLess(_) => {}
             Convert(_) => {}
             ConvertOverflow(_, _) => {}
@@ -193,9 +350,23 @@ impl MethodState {
             LoadLocalAddress(_) => {}
             LoadNull => self.stack.push(StackValue::ObjectRef(None)),
             Leave(_) => {}
-            LocalMemoryAllocate => {}
-            Multiply => binary_arith_op!(self, *, { }),
-            MultiplyOverflow(_) => {}
+            LocalMemoryAllocate => {
+                let size = match self.pop() {
+                    StackValue::Int32(i) => i as usize,
+                    StackValue::NativeInt(i) => i as usize,
+                    v => todo!(
+                        "invalid type on stack ({:?}) for local memory allocation size",
+                        v
+                    ),
+                };
+                let loc = self.memory_pool.len();
+                self.memory_pool.extend(vec![0; size]);
+                self.stack.push(StackValue::UnmanagedPtr(
+                    self.memory_pool[loc..].as_mut_ptr(),
+                ))
+            }
+            Multiply => binary_arith_op!(self, wrapping_mul, {}),
+            MultiplyOverflow(sgn) => binary_checked_op!(self, sgn, checked_mul, {}),
             Negate => match self.pop() {
                 StackValue::Int32(i) => self.stack.push(StackValue::Int32(-i)),
                 StackValue::Int64(i) => self.stack.push(StackValue::Int64(-i)),
@@ -218,13 +389,28 @@ impl MethodState {
                 NumberSign::Signed => binary_arith_op!(self, %, { }),
                 NumberSign::Unsigned => binary_int_op!(self, % as unsigned),
             },
-            Return => {}
-            ShiftLeft => {}
-            ShiftRight(_) => {}
-            StoreArgument(_) => {}
+            Return => return Some(Ok(self.pop())),
+            ShiftLeft => shift_op!(self, <<),
+            ShiftRight(sgn) => match sgn {
+                NumberSign::Signed => shift_op!(self, >>),
+                NumberSign::Unsigned => shift_op!(self, >> as unsigned),
+            },
+            StoreArgument(i) => {
+                let val = self.pop();
+                match self.arguments.get_mut(*i as usize) {
+                    Some(v) => *v = val,
+                    None => todo!("invalid argument index to store into"),
+                }
+            }
             StoreIndirect { .. } => {}
-            StoreLocal(_) => {}
-            Subtract => binary_arith_op!(self, -, {
+            StoreLocal(i) => {
+                let val = self.pop();
+                match self.locals.get_mut(*i as usize) {
+                    Some(v) => *v = val,
+                    None => todo!("invalid local variable index to store into"),
+                }
+            }
+            Subtract => binary_arith_op!(self, wrapping_sub, {
                 (StackValue::ManagedPtr(p), StackValue::Int32(i)) => unsafe {
                     self.stack
                         .push(StackValue::ManagedPtr(p.offset(-i as isize)))
@@ -236,7 +422,9 @@ impl MethodState {
                     self.stack.push(StackValue::NativeInt((p1 as isize) - (p2 as isize)))
                 },
             }),
-            SubtractOverflow(_) => todo!("subtract with overflow"),
+            SubtractOverflow(sgn) => binary_checked_op!(self, sgn, checked_sub, {
+                // TODO: pointer stuff
+            }),
             Switch(_) => {}
             Xor => binary_int_op!(self, ^),
             BoxValue(_) => {}

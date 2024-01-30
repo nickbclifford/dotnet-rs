@@ -5,7 +5,7 @@ pub enum StackValue {
     NativeInt(isize),
     NativeFloat(f64),
     ObjectRef(ObjectRef),
-    UnmanagedPtr(usize),
+    UnmanagedPtr(*mut u8),
     ManagedPtr(*mut u8) // TODO
 }
 
