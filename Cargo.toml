@@ -7,3 +7,4 @@ edition = "2021"
 
 [dependencies]
 dotnetdll = "0.0.2"
+gc-arena = "0.5.0"
