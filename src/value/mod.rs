@@ -1,3 +1,5 @@
+mod layout;
+
 use dotnetdll::prelude::*;
 use gc_arena::{Gc, Collect, unsafe_empty_collect};
 
@@ -25,17 +27,19 @@ impl StackValue<'_> {
 
 // TODO: proper representations
 #[derive(Clone, Debug)]
+#[repr(transparent)]
 pub struct UnmanagedPtr(pub *mut u8);
 #[derive(Clone, Debug)]
+#[repr(transparent)]
 pub struct ManagedPtr(pub *mut u8);
 unsafe_empty_collect!(UnmanagedPtr);
 unsafe_empty_collect!(ManagedPtr);
 
-pub type ObjectRef<'gc> = Option<Gc<'gc, ObjectKind<'gc>>>;
+pub type ObjectRef<'gc> = Option<Gc<'gc, HeapObjectKind<'gc>>>;
 
 #[derive(Clone, Debug, Collect)]
 #[collect(no_drop)]
-pub enum ObjectKind<'gc> {
+pub enum HeapObjectKind<'gc> {
     Vec(Vector<'gc>),
     Obj(Object<'gc>)
 }
@@ -54,6 +58,6 @@ pub struct Object<'gc> {
 
 // the TypeDescription's data will longer than the garbage collector
 // thus it's fine to pun the lifetimes
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy)]
 pub struct TypeDescription<'data>(pub &'data TypeDefinition<'data>);
 unsafe_empty_collect!(TypeDescription<'_>);

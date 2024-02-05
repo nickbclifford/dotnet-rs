@@ -1,21 +1,26 @@
+mod executor;
+
 use super::value::*;
 use dotnetdll::prelude::*;
 
 // I.12.3.2
 
+#[derive(Clone, Debug)]
 pub struct MethodState<'gc> {
     ip: usize,
     stack: Vec<StackValue<'gc>>,
     locals: Vec<StackValue<'gc>>,
     arguments: Vec<StackValue<'gc>>,
-    info_handle: MethodInfo,
+    // this lifetime punning is okay, since all metadata will live as least as long as the GC
+    info_handle: MethodInfo<'gc>,
     memory_pool: Vec<u8>,
 }
 
-pub struct MethodInfo {
-    signature: ManagedMethod,
-    locals: Vec<LocalVariable>,
-    exceptions: Vec<body::Exception>,
+#[derive(Copy, Clone, Debug)]
+pub struct MethodInfo<'a> {
+    signature: &'a ManagedMethod,
+    locals: &'a [LocalVariable],
+    exceptions: &'a [body::Exception],
 }
 
 // TODO: well-typed exceptions
