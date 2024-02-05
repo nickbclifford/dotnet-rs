@@ -1,0 +1,5006 @@
+{
+  "System.Exception": [
+    {
+      "Internal": {
+        "name": "IsImmutableAgileException",
+        "signature": "static bool (System.Exception)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetMethodFromStackTrace",
+        "signature": "static System.IRuntimeMethodInfo (object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "PrepareForForeignExceptionRaise",
+        "signature": "static void ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetStackTracesDeepCopy",
+        "signature": "static void (System.Exception, ref byte[], ref object[])"
+      }
+    },
+    {
+      "Internal": {
+        "name": "SaveStackTracesFromDeepCopy",
+        "signature": "static void (System.Exception, byte[], object[])"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetExceptionCount",
+        "signature": "static uint ()"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetMessageFromNativeResources",
+        "signature": "static void (valuetype System.Exception/ExceptionMessageKind, valuetype System.Runtime.CompilerServices.StringHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "ExceptionNative_GetMessageFromNativeResources"
+      }
+    }
+  ],
+  "System.RuntimeType": [
+    {
+      "Internal": {
+        "name": "GetGUID",
+        "signature": "void (ref valuetype System.Guid)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "CanValueSpecialCast",
+        "signature": "static bool (System.RuntimeType, System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "AllocateValueType",
+        "signature": "static object (System.RuntimeType, object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_CreateEnum",
+        "signature": "static object (System.RuntimeType, long)"
+      }
+    }
+  ],
+  "System.MdUtf8String": [
+    {
+      "Native": {
+        "name": "<EqualsCaseInsensitive>g____PInvoke|0_0",
+        "signature": "static int (void*, void*, int)",
+        "source_dll": "QCall",
+        "source_name": "MdUtf8String_EqualsCaseInsensitive"
+      }
+    }
+  ],
+  "System.ValueType": [
+    {
+      "Internal": {
+        "name": "CanCompareBits",
+        "signature": "static bool (object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetHashCode",
+        "signature": "int ()"
+      }
+    }
+  ],
+  "System.RuntimeMethodHandle": [
+    {
+      "Internal": {
+        "name": "GetLoaderAllocator",
+        "signature": "static System.Reflection.LoaderAllocator (valuetype System.RuntimeMethodHandleInternal)"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetFunctionPointer",
+        "signature": "static nint (valuetype System.RuntimeMethodHandleInternal)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeMethodHandle_GetFunctionPointer"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetIsCollectible",
+        "signature": "static valuetype Interop/BOOL (valuetype System.RuntimeMethodHandleInternal)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeMethodHandle_GetIsCollectible"
+      }
+    },
+    {
+      "Native": {
+        "name": "IsCAVisibleFromDecoratedType",
+        "signature": "static valuetype Interop/BOOL (valuetype System.Runtime.CompilerServices.QCallTypeHandle, valuetype System.RuntimeMethodHandleInternal, valuetype System.Runtime.CompilerServices.QCallTypeHandle, valuetype System.Runtime.CompilerServices.QCallModule)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeMethodHandle_IsCAVisibleFromDecoratedType"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetCurrentMethod",
+        "signature": "static System.IRuntimeMethodInfo (ref valuetype System.Threading.StackCrawlMark)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetAttributes",
+        "signature": "static valuetype System.Reflection.MethodAttributes (valuetype System.RuntimeMethodHandleInternal)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetImplAttributes",
+        "signature": "static valuetype System.Reflection.MethodImplAttributes (System.IRuntimeMethodInfo)"
+      }
+    },
+    {
+      "Native": {
+        "name": "ConstructInstantiation",
+        "signature": "static void (valuetype System.RuntimeMethodHandleInternal, valuetype System.TypeNameFormatFlags, valuetype System.Runtime.CompilerServices.StringHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeMethodHandle_ConstructInstantiation"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetDeclaringType",
+        "signature": "static System.RuntimeType (valuetype System.RuntimeMethodHandleInternal)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetSlot",
+        "signature": "static int (valuetype System.RuntimeMethodHandleInternal)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetMethodDef",
+        "signature": "static int (System.IRuntimeMethodInfo)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetName",
+        "signature": "static string (valuetype System.RuntimeMethodHandleInternal)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetUtf8Name",
+        "signature": "static void* (valuetype System.RuntimeMethodHandleInternal)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "InvokeMethod",
+        "signature": "static object (object, void**, System.Signature, bool)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ReboxFromNullable",
+        "signature": "static object (object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ReboxToNullable",
+        "signature": "static object (object, System.RuntimeType)"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetMethodInstantiation",
+        "signature": "static void (valuetype System.RuntimeMethodHandleInternal, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack, valuetype Interop/BOOL)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeMethodHandle_GetMethodInstantiation"
+      }
+    },
+    {
+      "Internal": {
+        "name": "HasMethodInstantiation",
+        "signature": "static bool (valuetype System.RuntimeMethodHandleInternal)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetStubIfNeeded",
+        "signature": "static valuetype System.RuntimeMethodHandleInternal (valuetype System.RuntimeMethodHandleInternal, System.RuntimeType, System.RuntimeType[])"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetMethodFromCanonical",
+        "signature": "static valuetype System.RuntimeMethodHandleInternal (valuetype System.RuntimeMethodHandleInternal, System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "IsGenericMethodDefinition",
+        "signature": "static bool (valuetype System.RuntimeMethodHandleInternal)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "IsTypicalMethodDefinition",
+        "signature": "static bool (System.IRuntimeMethodInfo)"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetTypicalMethodDefinition",
+        "signature": "static void (valuetype System.RuntimeMethodHandleInternal, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeMethodHandle_GetTypicalMethodDefinition"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetGenericParameterCount",
+        "signature": "static int (valuetype System.RuntimeMethodHandleInternal)"
+      }
+    },
+    {
+      "Native": {
+        "name": "StripMethodInstantiation",
+        "signature": "static void (valuetype System.RuntimeMethodHandleInternal, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeMethodHandle_StripMethodInstantiation"
+      }
+    },
+    {
+      "Internal": {
+        "name": "IsDynamicMethod",
+        "signature": "static bool (valuetype System.RuntimeMethodHandleInternal)"
+      }
+    },
+    {
+      "Native": {
+        "name": "Destroy",
+        "signature": "static void (valuetype System.RuntimeMethodHandleInternal)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeMethodHandle_Destroy"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetResolver",
+        "signature": "static System.Resolver (valuetype System.RuntimeMethodHandleInternal)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetMethodBody",
+        "signature": "static System.Reflection.RuntimeMethodBody (System.IRuntimeMethodInfo, System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "IsConstructor",
+        "signature": "static bool (valuetype System.RuntimeMethodHandleInternal)"
+      }
+    }
+  ],
+  "System.Reflection.CustomAttributeEncodedArgument": [
+    {
+      "Internal": {
+        "name": "ParseAttributeArguments",
+        "signature": "static void (nint, int, ref valuetype System.Reflection.CustomAttributeCtorParameter[], ref valuetype System.Reflection.CustomAttributeNamedParameter[], System.Reflection.RuntimeAssembly)"
+      }
+    }
+  ],
+  "System.Runtime.InteropServices.GCHandle": [
+    {
+      "Internal": {
+        "name": "InternalAlloc",
+        "signature": "static nint (object, valuetype System.Runtime.InteropServices.GCHandleType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "InternalFree",
+        "signature": "static void (nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "InternalSet",
+        "signature": "static void (nint, object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "InternalCompareExchange",
+        "signature": "static object (nint, object, object)"
+      }
+    }
+  ],
+  "System.MathF": [
+    {
+      "Internal": {
+        "name": "Acos",
+        "signature": "static float (float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Acosh",
+        "signature": "static float (float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Asin",
+        "signature": "static float (float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Asinh",
+        "signature": "static float (float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Atan",
+        "signature": "static float (float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Atanh",
+        "signature": "static float (float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Atan2",
+        "signature": "static float (float, float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Cbrt",
+        "signature": "static float (float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Ceiling",
+        "signature": "static float (float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Cos",
+        "signature": "static float (float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Cosh",
+        "signature": "static float (float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Exp",
+        "signature": "static float (float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Floor",
+        "signature": "static float (float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "FusedMultiplyAdd",
+        "signature": "static float (float, float, float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Log",
+        "signature": "static float (float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Log2",
+        "signature": "static float (float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Log10",
+        "signature": "static float (float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Pow",
+        "signature": "static float (float, float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Sin",
+        "signature": "static float (float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Sinh",
+        "signature": "static float (float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Sqrt",
+        "signature": "static float (float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Tan",
+        "signature": "static float (float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Tanh",
+        "signature": "static float (float)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ModF",
+        "signature": "static float (float, float*)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "SinCos",
+        "signature": "static void (float, float*, float*)"
+      }
+    }
+  ],
+  "System.Threading.Monitor": [
+    {
+      "Internal": {
+        "name": "Enter",
+        "signature": "static void (object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ReliableEnter",
+        "signature": "static void (object, ref bool)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Exit",
+        "signature": "static void (object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ReliableEnterTimeout",
+        "signature": "static void (object, int, ref bool)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "IsEnteredNative",
+        "signature": "static bool (object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ObjWait",
+        "signature": "static bool (int, object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ObjPulse",
+        "signature": "static void (object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ObjPulseAll",
+        "signature": "static void (object)"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetLockContentionCount",
+        "signature": "static long ()",
+        "source_dll": "QCall",
+        "source_name": "ObjectNative_GetMonitorLockContentionCount"
+      }
+    }
+  ],
+  "ArrayInitializeCache": [
+    {
+      "Native": {
+        "name": "GetElementConstructorEntrypoint",
+        "signature": "static delegate*<ref byte, void> (valuetype System.Runtime.CompilerServices.QCallTypeHandle)",
+        "source_dll": "QCall",
+        "source_name": "Array_GetElementConstructorEntrypoint"
+      }
+    }
+  ],
+  "System.IO.FileLoadException": [
+    {
+      "Native": {
+        "name": "GetFileLoadExceptionMessage",
+        "signature": "static void (int, valuetype System.Runtime.CompilerServices.StringHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "GetFileLoadExceptionMessage"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetMessageForHR",
+        "signature": "static void (int, valuetype System.Runtime.CompilerServices.StringHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "FileLoadException_GetMessageForHR"
+      }
+    }
+  ],
+  "System.Threading.Thread": [
+    {
+      "Native": {
+        "name": "<InformThreadNameChange>g____PInvoke|26_0",
+        "signature": "static void (valuetype System.Threading.ThreadHandle, ushort*, int)",
+        "source_dll": "QCall",
+        "source_name": "ThreadNative_InformThreadNameChange"
+      }
+    },
+    {
+      "Native": {
+        "name": "StartInternal",
+        "signature": "static void (valuetype System.Threading.ThreadHandle, int, int, char*)",
+        "source_dll": "QCall",
+        "source_name": "ThreadNative_Start"
+      }
+    },
+    {
+      "Internal": {
+        "name": "InternalGetCurrentThread",
+        "signature": "static nint ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "SleepInternal",
+        "signature": "static void (int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "SpinWaitInternal",
+        "signature": "static void (int)"
+      }
+    },
+    {
+      "Native": {
+        "name": "YieldInternal",
+        "signature": "static valuetype Interop/BOOL ()",
+        "source_dll": "QCall",
+        "source_name": "ThreadNative_YieldThread"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetCurrentThreadNative",
+        "signature": "static System.Threading.Thread ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Initialize",
+        "signature": "void ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "InternalFinalize",
+        "signature": "void ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "IsBackgroundNative",
+        "signature": "bool ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "SetBackgroundNative",
+        "signature": "void (bool)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetPriorityNative",
+        "signature": "int ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "SetPriorityNative",
+        "signature": "void (int)"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetCurrentOSThreadId",
+        "signature": "static ulong ()",
+        "source_dll": "QCall",
+        "source_name": "ThreadNative_GetCurrentOSThreadId"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetThreadStateNative",
+        "signature": "int ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Interrupt",
+        "signature": "void ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Join",
+        "signature": "bool (int)"
+      }
+    }
+  ],
+  "System.Buffer": [
+    {
+      "Native": {
+        "name": "__ZeroMemory",
+        "signature": "static void (void*, nuint)",
+        "source_dll": "QCall",
+        "source_name": "Buffer_Clear"
+      }
+    },
+    {
+      "Native": {
+        "name": "__Memmove",
+        "signature": "static void (byte*, byte*, nuint)",
+        "source_dll": "QCall",
+        "source_name": "Buffer_MemMove"
+      }
+    },
+    {
+      "Internal": {
+        "name": "__BulkMoveWithWriteBarrier",
+        "signature": "static void (ref byte, ref byte, nuint)"
+      }
+    }
+  ],
+  "System.Threading.WaitHandle": [
+    {
+      "Internal": {
+        "name": "WaitOneCore",
+        "signature": "static int (nint, int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "WaitMultipleIgnoringSyncContext",
+        "signature": "static int (nint*, int, bool, int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "SignalAndWaitNative",
+        "signature": "static int (nint, nint, int)"
+      }
+    }
+  ],
+  "System.Runtime.CompilerServices.CastHelpers": [
+    {
+      "Internal": {
+        "name": "IsInstanceOfAny_NoCacheLookup",
+        "signature": "static object (void*, object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ChkCastAny_NoCacheLookup",
+        "signature": "static object (void*, object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Unbox_Helper",
+        "signature": "static ref byte (void*, object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "WriteBarrier",
+        "signature": "static void (ref object, object)"
+      }
+    }
+  ],
+  "System.TypedReference": [
+    {
+      "Internal": {
+        "name": "InternalMakeTypedReference",
+        "signature": "static void (void*, object, nint[], System.RuntimeType)"
+      }
+    }
+  ],
+  "System.Reflection.MetadataImport": [
+    {
+      "Internal": {
+        "name": "_GetMarshalAs",
+        "signature": "static void (nint, int, ref int, ref int, ref string, ref int, ref int, ref int, ref string, ref string, ref int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_Enum",
+        "signature": "static void (nint, int, int, ref valuetype System.Reflection.MetadataEnumResult)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetDefaultValue",
+        "signature": "static string (nint, int, ref long, ref int, ref int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetUserString",
+        "signature": "static void (nint, int, void**, ref int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetName",
+        "signature": "static void (nint, int, void**)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetNamespace",
+        "signature": "static void (nint, int, void**)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetEventProps",
+        "signature": "static void (nint, int, void**, ref int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetFieldDefProps",
+        "signature": "static void (nint, int, ref int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetPropertyProps",
+        "signature": "static void (nint, int, void**, ref int, ref valuetype System.Reflection.ConstArray)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetParentToken",
+        "signature": "static void (nint, int, ref int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetParamDefProps",
+        "signature": "static void (nint, int, ref int, ref int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetGenericParamProps",
+        "signature": "static void (nint, int, ref int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetScopeProps",
+        "signature": "static void (nint, ref valuetype System.Guid)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetSigOfMethodDef",
+        "signature": "static void (nint, int, ref valuetype System.Reflection.ConstArray)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetSignatureFromToken",
+        "signature": "static void (nint, int, ref valuetype System.Reflection.ConstArray)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetMemberRefProps",
+        "signature": "static void (nint, int, ref valuetype System.Reflection.ConstArray)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetCustomAttributeProps",
+        "signature": "static void (nint, int, ref int, ref valuetype System.Reflection.ConstArray)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetClassLayout",
+        "signature": "static void (nint, int, ref int, ref int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetFieldOffset",
+        "signature": "static bool (nint, int, int, ref int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetSigOfFieldDef",
+        "signature": "static void (nint, int, ref valuetype System.Reflection.ConstArray)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetFieldMarshal",
+        "signature": "static void (nint, int, ref valuetype System.Reflection.ConstArray)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetPInvokeMap",
+        "signature": "static void (nint, int, ref int, void**, void**)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_IsValidToken",
+        "signature": "static bool (nint, int)"
+      }
+    }
+  ],
+  "System.Reflection.Assembly": [
+    {
+      "Native": {
+        "name": "GetExecutingAssemblyNative",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.StackCrawlMarkHandle, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetExecutingAssembly"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetEntryAssemblyNative",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetEntryAssembly"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetAssemblyCount",
+        "signature": "static uint ()",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetAssemblyCount"
+      }
+    }
+  ],
+  "System.Type": [
+    {
+      "Internal": {
+        "name": "GetTypeFromHandleUnsafe",
+        "signature": "static System.RuntimeType (nint)"
+      }
+    }
+  ],
+  "System.StubHelpers.StubHelpers": [
+    {
+      "Internal": {
+        "name": "GetDelegateTarget",
+        "signature": "static nint (System.Delegate)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ClearLastError",
+        "signature": "static void ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "SetLastError",
+        "signature": "static void ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ThrowInteropParamException",
+        "signature": "static void (int, int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "InternalGetHRExceptionObject",
+        "signature": "static System.Exception (int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "CreateCustomMarshalerHelper",
+        "signature": "static nint (nint, int, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ProfilerBeginTransitionCallback",
+        "signature": "static nint (nint, nint, object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ProfilerEndTransitionCallback",
+        "signature": "static void (nint, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "FmtClassUpdateNativeInternal",
+        "signature": "static void (object, byte*, ref System.StubHelpers.CleanupWorkListElement)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "FmtClassUpdateCLRInternal",
+        "signature": "static void (object, byte*)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "LayoutDestroyNativeInternal",
+        "signature": "static void (object, byte*)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "AllocateInternal",
+        "signature": "static object (nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "MarshalToUnmanagedVaListInternal",
+        "signature": "static void (nint, uint, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "MarshalToManagedVaListInternal",
+        "signature": "static void (nint, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "CalcVaListSize",
+        "signature": "static uint (nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ValidateObject",
+        "signature": "static void (object, nint, object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "LogPinnedArgument",
+        "signature": "static void (nint, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ValidateByref",
+        "signature": "static void (nint, nint, object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetStubContext",
+        "signature": "static nint ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ArrayTypeCheck",
+        "signature": "static void (object, object[])"
+      }
+    },
+    {
+      "Internal": {
+        "name": "MulticastDebuggerTraceHelper",
+        "signature": "static void (object, int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "NextCallReturnAddress",
+        "signature": "static nint ()"
+      }
+    }
+  ],
+  "System.Threading.ThreadPool": [
+    {
+      "Internal": {
+        "name": "GetNextConfigUInt32Value",
+        "signature": "static int (int, ref uint, ref bool, ref char*)"
+      }
+    }
+  ],
+  "System.Runtime.GCFrameRegistration": [
+    {
+      "Internal": {
+        "name": "RegisterForGCReporting",
+        "signature": "static void (valuetype System.Runtime.GCFrameRegistration*)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "UnregisterForGCReporting",
+        "signature": "static void (valuetype System.Runtime.GCFrameRegistration*)"
+      }
+    }
+  ],
+  "System.Math": [
+    {
+      "Internal": {
+        "name": "Acos",
+        "signature": "static double (double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Acosh",
+        "signature": "static double (double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Asin",
+        "signature": "static double (double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Asinh",
+        "signature": "static double (double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Atan",
+        "signature": "static double (double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Atanh",
+        "signature": "static double (double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Atan2",
+        "signature": "static double (double, double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Cbrt",
+        "signature": "static double (double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Ceiling",
+        "signature": "static double (double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Cos",
+        "signature": "static double (double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Cosh",
+        "signature": "static double (double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Exp",
+        "signature": "static double (double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Floor",
+        "signature": "static double (double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "FusedMultiplyAdd",
+        "signature": "static double (double, double, double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Log",
+        "signature": "static double (double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Log2",
+        "signature": "static double (double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Log10",
+        "signature": "static double (double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Pow",
+        "signature": "static double (double, double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Sin",
+        "signature": "static double (double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Sinh",
+        "signature": "static double (double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Sqrt",
+        "signature": "static double (double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Tan",
+        "signature": "static double (double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Tanh",
+        "signature": "static double (double)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ModF",
+        "signature": "static double (double, double*)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "SinCos",
+        "signature": "static void (double, double*, double*)"
+      }
+    }
+  ],
+  "System.RuntimeTypeHandle": [
+    {
+      "Internal": {
+        "name": "IsInstanceOfType",
+        "signature": "static bool (System.RuntimeType, object)"
+      }
+    },
+    {
+      "Native": {
+        "name": "<_IsVisible>g____PInvoke|66_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallTypeHandle)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeTypeHandle_IsVisible"
+      }
+    },
+    {
+      "Native": {
+        "name": "CreateInstanceForAnotherGenericParameter",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallTypeHandle, nint*, int, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeTypeHandle_CreateInstanceForAnotherGenericParameter"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetActivationInfo",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.ObjectHandleOnStack, delegate*<void*, object>*, void**, delegate*<object, void>*, valuetype Interop/BOOL*)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeTypeHandle_GetActivationInfo"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetCorElementType",
+        "signature": "static valuetype System.Reflection.CorElementType (System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetAssembly",
+        "signature": "static System.Reflection.RuntimeAssembly (System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetModule",
+        "signature": "static System.Reflection.RuntimeModule (System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetBaseType",
+        "signature": "static System.RuntimeType (System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetAttributes",
+        "signature": "static valuetype System.Reflection.TypeAttributes (System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetElementType",
+        "signature": "static System.RuntimeType (System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "CompareCanonicalHandles",
+        "signature": "static bool (System.RuntimeType, System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetArrayRank",
+        "signature": "static int (System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetToken",
+        "signature": "static int (System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetMethodAt",
+        "signature": "static valuetype System.RuntimeMethodHandleInternal (System.RuntimeType, int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetArgumentTypesFromFunctionPointer",
+        "signature": "static System.Type[] (System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "IsUnmanagedFunctionPointer",
+        "signature": "static bool (System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetFirstIntroducedMethod",
+        "signature": "static valuetype System.RuntimeMethodHandleInternal (System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetNextIntroducedMethod",
+        "signature": "static void (ref valuetype System.RuntimeMethodHandleInternal)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetFields",
+        "signature": "static bool (System.RuntimeType, nint*, int*)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetInterfaces",
+        "signature": "static System.Type[] (System.RuntimeType)"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetConstraints",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallTypeHandle, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeTypeHandle_GetConstraints"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetGCHandle",
+        "signature": "static nint (valuetype System.Runtime.CompilerServices.QCallTypeHandle, valuetype System.Runtime.InteropServices.GCHandleType)",
+        "source_dll": "QCall",
+        "source_name": "QCall_GetGCHandleForTypeHandle"
+      }
+    },
+    {
+      "Native": {
+        "name": "FreeGCHandle",
+        "signature": "static nint (valuetype System.Runtime.CompilerServices.QCallTypeHandle, nint)",
+        "source_dll": "QCall",
+        "source_name": "QCall_FreeGCHandleForTypeHandle"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetNumVirtuals",
+        "signature": "static int (System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetNumVirtualsAndStaticVirtuals",
+        "signature": "static int (System.RuntimeType)"
+      }
+    },
+    {
+      "Native": {
+        "name": "VerifyInterfaceIsImplemented",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallTypeHandle, valuetype System.Runtime.CompilerServices.QCallTypeHandle)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeTypeHandle_VerifyInterfaceIsImplemented"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetInterfaceMethodImplementation",
+        "signature": "static valuetype System.RuntimeMethodHandleInternal (valuetype System.Runtime.CompilerServices.QCallTypeHandle, valuetype System.Runtime.CompilerServices.QCallTypeHandle, valuetype System.RuntimeMethodHandleInternal)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeTypeHandle_GetInterfaceMethodImplementation"
+      }
+    },
+    {
+      "Internal": {
+        "name": "IsInterface",
+        "signature": "static bool (System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "IsByRefLike",
+        "signature": "static bool (System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "IsValueType",
+        "signature": "static bool (System.RuntimeType)"
+      }
+    },
+    {
+      "Native": {
+        "name": "ConstructName",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallTypeHandle, valuetype System.TypeNameFormatFlags, valuetype System.Runtime.CompilerServices.StringHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeTypeHandle_ConstructName"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetUtf8Name",
+        "signature": "static void* (System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "CanCastTo",
+        "signature": "static bool (System.RuntimeType, System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetDeclaringType",
+        "signature": "static System.RuntimeType (System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetDeclaringMethod",
+        "signature": "static System.IRuntimeMethodInfo (System.RuntimeType)"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetInstantiation",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallTypeHandle, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack, valuetype Interop/BOOL)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeTypeHandle_GetInstantiation"
+      }
+    },
+    {
+      "Native": {
+        "name": "Instantiate",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallTypeHandle, nint*, int, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeTypeHandle_Instantiate"
+      }
+    },
+    {
+      "Native": {
+        "name": "MakeArray",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallTypeHandle, int, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeTypeHandle_MakeArray"
+      }
+    },
+    {
+      "Native": {
+        "name": "MakeSZArray",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallTypeHandle, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeTypeHandle_MakeSZArray"
+      }
+    },
+    {
+      "Native": {
+        "name": "MakeByRef",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallTypeHandle, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeTypeHandle_MakeByRef"
+      }
+    },
+    {
+      "Native": {
+        "name": "MakePointer",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallTypeHandle, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeTypeHandle_MakePointer"
+      }
+    },
+    {
+      "Native": {
+        "name": "IsCollectible",
+        "signature": "static valuetype Interop/BOOL (valuetype System.Runtime.CompilerServices.QCallTypeHandle)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeTypeHandle_IsCollectible"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetGenericTypeDefinition",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallTypeHandle, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeTypeHandle_GetGenericTypeDefinition"
+      }
+    },
+    {
+      "Internal": {
+        "name": "IsGenericVariable",
+        "signature": "static bool (System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetGenericVariableIndex",
+        "signature": "static int (System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ContainsGenericVariables",
+        "signature": "static bool (System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "SatisfiesConstraints",
+        "signature": "static bool (System.RuntimeType, nint*, int, nint*, int, System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetMetadataImport",
+        "signature": "static nint (System.RuntimeType)"
+      }
+    },
+    {
+      "Native": {
+        "name": "RegisterCollectibleTypeDependency",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallTypeHandle, valuetype System.Runtime.CompilerServices.QCallAssembly)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeTypeHandle_RegisterCollectibleTypeDependency"
+      }
+    },
+    {
+      "Internal": {
+        "name": "IsEquivalentTo",
+        "signature": "static bool (System.RuntimeType, System.RuntimeType)"
+      }
+    }
+  ],
+  "System.Reflection.Emit.RuntimeAssemblyBuilder": [
+    {
+      "Native": {
+        "name": "CreateDynamicAssembly",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.ObjectHandleOnStack, valuetype System.Reflection.NativeAssemblyNameParts*, valuetype System.Configuration.Assemblies.AssemblyHashAlgorithm, valuetype System.Reflection.Emit.AssemblyBuilderAccess, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AppDomain_CreateDynamicAssembly"
+      }
+    }
+  ],
+  "System.Runtime.InteropServices.Marshal": [
+    {
+      "Internal": {
+        "name": "SizeOfHelper",
+        "signature": "static int (System.Type, bool)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "OffsetOfHelper",
+        "signature": "static nint (System.IRuntimeFieldInfo)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetLastPInvokeError",
+        "signature": "static int ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "SetLastPInvokeError",
+        "signature": "static void (int)"
+      }
+    },
+    {
+      "Native": {
+        "name": "InternalPrelink",
+        "signature": "static void (valuetype System.RuntimeMethodHandleInternal)",
+        "source_dll": "QCall",
+        "source_name": "MarshalNative_Prelink"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetExceptionPointers",
+        "signature": "static nint ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetExceptionCode",
+        "signature": "static int ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "StructureToPtr",
+        "signature": "static void (object, nint, bool)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "PtrToStructureHelper",
+        "signature": "static void (nint, object, bool)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "DestroyStructure",
+        "signature": "static void (nint, System.Type)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetExceptionForHRInternal",
+        "signature": "static System.Exception (int, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetDelegateForFunctionPointerInternal",
+        "signature": "static System.Delegate (nint, System.Type)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetFunctionPointerForDelegateInternal",
+        "signature": "static nint (System.Delegate)"
+      }
+    }
+  ],
+  "System.Runtime.JitInfo": [
+    {
+      "Internal": {
+        "name": "GetCompiledILBytes",
+        "signature": "static long (bool)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetCompiledMethodCount",
+        "signature": "static long (bool)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetCompilationTimeInTicks",
+        "signature": "static long (bool)"
+      }
+    }
+  ],
+  "System.Enum": [
+    {
+      "Native": {
+        "name": "GetEnumValuesAndNames",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallTypeHandle, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack, valuetype Interop/BOOL)",
+        "source_dll": "QCall",
+        "source_name": "Enum_GetValuesAndNames"
+      }
+    },
+    {
+      "Internal": {
+        "name": "InternalBoxEnum",
+        "signature": "static object (System.RuntimeType, long)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "InternalGetCorElementType",
+        "signature": "static valuetype System.Reflection.CorElementType (valuetype System.Runtime.CompilerServices.MethodTable*)"
+      }
+    }
+  ],
+  "System.Threading.LowLevelLifoSemaphore": [
+    {
+      "Native": {
+        "name": "<WaitNative>g____PInvoke|3_0",
+        "signature": "static int (nint, int)",
+        "source_dll": "QCall",
+        "source_name": "WaitHandle_CorWaitOnePrioritizedNative"
+      }
+    }
+  ],
+  "System.Diagnostics.Tracing.EventPipeInternal": [
+    {
+      "Native": {
+        "name": "Enable",
+        "signature": "static ulong (char*, valuetype System.Diagnostics.Tracing.EventPipeSerializationFormat, uint, valuetype System.Diagnostics.Tracing.EventPipeInternal/EventPipeProviderConfigurationNative*, uint)",
+        "source_dll": "QCall",
+        "source_name": "EventPipeInternal_Enable"
+      }
+    },
+    {
+      "Native": {
+        "name": "Disable",
+        "signature": "static void (ulong)",
+        "source_dll": "QCall",
+        "source_name": "EventPipeInternal_Disable"
+      }
+    },
+    {
+      "Native": {
+        "name": "DefineEvent",
+        "signature": "static nint (nint, uint, long, uint, uint, void*, uint)",
+        "source_dll": "QCall",
+        "source_name": "EventPipeInternal_DefineEvent"
+      }
+    },
+    {
+      "Native": {
+        "name": "DeleteProvider",
+        "signature": "static void (nint)",
+        "source_dll": "QCall",
+        "source_name": "EventPipeInternal_DeleteProvider"
+      }
+    },
+    {
+      "Native": {
+        "name": "WriteEventData",
+        "signature": "static void (nint, valuetype System.Diagnostics.Tracing.EventProvider/EventData*, uint, valuetype System.Guid*, valuetype System.Guid*)",
+        "source_dll": "QCall",
+        "source_name": "EventPipeInternal_WriteEventData"
+      }
+    },
+    {
+      "Native": {
+        "name": "<CreateProvider>g____PInvoke|2_0",
+        "signature": "static nint (ushort*, delegate* unmanaged<byte*, int, byte, long, long, valuetype Advapi32/EVENT_FILTER_DESCRIPTOR*, void*, void>, void*)",
+        "source_dll": "QCall",
+        "source_name": "EventPipeInternal_CreateProvider"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetProvider>g____PInvoke|4_0",
+        "signature": "static nint (ushort*)",
+        "source_dll": "QCall",
+        "source_name": "EventPipeInternal_GetProvider"
+      }
+    },
+    {
+      "Native": {
+        "name": "<EventActivityIdControl>g____PInvoke|6_0",
+        "signature": "static int (uint, valuetype System.Guid*)",
+        "source_dll": "QCall",
+        "source_name": "EventPipeInternal_EventActivityIdControl"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetSessionInfo>g____PInvoke|8_0",
+        "signature": "static int (ulong, valuetype System.Diagnostics.Tracing.EventPipeSessionInfo*)",
+        "source_dll": "QCall",
+        "source_name": "EventPipeInternal_GetSessionInfo"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetNextEvent>g____PInvoke|9_0",
+        "signature": "static int (ulong, valuetype System.Diagnostics.Tracing.EventPipeEventInstanceData*)",
+        "source_dll": "QCall",
+        "source_name": "EventPipeInternal_GetNextEvent"
+      }
+    },
+    {
+      "Native": {
+        "name": "<SignalSession>g____PInvoke|10_0",
+        "signature": "static int (ulong)",
+        "source_dll": "QCall",
+        "source_name": "EventPipeInternal_SignalSession"
+      }
+    },
+    {
+      "Native": {
+        "name": "<WaitForSessionSignal>g____PInvoke|11_0",
+        "signature": "static int (ulong, int)",
+        "source_dll": "QCall",
+        "source_name": "EventPipeInternal_WaitForSessionSignal"
+      }
+    }
+  ],
+  "Sys": [
+    {
+      "Native": {
+        "name": "ConvertErrorPlatformToPal",
+        "signature": "static valuetype Interop/Error (int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_ConvertErrorPlatformToPal"
+      }
+    },
+    {
+      "Native": {
+        "name": "ConvertErrorPalToPlatform",
+        "signature": "static int (valuetype Interop/Error)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_ConvertErrorPalToPlatform"
+      }
+    },
+    {
+      "Native": {
+        "name": "StrErrorR",
+        "signature": "static byte* (int, byte*, int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_StrErrorR"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetErrNo",
+        "signature": "static int ()",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetErrNo"
+      }
+    },
+    {
+      "Native": {
+        "name": "SetErrNo",
+        "signature": "static void (int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_SetErrNo"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetOSArchitecture",
+        "signature": "static int ()",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetOSArchitecture"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetNonCryptographicallySecureRandomBytes",
+        "signature": "static void (byte*, int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetNonCryptographicallySecureRandomBytes"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetCryptographicallySecureRandomBytes",
+        "signature": "static int (byte*, int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetCryptographicallySecureRandomBytes"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetSystemTimeAsTicks",
+        "signature": "static long ()",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetSystemTimeAsTicks"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetTimestamp",
+        "signature": "static ulong ()",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetTimestamp"
+      }
+    },
+    {
+      "Native": {
+        "name": "LChflagsCanSetHiddenFlag",
+        "signature": "static int ()",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_LChflagsCanSetHiddenFlag"
+      }
+    },
+    {
+      "Native": {
+        "name": "CanGetHiddenFlag",
+        "signature": "static int ()",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_CanGetHiddenFlag"
+      }
+    },
+    {
+      "Native": {
+        "name": "Log",
+        "signature": "static void (byte*, int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_Log"
+      }
+    },
+    {
+      "Native": {
+        "name": "LogError",
+        "signature": "static void (byte*, int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_LogError"
+      }
+    },
+    {
+      "Native": {
+        "name": "LowLevelMonitor_Create",
+        "signature": "static nint ()",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_LowLevelMonitor_Create"
+      }
+    },
+    {
+      "Native": {
+        "name": "LowLevelMonitor_Destroy",
+        "signature": "static void (nint)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_LowLevelMonitor_Destroy"
+      }
+    },
+    {
+      "Native": {
+        "name": "LowLevelMonitor_Acquire",
+        "signature": "static void (nint)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_LowLevelMonitor_Acquire"
+      }
+    },
+    {
+      "Native": {
+        "name": "LowLevelMonitor_Release",
+        "signature": "static void (nint)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_LowLevelMonitor_Release"
+      }
+    },
+    {
+      "Native": {
+        "name": "LowLevelMonitor_Wait",
+        "signature": "static void (nint)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_LowLevelMonitor_Wait"
+      }
+    },
+    {
+      "Native": {
+        "name": "LowLevelMonitor_Signal_Release",
+        "signature": "static void (nint)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_LowLevelMonitor_Signal_Release"
+      }
+    },
+    {
+      "Native": {
+        "name": "AlignedAlloc",
+        "signature": "static void* (nuint, nuint)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_AlignedAlloc"
+      }
+    },
+    {
+      "Native": {
+        "name": "AlignedFree",
+        "signature": "static void (void*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_AlignedFree"
+      }
+    },
+    {
+      "Native": {
+        "name": "AlignedRealloc",
+        "signature": "static void* (void*, nuint, nuint)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_AlignedRealloc"
+      }
+    },
+    {
+      "Native": {
+        "name": "Calloc",
+        "signature": "static void* (nuint, nuint)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_Calloc"
+      }
+    },
+    {
+      "Native": {
+        "name": "Free",
+        "signature": "static void (void*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_Free"
+      }
+    },
+    {
+      "Native": {
+        "name": "Malloc",
+        "signature": "static void* (nuint)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_Malloc"
+      }
+    },
+    {
+      "Native": {
+        "name": "Realloc",
+        "signature": "static void* (void*, nuint)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_Realloc"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetAllMountPoints",
+        "signature": "static int (delegate* unmanaged<void*, byte*, void>, void*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetAllMountPoints"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetReadDirRBufferSize",
+        "signature": "static int ()",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetReadDirRBufferSize"
+      }
+    },
+    {
+      "Native": {
+        "name": "ReadDirR",
+        "signature": "static int (nint, byte*, int, valuetype Sys/DirectoryEntry*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_ReadDirR"
+      }
+    },
+    {
+      "Native": {
+        "name": "SchedGetCpu",
+        "signature": "static int ()",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_SchedGetCpu"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetEUid",
+        "signature": "static uint ()",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetEUid"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetEGid",
+        "signature": "static uint ()",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetEGid"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetPid",
+        "signature": "static int ()",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetPid"
+      }
+    },
+    {
+      "Native": {
+        "name": "SetPosixSignalHandler",
+        "signature": "static void (delegate* unmanaged<int, valuetype System.Runtime.InteropServices.PosixSignal, int>)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_SetPosixSignalHandler"
+      }
+    },
+    {
+      "Native": {
+        "name": "DisablePosixSignalHandling",
+        "signature": "static void (int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_DisablePosixSignalHandling"
+      }
+    },
+    {
+      "Native": {
+        "name": "HandleNonCanceledPosixSignal",
+        "signature": "static void (int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_HandleNonCanceledPosixSignal"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetPlatformSignalNumber",
+        "signature": "static int (valuetype System.Runtime.InteropServices.PosixSignal)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetPlatformSignalNumber"
+      }
+    },
+    {
+      "Native": {
+        "name": "<Access>g____PInvoke|7_0",
+        "signature": "static int (byte*, valuetype Sys/AccessMode)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_Access"
+      }
+    },
+    {
+      "Native": {
+        "name": "<ChDir>g____PInvoke|8_0",
+        "signature": "static int (byte*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_ChDir"
+      }
+    },
+    {
+      "Native": {
+        "name": "<ChMod>g____PInvoke|9_0",
+        "signature": "static int (byte*, int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_ChMod"
+      }
+    },
+    {
+      "Native": {
+        "name": "<FChMod>g____PInvoke|10_0",
+        "signature": "static int (nint, int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_FChMod"
+      }
+    },
+    {
+      "Native": {
+        "name": "<Close>g____PInvoke|11_0",
+        "signature": "static int (nint)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_Close"
+      }
+    },
+    {
+      "Native": {
+        "name": "<CopyFile>g____PInvoke|12_0",
+        "signature": "static int (nint, nint, long)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_CopyFile"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetDefaultSearchOrderPseudoHandle>g____PInvoke|18_0",
+        "signature": "static nint ()",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetDefaultSearchOrderPseudoHandle"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetFileSystemType>g____PInvoke|22_0",
+        "signature": "static uint (nint)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetFileSystemType"
+      }
+    },
+    {
+      "Native": {
+        "name": "<FLock>g____PInvoke|25_0",
+        "signature": "static int (nint, valuetype Sys/LockOperations)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_FLock"
+      }
+    },
+    {
+      "Native": {
+        "name": "<FLock>g____PInvoke|26_0",
+        "signature": "static int (nint, valuetype Sys/LockOperations)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_FLock"
+      }
+    },
+    {
+      "Native": {
+        "name": "<FSync>g____PInvoke|27_0",
+        "signature": "static int (nint)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_FSync"
+      }
+    },
+    {
+      "Native": {
+        "name": "<FTruncate>g____PInvoke|28_0",
+        "signature": "static int (nint, long)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_FTruncate"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetCpuUtilization>g____PInvoke|30_0",
+        "signature": "static double (valuetype Sys/ProcessCpuInformation*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetCpuUtilization"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetCwd>g____PInvoke|31_0",
+        "signature": "static byte* (byte*, int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetCwd"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetHostName>g____PInvoke|37_0",
+        "signature": "static int (byte*, int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetHostName"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetProcessPath>g____PInvoke|40_0",
+        "signature": "static byte* ()",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetProcessPath"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetUnixVersion>g____PInvoke|45_0",
+        "signature": "static int (byte*, int*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetUnixVersion"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetUnixRelease>g____PInvoke|47_0",
+        "signature": "static byte* ()",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetUnixRelease"
+      }
+    },
+    {
+      "Native": {
+        "name": "<LChflags>g____PInvoke|50_0",
+        "signature": "static int (byte*, uint)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_LChflags"
+      }
+    },
+    {
+      "Native": {
+        "name": "<FChflags>g____PInvoke|51_0",
+        "signature": "static int (nint, uint)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_FChflags"
+      }
+    },
+    {
+      "Native": {
+        "name": "<Link>g____PInvoke|56_0",
+        "signature": "static int (byte*, byte*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_Link"
+      }
+    },
+    {
+      "Native": {
+        "name": "<LockFileRegion>g____PInvoke|58_0",
+        "signature": "static int (nint, long, long, valuetype Sys/LockType)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_LockFileRegion"
+      }
+    },
+    {
+      "Native": {
+        "name": "<LSeek>g____PInvoke|69_0",
+        "signature": "static long (nint, long, valuetype Sys/SeekWhence)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_LSeek"
+      }
+    },
+    {
+      "Native": {
+        "name": "<MkDir>g____PInvoke|77_0",
+        "signature": "static int (byte*, int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_MkDir"
+      }
+    },
+    {
+      "Native": {
+        "name": "<MkdTemp>g____PInvoke|79_0",
+        "signature": "static byte* (byte*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_MkdTemp"
+      }
+    },
+    {
+      "Native": {
+        "name": "<MksTemps>g____PInvoke|80_0",
+        "signature": "static nint (byte*, int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_MksTemps"
+      }
+    },
+    {
+      "Native": {
+        "name": "<Open>g____PInvoke|85_0",
+        "signature": "static nint (byte*, valuetype Sys/OpenFlags, int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_Open"
+      }
+    },
+    {
+      "Native": {
+        "name": "<PosixFAdvise>g____PInvoke|90_0",
+        "signature": "static int (nint, long, long, valuetype Sys/FileAdvice)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_PosixFAdvise"
+      }
+    },
+    {
+      "Native": {
+        "name": "<FAllocate>g____PInvoke|91_0",
+        "signature": "static int (nint, long, long)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_FAllocate"
+      }
+    },
+    {
+      "Native": {
+        "name": "<PRead>g____PInvoke|92_0",
+        "signature": "static int (nint, byte*, int, long)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_PRead"
+      }
+    },
+    {
+      "Native": {
+        "name": "<PReadV>g____PInvoke|93_0",
+        "signature": "static long (nint, valuetype Sys/IOVector*, int, long)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_PReadV"
+      }
+    },
+    {
+      "Native": {
+        "name": "<PWrite>g____PInvoke|94_0",
+        "signature": "static int (nint, byte*, int, long)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_PWrite"
+      }
+    },
+    {
+      "Native": {
+        "name": "<PWriteV>g____PInvoke|95_0",
+        "signature": "static long (nint, valuetype Sys/IOVector*, int, long)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_PWriteV"
+      }
+    },
+    {
+      "Native": {
+        "name": "<Read>g____PInvoke|96_0",
+        "signature": "static int (nint, byte*, int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_Read"
+      }
+    },
+    {
+      "Native": {
+        "name": "<OpenDir>g____PInvoke|99_0",
+        "signature": "static nint (byte*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_OpenDir"
+      }
+    },
+    {
+      "Native": {
+        "name": "<CloseDir>g____PInvoke|102_0",
+        "signature": "static int (nint)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_CloseDir"
+      }
+    },
+    {
+      "Native": {
+        "name": "<ReadLink>g____PInvoke|103_0",
+        "signature": "static int (byte*, byte*, int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_ReadLink"
+      }
+    },
+    {
+      "Native": {
+        "name": "<Rename>g____PInvoke|105_0",
+        "signature": "static int (byte*, byte*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_Rename"
+      }
+    },
+    {
+      "Native": {
+        "name": "<Rename>g____PInvoke|106_0",
+        "signature": "static int (byte*, byte*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_Rename"
+      }
+    },
+    {
+      "Native": {
+        "name": "<RmDir>g____PInvoke|108_0",
+        "signature": "static int (byte*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_RmDir"
+      }
+    },
+    {
+      "Native": {
+        "name": "<FStat>g____PInvoke|113_0",
+        "signature": "static int (nint, valuetype Sys/FileStatus*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_FStat"
+      }
+    },
+    {
+      "Native": {
+        "name": "<Stat>g____PInvoke|114_0",
+        "signature": "static int (byte*, valuetype Sys/FileStatus*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_Stat"
+      }
+    },
+    {
+      "Native": {
+        "name": "<LStat>g____PInvoke|115_0",
+        "signature": "static int (byte*, valuetype Sys/FileStatus*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_LStat"
+      }
+    },
+    {
+      "Native": {
+        "name": "<Stat>g____PInvoke|116_0",
+        "signature": "static int (byte*, valuetype Sys/FileStatus*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_Stat"
+      }
+    },
+    {
+      "Native": {
+        "name": "<LStat>g____PInvoke|118_0",
+        "signature": "static int (byte*, valuetype Sys/FileStatus*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_LStat"
+      }
+    },
+    {
+      "Native": {
+        "name": "<SymLink>g____PInvoke|120_0",
+        "signature": "static int (byte*, byte*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_SymLink"
+      }
+    },
+    {
+      "Native": {
+        "name": "<SysConf>g____PInvoke|122_0",
+        "signature": "static long (valuetype Sys/SysConfName)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_SysConf"
+      }
+    },
+    {
+      "Native": {
+        "name": "<SysLog>g____PInvoke|124_0",
+        "signature": "static void (valuetype Sys/SysLogPriority, byte*, byte*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_SysLog"
+      }
+    },
+    {
+      "Native": {
+        "name": "<Unlink>g____PInvoke|125_0",
+        "signature": "static int (byte*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_Unlink"
+      }
+    },
+    {
+      "Native": {
+        "name": "<UTimensat>g____PInvoke|127_0",
+        "signature": "static int (byte*, valuetype Sys/TimeSpec*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_UTimensat"
+      }
+    },
+    {
+      "Native": {
+        "name": "<FUTimens>g____PInvoke|128_0",
+        "signature": "static int (nint, valuetype Sys/TimeSpec*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_FUTimens"
+      }
+    },
+    {
+      "Native": {
+        "name": "<Write>g____PInvoke|129_0",
+        "signature": "static int (nint, byte*, int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_Write"
+      }
+    },
+    {
+      "Native": {
+        "name": "<Write>g____PInvoke|130_0",
+        "signature": "static int (nint, byte*, int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_Write"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetGroups>g____PInvoke|134_0",
+        "signature": "static int (int, uint*)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetGroups"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetPwUidR>g____PInvoke|138_0",
+        "signature": "static int (uint, valuetype Sys/Passwd*, byte*, int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_GetPwUidR"
+      }
+    },
+    {
+      "Native": {
+        "name": "<InitializeTerminalAndSignalHandling>g____PInvoke|141_0",
+        "signature": "static int ()",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_InitializeTerminalAndSignalHandling"
+      }
+    },
+    {
+      "Native": {
+        "name": "<EnablePosixSignalHandling>g____PInvoke|144_0",
+        "signature": "static int (int)",
+        "source_dll": "libSystem.Native",
+        "source_name": "SystemNative_EnablePosixSignalHandling"
+      }
+    }
+  ],
+  "System.Reflection.RuntimeModule": [
+    {
+      "Native": {
+        "name": "GetScopeName",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallModule, valuetype System.Runtime.CompilerServices.StringHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeModule_GetScopeName"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetFullyQualifiedName",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallModule, valuetype System.Runtime.CompilerServices.StringHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeModule_GetFullyQualifiedName"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetTypes",
+        "signature": "static System.RuntimeType[] (System.Reflection.RuntimeModule)"
+      }
+    }
+  ],
+  "Kernel32": [
+    {
+      "Native": {
+        "name": "GetEnvironmentStringsW",
+        "signature": "static char* ()",
+        "source_dll": "QCall",
+        "source_name": "GetEnvironmentStringsW"
+      }
+    },
+    {
+      "Native": {
+        "name": "FreeEnvironmentStringsW",
+        "signature": "static valuetype Interop/BOOL (char*)",
+        "source_dll": "QCall",
+        "source_name": "FreeEnvironmentStringsW"
+      }
+    },
+    {
+      "Native": {
+        "name": "<CloseHandle>g____PInvoke|46_0",
+        "signature": "static int (nint)",
+        "source_dll": "QCall",
+        "source_name": "CloseHandle"
+      }
+    },
+    {
+      "Native": {
+        "name": "<SetEvent>g____PInvoke|57_0",
+        "signature": "static int (nint)",
+        "source_dll": "QCall",
+        "source_name": "SetEvent"
+      }
+    },
+    {
+      "Native": {
+        "name": "<ResetEvent>g____PInvoke|58_0",
+        "signature": "static int (nint)",
+        "source_dll": "QCall",
+        "source_name": "ResetEvent"
+      }
+    },
+    {
+      "Native": {
+        "name": "<CreateEventEx>g____PInvoke|59_0",
+        "signature": "static nint (nint, ushort*, uint, uint)",
+        "source_dll": "QCall",
+        "source_name": "CreateEventExW"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetEnvironmentVariable>g____PInvoke|61_0",
+        "signature": "static uint (ushort*, char*, uint)",
+        "source_dll": "QCall",
+        "source_name": "GetEnvironmentVariableW"
+      }
+    },
+    {
+      "Native": {
+        "name": "<FormatMessage>g____PInvoke|70_0",
+        "signature": "static int (int, nint, uint, int, void*, int, nint)",
+        "source_dll": "QCall",
+        "source_name": "FormatMessageW"
+      }
+    },
+    {
+      "Native": {
+        "name": "<OpenMutex>g____PInvoke|75_0",
+        "signature": "static nint (uint, int, ushort*)",
+        "source_dll": "QCall",
+        "source_name": "OpenMutexW"
+      }
+    },
+    {
+      "Native": {
+        "name": "<CreateMutexEx>g____PInvoke|76_0",
+        "signature": "static nint (nint, ushort*, uint, uint)",
+        "source_dll": "QCall",
+        "source_name": "CreateMutexExW"
+      }
+    },
+    {
+      "Native": {
+        "name": "<ReleaseMutex>g____PInvoke|77_0",
+        "signature": "static int (nint)",
+        "source_dll": "QCall",
+        "source_name": "ReleaseMutex"
+      }
+    },
+    {
+      "Native": {
+        "name": "<CreateSemaphoreEx>g____PInvoke|79_0",
+        "signature": "static nint (nint, int, int, ushort*, uint, uint)",
+        "source_dll": "QCall",
+        "source_name": "CreateSemaphoreExW"
+      }
+    },
+    {
+      "Native": {
+        "name": "<ReleaseSemaphore>g____PInvoke|80_0",
+        "signature": "static int (nint, int, int*)",
+        "source_dll": "QCall",
+        "source_name": "ReleaseSemaphore"
+      }
+    },
+    {
+      "Native": {
+        "name": "<SetEnvironmentVariable>g____PInvoke|81_0",
+        "signature": "static int (ushort*, ushort*)",
+        "source_dll": "QCall",
+        "source_name": "SetEnvironmentVariableW"
+      }
+    }
+  ],
+  "System.RuntimeFieldHandle": [
+    {
+      "Internal": {
+        "name": "GetName",
+        "signature": "static string (System.Reflection.RtFieldInfo)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetUtf8Name",
+        "signature": "static void* (valuetype System.RuntimeFieldHandleInternal)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetAttributes",
+        "signature": "static valuetype System.Reflection.FieldAttributes (valuetype System.RuntimeFieldHandleInternal)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetApproxDeclaringType",
+        "signature": "static System.RuntimeType (valuetype System.RuntimeFieldHandleInternal)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetToken",
+        "signature": "static int (System.Reflection.RtFieldInfo)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetValue",
+        "signature": "static object (System.Reflection.RtFieldInfo, object, System.RuntimeType, System.RuntimeType, ref bool)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetValueDirect",
+        "signature": "static object (System.Reflection.RtFieldInfo, System.RuntimeType, void*, System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "SetValue",
+        "signature": "static void (System.Reflection.RtFieldInfo, object, object, System.RuntimeType, valuetype System.Reflection.FieldAttributes, System.RuntimeType, ref bool)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "SetValueDirect",
+        "signature": "static void (System.Reflection.RtFieldInfo, System.RuntimeType, void*, object, System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetStaticFieldForGenericType",
+        "signature": "static valuetype System.RuntimeFieldHandleInternal (valuetype System.RuntimeFieldHandleInternal, System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "AcquiresContextFromThis",
+        "signature": "static bool (valuetype System.RuntimeFieldHandleInternal)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetLoaderAllocator",
+        "signature": "static System.Reflection.LoaderAllocator (valuetype System.RuntimeFieldHandleInternal)"
+      }
+    }
+  ],
+  "System.Runtime.GCSettings": [
+    {
+      "Internal": {
+        "name": "SetLOHCompactionMode",
+        "signature": "static void (valuetype System.Runtime.GCLargeObjectHeapCompactionMode)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetGCLatencyMode",
+        "signature": "static valuetype System.Runtime.GCLatencyMode ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "SetGCLatencyMode",
+        "signature": "static valuetype System.Runtime.GCSettings/SetLatencyModeStatus (valuetype System.Runtime.GCLatencyMode)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetLOHCompactionMode",
+        "signature": "static valuetype System.Runtime.GCLargeObjectHeapCompactionMode ()"
+      }
+    }
+  ],
+  "System.Reflection.Emit.RuntimeModuleBuilder": [
+    {
+      "Native": {
+        "name": "<SetFieldRVAContent>g____PInvoke|27_0",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallModule, int, byte*, int)",
+        "source_dll": "QCall",
+        "source_name": "ModuleBuilder_SetFieldRVAContent"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetMemberRef",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallModule, valuetype System.Runtime.CompilerServices.QCallModule, int, int)",
+        "source_dll": "QCall",
+        "source_name": "ModuleBuilder_GetMemberRef"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetMemberRefOfMethodInfo",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallModule, int, valuetype System.RuntimeMethodHandleInternal)",
+        "source_dll": "QCall",
+        "source_name": "ModuleBuilder_GetMemberRefOfMethodInfo"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetMemberRefOfFieldInfo",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallModule, int, valuetype System.Runtime.CompilerServices.QCallTypeHandle, int)",
+        "source_dll": "QCall",
+        "source_name": "ModuleBuilder_GetMemberRefOfFieldInfo"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetStringConstant>g____PInvoke|26_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallModule, ushort*, int)",
+        "source_dll": "QCall",
+        "source_name": "ModuleBuilder_GetStringConstant"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetArrayMethodToken>g____PInvoke|25_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallModule, int, ushort*, byte*, int)",
+        "source_dll": "QCall",
+        "source_name": "ModuleBuilder_GetArrayMethodToken"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetTokenFromTypeSpec>g____PInvoke|23_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallModule, byte*, int)",
+        "source_dll": "QCall",
+        "source_name": "ModuleBuilder_GetTokenFromTypeSpec"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetMemberRefFromSignature>g____PInvoke|16_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallModule, int, ushort*, byte*, int)",
+        "source_dll": "QCall",
+        "source_name": "ModuleBuilder_GetMemberRefFromSignature"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetTypeRef>g____PInvoke|13_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallModule, ushort*, valuetype System.Runtime.CompilerServices.QCallModule, int)",
+        "source_dll": "QCall",
+        "source_name": "ModuleBuilder_GetTypeRef"
+      }
+    }
+  ],
+  "Globalization": [
+    {
+      "Native": {
+        "name": "GetLatestJapaneseEra",
+        "signature": "static int ()",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_GetLatestJapaneseEra"
+      }
+    },
+    {
+      "Native": {
+        "name": "InitOrdinalCasingPage",
+        "signature": "static void (int, char*)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_InitOrdinalCasingPage"
+      }
+    },
+    {
+      "Native": {
+        "name": "CloseSortHandle",
+        "signature": "static void (nint)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_CloseSortHandle"
+      }
+    },
+    {
+      "Native": {
+        "name": "CompareString",
+        "signature": "static int (nint, char*, int, char*, int, valuetype System.Globalization.CompareOptions)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_CompareString"
+      }
+    },
+    {
+      "Native": {
+        "name": "IndexOf",
+        "signature": "static int (nint, char*, int, char*, int, valuetype System.Globalization.CompareOptions, int*)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_IndexOf"
+      }
+    },
+    {
+      "Native": {
+        "name": "LastIndexOf",
+        "signature": "static int (nint, char*, int, char*, int, valuetype System.Globalization.CompareOptions, int*)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_LastIndexOf"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetSortKey",
+        "signature": "static int (nint, char*, int, byte*, int, valuetype System.Globalization.CompareOptions)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_GetSortKey"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetSortVersion",
+        "signature": "static int (nint)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_GetSortVersion"
+      }
+    },
+    {
+      "Native": {
+        "name": "LoadICU",
+        "signature": "static int ()",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_LoadICU"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetICUVersion",
+        "signature": "static int ()",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_GetICUVersion"
+      }
+    },
+    {
+      "Native": {
+        "name": "ToAscii",
+        "signature": "static int (uint, char*, int, char*, int)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_ToAscii"
+      }
+    },
+    {
+      "Native": {
+        "name": "ToUnicode",
+        "signature": "static int (uint, char*, int, char*, int)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_ToUnicode"
+      }
+    },
+    {
+      "Native": {
+        "name": "IsNormalized",
+        "signature": "static int (valuetype System.Text.NormalizationForm, char*, int)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_IsNormalized"
+      }
+    },
+    {
+      "Native": {
+        "name": "NormalizeString",
+        "signature": "static int (valuetype System.Text.NormalizationForm, char*, int, char*, int)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_NormalizeString"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetCalendars>g____PInvoke|0_0",
+        "signature": "static int (ushort*, valuetype System.Globalization.CalendarId*, int)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_GetCalendars"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetCalendarInfo>g____PInvoke|1_0",
+        "signature": "static valuetype Globalization/ResultCode (ushort*, valuetype System.Globalization.CalendarId, valuetype System.Globalization.CalendarDataType, char*, int)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_GetCalendarInfo"
+      }
+    },
+    {
+      "Native": {
+        "name": "<EnumCalendarInfo>g____PInvoke|3_0",
+        "signature": "static int (nint, ushort*, valuetype System.Globalization.CalendarId, valuetype System.Globalization.CalendarDataType, nint)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_EnumCalendarInfo"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetJapaneseEraStartDate>g____PInvoke|5_0",
+        "signature": "static int (int, int*, int*, int*)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_GetJapaneseEraStartDate"
+      }
+    },
+    {
+      "Native": {
+        "name": "<ChangeCase>g____PInvoke|6_0",
+        "signature": "static void (char*, int, char*, int, int)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_ChangeCase"
+      }
+    },
+    {
+      "Native": {
+        "name": "<ChangeCaseInvariant>g____PInvoke|7_0",
+        "signature": "static void (char*, int, char*, int, int)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_ChangeCaseInvariant"
+      }
+    },
+    {
+      "Native": {
+        "name": "<ChangeCaseTurkish>g____PInvoke|8_0",
+        "signature": "static void (char*, int, char*, int, int)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_ChangeCaseTurkish"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetSortHandle>g____PInvoke|10_0",
+        "signature": "static valuetype Globalization/ResultCode (byte*, nint*)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_GetSortHandle"
+      }
+    },
+    {
+      "Native": {
+        "name": "<StartsWith>g____PInvoke|15_0",
+        "signature": "static int (nint, char*, int, char*, int, valuetype System.Globalization.CompareOptions, int*)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_StartsWith"
+      }
+    },
+    {
+      "Native": {
+        "name": "<EndsWith>g____PInvoke|16_0",
+        "signature": "static int (nint, char*, int, char*, int, valuetype System.Globalization.CompareOptions, int*)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_EndsWith"
+      }
+    },
+    {
+      "Native": {
+        "name": "<InitICUFunctions>g____PInvoke|23_0",
+        "signature": "static void (nint, nint, byte*, byte*)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_InitICUFunctions"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetLocaleName>g____PInvoke|29_0",
+        "signature": "static int (ushort*, char*, int)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_GetLocaleName"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetLocaleInfoString>g____PInvoke|30_0",
+        "signature": "static int (ushort*, uint, char*, int, ushort*)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_GetLocaleInfoString"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetDefaultLocaleName>g____PInvoke|31_0",
+        "signature": "static int (char*, int)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_GetDefaultLocaleName"
+      }
+    },
+    {
+      "Native": {
+        "name": "<IsPredefinedLocale>g____PInvoke|32_0",
+        "signature": "static int (ushort*)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_IsPredefinedLocale"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetLocaleTimeFormat>g____PInvoke|33_0",
+        "signature": "static int (ushort*, int, char*, int)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_GetLocaleTimeFormat"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetLocaleInfoInt>g____PInvoke|34_0",
+        "signature": "static int (ushort*, uint, int*)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_GetLocaleInfoInt"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetLocaleInfoGroupingSizes>g____PInvoke|35_0",
+        "signature": "static int (ushort*, uint, int*, int*)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_GetLocaleInfoGroupingSizes"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetLocales>g____PInvoke|36_0",
+        "signature": "static int (char*, int)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_GetLocales"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetTimeZoneDisplayName>g____PInvoke|41_0",
+        "signature": "static valuetype Globalization/ResultCode (ushort*, ushort*, valuetype Globalization/TimeZoneDisplayNameType, char*, int)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_GetTimeZoneDisplayName"
+      }
+    },
+    {
+      "Native": {
+        "name": "<WindowsIdToIanaId>g____PInvoke|42_0",
+        "signature": "static int (ushort*, nint, char*, int)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_WindowsIdToIanaId"
+      }
+    },
+    {
+      "Native": {
+        "name": "<IanaIdToWindowsId>g____PInvoke|43_0",
+        "signature": "static int (ushort*, char*, int)",
+        "source_dll": "libSystem.Globalization.Native",
+        "source_name": "GlobalizationNative_IanaIdToWindowsId"
+      }
+    }
+  ],
+  "System.Runtime.InteropServices.ComWrappers": [
+    {
+      "Native": {
+        "name": "SetGlobalInstanceRegisteredForTrackerSupport",
+        "signature": "static void (long)",
+        "source_dll": "QCall",
+        "source_name": "ComWrappers_SetGlobalInstanceRegisteredForTrackerSupport"
+      }
+    },
+    {
+      "Native": {
+        "name": "SetGlobalInstanceRegisteredForMarshalling",
+        "signature": "static void (long)",
+        "source_dll": "QCall",
+        "source_name": "ComWrappers_SetGlobalInstanceRegisteredForMarshalling"
+      }
+    },
+    {
+      "Native": {
+        "name": "<TryGetComInstanceInternal>g____PInvoke|1_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.ObjectHandleOnStack, nint*)",
+        "source_dll": "QCall",
+        "source_name": "ComWrappers_TryGetComInstance"
+      }
+    },
+    {
+      "Native": {
+        "name": "<TryGetObjectInternal>g____PInvoke|3_0",
+        "signature": "static int (nint, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "ComWrappers_TryGetObject"
+      }
+    },
+    {
+      "Native": {
+        "name": "<TryGetOrCreateComInterfaceForObjectInternal>g____PInvoke|11_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.ObjectHandleOnStack, long, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack, valuetype System.Runtime.InteropServices.CreateComInterfaceFlags, nint*)",
+        "source_dll": "QCall",
+        "source_name": "ComWrappers_TryGetOrCreateComInterfaceForObject"
+      }
+    },
+    {
+      "Native": {
+        "name": "<TryGetOrCreateObjectForComInstanceInternal>g____PInvoke|18_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.ObjectHandleOnStack, long, nint, nint, valuetype System.Runtime.InteropServices.CreateObjectFlags, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "ComWrappers_TryGetOrCreateObjectForComInstance"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetIUnknownImplInternal>g____PInvoke|25_0",
+        "signature": "static void (nint*, nint*, nint*)",
+        "source_dll": "QCall",
+        "source_name": "ComWrappers_GetIUnknownImpl"
+      }
+    }
+  ],
+  "System.Runtime.Loader.AssemblyLoadContext": [
+    {
+      "Native": {
+        "name": "PrepareForAssemblyLoadContextRelease",
+        "signature": "static void (nint, nint)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_PrepareForAssemblyLoadContextRelease"
+      }
+    },
+    {
+      "Native": {
+        "name": "LoadFromStream",
+        "signature": "static void (nint, nint, int, nint, int, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_LoadFromStream"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetLoadedAssemblies",
+        "signature": "static System.Reflection.Assembly[] ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "IsTracingEnabled",
+        "signature": "static bool ()"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetLoadContextForAssembly",
+        "signature": "static nint (valuetype System.Runtime.CompilerServices.QCallAssembly)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetLoadContextForAssembly"
+      }
+    },
+    {
+      "Native": {
+        "name": "<TraceSatelliteSubdirectoryPathProbed>g____PInvoke|11_0",
+        "signature": "static int (ushort*, int)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_TraceSatelliteSubdirectoryPathProbed"
+      }
+    },
+    {
+      "Native": {
+        "name": "<TraceAssemblyLoadFromResolveHandlerInvoked>g____PInvoke|10_0",
+        "signature": "static int (ushort*, int, ushort*, ushort*)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_TraceAssemblyLoadFromResolveHandlerInvoked"
+      }
+    },
+    {
+      "Native": {
+        "name": "<TraceAssemblyResolveHandlerInvoked>g____PInvoke|9_0",
+        "signature": "static int (ushort*, ushort*, ushort*, ushort*)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_TraceAssemblyResolveHandlerInvoked"
+      }
+    },
+    {
+      "Native": {
+        "name": "<TraceResolvingHandlerInvoked>g____PInvoke|8_0",
+        "signature": "static int (ushort*, ushort*, ushort*, ushort*, ushort*)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_TraceResolvingHandlerInvoked"
+      }
+    },
+    {
+      "Native": {
+        "name": "<LoadFromPath>g____PInvoke|5_0",
+        "signature": "static void (nint, ushort*, ushort*, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_LoadFromPath"
+      }
+    },
+    {
+      "Native": {
+        "name": "<InternalStartProfile>g____PInvoke|4_0",
+        "signature": "static void (ushort*, nint)",
+        "source_dll": "QCall",
+        "source_name": "MultiCoreJIT_InternalStartProfile"
+      }
+    },
+    {
+      "Native": {
+        "name": "<InternalSetProfileRoot>g____PInvoke|3_0",
+        "signature": "static void (ushort*)",
+        "source_dll": "QCall",
+        "source_name": "MultiCoreJIT_InternalSetProfileRoot"
+      }
+    },
+    {
+      "Native": {
+        "name": "<InitializeAssemblyLoadContext>g____PInvoke|0_0",
+        "signature": "static nint (nint, int, int)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_InitializeAssemblyLoadContext"
+      }
+    }
+  ],
+  "System.Runtime.ControlledExecution": [
+    {
+      "Native": {
+        "name": "AbortThread",
+        "signature": "static void (valuetype System.Threading.ThreadHandle)",
+        "source_dll": "QCall",
+        "source_name": "ThreadNative_Abort"
+      }
+    },
+    {
+      "Native": {
+        "name": "ResetAbortThread",
+        "signature": "static void ()",
+        "source_dll": "QCall",
+        "source_name": "ThreadNative_ResetAbort"
+      }
+    }
+  ],
+  "System.Signature": [
+    {
+      "Internal": {
+        "name": "GetSignature",
+        "signature": "void (void*, int, valuetype System.RuntimeFieldHandleInternal, System.IRuntimeMethodInfo, System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetCustomModifiersAtOffset",
+        "signature": "System.Type[] (int, bool)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetCallingConventionFromFunctionPointerAtOffset",
+        "signature": "valuetype System.Reflection.SignatureCallingConvention (int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetTypeParameterOffset",
+        "signature": "int (int, int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetParameterOffset",
+        "signature": "int (int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "CompareSig",
+        "signature": "static bool (System.Signature, System.Signature)"
+      }
+    }
+  ],
+  "System.Runtime.DependentHandle": [
+    {
+      "Internal": {
+        "name": "InternalFree",
+        "signature": "static void (nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "InternalSetTargetToNull",
+        "signature": "static void (nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "InternalSetDependent",
+        "signature": "static void (nint, object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "InternalGetTargetAndDependent",
+        "signature": "static object (nint, ref object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "InternalGetDependent",
+        "signature": "static object (nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "InternalInitialize",
+        "signature": "static nint (object, object)"
+      }
+    }
+  ],
+  "System.Array": [
+    {
+      "Internal": {
+        "name": "InternalCreate",
+        "signature": "static System.Array (System.RuntimeType, int, int*, int*)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "IsSimpleCopy",
+        "signature": "static bool (System.Array, System.Array)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "CopySlow",
+        "signature": "static void (System.Array, int, System.Array, int, int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "InternalSetValue",
+        "signature": "void (object, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetCorElementTypeOfElementType",
+        "signature": "valuetype System.Reflection.CorElementType ()"
+      }
+    }
+  ],
+  "System.Reflection.CustomAttribute": [
+    {
+      "Internal": {
+        "name": "_ParseAttributeUsageAttribute",
+        "signature": "static void (nint, int, ref int, ref bool, ref bool)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_CreateCaObject",
+        "signature": "static object (System.Reflection.RuntimeModule, System.RuntimeType, System.IRuntimeMethodInfo, byte**, byte*, int*)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetPropertyOrFieldData",
+        "signature": "static void (System.Reflection.RuntimeModule, byte**, byte*, ref string, ref bool, ref System.RuntimeType, ref object)"
+      }
+    }
+  ],
+  "System.Reflection.Metadata.AssemblyExtensions": [
+    {
+      "Native": {
+        "name": "<InternalTryGetRawMetadata>g____PInvoke|0_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallAssembly, byte**, int*)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_InternalTryGetRawMetadata"
+      }
+    }
+  ],
+  "System.Reflection.Metadata.MetadataUpdater": [
+    {
+      "Native": {
+        "name": "ApplyUpdate",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallAssembly, byte*, int, byte*, int, byte*, int)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_ApplyUpdate"
+      }
+    },
+    {
+      "Native": {
+        "name": "<IsApplyUpdateSupported>g____PInvoke|1_0",
+        "signature": "static int ()",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_IsApplyUpdateSupported"
+      }
+    }
+  ],
+  "System.Reflection.Emit.RuntimeTypeBuilder": [
+    {
+      "Native": {
+        "name": "SetParentType",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallModule, int, int)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_SetParentType"
+      }
+    },
+    {
+      "Native": {
+        "name": "AddInterfaceImpl",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallModule, int, int)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_AddInterfaceImpl"
+      }
+    },
+    {
+      "Native": {
+        "name": "DefineMethodSemantics",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallModule, int, valuetype System.Reflection.MethodSemanticsAttributes, int)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_DefineMethodSemantics"
+      }
+    },
+    {
+      "Native": {
+        "name": "DefineMethodImpl",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallModule, int, int, int)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_DefineMethodImpl"
+      }
+    },
+    {
+      "Native": {
+        "name": "SetMethodImpl",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallModule, int, valuetype System.Reflection.MethodImplAttributes)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_SetMethodImpl"
+      }
+    },
+    {
+      "Native": {
+        "name": "SetFieldLayoutOffset",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallModule, int, int)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_SetFieldLayoutOffset"
+      }
+    },
+    {
+      "Native": {
+        "name": "SetClassLayout",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallModule, int, valuetype System.Reflection.Emit.PackingSize, int)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_SetClassLayout"
+      }
+    },
+    {
+      "Native": {
+        "name": "SetConstantValue",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallModule, int, int, void*)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_SetConstantValue"
+      }
+    },
+    {
+      "Native": {
+        "name": "TermCreateClass",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallModule, int, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_TermCreateClass"
+      }
+    },
+    {
+      "Native": {
+        "name": "<DefineGenericParam>g____PInvoke|56_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallModule, ushort*, int, valuetype System.Reflection.GenericParameterAttributes, int, int*)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_DefineGenericParam"
+      }
+    },
+    {
+      "Native": {
+        "name": "<DefineType>g____PInvoke|55_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallModule, ushort*, int, valuetype System.Reflection.TypeAttributes, int, int*)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_DefineType"
+      }
+    },
+    {
+      "Native": {
+        "name": "<SetPInvokeData>g____PInvoke|20_0",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallModule, ushort*, ushort*, int, int)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_SetPInvokeData"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetTokenFromSig>g____PInvoke|16_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallModule, byte*, int)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_GetTokenFromSig"
+      }
+    },
+    {
+      "Native": {
+        "name": "<SetParamInfo>g____PInvoke|15_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallModule, int, int, valuetype System.Reflection.ParameterAttributes, ushort*)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_SetParamInfo"
+      }
+    },
+    {
+      "Native": {
+        "name": "<DefineEvent>g____PInvoke|11_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallModule, int, ushort*, valuetype System.Reflection.EventAttributes, int)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_DefineEvent"
+      }
+    },
+    {
+      "Native": {
+        "name": "<DefineProperty>g____PInvoke|10_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallModule, int, ushort*, valuetype System.Reflection.PropertyAttributes, byte*, int)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_DefineProperty"
+      }
+    },
+    {
+      "Native": {
+        "name": "<DefineCustomAttribute>g____PInvoke|8_0",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallModule, int, int, byte*, int)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_DefineCustomAttribute"
+      }
+    },
+    {
+      "Native": {
+        "name": "<SetMethodIL>g____PInvoke|7_0",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallModule, int, int, byte*, int, byte*, int, int, valuetype System.Reflection.Emit.ExceptionHandler*, int, int*, int)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_SetMethodIL"
+      }
+    },
+    {
+      "Native": {
+        "name": "<DefineField>g____PInvoke|6_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallModule, int, ushort*, byte*, int, valuetype System.Reflection.FieldAttributes)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_DefineField"
+      }
+    },
+    {
+      "Native": {
+        "name": "<DefineMethodSpec>g____PInvoke|5_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallModule, int, byte*, int)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_DefineMethodSpec"
+      }
+    },
+    {
+      "Native": {
+        "name": "<DefineMethod>g____PInvoke|4_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallModule, int, ushort*, byte*, int, valuetype System.Reflection.MethodAttributes)",
+        "source_dll": "QCall",
+        "source_name": "TypeBuilder_DefineMethod"
+      }
+    }
+  ],
+  "System.Delegate": [
+    {
+      "Internal": {
+        "name": "BindToMethodName",
+        "signature": "bool (object, System.RuntimeType, string, valuetype System.DelegateBindingFlags)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "BindToMethodInfo",
+        "signature": "bool (object, System.IRuntimeMethodInfo, System.RuntimeType, valuetype System.DelegateBindingFlags)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "InternalAlloc",
+        "signature": "static System.MulticastDelegate (System.RuntimeType)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "InternalAllocLike",
+        "signature": "static System.MulticastDelegate (System.Delegate)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "DelegateConstruct",
+        "signature": "void (object, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetMulticastInvoke",
+        "signature": "nint ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetInvokeMethod",
+        "signature": "nint ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "FindMethodHandle",
+        "signature": "System.IRuntimeMethodInfo ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "InternalEqualMethodHandles",
+        "signature": "static bool (System.Delegate, System.Delegate)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "AdjustTarget",
+        "signature": "nint (object, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetCallStub",
+        "signature": "nint (nint)"
+      }
+    }
+  ],
+  "System.Diagnostics.Tracing.XplatEventLogger": [
+    {
+      "Native": {
+        "name": "<IsEventSourceLoggingEnabled>g____PInvoke|5_0",
+        "signature": "static int ()",
+        "source_dll": "QCall",
+        "source_name": "IsEventSourceLoggingEnabled"
+      }
+    },
+    {
+      "Native": {
+        "name": "<LogEventSource>g____PInvoke|6_0",
+        "signature": "static void (int, ushort*, ushort*, ushort*)",
+        "source_dll": "QCall",
+        "source_name": "LogEventSource"
+      }
+    }
+  ],
+  "System.GC": [
+    {
+      "Internal": {
+        "name": "GetMemoryInfo",
+        "signature": "static void (System.GCMemoryInfoData, int)"
+      }
+    },
+    {
+      "Native": {
+        "name": "_EndNoGCRegion",
+        "signature": "static int ()",
+        "source_dll": "QCall",
+        "source_name": "GCInterface_EndNoGCRegion"
+      }
+    },
+    {
+      "Internal": {
+        "name": "AllocateNewArray",
+        "signature": "static System.Array (nint, int, valuetype System.GC/GC_ALLOC_FLAGS)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetGenerationWR",
+        "signature": "static int (nint)"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetTotalMemory",
+        "signature": "static long ()",
+        "source_dll": "QCall",
+        "source_name": "GCInterface_GetTotalMemory"
+      }
+    },
+    {
+      "Native": {
+        "name": "_Collect",
+        "signature": "static void (int, int)",
+        "source_dll": "QCall",
+        "source_name": "GCInterface_Collect"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetMaxGeneration",
+        "signature": "static int ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_CollectionCount",
+        "signature": "static int (int, int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetSegmentSize",
+        "signature": "static ulong ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetLastGCPercentTimeInGC",
+        "signature": "static int ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetGenerationSize",
+        "signature": "static ulong (int)"
+      }
+    },
+    {
+      "Native": {
+        "name": "_AddMemoryPressure",
+        "signature": "static void (ulong)",
+        "source_dll": "QCall",
+        "source_name": "GCInterface_AddMemoryPressure"
+      }
+    },
+    {
+      "Native": {
+        "name": "_RemoveMemoryPressure",
+        "signature": "static void (ulong)",
+        "source_dll": "QCall",
+        "source_name": "GCInterface_RemoveMemoryPressure"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetGeneration",
+        "signature": "static int (object)"
+      }
+    },
+    {
+      "Native": {
+        "name": "_WaitForPendingFinalizers",
+        "signature": "static void ()",
+        "source_dll": "QCall",
+        "source_name": "GCInterface_WaitForPendingFinalizers"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_SuppressFinalize",
+        "signature": "static void (object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_ReRegisterForFinalize",
+        "signature": "static void (object)"
+      }
+    },
+    {
+      "Native": {
+        "name": "_RegisterFrozenSegment",
+        "signature": "static nint (nint, nint)",
+        "source_dll": "QCall",
+        "source_name": "GCInterface_RegisterFrozenSegment"
+      }
+    },
+    {
+      "Native": {
+        "name": "_UnregisterFrozenSegment",
+        "signature": "static void (nint)",
+        "source_dll": "QCall",
+        "source_name": "GCInterface_UnregisterFrozenSegment"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetAllocatedBytesForCurrentThread",
+        "signature": "static long ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetTotalAllocatedBytes",
+        "signature": "static long (bool)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_RegisterForFullGCNotification",
+        "signature": "static bool (int, int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_CancelFullGCNotification",
+        "signature": "static bool ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_WaitForFullGCApproach",
+        "signature": "static int (int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_WaitForFullGCComplete",
+        "signature": "static int (int)"
+      }
+    },
+    {
+      "Native": {
+        "name": "_EnableNoGCRegionCallback",
+        "signature": "static valuetype System.GC/EnableNoGCRegionCallbackStatus (valuetype System.GC/NoGCRegionCallbackFinalizerWorkItem*, long)",
+        "source_dll": "QCall",
+        "source_name": "GCInterface_EnableNoGCRegionCallback"
+      }
+    },
+    {
+      "Native": {
+        "name": "_GetGenerationBudget",
+        "signature": "static long (int)",
+        "source_dll": "QCall",
+        "source_name": "GCInterface_GetGenerationBudget"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetTotalPauseDuration",
+        "signature": "static long ()"
+      }
+    },
+    {
+      "Native": {
+        "name": "_EnumerateConfigurationValues",
+        "signature": "static void (void*, delegate* unmanaged<void*, void*, void*, valuetype System.GC/GCConfigurationType, long, void>)",
+        "source_dll": "QCall",
+        "source_name": "GCInterface_EnumerateConfigurationValues"
+      }
+    },
+    {
+      "Native": {
+        "name": "_RefreshMemoryLimit",
+        "signature": "static int (valuetype System.GC/GCHeapHardLimitInfo)",
+        "source_dll": "QCall",
+        "source_name": "GCInterface_RefreshMemoryLimit"
+      }
+    },
+    {
+      "Native": {
+        "name": "<_StartNoGCRegion>g____PInvoke|3_0",
+        "signature": "static int (long, int, long, int)",
+        "source_dll": "QCall",
+        "source_name": "GCInterface_StartNoGCRegion"
+      }
+    }
+  ],
+  "System.Runtime.CompilerServices.MethodTable": [
+    {
+      "Internal": {
+        "name": "GetNumInstanceFieldBytes",
+        "signature": "uint ()"
+      }
+    }
+  ],
+  "System.ModuleHandle": [
+    {
+      "Internal": {
+        "name": "GetDynamicMethod",
+        "signature": "static System.IRuntimeMethodInfo (System.Reflection.Emit.DynamicMethod, System.Reflection.RuntimeModule, string, byte[], System.Resolver)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetToken",
+        "signature": "static int (System.Reflection.RuntimeModule)"
+      }
+    },
+    {
+      "Native": {
+        "name": "ResolveType",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallModule, int, nint*, int, nint*, int, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "ModuleHandle_ResolveType"
+      }
+    },
+    {
+      "Native": {
+        "name": "ResolveMethod",
+        "signature": "static valuetype System.RuntimeMethodHandleInternal (valuetype System.Runtime.CompilerServices.QCallModule, int, nint*, int, nint*, int)",
+        "source_dll": "QCall",
+        "source_name": "ModuleHandle_ResolveMethod"
+      }
+    },
+    {
+      "Native": {
+        "name": "ResolveField",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallModule, int, nint*, int, nint*, int, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "ModuleHandle_ResolveField"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetModuleType",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallModule, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "ModuleHandle_GetModuleType"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetPEKind",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallModule, int*, int*)",
+        "source_dll": "QCall",
+        "source_name": "ModuleHandle_GetPEKind"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetMDStreamVersion",
+        "signature": "static int (System.Reflection.RuntimeModule)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "_GetMetadataImport",
+        "signature": "static nint (System.Reflection.RuntimeModule)"
+      }
+    }
+  ],
+  "System.TypeLoadException": [
+    {
+      "Native": {
+        "name": "GetTypeLoadExceptionMessage",
+        "signature": "static void (int, valuetype System.Runtime.CompilerServices.StringHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "GetTypeLoadExceptionMessage"
+      }
+    }
+  ],
+  "System.Runtime.CompilerServices.RuntimeHelpers": [
+    {
+      "Internal": {
+        "name": "InitializeArray",
+        "signature": "static void (System.Array, valuetype System.RuntimeFieldHandle)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetSpanDataFrom",
+        "signature": "static void* (valuetype System.RuntimeFieldHandle, valuetype System.RuntimeTypeHandle, ref int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetObjectValue",
+        "signature": "static object (object)"
+      }
+    },
+    {
+      "Native": {
+        "name": "RunClassConstructor",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallTypeHandle)",
+        "source_dll": "QCall",
+        "source_name": "ReflectionInvocation_RunClassConstructor"
+      }
+    },
+    {
+      "Native": {
+        "name": "RunModuleConstructor",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallModule)",
+        "source_dll": "QCall",
+        "source_name": "ReflectionInvocation_RunModuleConstructor"
+      }
+    },
+    {
+      "Native": {
+        "name": "CompileMethod",
+        "signature": "static void (valuetype System.RuntimeMethodHandleInternal)",
+        "source_dll": "QCall",
+        "source_name": "ReflectionInvocation_CompileMethod"
+      }
+    },
+    {
+      "Native": {
+        "name": "PrepareMethod",
+        "signature": "static void (valuetype System.RuntimeMethodHandleInternal, nint*, int)",
+        "source_dll": "QCall",
+        "source_name": "ReflectionInvocation_PrepareMethod"
+      }
+    },
+    {
+      "Internal": {
+        "name": "PrepareDelegate",
+        "signature": "static void (System.Delegate)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetHashCode",
+        "signature": "static int (object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "TryGetHashCode",
+        "signature": "static int (object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Equals",
+        "signature": "static bool (object, object)"
+      }
+    },
+    {
+      "Native": {
+        "name": "<AreTypesEquivalent>g____PInvoke|34_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.MethodTable*, valuetype System.Runtime.CompilerServices.MethodTable*)",
+        "source_dll": "QCall",
+        "source_name": "MethodTable_AreTypesEquivalent"
+      }
+    },
+    {
+      "Internal": {
+        "name": "EnsureSufficientExecutionStack",
+        "signature": "static void ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "TryEnsureSufficientExecutionStack",
+        "signature": "static bool ()"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetUninitializedObject",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallTypeHandle, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "ReflectionSerialization_GetUninitializedObject"
+      }
+    },
+    {
+      "Internal": {
+        "name": "AllocateUninitializedClone",
+        "signature": "static object (object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Box",
+        "signature": "static object (valuetype System.Runtime.CompilerServices.MethodTable*, ref byte)"
+      }
+    },
+    {
+      "Native": {
+        "name": "AllocateTypeAssociatedMemory",
+        "signature": "static nint (valuetype System.Runtime.CompilerServices.QCallTypeHandle, uint)",
+        "source_dll": "QCall",
+        "source_name": "RuntimeTypeHandle_AllocateTypeAssociatedMemory"
+      }
+    },
+    {
+      "Internal": {
+        "name": "AllocTailCallArgBuffer",
+        "signature": "static nint (int, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetTailCallInfo",
+        "signature": "static valuetype System.Runtime.CompilerServices.TailCallTls* (nint, nint*)"
+      }
+    }
+  ],
+  "System.Object": [
+    {
+      "Internal": {
+        "name": "GetType",
+        "signature": "System.Type ()"
+      }
+    }
+  ],
+  "System.StubHelpers.MngdNativeArrayMarshaler": [
+    {
+      "Internal": {
+        "name": "CreateMarshaler",
+        "signature": "static void (nint, nint, int, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ConvertSpaceToNative",
+        "signature": "static void (nint, ref object, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ConvertContentsToNative",
+        "signature": "static void (nint, ref object, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ConvertSpaceToManaged",
+        "signature": "static void (nint, ref object, nint, int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ConvertContentsToManaged",
+        "signature": "static void (nint, ref object, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ClearNative",
+        "signature": "static void (nint, ref object, nint, int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ClearNativeContents",
+        "signature": "static void (nint, ref object, nint, int)"
+      }
+    }
+  ],
+  "System.StubHelpers.MngdRefCustomMarshaler": [
+    {
+      "Internal": {
+        "name": "CreateMarshaler",
+        "signature": "static void (nint, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ConvertContentsToNative",
+        "signature": "static void (nint, ref object, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ConvertContentsToManaged",
+        "signature": "static void (nint, ref object, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ClearNative",
+        "signature": "static void (nint, ref object, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ClearManaged",
+        "signature": "static void (nint, ref object, nint)"
+      }
+    }
+  ],
+  "System.Runtime.Versioning.CompatibilitySwitch": [
+    {
+      "Internal": {
+        "name": "GetValueInternal",
+        "signature": "static string (string)"
+      }
+    }
+  ],
+  "System.Runtime.InteropServices.NativeLibrary": [
+    {
+      "Native": {
+        "name": "FreeLib",
+        "signature": "static void (nint)",
+        "source_dll": "QCall",
+        "source_name": "NativeLibrary_FreeLib"
+      }
+    },
+    {
+      "Native": {
+        "name": "<LoadFromPath>g____PInvoke|1_0",
+        "signature": "static nint (ushort*, int)",
+        "source_dll": "QCall",
+        "source_name": "NativeLibrary_LoadFromPath"
+      }
+    },
+    {
+      "Native": {
+        "name": "<LoadByName>g____PInvoke|2_0",
+        "signature": "static nint (ushort*, valuetype System.Runtime.CompilerServices.QCallAssembly, int, uint, int)",
+        "source_dll": "QCall",
+        "source_name": "NativeLibrary_LoadByName"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetSymbol>g____PInvoke|4_0",
+        "signature": "static nint (nint, ushort*, int)",
+        "source_dll": "QCall",
+        "source_name": "NativeLibrary_GetSymbol"
+      }
+    }
+  ],
+  "System.StubHelpers.MngdFixedArrayMarshaler": [
+    {
+      "Internal": {
+        "name": "CreateMarshaler",
+        "signature": "static void (nint, nint, int, int, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ConvertSpaceToNative",
+        "signature": "static void (nint, ref object, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ConvertContentsToNative",
+        "signature": "static void (nint, ref object, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ConvertSpaceToManaged",
+        "signature": "static void (nint, ref object, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ConvertContentsToManaged",
+        "signature": "static void (nint, ref object, nint)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ClearNativeContents",
+        "signature": "static void (nint, ref object, nint)"
+      }
+    }
+  ],
+  "System.IO.Stream": [
+    {
+      "Internal": {
+        "name": "HasOverriddenBeginEndRead",
+        "signature": "bool ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "HasOverriddenBeginEndWrite",
+        "signature": "bool ()"
+      }
+    }
+  ],
+  "System.Threading.Interlocked": [
+    {
+      "Internal": {
+        "name": "Exchange",
+        "signature": "static int (ref int, int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Exchange",
+        "signature": "static long (ref long, long)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Exchange",
+        "signature": "static object (ref object, object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "CompareExchange",
+        "signature": "static int (ref int, int, int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "CompareExchange",
+        "signature": "static long (ref long, long, long)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "CompareExchange",
+        "signature": "static object (ref object, object, object)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ExchangeAdd",
+        "signature": "static int (ref int, int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "ExchangeAdd",
+        "signature": "static long (ref long, long)"
+      }
+    },
+    {
+      "Native": {
+        "name": "_MemoryBarrierProcessWide",
+        "signature": "static void ()",
+        "source_dll": "QCall",
+        "source_name": "Interlocked_MemoryBarrierProcessWide"
+      }
+    }
+  ],
+  "System.Reflection.LoaderAllocatorScout": [
+    {
+      "Native": {
+        "name": "<Destroy>g____PInvoke|1_0",
+        "signature": "static int (nint)",
+        "source_dll": "QCall",
+        "source_name": "LoaderAllocator_Destroy"
+      }
+    }
+  ],
+  "System.Reflection.RuntimeAssembly": [
+    {
+      "Native": {
+        "name": "<GetModules>g____PInvoke|90_0",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallAssembly, int, int, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetModules"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetVersion>g____PInvoke|72_0",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallAssembly, int*, int*, int*, int*)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetVersion"
+      }
+    },
+    {
+      "Native": {
+        "name": "<InternalLoad>g____PInvoke|49_0",
+        "signature": "static void (valuetype System.Reflection.NativeAssemblyNameParts*, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack, valuetype System.Runtime.CompilerServices.StackCrawlMarkHandle, int, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_InternalLoad"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetManifestResourceInfo>g____PInvoke|60_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallAssembly, ushort*, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack, valuetype System.Runtime.CompilerServices.StringHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetManifestResourceInfo"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetModule>g____PInvoke|52_0",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallAssembly, ushort*, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetModule"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetResource>g____PInvoke|37_0",
+        "signature": "static byte* (valuetype System.Runtime.CompilerServices.QCallAssembly, ushort*, uint*)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetResource"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetFullName",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallAssembly, valuetype System.Runtime.CompilerServices.StringHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetFullName"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetTypeCoreIgnoreCase>g____PInvoke|27_0",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallAssembly, ushort*, nint*, int, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetTypeCoreIgnoreCase"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetEntryPoint",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallAssembly, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetEntryPoint"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetTypeCore>g____PInvoke|26_0",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallAssembly, byte*, nint*, int, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetTypeCore"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetExportedTypes",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallAssembly, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetExportedTypes"
+      }
+    },
+    {
+      "Native": {
+        "name": "<GetCodeBase>g____PInvoke|14_0",
+        "signature": "static int (valuetype System.Runtime.CompilerServices.QCallAssembly, valuetype System.Runtime.CompilerServices.StringHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetCodeBase"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetIsCollectible",
+        "signature": "static valuetype Interop/BOOL (valuetype System.Runtime.CompilerServices.QCallAssembly)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetIsCollectible"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetForwardedType",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallAssembly, valuetype System.Reflection.MetadataToken, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetForwardedType"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetManifestResourceNames",
+        "signature": "static string[] (System.Reflection.RuntimeAssembly)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetReferencedAssemblies",
+        "signature": "static System.Reflection.AssemblyName[] (System.Reflection.RuntimeAssembly)"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetLocation",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallAssembly, valuetype System.Runtime.CompilerServices.StringHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetLocation"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetToken",
+        "signature": "static int (System.Reflection.RuntimeAssembly)"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetImageRuntimeVersion",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallAssembly, valuetype System.Runtime.CompilerServices.StringHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetImageRuntimeVersion"
+      }
+    },
+    {
+      "Internal": {
+        "name": "GetManifestModule",
+        "signature": "static System.Reflection.RuntimeModule (System.Reflection.RuntimeAssembly)"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetLocale",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallAssembly, valuetype System.Runtime.CompilerServices.StringHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetLocale"
+      }
+    },
+    {
+      "Internal": {
+        "name": "FCallIsDynamic",
+        "signature": "static bool (System.Reflection.RuntimeAssembly)"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetSimpleName",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallAssembly, valuetype System.Runtime.CompilerServices.StringHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetSimpleName"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetHashAlgorithm",
+        "signature": "static valuetype System.Configuration.Assemblies.AssemblyHashAlgorithm (valuetype System.Runtime.CompilerServices.QCallAssembly)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetHashAlgorithm"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetFlags",
+        "signature": "static valuetype System.Reflection.AssemblyNameFlags (valuetype System.Runtime.CompilerServices.QCallAssembly)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetFlags"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetPublicKey",
+        "signature": "static void (valuetype System.Runtime.CompilerServices.QCallAssembly, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyNative_GetPublicKey"
+      }
+    }
+  ],
+  "System.Reflection.AssemblyName": [
+    {
+      "Native": {
+        "name": "InitializeAssemblySpec",
+        "signature": "static void (valuetype System.Reflection.NativeAssemblyNameParts*, void*)",
+        "source_dll": "QCall",
+        "source_name": "AssemblyName_InitializeAssemblySpec"
+      }
+    }
+  ],
+  "System.Diagnostics.Debugger": [
+    {
+      "Internal": {
+        "name": "BreakInternal",
+        "signature": "static void ()"
+      }
+    },
+    {
+      "Native": {
+        "name": "<LogInternal>g____PInvoke|11_0",
+        "signature": "static void (int, ushort*, ushort*)",
+        "source_dll": "QCall",
+        "source_name": "DebugDebugger_Log"
+      }
+    },
+    {
+      "Internal": {
+        "name": "IsLogging",
+        "signature": "static bool ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "CustomNotification",
+        "signature": "static void (System.Diagnostics.ICustomDebuggerNotification)"
+      }
+    },
+    {
+      "Native": {
+        "name": "<LaunchInternal>g____PInvoke|6_0",
+        "signature": "static int ()",
+        "source_dll": "QCall",
+        "source_name": "DebugDebugger_Launch"
+      }
+    }
+  ],
+  "System.Diagnostics.StackTrace": [
+    {
+      "Internal": {
+        "name": "GetStackFramesInternal",
+        "signature": "static void (System.Diagnostics.StackFrameHelper, int, bool, System.Exception)"
+      }
+    }
+  ],
+  "System.Diagnostics.Tracing.NativeRuntimeEventSource": [
+    {
+      "Native": {
+        "name": "LogContentionLockCreated",
+        "signature": "static void (nint, nint, ushort)",
+        "source_dll": "QCall",
+        "source_name": "LogContentionLockCreated"
+      }
+    },
+    {
+      "Native": {
+        "name": "LogContentionStart",
+        "signature": "static void (valuetype System.Diagnostics.Tracing.NativeRuntimeEventSource/ContentionFlagsMap, ushort, nint, nint, ulong)",
+        "source_dll": "QCall",
+        "source_name": "LogContentionStart"
+      }
+    },
+    {
+      "Native": {
+        "name": "LogContentionStop",
+        "signature": "static void (valuetype System.Diagnostics.Tracing.NativeRuntimeEventSource/ContentionFlagsMap, ushort, double)",
+        "source_dll": "QCall",
+        "source_name": "LogContentionStop"
+      }
+    },
+    {
+      "Native": {
+        "name": "LogThreadPoolWorkerThreadStart",
+        "signature": "static void (uint, uint, ushort)",
+        "source_dll": "QCall",
+        "source_name": "LogThreadPoolWorkerThreadStart"
+      }
+    },
+    {
+      "Native": {
+        "name": "LogThreadPoolWorkerThreadStop",
+        "signature": "static void (uint, uint, ushort)",
+        "source_dll": "QCall",
+        "source_name": "LogThreadPoolWorkerThreadStop"
+      }
+    },
+    {
+      "Native": {
+        "name": "LogThreadPoolWorkerThreadWait",
+        "signature": "static void (uint, uint, ushort)",
+        "source_dll": "QCall",
+        "source_name": "LogThreadPoolWorkerThreadWait"
+      }
+    },
+    {
+      "Native": {
+        "name": "LogThreadPoolMinMaxThreads",
+        "signature": "static void (ushort, ushort, ushort, ushort, ushort)",
+        "source_dll": "QCall",
+        "source_name": "LogThreadPoolMinMaxThreads"
+      }
+    },
+    {
+      "Native": {
+        "name": "LogThreadPoolWorkerThreadAdjustmentSample",
+        "signature": "static void (double, ushort)",
+        "source_dll": "QCall",
+        "source_name": "LogThreadPoolWorkerThreadAdjustmentSample"
+      }
+    },
+    {
+      "Native": {
+        "name": "LogThreadPoolWorkerThreadAdjustmentAdjustment",
+        "signature": "static void (double, uint, valuetype System.Diagnostics.Tracing.NativeRuntimeEventSource/ThreadAdjustmentReasonMap, ushort)",
+        "source_dll": "QCall",
+        "source_name": "LogThreadPoolWorkerThreadAdjustmentAdjustment"
+      }
+    },
+    {
+      "Native": {
+        "name": "LogThreadPoolWorkerThreadAdjustmentStats",
+        "signature": "static void (double, double, double, double, double, double, double, double, double, ushort, ushort)",
+        "source_dll": "QCall",
+        "source_name": "LogThreadPoolWorkerThreadAdjustmentStats"
+      }
+    },
+    {
+      "Native": {
+        "name": "LogThreadPoolIODequeue",
+        "signature": "static void (nint, nint, ushort)",
+        "source_dll": "QCall",
+        "source_name": "LogThreadPoolIODequeue"
+      }
+    },
+    {
+      "Native": {
+        "name": "LogThreadPoolWorkingThreadCount",
+        "signature": "static void (uint, ushort)",
+        "source_dll": "QCall",
+        "source_name": "LogThreadPoolWorkingThreadCount"
+      }
+    },
+    {
+      "Native": {
+        "name": "LogThreadPoolIOPack",
+        "signature": "static void (nint, nint, ushort)",
+        "source_dll": "QCall",
+        "source_name": "LogThreadPoolIOPack"
+      }
+    },
+    {
+      "Native": {
+        "name": "<LogThreadPoolIOEnqueue>g____PInvoke|10_0",
+        "signature": "static void (nint, nint, int, ushort)",
+        "source_dll": "QCall",
+        "source_name": "LogThreadPoolIOEnqueue"
+      }
+    }
+  ],
+  "HostPolicy": [
+    {
+      "Native": {
+        "name": "corehost_set_error_writer",
+        "signature": "static nint (nint)",
+        "source_dll": "libhostpolicy",
+        "source_name": "corehost_set_error_writer"
+      }
+    },
+    {
+      "Native": {
+        "name": "<corehost_resolve_component_dependencies>g____PInvoke|2_0",
+        "signature": "static int (byte*, nint)",
+        "source_dll": "libhostpolicy",
+        "source_name": "corehost_resolve_component_dependencies"
+      }
+    }
+  ],
+  "System.String": [
+    {
+      "Internal": {
+        "name": "FastAllocateString",
+        "signature": "static string (int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "SetTrailByte",
+        "signature": "void (byte)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "TryGetTrailByte",
+        "signature": "bool (ref byte)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "Intern",
+        "signature": "string ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": "IsInterned",
+        "signature": "string ()"
+      }
+    },
+    {
+      "Internal": {
+        "name": ".ctor",
+        "signature": "void (char[])"
+      }
+    },
+    {
+      "Internal": {
+        "name": ".ctor",
+        "signature": "void (char[], int, int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": ".ctor",
+        "signature": "void (char*)"
+      }
+    },
+    {
+      "Internal": {
+        "name": ".ctor",
+        "signature": "void (char*, int, int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": ".ctor",
+        "signature": "void (sbyte*)"
+      }
+    },
+    {
+      "Internal": {
+        "name": ".ctor",
+        "signature": "void (sbyte*, int, int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": ".ctor",
+        "signature": "void (sbyte*, int, int, System.Text.Encoding)"
+      }
+    },
+    {
+      "Internal": {
+        "name": ".ctor",
+        "signature": "void (char, int)"
+      }
+    },
+    {
+      "Internal": {
+        "name": ".ctor",
+        "signature": "void (valuetype System.ReadOnlySpan`1<char>)"
+      }
+    }
+  ],
+  "System.Diagnostics.StackFrame": [
+    {
+      "Native": {
+        "name": "GetMethodDescFromNativeIP",
+        "signature": "static valuetype System.RuntimeMethodHandleInternal (nint)",
+        "source_dll": "QCall",
+        "source_name": "StackFrame_GetMethodDescFromNativeIP"
+      }
+    }
+  ],
+  "System.Environment": [
+    {
+      "Native": {
+        "name": "_Exit",
+        "signature": "static void (int)",
+        "source_dll": "QCall",
+        "source_name": "Environment_Exit"
+      }
+    },
+    {
+      "Internal": {
+        "name": "FailFast",
+        "signature": "static void (string)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "FailFast",
+        "signature": "static void (string, System.Exception)"
+      }
+    },
+    {
+      "Internal": {
+        "name": "FailFast",
+        "signature": "static void (string, System.Exception, string)"
+      }
+    },
+    {
+      "Native": {
+        "name": "GetProcessorCount",
+        "signature": "static int ()",
+        "source_dll": "QCall",
+        "source_name": "Environment_GetProcessorCount"
+      }
+    }
+  ],
+  "System.Runtime.Intrinsics.X86.X86Base": [
+    {
+      "Native": {
+        "name": "__cpuidex",
+        "signature": "static void (int*, int, int)",
+        "source_dll": "QCall",
+        "source_name": "X86BaseCpuId"
+      }
+    }
+  ],
+  "System.ComAwareWeakReference": [
+    {
+      "Native": {
+        "name": "ComWeakRefToObject",
+        "signature": "static void (nint, long, valuetype System.Runtime.CompilerServices.ObjectHandleOnStack)",
+        "source_dll": "QCall",
+        "source_name": "ComWeakRefToObject"
+      }
+    },
+    {
+      "Internal": {
+        "name": "HasInteropInfo",
+        "signature": "static bool (object)"
+      }
+    },
+    {
+      "Native": {
+        "name": "<ObjectToComWeakRef>g____PInvoke|4_0",
+        "signature": "static nint (valuetype System.Runtime.CompilerServices.ObjectHandleOnStack, long*)",
+        "source_dll": "QCall",
+        "source_name": "ObjectToComWeakRef"
+      }
+    }
+  ]
+}
