@@ -81,14 +81,15 @@ name = "dotnet-rs"
 version = "0.1.0"
 dependencies = [
  "dotnetdll",
+ "enum_dispatch",
  "gc-arena",
 ]
 
 [[package]]
 name = "dotnetdll"
-version = "0.0.2"
+version = "0.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88ebd65938b07323c6d26281b3418b54d2b365cbc200070c349a2651f64e3a66"
+checksum = "a89b68c99c215442368db279146dd11169c117aad1bed134b35de0e7d3ec676c"
 dependencies = [
  "bitfield",
  "bitvec",
@@ -113,6 +114,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "enum_dispatch"
+version = "0.3.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f33313078bb8d4d05a2733a94ac4c2d8a0df9a2b84424ebf4f33bfc224a890e"
+dependencies = [
+ "once_cell",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.48",
 ]
 
 [[package]]

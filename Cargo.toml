@@ -6,5 +6,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-dotnetdll = "0.0.2"
+dotnetdll = "0.0.3"
+enum_dispatch = "0.3"
 gc-arena = "0.5.0"

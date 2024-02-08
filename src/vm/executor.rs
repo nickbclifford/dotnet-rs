@@ -6,18 +6,18 @@ use super::{MethodInfo, ExecutionResult, MethodState};
 
 // TODO
 #[derive(Debug)]
-pub struct Executor<'gc> {
-    instructions: &'gc [Instruction],
+pub struct Executor<'gc, 'm: 'gc> {
+    instructions: &'m [Instruction],
     info: MethodInfo<'gc>
 }
 
-impl<'gc> Executor<'gc> {
-    pub fn new(method: &Method<'gc>) -> Self {
+impl<'gc, 'm: 'gc> Executor<'gc, 'm> {
+    pub fn new(method: &'m Method<'gc>) -> Self {
         let body = match &method.body {
             Some(b) => b,
             None => todo!("no body in executing method")
         };
-        let mut exceptions = &[];
+        let mut exceptions: &[body::Exception] = &[];
         for sec in &body.data_sections {
             match sec {
                 DataSection::Unrecognized { .. } => {}
@@ -30,7 +30,7 @@ impl<'gc> Executor<'gc> {
         Self {
             instructions: &body.instructions,
             info: MethodInfo {
-                signature: &method.signature.clone(),
+                signature: &method.signature,
                 locals: &body.header.local_variables,
                 exceptions,
             }
