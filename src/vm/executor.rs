@@ -1,21 +1,19 @@
-use dotnetdll::prelude::*;
-use dotnetdll::prelude::body::DataSection;
+use super::{ExecutionResult, MethodInfo, MethodState};
 use crate::value::StackValue;
-use super::{MethodInfo, ExecutionResult, MethodState};
-
+use dotnetdll::prelude::{body::DataSection, *};
 
 // TODO
 #[derive(Debug)]
-pub struct Executor<'gc, 'm: 'gc> {
-    instructions: &'m [Instruction],
-    info: MethodInfo<'gc>
+pub struct Executor<'a> {
+    instructions: &'a [Instruction],
+    info: MethodInfo<'a>,
 }
 
-impl<'gc, 'm: 'gc> Executor<'gc, 'm> {
-    pub fn new(method: &'m Method<'gc>) -> Self {
+impl<'gc, 'a: 'gc> Executor<'a> {
+    pub fn new(method: &'a Method<'a>) -> Self {
         let body = match &method.body {
             Some(b) => b,
-            None => todo!("no body in executing method")
+            None => todo!("no body in executing method"),
         };
         let mut exceptions: &[body::Exception] = &[];
         for sec in &body.data_sections {
@@ -33,7 +31,7 @@ impl<'gc, 'm: 'gc> Executor<'gc, 'm> {
                 signature: &method.signature,
                 locals: &body.header.local_variables,
                 exceptions,
-            }
+            },
         }
     }
 
@@ -49,10 +47,8 @@ impl<'gc, 'm: 'gc> Executor<'gc, 'm> {
         };
 
         loop {
-            // TODO: auto-increment ip if it hasn't been changed by the instruction
-            let step = state.execute(&self.instructions[state.ip]);
-            if let Some(result) = step {
-                return result
+            if let Some(result) = state.execute(&self.instructions[state.ip]) {
+                return result;
             }
         }
     }

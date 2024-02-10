@@ -265,6 +265,9 @@ impl<'gc> MethodState<'gc> {
 
     fn execute(&mut self, i: &Instruction) -> Option<ExecutionResult<'gc>> {
         use Instruction::*;
+
+        let mut moved_ip = false;
+
         match i {
             Add => binary_arith_op!(self, wrapping_add (f64 +), {
                 (StackValue::Int32(i), StackValue::ManagedPtr(ManagedPtr(p))) => {
@@ -298,6 +301,7 @@ impl<'gc> MethodState<'gc> {
             BranchNotEqual(_) => {}
             Branch(i) => {
                 self.ip = *i;
+                moved_ip = true;
             }
             Breakpoint => {}
             BranchFalsy(_) => {}
@@ -474,6 +478,9 @@ impl<'gc> MethodState<'gc> {
             },
             UnboxIntoAddress { .. } => {}
             UnboxIntoValue(_) => {}
+        }
+        if !moved_ip {
+            self.ip += 1;
         }
         None
     }

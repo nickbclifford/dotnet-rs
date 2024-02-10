@@ -8,23 +8,34 @@ pub trait HasLayout {
     fn size(&self) -> usize;
 }
 
-// TODO: scalars
 #[enum_dispatch(HasLayout)]
+#[derive(Clone, Debug)]
 pub enum LayoutManager {
     ClassLayoutManager,
     ArrayLayoutManager,
+    Scalar
+}
+impl LayoutManager {
+    pub fn is_gc_ptr(&self) -> bool {
+        match self {
+            LayoutManager::Scalar(Scalar::ObjectRef) => true,
+            _ => false
+        }
+    }
 }
 
-struct FieldLayout {
-    position: usize,
-    size: usize,
+#[derive(Clone, Debug)]
+pub struct FieldLayout {
+    pub position: usize,
+    pub layout: LayoutManager
 }
-struct ClassLayoutManager {
-    fields: HashMap<String, FieldLayout>
+#[derive(Clone, Debug)]
+pub struct ClassLayoutManager {
+    pub fields: HashMap<String, FieldLayout>
 }
 impl HasLayout for ClassLayoutManager {
     fn size(&self) -> usize {
-        self.fields.values().map(|l| l.size).sum()
+        self.fields.values().map(|f| f.layout.size()).sum()
     }
 }
 impl ClassLayoutManager {
@@ -53,25 +64,37 @@ impl ClassLayoutManager {
     }
 }
 
-struct ArrayLayoutManager {
-    element_size: usize,
-    length: usize
+#[derive(Clone, Debug)]
+pub struct ArrayLayoutManager {
+    pub element_layout: Box<LayoutManager>,
+    pub length: usize
 }
 impl HasLayout for ArrayLayoutManager {
     fn size(&self) -> usize {
-        self.element_size * self.length
+        self.element_layout.size() * self.length
     }
 }
 impl ArrayLayoutManager {
     pub fn new(element: &MemberType, length: usize) -> Self {
         Self {
-            element_size: type_layout(element).size(),
+            element_layout: Box::new(type_layout(element)),
             length,
         }
     }
 
     pub fn element_offset(&self, index: usize) -> usize {
-        self.element_size * index
+        self.element_layout.size() * index
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum Scalar {
+    ObjectRef
+    // TODO: int/ptr types
+}
+impl HasLayout for Scalar {
+    fn size(&self) -> usize {
+        todo!()
     }
 }
 
