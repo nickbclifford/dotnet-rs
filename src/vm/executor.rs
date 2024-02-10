@@ -1,6 +1,7 @@
-use super::{ExecutionResult, MethodInfo, MethodState};
-use crate::value::StackValue;
-use dotnetdll::prelude::{body::DataSection, *};
+use dotnetdll::prelude::{*, body::DataSection};
+use gc_arena::{Arena, Rootable};
+
+use super::{MethodInfo, MethodState};
 
 // TODO
 #[derive(Debug)]
@@ -9,7 +10,9 @@ pub struct Executor<'a> {
     info: MethodInfo<'a>,
 }
 
-impl<'gc, 'a: 'gc> Executor<'a> {
+type GCArena<'a> = Arena<Rootable!['gc => MethodState<'gc, 'a>]>;
+
+impl<'a> Executor<'a> {
     pub fn new(method: &'a Method<'a>) -> Self {
         let body = match &method.body {
             Some(b) => b,
@@ -35,21 +38,27 @@ impl<'gc, 'a: 'gc> Executor<'a> {
         }
     }
 
-    pub fn run(&self, args: Vec<StackValue<'gc>>) -> ExecutionResult<'gc> {
-        // TODO: where do we initialize locals slots?
-        let mut state = MethodState {
+    // TODO: arguments/returns between gc sessions?
+    pub fn run(&self) {
+        let mut arena = GCArena::new(|m| MethodState {
             ip: 0,
+            // TODO: properly initialize
             stack: vec![],
             locals: vec![],
-            arguments: args,
+            arguments: vec![],
             info_handle: self.info,
             memory_pool: vec![],
-        };
+            gc_handle: m
+        });
+
 
         loop {
-            if let Some(result) = state.execute(&self.instructions[state.ip]) {
-                return result;
-            }
+            // TODO
+            // arena.mutate_root(|_, state| {
+            //     if let Some(result) = state.execute(&self.instructions[state.ip]) {
+            //         return result;
+            //     }
+            // });
         }
     }
 }

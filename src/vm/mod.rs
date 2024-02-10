@@ -2,18 +2,20 @@ mod executor;
 
 use super::value::*;
 use dotnetdll::prelude::*;
+use gc_arena::{Collect, Mutation};
 
 // I.12.3.2
 
-#[derive(Clone, Debug)]
-pub struct MethodState<'gc> {
+#[derive(Clone, Debug, Collect)]
+#[collect(no_drop)]
+pub struct MethodState<'gc, 'm> {
     ip: usize,
     stack: Vec<StackValue<'gc>>,
     locals: Vec<StackValue<'gc>>,
     arguments: Vec<StackValue<'gc>>,
-    // this lifetime punning is okay, since all metadata will live as least as long as the GC
-    info_handle: MethodInfo<'gc>,
+    info_handle: MethodInfo<'m>,
     memory_pool: Vec<u8>,
+    gc_handle: &'gc Mutation<'gc>
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -255,7 +257,7 @@ macro_rules! shift_op {
     };
 }
 
-impl<'gc> MethodState<'gc> {
+impl<'gc, 'm> MethodState<'gc, 'm> {
     fn pop(&mut self) -> StackValue<'gc> {
         match self.stack.pop() {
             Some(v) => v,
