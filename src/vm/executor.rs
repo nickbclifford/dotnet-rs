@@ -1,19 +1,18 @@
-use dotnetdll::prelude::{*, body::DataSection};
-use gc_arena::{Arena, Rootable};
+use crate::vm::gc::{GCArena, GCValueHandle};
+use dotnetdll::prelude::{body::DataSection, *};
 
-use super::{MethodInfo, MethodState};
+use super::{ExecutionResult, MethodInfo, MethodState};
 
 // TODO
 #[derive(Debug)]
 pub struct Executor<'a> {
     instructions: &'a [Instruction],
     info: MethodInfo<'a>,
+    arena: &'a GCArena<'a>
 }
 
-type GCArena<'a> = Arena<Rootable!['gc => MethodState<'gc, 'a>]>;
-
 impl<'a> Executor<'a> {
-    pub fn new(method: &'a Method<'a>) -> Self {
+    pub fn new(arena: &'a GCArena<'a>, method: &'a Method<'a>) -> Self {
         let body = match &method.body {
             Some(b) => b,
             None => todo!("no body in executing method"),
@@ -35,30 +34,25 @@ impl<'a> Executor<'a> {
                 locals: &body.header.local_variables,
                 exceptions,
             },
+            arena
         }
     }
 
-    // TODO: arguments/returns between gc sessions?
-    pub fn run(&self) {
-        let mut arena = GCArena::new(|m| MethodState {
-            ip: 0,
-            // TODO: properly initialize
-            stack: vec![],
-            locals: vec![],
-            arguments: vec![],
-            info_handle: self.info,
-            memory_pool: vec![],
-            gc_handle: m
-        });
-
+    // assumes args are already on stack
+    pub fn run(&mut self) -> ExecutionResult {
+        self.arena.mutate_root(|gc, c| c.new_frame(gc, self.info));
 
         loop {
-            // TODO
-            // arena.mutate_root(|_, state| {
-            //     if let Some(result) = state.execute(&self.instructions[state.ip]) {
-            //         return result;
-            //     }
-            // });
+            match self.arena.mutate_root(|gc, c| c.step_instruction(gc, self.instructions)) {
+                Some(ExecutionResult::Returned) => {
+                    // TODO: void returns
+                    self.arena.mutate_root(|gc, c| c.return_frame(gc));
+                }
+                Some(ExecutionResult::Threw) => {
+                    // TODO: where do we keep track of exceptions?
+                }
+                None => {}
+            }
         }
     }
 }

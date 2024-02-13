@@ -6,7 +6,7 @@ use layout::*;
 use std::marker::PhantomData;
 use std::mem::size_of;
 
-#[derive(Clone, Debug, Collect)]
+#[derive(Copy, Clone, Debug, Collect)]
 #[collect(no_drop)]
 pub enum StackValue<'gc> {
     Int32(i32),
@@ -25,13 +25,21 @@ impl StackValue<'_> {
     pub fn managed_ptr(ptr: *mut u8) -> Self {
         Self::ManagedPtr(ManagedPtr(ptr))
     }
+    pub fn null() -> Self {
+        Self::ObjectRef(None)
+    }
+}
+impl Default for StackValue<'_> {
+    fn default() -> Self {
+        Self::null()
+    }
 }
 
 // TODO: proper representations
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 #[repr(transparent)]
 pub struct UnmanagedPtr(pub *mut u8);
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 #[repr(transparent)]
 pub struct ManagedPtr(pub *mut u8);
 unsafe_empty_collect!(UnmanagedPtr);
