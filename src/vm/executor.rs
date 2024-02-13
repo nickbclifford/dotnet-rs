@@ -4,15 +4,14 @@ use dotnetdll::prelude::{body::DataSection, *};
 use super::{ExecutionResult, MethodInfo, MethodState};
 
 // TODO
-#[derive(Debug)]
 pub struct Executor<'a> {
     instructions: &'a [Instruction],
     info: MethodInfo<'a>,
-    arena: &'a GCArena<'a>
+    arena: &'a mut GCArena
 }
 
 impl<'a> Executor<'a> {
-    pub fn new(arena: &'a GCArena<'a>, method: &'a Method<'a>) -> Self {
+    pub fn new(arena: &'a mut GCArena, method: &'a Method<'a>) -> Self {
         let body = match &method.body {
             Some(b) => b,
             None => todo!("no body in executing method"),
