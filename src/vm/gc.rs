@@ -1,9 +1,10 @@
-use dotnetdll::prelude::Instruction;
-use gc_arena::{Arena, Collect, DynamicRoot, DynamicRootSet, Gc, Mutation, Rootable, unsafe_empty_collect};
+use gc_arena::{
+    Arena, Collect, DynamicRoot, DynamicRootSet, Gc, Mutation, Rootable, unsafe_empty_collect,
+};
 use gc_arena::lock::Lock;
 
 use crate::value::StackValue;
-use crate::vm::{ExecutionResult, MethodInfo, MethodState};
+use crate::vm::{MethodInfo, MethodState};
 
 type StackSlot = Rootable![Gc<'_, Lock<StackValue<'_>>>];
 
@@ -19,19 +20,18 @@ pub struct CallStack<'gc, 'm> {
     frames: Vec<StackFrame<'m>>,
 }
 
-struct StackFrame<'m> {
-    stack_height: usize,
-    base: BasePointer,
-    state: MethodState<'m>,
+pub struct StackFrame<'m> {
+    pub stack_height: usize,
+    pub base: BasePointer,
+    pub state: MethodState<'m>,
 }
 unsafe_empty_collect!(StackFrame<'_>);
-struct BasePointer {
+pub struct BasePointer {
     arguments: usize,
     locals: usize,
     stack: usize,
 }
 
-// TODO: the 'm lifetime on CallStack is causing problems with the Rootable trait
 pub type GCArena = Arena<Rootable!['gc => CallStack<'gc, 'static>]>;
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
@@ -122,12 +122,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         f.base.stack + f.stack_height
     }
 
-    pub fn step_instruction(&mut self, gc_handle: &'gc Mutation<'gc>, body: &[Instruction]) -> Option<ExecutionResult> {
-        let frame = self.current_frame_mut();
-        let i = &body[frame.state.ip];
-        frame.state.execute(gc_handle, self, i)
-    }
-
     pub fn get_argument(&self, index: usize) -> StackValue<'gc> {
         let bp = &self.current_frame().base;
         let GCValueHandle(arg_handle) = &self.stack[bp.arguments + index];
@@ -140,7 +134,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.roots.fetch(local_handle).get()
     }
 
-    pub fn set_argument(&self, gc_handle: &'gc Mutation<'gc>, index: usize, value: StackValue<'gc>) {
+    pub fn set_argument(
+        &self,
+        gc_handle: &'gc Mutation<'gc>,
+        index: usize,
+        value: StackValue<'gc>,
+    ) {
         let bp = &self.current_frame().base;
         let GCValueHandle(arg_handle) = &self.stack[bp.arguments + index];
         self.roots.fetch(arg_handle).set(gc_handle, value)

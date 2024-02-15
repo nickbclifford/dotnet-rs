@@ -1,17 +1,18 @@
-use crate::vm::gc::{GCArena, GCValueHandle};
-use dotnetdll::prelude::{body::DataSection, *};
+use dotnetdll::prelude::{*, body::DataSection};
 
-use super::{ExecutionResult, MethodInfo, MethodState};
+use crate::vm::gc::GCArena;
+
+use super::{ExecutionResult, MethodInfo};
 
 // TODO
-pub struct Executor<'a> {
-    instructions: &'a [Instruction],
-    info: MethodInfo<'a>,
-    arena: &'a mut GCArena
+pub struct Executor {
+    instructions: &'static [Instruction],
+    info: MethodInfo<'static>,
+    arena: &'static mut GCArena
 }
 
-impl<'a> Executor<'a> {
-    pub fn new(arena: &'a mut GCArena, method: &'a Method<'a>) -> Self {
+impl Executor {
+    pub fn new(arena: &'static mut GCArena, method: &'static Method<'static>) -> Self {
         let body = match &method.body {
             Some(b) => b,
             None => todo!("no body in executing method"),
@@ -42,7 +43,7 @@ impl<'a> Executor<'a> {
         self.arena.mutate_root(|gc, c| c.new_frame(gc, self.info));
 
         loop {
-            match self.arena.mutate_root(|gc, c| c.step_instruction(gc, self.instructions)) {
+            match self.arena.mutate_root(|gc, c| c.step(gc, self.instructions)) {
                 Some(ExecutionResult::Returned) => {
                     // TODO: void returns
                     self.arena.mutate_root(|gc, c| c.return_frame(gc));
