@@ -1,17 +1,27 @@
-use super::{CallStack, CallResult};
-use crate::value::{ManagedPtr, StackValue};
+use super::{CallResult, CallStack};
+use crate::value::{ManagedPtr, ObjectRef, StackValue, UnmanagedPtr};
 use dotnetdll::prelude::{Instruction, NumberSign};
 use gc_arena::Mutation;
+use std::cmp::Ordering;
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     pub fn step(&mut self, gc_handle: &'gc Mutation<'gc>) -> Option<CallResult> {
         use Instruction::*;
+
+        let mut moved_ip = false;
 
         macro_rules! state {
             (|$state:ident| $body:expr) => {{
                 let frame = self.current_frame_mut();
                 let $state = &mut frame.state;
                 $body
+            }};
+        }
+
+        macro_rules! branch {
+            ($ip:expr) => {{
+                state!(|s| s.ip = *$ip);
+                moved_ip = true;
             }};
         }
 
@@ -254,9 +264,53 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             };
         }
 
-        let i = state!(|s| &s.info_handle.instructions[s.ip]);
+        macro_rules! equal {
+            () => {
+                match (pop!(), pop!()) {
+                    (StackValue::ManagedPtr(ManagedPtr(l)), StackValue::NativeInt(r)) => {
+                        l as isize == r
+                    }
+                    (StackValue::NativeInt(l), StackValue::ManagedPtr(ManagedPtr(r))) => {
+                        l == r as isize
+                    }
+                    (StackValue::ObjectRef(l), StackValue::ObjectRef(r)) => l == r,
+                    (l, r) => l.partial_cmp(&r) == Some(Ordering::Equal),
+                }
+            };
+        }
+        macro_rules! compare {
+            ($sgn:expr, $op:tt ( $order:pat )) => {
+                match (pop!(), pop!(), $sgn) {
+                    (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Unsigned) => {
+                        (l as u32) $op (r as u32)
+                    }
+                    (StackValue::Int32(l), StackValue::NativeInt(r), NumberSign::Unsigned) => {
+                        (l as usize) $op (r as usize)
+                    }
+                    (StackValue::Int64(l), StackValue::Int64(r), NumberSign::Unsigned) => {
+                        (l as u64) $op (r as u64)
+                    }
+                    (StackValue::NativeInt(l), StackValue::Int32(r), NumberSign::Unsigned) => {
+                        (l as usize) $op (r as usize)
+                    }
+                    (StackValue::NativeInt(l), StackValue::NativeInt(r), NumberSign::Unsigned) => {
+                        (l as usize) $op (r as usize)
+                    }
+                    (l, r, _) => {
+                        matches!(l.partial_cmp(&r), Some($order))
+                    }
+                }
+            }
+        }
+        macro_rules! conditional_branch {
+            ($condition:expr, $ip:expr) => {{
+                if $condition {
+                    branch!($ip);
+                }
+            }};
+        }
 
-        let mut moved_ip = false;
+        let i = state!(|s| &s.info_handle.instructions[s.ip]);
 
         match i {
             Add => binary_arith_op!(self, wrapping_add (f64 +), {
@@ -281,26 +335,66 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }),
             And => binary_int_op!(self, &),
             ArgumentList => {}
-            BranchEqual(_) => {}
-            BranchGreaterOrEqual(_, _) => {}
-            BranchGreater(_, _) => {}
-            BranchLessOrEqual(_, _) => {}
-            BranchLess(_, _) => {}
-            BranchNotEqual(_) => {}
-            Branch(i) => {
-                state!(|s| s.ip = *i);
-                moved_ip = true;
+            BranchEqual(i) => {
+                if equal!() {
+                    branch!(i);
+                }
             }
+            BranchGreaterOrEqual(sgn, i) => {
+                conditional_branch!(compare!(sgn, >= (Ordering::Greater | Ordering::Equal)), i)
+            }
+            BranchGreater(sgn, i) => {
+                conditional_branch!(compare!(sgn, > (Ordering::Greater)), i)
+            }
+            BranchLessOrEqual(sgn, i) => {
+                conditional_branch!(compare!(sgn, <= (Ordering::Less | Ordering::Equal)), i)
+            }
+            BranchLess(sgn, i) => conditional_branch!(compare!(sgn, < (Ordering::Less)), i),
+            BranchNotEqual(i) => {
+                conditional_branch!(!equal!(), i)
+            }
+            Branch(i) => branch!(i),
             Breakpoint => {}
-            BranchFalsy(_) => {}
-            BranchTruthy(_) => {}
-            Call { tail_call, param0: method } => {
+            BranchFalsy(i) => {
+                conditional_branch!(
+                    match pop!() {
+                        StackValue::Int32(i) => i == 0,
+                        StackValue::Int64(i) => i == 0,
+                        StackValue::NativeInt(i) => i == 0,
+                        StackValue::ObjectRef(ObjectRef(o)) => o.is_none(),
+                        StackValue::UnmanagedPtr(UnmanagedPtr(p))
+                        | StackValue::ManagedPtr(ManagedPtr(p)) => p.is_null(),
+                        v => todo!("invalid type on stack ({:?}) for brfalse operation", v),
+                    },
+                    i
+                )
+            }
+            BranchTruthy(i) => {
+                conditional_branch!(
+                    match pop!() {
+                        StackValue::NativeInt(i) => i != 0,
+                        StackValue::ObjectRef(ObjectRef(o)) => o.is_some(),
+                        v => todo!("invalid type on stack ({:?}) for brtrue operation", v),
+                    },
+                    i
+                )
+            }
+            Call {
+                tail_call,
+                param0: method,
+            } => {
                 // TODO: traverse MethodSource and actually call
             }
             CallConstrained(_, _) => {}
             CallIndirect { .. } => {}
-            CompareEqual => {}
-            CompareGreater(_) => {}
+            CompareEqual => {
+                let val = equal!() as i32;
+                push!(StackValue::Int32(val))
+            }
+            CompareGreater(sgn) => {
+                let val = compare!(sgn, > (Ordering::Greater)) as i32;
+                push!(StackValue::Int32(val))
+            }
             CheckFinite => match pop!() {
                 StackValue::NativeFloat(f) => {
                     if f.is_infinite() || f.is_nan() {
@@ -311,7 +405,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 }
                 v => todo!("invalid type on stack ({:?}) for ckfinite operation", v),
             },
-            CompareLess(_) => {}
+            CompareLess(sgn) => {
+                let val = compare!(sgn, < (Ordering::Less)) as i32;
+                push!(StackValue::Int32(val))
+            }
             Convert(_) => {}
             ConvertOverflow(_, _) => {}
             ConvertFloat32 => {}

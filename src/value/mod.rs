@@ -3,10 +3,11 @@ mod layout;
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};
 use layout::*;
+use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::mem::size_of;
 
-#[derive(Copy, Clone, Debug, Collect)]
+#[derive(Copy, Clone, Debug, Collect, PartialEq)]
 #[collect(no_drop)]
 pub enum StackValue<'gc> {
     Int32(i32),
@@ -26,7 +27,7 @@ impl StackValue<'_> {
         Self::ManagedPtr(ManagedPtr(ptr))
     }
     pub fn null() -> Self {
-        Self::ObjectRef(None)
+        Self::ObjectRef(ObjectRef(None))
     }
 }
 impl Default for StackValue<'_> {
@@ -34,18 +35,44 @@ impl Default for StackValue<'_> {
         Self::null()
     }
 }
+impl PartialOrd for StackValue<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        use StackValue::*;
+        match (self, other) {
+            (Int32(l), Int32(r)) => l.partial_cmp(r),
+            (Int32(l), NativeInt(r)) => l.partial_cmp(&(*r as i32)),
+            (Int64(l), Int64(r)) => l.partial_cmp(r),
+            (NativeInt(l), Int32(r)) => l.partial_cmp(&(*r as isize)),
+            (NativeInt(l), NativeInt(r)) => l.partial_cmp(r),
+            (NativeFloat(l), NativeFloat(r)) => l.partial_cmp(r),
+            (ManagedPtr(l), ManagedPtr(r)) => l.partial_cmp(r),
+            _ => None,
+        }
+    }
+}
 
 // TODO: proper representations
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 #[repr(transparent)]
 pub struct UnmanagedPtr(pub *mut u8);
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 #[repr(transparent)]
 pub struct ManagedPtr(pub *mut u8);
 unsafe_empty_collect!(UnmanagedPtr);
 unsafe_empty_collect!(ManagedPtr);
 
-pub type ObjectRef<'gc> = Option<Gc<'gc, HeapStorage<'gc>>>;
+#[derive(Copy, Clone, Debug, Collect)]
+#[collect(no_drop)]
+#[repr(transparent)]
+pub struct ObjectRef<'gc>(pub Option<Gc<'gc, HeapStorage<'gc>>>);
+impl PartialEq for ObjectRef<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self.0, other.0) {
+            (Some(l), Some(r)) => Gc::ptr_eq(l, r),
+            _ => false,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Collect)]
 #[collect(no_drop)]
@@ -63,10 +90,10 @@ fn read_gc_ptr(source: &[u8]) -> ObjectRef<'_> {
     // and the same layout as Gc for Some
     // thus, if the pointer is not null, we know it is a Some(Gc)
     if ptr.is_null() {
-        None
+        ObjectRef(None)
     } else {
         // SAFETY: since this came from Gc::as_ptr, we know it's valid
-        Some(unsafe { Gc::from_ptr(ptr) })
+        ObjectRef(Some(unsafe { Gc::from_ptr(ptr) }))
     }
 }
 
@@ -82,7 +109,7 @@ unsafe impl Collect for Vector<'_> {
     fn trace(&self, cc: &Collection) {
         if self.layout.element_layout.is_gc_ptr() {
             for i in 0..self.layout.length {
-                if let Some(gc) = read_gc_ptr(&self.storage[i..]) {
+                if let ObjectRef(Some(gc)) = read_gc_ptr(&self.storage[i..]) {
                     gc.trace(cc);
                 }
             }
@@ -102,7 +129,7 @@ unsafe impl Collect for Object<'_> {
     fn trace(&self, cc: &Collection) {
         for field in self.field_layout.fields.values() {
             if field.layout.is_gc_ptr() {
-                if let Some(gc) = read_gc_ptr(&self.field_storage[field.position..]) {
+                if let ObjectRef(Some(gc)) = read_gc_ptr(&self.field_storage[field.position..]) {
                     gc.trace(cc);
                 }
             }

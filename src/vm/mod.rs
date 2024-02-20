@@ -10,7 +10,7 @@ mod gc;
 mod instructions;
 
 // I.12.3.2
-#[derive(Clone, Collect)]
+#[derive(Clone)]
 pub struct MethodState<'m> {
     ip: usize,
     info_handle: MethodInfo<'m>,
