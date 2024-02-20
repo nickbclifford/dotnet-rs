@@ -1,8 +1,9 @@
-mod value;
-mod vm;
+use std::{env::args, fs::File, io::prelude::*};
 
 use dotnetdll::prelude::*;
-use std::{env::args, fs::File, io::prelude::*};
+
+mod value;
+mod vm;
 
 fn main() {
     let args: Vec<_> = args().collect();
@@ -31,10 +32,9 @@ fn main() {
     };
 
     let arena = Box::new(vm::GCArena::new(|gc| vm::CallStack::new(gc)));
+    let mut executor = vm::Executor::new(Box::leak(arena));
 
-    let mut executor = vm::Executor::new(Box::leak(arena), &resolution[entry_method]);
+    executor.entrypoint(&resolution[entry_method]);
 
-    let result = executor.run();
-
-    println!("{:#?}", result)
+    println!("{:#?}", executor.run())
 }

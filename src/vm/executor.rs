@@ -1,58 +1,59 @@
-use dotnetdll::prelude::{*, body::DataSection};
+use dotnetdll::prelude::*;
 
+use crate::value::StackValue;
 use crate::vm::gc::GCArena;
 
-use super::{ExecutionResult, MethodInfo};
+use super::{CallResult, MethodInfo};
 
 // TODO
 pub struct Executor {
-    instructions: &'static [Instruction],
-    info: MethodInfo<'static>,
-    arena: &'static mut GCArena
+    arena: &'static mut GCArena,
+}
+
+#[derive(Clone, Debug)]
+pub enum ExecutorResult {
+    Exited(u32),
+    Threw, // TODO: well-typed exceptions
 }
 
 impl Executor {
-    pub fn new(arena: &'static mut GCArena, method: &'static Method<'static>) -> Self {
-        let body = match &method.body {
-            Some(b) => b,
-            None => todo!("no body in executing method"),
-        };
-        let mut exceptions: &[body::Exception] = &[];
-        for sec in &body.data_sections {
-            match sec {
-                DataSection::Unrecognized { .. } => {}
-                DataSection::ExceptionHandlers(e) => {
-                    exceptions = e;
-                }
-            }
-        }
+    pub fn new(arena: &'static mut GCArena) -> Self {
+        Self { arena }
+    }
 
-        Self {
-            instructions: &body.instructions,
-            info: MethodInfo {
-                signature: &method.signature,
-                locals: &body.header.local_variables,
-                exceptions,
-            },
-            arena
-        }
+    pub fn entrypoint(&mut self, method: &'static Method<'static>) {
+        // TODO: initialize argv (entry point args are either string[] or nothing, II.15.4.1.2)
+        self.arena
+            .mutate_root(|gc, c| c.entrypoint_frame(gc, MethodInfo::new(method), vec![]));
+    }
+
+    pub fn call(&mut self, method: &'static Method<'static>) {
+        self.arena
+            .mutate_root(|gc, c| c.call_frame(gc, MethodInfo::new(method)));
     }
 
     // assumes args are already on stack
-    pub fn run(&mut self) -> ExecutionResult {
-        self.arena.mutate_root(|gc, c| c.new_frame(gc, self.info));
-
+    pub fn run(&mut self) -> ExecutorResult {
         loop {
-            match self.arena.mutate_root(|gc, c| c.step(gc, self.instructions)) {
-                Some(ExecutionResult::Returned) => {
+            match self.arena.mutate_root(|gc, c| c.step(gc)) {
+                Some(CallResult::Returned) => {
                     // TODO: void returns
                     self.arena.mutate_root(|gc, c| c.return_frame(gc));
+
+                    let exit_code = self.arena.mutate(|gc, c| match c.bottom_of_stack() {
+                        Some(StackValue::Int32(i)) => i as u32,
+                        Some(_) => todo!("invalid value for entrypoint return"),
+                        None => 0,
+                    });
+                    return ExecutorResult::Exited(exit_code);
                 }
-                Some(ExecutionResult::Threw) => {
+                Some(CallResult::Threw) => {
                     // TODO: where do we keep track of exceptions?
+                    todo!()
                 }
                 None => {}
             }
+            // TODO: check GC
         }
     }
 }

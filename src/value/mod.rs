@@ -92,9 +92,10 @@ unsafe impl Collect for Vector<'_> {
 
 #[derive(Clone, Debug)]
 pub struct Object<'gc> {
-    description: TypeDescription<'gc>,
+    description: TypeDescription,
     field_layout: ClassLayoutManager,
     field_storage: Vec<u8>,
+    _contains_gc: PhantomData<&'gc ()>, // ditto
 }
 unsafe impl Collect for Object<'_> {
     #[inline]
@@ -109,8 +110,6 @@ unsafe impl Collect for Object<'_> {
     }
 }
 
-// the TypeDescription's data will longer than the garbage collector
-// thus it's fine to pun the lifetimes
 #[derive(Clone, Debug, Copy)]
-pub struct TypeDescription<'data>(pub &'data TypeDefinition<'data>);
-unsafe_empty_collect!(TypeDescription<'_>);
+pub struct TypeDescription(pub &'static TypeDefinition<'static>);
+unsafe_empty_collect!(TypeDescription);

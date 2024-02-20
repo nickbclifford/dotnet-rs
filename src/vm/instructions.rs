@@ -1,14 +1,10 @@
-use super::{CallStack, ExecutionResult};
+use super::{CallStack, CallResult};
 use crate::value::{ManagedPtr, StackValue};
 use dotnetdll::prelude::{Instruction, NumberSign};
 use gc_arena::Mutation;
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
-    pub fn step(
-        &mut self,
-        gc_handle: &'gc Mutation<'gc>,
-        body: &[Instruction],
-    ) -> Option<ExecutionResult> {
+    pub fn step(&mut self, gc_handle: &'gc Mutation<'gc>) -> Option<CallResult> {
         use Instruction::*;
 
         macro_rules! state {
@@ -258,7 +254,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             };
         }
 
-        let i = state!(|s| &body[s.ip]);
+        let i = state!(|s| &s.info_handle.instructions[s.ip]);
 
         let mut moved_ip = false;
 
@@ -298,7 +294,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             Breakpoint => {}
             BranchFalsy(_) => {}
             BranchTruthy(_) => {}
-            Call { .. } => {}
+            Call { tail_call, param0: method } => {
+                // TODO: traverse MethodSource and actually call
+            }
             CallConstrained(_, _) => {}
             CallIndirect { .. } => {}
             CompareEqual => {}
@@ -307,7 +305,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 StackValue::NativeFloat(f) => {
                     if f.is_infinite() || f.is_nan() {
                         todo!("ArithmeticException in ckfinite");
-                        return Some(ExecutionResult::Threw);
+                        return Some(CallResult::Threw);
                     }
                     push!(StackValue::NativeFloat(f))
                 }
@@ -392,9 +390,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 NumberSign::Unsigned => binary_int_op!(self, % as unsigned),
             },
             Return => {
-                // expects single value on stack
+                // expects single value on stack for non-void methods
                 // will be moved around properly by call stack manager
-                return Some(ExecutionResult::Returned);
+                return Some(CallResult::Returned);
             }
             ShiftLeft => shift_op!(self, <<),
             ShiftRight(sgn) => match sgn {
@@ -466,7 +464,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             Throw => {
                 // expects single value on stack
                 // TODO: how will we propagate exceptions up the call stack?
-                return Some(ExecutionResult::Threw);
+                return Some(CallResult::Threw);
             }
             UnboxIntoAddress { .. } => {}
             UnboxIntoValue(_) => {}
