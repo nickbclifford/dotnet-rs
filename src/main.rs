@@ -1,7 +1,10 @@
-use std::{env::args, fs::File, io::prelude::*};
+use std::{env::args, io::prelude::*};
 
 use dotnetdll::prelude::*;
 
+use crate::utils::static_res_from_file;
+
+mod utils;
 mod value;
 mod vm;
 
@@ -10,20 +13,8 @@ fn main() {
     let input_filename = args
         .get(1)
         .expect("missing input filename (TODO: usage instructions)");
-    let mut input_file =
-        File::open(input_filename).expect(&format!("could not open file {}", input_filename));
-    let mut input_buf = vec![];
-    input_file
-        .read_to_end(&mut input_buf)
-        .expect("failed to read input file");
 
-    let resolution = Resolution::parse(
-        // TODO: turn all these Box::leaks into lazy statics?
-        Box::leak(input_buf.into_boxed_slice()),
-        ReadOptions::default(),
-    )
-    .expect("failed to parse input file as .NET metadata");
-    let resolution = Box::leak(Box::new(resolution));
+    let resolution = static_res_from_file(input_filename);
 
     let entry_method = match resolution.entry_point {
         Some(EntryPoint::Method(m)) => m,
@@ -35,6 +26,9 @@ fn main() {
     let mut executor = vm::Executor::new(Box::leak(arena));
 
     executor.entrypoint(&resolution[entry_method]);
+
+    // TODO: collect external assemblies from args
+    let assemblies = value::resolve::Assemblies::new(resolution, std::iter::empty());
 
     println!("{:#?}", executor.run())
 }

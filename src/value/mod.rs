@@ -1,4 +1,5 @@
 mod layout;
+pub mod resolve;
 
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};
@@ -69,6 +70,7 @@ impl PartialEq for ObjectRef<'_> {
     fn eq(&self, other: &Self) -> bool {
         match (self.0, other.0) {
             (Some(l), Some(r)) => Gc::ptr_eq(l, r),
+            (None, None) => true,
             _ => false,
         }
     }
