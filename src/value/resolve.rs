@@ -1,19 +1,16 @@
 use super::TypeDescription;
-use crate::utils::static_res_from_file;
+use crate::utils::{static_res_from_file, ResolutionS};
 use dotnetdll::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub struct Assemblies {
-    external: HashMap<String, &'static Resolution<'static>>,
-    root: &'static Resolution<'static>,
+    external: HashMap<String, ResolutionS>,
+    pub root: ResolutionS,
 }
 
 impl Assemblies {
-    pub fn new(
-        root: &'static Resolution<'static>,
-        external_files: impl Iterator<Item = PathBuf>,
-    ) -> Self {
+    pub fn new(root: ResolutionS, external_files: impl Iterator<Item = PathBuf>) -> Self {
         let mut resolutions = HashMap::new();
         for name in external_files {
             let resolution = static_res_from_file(name);
@@ -30,7 +27,7 @@ impl Assemblies {
         }
     }
 
-    pub fn get_type(&self, handle: UserType) -> TypeDescription {
+    pub fn locate_type(&self, handle: UserType) -> TypeDescription {
         match handle {
             UserType::Definition(d) => TypeDescription(&self.root[d]),
             UserType::Reference(r) => {

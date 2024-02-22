@@ -1,4 +1,4 @@
-use crate::value::TypeDescription;
+use super::{resolve::Assemblies, TypeDescription};
 use dotnetdll::prelude::*;
 use enum_dispatch::enum_dispatch;
 use std::collections::HashMap;
@@ -40,7 +40,11 @@ impl HasLayout for ClassLayoutManager {
     }
 }
 impl ClassLayoutManager {
-    pub fn new(description: TypeDescription, generics: GenericLookup) -> Self {
+    pub fn new(
+        description: TypeDescription,
+        generics: GenericLookup,
+        assemblies: Assemblies,
+    ) -> Self {
         let layout = description.0.flags.layout;
         let fields: Vec<_> = description
             .0
@@ -50,7 +54,7 @@ impl ClassLayoutManager {
                 (
                     f.name.as_ref(),
                     f.offset,
-                    type_layout(&f.return_type, generics).size(),
+                    type_layout(&f.return_type, generics, assemblies).size(),
                 )
             })
             .collect();
@@ -82,9 +86,14 @@ impl HasLayout for ArrayLayoutManager {
     }
 }
 impl ArrayLayoutManager {
-    pub fn new(element: &MemberType, length: usize, generics: GenericLookup) -> Self {
+    pub fn new(
+        element: &MemberType,
+        length: usize,
+        generics: GenericLookup,
+        assemblies: Assemblies,
+    ) -> Self {
         Self {
-            element_layout: Box::new(type_layout(element, generics)),
+            element_layout: Box::new(type_layout(element, generics, assemblies)),
             length,
         }
     }
@@ -119,15 +128,19 @@ impl HasLayout for Scalar {
     }
 }
 
-pub type GenericLookup<'a> = &'a [&'a MemberType];
+pub type GenericLookup = Vec<MemberType>;
 
-pub fn type_layout(t: &MemberType, generics: GenericLookup) -> LayoutManager {
+pub fn type_layout(
+    t: &MemberType,
+    generics: GenericLookup,
+    assemblies: Assemblies,
+) -> LayoutManager {
     let base = loop {
         let mut mt = t;
         match mt {
             MemberType::Base(b) => break b,
             MemberType::TypeGeneric(i) => {
-                mt = generics[*i];
+                mt = &generics[*i];
             }
         }
     };
@@ -144,8 +157,16 @@ pub fn type_layout(t: &MemberType, generics: GenericLookup) -> LayoutManager {
         BaseType::Float64 => Scalar::Float64.into(),
         BaseType::Type {
             value_kind: Some(ValueKind::ValueType),
-            ..
-        } => ClassLayoutManager { fields: todo!() }.into(),
+            source,
+        } => {
+            let (t, generics) = match source {
+                TypeSource::User(u) => (assemblies.locate_type(*u), vec![]),
+                TypeSource::Generic { base, parameters } => {
+                    (assemblies.locate_type(*base), parameters)
+                }
+            };
+            ClassLayoutManager::new(t, generics, assemblies).into()
+        }
         BaseType::Type { .. }
         | BaseType::Object
         | BaseType::String

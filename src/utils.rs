@@ -2,7 +2,9 @@ use dotnetdll::prelude::{ReadOptions, Resolution};
 use std::io::Read;
 use std::path::Path;
 
-pub fn static_res_from_file(path: impl AsRef<Path>) -> &'static Resolution<'static> {
+pub type ResolutionS = &'static Resolution<'static>;
+
+pub fn static_res_from_file(path: impl AsRef<Path>) -> ResolutionS {
     let mut file = std::fs::File::open(path).expect("could not open file");
     let mut buf = vec![];
     file.read_to_end(&mut buf).expect("failed to read file");
