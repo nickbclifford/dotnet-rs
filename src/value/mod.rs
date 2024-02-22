@@ -41,7 +41,7 @@ impl PartialOrd for StackValue<'_> {
         use StackValue::*;
         match (self, other) {
             (Int32(l), Int32(r)) => l.partial_cmp(r),
-            (Int32(l), NativeInt(r)) => l.partial_cmp(&(*r as i32)),
+            (Int32(l), NativeInt(r)) => (*l as isize).partial_cmp(r),
             (Int64(l), Int64(r)) => l.partial_cmp(r),
             (NativeInt(l), Int32(r)) => l.partial_cmp(&(*r as isize)),
             (NativeInt(l), NativeInt(r)) => l.partial_cmp(r),
