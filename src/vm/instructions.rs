@@ -1,14 +1,25 @@
-use super::{CallResult, CallStack};
-use crate::value::{ManagedPtr, ObjectRef, StackValue, UnmanagedPtr};
-use dotnetdll::prelude::{Instruction, NumberSign};
-use gc_arena::Mutation;
 use std::cmp::Ordering;
 
+use dotnetdll::prelude::{Instruction, NumberSign};
+
+use crate::value::{ManagedPtr, ObjectRef, StackValue, UnmanagedPtr};
+
+use super::{CallResult, CallStack, GCHandle};
+
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
-    pub fn step(&mut self, gc_handle: &'gc Mutation<'gc>) -> Option<CallResult> {
+    pub fn step(&mut self, gc: GCHandle<'gc>) -> Option<CallResult> {
         use Instruction::*;
 
-        let mut moved_ip = false;
+        macro_rules! push {
+            ($val:expr) => {
+                self.push_stack(gc, $val)
+            };
+        }
+        macro_rules! pop {
+            () => {
+                self.pop_stack()
+            };
+        }
 
         macro_rules! state {
             (|$state:ident| $body:expr) => {{
@@ -18,26 +29,62 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }};
         }
 
+        let mut moved_ip = false;
+
         macro_rules! branch {
             ($ip:expr) => {{
                 state!(|s| s.ip = *$ip);
                 moved_ip = true;
             }};
         }
-
-        macro_rules! push {
-            ($val:expr) => {
-                self.push_stack(gc_handle, $val)
+        macro_rules! conditional_branch {
+            ($condition:expr, $ip:expr) => {{
+                if $condition {
+                    branch!($ip);
+                }
+            }};
+        }
+        macro_rules! equal {
+            () => {
+                match (pop!(), pop!()) {
+                    (StackValue::ManagedPtr(ManagedPtr(l)), StackValue::NativeInt(r)) => {
+                        l as isize == r
+                    }
+                    (StackValue::NativeInt(l), StackValue::ManagedPtr(ManagedPtr(r))) => {
+                        l == r as isize
+                    }
+                    (StackValue::ObjectRef(l), StackValue::ObjectRef(r)) => l == r,
+                    (l, r) => l.partial_cmp(&r) == Some(Ordering::Equal),
+                }
             };
         }
-        macro_rules! pop {
-            () => {
-                self.pop_stack()
-            };
+        macro_rules! compare {
+            ($sgn:expr, $op:tt ( $order:pat )) => {
+                match (pop!(), pop!(), $sgn) {
+                    (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Unsigned) => {
+                        (l as u32) $op (r as u32)
+                    }
+                    (StackValue::Int32(l), StackValue::NativeInt(r), NumberSign::Unsigned) => {
+                        (l as usize) $op (r as usize)
+                    }
+                    (StackValue::Int64(l), StackValue::Int64(r), NumberSign::Unsigned) => {
+                        (l as u64) $op (r as u64)
+                    }
+                    (StackValue::NativeInt(l), StackValue::Int32(r), NumberSign::Unsigned) => {
+                        (l as usize) $op (r as usize)
+                    }
+                    (StackValue::NativeInt(l), StackValue::NativeInt(r), NumberSign::Unsigned) => {
+                        (l as usize) $op (r as usize)
+                    }
+                    (l, r, _) => {
+                        matches!(l.partial_cmp(&r), Some($order))
+                    }
+                }
+            }
         }
 
         macro_rules! binary_arith_op {
-            ($self:ident, $method:ident (f64 $op:tt), { $($pat:pat => $arm:expr, )* }) => {
+            ($method:ident (f64 $op:tt), { $($pat:pat => $arm:expr, )* }) => {
                 match (pop!(), pop!()) {
                     (StackValue::Int32(i1), StackValue::Int32(i2)) => {
                         push!(StackValue::Int32(i1.$method(i2)))
@@ -66,7 +113,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     ),
                 }
             };
-            ($self:ident, $op:tt, { $($pat:pat => $arm:expr, )* }) => {
+            ($op:tt, { $($pat:pat => $arm:expr, )* }) => {
                 match (pop!(), pop!()) {
                     (StackValue::Int32(i1), StackValue::Int32(i2)) => {
                         push!(StackValue::Int32(i1 $op i2))
@@ -97,7 +144,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             };
         }
         macro_rules! binary_checked_op {
-            ($self:ident, $sign:expr, $method:ident (f64 $op:tt), { $($pat:pat => $arm:expr, )* }) => {
+            ($sign:expr, $method:ident (f64 $op:tt), { $($pat:pat => $arm:expr, )* }) => {
                 match (pop!(), pop!(), $sign) {
                     (StackValue::Int32(i1), StackValue::Int32(i2), NumberSign::Signed) => {
                         let Some(val) = i1.$method(i2) else { todo!("OverflowException in {}", stringify!($method)) };
@@ -154,7 +201,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             };
         }
         macro_rules! binary_int_op {
-            ($self:ident, $op:tt) => {
+            ($op:tt) => {
                 match (pop!(), pop!()) {
                     (StackValue::Int32(i1), StackValue::Int32(i2)) => {
                         push!(StackValue::Int32(i1 $op i2))
@@ -179,7 +226,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     ),
                 }
             };
-            ($self:ident, $op:tt as unsigned) => {
+            ($op:tt as unsigned) => {
                 match (pop!(), pop!()) {
                     (StackValue::Int32(i1), StackValue::Int32(i2)) => {
                         push!(StackValue::Int32(((i1 as u32) $op (i2 as u32)) as i32))
@@ -206,7 +253,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             };
         }
         macro_rules! shift_op {
-            ($self:ident, $op:tt) => {
+            ($op:tt) => {
                 match (pop!(), pop!()) {
                     (StackValue::Int32(i1), StackValue::Int32(i2)) => {
                         push!(StackValue::Int32(i1 $op i2))
@@ -234,7 +281,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     ),
                 }
             };
-            ($self:ident, $op:tt as unsigned) => {
+            ($op:tt as unsigned) => {
                match (pop!(), pop!()) {
                     (StackValue::Int32(i1), StackValue::Int32(i2)) => {
                         push!(StackValue::Int32(((i1 as u32) $op (i2 as u32)) as i32))
@@ -264,56 +311,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             };
         }
 
-        macro_rules! equal {
-            () => {
-                match (pop!(), pop!()) {
-                    (StackValue::ManagedPtr(ManagedPtr(l)), StackValue::NativeInt(r)) => {
-                        l as isize == r
-                    }
-                    (StackValue::NativeInt(l), StackValue::ManagedPtr(ManagedPtr(r))) => {
-                        l == r as isize
-                    }
-                    (StackValue::ObjectRef(l), StackValue::ObjectRef(r)) => l == r,
-                    (l, r) => l.partial_cmp(&r) == Some(Ordering::Equal),
-                }
-            };
-        }
-        macro_rules! compare {
-            ($sgn:expr, $op:tt ( $order:pat )) => {
-                match (pop!(), pop!(), $sgn) {
-                    (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Unsigned) => {
-                        (l as u32) $op (r as u32)
-                    }
-                    (StackValue::Int32(l), StackValue::NativeInt(r), NumberSign::Unsigned) => {
-                        (l as usize) $op (r as usize)
-                    }
-                    (StackValue::Int64(l), StackValue::Int64(r), NumberSign::Unsigned) => {
-                        (l as u64) $op (r as u64)
-                    }
-                    (StackValue::NativeInt(l), StackValue::Int32(r), NumberSign::Unsigned) => {
-                        (l as usize) $op (r as usize)
-                    }
-                    (StackValue::NativeInt(l), StackValue::NativeInt(r), NumberSign::Unsigned) => {
-                        (l as usize) $op (r as usize)
-                    }
-                    (l, r, _) => {
-                        matches!(l.partial_cmp(&r), Some($order))
-                    }
-                }
-            }
-        }
-        macro_rules! conditional_branch {
-            ($condition:expr, $ip:expr) => {{
-                if $condition {
-                    branch!($ip);
-                }
-            }};
-        }
-
         let i = state!(|s| &s.info_handle.instructions[s.ip]);
 
         match i {
-            Add => binary_arith_op!(self, wrapping_add (f64 +), {
+            Add => binary_arith_op!(wrapping_add (f64 +), {
                 (StackValue::Int32(i), StackValue::ManagedPtr(ManagedPtr(p))) => {
                     // TODO: proper mechanisms for safety and pointer arithmetic
                     unsafe {
@@ -330,15 +331,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     push!(StackValue::managed_ptr(p.offset(i)))
                 },
             }),
-            AddOverflow(sgn) => binary_checked_op!(self, sgn, checked_add(f64+), {
+            AddOverflow(sgn) => binary_checked_op!(sgn, checked_add(f64+), {
                 // TODO: pointer stuff
             }),
-            And => binary_int_op!(self, &),
+            And => binary_int_op!(&),
             ArgumentList => {}
             BranchEqual(i) => {
-                if equal!() {
-                    branch!(i);
-                }
+                conditional_branch!(equal!(), i)
             }
             BranchGreaterOrEqual(sgn, i) => {
                 conditional_branch!(compare!(sgn, >= (Ordering::Greater | Ordering::Equal)), i)
@@ -416,8 +415,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             ConvertUnsignedToFloat => {}
             CopyMemoryBlock { .. } => {}
             Divide(sgn) => match sgn {
-                NumberSign::Signed => binary_arith_op!(self, /, { }),
-                NumberSign::Unsigned => binary_int_op!(self, / as unsigned),
+                NumberSign::Signed => binary_arith_op!(/, { }),
+                NumberSign::Unsigned => binary_int_op!(/ as unsigned),
             },
             Duplicate => {
                 let val = self.pop_stack();
@@ -455,15 +454,15 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         v
                     ),
                 };
-                let ptr = state!(|state| {
-                    let loc = state.memory_pool.len();
-                    state.memory_pool.extend(vec![0; size]);
-                    state.memory_pool[loc..].as_mut_ptr()
+                let ptr = state!(|s| {
+                    let loc = s.memory_pool.len();
+                    s.memory_pool.extend(vec![0; size]);
+                    s.memory_pool[loc..].as_mut_ptr()
                 });
                 push!(StackValue::unmanaged_ptr(ptr));
             }
-            Multiply => binary_arith_op!(self, wrapping_mul (f64 *), {}),
-            MultiplyOverflow(sgn) => binary_checked_op!(self, sgn, checked_mul (f64 *), {}),
+            Multiply => binary_arith_op!(wrapping_mul (f64 *), {}),
+            MultiplyOverflow(sgn) => binary_checked_op!(sgn, checked_mul (f64 *), {}),
             Negate => match pop!() {
                 StackValue::Int32(i) => push!(StackValue::Int32(-i)),
                 StackValue::Int64(i) => push!(StackValue::Int64(-i)),
@@ -478,34 +477,34 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 StackValue::NativeInt(i) => push!(StackValue::NativeInt(!i)),
                 v => todo!("invalid type on stack ({:?}) for ~ operation", v),
             },
-            Or => binary_int_op!(self, |),
+            Or => binary_int_op!(|),
             Pop => {
                 pop!();
             }
             Remainder(sgn) => match sgn {
-                NumberSign::Signed => binary_arith_op!(self, %, { }),
-                NumberSign::Unsigned => binary_int_op!(self, % as unsigned),
+                NumberSign::Signed => binary_arith_op!(%, { }),
+                NumberSign::Unsigned => binary_int_op!(% as unsigned),
             },
             Return => {
                 // expects single value on stack for non-void methods
                 // will be moved around properly by call stack manager
                 return Some(CallResult::Returned);
             }
-            ShiftLeft => shift_op!(self, <<),
+            ShiftLeft => shift_op!(<<),
             ShiftRight(sgn) => match sgn {
-                NumberSign::Signed => shift_op!(self, >>),
-                NumberSign::Unsigned => shift_op!(self, >> as unsigned),
+                NumberSign::Signed => shift_op!(>>),
+                NumberSign::Unsigned => shift_op!(>> as unsigned),
             },
             StoreArgument(i) => {
                 let val = self.pop_stack();
-                self.set_argument(gc_handle, *i as usize, val);
+                self.set_argument(gc, *i as usize, val);
             }
             StoreIndirect { .. } => {}
             StoreLocal(i) => {
                 let val = self.pop_stack();
-                self.set_local(gc_handle, *i as usize, val);
+                self.set_local(gc, *i as usize, val);
             }
-            Subtract => binary_arith_op!(self, wrapping_sub (f64 -), {
+            Subtract => binary_arith_op!(wrapping_sub (f64 -), {
                 (StackValue::ManagedPtr(ManagedPtr(p)), StackValue::Int32(i)) => unsafe {
                     push!(StackValue::managed_ptr(p.offset(-i as isize)))
                 },
@@ -516,11 +515,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     push!(StackValue::NativeInt((p1 as isize) - (p2 as isize)))
                 },
             }),
-            SubtractOverflow(sgn) => binary_checked_op!(self, sgn, checked_sub (f64 -), {
+            SubtractOverflow(sgn) => binary_checked_op!(sgn, checked_sub (f64 -), {
                 // TODO: pointer stuff
             }),
             Switch(_) => {}
-            Xor => binary_int_op!(self, ^),
+            Xor => binary_int_op!(^),
             BoxValue(_) => {}
             CallVirtual { .. } => {}
             CallVirtualConstrained(_, _) => {}

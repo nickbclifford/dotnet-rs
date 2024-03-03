@@ -1,12 +1,19 @@
-mod layout;
-pub mod resolve;
+use std::{cmp::Ordering, marker::PhantomData, mem::size_of};
 
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};
+
 use layout::*;
-use std::cmp::Ordering;
-use std::marker::PhantomData;
-use std::mem::size_of;
+
+use crate::{resolve::Assemblies, vm::GCHandle};
+
+mod layout;
+
+#[derive(Clone)]
+pub struct Context<'a> {
+    pub generics: &'a GenericLookup,
+    pub assemblies: &'a Assemblies,
+}
 
 #[derive(Copy, Clone, Debug, Collect, PartialEq)]
 #[collect(no_drop)]
@@ -98,10 +105,18 @@ fn read_gc_ptr(source: &[u8]) -> ObjectRef<'_> {
         ObjectRef(Some(unsafe { Gc::from_ptr(ptr) }))
     }
 }
+fn write_gc_ptr(ObjectRef(source): ObjectRef<'_>, dest: &mut [u8]) {
+    let ptr: *const HeapStorage = match source {
+        None => std::ptr::null(),
+        Some(s) => Gc::as_ptr(s),
+    };
+    let ptr_bytes = (ptr as usize).to_ne_bytes();
+    dest.copy_from_slice(&ptr_bytes);
+}
 
 #[derive(Clone, Debug)]
 pub struct Vector<'gc> {
-    element_type: MemberType,
+    element: ConcreteType,
     layout: ArrayLayoutManager,
     storage: Vec<u8>,
     _contains_gc: PhantomData<&'gc ()>, // TODO: variance rules?
@@ -116,6 +131,23 @@ unsafe impl Collect for Vector<'_> {
                 }
             }
         }
+    }
+}
+impl<'gc> Vector<'gc> {
+    pub fn new(
+        gc: GCHandle<'gc>,
+        element: ConcreteType,
+        size: usize,
+        context: Context,
+    ) -> Gc<'gc, Self> {
+        let layout = ArrayLayoutManager::new(element.clone(), size, context);
+        let value = Self {
+            storage: vec![0; layout.size()], // TODO: initialize properly
+            layout,
+            element,
+            _contains_gc: PhantomData,
+        };
+        Gc::new(gc, value)
     }
 }
 
@@ -138,7 +170,46 @@ unsafe impl Collect for Object<'_> {
         }
     }
 }
+impl<'gc> Object<'gc> {
+    pub fn new(gc: GCHandle<'gc>, description: TypeDescription, context: Context) -> Gc<'gc, Self> {
+        let layout = ClassLayoutManager::new(description, context);
+        let value = Self {
+            description,
+            field_storage: vec![0; layout.size()], // TODO: initialize properly
+            field_layout: layout,
+            _contains_gc: PhantomData,
+        };
+        Gc::new(gc, value)
+    }
+}
 
 #[derive(Clone, Debug, Copy)]
 pub struct TypeDescription(pub &'static TypeDefinition<'static>);
 unsafe_empty_collect!(TypeDescription);
+
+#[derive(Clone, Debug)]
+pub struct ConcreteType(Box<BaseType<ConcreteType>>);
+impl ConcreteType {
+    pub fn new(base: BaseType<Self>) -> Self {
+        ConcreteType(Box::new(base))
+    }
+
+    pub fn get(&self) -> &BaseType<Self> {
+        &*self.0
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct GenericLookup {
+    pub type_generics: Vec<ConcreteType>,
+    pub method_generics: Vec<ConcreteType>,
+}
+impl GenericLookup {
+    pub fn make_concrete(&self, t: impl Into<MethodType>) -> ConcreteType {
+        match t.into() {
+            MethodType::Base(b) => ConcreteType(Box::new(b.map(|t| self.make_concrete(t)))),
+            MethodType::TypeGeneric(i) => self.type_generics[i].clone(),
+            MethodType::MethodGeneric(i) => self.method_generics[i].clone(),
+        }
+    }
+}

@@ -4,6 +4,7 @@ use dotnetdll::prelude::*;
 
 use crate::utils::static_res_from_file;
 
+mod resolve;
 mod utils;
 mod value;
 mod vm;
@@ -22,13 +23,16 @@ fn main() {
         None => panic!("expected input module to have an entry point, received one without"),
     };
 
-    let arena = Box::new(vm::GCArena::new(|gc| vm::CallStack::new(gc)));
+    // TODO: process args for external assemblies
+    let assemblies = resolve::Assemblies::new(&resolution, std::iter::empty());
+
+    let arena = Box::new(vm::GCArena::new(|gc| vm::CallStack::new(gc, &assemblies)));
     let mut executor = vm::Executor::new(Box::leak(arena));
 
     executor.entrypoint(&resolution[entry_method]);
 
     // TODO: collect external assemblies from args
-    let assemblies = value::resolve::Assemblies::new(resolution, std::iter::empty());
+    let assemblies = resolve::Assemblies::new(resolution, std::iter::empty());
 
     println!("{:#?}", executor.run())
 }

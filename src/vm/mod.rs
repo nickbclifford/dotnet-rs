@@ -29,7 +29,7 @@ unsafe_empty_collect!(MethodState<'_>);
 
 #[derive(Copy, Clone, Debug)]
 pub struct MethodInfo<'a> {
-    signature: &'a ManagedMethod,
+    signature: &'a ManagedMethod<MethodType>,
     locals: &'a [LocalVariable],
     exceptions: &'a [body::Exception],
     pub instructions: &'a [Instruction],

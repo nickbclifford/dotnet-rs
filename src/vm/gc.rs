@@ -4,35 +4,46 @@ use gc_arena::{
     unsafe_empty_collect, Arena, Collect, DynamicRoot, DynamicRootSet, Gc, Mutation, Rootable,
 };
 
-use crate::value::StackValue;
-use crate::vm::{MethodInfo, MethodState};
+use crate::value::Context;
+use crate::{
+    resolve::Assemblies,
+    value::{GenericLookup, StackValue},
+    vm::{MethodInfo, MethodState},
+};
 
 type StackSlot = Rootable![Gc<'_, Lock<StackValue<'_>>>];
 
 #[derive(Collect)]
 #[collect(require_static)]
-pub struct GCValueHandle(DynamicRoot<StackSlot>);
+pub struct StackSlotHandle(DynamicRoot<StackSlot>);
 
 #[derive(Collect)]
 #[collect(no_drop)]
 pub struct CallStack<'gc, 'm> {
     roots: DynamicRootSet<'gc>,
-    stack: Vec<GCValueHandle>,
+    stack: Vec<StackSlotHandle>,
     frames: Vec<StackFrame<'m>>,
+    assemblies: &'m Assemblies,
 }
 
 pub struct StackFrame<'m> {
     pub stack_height: usize,
     pub base: BasePointer,
     pub state: MethodState<'m>,
+    pub generic_inst: GenericLookup,
 }
 unsafe_empty_collect!(StackFrame<'_>);
 impl<'m> StackFrame<'m> {
-    pub fn new(base_pointer: BasePointer, method: MethodInfo<'m>) -> Self {
+    pub fn new(
+        base_pointer: BasePointer,
+        method: MethodInfo<'m>,
+        generic_inst: GenericLookup,
+    ) -> Self {
         Self {
             stack_height: 0,
             base: base_pointer,
             state: MethodState::new(method),
+            generic_inst,
         }
     }
 }
@@ -45,42 +56,44 @@ pub struct BasePointer {
 
 pub type GCArena = Arena<Rootable!['gc => CallStack<'gc, 'static>]>;
 
+pub type GCHandle<'gc> = &'gc Mutation<'gc>;
+
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
-    pub fn new(gc_handle: &'gc Mutation<'gc>) -> Self {
+    pub fn new(gc: GCHandle<'gc>, assemblies: &'m Assemblies) -> Self {
         Self {
-            roots: DynamicRootSet::new(gc_handle),
+            roots: DynamicRootSet::new(gc),
             stack: vec![],
             frames: vec![],
+            assemblies,
         }
     }
 
     // careful with this, it always allocates a new slot
-    fn insert_value(&mut self, gc_handle: &'gc Mutation<'gc>, value: StackValue<'gc>) {
-        let handle = self
-            .roots
-            .stash(gc_handle, Gc::new(gc_handle, Lock::new(value)));
-        self.stack.push(GCValueHandle(handle));
+    fn insert_value(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {
+        let handle = self.roots.stash(gc, Gc::new(gc, Lock::new(value)));
+        self.stack.push(StackSlotHandle(handle));
     }
 
-    fn init_locals(&mut self, gc_handle: &'gc Mutation<'gc>, locals: &'m [LocalVariable]) {
+    fn init_locals(&mut self, gc: GCHandle<'gc>, locals: &'m [LocalVariable]) {
         for l in locals {
             // TODO: proper values
-            self.insert_value(gc_handle, StackValue::null());
+            self.insert_value(gc, StackValue::null());
         }
     }
 
     pub fn entrypoint_frame(
         &mut self,
-        gc_handle: &'gc Mutation<'gc>,
+        gc: GCHandle<'gc>,
         method: MethodInfo<'m>,
+        generic_inst: GenericLookup,
         args: Vec<StackValue<'gc>>,
     ) {
         let argument_base = self.stack.len();
         for a in args {
-            self.insert_value(gc_handle, a);
+            self.insert_value(gc, a);
         }
         let locals_base = self.stack.len();
-        self.init_locals(gc_handle, method.locals);
+        self.init_locals(gc, method.locals);
         let stack_base = self.stack.len();
 
         self.frames.push(StackFrame::new(
@@ -90,10 +103,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 stack: stack_base,
             },
             method,
+            generic_inst,
         ));
     }
 
-    pub fn call_frame(&mut self, gc_handle: &'gc Mutation<'gc>, method: MethodInfo<'m>) {
+    pub fn call_frame(
+        &mut self,
+        gc: GCHandle<'gc>,
+        method: MethodInfo<'m>,
+        generic_inst: GenericLookup,
+    ) {
         // TODO: varargs?
         // since arguments are set up on the stack in order for a call and consumed for the caller
         // we can take advantage of the existing stack space and just move our base pointer back
@@ -118,7 +137,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             if method.signature.instance { 1 } else { 0 } + method.signature.parameters.len();
         let argument_base = self.stack.len() - num_args;
         let locals_base = self.stack.len();
-        self.init_locals(gc_handle, method.locals);
+        self.init_locals(gc, method.locals);
         let stack_base = self.stack.len();
 
         self.current_frame_mut().stack_height -= num_args;
@@ -129,23 +148,24 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 stack: stack_base,
             },
             method,
+            generic_inst,
         ));
     }
 
-    pub fn return_frame(&mut self, gc_handle: &'gc Mutation<'gc>) {
+    pub fn return_frame(&mut self, gc: GCHandle<'gc>) {
         // since arguments are consumed by the caller and the return value is put on the top of the stack
         // for similar reasons as above, we can just "delete" the whole frame's slots (reclaimable)
         // and put the return value on the first slot (now open)
         let frame = self.frames.pop().unwrap();
 
-        for GCValueHandle(h) in &self.stack[frame.base.arguments..] {
-            self.roots.fetch(h).set(gc_handle, StackValue::null());
+        for StackSlotHandle(h) in &self.stack[frame.base.arguments..] {
+            self.roots.fetch(h).set(gc, StackValue::null());
         }
 
-        if let Some(GCValueHandle(handle)) = self.stack.get(frame.base.stack) {
+        if let Some(StackSlotHandle(handle)) = self.stack.get(frame.base.stack) {
             let return_value = self.roots.fetch(handle).get();
             // since we popped the returning frame off, this now refers to the caller frame
-            self.push_stack(gc_handle, return_value);
+            self.push_stack(gc, return_value);
         }
     }
 
@@ -156,6 +176,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.frames.last_mut().unwrap()
     }
 
+    pub fn current_context(&self) -> Context<'m> {
+        let f = self.current_frame();
+        Context {
+            generics: &f.generic_inst,
+            assemblies: self.assemblies,
+        }
+    }
+
     pub fn top_of_stack(&self) -> usize {
         let f = self.current_frame();
         f.base.stack + f.stack_height
@@ -163,40 +191,35 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn get_argument(&self, index: usize) -> StackValue<'gc> {
         let bp = &self.current_frame().base;
-        let GCValueHandle(arg_handle) = &self.stack[bp.arguments + index];
+        let StackSlotHandle(arg_handle) = &self.stack[bp.arguments + index];
         self.roots.fetch(arg_handle).get()
     }
 
     pub fn get_local(&self, index: usize) -> StackValue<'gc> {
         let bp = &self.current_frame().base;
-        let GCValueHandle(local_handle) = &self.stack[bp.locals + index];
+        let StackSlotHandle(local_handle) = &self.stack[bp.locals + index];
         self.roots.fetch(local_handle).get()
     }
 
-    pub fn set_argument(
-        &self,
-        gc_handle: &'gc Mutation<'gc>,
-        index: usize,
-        value: StackValue<'gc>,
-    ) {
+    pub fn set_argument(&self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
         let bp = &self.current_frame().base;
-        let GCValueHandle(arg_handle) = &self.stack[bp.arguments + index];
-        self.roots.fetch(arg_handle).set(gc_handle, value)
+        let StackSlotHandle(arg_handle) = &self.stack[bp.arguments + index];
+        self.roots.fetch(arg_handle).set(gc, value)
     }
 
-    pub fn set_local(&self, gc_handle: &'gc Mutation<'gc>, index: usize, value: StackValue<'gc>) {
+    pub fn set_local(&self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
         let bp = &self.current_frame().base;
-        let GCValueHandle(local_handle) = &self.stack[bp.locals + index];
-        self.roots.fetch(local_handle).set(gc_handle, value)
+        let StackSlotHandle(local_handle) = &self.stack[bp.locals + index];
+        self.roots.fetch(local_handle).set(gc, value)
     }
 
-    pub fn push_stack(&mut self, gc_handle: &'gc Mutation<'gc>, value: StackValue<'gc>) {
+    pub fn push_stack(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {
         match self.stack.get(self.top_of_stack()) {
-            Some(GCValueHandle(h)) => {
-                self.roots.fetch(h).set(gc_handle, value);
+            Some(StackSlotHandle(h)) => {
+                self.roots.fetch(h).set(gc, value);
             }
             None => {
-                self.insert_value(gc_handle, value);
+                self.insert_value(gc, value);
             }
         };
         self.current_frame_mut().stack_height += 1;
@@ -204,7 +227,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn pop_stack(&mut self) -> StackValue<'gc> {
         match self.stack.get(self.top_of_stack()) {
-            Some(GCValueHandle(h)) => {
+            Some(StackSlotHandle(h)) => {
                 let value = self.roots.fetch(h).take();
                 self.current_frame_mut().stack_height -= 1;
                 value
@@ -215,7 +238,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn bottom_of_stack(&self) -> Option<StackValue<'gc>> {
         match self.stack.first() {
-            Some(GCValueHandle(h)) => {
+            Some(StackSlotHandle(h)) => {
                 let value = self.roots.fetch(h).get();
                 Some(value)
             }

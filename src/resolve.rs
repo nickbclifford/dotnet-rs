@@ -1,8 +1,12 @@
-use super::TypeDescription;
-use crate::utils::{static_res_from_file, ResolutionS};
-use dotnetdll::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+use dotnetdll::prelude::*;
+
+use crate::{
+    utils::{ResolutionS, static_res_from_file},
+    value::TypeDescription
+};
 
 pub struct Assemblies {
     external: HashMap<String, ResolutionS>,
@@ -57,10 +61,26 @@ impl Assemblies {
             }
         }
     }
+
+    pub fn locate_method(&self, handle: UserMethod) -> &'static Method<'static> {
+        match handle {
+            UserMethod::Definition(d) => &self.root[d],
+            UserMethod::Reference(r) => {
+                let method_ref = &self.root[r];
+
+                use MethodReferenceParent::*;
+                match &method_ref.parent {
+                    Type(t) => todo!(),
+                    Module(_) => todo!(),
+                    VarargMethod(_) => todo!(),
+                }
+            }
+        }
+    }
 }
 
 impl Resolver<'static> for Assemblies {
-    type Error = (); // TODO: error handling
+    type Error = AlwaysFails; // TODO: error handling
 
     fn find_type(
         &self,
