@@ -1,59 +1,93 @@
+use clap::builder::OsStr;
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use dotnetdll::prelude::*;
 
-use crate::value::{ConcreteType, GenericLookup};
+use crate::value::GenericLookup;
 use crate::{
     utils::{static_res_from_file, ResolutionS},
     value::TypeDescription,
 };
 
 pub struct Assemblies {
-    external: HashMap<String, ResolutionS>,
-    pub root: ResolutionS,
+    assembly_root: String,
+    external: RefCell<HashMap<String, Option<ResolutionS>>>,
+    pub entrypoint: ResolutionS,
 }
 
 impl Assemblies {
-    pub fn new(root: ResolutionS, external_files: impl Iterator<Item = PathBuf>) -> Self {
-        let mut resolutions = HashMap::new();
-        for name in external_files {
-            let resolution = static_res_from_file(name);
-            match &resolution.assembly {
-                None => todo!("no assembly present in external module"),
-                Some(a) => {
-                    resolutions.insert(a.name.to_string(), resolution);
+    pub fn new<'a>(entrypoint: ResolutionS, assembly_root: String) -> Self {
+        let resolutions = std::fs::read_dir(&assembly_root)
+            .unwrap()
+            .filter_map(|e| {
+                let path = e.unwrap().path();
+                if path.extension()? == OsStr::from("dll") {
+                    Some((
+                        path.file_stem().unwrap().to_string_lossy().into_owned(),
+                        None,
+                    ))
+                } else {
+                    None
                 }
-            }
-        }
+            })
+            .collect();
         Self {
-            external: resolutions,
-            root,
+            assembly_root,
+            external: RefCell::new(resolutions),
+            entrypoint,
+        }
+    }
+
+    pub fn get_assembly(&self, name: &str) -> ResolutionS {
+        let res = {
+            self.external
+                .borrow()
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| panic!("could not find assembly {name}"))
+        };
+        match res {
+            None => {
+                eprintln!("resolving {name}.dll");
+                let mut file = PathBuf::from(&self.assembly_root);
+                file.push(format!("{name}.dll"));
+                let resolution = static_res_from_file(file);
+                match &resolution.assembly {
+                    None => todo!("no assembly present in external module"),
+                    Some(a) => {
+                        self.external
+                            .borrow_mut()
+                            .insert(a.name.to_string(), Some(resolution));
+                    }
+                }
+                resolution
+            }
+            Some(res) => res,
         }
     }
 
     pub fn locate_type(&self, handle: UserType) -> TypeDescription {
         match handle {
-            UserType::Definition(d) => TypeDescription(&self.root[d]),
+            UserType::Definition(d) => TypeDescription(&self.entrypoint[d]),
             UserType::Reference(r) => {
-                let type_ref = &self.root[r];
+                let type_ref = &self.entrypoint[r];
 
                 use ResolutionScope::*;
                 match &type_ref.scope {
                     ExternalModule(_) => todo!(),
                     CurrentModule => todo!(),
                     Assembly(a) => {
-                        let assembly = &self.root[*a];
-                        match self.external.get(assembly.name.as_ref()) {
-                            None => todo!("external assembly not provided ({})", assembly.name),
-                            Some(res) => match res
-                                .type_definitions
-                                .iter()
-                                .find(|t| t.type_name() == type_ref.type_name())
-                            {
-                                None => todo!("could not find type in corresponding assembly"),
-                                Some(t) => TypeDescription(t),
-                            },
+                        let assembly = &self.entrypoint[*a];
+                        match self
+                            .get_assembly(assembly.name.as_ref())
+                            .type_definitions
+                            .iter()
+                            .find(|t| t.type_name() == type_ref.type_name())
+                        {
+                            None => todo!("could not find type in corresponding assembly"),
+                            Some(t) => TypeDescription(t),
                         }
                     }
                     Exported => todo!(),
@@ -69,9 +103,9 @@ impl Assemblies {
         generic_inst: &GenericLookup,
     ) -> &'static Method<'static> {
         match handle {
-            UserMethod::Definition(d) => &self.root[d],
+            UserMethod::Definition(d) => &self.entrypoint[d],
             UserMethod::Reference(r) => {
-                let method_ref = &self.root[r];
+                let method_ref = &self.entrypoint[r];
 
                 use MethodReferenceParent::*;
                 match &method_ref.parent {
