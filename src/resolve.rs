@@ -3,9 +3,10 @@ use std::path::PathBuf;
 
 use dotnetdll::prelude::*;
 
+use crate::value::{ConcreteType, GenericLookup};
 use crate::{
-    utils::{ResolutionS, static_res_from_file},
-    value::TypeDescription
+    utils::{static_res_from_file, ResolutionS},
+    value::TypeDescription,
 };
 
 pub struct Assemblies {
@@ -44,7 +45,7 @@ impl Assemblies {
                     Assembly(a) => {
                         let assembly = &self.root[*a];
                         match self.external.get(assembly.name.as_ref()) {
-                            None => todo!("external assembly not provided"),
+                            None => todo!("external assembly not provided ({})", assembly.name),
                             Some(res) => match res
                                 .type_definitions
                                 .iter()
@@ -62,7 +63,11 @@ impl Assemblies {
         }
     }
 
-    pub fn locate_method(&self, handle: UserMethod) -> &'static Method<'static> {
+    pub fn locate_method(
+        &self,
+        handle: UserMethod,
+        generic_inst: &GenericLookup,
+    ) -> &'static Method<'static> {
         match handle {
             UserMethod::Definition(d) => &self.root[d],
             UserMethod::Reference(r) => {
@@ -70,9 +75,37 @@ impl Assemblies {
 
                 use MethodReferenceParent::*;
                 match &method_ref.parent {
-                    Type(t) => todo!(),
-                    Module(_) => todo!(),
-                    VarargMethod(_) => todo!(),
+                    Type(t) => match generic_inst.make_concrete(t.clone()).get() {
+                        BaseType::Type { source, .. } => {
+                            let parent = match source {
+                                TypeSource::User(base) | TypeSource::Generic { base, .. } => *base,
+                            };
+                            let parent_type = self.locate_type(parent);
+                            todo!("search through methods by signature")
+                        }
+                        BaseType::Boolean => todo!("System.Boolean"),
+                        BaseType::Char => todo!("System.Char"),
+                        BaseType::Int8 => todo!("System.Byte"),
+                        BaseType::UInt8 => todo!("System.SByte"),
+                        BaseType::Int16 => todo!("System.Int16"),
+                        BaseType::UInt16 => todo!("System.UInt16"),
+                        BaseType::Int32 => todo!("System.Int32"),
+                        BaseType::UInt32 => todo!("System.UInt32"),
+                        BaseType::Int64 => todo!("System.Int64"),
+                        BaseType::UInt64 => todo!("System.UInt64"),
+                        BaseType::Float32 => todo!("System.Single"),
+                        BaseType::Float64 => todo!("System.Double"),
+                        BaseType::IntPtr => todo!("System.IntPtr"),
+                        BaseType::UIntPtr => todo!("System.UIntPtr"),
+                        BaseType::Object => todo!("System.Object"),
+                        BaseType::String => todo!("System.String"),
+                        BaseType::Vector(_, _) | BaseType::Array(_, _) => todo!("System.Array"),
+                        BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
+                            todo!("pointer types cannot be parents of a method call")
+                        }
+                    },
+                    Module(_) => todo!("method reference: module"),
+                    VarargMethod(_) => todo!("method reference: vararg method"),
                 }
             }
         }

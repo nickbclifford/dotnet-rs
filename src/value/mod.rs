@@ -199,7 +199,7 @@ impl ConcreteType {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct GenericLookup {
     pub type_generics: Vec<ConcreteType>,
     pub method_generics: Vec<ConcreteType>,
@@ -210,6 +210,13 @@ impl GenericLookup {
             MethodType::Base(b) => ConcreteType(Box::new(b.map(|t| self.make_concrete(t)))),
             MethodType::TypeGeneric(i) => self.type_generics[i].clone(),
             MethodType::MethodGeneric(i) => self.method_generics[i].clone(),
+        }
+    }
+
+    pub fn instantiate_method(&self, parameters: Vec<ConcreteType>) -> Self {
+        Self {
+            method_generics: parameters,
+            ..self.clone()
         }
     }
 }

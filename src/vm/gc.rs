@@ -1,7 +1,8 @@
 use dotnetdll::prelude::LocalVariable;
 use gc_arena::lock::Lock;
 use gc_arena::{
-    unsafe_empty_collect, Arena, Collect, DynamicRoot, DynamicRootSet, Gc, Mutation, Rootable,
+    unsafe_empty_collect, Arena, Collect, Collection, DynamicRoot, DynamicRootSet, Gc, Mutation,
+    Rootable,
 };
 
 use crate::value::Context;
@@ -17,13 +18,17 @@ type StackSlot = Rootable![Gc<'_, Lock<StackValue<'_>>>];
 #[collect(require_static)]
 pub struct StackSlotHandle(DynamicRoot<StackSlot>);
 
-#[derive(Collect)]
-#[collect(no_drop)]
 pub struct CallStack<'gc, 'm> {
     roots: DynamicRootSet<'gc>,
     stack: Vec<StackSlotHandle>,
     frames: Vec<StackFrame<'m>>,
-    assemblies: &'m Assemblies,
+    pub(crate) assemblies: &'m Assemblies,
+}
+// this is sound, I think?
+unsafe impl<'gc, 'm> Collect for CallStack<'gc, 'm> {
+    fn trace(&self, cc: &Collection) {
+        self.roots.trace(cc)
+    }
 }
 
 pub struct StackFrame<'m> {
@@ -176,7 +181,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.frames.last_mut().unwrap()
     }
 
-    pub fn current_context(&self) -> Context<'m> {
+    pub fn current_context(&self) -> Context {
         let f = self.current_frame();
         Context {
             generics: &f.generic_inst,

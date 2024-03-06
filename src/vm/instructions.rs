@@ -1,10 +1,10 @@
 use std::cmp::Ordering;
 
-use dotnetdll::prelude::{Instruction, NumberSign};
+use dotnetdll::prelude::{Instruction, MethodSource, NumberSign};
 
-use crate::value::{ManagedPtr, ObjectRef, StackValue, UnmanagedPtr};
+use crate::value::{GenericLookup, ManagedPtr, ObjectRef, StackValue, UnmanagedPtr};
 
-use super::{CallResult, CallStack, GCHandle};
+use super::{CallResult, CallStack, GCHandle, MethodInfo};
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     pub fn step(&mut self, gc: GCHandle<'gc>) -> Option<CallResult> {
@@ -379,10 +379,29 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 )
             }
             Call {
-                tail_call,
-                param0: method,
+                tail_call, // TODO
+                param0: source,
             } => {
-                // TODO: traverse MethodSource and actually call
+                let mut generics: Option<Vec<_>> = None;
+                let current_lookup = self.current_frame().generic_inst.clone();
+                let method = match source {
+                    MethodSource::User(u) => *u,
+                    MethodSource::Generic(g) => {
+                        generics = Some(
+                            g.parameters
+                                .iter()
+                                .map(|t| current_lookup.make_concrete(t.clone()))
+                                .collect(),
+                        );
+                        g.base
+                    }
+                };
+                let new_lookup = match generics {
+                    None => current_lookup,
+                    Some(g) => current_lookup.instantiate_method(g),
+                };
+                let method = self.assemblies.locate_method(method, &new_lookup);
+                self.call_frame(gc, MethodInfo::new(method), new_lookup);
             }
             CallConstrained(_, _) => {}
             CallIndirect { .. } => {}

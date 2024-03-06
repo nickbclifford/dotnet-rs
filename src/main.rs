@@ -25,8 +25,9 @@ fn main() {
 
     // TODO: process args for external assemblies
     let assemblies = resolve::Assemblies::new(&resolution, std::iter::empty());
+    let assemblies = Box::leak(Box::new(assemblies));
 
-    let arena = Box::new(vm::GCArena::new(|gc| vm::CallStack::new(gc, &assemblies)));
+    let arena = Box::new(vm::GCArena::new(|gc| vm::CallStack::new(gc, assemblies)));
     let mut executor = vm::Executor::new(Box::leak(arena));
 
     executor.entrypoint(&resolution[entry_method]);
