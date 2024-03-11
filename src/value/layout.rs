@@ -141,11 +141,11 @@ pub fn type_layout(t: ConcreteType, mut context: Context) -> LayoutManager {
             value_kind: Some(ValueKind::ValueType),
             source,
         } => {
-            let t = match source {
-                TypeSource::User(u) => context.assemblies.locate_type(*u),
+            let (_, t) = match source {
+                TypeSource::User(u) => context.locate_type(*u),
                 TypeSource::Generic { base, parameters } => {
                     // TODO: new generic lookup context
-                    context.assemblies.locate_type(*base)
+                    context.locate_type(*base)
                 }
             };
             ClassLayoutManager::new(t, context).into()

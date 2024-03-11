@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use dotnetdll::prelude::{Instruction, MethodSource, NumberSign};
 
-use crate::value::{GenericLookup, ManagedPtr, ObjectRef, StackValue, UnmanagedPtr};
+use crate::value::{ManagedPtr, ObjectRef, StackValue, UnmanagedPtr};
 
 use super::{CallResult, CallStack, GCHandle, MethodInfo};
 
@@ -400,8 +400,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     None => current_lookup,
                     Some(g) => current_lookup.instantiate_method(g),
                 };
-                let method = self.assemblies.locate_method(method, &new_lookup);
-                self.call_frame(gc, MethodInfo::new(method), new_lookup);
+                let (res, method) = self.current_context().locate_method(method, &new_lookup);
+                self.call_frame(gc, MethodInfo::new(res, method), new_lookup);
             }
             CallConstrained(_, _) => {}
             CallIndirect { .. } => {}

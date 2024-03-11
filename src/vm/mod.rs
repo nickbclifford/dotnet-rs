@@ -2,6 +2,7 @@ use dotnetdll::prelude::body::DataSection;
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
 
+use crate::utils::ResolutionS;
 pub use executor::*;
 pub use gc::*;
 
@@ -33,10 +34,11 @@ pub struct MethodInfo<'a> {
     locals: &'a [LocalVariable],
     exceptions: &'a [body::Exception],
     pub instructions: &'a [Instruction],
+    pub source_resolution: ResolutionS,
 }
 unsafe_empty_collect!(MethodInfo<'_>);
 impl<'m> MethodInfo<'m> {
-    pub fn new(method: &'m Method<'m>) -> Self {
+    pub fn new(source_resolution: ResolutionS, method: &'m Method<'m>) -> Self {
         let body = match &method.body {
             Some(b) => b,
             None => todo!("no body in executing method"),
@@ -61,6 +63,7 @@ impl<'m> MethodInfo<'m> {
             locals: &body.header.local_variables,
             exceptions,
             instructions,
+            source_resolution,
         }
     }
 }

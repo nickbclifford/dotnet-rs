@@ -11,6 +11,7 @@ use crate::{
     value::{GenericLookup, StackValue},
     vm::{MethodInfo, MethodState},
 };
+use crate::utils::ResolutionS;
 
 type StackSlot = Rootable![Gc<'_, Lock<StackValue<'_>>>];
 
@@ -36,6 +37,7 @@ pub struct StackFrame<'m> {
     pub base: BasePointer,
     pub state: MethodState<'m>,
     pub generic_inst: GenericLookup,
+    pub source_resolution: ResolutionS,
 }
 unsafe_empty_collect!(StackFrame<'_>);
 impl<'m> StackFrame<'m> {
@@ -47,6 +49,7 @@ impl<'m> StackFrame<'m> {
         Self {
             stack_height: 0,
             base: base_pointer,
+            source_resolution: method.source_resolution,
             state: MethodState::new(method),
             generic_inst,
         }
@@ -186,6 +189,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         Context {
             generics: &f.generic_inst,
             assemblies: self.assemblies,
+            resolution: f.source_resolution,
         }
     }
 

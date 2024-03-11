@@ -1,4 +1,5 @@
 use dotnetdll::prelude::*;
+use crate::utils::ResolutionS;
 
 use crate::value::{ConcreteType, StackValue};
 use crate::vm::gc::GCArena;
@@ -24,15 +25,20 @@ impl Executor {
     pub fn entrypoint(&mut self, method: &'static Method<'static>) {
         // TODO: initialize argv (entry point args are either string[] or nothing, II.15.4.1.2)
         self.arena.mutate_root(|gc, c| {
-            c.entrypoint_frame(gc, MethodInfo::new(method), Default::default(), vec![])
+            c.entrypoint_frame(
+                gc,
+                MethodInfo::new(c.assemblies.entrypoint, method),
+                Default::default(),
+                vec![],
+            )
         });
     }
 
-    pub fn call(&mut self, method: &'static Method<'static>, generic_inst: Vec<ConcreteType>) {
+    pub fn call(&mut self, source_resolution: ResolutionS, method: &'static Method<'static>, generic_inst: Vec<ConcreteType>) {
         self.arena.mutate_root(|gc, c| {
             c.call_frame(
                 gc,
-                MethodInfo::new(method),
+                MethodInfo::new(source_resolution, method),
                 c.current_frame()
                     .generic_inst
                     .instantiate_method(generic_inst),

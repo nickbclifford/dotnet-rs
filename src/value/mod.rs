@@ -5,7 +5,9 @@ use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};
 
 use layout::*;
 
+use crate::utils::ResolutionS;
 use crate::{resolve::Assemblies, vm::GCHandle};
+use crate::resolve::WithSource;
 
 mod layout;
 
@@ -13,6 +15,21 @@ mod layout;
 pub struct Context<'a> {
     pub generics: &'a GenericLookup,
     pub assemblies: &'a Assemblies,
+    pub resolution: ResolutionS,
+}
+impl Context<'_> {
+    pub fn locate_type(&self, handle: UserType) -> WithSource<TypeDescription> {
+        self.assemblies.locate_type(self.resolution, handle)
+    }
+
+    pub fn locate_method(
+        &self,
+        handle: UserMethod,
+        generic_inst: &GenericLookup,
+    ) -> WithSource<&'static Method<'static>> {
+        self.assemblies
+            .locate_method(self.resolution, handle, generic_inst)
+    }
 }
 
 #[derive(Copy, Clone, Debug, Collect, PartialEq)]

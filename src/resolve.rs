@@ -1,14 +1,11 @@
-use clap::builder::OsStr;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::{cell::RefCell, collections::HashMap, path::PathBuf};
 
+use clap::builder::OsStr;
 use dotnetdll::prelude::*;
 
-use crate::value::GenericLookup;
 use crate::{
     utils::{static_res_from_file, ResolutionS},
-    value::TypeDescription,
+    value::{GenericLookup, TypeDescription},
 };
 
 pub struct Assemblies {
@@ -16,6 +13,8 @@ pub struct Assemblies {
     external: RefCell<HashMap<String, Option<ResolutionS>>>,
     pub entrypoint: ResolutionS,
 }
+
+pub type WithSource<T> = (ResolutionS, T);
 
 impl Assemblies {
     pub fn new<'a>(entrypoint: ResolutionS, assembly_root: String) -> Self {
@@ -45,7 +44,7 @@ impl Assemblies {
             self.external
                 .borrow()
                 .get(name)
-                .cloned()
+                .copied()
                 .unwrap_or_else(|| panic!("could not find assembly {name}"))
         };
         match res {
@@ -68,28 +67,56 @@ impl Assemblies {
         }
     }
 
-    pub fn locate_type(&self, handle: UserType) -> TypeDescription {
+    fn find_exported_type(
+        &self,
+        resolution: ResolutionS,
+        e: &ExportedType,
+    ) -> WithSource<TypeDescription> {
+        match e.implementation {
+            TypeImplementation::Nested(x) => todo!(),
+            TypeImplementation::ModuleFile { .. } => todo!(),
+            TypeImplementation::TypeForwarder(a) => {
+                self.find_in_assembly(&resolution[a], &e.type_name())
+            }
+        }
+    }
+
+    fn find_in_assembly(
+        &self,
+        assembly: &ExternalAssemblyReference,
+        name: &str,
+    ) -> WithSource<TypeDescription> {
+        let res = self.get_assembly(assembly.name.as_ref());
+        println!("searching for type {} in assembly {}", name, assembly.name);
+        match res.type_definitions.iter().find(|t| t.type_name() == name) {
+            None => {
+                for e in &res.exported_types {
+                    if e.type_name() == name {
+                        return self.find_exported_type(res, e);
+                    }
+                }
+                panic!("could not find type {} in assembly {}", name, assembly.name)
+            }
+            Some(t) => (res, TypeDescription(t)),
+        }
+    }
+
+    pub fn locate_type(
+        &self,
+        resolution: ResolutionS,
+        handle: UserType,
+    ) -> WithSource<TypeDescription> {
         match handle {
-            UserType::Definition(d) => TypeDescription(&self.entrypoint[d]),
+            UserType::Definition(d) => (resolution, TypeDescription(&resolution[d])),
             UserType::Reference(r) => {
-                let type_ref = &self.entrypoint[r];
+                let type_ref = &resolution[r];
+                println!("looking for {}", type_ref.type_name());
 
                 use ResolutionScope::*;
                 match &type_ref.scope {
                     ExternalModule(_) => todo!(),
                     CurrentModule => todo!(),
-                    Assembly(a) => {
-                        let assembly = &self.entrypoint[*a];
-                        match self
-                            .get_assembly(assembly.name.as_ref())
-                            .type_definitions
-                            .iter()
-                            .find(|t| t.type_name() == type_ref.type_name())
-                        {
-                            None => todo!("could not find type in corresponding assembly"),
-                            Some(t) => TypeDescription(t),
-                        }
-                    }
+                    Assembly(a) => self.find_in_assembly(&resolution[*a], &type_ref.type_name()),
                     Exported => todo!(),
                     Nested(_) => todo!(),
                 }
@@ -99,11 +126,12 @@ impl Assemblies {
 
     pub fn locate_method(
         &self,
+        resolution: ResolutionS,
         handle: UserMethod,
         generic_inst: &GenericLookup,
-    ) -> &'static Method<'static> {
+    ) -> WithSource<&'static Method<'static>> {
         match handle {
-            UserMethod::Definition(d) => &self.entrypoint[d],
+            UserMethod::Definition(d) => (self.entrypoint, &self.entrypoint[d]),
             UserMethod::Reference(r) => {
                 let method_ref = &self.entrypoint[r];
 
@@ -114,7 +142,14 @@ impl Assemblies {
                             let parent = match source {
                                 TypeSource::User(base) | TypeSource::Generic { base, .. } => *base,
                             };
-                            let parent_type = self.locate_type(parent);
+
+                            let (res, parent_type) = self.locate_type(resolution, parent);
+                            println!(
+                                "{:#?}",
+                                self.ancestors(res, parent_type)
+                                    .map(|t| t.0.type_name())
+                                    .collect::<Vec<_>>()
+                            );
                             todo!("search through methods by signature")
                         }
                         BaseType::Boolean => todo!("System.Boolean"),
@@ -141,6 +176,20 @@ impl Assemblies {
                     Module(_) => todo!("method reference: module"),
                     VarargMethod(_) => todo!("method reference: vararg method"),
                 }
+            }
+        }
+    }
+
+    pub fn ancestors(
+        &self,
+        resolution: ResolutionS,
+        child: TypeDescription,
+    ) -> Box<dyn Iterator<Item = TypeDescription>> {
+        match &child.0.extends {
+            None => Box::new(std::iter::empty()),
+            Some(TypeSource::User(parent) | TypeSource::Generic { base: parent, .. }) => {
+                let (res, parent) = self.locate_type(resolution, *parent);
+                Box::new(std::iter::once(parent).chain(self.ancestors(res, parent)))
             }
         }
     }
