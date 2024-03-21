@@ -5,11 +5,13 @@ use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};
 
 use layout::*;
 
-use crate::utils::ResolutionS;
-use crate::{resolve::Assemblies, vm::GCHandle};
 use crate::resolve::WithSource;
+use crate::utils::ResolutionS;
+use crate::value::string::CLRString;
+use crate::{resolve::Assemblies, vm::GCHandle};
 
 mod layout;
+pub mod string;
 
 #[derive(Clone)]
 pub struct Context<'a> {
@@ -99,12 +101,18 @@ impl PartialEq for ObjectRef<'_> {
         }
     }
 }
+impl<'gc> ObjectRef<'gc> {
+    pub fn new(gc: GCHandle<'gc>, value: HeapStorage<'gc>) -> Self {
+        Self(Some(Gc::new(gc, value)))
+    }
+}
 
 #[derive(Clone, Debug, Collect)]
 #[collect(no_drop)]
 pub enum HeapStorage<'gc> {
     Vec(Vector<'gc>),
     Obj(Object<'gc>),
+    Str(CLRString),
 }
 
 fn read_gc_ptr(source: &[u8]) -> ObjectRef<'_> {

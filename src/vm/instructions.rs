@@ -1,8 +1,9 @@
 use std::cmp::Ordering;
 
-use dotnetdll::prelude::{Instruction, MethodSource, NumberSign};
+use dotnetdll::prelude::{Instruction, MethodSource, NumberSign, ResolvedDebug};
 
-use crate::value::{ManagedPtr, ObjectRef, StackValue, UnmanagedPtr};
+use crate::value::string::CLRString;
+use crate::value::{HeapStorage, ManagedPtr, ObjectRef, StackValue, UnmanagedPtr};
 
 use super::{CallResult, CallStack, GCHandle, MethodInfo};
 
@@ -311,7 +312,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             };
         }
 
-        let i = state!(|s| &s.info_handle.instructions[s.ip]);
+        let i = state!(|s| {
+            let i = &s.info_handle.instructions[s.ip];
+            println!(
+                "about to execute {}",
+                i.show(s.info_handle.source_resolution)
+            );
+            i
+        });
 
         match i {
             Add => binary_arith_op!(wrapping_add (f64 +), {
@@ -540,7 +548,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             Switch(_) => {}
             Xor => binary_int_op!(^),
             BoxValue(_) => {}
-            CallVirtual { .. } => {}
+            CallVirtual { .. } => {
+                todo!("implement virtual calls!!")
+            }
             CallVirtualConstrained(_, _) => {}
             CallVirtualTail(_) => {}
             CastClass { .. } => {}
@@ -558,7 +568,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadObject { .. } => {}
             LoadStaticField { .. } => {}
             LoadStaticFieldAddress(_) => {}
-            LoadString(_) => {}
+            LoadString(cs) => {
+                let val = StackValue::ObjectRef(ObjectRef::new(
+                    gc,
+                    HeapStorage::Str(CLRString::new(cs.clone())),
+                ));
+                push!(val)
+            }
             LoadTokenField(_) => {}
             LoadTokenMethod(_) => {}
             LoadTokenType(_) => {}

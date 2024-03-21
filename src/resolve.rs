@@ -101,6 +101,7 @@ impl Assemblies {
         }
     }
 
+    // TODO: cache
     pub fn locate_type(
         &self,
         resolution: ResolutionS,
@@ -116,7 +117,12 @@ impl Assemblies {
                 match &type_ref.scope {
                     ExternalModule(_) => todo!(),
                     CurrentModule => todo!(),
-                    Assembly(a) => self.find_in_assembly(&resolution[*a], &type_ref.type_name()),
+                    Assembly(a) => {
+                        let (res, t) =
+                            self.find_in_assembly(&resolution[*a], &type_ref.type_name());
+                        println!("found {}", t.0.type_name());
+                        (res, t)
+                    }
                     Exported => todo!(),
                     Nested(_) => todo!(),
                 }
@@ -124,6 +130,7 @@ impl Assemblies {
         }
     }
 
+    // TODO: cache
     pub fn locate_method(
         &self,
         resolution: ResolutionS,
@@ -144,13 +151,32 @@ impl Assemblies {
                             };
 
                             let (res, parent_type) = self.locate_type(resolution, parent);
-                            println!(
-                                "{:#?}",
-                                self.ancestors(res, parent_type)
-                                    .map(|t| t.0.type_name())
-                                    .collect::<Vec<_>>()
-                            );
-                            todo!("search through methods by signature")
+
+                            for method in &parent_type.0.methods {
+                                if method.name == method_ref.name {
+                                    // TODO: properly check sigs instead of this horrifying hack lol
+                                    if method_ref.signature.show(res) == method.signature.show(res)
+                                    {
+                                        println!(
+                                            "found {}",
+                                            method.signature.show_with_name(
+                                                res,
+                                                format!(
+                                                    "{}::{}",
+                                                    parent_type.0.type_name(),
+                                                    method.name
+                                                )
+                                            )
+                                        );
+                                        return (res, method);
+                                    }
+                                }
+                            }
+
+                            panic!(
+                                "could not find {}",
+                                method_ref.signature.show_with_name(res, &method_ref.name)
+                            )
                         }
                         BaseType::Boolean => todo!("System.Boolean"),
                         BaseType::Char => todo!("System.Char"),

@@ -5,13 +5,13 @@ use gc_arena::{
     Rootable,
 };
 
+use crate::utils::ResolutionS;
 use crate::value::Context;
 use crate::{
     resolve::Assemblies,
     value::{GenericLookup, StackValue},
     vm::{MethodInfo, MethodState},
 };
-use crate::utils::ResolutionS;
 
 type StackSlot = Rootable![Gc<'_, Lock<StackValue<'_>>>];
 
@@ -143,7 +143,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         let num_args =
             if method.signature.instance { 1 } else { 0 } + method.signature.parameters.len();
-        let argument_base = self.stack.len() - num_args;
+        let Some(argument_base) = self.stack.len().checked_sub(num_args) else {
+            panic!(
+                "not enough values on stack! expected {} arguments, found {}",
+                num_args,
+                self.stack.len()
+            )
+        };
         let locals_base = self.stack.len();
         self.init_locals(gc, method.locals);
         let stack_base = self.stack.len();
