@@ -5,7 +5,7 @@ use dotnetdll::prelude::*;
 
 use crate::{
     utils::{static_res_from_file, ResolutionS},
-    value::{GenericLookup, TypeDescription},
+    value::{GenericLookup, TypeDescription, MethodDescription},
 };
 
 pub struct Assemblies {
@@ -130,17 +130,52 @@ impl Assemblies {
         }
     }
 
+    pub fn find_method_in_type(
+        &self,
+        res: ResolutionS,
+        parent_type: TypeDescription,
+        name: &str,
+        signature: &ManagedMethod<MethodType>,
+    ) -> Option<MethodDescription> {
+        for method in &parent_type.0.methods {
+            if method.name == name {
+                // TODO: properly check sigs instead of this horrifying hack lol
+                if signature.show(res) == method.signature.show(res) {
+                    println!(
+                        "found {}",
+                        method.signature.show_with_name(
+                            res,
+                            format!("{}::{}", parent_type.0.type_name(), method.name)
+                        )
+                    );
+                    return Some(MethodDescription {
+                        parent: parent_type,
+                        method,
+                    });
+                }
+            }
+        }
+
+        None
+    }
+
     // TODO: cache
     pub fn locate_method(
         &self,
         resolution: ResolutionS,
         handle: UserMethod,
         generic_inst: &GenericLookup,
-    ) -> WithSource<&'static Method<'static>> {
+    ) -> WithSource<MethodDescription> {
         match handle {
-            UserMethod::Definition(d) => (self.entrypoint, &self.entrypoint[d]),
+            UserMethod::Definition(d) => (
+                resolution,
+                MethodDescription {
+                    parent: TypeDescription(&resolution[d.parent_type()]),
+                    method: &resolution[d],
+                },
+            ),
             UserMethod::Reference(r) => {
-                let method_ref = &self.entrypoint[r];
+                let method_ref = &resolution[r];
 
                 use MethodReferenceParent::*;
                 match &method_ref.parent {
@@ -152,31 +187,18 @@ impl Assemblies {
 
                             let (res, parent_type) = self.locate_type(resolution, parent);
 
-                            for method in &parent_type.0.methods {
-                                if method.name == method_ref.name {
-                                    // TODO: properly check sigs instead of this horrifying hack lol
-                                    if method_ref.signature.show(res) == method.signature.show(res)
-                                    {
-                                        println!(
-                                            "found {}",
-                                            method.signature.show_with_name(
-                                                res,
-                                                format!(
-                                                    "{}::{}",
-                                                    parent_type.0.type_name(),
-                                                    method.name
-                                                )
-                                            )
-                                        );
-                                        return (res, method);
-                                    }
-                                }
+                            match self.find_method_in_type(
+                                res,
+                                parent_type,
+                                &method_ref.name,
+                                &method_ref.signature,
+                            ) {
+                                None => panic!(
+                                    "could not find {}",
+                                    method_ref.signature.show_with_name(res, &method_ref.name)
+                                ),
+                                Some(method) => (res, method),
                             }
-
-                            panic!(
-                                "could not find {}",
-                                method_ref.signature.show_with_name(res, &method_ref.name)
-                            )
                         }
                         BaseType::Boolean => todo!("System.Boolean"),
                         BaseType::Char => todo!("System.Char"),
@@ -210,12 +232,12 @@ impl Assemblies {
         &self,
         resolution: ResolutionS,
         child: TypeDescription,
-    ) -> Box<dyn Iterator<Item = TypeDescription>> {
+    ) -> Box<dyn Iterator<Item = WithSource<TypeDescription>>> {
         match &child.0.extends {
-            None => Box::new(std::iter::empty()),
+            None => Box::new(std::iter::once((resolution, child))),
             Some(TypeSource::User(parent) | TypeSource::Generic { base: parent, .. }) => {
                 let (res, parent) = self.locate_type(resolution, *parent);
-                Box::new(std::iter::once(parent).chain(self.ancestors(res, parent)))
+                Box::new(std::iter::once((res, parent)).chain(self.ancestors(res, parent)))
             }
         }
     }

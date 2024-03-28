@@ -28,9 +28,26 @@ impl Context<'_> {
         &self,
         handle: UserMethod,
         generic_inst: &GenericLookup,
-    ) -> WithSource<&'static Method<'static>> {
+    ) -> WithSource<MethodDescription> {
         self.assemblies
             .locate_method(self.resolution, handle, generic_inst)
+    }
+
+    pub fn find_method_in_type(
+        &self,
+        parent_type: TypeDescription,
+        name: &str,
+        signature: &ManagedMethod<MethodType>,
+    ) -> Option<MethodDescription> {
+        self.assemblies
+            .find_method_in_type(self.resolution, parent_type, name, signature)
+    }
+
+    pub fn get_ancestors(
+        &self,
+        child_type: TypeDescription,
+    ) -> impl Iterator<Item = WithSource<TypeDescription>> {
+        self.assemblies.ancestors(self.resolution, child_type)
     }
 }
 
@@ -178,7 +195,7 @@ impl<'gc> Vector<'gc> {
 
 #[derive(Clone, Debug)]
 pub struct Object<'gc> {
-    description: TypeDescription,
+    pub description: TypeDescription,
     field_layout: ClassLayoutManager,
     field_storage: Vec<u8>,
     _contains_gc: PhantomData<&'gc ()>, // ditto
@@ -211,6 +228,12 @@ impl<'gc> Object<'gc> {
 #[derive(Clone, Debug, Copy)]
 pub struct TypeDescription(pub &'static TypeDefinition<'static>);
 unsafe_empty_collect!(TypeDescription);
+
+#[derive(Clone, Debug, Copy)]
+pub struct MethodDescription {
+    pub parent: TypeDescription,
+    pub method: &'static Method<'static>,
+}
 
 #[derive(Clone, Debug)]
 pub struct ConcreteType(Box<BaseType<ConcreteType>>);

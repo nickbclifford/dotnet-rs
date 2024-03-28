@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use dotnetdll::prelude::LocalVariable;
 use gc_arena::lock::Lock;
 use gc_arena::{
@@ -241,7 +242,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn pop_stack(&mut self) -> StackValue<'gc> {
-        match self.stack.get(self.top_of_stack()) {
+        match self.stack.get(self.top_of_stack() - 1) {
             Some(StackSlotHandle(h)) => {
                 let value = self.roots.fetch(h).take();
                 self.current_frame_mut().stack_height -= 1;
@@ -261,5 +262,49 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
     }
 
-    // TODO: return values? arguments?
+    pub fn dump_stack(&self) {
+        let mut contents: Vec<_> = self
+            .stack
+            .iter()
+            .map(|h| format!("{:?}", self.roots.fetch(&h.0).get()))
+            .collect();
+        contents.reverse();
+
+        let mut positions: HashMap<usize, Vec<String>> = HashMap::new();
+        let mut insert = |i, value| {
+            positions.entry(i).or_insert(vec![]).push(value);
+        };
+        for (i, frame) in self.frames.iter().enumerate() {
+            let base = &frame.base;
+            insert(base.stack, format!("stack base of frame #{}", i));
+            insert(base.locals, format!("locals base of frame #{}", i));
+            insert(base.arguments, format!("arguments base of frame #{}", i))
+        }
+
+        let longest = contents.iter().map(|s| s.len()).max().unwrap();
+        println!("│ {} │", " ".repeat(longest));
+
+        let last_idx = contents.len() - 1;
+
+        if let Some(bases) = positions.get(&(last_idx + 1)) {
+            for b in bases {
+                println!("│ {:width$} │", b, width = longest);
+            }
+            println!("├─{}─┤", "─".repeat(longest));
+        }
+
+        for (i, entry) in contents.into_iter().enumerate() {
+            println!("│ {:width$} │", entry, width = longest);
+            if let Some(bases) = positions.get(&(last_idx - i)) {
+                for b in bases {
+                    println!("│ {:width$} │", b, width = longest);
+                }
+            }
+            if i != last_idx {
+                println!("├─{}─┤", "─".repeat(longest));
+            }
+        }
+
+        println!("└─{}─┘", "─".repeat(longest))
+    }
 }
