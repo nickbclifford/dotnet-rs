@@ -5,7 +5,6 @@ use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};
 
 use layout::*;
 
-use crate::resolve::WithSource;
 use crate::utils::ResolutionS;
 use crate::value::string::CLRString;
 use crate::{resolve::Assemblies, vm::GCHandle};
@@ -20,7 +19,7 @@ pub struct Context<'a> {
     pub resolution: ResolutionS,
 }
 impl Context<'_> {
-    pub fn locate_type(&self, handle: UserType) -> WithSource<TypeDescription> {
+    pub fn locate_type(&self, handle: UserType) -> TypeDescription {
         self.assemblies.locate_type(self.resolution, handle)
     }
 
@@ -28,7 +27,7 @@ impl Context<'_> {
         &self,
         handle: UserMethod,
         generic_inst: &GenericLookup,
-    ) -> WithSource<MethodDescription> {
+    ) -> MethodDescription {
         self.assemblies
             .locate_method(self.resolution, handle, generic_inst)
     }
@@ -40,14 +39,14 @@ impl Context<'_> {
         signature: &ManagedMethod<MethodType>,
     ) -> Option<MethodDescription> {
         self.assemblies
-            .find_method_in_type(self.resolution, parent_type, name, signature)
+            .find_method_in_type(parent_type, name, signature)
     }
 
     pub fn get_ancestors(
         &self,
         child_type: TypeDescription,
-    ) -> impl Iterator<Item = WithSource<TypeDescription>> {
-        self.assemblies.ancestors(self.resolution, child_type)
+    ) -> impl Iterator<Item = TypeDescription> {
+        self.assemblies.ancestors(child_type)
     }
 }
 
@@ -226,7 +225,7 @@ impl<'gc> Object<'gc> {
 }
 
 #[derive(Clone, Debug, Copy)]
-pub struct TypeDescription(pub &'static TypeDefinition<'static>);
+pub struct TypeDescription(pub ResolutionS, pub &'static TypeDefinition<'static>);
 unsafe_empty_collect!(TypeDescription);
 
 #[derive(Clone, Debug, Copy)]

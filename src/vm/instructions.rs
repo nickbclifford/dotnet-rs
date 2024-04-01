@@ -2,21 +2,15 @@ use std::{cmp::Ordering, ops::Deref};
 
 use dotnetdll::prelude::{Instruction, MethodSource, NumberSign, ResolvedDebug};
 
-use crate::{
-    resolve::WithSource,
-    value::{
-        string::CLRString, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, ObjectRef,
-        StackValue, UnmanagedPtr,
-    },
+use crate::value::{
+    string::CLRString, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, ObjectRef,
+    StackValue, UnmanagedPtr,
 };
 
 use super::{CallResult, CallStack, GCHandle, MethodInfo};
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
-    fn find_generic_method(
-        &self,
-        source: &MethodSource,
-    ) -> (WithSource<MethodDescription>, GenericLookup) {
+    fn find_generic_method(&self, source: &MethodSource) -> (MethodDescription, GenericLookup) {
         let mut generics: Option<Vec<_>> = None;
         let current_lookup = self.current_frame().generic_inst.clone();
         let method = match source {
@@ -424,8 +418,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 tail_call, // TODO
                 param0: source,
             } => {
-                let ((res, method), lookup) = self.find_generic_method(source);
-                self.call_frame(gc, MethodInfo::new(res, method.method), lookup);
+                let (method, lookup) = self.find_generic_method(source);
+                self.call_frame(gc, MethodInfo::new(method.parent.0, method.method), lookup);
             }
             CallConstrained(_, _) => {}
             CallIndirect { .. } => {}
@@ -568,36 +562,40 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 skip_null_check, // TODO
                 param0: source,
             } => {
-                self.dump_stack();
                 let this_value = pop!();
                 let this_heap = match this_value {
                     StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
                     StackValue::ObjectRef(ObjectRef(Some(o))) => o,
                     rest => panic!("invalid this argument for virtual call (expected object ref, received {:?})", rest)
                 };
+
                 let this_type = match this_heap.deref() {
                     HeapStorage::Obj(o) => o.description,
-                    HeapStorage::Vec(v) => todo!("System.Array"),
-                    HeapStorage::Str(s) => todo!("System.String"),
+                    HeapStorage::Vec(v) => self.assemblies.corlib_type("System.Array"),
+                    HeapStorage::Str(s) => self.assemblies.corlib_type("System.String"),
                 };
 
-                let ((_, base_method), lookup) = self.find_generic_method(source);
+                let (base_method, lookup) = self.find_generic_method(source);
 
                 // TODO: check explicit overrides
 
-                for (res, parent) in self.current_context().get_ancestors(this_type) {
+                let mut found = false;
+                for parent in self.current_context().get_ancestors(this_type) {
                     if let Some(method) = self.current_context().find_method_in_type(
                         parent,
                         &base_method.method.name,
                         &base_method.method.signature,
                     ) {
                         push!(this_value);
-                        self.call_frame(gc, MethodInfo::new(res, method.method), lookup);
+                        self.call_frame(gc, MethodInfo::new(parent.0, method.method), lookup);
+                        found = true;
                         break;
                     }
                 }
 
-                todo!("implement virtual calls!!")
+                if !found {
+                    panic!("could not resolve virtual call");
+                }
             }
             CallVirtualConstrained(_, _) => {}
             CallVirtualTail(_) => {}

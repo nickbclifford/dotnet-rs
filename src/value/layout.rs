@@ -42,10 +42,9 @@ impl HasLayout for ClassLayoutManager {
     }
 }
 impl ClassLayoutManager {
-    pub fn new(description: TypeDescription, context: Context) -> Self {
-        let layout = description.0.flags.layout;
+    pub fn new(TypeDescription(_, description): TypeDescription, context: Context) -> Self {
+        let layout = description.flags.layout;
         let fields: Vec<_> = description
-            .0
             .fields
             .iter()
             .map(|f| {
@@ -141,7 +140,7 @@ pub fn type_layout(t: ConcreteType, mut context: Context) -> LayoutManager {
             value_kind: Some(ValueKind::ValueType),
             source,
         } => {
-            let (_, t) = match source {
+            let t = match source {
                 TypeSource::User(u) => context.locate_type(*u),
                 TypeSource::Generic { base, parameters } => {
                     // TODO: new generic lookup context

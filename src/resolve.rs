@@ -5,7 +5,7 @@ use dotnetdll::prelude::*;
 
 use crate::{
     utils::{static_res_from_file, ResolutionS},
-    value::{GenericLookup, TypeDescription, MethodDescription},
+    value::{GenericLookup, MethodDescription, TypeDescription},
 };
 
 pub struct Assemblies {
@@ -13,8 +13,6 @@ pub struct Assemblies {
     external: RefCell<HashMap<String, Option<ResolutionS>>>,
     pub entrypoint: ResolutionS,
 }
-
-pub type WithSource<T> = (ResolutionS, T);
 
 impl Assemblies {
     pub fn new<'a>(entrypoint: ResolutionS, assembly_root: String) -> Self {
@@ -67,11 +65,7 @@ impl Assemblies {
         }
     }
 
-    fn find_exported_type(
-        &self,
-        resolution: ResolutionS,
-        e: &ExportedType,
-    ) -> WithSource<TypeDescription> {
+    fn find_exported_type(&self, resolution: ResolutionS, e: &ExportedType) -> TypeDescription {
         match e.implementation {
             TypeImplementation::Nested(x) => todo!(),
             TypeImplementation::ModuleFile { .. } => todo!(),
@@ -81,11 +75,11 @@ impl Assemblies {
         }
     }
 
-    fn find_in_assembly(
+    pub fn find_in_assembly(
         &self,
         assembly: &ExternalAssemblyReference,
         name: &str,
-    ) -> WithSource<TypeDescription> {
+    ) -> TypeDescription {
         let res = self.get_assembly(assembly.name.as_ref());
         println!("searching for type {} in assembly {}", name, assembly.name);
         match res.type_definitions.iter().find(|t| t.type_name() == name) {
@@ -97,18 +91,18 @@ impl Assemblies {
                 }
                 panic!("could not find type {} in assembly {}", name, assembly.name)
             }
-            Some(t) => (res, TypeDescription(t)),
+            Some(t) => TypeDescription(res, t),
         }
     }
 
+    pub fn corlib_type(&self, name: &str) -> TypeDescription {
+        self.find_in_assembly(&ExternalAssemblyReference::new("mscorlib"), name)
+    }
+
     // TODO: cache
-    pub fn locate_type(
-        &self,
-        resolution: ResolutionS,
-        handle: UserType,
-    ) -> WithSource<TypeDescription> {
+    pub fn locate_type(&self, resolution: ResolutionS, handle: UserType) -> TypeDescription {
         match handle {
-            UserType::Definition(d) => (resolution, TypeDescription(&resolution[d])),
+            UserType::Definition(d) => TypeDescription(resolution, &resolution[d]),
             UserType::Reference(r) => {
                 let type_ref = &resolution[r];
                 println!("looking for {}", type_ref.type_name());
@@ -117,12 +111,7 @@ impl Assemblies {
                 match &type_ref.scope {
                     ExternalModule(_) => todo!(),
                     CurrentModule => todo!(),
-                    Assembly(a) => {
-                        let (res, t) =
-                            self.find_in_assembly(&resolution[*a], &type_ref.type_name());
-                        println!("found {}", t.0.type_name());
-                        (res, t)
-                    }
+                    Assembly(a) => self.find_in_assembly(&resolution[*a], &type_ref.type_name()),
                     Exported => todo!(),
                     Nested(_) => todo!(),
                 }
@@ -132,12 +121,11 @@ impl Assemblies {
 
     pub fn find_method_in_type(
         &self,
-        res: ResolutionS,
-        parent_type: TypeDescription,
+        desc @ TypeDescription(res, parent_type): TypeDescription,
         name: &str,
         signature: &ManagedMethod<MethodType>,
     ) -> Option<MethodDescription> {
-        for method in &parent_type.0.methods {
+        for method in &parent_type.methods {
             if method.name == name {
                 // TODO: properly check sigs instead of this horrifying hack lol
                 if signature.show(res) == method.signature.show(res) {
@@ -145,11 +133,11 @@ impl Assemblies {
                         "found {}",
                         method.signature.show_with_name(
                             res,
-                            format!("{}::{}", parent_type.0.type_name(), method.name)
+                            format!("{}::{}", parent_type.type_name(), method.name)
                         )
                     );
                     return Some(MethodDescription {
-                        parent: parent_type,
+                        parent: desc,
                         method,
                     });
                 }
@@ -165,15 +153,12 @@ impl Assemblies {
         resolution: ResolutionS,
         handle: UserMethod,
         generic_inst: &GenericLookup,
-    ) -> WithSource<MethodDescription> {
+    ) -> MethodDescription {
         match handle {
-            UserMethod::Definition(d) => (
-                resolution,
-                MethodDescription {
-                    parent: TypeDescription(&resolution[d.parent_type()]),
-                    method: &resolution[d],
-                },
-            ),
+            UserMethod::Definition(d) => MethodDescription {
+                parent: TypeDescription(resolution, &resolution[d.parent_type()]),
+                method: &resolution[d],
+            },
             UserMethod::Reference(r) => {
                 let method_ref = &resolution[r];
 
@@ -185,19 +170,20 @@ impl Assemblies {
                                 TypeSource::User(base) | TypeSource::Generic { base, .. } => *base,
                             };
 
-                            let (res, parent_type) = self.locate_type(resolution, parent);
+                            let parent_type = self.locate_type(resolution, parent);
 
                             match self.find_method_in_type(
-                                res,
                                 parent_type,
                                 &method_ref.name,
                                 &method_ref.signature,
                             ) {
                                 None => panic!(
                                     "could not find {}",
-                                    method_ref.signature.show_with_name(res, &method_ref.name)
+                                    method_ref
+                                        .signature
+                                        .show_with_name(parent_type.0, &method_ref.name)
                                 ),
-                                Some(method) => (res, method),
+                                Some(method) => method,
                             }
                         }
                         BaseType::Boolean => todo!("System.Boolean"),
@@ -230,14 +216,13 @@ impl Assemblies {
 
     pub fn ancestors(
         &self,
-        resolution: ResolutionS,
-        child: TypeDescription,
-    ) -> Box<dyn Iterator<Item = WithSource<TypeDescription>>> {
-        match &child.0.extends {
-            None => Box::new(std::iter::once((resolution, child))),
+        desc @ TypeDescription(resolution, child): TypeDescription,
+    ) -> Box<dyn Iterator<Item = TypeDescription>> {
+        match &child.extends {
+            None => Box::new(std::iter::once(desc)),
             Some(TypeSource::User(parent) | TypeSource::Generic { base: parent, .. }) => {
-                let (res, parent) = self.locate_type(resolution, *parent);
-                Box::new(std::iter::once((res, parent)).chain(self.ancestors(res, parent)))
+                let parent = self.locate_type(resolution, *parent);
+                Box::new(std::iter::once(parent).chain(self.ancestors(parent)))
             }
         }
     }
