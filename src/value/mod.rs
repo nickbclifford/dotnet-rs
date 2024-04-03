@@ -129,6 +129,7 @@ pub enum HeapStorage<'gc> {
     Vec(Vector<'gc>),
     Obj(Object<'gc>),
     Str(CLRString),
+    BoxedValueType // TODO
 }
 
 fn read_gc_ptr(source: &[u8]) -> ObjectRef<'_> {

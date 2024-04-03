@@ -3,8 +3,8 @@ use std::{cmp::Ordering, ops::Deref};
 use dotnetdll::prelude::{Instruction, MethodSource, NumberSign, ResolvedDebug};
 
 use crate::value::{
-    string::CLRString, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, ObjectRef,
-    StackValue, UnmanagedPtr,
+    GenericLookup, HeapStorage, ManagedPtr, MethodDescription, ObjectRef, StackValue,
+    string::CLRString, UnmanagedPtr,
 };
 
 use super::{CallResult, CallStack, GCHandle, MethodInfo};
@@ -418,6 +418,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 tail_call, // TODO
                 param0: source,
             } => {
+                self.dump_stack();
                 let (method, lookup) = self.find_generic_method(source);
                 self.call_frame(gc, MethodInfo::new(method.parent.0, method.method), lookup);
             }
@@ -456,7 +457,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 NumberSign::Unsigned => binary_int_op!(/ as unsigned),
             },
             Duplicate => {
-                let val = self.pop_stack();
+                let val = pop!();
                 push!(val);
                 push!(val);
             }
@@ -533,13 +534,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 NumberSign::Unsigned => shift_op!(>> as unsigned),
             },
             StoreArgument(i) => {
-                let val = self.pop_stack();
+                let val = pop!();
                 self.set_argument(gc, *i as usize, val);
             }
             StoreIndirect { .. } => {}
             StoreLocal(i) => {
-                let val = self.pop_stack();
+                let val = pop!();
                 self.set_local(gc, *i as usize, val);
+                self.dump_stack();
             }
             Subtract => binary_arith_op!(wrapping_sub (f64 -), {
                 (StackValue::ManagedPtr(ManagedPtr(p)), StackValue::Int32(i)) => unsafe {
@@ -557,11 +559,19 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }),
             Switch(_) => {}
             Xor => binary_int_op!(^),
-            BoxValue(_) => {}
+            BoxValue(t) => {
+                // TODO
+                let _value = pop!();
+                push!(StackValue::ObjectRef(ObjectRef::new(
+                    gc,
+                    HeapStorage::BoxedValueType
+                )));
+            }
             CallVirtual {
                 skip_null_check, // TODO
                 param0: source,
             } => {
+                self.dump_stack();
                 let this_value = pop!();
                 let this_heap = match this_value {
                     StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
@@ -573,6 +583,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     HeapStorage::Obj(o) => o.description,
                     HeapStorage::Vec(v) => self.assemblies.corlib_type("System.Array"),
                     HeapStorage::Str(s) => self.assemblies.corlib_type("System.String"),
+                    HeapStorage::BoxedValueType => todo!("boxed value type"),
                 };
 
                 let (base_method, lookup) = self.find_generic_method(source);

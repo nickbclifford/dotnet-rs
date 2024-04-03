@@ -23,7 +23,7 @@ pub struct StackSlotHandle(DynamicRoot<StackSlot>);
 pub struct CallStack<'gc, 'm> {
     roots: DynamicRootSet<'gc>,
     stack: Vec<StackSlotHandle>,
-    frames: Vec<StackFrame<'m>>,
+    pub(crate) frames: Vec<StackFrame<'m>>,
     pub(crate) assemblies: &'m Assemblies,
 }
 // this is sound, I think?
@@ -144,16 +144,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         let num_args =
             if method.signature.instance { 1 } else { 0 } + method.signature.parameters.len();
-        let Some(argument_base) = self.stack.len().checked_sub(num_args) else {
+        let Some(argument_base) = self.top_of_stack().checked_sub(num_args) else {
             panic!(
                 "not enough values on stack! expected {} arguments, found {}",
                 num_args,
                 self.stack.len()
             )
         };
-        let locals_base = self.stack.len();
+        let locals_base = self.top_of_stack();
         self.init_locals(gc, method.locals);
-        let stack_base = self.stack.len();
+        let stack_base = self.top_of_stack() + method.locals.len();
 
         self.current_frame_mut().stack_height -= num_args;
         self.frames.push(StackFrame::new(
@@ -168,6 +168,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn return_frame(&mut self, gc: GCHandle<'gc>) {
+
         // since arguments are consumed by the caller and the return value is put on the top of the stack
         // for similar reasons as above, we can just "delete" the whole frame's slots (reclaimable)
         // and put the return value on the first slot (now open)
@@ -264,8 +265,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn dump_stack(&self) {
         let mut contents: Vec<_> = self
-            .stack
-            .iter()
+            .stack[..self.top_of_stack()].iter()
             .map(|h| format!("{:?}", self.roots.fetch(&h.0).get()))
             .collect();
         contents.reverse();

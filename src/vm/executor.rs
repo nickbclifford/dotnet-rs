@@ -1,8 +1,6 @@
 use dotnetdll::prelude::*;
-use crate::utils::ResolutionS;
 
-use crate::value::{ConcreteType, StackValue};
-use crate::vm::gc::GCArena;
+use crate::{value::StackValue, vm::gc::GCArena};
 
 use super::{CallResult, MethodInfo};
 
@@ -34,18 +32,6 @@ impl Executor {
         });
     }
 
-    pub fn call(&mut self, source_resolution: ResolutionS, method: &'static Method<'static>, generic_inst: Vec<ConcreteType>) {
-        self.arena.mutate_root(|gc, c| {
-            c.call_frame(
-                gc,
-                MethodInfo::new(source_resolution, method),
-                c.current_frame()
-                    .generic_inst
-                    .instantiate_method(generic_inst),
-            )
-        });
-    }
-
     // assumes args are already on stack
     pub fn run(&mut self) -> ExecutorResult {
         loop {
@@ -54,12 +40,20 @@ impl Executor {
                     // TODO: void returns
                     self.arena.mutate_root(|gc, c| c.return_frame(gc));
 
-                    let exit_code = self.arena.mutate(|gc, c| match c.bottom_of_stack() {
-                        Some(StackValue::Int32(i)) => i as u32,
-                        Some(_) => todo!("invalid value for entrypoint return"),
-                        None => 0,
-                    });
-                    return ExecutorResult::Exited(exit_code);
+                    if self.arena.mutate(|gc, c| c.frames.len() == 0) {
+                        let exit_code = self.arena.mutate(|gc, c| match c.bottom_of_stack() {
+                            Some(StackValue::Int32(i)) => i as u32,
+                            Some(_) => todo!("invalid value for entrypoint return"),
+                            None => 0,
+                        });
+                        return ExecutorResult::Exited(exit_code);
+                    } else {
+                        // step the caller past the call instruction
+                        self.arena.mutate_root(|gc, c| {
+                            c.dump_stack();
+                            c.current_frame_mut().state.ip += 1;
+                        });
+                    }
                 }
                 Some(CallResult::Threw) => {
                     // TODO: where do we keep track of exceptions?
