@@ -1,0 +1,86 @@
+% ---- ETD Document Class and Useful Packages ---- %
+\documentclass{ucetd}
+
+% Of course, add in any latex packages you need!
+%\usepackage{xcolor}
+%\usepackage{graphicx}
+%\graphicspath{{figs/}}
+%\DeclareGraphicsExtensions{.pdf,.jpeg,.png}
+
+
+%% Use these commands to set biographic information for the title page:
+\title{dotnet-rs: Rust in Large-Scale PL Systems}
+\author{Nick Clifford}
+\department{Computer Science}
+\division{Physical Sciences}
+\degree{Bachelor of Science}
+\date{April 2024}
+
+%% Use these commands to set a dedication and epigraph text
+%\dedication{Dedicated to\dots}
+%\epigraph{\textit{``A profound quote.''} \\ --- A profound thinker}
+
+\usepackage[pdfusetitle]{hyperref}
+\hypersetup{unicode=true,
+            linktoc=all,
+            pdfsubject=subject here,
+            pdfkeywords=keyword1 keyword2 keyword3,
+            pdfborder={0 0 0},
+            breaklinks=true}
+% See https://github.com/k4rtik/ucetd-latex/issues/1
+\makeatletter
+\let\ORG@hyper@linkstart\hyper@linkstart
+\protected\def\hyper@linkstart#1#2{%
+  \lowercase{\ORG@hyper@linkstart{#1}{#2}}}
+\makeatother
+
+\begin{document}
+
+\maketitle
+
+% These lines can be commented out to disable the copyright/dedication/epigraph pages
+\makecopyright
+%\makededication
+%\makeepigraph
+
+
+%% Make the various tables of contents
+\tableofcontents
+%\listoffigures
+%\listoftables
+
+\acknowledgments
+% Enter Acknowledgements here
+You might consider thanking the people you may need to thank: advisor, reader, classmates, friends, family. This is entirely optional, but encouraged. If your thesis was part of a project where you worked with other people, this section should include a citation to the full work and should also clearly outline your own contributions. Keep in mind that the words in your thesis document should be your own, not those of your co-authors.
+
+\abstract
+\input{abstract}
+
+\mainmatter
+% Main body of text follows
+
+\chapter{Introduction}
+\input{intro}
+
+\chapter{Related Work}
+\input{related}
+
+\chapter{Methods}
+\input{methods}
+
+\chapter{Conclusion}
+\input{conclusion}
+
+% Format a LaTeX bibliography
+\makebibliography
+
+%\appendix
+%
+%\chapter{Extra Things I Chose to Include}
+%\input{appendix}
+
+% Figures and tables, if you decide to leave them to the end
+%\input{figure}
+%\input{table}
+
+\end{document}
