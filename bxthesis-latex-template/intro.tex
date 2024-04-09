@@ -33,7 +33,7 @@ Of particular relevance to this exploration is the public source code to Microso
 The runtime is written primarily in C++, although it should be noted that the repository is majority-C\# due to the presence of
 library source code that requires special internal calls to the runtime.
 As a result, the build system is highly complex, featuring a combination of Microsoft's own MSBuild and CMake.
-Adding to this complexity is the nature of the C++ used for this runtime implementation\emdash{}pointers are very frequently cast between types,
+Adding to this complexity is the nature of the C++ used for this runtime implementation---pointers are very frequently cast between types,
 the class hierarchy is highly nested, and the boundary between garbage-collected (also called ``managed'') code and native code with
 manual memory management is frequently crossed.
 Not only is this very difficult to grasp for open source contributors, but the unchecked nature of C++ means that there are many
