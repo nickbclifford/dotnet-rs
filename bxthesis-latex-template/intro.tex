@@ -29,9 +29,68 @@ cross-platform execution and open development.
 Microsoft later went on to open-source the entirety of the .NET SDK, including their C\# compiler,
 and has invited community participation in the evolution process through the .NET Foundation on GitHub.
 
-% TODO: relevance?
-
+Of particular relevance to this exploration is the public source code to Microsoft's CLR implementation~\cite{runtime}.
+The runtime is written primarily in C++, although it should be noted that the repository is majority-C\# due to the presence of
+library source code that requires special internal calls to the runtime.
+As a result, the build system is highly complex, featuring a combination of Microsoft's own MSBuild and CMake.
+Adding to this complexity is the nature of the C++ used for this runtime implementation\emdash{}pointers are very frequently cast between types,
+the class hierarchy is highly nested, and the boundary between garbage-collected (also called ``managed'') code and native code with
+manual memory management is frequently crossed.
+Not only is this very difficult to grasp for open source contributors, but the unchecked nature of C++ means that there are many
+opportunities for memory safety errors to arise and potentially become exposed as a vulnerability in the runtime itself.
+However, these problems have existed for long enough across the C++ community that other programming languages have been developed
+explicitly to solve them.
 
 \section{The Rust language}
+In 2006, Mozilla employee Graydon Hoare started development on Rust as a personal project,
+with the explicit desire to create a safer and more ergonomic alternative to C++.
+Recognizing its potential, Mozilla officially sponsored Rust's development in 2009, and since then, the language has grown tremendously quickly,
+creating an online community of Rust developers that is also highly involved in the evolution process.
+Since its first stable release in 2015, countless companies have recognized its potential as a more productive replacement for C++,
+going on to adopt Rust as a primary language and rewriting critical services in it (leading to the famous `Rewrite It In Rust' meme).
+Rust has also proved a popular choice for embedded programming environments, and in 2022,
+Rust achieved the notable accomplishment of being accepted into the Linux kernel.
 
-\section{Execution of CIL code}
+\subsection{Notable features}
+The most prominent and distinctive feature of Rust is its memory safety system.
+Rust was designed from the ground up to prevent common errors such as null pointer dereferences, use-after-frees, and data races,
+which it accomplishes with its famous ownership system, borrow checker, and lifetime syntax.
+These are core to the language and so robust that any code outside an \texttt{unsafe} block that compiles
+is guaranteed to be free of memory unsafety, concurrency errors (other than deadlocks), or undefined behavior.
+Furthermore, these semantic guarantees have been mathematically formalized and proven to be sound~\cite{rustbelt}.
+
+Rust is also famous for its extremely expressive type system, which is inspired by those from functional programming languages such as Scala.
+It replaces C++'s textual template programming with true quantified type generics and its complex inheritance system with simple
+compositional traits (otherwise known as typeclasses).
+When combined with true algebraic data types and pattern matching, this allows for incredible levels of flexibility and abstraction
+for both library authors and consumers.
+
+These combine to create Rust's most compelling feature: \textit{zero-cost abstractions}.
+Plenty of programming languages with both true memory safety and highly complex type systems exist, but these are often implemented with
+garbage collectors, heavyweight runtime systems, or otherwise computationally-intensive bookkeeping, which make such languages unsuitable
+for performance-sensitive applications.
+However, tracking memory ownership at compile-time means that Rust does not need any sort of garbage collection.
+Additionally, the highly-optimizing compiler can easily remove dead code and provide optimizations specific to a particular generic instantiation,
+meaning that generic programming in Rust comes with no runtime cost.
+This is all to say that Rust enables one to get ``close to the metal'' just like C++,
+but without sacrificing any of the safety or productivity that a more high-level language could provide.
+
+Finally, Rust's focus on developer productivity is most visible in its build system and tooling.
+The compiler is known for its helpful error messages that guide the user directly to the problem, and the official documentation provided is stellar.
+Furthermore, dependency management is made extremely easy by the Cargo build tools,
+standing in stark contrast to the `CMake hell' of C++.
+Developers consistently rate Rust as their most loved/admired programming language~\cite{sosurvey},
+which can partially be attributed to this intense focus on developer experience.
+
+\section{Objectives}
+This project aims to explore the benefits and drawbacks of using Rust as the implementation language for large-scale
+programming language runtimes such as .NET.
+In particular, Rust's semantic guarantees have the potential to significantly streamline development within the
+complex environment of a language runtime.
+However, Rust is not a magic bullet.
+These guarantees can sometimes come at the cost of additional complexity: the ownership system encourages one to design programs
+based around well-defined object ownership graphs, which can be hard to retrofit existing architectures into, and lifetime tracking
+sometimes requires syntactic annotations that add to general code noisiness.
+As such, a secondary goal of the project is to examine whether the additional annotations and developer effort
+required by Rust constitute a significant burden for language system designers.
+In all, this establishes a framework for an analysis of Rust's benefits and trade-offs in the specific realm of large-scale programming language systems.
