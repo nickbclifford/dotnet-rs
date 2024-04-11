@@ -1,7 +1,6 @@
 \section{.NET and the Common Language Runtime}
-First released in 2000 as the proprietary .NET Framework, the .NET platform is a complete programming ecosystem developed by Microsoft,
-famous for its extremely high popularity in business and industry.
-While its primary programming language is famously C\#, the platform itself is language-agnostic,
+First released in 2000 as the proprietary .NET Framework, the .NET platform is a complete programming ecosystem developed by Microsoft.
+While its primary programming language is C\#, the platform itself is language-agnostic,
 being built upon a virtual machine execution environment called the Common Language Runtime, or CLR.
 Strictly speaking, the .NET platform refers primarily to the rich standard library and development frameworks bundled with the platform,
 whereas the CLR itself is a fully independently-specified runtime.
@@ -16,7 +15,7 @@ In 2001, Ecma International published the first edition of the ECMA-335 standard
 a collection of specifications for the language runtime, bytecode instruction set, and type system implemented by the CLR.
 (It should be noted that editions of this standard do \textit{not} correspond to specific versions of the .NET distribution or the C\# language.
 The last update to the standard was the sixth edition published in 2012, whereas both .NET and C\# have had countless updates since then.)
-However, the only implementation at the time was Microsoft's proprietary .NET Framework for Windows, inspiring Linux programmer Miguel de Icaza
+The only implementation at the time was Microsoft's proprietary .NET Framework for Windows, inspiring Linux programmer Miguel de Icaza
 to start the Mono project, an open-source cross-platform implementation of the CLI intended to be compatible with Microsoft's .NET.
 
 For more than a decade, this was the status quo: Microsoft continued to publish .NET as a Windows-only framework, intended for enterprise systems and Windows
@@ -32,27 +31,27 @@ and has invited community participation in the evolution process through the .NE
 Of particular relevance to this exploration is the public source code to Microsoft's CLR implementation~\cite{runtime}.
 The runtime is written primarily in C++, although it should be noted that the repository is majority-C\# due to the presence of
 library source code that requires special internal calls to the runtime.
-As a result, the build system is highly complex, featuring a combination of Microsoft's own MSBuild and CMake.
-Adding to this complexity is the nature of the C++ used for this runtime implementation---pointers are very frequently cast between types,
+In particular, the style of C++ used for the implementation is highly complex: pointers are very frequently cast between types,
 the class hierarchy is highly nested, and the boundary between garbage-collected (also called ``managed'') code and native code with
 manual memory management is frequently crossed.
 Not only is this very difficult to grasp for open source contributors, but the unchecked nature of C++ means that there are many
 opportunities for memory safety errors to arise and potentially become exposed as a vulnerability in the runtime itself.
-However, these problems have existed for long enough across the C++ community that other programming languages have been developed
+These problems have existed for long enough across the C++ community that other programming languages have been developed
 explicitly to solve them.
 
 \section{The Rust language}
 In 2006, Mozilla employee Graydon Hoare started development on Rust as a personal project,
 with the explicit desire to create a safer and more ergonomic alternative to C++.
-Recognizing its potential, Mozilla officially sponsored Rust's development in 2009, and since then, the language has grown tremendously quickly,
-creating an online community of Rust developers that is also highly involved in the evolution process.
-Since its first stable release in 2015, countless companies have recognized its potential as a more productive replacement for C++,
-going on to adopt Rust as a primary language and rewriting critical services in it (leading to the famous `Rewrite It In Rust' meme).
+Recognizing its potential, Mozilla officially sponsored Rust's development in 2009.
+Since then, the language has grown tremendously quickly,
+fostering an online community of Rust developers that is also highly involved in the evolution process.
+Since its first stable release in 2015, countless companies and large open-source projects have recognized its potential
+as a more productive replacement for C++.
 Rust has also proved a popular choice for embedded programming environments, and in 2022,
 Rust achieved the notable accomplishment of being accepted into the Linux kernel.
 
 \subsection{Notable features}
-The most prominent and distinctive feature of Rust is its memory safety system.
+The most distinctive feature of Rust is its memory safety system.
 Rust was designed from the ground up to prevent common errors such as null pointer dereferences, use-after-frees, and data races,
 which it accomplishes with its famous ownership system, borrow checker, and lifetime syntax.
 These are core to the language and so robust that any code outside an \texttt{unsafe} block that compiles
@@ -68,8 +67,7 @@ for both library authors and consumers.
 These combine to create Rust's most compelling feature: \textit{zero-cost abstractions}.
 Plenty of programming languages with both true memory safety and highly complex type systems exist, but these are often implemented with
 garbage collectors, heavyweight runtime systems, or otherwise computationally-intensive bookkeeping, which make such languages unsuitable
-for performance-sensitive applications.
-However, tracking memory ownership at compile-time means that Rust does not need any sort of garbage collection.
+for performance-sensitive applications; however, tracking memory ownership at compile-time means that Rust does not need any sort of garbage collection.
 Additionally, the highly-optimizing compiler can easily remove dead code and provide optimizations specific to a particular generic instantiation,
 meaning that generic programming in Rust comes with no runtime cost.
 This is all to say that Rust enables one to get ``close to the metal'' just like C++,
