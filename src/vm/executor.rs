@@ -37,7 +37,6 @@ impl Executor {
         loop {
             match self.arena.mutate_root(|gc, c| c.step(gc)) {
                 Some(CallResult::Returned) => {
-                    // TODO: void returns
                     self.arena.mutate_root(|gc, c| c.return_frame(gc));
 
                     if self.arena.mutate(|gc, c| c.frames.len() == 0) {
@@ -50,7 +49,6 @@ impl Executor {
                     } else {
                         // step the caller past the call instruction
                         self.arena.mutate_root(|gc, c| {
-                            c.dump_stack();
                             c.current_frame_mut().state.ip += 1;
                         });
                     }

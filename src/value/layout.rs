@@ -12,7 +12,7 @@ pub trait HasLayout {
 }
 
 #[enum_dispatch(HasLayout)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum LayoutManager {
     ClassLayoutManager,
     ArrayLayoutManager,
@@ -27,12 +27,12 @@ impl LayoutManager {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FieldLayout {
     pub position: usize,
     pub layout: LayoutManager,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ClassLayoutManager {
     pub fields: HashMap<String, FieldLayout>,
 }
@@ -76,7 +76,7 @@ impl ClassLayoutManager {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ArrayLayoutManager {
     pub element_layout: Box<LayoutManager>,
     pub length: usize,
@@ -99,7 +99,7 @@ impl ArrayLayoutManager {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Scalar {
     ObjectRef,
     Int8,

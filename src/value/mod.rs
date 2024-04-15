@@ -50,7 +50,7 @@ impl Context<'_> {
     }
 }
 
-#[derive(Copy, Clone, Debug, Collect, PartialEq)]
+#[derive(Clone, Debug, Collect, PartialEq)]
 #[collect(no_drop)]
 pub enum StackValue<'gc> {
     Int32(i32),
@@ -59,8 +59,8 @@ pub enum StackValue<'gc> {
     NativeFloat(f64),
     ObjectRef(ObjectRef<'gc>),
     UnmanagedPtr(UnmanagedPtr),
-    ManagedPtr(ManagedPtr), // TODO: user-defined value type
-                            // I.12.3.2.1
+    ManagedPtr(ManagedPtr),
+    ValueType(ValueObject),
 }
 impl StackValue<'_> {
     pub fn unmanaged_ptr(ptr: *mut u8) -> Self {
@@ -129,7 +129,108 @@ pub enum HeapStorage<'gc> {
     Vec(Vector<'gc>),
     Obj(Object<'gc>),
     Str(CLRString),
-    BoxedValueType // TODO
+    Boxed(ValueType),
+}
+
+#[derive(Clone, Debug, Collect)]
+#[collect(require_static)]
+pub enum ValueType {
+    Bool(bool),
+    Char(char),
+    Int8(i8),
+    UInt8(u8),
+    Int16(i16),
+    UInt16(u16),
+    Int32(i32),
+    UInt32(u32),
+    Int64(i64),
+    UInt64(u64),
+    NativeInt(isize),
+    NativeUInt(usize),
+    Float32(f32),
+    Float64(f64),
+    TypedRef, // TODO
+    Struct(ValueObject),
+}
+
+fn convert_num<T: TryFrom<i32> + TryFrom<isize>>(data: StackValue) -> T {
+    match data {
+        StackValue::Int32(i) => i.try_into().unwrap_or_else(|_| panic!("failed to convert from i32")),
+        StackValue::NativeInt(i) => i.try_into().unwrap_or_else(|_| panic!("failed to convert from isize")),
+        other => panic!("invalid stack value {:?} for integer conversion", other)
+    }
+}
+
+impl ValueType {
+    pub fn new(t: &ConcreteType, context: &Context, data: StackValue) -> Self {
+        match t.get() {
+            BaseType::Type {
+                value_kind: None | Some(ValueKind::ValueType),
+                source,
+            } => match source {
+                TypeSource::User(u) => {
+                    let t = context.locate_type(*u);
+                    match t.1.type_name().as_str() {
+                        "System.Boolean" => Self::Bool(todo!()),
+                        "System.Char" => Self::Char(todo!()),
+                        "System.Single" => Self::Float32(todo!()),
+                        "System.Double" => Self::Float64(todo!()),
+                        "System.SByte" => Self::Int8(convert_num(data)),
+                        "System.Int16" => Self::Int16(convert_num(data)),
+                        "System.Int32" => Self::Int32(convert_num(data)),
+                        "System.Int64" => Self::Int64(todo!()),
+                        "System.IntPtr" => Self::NativeInt(convert_num(data)),
+                        "System.TypedReference" => Self::TypedRef,
+                        "System.Byte" => Self::UInt8(convert_num(data)),
+                        "System.UInt16" => Self::UInt16(convert_num(data)),
+                        "System.UInt32" => Self::UInt32(convert_num(data)),
+                        "System.UInt64" => Self::UInt64(todo!()),
+                        "System.UIntPtr" => Self::NativeUInt(convert_num(data)),
+                        _ => Self::Struct(todo!()),
+                    }
+                }
+                TypeSource::Generic { .. } => {
+                    todo!("resolve value types with generics")
+                }
+            },
+            BaseType::Boolean => Self::Bool(todo!()),
+            BaseType::Char => Self::Char(todo!()),
+            BaseType::Int8 => Self::Int8(convert_num(data)),
+            BaseType::UInt8 => Self::UInt8(convert_num(data)),
+            BaseType::Int16 => Self::Int16(convert_num(data)),
+            BaseType::UInt16 => Self::UInt16(convert_num(data)),
+            BaseType::Int32 => Self::Int32(convert_num(data)),
+            BaseType::UInt32 => Self::UInt32(convert_num(data)),
+            BaseType::Int64 => Self::Int64(todo!()),
+            BaseType::UInt64 => Self::UInt64(todo!()),
+            BaseType::Float32 => Self::Float32(todo!()),
+            BaseType::Float64 => Self::Float64(todo!()),
+            BaseType::IntPtr => Self::NativeInt(convert_num(data)),
+            BaseType::UIntPtr | BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => Self::NativeUInt(convert_num(data)),
+            rest => panic!("{:?} is not a value type", rest),
+        }
+    }
+
+    pub fn description(&self, context: &Context) -> TypeDescription {
+        match self {
+            ValueType::Bool(_) => context.assemblies.corlib_type("System.Boolean"),
+            ValueType::Char(_) => context.assemblies.corlib_type("System.Char"),
+            ValueType::Int8(_) => context.assemblies.corlib_type("System.SByte"),
+            ValueType::UInt8(_) => context.assemblies.corlib_type("System.Byte"),
+            ValueType::Int16(_) => context.assemblies.corlib_type("System.Int16"),
+            ValueType::UInt16(_) => context.assemblies.corlib_type("System.UInt16"),
+            ValueType::Int32(_) => context.assemblies.corlib_type("System.Int32"),
+            ValueType::UInt32(_) => context.assemblies.corlib_type("System.UInt32"),
+            ValueType::Int64(_) => context.assemblies.corlib_type("System.Int64"),
+            ValueType::UInt64(_) => context.assemblies.corlib_type("System.UInt64"),
+            ValueType::NativeInt(_) => context.assemblies.corlib_type("System.IntPtr"),
+            ValueType::NativeUInt(_) => context.assemblies.corlib_type("System.UIntPtr"),
+            ValueType::Float32(_) => context.assemblies.corlib_type("System.Single"),
+            ValueType::Float64(_) => context.assemblies.corlib_type("System.Double"),
+            ValueType::TypedRef => context.assemblies.corlib_type("System.TypedReference"),
+            ValueType::Struct(s) => s.description,
+        }
+    }
 }
 
 fn read_gc_ptr(source: &[u8]) -> ObjectRef<'_> {
@@ -225,9 +326,34 @@ impl<'gc> Object<'gc> {
     }
 }
 
+// TODO: GC pointers stored here probably need to be traced too
+// can we just copy the Object implementation, even though ValueObject won't be inside of a Gc<T>?
+#[derive(Clone, Debug, Collect, PartialEq)]
+#[collect(require_static)]
+pub struct ValueObject {
+    pub description: TypeDescription,
+    field_layout: ClassLayoutManager,
+    field_storage: Vec<u8>,
+}
+impl ValueObject {
+    pub fn new(description: TypeDescription, context: Context) -> Self {
+        let layout = ClassLayoutManager::new(description, context);
+        Self {
+            description,
+            field_storage: vec![0; layout.size()], // TODO: initialize properly
+            field_layout: layout,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Copy)]
 pub struct TypeDescription(pub ResolutionS, pub &'static TypeDefinition<'static>);
 unsafe_empty_collect!(TypeDescription);
+impl PartialEq for TypeDescription {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0, other.0) && std::ptr::eq(self.1, other.1)
+    }
+}
 
 #[derive(Clone, Debug, Copy)]
 pub struct MethodDescription {

@@ -2,10 +2,7 @@ use std::{cmp::Ordering, ops::Deref};
 
 use dotnetdll::prelude::{Instruction, MethodSource, NumberSign, ResolvedDebug};
 
-use crate::value::{
-    GenericLookup, HeapStorage, ManagedPtr, MethodDescription, ObjectRef, StackValue,
-    string::CLRString, UnmanagedPtr,
-};
+use crate::value::{GenericLookup, HeapStorage, ManagedPtr, MethodDescription, ObjectRef, StackValue, string::CLRString, UnmanagedPtr, ValueType};
 
 use super::{CallResult, CallStack, GCHandle, MethodInfo};
 
@@ -340,10 +337,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             };
         }
 
+        let indent = self.frames.len() - 1;
         let i = state!(|s| {
             let i = &s.info_handle.instructions[s.ip];
             println!(
-                "about to execute {}",
+                "[{}ip @ {}] about to execute {}",
+                "\t".repeat(indent),
+                s.ip,
                 i.show(s.info_handle.source_resolution)
             );
             i
@@ -418,9 +418,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 tail_call, // TODO
                 param0: source,
             } => {
-                self.dump_stack();
                 let (method, lookup) = self.find_generic_method(source);
                 self.call_frame(gc, MethodInfo::new(method.parent.0, method.method), lookup);
+                moved_ip = true;
             }
             CallConstrained(_, _) => {}
             CallIndirect { .. } => {}
@@ -458,7 +458,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             },
             Duplicate => {
                 let val = pop!();
-                push!(val);
+                push!(val.clone());
                 push!(val);
             }
             EndFilter => {}
@@ -525,7 +525,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             },
             Return => {
                 // expects single value on stack for non-void methods
-                // will be moved around properly by call stack manager
+                // will be moved around properly by call stack manager=
                 return Some(CallResult::Returned);
             }
             ShiftLeft => shift_op!(<<),
@@ -541,7 +541,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             StoreLocal(i) => {
                 let val = pop!();
                 self.set_local(gc, *i as usize, val);
-                self.dump_stack();
             }
             Subtract => binary_arith_op!(wrapping_sub (f64 -), {
                 (StackValue::ManagedPtr(ManagedPtr(p)), StackValue::Int32(i)) => unsafe {
@@ -560,11 +559,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             Switch(_) => {}
             Xor => binary_int_op!(^),
             BoxValue(t) => {
-                // TODO
-                let _value = pop!();
+                let t = self.current_context().generics.make_concrete(t.clone());
+
+                let value = pop!();
                 push!(StackValue::ObjectRef(ObjectRef::new(
                     gc,
-                    HeapStorage::BoxedValueType
+                    HeapStorage::Boxed(ValueType::new(&t, &self.current_context(), value))
                 )));
             }
             CallVirtual {
@@ -572,6 +572,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 param0: source,
             } => {
                 self.dump_stack();
+
                 let this_value = pop!();
                 let this_heap = match this_value {
                     StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
@@ -583,7 +584,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     HeapStorage::Obj(o) => o.description,
                     HeapStorage::Vec(v) => self.assemblies.corlib_type("System.Array"),
                     HeapStorage::Str(s) => self.assemblies.corlib_type("System.String"),
-                    HeapStorage::BoxedValueType => todo!("boxed value type"),
+                    HeapStorage::Boxed(v) => v.description(&self.current_context()),
                 };
 
                 let (base_method, lookup) = self.find_generic_method(source);
@@ -618,13 +619,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadElementPrimitive { .. } => {}
             LoadElementAddress { .. } => {}
             LoadElementAddressReadonly(_) => {}
-            LoadField { .. } => {}
-            LoadFieldAddress(_) => {}
+            LoadField { .. } => todo!("ldfld"),
+            LoadFieldAddress(_) => todo!("ldflda"),
             LoadFieldSkipNullCheck(_) => {}
             LoadLength => {}
             LoadObject { .. } => {}
-            LoadStaticField { .. } => {}
-            LoadStaticFieldAddress(_) => {}
+            LoadStaticField { .. } => todo!("ldsfld"),
+            LoadStaticFieldAddress(_) => todo!("ldsflda"),
             LoadString(cs) => {
                 let val = StackValue::ObjectRef(ObjectRef::new(
                     gc,
@@ -645,10 +646,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             Sizeof(_) => {}
             StoreElement { .. } => {}
             StoreElementPrimitive { .. } => {}
-            StoreField { .. } => {}
+            StoreField { .. } => todo!("stfld"),
             StoreFieldSkipNullCheck(_) => {}
             StoreObject { .. } => {}
-            StoreStaticField { .. } => {}
+            StoreStaticField { .. } => todo!("stsfld"),
             Throw => {
                 // expects single value on stack
                 // TODO: how will we propagate exceptions up the call stack?
