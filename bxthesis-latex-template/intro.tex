@@ -13,16 +13,19 @@ and high interoperability with native C or C++ libraries.
 .NET and the CLR have a long history with open source software and community involvement.
 In 2001, Ecma International published the first edition of the ECMA-335 standard, which codified the Common Language Infrastructure (CLI):
 a collection of specifications for the language runtime, bytecode instruction set, and type system implemented by the CLR.
-(It should be noted that editions of this standard do \textit{not} correspond to specific versions of the .NET distribution or the C\# language.
-The last update to the standard was the sixth edition published in 2012, whereas both .NET and C\# have had countless updates since then.)
-The only implementation at the time was Microsoft's proprietary .NET Framework for Windows, inspiring Linux programmer Miguel de Icaza
-to start the Mono project, an open-source cross-platform implementation of the CLI intended to be compatible with Microsoft's .NET.
+\footnote{It should be noted that editions of this standard do \textit{not} correspond to specific versions of the .NET distribution or the C\# language.
+The last update to the standard was the sixth edition published in 2012, whereas both .NET and C\# have had countless updates since then.}
+The only implementation at the time was Microsoft's proprietary .NET Framework for Windows, however.
+Searching for a Linux-compatible environment, Linux programmer Miguel de Icaza decided to start the Mono project: an open-source cross-platform implementation of the CLI intended to be compatible with Microsoft's .NET.
+In 2011, he started Xamarin Inc., which took over the development of Mono and served as its legal owner.
 
 For more than a decade, this was the status quo: Microsoft continued to publish .NET as a Windows-only framework, intended for enterprise systems and Windows
 application development in C\#, whereas Mono was used as the execution environment for cross-platform and open-source projects that wanted to use C\#,
-such as the Unity game engine's scripting system. % TODO: cite
-This all changed in 2014, when Microsoft published .NET Core, a fully open-source and cross-platform implementation of the .NET stack.
-This included publishing the source code for Microsoft's CLR implementation.
+such as the Unity game engine's scripting system or Xamarin's mobile development framework. % TODO: cite
+This all changed in 2014, when Microsoft published .NET Core, a fully open-source and cross-platform implementation of the .NET stack,
+which included publishing the source code for Microsoft's CLR implementation.
+At the same time, Microsoft incorporated the .NET Foundation to serve as the new legal steward of official open-source .NET repositories.
+Furthermore, in 2016, Microsoft acquired Xamarin, thus bringing Mono under the umbrella of the .NET Foundation.
 In 2020, Microsoft replaced .NET Framework and .NET Core with the unified .NET 5.0, and since then, the .NET ecosystem has embraced
 cross-platform execution and open development.
 Microsoft later went on to open-source the entirety of the .NET SDK, including their C\# compiler,
@@ -36,7 +39,7 @@ the class hierarchy is highly nested, and the boundary between garbage-collected
 manual memory management is frequently crossed.
 Not only is this very difficult to grasp for open source contributors, but the unchecked nature of C++ means that there are many
 opportunities for memory safety errors to arise and potentially become exposed as a vulnerability in the runtime itself.
-These problems have existed for long enough across the C++ community that other programming languages have been developed
+These problems have existed for long enough across the C++ community, however, that other programming languages have been developed
 explicitly to solve them.
 
 \section{The Rust language}
@@ -53,21 +56,31 @@ Rust achieved the notable accomplishment of being accepted into the Linux kernel
 \subsection{Notable features}
 The most distinctive feature of Rust is its memory safety system.
 Rust was designed from the ground up to prevent common errors such as null pointer dereferences, use-after-frees, and data races,
-which it accomplishes with its famous ownership system, borrow checker, and lifetime syntax.
+which it accomplishes with its ownership system, borrow checker, and lifetime syntax.
 These are core to the language and so robust that any code outside an \texttt{unsafe} block that compiles
 is guaranteed to be free of memory unsafety, concurrency errors (other than deadlocks), or undefined behavior.
 Furthermore, these semantic guarantees have been mathematically formalized and proven to be sound~\cite{rustbelt}.
 
-Rust is also famous for its extremely expressive type system, which is inspired by those from functional programming languages such as Scala.
-It replaces C++'s textual template programming with true quantified type generics and its complex inheritance system with simple
+Rust is also known for its extremely expressive type system, which is inspired by those from modern programming languages such as Scala.
+It replaces C++'s textual template programming with true quantified type generics, and its complex inheritance system with simple
 compositional traits (otherwise known as typeclasses).
+\footnote{Traits are often compared to interfaces from object-oriented languages, however, there are two key differences:
+traits may have default implementations attached to their declared methods, and they may also declare associated types that implementing types must define.}
 When combined with true algebraic data types and pattern matching, this allows for incredible levels of flexibility and abstraction
 for both library authors and consumers.
 
 These combine to create Rust's most compelling feature: \textit{zero-cost abstractions}.
 Plenty of programming languages with both true memory safety and highly complex type systems exist, but these are often implemented with
-garbage collectors, heavyweight runtime systems, or otherwise computationally-intensive bookkeeping, which make such languages unsuitable
-for performance-sensitive applications; however, tracking memory ownership at compile-time means that Rust does not need any sort of garbage collection.
+garbage collectors, heavyweight runtime systems, or otherwise computationally-intensive bookkeeping,
+which makes such languages unsuitable for certain performance-sensitive applications.
+\footnote{For most applications, the performance overhead of a garbage collector is simply not relevant.
+In performance-critical environments such as embedded programming and high-frequency trading, however,
+C++ has maintained market dominance because of its lack of GC and ability to manually manage memory.}
+In comparison, tracking memory ownership at compile-time means that Rust does not need any sort of garbage collection.
+Indeed, Rust's memory model takes advantage of the RAII principle to statically resolve memory management:
+similar to destructors in C++, all types can implement the \texttt{Drop} trait, which the compiler automatically runs at the end of a value's lexical scope.
+Since the borrow checker
+
 Additionally, the highly-optimizing compiler can easily remove dead code and provide optimizations specific to a particular generic instantiation,
 meaning that generic programming in Rust comes with no runtime cost.
 This is all to say that Rust enables one to get ``close to the metal'' just like C++,
@@ -85,10 +98,10 @@ This project aims to explore the benefits and drawbacks of using Rust as the imp
 programming language runtimes such as .NET.
 In particular, Rust's semantic guarantees have the potential to significantly streamline development within the
 complex environment of a language runtime.
-However, Rust is not a magic bullet.
-These guarantees can sometimes come at the cost of additional complexity: the ownership system encourages one to design programs
-based around well-defined object ownership graphs, which can be hard to retrofit existing architectures into, and lifetime tracking
-sometimes requires syntactic annotations that add to general code noisiness.
+Nevertheless, Rust is not a magic bullet, and these guarantees can sometimes come at the cost of additional complexity:
+the ownership system encourages one to design programs based around well-defined object ownership graphs,
+which can be hard to retrofit existing architectures into,
+and lifetime tracking often requires syntactic annotations that add to general code noisiness.
 As such, a secondary goal of the project is to examine whether the additional annotations and developer effort
 required by Rust constitute a significant burden for language system designers.
 In all, this establishes a framework for an analysis of Rust's benefits and trade-offs in the specific realm of large-scale programming language systems.

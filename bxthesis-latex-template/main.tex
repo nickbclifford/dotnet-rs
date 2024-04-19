@@ -2,14 +2,15 @@
 \documentclass{ucetd}
 
 % Of course, add in any latex packages you need!
-%\usepackage{xcolor}
-%\usepackage{graphicx}
-%\graphicspath{{figs/}}
-%\DeclareGraphicsExtensions{.pdf,.jpeg,.png}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\graphicspath{{figs/}}
+\DeclareGraphicsExtensions{.pdf,.jpeg,.png}
+\usepackage{caption}
 
 
 %% Use these commands to set biographic information for the title page:
-\title{dotnet-rs: Rust in Large-Scale PL Systems}
+\title{dotnet-rs: Rust in Large-Scale Programming Language Systems}
 \author{Nick Clifford}
 \department{Computer Science}
 \division{Physical Sciences}
@@ -77,10 +78,16 @@ You might consider thanking the people you may need to thank: advisor, reader, c
 % Format a LaTeX bibliography
 \makebibliography
 
-%\appendix
-%
-%\chapter{Extra Things I Chose to Include}
-%\input{appendix}
+\appendix
+
+\chapter{CIL Instruction Set}\label{app:cil}
+\input{cil}
+
+\chapter{dotnetdll: Reading .NET Metadata}
+\input{dotnetdll}
+
+\chapter{gc-arena API}
+\input{arena}
 
 % Figures and tables, if you decide to leave them to the end
 %\input{figure}
