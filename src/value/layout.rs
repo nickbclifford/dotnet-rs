@@ -14,7 +14,7 @@ pub trait HasLayout {
 #[enum_dispatch(HasLayout)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayoutManager {
-    ClassLayoutManager,
+    FieldLayoutManager,
     ArrayLayoutManager,
     Scalar,
 }
@@ -27,26 +27,41 @@ impl LayoutManager {
     }
 }
 
+fn align_up(value: usize, align: usize) -> usize {
+    let misalignment = value % align;
+    if misalignment == 0 {
+        value
+    } else {
+        value + align - misalignment
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldLayout {
     pub position: usize,
     pub layout: LayoutManager,
 }
 #[derive(Clone, Debug, PartialEq)]
-pub struct ClassLayoutManager {
+pub struct FieldLayoutManager {
     pub fields: HashMap<String, FieldLayout>,
+    pub total_size: usize,
 }
-impl HasLayout for ClassLayoutManager {
+impl HasLayout for FieldLayoutManager {
     fn size(&self) -> usize {
-        self.fields.values().map(|f| f.layout.size()).sum()
+        self.total_size
     }
 }
-impl ClassLayoutManager {
-    pub fn new(TypeDescription(_, description): TypeDescription, context: Context) -> Self {
-        let layout = description.flags.layout;
-        let fields: Vec<_> = description
-            .fields
-            .iter()
+impl FieldLayoutManager {
+    fn new<'a>(
+        fields: impl IntoIterator<Item = &'a Field<'static>>,
+        layout: Layout,
+        context: Context,
+    ) -> Self {
+        let mut mapping = HashMap::new();
+        let total_size;
+
+        let fields: Vec<_> = fields
+            .into_iter()
             .map(|f| {
                 (
                     f.name.as_ref(),
@@ -54,18 +69,119 @@ impl ClassLayoutManager {
                     type_layout(
                         context.generics.make_concrete(f.return_type.clone()),
                         context.clone(),
-                    )
-                    .size(),
+                    ),
                 )
             })
             .collect();
 
         match layout {
-            Layout::Automatic => {}
-            Layout::Sequential(_) => {}
-            Layout::Explicit(_) => {}
+            Layout::Automatic => {
+                let mut offset = 0;
+
+                for (name, _, layout) in fields {
+                    let size = layout.size();
+                    mapping.insert(
+                        name.to_string(),
+                        FieldLayout {
+                            position: offset,
+                            layout,
+                        },
+                    );
+                    offset += align_up(size, size_of::<usize>());
+                }
+
+                total_size = offset;
+            }
+            Layout::Sequential(s) => match s {
+                None => {
+                    let mut offset = 0;
+
+                    for (name, _, layout) in fields {
+                        let size = layout.size();
+                        mapping.insert(
+                            name.to_string(),
+                            FieldLayout {
+                                position: offset,
+                                layout,
+                            },
+                        );
+                        offset += size;
+                    }
+
+                    total_size = offset;
+                }
+                Some(SequentialLayout {
+                    packing_size,
+                    class_size,
+                }) => {
+                    let mut offset = 0;
+
+                    for (name, _, layout) in fields {
+                        let size = layout.size();
+                        let aligned_offset = align_up(offset, packing_size);
+                        mapping.insert(
+                            name.to_string(),
+                            FieldLayout {
+                                position: aligned_offset,
+                                layout,
+                            },
+                        );
+                        offset = aligned_offset + size;
+                    }
+                    total_size = align_up(offset, class_size);
+                }
+            },
+            Layout::Explicit(e) => {
+                for (name, offset, layout) in fields {
+                    match offset {
+                        None => panic!(
+                            "explicit field layout requires all fields to have defined offsets"
+                        ),
+                        Some(o) => mapping.insert(
+                            name.to_string(),
+                            FieldLayout {
+                                position: o,
+                                layout,
+                            },
+                        ),
+                    };
+                }
+                total_size = match e {
+                    Some(ExplicitLayout { class_size }) => class_size,
+                    None => match mapping.values().max_by_key(|l| l.position) {
+                        None => 0,
+                        Some(FieldLayout { position, layout }) => position + layout.size(),
+                    },
+                }
+            }
         }
-        todo!()
+
+        Self {
+            fields: mapping,
+            total_size,
+        }
+    }
+
+    pub fn instance_fields(
+        TypeDescription(_, description): TypeDescription,
+        context: Context,
+    ) -> Self {
+        Self::new(
+            description.fields.iter().filter(|f| !f.static_member),
+            description.flags.layout,
+            context,
+        )
+    }
+
+    pub fn static_fields(
+        TypeDescription(_, description): TypeDescription,
+        context: Context,
+    ) -> Self {
+        Self::new(
+            description.fields.iter().filter(|f| f.static_member),
+            description.flags.layout,
+            context,
+        )
     }
 
     pub fn field_offset(&self, name: &str) -> usize {
@@ -124,7 +240,7 @@ impl HasLayout for Scalar {
     }
 }
 
-pub fn type_layout(t: ConcreteType, mut context: Context) -> LayoutManager {
+pub fn type_layout(t: ConcreteType, context: Context) -> LayoutManager {
     match t.get() {
         BaseType::Boolean | BaseType::Int8 | BaseType::UInt8 => Scalar::Int8.into(),
         BaseType::Char | BaseType::Int16 | BaseType::UInt16 => Scalar::Int16.into(),
@@ -147,7 +263,7 @@ pub fn type_layout(t: ConcreteType, mut context: Context) -> LayoutManager {
                     context.locate_type(*base)
                 }
             };
-            ClassLayoutManager::new(t, context).into()
+            FieldLayoutManager::instance_fields(t, context).into()
         }
         BaseType::Type { .. }
         | BaseType::Object

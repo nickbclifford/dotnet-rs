@@ -341,7 +341,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let i = state!(|s| {
             let i = &s.info_handle.instructions[s.ip];
             println!(
-                "[{}ip @ {}] about to execute {}",
+                "{}[ip @ {}] about to execute {}",
                 "\t".repeat(indent),
                 s.ip,
                 i.show(s.info_handle.source_resolution)

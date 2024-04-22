@@ -1,9 +1,11 @@
 use std::{cmp::Ordering, marker::PhantomData, mem::size_of};
+use std::hash::{Hash, Hasher};
 
 use dotnetdll::prelude::*;
-use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};
+use gc_arena::{Collect, Collection, Gc, unsafe_empty_collect};
 
 use layout::*;
+use storage::FieldStorage;
 
 use crate::utils::ResolutionS;
 use crate::value::string::CLRString;
@@ -11,6 +13,7 @@ use crate::{resolve::Assemblies, vm::GCHandle};
 
 mod layout;
 pub mod string;
+mod storage;
 
 #[derive(Clone)]
 pub struct Context<'a> {
@@ -60,7 +63,7 @@ pub enum StackValue<'gc> {
     ObjectRef(ObjectRef<'gc>),
     UnmanagedPtr(UnmanagedPtr),
     ManagedPtr(ManagedPtr),
-    ValueType(ValueObject),
+    ValueType(Object<'gc>),
 }
 impl StackValue<'_> {
     pub fn unmanaged_ptr(ptr: *mut u8) -> Self {
@@ -129,12 +132,12 @@ pub enum HeapStorage<'gc> {
     Vec(Vector<'gc>),
     Obj(Object<'gc>),
     Str(CLRString),
-    Boxed(ValueType),
+    Boxed(ValueType<'gc>),
 }
 
 #[derive(Clone, Debug, Collect)]
-#[collect(require_static)]
-pub enum ValueType {
+#[collect(no_drop)]
+pub enum ValueType<'gc> {
     Bool(bool),
     Char(char),
     Int8(i8),
@@ -150,18 +153,22 @@ pub enum ValueType {
     Float32(f32),
     Float64(f64),
     TypedRef, // TODO
-    Struct(ValueObject),
+    Struct(Object<'gc>),
 }
 
 fn convert_num<T: TryFrom<i32> + TryFrom<isize>>(data: StackValue) -> T {
     match data {
-        StackValue::Int32(i) => i.try_into().unwrap_or_else(|_| panic!("failed to convert from i32")),
-        StackValue::NativeInt(i) => i.try_into().unwrap_or_else(|_| panic!("failed to convert from isize")),
-        other => panic!("invalid stack value {:?} for integer conversion", other)
+        StackValue::Int32(i) => i
+            .try_into()
+            .unwrap_or_else(|_| panic!("failed to convert from i32")),
+        StackValue::NativeInt(i) => i
+            .try_into()
+            .unwrap_or_else(|_| panic!("failed to convert from isize")),
+        other => panic!("invalid stack value {:?} for integer conversion", other),
     }
 }
 
-impl ValueType {
+impl ValueType<'_> {
     pub fn new(t: &ConcreteType, context: &Context, data: StackValue) -> Self {
         match t.get() {
             BaseType::Type {
@@ -206,7 +213,9 @@ impl ValueType {
             BaseType::Float32 => Self::Float32(todo!()),
             BaseType::Float64 => Self::Float64(todo!()),
             BaseType::IntPtr => Self::NativeInt(convert_num(data)),
-            BaseType::UIntPtr | BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => Self::NativeUInt(convert_num(data)),
+            BaseType::UIntPtr | BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
+                Self::NativeUInt(convert_num(data))
+            }
             rest => panic!("{:?} is not a value type", rest),
         }
     }
@@ -233,7 +242,7 @@ impl ValueType {
     }
 }
 
-fn read_gc_ptr(source: &[u8]) -> ObjectRef<'_> {
+pub fn read_gc_ptr(source: &[u8]) -> ObjectRef<'_> {
     let mut ptr_bytes = [0u8; size_of::<ObjectRef>()];
     ptr_bytes.copy_from_slice(&source[0..size_of::<ObjectRef>()]);
     let ptr = usize::from_ne_bytes(ptr_bytes) as *const HeapStorage;
@@ -248,7 +257,7 @@ fn read_gc_ptr(source: &[u8]) -> ObjectRef<'_> {
         ObjectRef(Some(unsafe { Gc::from_ptr(ptr) }))
     }
 }
-fn write_gc_ptr(ObjectRef(source): ObjectRef<'_>, dest: &mut [u8]) {
+pub fn write_gc_ptr(ObjectRef(source): ObjectRef<'_>, dest: &mut [u8]) {
     let ptr: *const HeapStorage = match source {
         None => std::ptr::null(),
         Some(s) => Gc::as_ptr(s),
@@ -294,55 +303,19 @@ impl<'gc> Vector<'gc> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Collect, PartialEq)]
+#[collect(no_drop)]
 pub struct Object<'gc> {
     pub description: TypeDescription,
-    field_layout: ClassLayoutManager,
-    field_storage: Vec<u8>,
-    _contains_gc: PhantomData<&'gc ()>, // ditto
-}
-unsafe impl Collect for Object<'_> {
-    #[inline]
-    fn trace(&self, cc: &Collection) {
-        for field in self.field_layout.fields.values() {
-            if field.layout.is_gc_ptr() {
-                if let ObjectRef(Some(gc)) = read_gc_ptr(&self.field_storage[field.position..]) {
-                    gc.trace(cc);
-                }
-            }
-        }
-    }
+    instance_storage: FieldStorage<'gc>,
 }
 impl<'gc> Object<'gc> {
     pub fn new(gc: GCHandle<'gc>, description: TypeDescription, context: Context) -> Gc<'gc, Self> {
-        let layout = ClassLayoutManager::new(description, context);
         let value = Self {
             description,
-            field_storage: vec![0; layout.size()], // TODO: initialize properly
-            field_layout: layout,
-            _contains_gc: PhantomData,
+            instance_storage: FieldStorage::instance_fields(description, context)
         };
         Gc::new(gc, value)
-    }
-}
-
-// TODO: GC pointers stored here probably need to be traced too
-// can we just copy the Object implementation, even though ValueObject won't be inside of a Gc<T>?
-#[derive(Clone, Debug, Collect, PartialEq)]
-#[collect(require_static)]
-pub struct ValueObject {
-    pub description: TypeDescription,
-    field_layout: ClassLayoutManager,
-    field_storage: Vec<u8>,
-}
-impl ValueObject {
-    pub fn new(description: TypeDescription, context: Context) -> Self {
-        let layout = ClassLayoutManager::new(description, context);
-        Self {
-            description,
-            field_storage: vec![0; layout.size()], // TODO: initialize properly
-            field_layout: layout,
-        }
     }
 }
 
@@ -352,6 +325,12 @@ unsafe_empty_collect!(TypeDescription);
 impl PartialEq for TypeDescription {
     fn eq(&self, other: &Self) -> bool {
         std::ptr::eq(self.0, other.0) && std::ptr::eq(self.1, other.1)
+    }
+}
+impl Hash for TypeDescription {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (self.0 as *const Resolution).hash(state);
+        (self.1 as *const TypeDefinition).hash(state);
     }
 }
 
