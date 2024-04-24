@@ -1,8 +1,11 @@
-use std::{cmp::Ordering, ops::Deref};
+use std::cmp::Ordering;
 
 use dotnetdll::prelude::{Instruction, MethodSource, NumberSign, ResolvedDebug};
 
-use crate::value::{GenericLookup, HeapStorage, ManagedPtr, MethodDescription, ObjectRef, StackValue, string::CLRString, UnmanagedPtr, ValueType};
+use crate::value::{
+    GenericLookup, HeapStorage, ManagedPtr, MethodDescription, ObjectRef, StackValue,
+    string::CLRString, UnmanagedPtr, ValueType,
+};
 
 use super::{CallResult, CallStack, GCHandle, MethodInfo};
 
@@ -579,13 +582,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::ObjectRef(ObjectRef(Some(o))) => o,
                     rest => panic!("invalid this argument for virtual call (expected object ref, received {:?})", rest)
                 };
-
-                let this_type = match this_heap.deref() {
-                    HeapStorage::Obj(o) => o.description,
-                    HeapStorage::Vec(v) => self.assemblies.corlib_type("System.Array"),
-                    HeapStorage::Str(s) => self.assemblies.corlib_type("System.String"),
-                    HeapStorage::Boxed(v) => v.description(&self.current_context()),
-                };
+                let this_type = self.current_context().get_heap_description(this_heap);
 
                 let (base_method, lookup) = self.find_generic_method(source);
 
@@ -619,7 +616,47 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadElementPrimitive { .. } => {}
             LoadElementAddress { .. } => {}
             LoadElementAddressReadonly(_) => {}
-            LoadField { .. } => todo!("ldfld"),
+            LoadField { param0: source, .. } => {
+                let field = self.current_context().locate_field(*source);
+                let name = &field.field.name;
+
+                let parent = pop!();
+                let value = match &parent {
+                    StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
+                    StackValue::ObjectRef(ObjectRef(Some(h))) => {
+                        let pt = self.current_context().get_heap_description(*h);
+                        if field.parent != pt {
+                            panic!(
+                                "tried to load {}::{} on object of type {}",
+                                field.parent.1.type_name(),
+                                name,
+                                pt.1.type_name()
+                            )
+                        }
+
+                        match h.as_ref() {
+                            HeapStorage::Vec(_) => todo!("field on array"),
+                            HeapStorage::Obj(o) => o,
+                            HeapStorage::Str(_) => todo!("field on string"),
+                            HeapStorage::Boxed(_) => todo!("field on boxed value type"),
+                        }
+                    }
+                    StackValue::ValueType(o) => {
+                        if field.parent != o.description {
+                            panic!(
+                                "tried to load {}::{} on object of type {}",
+                                field.parent.1.type_name(),
+                                name,
+                                o.description.1.type_name()
+                            )
+                        }
+                        o
+                    }
+                    rest => panic!("stack value {:?} has no fields", rest),
+                };
+
+                todo!("get CLSValue out of parent field storage")
+            }
             LoadFieldAddress(_) => todo!("ldflda"),
             LoadFieldSkipNullCheck(_) => {}
             LoadLength => {}

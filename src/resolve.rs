@@ -3,6 +3,7 @@ use std::{cell::RefCell, collections::HashMap, path::PathBuf};
 use clap::builder::OsStr;
 use dotnetdll::prelude::*;
 
+use crate::value::{ConcreteType, FieldDescription};
 use crate::{
     utils::{static_res_from_file, ResolutionS},
     value::{GenericLookup, MethodDescription, TypeDescription},
@@ -119,6 +120,38 @@ impl Assemblies {
         }
     }
 
+    pub fn find_concrete_type(&self, resolution: ResolutionS, ty: ConcreteType) -> TypeDescription {
+        match ty.get() {
+            BaseType::Type { source, .. } => {
+                let parent = match source {
+                    TypeSource::User(base) | TypeSource::Generic { base, .. } => *base,
+                };
+
+                self.locate_type(resolution, parent)
+            }
+            BaseType::Boolean => todo!("System.Boolean"),
+            BaseType::Char => todo!("System.Char"),
+            BaseType::Int8 => todo!("System.Byte"),
+            BaseType::UInt8 => todo!("System.SByte"),
+            BaseType::Int16 => todo!("System.Int16"),
+            BaseType::UInt16 => todo!("System.UInt16"),
+            BaseType::Int32 => todo!("System.Int32"),
+            BaseType::UInt32 => todo!("System.UInt32"),
+            BaseType::Int64 => todo!("System.Int64"),
+            BaseType::UInt64 => todo!("System.UInt64"),
+            BaseType::Float32 => todo!("System.Single"),
+            BaseType::Float64 => todo!("System.Double"),
+            BaseType::IntPtr => todo!("System.IntPtr"),
+            BaseType::UIntPtr => todo!("System.UIntPtr"),
+            BaseType::Object => todo!("System.Object"),
+            BaseType::String => todo!("System.String"),
+            BaseType::Vector(_, _) | BaseType::Array(_, _) => todo!("System.Array"),
+            BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
+                todo!("pointer types have no .NET names")
+            }
+        }
+    }
+
     pub fn find_method_in_type(
         &self,
         desc @ TypeDescription(res, parent_type): TypeDescription,
@@ -164,51 +197,66 @@ impl Assemblies {
 
                 use MethodReferenceParent::*;
                 match &method_ref.parent {
-                    Type(t) => match generic_inst.make_concrete(t.clone()).get() {
-                        BaseType::Type { source, .. } => {
-                            let parent = match source {
-                                TypeSource::User(base) | TypeSource::Generic { base, .. } => *base,
-                            };
-
-                            let parent_type = self.locate_type(resolution, parent);
-
-                            match self.find_method_in_type(
-                                parent_type,
-                                &method_ref.name,
-                                &method_ref.signature,
-                            ) {
-                                None => panic!(
-                                    "could not find {}",
-                                    method_ref
-                                        .signature
-                                        .show_with_name(parent_type.0, &method_ref.name)
-                                ),
-                                Some(method) => method,
-                            }
+                    Type(t) => {
+                        let parent_type = self
+                            .find_concrete_type(resolution, generic_inst.make_concrete(t.clone()));
+                        match self.find_method_in_type(
+                            parent_type,
+                            &method_ref.name,
+                            &method_ref.signature,
+                        ) {
+                            None => panic!(
+                                "could not find {}",
+                                method_ref
+                                    .signature
+                                    .show_with_name(parent_type.0, &method_ref.name)
+                            ),
+                            Some(method) => method,
                         }
-                        BaseType::Boolean => todo!("System.Boolean"),
-                        BaseType::Char => todo!("System.Char"),
-                        BaseType::Int8 => todo!("System.Byte"),
-                        BaseType::UInt8 => todo!("System.SByte"),
-                        BaseType::Int16 => todo!("System.Int16"),
-                        BaseType::UInt16 => todo!("System.UInt16"),
-                        BaseType::Int32 => todo!("System.Int32"),
-                        BaseType::UInt32 => todo!("System.UInt32"),
-                        BaseType::Int64 => todo!("System.Int64"),
-                        BaseType::UInt64 => todo!("System.UInt64"),
-                        BaseType::Float32 => todo!("System.Single"),
-                        BaseType::Float64 => todo!("System.Double"),
-                        BaseType::IntPtr => todo!("System.IntPtr"),
-                        BaseType::UIntPtr => todo!("System.UIntPtr"),
-                        BaseType::Object => todo!("System.Object"),
-                        BaseType::String => todo!("System.String"),
-                        BaseType::Vector(_, _) | BaseType::Array(_, _) => todo!("System.Array"),
-                        BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
-                            todo!("pointer types cannot be parents of a method call")
-                        }
-                    },
+                    }
                     Module(_) => todo!("method reference: module"),
                     VarargMethod(_) => todo!("method reference: vararg method"),
+                }
+            }
+        }
+    }
+
+    pub fn locate_field(
+        &self,
+        resolution: ResolutionS,
+        field: FieldSource,
+        generic_inst: &GenericLookup,
+    ) -> FieldDescription {
+        match field {
+            FieldSource::Definition(d) => FieldDescription {
+                parent: TypeDescription(resolution, &resolution[d.parent_type()]),
+                field: &resolution[d],
+            },
+            FieldSource::Reference(r) => {
+                let field_ref = &resolution[r];
+
+                use FieldReferenceParent::*;
+                match &field_ref.parent {
+                    Type(t) => {
+                        let parent_type = self
+                            .find_concrete_type(resolution, generic_inst.make_concrete(t.clone()));
+
+                        for field in &parent_type.1.fields {
+                            if field.name == field_ref.name {
+                                return FieldDescription {
+                                    parent: parent_type,
+                                    field,
+                                };
+                            }
+                        }
+
+                        panic!(
+                            "could not find {}::{}",
+                            parent_type.1.type_name(),
+                            field_ref.name
+                        )
+                    }
+                    Module(_) => todo!("field reference: module"),
                 }
             }
         }

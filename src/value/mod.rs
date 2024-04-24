@@ -35,6 +35,11 @@ impl Context<'_> {
             .locate_method(self.resolution, handle, generic_inst)
     }
 
+    pub fn locate_field(&self, field: FieldSource) -> FieldDescription {
+        self.assemblies
+            .locate_field(self.resolution, field, self.generics)
+    }
+
     pub fn find_method_in_type(
         &self,
         parent_type: TypeDescription,
@@ -50,6 +55,15 @@ impl Context<'_> {
         child_type: TypeDescription,
     ) -> impl Iterator<Item = TypeDescription> {
         self.assemblies.ancestors(child_type)
+    }
+
+    pub fn get_heap_description<'gc>(&self, object: Gc<'gc, HeapStorage<'gc>>) -> TypeDescription {
+        match object.as_ref() {
+            HeapStorage::Obj(o) => o.description,
+            HeapStorage::Vec(v) => self.assemblies.corlib_type("System.Array"),
+            HeapStorage::Str(s) => self.assemblies.corlib_type("System.String"),
+            HeapStorage::Boxed(v) => v.description(self),
+        }
     }
 }
 
@@ -398,7 +412,7 @@ impl<'gc> Vector<'gc> {
 #[collect(no_drop)]
 pub struct Object<'gc> {
     pub description: TypeDescription,
-    instance_storage: FieldStorage<'gc>,
+    pub instance_storage: FieldStorage<'gc>,
 }
 impl<'gc> Object<'gc> {
     pub fn new(gc: GCHandle<'gc>, description: TypeDescription, context: Context) -> Gc<'gc, Self> {
@@ -448,6 +462,12 @@ impl TypeDescription {
 pub struct MethodDescription {
     pub parent: TypeDescription,
     pub method: &'static Method<'static>,
+}
+
+#[derive(Clone, Debug, Copy)]
+pub struct FieldDescription {
+    pub parent: TypeDescription,
+    pub field: &'static Field<'static>,
 }
 
 #[derive(Clone, Debug)]
