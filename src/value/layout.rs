@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::mem::size_of;
+use std::ops::Range;
 
 use dotnetdll::prelude::*;
 use enum_dispatch::enum_dispatch;
@@ -41,6 +42,12 @@ pub struct FieldLayout {
     pub position: usize,
     pub layout: LayoutManager,
 }
+impl FieldLayout {
+    pub fn as_range(&self) -> Range<usize> {
+        self.position..self.position + self.layout.size()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldLayoutManager {
     pub fields: HashMap<String, FieldLayout>,
@@ -182,13 +189,6 @@ impl FieldLayoutManager {
             description.flags.layout,
             context,
         )
-    }
-
-    pub fn field_offset(&self, name: &str) -> usize {
-        match self.fields.get(name) {
-            Some(l) => l.position,
-            None => todo!("field not present in class"),
-        }
     }
 }
 

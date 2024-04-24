@@ -1,8 +1,8 @@
-use std::{cmp::Ordering, marker::PhantomData, mem::size_of};
 use std::hash::{Hash, Hasher};
+use std::{cmp::Ordering, marker::PhantomData, mem::size_of};
 
 use dotnetdll::prelude::*;
-use gc_arena::{Collect, Collection, Gc, unsafe_empty_collect};
+use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};
 
 use layout::*;
 use storage::FieldStorage;
@@ -12,8 +12,8 @@ use crate::value::string::CLRString;
 use crate::{resolve::Assemblies, vm::GCHandle};
 
 mod layout;
-pub mod string;
 mod storage;
+pub mod string;
 
 #[derive(Clone)]
 pub struct Context<'a> {
@@ -139,7 +139,7 @@ pub enum HeapStorage<'gc> {
 #[collect(no_drop)]
 pub enum ValueType<'gc> {
     Bool(bool),
-    Char(char),
+    Char(u16),
     Int8(i8),
     UInt8(u8),
     Int16(i16),
@@ -167,56 +167,30 @@ fn convert_num<T: TryFrom<i32> + TryFrom<isize>>(data: StackValue) -> T {
         other => panic!("invalid stack value {:?} for integer conversion", other),
     }
 }
+fn convert_i64<T: TryFrom<i64>>(data: StackValue) -> T {
+    match data {
+        StackValue::Int64(i) => i
+            .try_into()
+            .unwrap_or_else(|_| panic!("failed to convert from i64")),
+        other => panic!("invalid stack value {:?} for integer conversion", other),
+    }
+}
+fn convert_f64<T: TryFrom<f64>>(data: StackValue) -> T {
+    match data {
+        StackValue::NativeFloat(f) => f
+            .try_into()
+            .unwrap_or_else(|_| panic!("failed to convert from f64")),
+        other => panic!("invalid stack value {:?} for float conversion", other),
+    }
+}
 
 impl ValueType<'_> {
     pub fn new(t: &ConcreteType, context: &Context, data: StackValue) -> Self {
-        match t.get() {
-            BaseType::Type {
-                value_kind: None | Some(ValueKind::ValueType),
-                source,
-            } => match source {
-                TypeSource::User(u) => {
-                    let t = context.locate_type(*u);
-                    match t.1.type_name().as_str() {
-                        "System.Boolean" => Self::Bool(todo!()),
-                        "System.Char" => Self::Char(todo!()),
-                        "System.Single" => Self::Float32(todo!()),
-                        "System.Double" => Self::Float64(todo!()),
-                        "System.SByte" => Self::Int8(convert_num(data)),
-                        "System.Int16" => Self::Int16(convert_num(data)),
-                        "System.Int32" => Self::Int32(convert_num(data)),
-                        "System.Int64" => Self::Int64(todo!()),
-                        "System.IntPtr" => Self::NativeInt(convert_num(data)),
-                        "System.TypedReference" => Self::TypedRef,
-                        "System.Byte" => Self::UInt8(convert_num(data)),
-                        "System.UInt16" => Self::UInt16(convert_num(data)),
-                        "System.UInt32" => Self::UInt32(convert_num(data)),
-                        "System.UInt64" => Self::UInt64(todo!()),
-                        "System.UIntPtr" => Self::NativeUInt(convert_num(data)),
-                        _ => Self::Struct(todo!()),
-                    }
-                }
-                TypeSource::Generic { .. } => {
-                    todo!("resolve value types with generics")
-                }
-            },
-            BaseType::Boolean => Self::Bool(todo!()),
-            BaseType::Char => Self::Char(todo!()),
-            BaseType::Int8 => Self::Int8(convert_num(data)),
-            BaseType::UInt8 => Self::UInt8(convert_num(data)),
-            BaseType::Int16 => Self::Int16(convert_num(data)),
-            BaseType::UInt16 => Self::UInt16(convert_num(data)),
-            BaseType::Int32 => Self::Int32(convert_num(data)),
-            BaseType::UInt32 => Self::UInt32(convert_num(data)),
-            BaseType::Int64 => Self::Int64(todo!()),
-            BaseType::UInt64 => Self::UInt64(todo!()),
-            BaseType::Float32 => Self::Float32(todo!()),
-            BaseType::Float64 => Self::Float64(todo!()),
-            BaseType::IntPtr => Self::NativeInt(convert_num(data)),
-            BaseType::UIntPtr | BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
-                Self::NativeUInt(convert_num(data))
+        match CTSValue::new(t, context, data) {
+            CTSValue::Value(v) => v,
+            CTSValue::Ref(_) => {
+                panic!("tried to instantiate value type, received object reference")
             }
-            rest => panic!("{:?} is not a value type", rest),
         }
     }
 
@@ -242,14 +216,131 @@ impl ValueType<'_> {
     }
 }
 
+pub enum CTSValue<'gc> {
+    Value(ValueType<'gc>),
+    Ref(ObjectRef<'gc>),
+}
+impl<'gc> CTSValue<'gc> {
+    pub fn new(t: &ConcreteType, context: &Context, data: StackValue) -> Self {
+        match t.get() {
+            BaseType::Type {
+                value_kind: None | Some(ValueKind::ValueType),
+                source,
+            } => Self::Value(match source {
+                TypeSource::User(u) => {
+                    let t = context.locate_type(*u);
+                    match t.1.type_name().as_str() {
+                        "System.Boolean" => ValueType::Bool(todo!()),
+                        "System.Char" => ValueType::Char(todo!()),
+                        "System.Single" => ValueType::Float32(match data {
+                            StackValue::NativeFloat(f) => f as f32,
+                            other => panic!("invalid stack value {:?} for float conversion", other),
+                        }),
+                        "System.Double" => ValueType::Float64(match data {
+                            StackValue::NativeFloat(f) => f,
+                            other => panic!("invalid stack value {:?} for float conversion", other),
+                        }),
+                        "System.SByte" => ValueType::Int8(convert_num(data)),
+                        "System.Int16" => ValueType::Int16(convert_num(data)),
+                        "System.Int32" => ValueType::Int32(convert_num(data)),
+                        "System.Int64" => ValueType::Int64(convert_i64(data)),
+                        "System.IntPtr" => ValueType::NativeInt(convert_num(data)),
+                        "System.TypedReference" => ValueType::TypedRef,
+                        "System.Byte" => ValueType::UInt8(convert_num(data)),
+                        "System.UInt16" => ValueType::UInt16(convert_num(data)),
+                        "System.UInt32" => ValueType::UInt32(convert_num(data)),
+                        "System.UInt64" => ValueType::UInt64(convert_i64(data)),
+                        "System.UIntPtr" => ValueType::NativeUInt(convert_num(data)),
+                        _ => ValueType::Struct(todo!()),
+                    }
+                }
+                TypeSource::Generic { .. } => {
+                    todo!("resolve types with generics")
+                }
+            }),
+            BaseType::Type {
+                value_kind: Some(ValueKind::Class),
+                source,
+            } => Self::Ref(todo!()),
+            BaseType::Boolean => Self::Value(ValueType::Bool(convert_num::<u8>(data) != 0)),
+            BaseType::Char => Self::Value(ValueType::Char(convert_num(data))),
+            BaseType::Int8 => Self::Value(ValueType::Int8(convert_num(data))),
+            BaseType::UInt8 => Self::Value(ValueType::UInt8(convert_num(data))),
+            BaseType::Int16 => Self::Value(ValueType::Int16(convert_num(data))),
+            BaseType::UInt16 => Self::Value(ValueType::UInt16(convert_num(data))),
+            BaseType::Int32 => Self::Value(ValueType::Int32(convert_num(data))),
+            BaseType::UInt32 => Self::Value(ValueType::UInt32(convert_num(data))),
+            BaseType::Int64 => Self::Value(ValueType::Int64(convert_i64(data))),
+            BaseType::UInt64 => Self::Value(ValueType::UInt64(convert_i64(data))),
+            BaseType::Float32 => Self::Value(ValueType::Float32(match data {
+                StackValue::NativeFloat(f) => f as f32,
+                other => panic!("invalid stack value {:?} for float conversion", other),
+            })),
+            BaseType::Float64 => Self::Value(ValueType::Float64(match data {
+                StackValue::NativeFloat(f) => f,
+                other => panic!("invalid stack value {:?} for float conversion", other),
+            })),
+            BaseType::IntPtr => Self::Value(ValueType::NativeInt(convert_num(data))),
+            BaseType::UIntPtr | BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
+                Self::Value(ValueType::NativeUInt(convert_num(data)))
+            }
+            rest => todo!(),
+        }
+    }
+
+    pub fn into_stack(self) -> StackValue<'gc> {
+        match self {
+            CTSValue::Value(ValueType::Bool(b)) => StackValue::Int32(b as i32),
+            CTSValue::Value(ValueType::Char(c)) => StackValue::Int32(c as i32),
+            CTSValue::Value(ValueType::Int8(i)) => StackValue::Int32(i as i32),
+            CTSValue::Value(ValueType::UInt8(i)) => StackValue::Int32(i as i32),
+            CTSValue::Value(ValueType::Int16(i)) => StackValue::Int32(i as i32),
+            CTSValue::Value(ValueType::UInt16(i)) => StackValue::Int32(i as i32),
+            CTSValue::Value(ValueType::Int32(i)) => StackValue::Int32(i),
+            CTSValue::Value(ValueType::UInt32(i)) => StackValue::Int32(i as i32),
+            CTSValue::Value(ValueType::Int64(i)) => StackValue::Int64(i),
+            CTSValue::Value(ValueType::UInt64(i)) => StackValue::Int64(i as i64),
+            CTSValue::Value(ValueType::NativeInt(i)) => StackValue::NativeInt(i),
+            CTSValue::Value(ValueType::NativeUInt(i)) => StackValue::NativeInt(i as isize),
+            CTSValue::Value(ValueType::Float32(f)) => StackValue::NativeFloat(f as f64),
+            CTSValue::Value(ValueType::Float64(f)) => StackValue::NativeFloat(f),
+            CTSValue::Value(ValueType::TypedRef) => todo!(),
+            CTSValue::Value(ValueType::Struct(s)) => StackValue::ValueType(s),
+            CTSValue::Ref(o) => StackValue::ObjectRef(o),
+        }
+    }
+
+    pub fn write(&self, dest: &mut [u8]) {
+        use ValueType::*;
+        match self {
+            CTSValue::Value(v) => dest.copy_from_slice(match v {
+                Bool(b) => &[*b as u8],
+                Char(c) => &c.to_ne_bytes(),
+                Int8(i) => &i.to_ne_bytes(),
+                UInt8(i) => &i.to_ne_bytes(),
+                Int16(i) => &i.to_ne_bytes(),
+                UInt16(i) => &i.to_ne_bytes(),
+                Int32(i) => &i.to_ne_bytes(),
+                UInt32(i) => &i.to_ne_bytes(),
+                Int64(i) => &i.to_ne_bytes(),
+                UInt64(i) => &i.to_ne_bytes(),
+                NativeInt(i) => &i.to_ne_bytes(),
+                NativeUInt(i) => &i.to_ne_bytes(),
+                Float32(f) => &f.to_ne_bytes(),
+                Float64(f) => &f.to_ne_bytes(),
+                TypedRef => todo!(),
+                Struct(o) => o.instance_storage.get(),
+            }),
+            CTSValue::Ref(o) => write_gc_ptr(*o, dest),
+        }
+    }
+}
+
 pub fn read_gc_ptr(source: &[u8]) -> ObjectRef<'_> {
     let mut ptr_bytes = [0u8; size_of::<ObjectRef>()];
     ptr_bytes.copy_from_slice(&source[0..size_of::<ObjectRef>()]);
     let ptr = usize::from_ne_bytes(ptr_bytes) as *const HeapStorage;
 
-    // null pointer optimization ensures Option<Gc> has all zeroes for None
-    // and the same layout as Gc for Some
-    // thus, if the pointer is not null, we know it is a Some(Gc)
     if ptr.is_null() {
         ObjectRef(None)
     } else {
@@ -313,7 +404,7 @@ impl<'gc> Object<'gc> {
     pub fn new(gc: GCHandle<'gc>, description: TypeDescription, context: Context) -> Gc<'gc, Self> {
         let value = Self {
             description,
-            instance_storage: FieldStorage::instance_fields(description, context)
+            instance_storage: FieldStorage::instance_fields(description, context),
         };
         Gc::new(gc, value)
     }
@@ -327,10 +418,29 @@ impl PartialEq for TypeDescription {
         std::ptr::eq(self.0, other.0) && std::ptr::eq(self.1, other.1)
     }
 }
+impl Eq for TypeDescription {}
 impl Hash for TypeDescription {
     fn hash<H: Hasher>(&self, state: &mut H) {
         (self.0 as *const Resolution).hash(state);
         (self.1 as *const TypeDefinition).hash(state);
+    }
+}
+impl TypeDescription {
+    pub fn static_initializer(&self) -> Option<MethodDescription> {
+        self.1.methods.iter().find_map(|m| {
+            if m.runtime_special_name
+                && m.name == ".cctor"
+                && !m.signature.instance
+                && m.signature.parameters.is_empty()
+            {
+                Some(MethodDescription {
+                    parent: *self,
+                    method: m,
+                })
+            } else {
+                None
+            }
+        })
     }
 }
 
