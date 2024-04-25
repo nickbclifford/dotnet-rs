@@ -1,17 +1,15 @@
 use std::collections::HashMap;
 
 use dotnetdll::prelude::{LocalVariable, ReturnType};
-use gc_arena::lock::RefLock;
 use gc_arena::{
-    unsafe_empty_collect, Arena, Collect, Collection, DynamicRoot, DynamicRootSet, Gc, Mutation,
-    Rootable,
+    lock::RefLock, unsafe_empty_collect, Arena, Collect, Collection, DynamicRoot, DynamicRootSet,
+    Gc, Mutation, Rootable,
 };
 
-use crate::utils::ResolutionS;
-use crate::value::Context;
 use crate::{
     resolve::Assemblies,
-    value::{GenericLookup, StackValue},
+    utils::ResolutionS,
+    value::{storage::StaticStorageManager, Context, GenericLookup, StackValue},
     vm::{MethodInfo, MethodState},
 };
 
@@ -26,6 +24,7 @@ pub struct CallStack<'gc, 'm> {
     stack: Vec<StackSlotHandle>,
     pub(crate) frames: Vec<StackFrame<'m>>,
     pub(crate) assemblies: &'m Assemblies,
+    pub(crate) statics: StaticStorageManager<'gc>,
 }
 // this is sound, I think?
 unsafe impl<'gc, 'm> Collect for CallStack<'gc, 'm> {
@@ -75,6 +74,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             stack: vec![],
             frames: vec![],
             assemblies,
+            statics: StaticStorageManager::new(),
         }
     }
 

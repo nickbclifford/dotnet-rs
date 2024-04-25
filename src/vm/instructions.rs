@@ -3,8 +3,8 @@ use std::cmp::Ordering;
 use dotnetdll::prelude::{Instruction, MethodSource, NumberSign, ResolvedDebug};
 
 use crate::value::{
-    GenericLookup, HeapStorage, ManagedPtr, MethodDescription, ObjectRef, StackValue,
-    string::CLRString, UnmanagedPtr, ValueType,
+    string::CLRString, CTSValue, GenericLookup, HeapStorage, ManagedPtr, MethodDescription,
+    ObjectRef, StackValue, UnmanagedPtr, ValueType,
 };
 
 use super::{CallResult, CallStack, GCHandle, MethodInfo};
@@ -562,7 +562,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             Switch(_) => {}
             Xor => binary_int_op!(^),
             BoxValue(t) => {
-                let t = self.current_context().generics.make_concrete(t.clone());
+                let t = self.current_context().make_concrete(t);
 
                 let value = pop!();
                 push!(StackValue::ObjectRef(ObjectRef::new(
@@ -621,7 +621,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let name = &field.field.name;
 
                 let parent = pop!();
-                let value = match &parent {
+                let object = match &parent {
                     StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
                     StackValue::ObjectRef(ObjectRef(Some(h))) => {
                         let pt = self.current_context().get_heap_description(*h);
@@ -655,14 +655,36 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     rest => panic!("stack value {:?} has no fields", rest),
                 };
 
-                todo!("get CLSValue out of parent field storage")
+                let field_data = object.instance_storage.get_field(name);
+                let t = self
+                    .current_context()
+                    .make_concrete(&field.field.return_type);
+                let value = CTSValue::read(&t, &self.current_context(), field_data);
+                push!(value.into_stack())
             }
             LoadFieldAddress(_) => todo!("ldflda"),
             LoadFieldSkipNullCheck(_) => {}
             LoadLength => {}
             LoadObject { .. } => {}
-            LoadStaticField { .. } => todo!("ldsfld"),
-            LoadStaticFieldAddress(_) => todo!("ldsflda"),
+            LoadStaticField { param0: source, .. } => {
+                let field = self.current_context().locate_field(*source);
+                let name = &field.field.name;
+
+                let field_data = self.statics.get(field.parent).get_field(name);
+                let t = self
+                    .current_context()
+                    .make_concrete(&field.field.return_type);
+                let value = CTSValue::read(&t, &self.current_context(), field_data);
+                push!(value.into_stack())
+            }
+            LoadStaticFieldAddress(source) => {
+                let field = self.current_context().locate_field(*source);
+                let name = &field.field.name;
+
+                let field_data = self.statics.get(field.parent).get_field(name);
+                let val = StackValue::managed_ptr(unsafe { field_data.as_ptr() as *mut _ });
+                push!(val)
+            },
             LoadString(cs) => {
                 let val = StackValue::ObjectRef(ObjectRef::new(
                     gc,

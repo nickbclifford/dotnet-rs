@@ -5,12 +5,12 @@ These method bodies are written in Common Intermediate Language (CIL), the bytec
 Each call to a method generates a new call frame that includes a stack, and the CIL uses this stack as ``scratch space'' for computation.
 In addition to standard instructions such as arithmetic, branching, and basic stack manipulation, the CIL has a separate set of
 ``object model'' instructions that govern the construction of class objects, the handling of virtual method calls,
-and loading/storing values in object fields. For details, see Appendix~\ref{app:cil}.
+and loading/storing values in object fields.
+For details, see Appendix~\ref{app:cil}.
 % TODO
 
 \subsection{The Virtual Execution System}
 The standard formally defines the semantics of CIL execution with the Virtual Execution System (VES) abstract machine.
-The specifications
 
 \subsubsection{Call frames}
 Call frames and method state are explicitly specified as a component of the VES.
@@ -49,14 +49,44 @@ All other values are then transparently synthesized by the VES; for instance, a 
 when loaded onto the stack, and CIL instructions that call specifically for 1-byte integers will have their arguments truncated.
 
 \subsection{The Common Type System}\label{sec:cts}
+- primitives: ints/floats, pointers, typedref
+- string type: UTF-16
+- fixed-size arrays vs vectors
+- classes and structs (composite types)
+    - fields, methods
+    - properties and events are just special markers on methods
 
 \section{Implementation}
+- objective was to essentially rebuild corerun, i.e. create a single executable that would run any DLL with an entrypoint
+- metadata resolution taken care of by dotnetdll (reference appendix)
+
+- the standard is definitely designed with AOT compilation in mind, in the sense that the architecture is very easy to compile to a standard calling convention
+- this implementation uses more of an abstract semantic representation during interpretation
+    - Rust makes this very easy with its enums and composition over inheritance
+    - it may not be as directly performant, but performance was not the goal
 
 \subsection{Garbage collection with \texttt{gc-arena}}
+- advantage of the Rust ecosystem: highly extensible libraries thanks to traits and composition-oriented design
+- arena-based architecture makes a lot of sense: the standard only has one heap for GCed objects to live in
+- smart pointer pattern
+    - used by the standard library
+    - taking advantage of lifetime system for branding
+- roots and DynamicRootSet
 
 \subsection{The call stack}
+- stack itself is a singular vector, explicit argument-local-callee order
+    - stack slots as roots, GC-tracked interior mutability
+- additional call frame data stored separately as vector of current ip/method metadata/etc
+    - no need to store return address or anything because we can just pop the frame off and return to the caller's stored ip
 
-\subsection{CIL instructions}
+\subsection{CIL execution}
+- linearly executes body of given method (following branches, etc)
+- each single instruction execution is an independent GC mutation
+- TODO: exception tracking?
 
-\subsubsection{Unsafe operations}
-
+\subsection{Unsafe operations}
+- Rust tries to compartmentalize unsafe, the CLI definitely doesn't
+- pointers allowed in arithmetic instructions
+- `ld{arg,loc,fld}a`, `ldind`
+- managed versus unmanaged pointers
+- FFI interop, marshaling?

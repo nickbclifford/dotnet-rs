@@ -1,10 +1,12 @@
-use crate::value::{
-    layout::{FieldLayout, FieldLayoutManager, HasLayout},
-    read_gc_ptr, Context, MethodDescription, ObjectRef, TypeDescription,
-};
-use gc_arena::{Collect, Collection};
 use std::collections::HashMap;
 use std::marker::PhantomData;
+
+use gc_arena::{Collect, Collection};
+
+use crate::value::{
+    layout::{FieldLayoutManager, HasLayout},
+    read_gc_ptr, Context, MethodDescription, ObjectRef, TypeDescription,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldStorage<'gc> {
@@ -66,17 +68,30 @@ impl FieldStorage<'_> {
 
 #[derive(Clone, Debug, Collect)]
 #[collect(no_drop)]
-struct StaticStorage<'gc> {
+pub struct StaticStorage<'gc> {
     initialized: bool,
     storage: FieldStorage<'gc>,
 }
 
 #[derive(Clone, Debug, Collect)]
 #[collect(no_drop)]
-struct StaticStorageManager<'gc> {
+pub struct StaticStorageManager<'gc> {
     types: HashMap<TypeDescription, StaticStorage<'gc>>,
 }
-impl StaticStorageManager<'_> {
+impl<'gc> StaticStorageManager<'gc> {
+    pub fn new() -> Self {
+        Self {
+            types: HashMap::new(),
+        }
+    }
+
+    pub fn get(&self, description: TypeDescription) -> &FieldStorage<'gc> {
+        &self.types
+            .get(&description)
+            .expect("missing type in static storage")
+            .storage
+    }
+
     pub fn try_init(&mut self, description: TypeDescription) -> Option<MethodDescription> {
         match description.static_initializer() {
             None => None,

@@ -74,7 +74,7 @@ impl FieldLayoutManager {
                     f.name.as_ref(),
                     f.offset,
                     type_layout(
-                        context.generics.make_concrete(f.return_type.clone()),
+                        context.make_concrete(&f.return_type),
                         context.clone(),
                     ),
                 )

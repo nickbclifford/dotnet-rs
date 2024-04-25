@@ -1,5 +1,9 @@
-use std::hash::{Hash, Hasher};
-use std::{cmp::Ordering, marker::PhantomData, mem::size_of};
+use std::{
+    cmp::Ordering,
+    hash::{Hash, Hasher},
+    marker::PhantomData,
+    mem::size_of,
+};
 
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};
@@ -7,12 +11,10 @@ use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};
 use layout::*;
 use storage::FieldStorage;
 
-use crate::utils::ResolutionS;
-use crate::value::string::CLRString;
-use crate::{resolve::Assemblies, vm::GCHandle};
+use crate::{resolve::Assemblies, utils::ResolutionS, value::string::CLRString, vm::GCHandle};
 
 mod layout;
-mod storage;
+pub mod storage;
 pub mod string;
 
 #[derive(Clone)]
@@ -64,6 +66,10 @@ impl Context<'_> {
             HeapStorage::Str(s) => self.assemblies.corlib_type("System.String"),
             HeapStorage::Boxed(v) => v.description(self),
         }
+    }
+
+    pub fn make_concrete<T: Clone + Into<MethodType>>(&self, t: &T) -> ConcreteType {
+        self.generics.make_concrete(t.clone())
     }
 }
 
@@ -189,14 +195,6 @@ fn convert_i64<T: TryFrom<i64>>(data: StackValue) -> T {
         other => panic!("invalid stack value {:?} for integer conversion", other),
     }
 }
-fn convert_f64<T: TryFrom<f64>>(data: StackValue) -> T {
-    match data {
-        StackValue::NativeFloat(f) => f
-            .try_into()
-            .unwrap_or_else(|_| panic!("failed to convert from f64")),
-        other => panic!("invalid stack value {:?} for float conversion", other),
-    }
-}
 
 impl ValueType<'_> {
     pub fn new(t: &ConcreteType, context: &Context, data: StackValue) -> Self {
@@ -228,6 +226,12 @@ impl ValueType<'_> {
             ValueType::Struct(s) => s.description,
         }
     }
+}
+
+macro_rules! from_bytes {
+    ($t:ty, $data:expr) => {
+        <$t>::from_ne_bytes($data.try_into().expect("source data was too small"))
+    };
 }
 
 pub enum CTSValue<'gc> {
@@ -302,6 +306,64 @@ impl<'gc> CTSValue<'gc> {
         }
     }
 
+    pub fn read(t: &ConcreteType, context: &Context, data: &[u8]) -> Self {
+        match t.get() {
+            BaseType::Type {
+                value_kind: None | Some(ValueKind::ValueType),
+                source,
+            } => Self::Value(match source {
+                TypeSource::User(u) => {
+                    let t = context.locate_type(*u);
+                    match t.1.type_name().as_str() {
+                        "System.Boolean" => ValueType::Bool(data[0] != 0),
+                        "System.Char" => ValueType::Char(from_bytes!(u16, data)),
+                        "System.Single" => ValueType::Float32(from_bytes!(f32, data)),
+                        "System.Double" => ValueType::Float64(from_bytes!(f64, data)),
+                        "System.SByte" => ValueType::Int8(data[0] as i8),
+                        "System.Int16" => ValueType::Int16(from_bytes!(i16, data)),
+                        "System.Int32" => ValueType::Int32(from_bytes!(i32, data)),
+                        "System.Int64" => ValueType::Int64(from_bytes!(i64, data)),
+                        "System.IntPtr" => ValueType::NativeInt(from_bytes!(isize, data)),
+                        "System.TypedReference" => ValueType::TypedRef,
+                        "System.Byte" => ValueType::UInt8(data[0]),
+                        "System.UInt16" => ValueType::UInt16(from_bytes!(u16, data)),
+                        "System.UInt32" => ValueType::UInt32(from_bytes!(u32, data)),
+                        "System.UInt64" => ValueType::UInt64(from_bytes!(u64, data)),
+                        "System.UIntPtr" => ValueType::NativeUInt(from_bytes!(usize, data)),
+                        _ => ValueType::Struct(todo!()),
+                    }
+                }
+                TypeSource::Generic { .. } => {
+                    todo!("resolve types with generics")
+                }
+            }),
+            BaseType::Type {
+                value_kind: Some(ValueKind::Class),
+                ..
+            }
+            | BaseType::Array(_, _)
+            | BaseType::String
+            | BaseType::Object
+            | BaseType::Vector(_, _) => Self::Ref(read_gc_ptr(data)),
+            BaseType::Boolean => Self::Value(ValueType::Bool(data[0] != 0)),
+            BaseType::Char => Self::Value(ValueType::Char(from_bytes!(u16, data))),
+            BaseType::Int8 => Self::Value(ValueType::Int8(data[0] as i8)),
+            BaseType::UInt8 => Self::Value(ValueType::UInt8(data[0])),
+            BaseType::Int16 => Self::Value(ValueType::Int16(from_bytes!(i16, data))),
+            BaseType::UInt16 => Self::Value(ValueType::UInt16(from_bytes!(u16, data))),
+            BaseType::Int32 => Self::Value(ValueType::Int32(from_bytes!(i32, data))),
+            BaseType::UInt32 => Self::Value(ValueType::UInt32(from_bytes!(u32, data))),
+            BaseType::Int64 => Self::Value(ValueType::Int64(from_bytes!(i64, data))),
+            BaseType::UInt64 => Self::Value(ValueType::UInt64(from_bytes!(u64, data))),
+            BaseType::Float32 => Self::Value(ValueType::Float32(from_bytes!(f32, data))),
+            BaseType::Float64 => Self::Value(ValueType::Float64(from_bytes!(f64, data))),
+            BaseType::IntPtr => Self::Value(ValueType::NativeInt(from_bytes!(isize, data))),
+            BaseType::UIntPtr | BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
+                Self::Value(ValueType::NativeUInt(from_bytes!(usize, data)))
+            }
+        }
+    }
+
     pub fn into_stack(self) -> StackValue<'gc> {
         match self {
             CTSValue::Value(ValueType::Bool(b)) => StackValue::Int32(b as i32),
@@ -327,30 +389,31 @@ impl<'gc> CTSValue<'gc> {
     pub fn write(&self, dest: &mut [u8]) {
         use ValueType::*;
         match self {
-            CTSValue::Value(v) => dest.copy_from_slice(match v {
-                Bool(b) => &[*b as u8],
-                Char(c) => &c.to_ne_bytes(),
-                Int8(i) => &i.to_ne_bytes(),
-                UInt8(i) => &i.to_ne_bytes(),
-                Int16(i) => &i.to_ne_bytes(),
-                UInt16(i) => &i.to_ne_bytes(),
-                Int32(i) => &i.to_ne_bytes(),
-                UInt32(i) => &i.to_ne_bytes(),
-                Int64(i) => &i.to_ne_bytes(),
-                UInt64(i) => &i.to_ne_bytes(),
-                NativeInt(i) => &i.to_ne_bytes(),
-                NativeUInt(i) => &i.to_ne_bytes(),
-                Float32(f) => &f.to_ne_bytes(),
-                Float64(f) => &f.to_ne_bytes(),
-                TypedRef => todo!(),
-                Struct(o) => o.instance_storage.get(),
-            }),
+            CTSValue::Value(v) => match v {
+                Bool(b) => dest.copy_from_slice(&[*b as u8]),
+                Char(c) => dest.copy_from_slice(&c.to_ne_bytes()),
+                Int8(i) => dest.copy_from_slice(&i.to_ne_bytes()),
+                UInt8(i) => dest.copy_from_slice(&i.to_ne_bytes()),
+                Int16(i) => dest.copy_from_slice(&i.to_ne_bytes()),
+                UInt16(i) => dest.copy_from_slice(&i.to_ne_bytes()),
+                Int32(i) => dest.copy_from_slice(&i.to_ne_bytes()),
+                UInt32(i) => dest.copy_from_slice(&i.to_ne_bytes()),
+                Int64(i) => dest.copy_from_slice(&i.to_ne_bytes()),
+                UInt64(i) => dest.copy_from_slice(&i.to_ne_bytes()),
+                NativeInt(i) => dest.copy_from_slice(&i.to_ne_bytes()),
+                NativeUInt(i) => dest.copy_from_slice(&i.to_ne_bytes()),
+                Float32(f) => dest.copy_from_slice(&f.to_ne_bytes()),
+                Float64(f) => dest.copy_from_slice(&f.to_ne_bytes()),
+                TypedRef => dest.copy_from_slice(todo!()),
+                Struct(o) => dest.copy_from_slice(o.instance_storage.get()),
+            },
             CTSValue::Ref(o) => write_gc_ptr(*o, dest),
         }
     }
 }
 
-pub fn read_gc_ptr(source: &[u8]) -> ObjectRef<'_> {
+// explicit lifetimes needed to avoid elision assigning both the same lifetime
+pub fn read_gc_ptr<'data, 'gc>(source: &'data [u8]) -> ObjectRef<'gc> {
     let mut ptr_bytes = [0u8; size_of::<ObjectRef>()];
     ptr_bytes.copy_from_slice(&source[0..size_of::<ObjectRef>()]);
     let ptr = usize::from_ne_bytes(ptr_bytes) as *const HeapStorage;
@@ -359,6 +422,7 @@ pub fn read_gc_ptr(source: &[u8]) -> ObjectRef<'_> {
         ObjectRef(None)
     } else {
         // SAFETY: since this came from Gc::as_ptr, we know it's valid
+        // also, this will only ever be called inside the context of a GC mutation, so it's okay for 'gc to be unbounded
         ObjectRef(Some(unsafe { Gc::from_ptr(ptr) }))
     }
 }
