@@ -196,8 +196,8 @@ fn convert_i64<T: TryFrom<i64>>(data: StackValue) -> T {
     }
 }
 
-impl ValueType<'_> {
-    pub fn new(t: &ConcreteType, context: &Context, data: StackValue) -> Self {
+impl<'gc> ValueType<'gc> {
+    pub fn new(t: &ConcreteType, context: &Context, data: StackValue<'gc>) -> Self {
         match CTSValue::new(t, context, data) {
             CTSValue::Value(v) => v,
             CTSValue::Ref(_) => {
@@ -239,7 +239,7 @@ pub enum CTSValue<'gc> {
     Ref(ObjectRef<'gc>),
 }
 impl<'gc> CTSValue<'gc> {
-    pub fn new(t: &ConcreteType, context: &Context, data: StackValue) -> Self {
+    pub fn new(t: &ConcreteType, context: &Context, data: StackValue<'gc>) -> Self {
         match t.get() {
             BaseType::Type {
                 value_kind: None | Some(ValueKind::ValueType),
@@ -302,7 +302,11 @@ impl<'gc> CTSValue<'gc> {
             BaseType::UIntPtr | BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
                 Self::Value(ValueType::NativeUInt(convert_num(data)))
             }
-            rest => todo!(),
+            BaseType::Object => Self::Ref(match data {
+                StackValue::ObjectRef(o) => o,
+                other => panic!("expected object ref on stack, found {:?}", other)
+            }),
+            rest => todo!("tried to deserialize StackValue {:?}", rest),
         }
     }
 
@@ -479,12 +483,11 @@ pub struct Object<'gc> {
     pub instance_storage: FieldStorage<'gc>,
 }
 impl<'gc> Object<'gc> {
-    pub fn new(gc: GCHandle<'gc>, description: TypeDescription, context: Context) -> Gc<'gc, Self> {
-        let value = Self {
+    pub fn new(description: TypeDescription, context: Context) -> Self {
+        Self {
             description,
             instance_storage: FieldStorage::instance_fields(description, context),
-        };
-        Gc::new(gc, value)
+        }
     }
 }
 

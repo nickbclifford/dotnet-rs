@@ -2,7 +2,7 @@ use dotnetdll::prelude::*;
 
 use crate::{value::StackValue, vm::gc::GCArena};
 
-use super::{CallResult, MethodInfo};
+use super::{MethodInfo, StepResult};
 
 // TODO
 pub struct Executor {
@@ -36,7 +36,7 @@ impl Executor {
     pub fn run(&mut self) -> ExecutorResult {
         loop {
             match self.arena.mutate_root(|gc, c| c.step(gc)) {
-                Some(CallResult::Returned) => {
+                StepResult::MethodReturned => {
                     self.arena.mutate_root(|gc, c| c.return_frame(gc));
 
                     if self.arena.mutate(|gc, c| c.frames.len() == 0) {
@@ -53,11 +53,11 @@ impl Executor {
                         });
                     }
                 }
-                Some(CallResult::Threw) => {
+                StepResult::MethodThrew => {
                     // TODO: where do we keep track of exceptions?
                     todo!()
                 }
-                None => {}
+                StepResult::InstructionStepped => {}
             }
             // TODO: check GC
         }

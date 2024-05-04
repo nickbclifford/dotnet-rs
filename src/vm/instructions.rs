@@ -3,11 +3,11 @@ use std::cmp::Ordering;
 use dotnetdll::prelude::{Instruction, MethodSource, NumberSign, ResolvedDebug};
 
 use crate::value::{
-    string::CLRString, CTSValue, GenericLookup, HeapStorage, ManagedPtr, MethodDescription,
-    ObjectRef, StackValue, UnmanagedPtr, ValueType,
+    string::CLRString, CTSValue, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, Object,
+    ObjectRef, StackValue, TypeDescription, UnmanagedPtr, ValueType,
 };
 
-use super::{CallResult, CallStack, GCHandle, MethodInfo};
+use super::{CallStack, GCHandle, MethodInfo, StepResult};
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     fn find_generic_method(&self, source: &MethodSource) -> (MethodDescription, GenericLookup) {
@@ -36,8 +36,45 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         )
     }
 
-    pub fn step(&mut self, gc: GCHandle<'gc>) -> Option<CallResult> {
+    fn initialize_static_storage(
+        &mut self,
+        gc: GCHandle<'gc>,
+        description: TypeDescription,
+    ) -> bool {
+        let value = {
+            let mut statics = self.statics.borrow_mut();
+            statics.init(description, self.current_context())
+        };
+        if let Some(m) = value {
+            // this is super hacky but we want to rerun the static member access instruction once we return from the initializer
+            let mut ip = &mut self.current_frame_mut().state.ip;
+            // *ip = ip.saturating_sub(1);
+            let ip = *ip;
+            println!(
+                "{} -- static member accessed, calling static constructor (will return to ip {}) --",
+                "\t".repeat(self.frames.len() - 1),
+                ip
+            );
+            self.call_frame(
+                gc,
+                MethodInfo::new(m.parent.0, m.method),
+                self.current_context().generics.clone(), // TODO: which type generics do static constructors get?
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn step(&mut self, gc: GCHandle<'gc>) -> StepResult {
         use Instruction::*;
+
+        macro_rules! statics {
+            (|$s:ident| $body:expr) => {{
+                let mut $s = self.statics.borrow_mut();
+                $body
+            }};
+        }
 
         macro_rules! push {
             ($val:expr) => {
@@ -421,6 +458,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 tail_call, // TODO
                 param0: source,
             } => {
+                self.dump_stack();
                 let (method, lookup) = self.find_generic_method(source);
                 self.call_frame(gc, MethodInfo::new(method.parent.0, method.method), lookup);
                 moved_ip = true;
@@ -439,7 +477,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 StackValue::NativeFloat(f) => {
                     if f.is_infinite() || f.is_nan() {
                         todo!("ArithmeticException in ckfinite");
-                        return Some(CallResult::Threw);
+                        return StepResult::MethodThrew ;
                     }
                     push!(StackValue::NativeFloat(f))
                 }
@@ -529,7 +567,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             Return => {
                 // expects single value on stack for non-void methods
                 // will be moved around properly by call stack manager=
-                return Some(CallResult::Returned);
+                return StepResult::MethodReturned;
             }
             ShiftLeft => shift_op!(<<),
             ShiftRight(sgn) => match sgn {
@@ -670,21 +708,36 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let field = self.current_context().locate_field(*source);
                 let name = &field.field.name;
 
-                let field_data = self.statics.get(field.parent).get_field(name);
-                let t = self
-                    .current_context()
-                    .make_concrete(&field.field.return_type);
-                let value = CTSValue::read(&t, &self.current_context(), field_data);
-                push!(value.into_stack())
+                if self.initialize_static_storage(gc, field.parent) {
+                    return StepResult::InstructionStepped;
+                }
+
+                let value = statics!(|s| {
+                    let field_data = s.get(field.parent).get_field(name);
+                    let t = self
+                        .current_context()
+                        .make_concrete(&field.field.return_type);
+                    CTSValue::read(&t, &self.current_context(), field_data).into_stack()
+                });
+                push!(value)
             }
             LoadStaticFieldAddress(source) => {
                 let field = self.current_context().locate_field(*source);
                 let name = &field.field.name;
 
-                let field_data = self.statics.get(field.parent).get_field(name);
-                let val = StackValue::managed_ptr(unsafe { field_data.as_ptr() as *mut _ });
-                push!(val)
-            },
+                if self.initialize_static_storage(gc, field.parent) {
+                    return StepResult::InstructionStepped;
+                } else {
+                    println!("executing normally!");
+                }
+
+                let value = statics!(|s| {
+                    let field_data = s.get(field.parent).get_field(name);
+                    StackValue::managed_ptr(unsafe { field_data.as_ptr() as *mut _ })
+                });
+
+                push!(value)
+            }
             LoadString(cs) => {
                 let val = StackValue::ObjectRef(ObjectRef::new(
                     gc,
@@ -698,7 +751,20 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadVirtualMethodPointer { .. } => {}
             MakeTypedReference(_) => {}
             NewArray(_) => {}
-            NewObject(_) => {}
+            NewObject(ctor) => {
+                let (method, lookup) = self.find_generic_method(&MethodSource::User(*ctor));
+
+                let parent = method.parent;
+                let instance = Object::new(parent, self.current_context());
+
+                self.constructor_frame(
+                    gc,
+                    instance,
+                    MethodInfo::new(parent.0, method.method),
+                    lookup,
+                );
+                moved_ip = true;
+            }
             ReadTypedReferenceType => {}
             ReadTypedReferenceValue(_) => {}
             Rethrow => {}
@@ -708,11 +774,27 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             StoreField { .. } => todo!("stfld"),
             StoreFieldSkipNullCheck(_) => {}
             StoreObject { .. } => {}
-            StoreStaticField { .. } => todo!("stsfld"),
+            StoreStaticField { param0: source, .. } => {
+                let field = self.current_context().locate_field(*source);
+                let name = &field.field.name;
+
+                if self.initialize_static_storage(gc, field.parent) {
+                    return StepResult::InstructionStepped;
+                }
+
+                let value = pop!();
+                statics!(|s| {
+                    let field_data = s.get_mut(field.parent).get_field_mut(name);
+                    let t = self
+                        .current_context()
+                        .make_concrete(&field.field.return_type);
+                    CTSValue::new(&t, &self.current_context(), value).write(field_data);
+                });
+            }
             Throw => {
                 // expects single value on stack
                 // TODO: how will we propagate exceptions up the call stack?
-                return Some(CallResult::Threw);
+                return StepResult::MethodThrew;
             }
             UnboxIntoAddress { .. } => {}
             UnboxIntoValue(_) => {}
@@ -720,6 +802,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         if !moved_ip {
             state!(|s| s.ip += 1);
         }
-        None
+        StepResult::InstructionStepped
     }
 }

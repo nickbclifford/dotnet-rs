@@ -69,7 +69,8 @@ impl<'m> MethodInfo<'m> {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub enum CallResult {
-    Returned,
-    Threw,
+pub enum StepResult {
+    MethodReturned,
+    MethodThrew,
+    InstructionStepped,
 }

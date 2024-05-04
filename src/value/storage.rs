@@ -86,13 +86,37 @@ impl<'gc> StaticStorageManager<'gc> {
     }
 
     pub fn get(&self, description: TypeDescription) -> &FieldStorage<'gc> {
-        &self.types
+        &self
+            .types
             .get(&description)
             .expect("missing type in static storage")
             .storage
     }
 
-    pub fn try_init(&mut self, description: TypeDescription) -> Option<MethodDescription> {
+    pub fn get_mut(&mut self, description: TypeDescription) -> &mut FieldStorage<'gc> {
+        &mut self
+            .types
+            .get_mut(&description)
+            .expect("missing type in static storage")
+            .storage
+    }
+
+    #[must_use]
+    pub fn init(
+        &mut self,
+        description: TypeDescription,
+        context: Context,
+    ) -> Option<MethodDescription> {
+        if !self.types.contains_key(&description) {
+            self.types.insert(
+                description,
+                StaticStorage {
+                    initialized: false,
+                    storage: FieldStorage::static_fields(description, context),
+                },
+            );
+        }
+
         match description.static_initializer() {
             None => None,
             Some(m) => {

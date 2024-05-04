@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use dotnetdll::prelude::{LocalVariable, ReturnType};
@@ -6,6 +7,7 @@ use gc_arena::{
     Gc, Mutation, Rootable,
 };
 
+use crate::value::{HeapStorage, Object, ObjectRef};
 use crate::{
     resolve::Assemblies,
     utils::ResolutionS,
@@ -24,7 +26,7 @@ pub struct CallStack<'gc, 'm> {
     stack: Vec<StackSlotHandle>,
     pub(crate) frames: Vec<StackFrame<'m>>,
     pub(crate) assemblies: &'m Assemblies,
-    pub(crate) statics: StaticStorageManager<'gc>,
+    pub(crate) statics: RefCell<StaticStorageManager<'gc>>,
 }
 // this is sound, I think?
 unsafe impl<'gc, 'm> Collect for CallStack<'gc, 'm> {
@@ -74,7 +76,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             stack: vec![],
             frames: vec![],
             assemblies,
-            statics: StaticStorageManager::new(),
+            statics: RefCell::new(StaticStorageManager::new()),
         }
     }
 
@@ -123,6 +125,33 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             method,
             generic_inst,
         ));
+    }
+
+    pub fn constructor_frame(
+        &mut self,
+        gc: GCHandle<'gc>,
+        instance: Object<'gc>,
+        method: MethodInfo<'m>,
+        generic_inst: GenericLookup,
+    ) {
+        let in_heap = ObjectRef::new(gc, HeapStorage::Obj(instance));
+        let value = StackValue::ObjectRef(in_heap);
+
+        let mut args = vec![];
+        for _ in 0..method.signature.parameters.len() {
+            args.push(self.pop_stack());
+        }
+
+        // the caller will see this as the newobj "return value" ?
+        self.push_stack(gc, value.clone());
+
+        // this is the arguments array setup
+        self.push_stack(gc, value);
+        for _ in 0..method.signature.parameters.len() {
+            self.push_stack(gc, args.pop().unwrap());
+        }
+
+        self.call_frame(gc, method, generic_inst);
     }
 
     pub fn call_frame(

@@ -48,7 +48,6 @@ impl Assemblies {
         };
         match res {
             None => {
-                eprintln!("resolving {name}.dll");
                 let mut file = PathBuf::from(&self.assembly_root);
                 file.push(format!("{name}.dll"));
                 let resolution = static_res_from_file(file);
@@ -82,7 +81,6 @@ impl Assemblies {
         name: &str,
     ) -> TypeDescription {
         let res = self.get_assembly(assembly.name.as_ref());
-        println!("searching for type {} in assembly {}", name, assembly.name);
         match res.type_definitions.iter().find(|t| t.type_name() == name) {
             None => {
                 for e in &res.exported_types {
@@ -106,7 +104,6 @@ impl Assemblies {
             UserType::Definition(d) => TypeDescription(resolution, &resolution[d]),
             UserType::Reference(r) => {
                 let type_ref = &resolution[r];
-                println!("looking for {}", type_ref.type_name());
 
                 use ResolutionScope::*;
                 match &type_ref.scope {
@@ -162,13 +159,13 @@ impl Assemblies {
             if method.name == name {
                 // TODO: properly check sigs instead of this horrifying hack lol
                 if signature.show(res) == method.signature.show(res) {
-                    println!(
-                        "found {}",
-                        method.signature.show_with_name(
-                            res,
-                            format!("{}::{}", parent_type.type_name(), method.name)
-                        )
-                    );
+                    // println!(
+                    //     "found {}",
+                    //     method.signature.show_with_name(
+                    //         res,
+                    //         format!("{}::{}", parent_type.type_name(), method.name)
+                    //     )
+                    // );
                     return Some(MethodDescription {
                         parent: desc,
                         method,
