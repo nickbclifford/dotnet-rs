@@ -35,6 +35,7 @@ pub struct MethodInfo<'a> {
     exceptions: &'a [body::Exception],
     pub instructions: &'a [Instruction],
     pub source_resolution: ResolutionS,
+    pub is_cctor: bool,
 }
 unsafe_empty_collect!(MethodInfo<'_>);
 impl<'m> MethodInfo<'m> {
@@ -59,6 +60,10 @@ impl<'m> MethodInfo<'m> {
         };
 
         Self {
+            is_cctor: method.runtime_special_name
+                && method.name == ".cctor"
+                && !method.signature.instance
+                && method.signature.parameters.is_empty(),
             signature: &method.signature,
             locals: &body.header.local_variables,
             exceptions,

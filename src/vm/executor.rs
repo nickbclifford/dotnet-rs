@@ -37,7 +37,11 @@ impl Executor {
         loop {
             match self.arena.mutate_root(|gc, c| c.step(gc)) {
                 StepResult::MethodReturned => {
-                    self.arena.mutate_root(|gc, c| c.return_frame(gc));
+                    let was_cctor = self.arena.mutate_root(|gc, c| {
+                        let val = c.frames.last().unwrap().state.info_handle.is_cctor;
+                        c.return_frame(gc);
+                        val
+                    });
 
                     if self.arena.mutate(|gc, c| c.frames.len() == 0) {
                         let exit_code = self.arena.mutate(|gc, c| match c.bottom_of_stack() {
@@ -46,7 +50,7 @@ impl Executor {
                             None => 0,
                         });
                         return ExecutorResult::Exited(exit_code);
-                    } else {
+                    } else if !was_cctor {
                         // step the caller past the call instruction
                         self.arena.mutate_root(|gc, c| {
                             c.current_frame_mut().state.ip += 1;

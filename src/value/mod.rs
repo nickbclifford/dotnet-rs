@@ -304,7 +304,7 @@ impl<'gc> CTSValue<'gc> {
             }
             BaseType::Object => Self::Ref(match data {
                 StackValue::ObjectRef(o) => o,
-                other => panic!("expected object ref on stack, found {:?}", other)
+                other => panic!("expected object ref on stack, found {:?}", other),
             }),
             rest => todo!("tried to deserialize StackValue {:?}", rest),
         }
@@ -529,6 +529,11 @@ impl TypeDescription {
 pub struct MethodDescription {
     pub parent: TypeDescription,
     pub method: &'static Method<'static>,
+}
+impl MethodDescription {
+    pub fn resolution(&self) -> ResolutionS {
+        self.parent.0
+    }
 }
 
 #[derive(Clone, Debug, Copy)]

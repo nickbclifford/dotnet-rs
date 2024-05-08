@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use dotnetdll::prelude::{Instruction, MethodSource, NumberSign, ResolvedDebug};
+use dotnetdll::prelude::{Instruction, MethodSource, NumberSign, ResolvedDebug, UserMethod};
 
 use crate::value::{
     string::CLRString, CTSValue, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, Object,
@@ -57,7 +57,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             );
             self.call_frame(
                 gc,
-                MethodInfo::new(m.parent.0, m.method),
+                MethodInfo::new(m.resolution(), m.method),
                 self.current_context().generics.clone(), // TODO: which type generics do static constructors get?
             );
             true
@@ -460,7 +460,17 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             } => {
                 self.dump_stack();
                 let (method, lookup) = self.find_generic_method(source);
-                self.call_frame(gc, MethodInfo::new(method.parent.0, method.method), lookup);
+                if method.parent.1.type_name().starts_with("System.Runtime.CompilerServices") {
+                    for a in &method.method.attributes {
+                        // TODO: do I really need a full lookup to get the type name?
+                        let ctor = self.assemblies.locate_method(method.resolution(), a.constructor, &lookup);
+                        // it's super cursed but this is basically hardcoded into coreclr
+                        if ctor.parent.1.type_name() == "System.Runtime.CompilerServices.IntrinsicAttribute" {
+                            todo!("intrinsic call")
+                        }
+                    }
+                }
+                self.call_frame(gc, MethodInfo::new(method.resolution(), method.method), lookup);
                 moved_ip = true;
             }
             CallConstrained(_, _) => {}
@@ -727,8 +737,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 if self.initialize_static_storage(gc, field.parent) {
                     return StepResult::InstructionStepped;
-                } else {
-                    println!("executing normally!");
                 }
 
                 let value = statics!(|s| {
