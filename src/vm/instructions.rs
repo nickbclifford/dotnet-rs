@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use dotnetdll::prelude::{Instruction, MethodSource, NumberSign, ResolvedDebug, UserMethod};
+use dotnetdll::prelude::{Instruction, MethodSource, NumberSign, ResolvedDebug};
 
 use crate::value::{
     string::CLRString, CTSValue, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, Object,
@@ -12,14 +12,15 @@ use super::{CallStack, GCHandle, MethodInfo, StepResult};
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     fn find_generic_method(&self, source: &MethodSource) -> (MethodDescription, GenericLookup) {
         let mut generics: Option<Vec<_>> = None;
-        let current_lookup = self.current_frame().generic_inst.clone();
+        let ctx = self.current_context();
+        let current_lookup = ctx.generics.clone();
         let method = match source {
             MethodSource::User(u) => *u,
             MethodSource::Generic(g) => {
                 generics = Some(
                     g.parameters
                         .iter()
-                        .map(|t| current_lookup.make_concrete(t.clone()))
+                        .map(|t| current_lookup.make_concrete(ctx.resolution, t.clone()))
                         .collect(),
                 );
                 g.base
@@ -458,19 +459,37 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 tail_call, // TODO
                 param0: source,
             } => {
-                self.dump_stack();
                 let (method, lookup) = self.find_generic_method(source);
-                if method.parent.1.type_name().starts_with("System.Runtime.CompilerServices") {
+                if method
+                    .parent
+                    .1
+                    .type_name()
+                    .starts_with("System.Runtime.CompilerServices")
+                {
                     for a in &method.method.attributes {
                         // TODO: do I really need a full lookup to get the type name?
-                        let ctor = self.assemblies.locate_method(method.resolution(), a.constructor, &lookup);
+                        let ctor = self.assemblies.locate_method(
+                            method.resolution(),
+                            a.constructor,
+                            &lookup,
+                        );
                         // it's super cursed but this is basically hardcoded into coreclr
-                        if ctor.parent.1.type_name() == "System.Runtime.CompilerServices.IntrinsicAttribute" {
-                            todo!("intrinsic call")
+                        if ctor.parent.1.type_name()
+                            == "System.Runtime.CompilerServices.IntrinsicAttribute"
+                        {
+                            todo!(
+                                "intrinsic call to {} with {:?}",
+                                method.method.show(method.resolution()),
+                                lookup
+                            )
                         }
                     }
                 }
-                self.call_frame(gc, MethodInfo::new(method.resolution(), method.method), lookup);
+                self.call_frame(
+                    gc,
+                    MethodInfo::new(method.resolution(), method.method),
+                    lookup,
+                );
                 moved_ip = true;
             }
             CallConstrained(_, _) => {}
@@ -487,7 +506,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 StackValue::NativeFloat(f) => {
                     if f.is_infinite() || f.is_nan() {
                         todo!("ArithmeticException in ckfinite");
-                        return StepResult::MethodThrew ;
+                        return StepResult::MethodThrew;
                     }
                     push!(StackValue::NativeFloat(f))
                 }

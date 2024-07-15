@@ -117,14 +117,14 @@ impl Assemblies {
         }
     }
 
-    pub fn find_concrete_type(&self, resolution: ResolutionS, ty: ConcreteType) -> TypeDescription {
+    pub fn find_concrete_type(&self, ty: ConcreteType) -> TypeDescription {
         match ty.get() {
             BaseType::Type { source, .. } => {
                 let parent = match source {
                     TypeSource::User(base) | TypeSource::Generic { base, .. } => *base,
                 };
 
-                self.locate_type(resolution, parent)
+                self.locate_type(ty.resolution(), parent)
             }
             BaseType::Boolean => todo!("System.Boolean"),
             BaseType::Char => todo!("System.Char"),
@@ -195,8 +195,9 @@ impl Assemblies {
                 use MethodReferenceParent::*;
                 match &method_ref.parent {
                     Type(t) => {
-                        let parent_type = self
-                            .find_concrete_type(resolution, generic_inst.make_concrete(t.clone()));
+                        let parent_type = self.find_concrete_type(
+                            generic_inst.make_concrete(resolution, t.clone()),
+                        );
                         match self.find_method_in_type(
                             parent_type,
                             &method_ref.name,
@@ -236,7 +237,7 @@ impl Assemblies {
                 match &field_ref.parent {
                     Type(t) => {
                         let parent_type = self
-                            .find_concrete_type(resolution, generic_inst.make_concrete(t.clone()));
+                            .find_concrete_type(generic_inst.make_concrete(resolution, t.clone()));
 
                         for field in &parent_type.1.fields {
                             if field.name == field_ref.name {

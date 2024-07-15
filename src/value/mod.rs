@@ -1,12 +1,12 @@
+use dotnetdll::prelude::*;
+use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};
+use std::fmt::{Debug, Formatter};
 use std::{
     cmp::Ordering,
     hash::{Hash, Hasher},
     marker::PhantomData,
     mem::size_of,
 };
-
-use dotnetdll::prelude::*;
-use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};
 
 use layout::*;
 use storage::FieldStorage;
@@ -69,7 +69,7 @@ impl Context<'_> {
     }
 
     pub fn make_concrete<T: Clone + Into<MethodType>>(&self, t: &T) -> ConcreteType {
-        self.generics.make_concrete(t.clone())
+        self.generics.make_concrete(self.resolution, t.clone())
     }
 }
 
@@ -542,27 +542,49 @@ pub struct FieldDescription {
     pub field: &'static Field<'static>,
 }
 
-#[derive(Clone, Debug)]
-pub struct ConcreteType(Box<BaseType<ConcreteType>>);
+#[derive(Clone)]
+pub struct ConcreteType {
+    source: ResolutionS,
+    base: Box<BaseType<Self>>,
+}
 impl ConcreteType {
-    pub fn new(base: BaseType<Self>) -> Self {
-        ConcreteType(Box::new(base))
+    pub fn new(source: ResolutionS, base: BaseType<Self>) -> Self {
+        ConcreteType {
+            source,
+            base: Box::new(base),
+        }
     }
 
     pub fn get(&self) -> &BaseType<Self> {
-        &*self.0
+        &*self.base
+    }
+
+    pub fn resolution(&self) -> ResolutionS {
+        self.source
+    }
+}
+impl Debug for ConcreteType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.get().show(self.source))
+    }
+}
+impl ResolvedDebug for ConcreteType {
+    fn show(&self, _res: &Resolution) -> String {
+        format!("{:?}", self)
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GenericLookup {
     pub type_generics: Vec<ConcreteType>,
     pub method_generics: Vec<ConcreteType>,
 }
 impl GenericLookup {
-    pub fn make_concrete(&self, t: impl Into<MethodType>) -> ConcreteType {
+    pub fn make_concrete(&self, source: ResolutionS, t: impl Into<MethodType>) -> ConcreteType {
         match t.into() {
-            MethodType::Base(b) => ConcreteType(Box::new(b.map(|t| self.make_concrete(t)))),
+            MethodType::Base(b) => {
+                ConcreteType::new(source, b.map(|t| self.make_concrete(source, t)))
+            }
             MethodType::TypeGeneric(i) => self.type_generics[i].clone(),
             MethodType::MethodGeneric(i) => self.method_generics[i].clone(),
         }
@@ -573,5 +595,30 @@ impl GenericLookup {
             method_generics: parameters,
             ..self.clone()
         }
+    }
+}
+impl Debug for GenericLookup {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        struct GenericIndexFormatter(char, usize);
+        impl Debug for GenericIndexFormatter {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}{}", self.0, self.1)
+            }
+        }
+
+        f.debug_map()
+            .entries(
+                self.type_generics
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| (GenericIndexFormatter('T', i), t)),
+            )
+            .entries(
+                self.method_generics
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| (GenericIndexFormatter('M', i), t)),
+            )
+            .finish()
     }
 }
