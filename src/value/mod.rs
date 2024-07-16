@@ -13,7 +13,7 @@ use storage::FieldStorage;
 
 use crate::{resolve::Assemblies, utils::ResolutionS, value::string::CLRString, vm::GCHandle};
 
-mod layout;
+pub mod layout;
 pub mod storage;
 pub mod string;
 
@@ -94,6 +94,25 @@ impl StackValue<'_> {
     }
     pub fn null() -> Self {
         Self::ObjectRef(ObjectRef(None))
+    }
+
+    pub fn data_location(&self) -> *const u8 {
+        fn ref_to_ptr<T>(r: &T) -> *const u8 {
+            (r as *const T) as *const u8
+        }
+
+        match self {
+            Self::Int32(i) => ref_to_ptr(i),
+            Self::Int64(i) => ref_to_ptr(i),
+            Self::NativeInt(i) => ref_to_ptr(i),
+            Self::NativeFloat(f) => ref_to_ptr(f),
+            // important note: here we're returning a pointer to where these pointers are stored
+            // NOT the pointers themselves, hence all the casting
+            Self::ObjectRef(ObjectRef(o)) => (o as *const Option<_>) as *const u8,
+            Self::UnmanagedPtr(UnmanagedPtr(u)) => (u as *const (*mut _)) as *const u8,
+            Self::ManagedPtr(ManagedPtr(m)) => (m as *const (*mut _)) as *const u8,
+            Self::ValueType(o) => o.instance_storage.get().as_ptr(),
+        }
     }
 }
 impl Default for StackValue<'_> {
@@ -491,8 +510,13 @@ impl<'gc> Object<'gc> {
     }
 }
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Copy)]
 pub struct TypeDescription(pub ResolutionS, pub &'static TypeDefinition<'static>);
+impl Debug for TypeDescription {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.1.show(self.0))
+    }
+}
 unsafe_empty_collect!(TypeDescription);
 impl PartialEq for TypeDescription {
     fn eq(&self, other: &Self) -> bool {

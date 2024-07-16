@@ -9,6 +9,7 @@ pub use gc::*;
 mod executor;
 mod gc;
 mod instructions;
+mod intrinsics;
 
 // I.12.3.2
 #[derive(Clone)]

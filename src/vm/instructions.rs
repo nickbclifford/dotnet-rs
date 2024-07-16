@@ -1,13 +1,13 @@
 use std::cmp::Ordering;
 
-use dotnetdll::prelude::{Instruction, MethodSource, NumberSign, ResolvedDebug};
+use dotnetdll::prelude::{Instruction, LoadType, MethodSource, NumberSign, ResolvedDebug};
 
+use super::{intrinsics::intrinsic_call, CallStack, GCHandle, MethodInfo, StepResult};
+use crate::value::layout::{FieldLayoutManager, HasLayout};
 use crate::value::{
     string::CLRString, CTSValue, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, Object,
     ObjectRef, StackValue, TypeDescription, UnmanagedPtr, ValueType,
 };
-
-use super::{CallStack, GCHandle, MethodInfo, StepResult};
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     fn find_generic_method(&self, source: &MethodSource) -> (MethodDescription, GenericLookup) {
@@ -477,11 +477,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         if ctor.parent.1.type_name()
                             == "System.Runtime.CompilerServices.IntrinsicAttribute"
                         {
-                            todo!(
-                                "intrinsic call to {} with {:?}",
-                                method.method.show(method.resolution()),
-                                lookup
-                            )
+                            intrinsic_call(self, method, lookup);
+                            return StepResult::InstructionStepped;
                         }
                     }
                 }
@@ -539,18 +536,49 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let arg = self.get_argument(*i as usize);
                 push!(arg);
             }
-            LoadArgumentAddress(_) => {}
+            LoadArgumentAddress(_) => todo!("ldarga"),
             LoadConstantInt32(i) => push!(StackValue::Int32(*i)),
             LoadConstantInt64(i) => push!(StackValue::Int64(*i)),
             LoadConstantFloat32(f) => push!(StackValue::NativeFloat(*f as f64)),
             LoadConstantFloat64(f) => push!(StackValue::NativeFloat(*f)),
             LoadMethodPointer(_) => {}
-            LoadIndirect { .. } => {}
+            LoadIndirect { param0: t, .. } => {
+                let ptr = match pop!() {
+                    StackValue::NativeInt(i) => i as *mut u8,
+                    StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p,
+                    StackValue::ManagedPtr(ManagedPtr(p)) => p,
+                    v => todo!("invalid type on stack ({:?}) for ldind operation, expected pointer", v),
+                };
+
+                macro_rules! load_as_i32 {
+                    ($t:ty) => {{
+                        let val: $t = unsafe { *(ptr as *mut _) };
+                        push!(StackValue::Int32(val as i32));
+                    }}
+                }
+
+                match t {
+                    LoadType::Int8 => load_as_i32!(i8),
+                    LoadType::UInt8 => load_as_i32!(u8),
+                    LoadType::Int16 => load_as_i32!(i16),
+                    LoadType::UInt16 => load_as_i32!(u16),
+                    LoadType::Int32 => load_as_i32!(i32),
+                    LoadType::UInt32 => load_as_i32!(u32),
+                    LoadType::Int64 => todo!("ldind.i8"),
+                    LoadType::Float32 => todo!("ldind.r4"),
+                    LoadType::Float64 => todo!("ldind.r8"),
+                    LoadType::IntPtr => todo!("ldind.i"),
+                    LoadType::Object => todo!("ldind.ref"),
+                }
+            }
             LoadLocal(i) => {
                 let local = self.get_local(*i as usize);
                 push!(local);
             }
-            LoadLocalAddress(_) => {}
+            LoadLocalAddress(i) => {
+                let local = self.get_local(*i as usize);
+                push!(StackValue::managed_ptr(local.data_location() as *mut _));
+            }
             LoadNull => push!(StackValue::null()),
             Leave(_) => {}
             LocalMemoryAllocate => {
@@ -595,7 +623,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             },
             Return => {
                 // expects single value on stack for non-void methods
-                // will be moved around properly by call stack manager=
+                // will be moved around properly by call stack manager
                 return StepResult::MethodReturned;
             }
             ShiftLeft => shift_op!(<<),
@@ -683,15 +711,19 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadElementPrimitive { .. } => {}
             LoadElementAddress { .. } => {}
             LoadElementAddressReadonly(_) => {}
-            LoadField { param0: source, .. } => {
+            LoadField {
+                param0: source,
+                volatile, // TODO
+                ..
+            } => {
                 let field = self.current_context().locate_field(*source);
                 let name = &field.field.name;
 
                 let parent = pop!();
-                let object = match &parent {
+                let field_data = match parent {
                     StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
                     StackValue::ObjectRef(ObjectRef(Some(h))) => {
-                        let pt = self.current_context().get_heap_description(*h);
+                        let pt = self.current_context().get_heap_description(h);
                         if field.parent != pt {
                             panic!(
                                 "tried to load {}::{} on object of type {}",
@@ -703,12 +735,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                         match h.as_ref() {
                             HeapStorage::Vec(_) => todo!("field on array"),
-                            HeapStorage::Obj(o) => o,
+                            HeapStorage::Obj(o) => o.instance_storage.get_field(name),
                             HeapStorage::Str(_) => todo!("field on string"),
                             HeapStorage::Boxed(_) => todo!("field on boxed value type"),
                         }
                     }
-                    StackValue::ValueType(o) => {
+                    StackValue::ValueType(ref o) => {
                         if field.parent != o.description {
                             panic!(
                                 "tried to load {}::{} on object of type {}",
@@ -717,12 +749,25 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                 o.description.1.type_name()
                             )
                         }
-                        o
+                        o.instance_storage.get_field(name)
+                    }
+                    StackValue::ManagedPtr(ManagedPtr(ptr)) => {
+                        let layout = FieldLayoutManager::instance_fields(
+                            field.parent,
+                            self.current_context(),
+                        );
+                        let field_layout = layout.fields.get(name.as_ref()).unwrap();
+                        // forgive me
+                        unsafe {
+                            std::slice::from_raw_parts(
+                                ptr.byte_offset(field_layout.position as isize),
+                                field_layout.layout.size(),
+                            )
+                        }
                     }
                     rest => panic!("stack value {:?} has no fields", rest),
                 };
 
-                let field_data = object.instance_storage.get_field(name);
                 let t = self
                     .current_context()
                     .make_concrete(&field.field.return_type);
