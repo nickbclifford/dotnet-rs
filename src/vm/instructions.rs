@@ -4,12 +4,14 @@ use dotnetdll::prelude::{
     ConversionType, Instruction, LoadType, MethodSource, NumberSign, ResolvedDebug,
 };
 
-use super::{intrinsics::intrinsic_call, CallStack, GCHandle, MethodInfo, StepResult};
-use crate::value::layout::{FieldLayoutManager, HasLayout};
 use crate::value::{
-    string::CLRString, CTSValue, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, Object,
-    ObjectRef, StackValue, TypeDescription, UnmanagedPtr, ValueType,
+    layout::{FieldLayoutManager, HasLayout},
+    string::CLRString,
+    CTSValue, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, Object, ObjectRef,
+    StackValue, TypeDescription, UnmanagedPtr, ValueType,
 };
+
+use super::{intrinsics::intrinsic_call, CallStack, GCHandle, MethodInfo, StepResult};
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     fn find_generic_method(&self, source: &MethodSource) -> (MethodDescription, GenericLookup) {
@@ -380,12 +382,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             };
         }
 
-        let indent = self.frames.len() - 1;
+        let frame_no = self.frames.len() - 1;
         let i = state!(|s| {
             let i = &s.info_handle.instructions[s.ip];
             println!(
-                "{}[ip @ {}] about to execute {}",
-                "\t".repeat(indent),
+                "{}[#{} | ip @ {}] about to execute {}",
+                "\t".repeat(frame_no),
+                frame_no,
                 s.ip,
                 i.show(s.info_handle.source_resolution)
             );
@@ -815,13 +818,34 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             } => {
                 let field = self.current_context().locate_field(*source);
                 let name = &field.field.name;
-
                 let parent = pop!();
-                let field_data = match parent {
+
+                let read_data = |d| {
+                    let t = self
+                        .current_context()
+                        .make_concrete(&field.field.return_type);
+                    CTSValue::read(&t, &self.current_context(), d)
+                };
+                let read_from_pointer = |ptr: *mut u8| {
+                    let layout =
+                        FieldLayoutManager::instance_fields(field.parent, self.current_context());
+                    let field_layout = layout.fields.get(name.as_ref()).unwrap();
+                    // forgive me
+                    let slice = unsafe {
+                        std::slice::from_raw_parts(
+                            ptr.byte_offset(field_layout.position as isize),
+                            field_layout.layout.size(),
+                        )
+                    };
+                    read_data(slice)
+                };
+
+                let value = match parent {
                     StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
                     StackValue::ObjectRef(ObjectRef(Some(h))) => {
                         let pt = self.current_context().get_heap_description(h);
-                        if field.parent != pt {
+                        let ancestors: Vec<_> = self.current_context().get_ancestors(pt).collect();
+                        if !ancestors.contains(&field.parent) {
                             panic!(
                                 "tried to load {}::{} on object of type {}",
                                 field.parent.1.type_name(),
@@ -830,9 +854,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             )
                         }
 
-                        match h.as_ref() {
+                        let data = h.borrow();
+                        match &*data {
                             HeapStorage::Vec(_) => todo!("field on array"),
-                            HeapStorage::Obj(o) => o.instance_storage.get_field(name),
+                            HeapStorage::Obj(o) => read_data(o.instance_storage.get_field(name)),
                             HeapStorage::Str(_) => todo!("field on string"),
                             HeapStorage::Boxed(_) => todo!("field on boxed value type"),
                         }
@@ -840,35 +865,20 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::ValueType(ref o) => {
                         if field.parent != o.description {
                             panic!(
-                                "tried to load {}::{} on object of type {}",
+                                "tried to load field {}::{} from object of type {}",
                                 field.parent.1.type_name(),
                                 name,
                                 o.description.1.type_name()
                             )
                         }
-                        o.instance_storage.get_field(name)
+                        read_data(o.instance_storage.get_field(name))
                     }
-                    StackValue::ManagedPtr(ManagedPtr(ptr)) => {
-                        let layout = FieldLayoutManager::instance_fields(
-                            field.parent,
-                            self.current_context(),
-                        );
-                        let field_layout = layout.fields.get(name.as_ref()).unwrap();
-                        // forgive me
-                        unsafe {
-                            std::slice::from_raw_parts(
-                                ptr.byte_offset(field_layout.position as isize),
-                                field_layout.layout.size(),
-                            )
-                        }
-                    }
+                    StackValue::NativeInt(i) => read_from_pointer(i as *mut u8),
+                    StackValue::UnmanagedPtr(UnmanagedPtr(ptr))
+                    | StackValue::ManagedPtr(ManagedPtr(ptr)) => read_from_pointer(ptr),
                     rest => panic!("stack value {:?} has no fields", rest),
                 };
 
-                let t = self
-                    .current_context()
-                    .make_concrete(&field.field.return_type);
-                let value = CTSValue::read(&t, &self.current_context(), field_data);
                 push!(value.into_stack())
             }
             LoadFieldAddress(_) => todo!("ldflda"),
@@ -940,7 +950,58 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             Sizeof(_) => {}
             StoreElement { .. } => {}
             StoreElementPrimitive { .. } => {}
-            StoreField { .. } => todo!("stfld"),
+            StoreField {
+                param0: source,
+                volatile, // TODO
+                ..
+            } => {
+                let field = self.current_context().locate_field(*source);
+                let name = &field.field.name;
+
+                let value = pop!();
+                let parent = pop!();
+
+                let write_data = |dest: &mut [u8]| {
+                    let t = self
+                        .current_context()
+                        .make_concrete(&field.field.return_type);
+                    CTSValue::new(&t, &self.current_context(), value).write(dest)
+                };
+
+                match parent {
+                    StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
+                    StackValue::ObjectRef(ObjectRef(Some(h))) => {
+                        let pt = self.current_context().get_heap_description(h);
+                        let ancestors: Vec<_> = self.current_context().get_ancestors(pt).collect();
+                        if !ancestors.contains(&field.parent) {
+                            panic!(
+                                "tried to store field {}::{} on object of type {}",
+                                field.parent.1.type_name(),
+                                name,
+                                pt.1.type_name()
+                            )
+                        }
+
+                        let mut data = h.unlock(gc).borrow_mut();
+                        match &mut *data {
+                            HeapStorage::Vec(_) => todo!("field on array"),
+                            HeapStorage::Obj(o) => {
+                                write_data(o.instance_storage.get_field_mut(name))
+                            }
+                            HeapStorage::Str(_) => todo!("field on string"),
+                            HeapStorage::Boxed(_) => todo!("field on boxed value type"),
+                        }
+                        todo!("stfld for object ref")
+                    }
+                    StackValue::ValueType(_) => todo!("stfld for value type"),
+                    StackValue::NativeInt(_)
+                    | StackValue::UnmanagedPtr(_)
+                    | StackValue::ManagedPtr(_) => {
+                        todo!("stfld for pointer/ref")
+                    }
+                    rest => panic!("stack value {:?} has no fields", rest),
+                }
+            }
             StoreFieldSkipNullCheck(_) => {}
             StoreObject { .. } => {}
             StoreStaticField { param0: source, .. } => {
@@ -974,3 +1035,5 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         StepResult::InstructionStepped
     }
 }
+
+        // TODO: inheritance of parent fields!

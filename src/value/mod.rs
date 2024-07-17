@@ -1,12 +1,13 @@
-use dotnetdll::prelude::*;
-use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};
-use std::fmt::{Debug, Formatter};
 use std::{
     cmp::Ordering,
+    fmt::{Debug, Formatter},
     hash::{Hash, Hasher},
     marker::PhantomData,
     mem::size_of,
 };
+
+use dotnetdll::prelude::*;
+use gc_arena::{lock::RefLock, unsafe_empty_collect, Collect, Collection, Gc};
 
 use layout::*;
 use storage::FieldStorage;
@@ -59,8 +60,8 @@ impl Context<'_> {
         self.assemblies.ancestors(child_type)
     }
 
-    pub fn get_heap_description<'gc>(&self, object: Gc<'gc, HeapStorage<'gc>>) -> TypeDescription {
-        match object.as_ref() {
+    pub fn get_heap_description(&self, object: ObjectPtr) -> TypeDescription {
+        match &*object.as_ref().borrow() {
             HeapStorage::Obj(o) => o.description,
             HeapStorage::Vec(v) => self.assemblies.corlib_type("System.Array"),
             HeapStorage::Str(s) => self.assemblies.corlib_type("System.String"),
@@ -146,10 +147,12 @@ pub struct ManagedPtr(pub *mut u8);
 unsafe_empty_collect!(UnmanagedPtr);
 unsafe_empty_collect!(ManagedPtr);
 
+pub type ObjectPtr<'gc> = Gc<'gc, RefLock<HeapStorage<'gc>>>;
+
 #[derive(Copy, Clone, Debug, Collect)]
 #[collect(no_drop)]
 #[repr(transparent)]
-pub struct ObjectRef<'gc>(pub Option<Gc<'gc, HeapStorage<'gc>>>);
+pub struct ObjectRef<'gc>(pub Option<ObjectPtr<'gc>>);
 impl PartialEq for ObjectRef<'_> {
     fn eq(&self, other: &Self) -> bool {
         match (self.0, other.0) {
@@ -161,7 +164,7 @@ impl PartialEq for ObjectRef<'_> {
 }
 impl<'gc> ObjectRef<'gc> {
     pub fn new(gc: GCHandle<'gc>, value: HeapStorage<'gc>) -> Self {
-        Self(Some(Gc::new(gc, value)))
+        Self(Some(Gc::new(gc, RefLock::new(value))))
     }
 }
 
@@ -439,7 +442,7 @@ impl<'gc> CTSValue<'gc> {
 pub fn read_gc_ptr<'data, 'gc>(source: &'data [u8]) -> ObjectRef<'gc> {
     let mut ptr_bytes = [0u8; size_of::<ObjectRef>()];
     ptr_bytes.copy_from_slice(&source[0..size_of::<ObjectRef>()]);
-    let ptr = usize::from_ne_bytes(ptr_bytes) as *const HeapStorage;
+    let ptr = usize::from_ne_bytes(ptr_bytes) as *const RefLock<_>;
 
     if ptr.is_null() {
         ObjectRef(None)
@@ -450,7 +453,7 @@ pub fn read_gc_ptr<'data, 'gc>(source: &'data [u8]) -> ObjectRef<'gc> {
     }
 }
 pub fn write_gc_ptr(ObjectRef(source): ObjectRef<'_>, dest: &mut [u8]) {
-    let ptr: *const HeapStorage = match source {
+    let ptr: *const RefLock<_> = match source {
         None => std::ptr::null(),
         Some(s) => Gc::as_ptr(s),
     };
@@ -495,7 +498,7 @@ impl<'gc> Vector<'gc> {
     }
 }
 
-#[derive(Clone, Debug, Collect, PartialEq)]
+#[derive(Clone, Collect, PartialEq)]
 #[collect(no_drop)]
 pub struct Object<'gc> {
     pub description: TypeDescription,
@@ -507,6 +510,14 @@ impl<'gc> Object<'gc> {
             description,
             instance_storage: FieldStorage::instance_fields(description, context),
         }
+    }
+}
+impl Debug for Object<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Object")
+            .field("description", &self.description)
+            .field("storage", &self.instance_storage.get())
+            .finish()
     }
 }
 
