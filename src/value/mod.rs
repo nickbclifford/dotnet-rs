@@ -549,7 +549,7 @@ impl TypeDescription {
     }
 }
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Copy)]
 pub struct MethodDescription {
     pub parent: TypeDescription,
     pub method: &'static Method<'static>,
@@ -557,6 +557,18 @@ pub struct MethodDescription {
 impl MethodDescription {
     pub fn resolution(&self) -> ResolutionS {
         self.parent.0
+    }
+}
+impl Debug for MethodDescription {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            self.method.signature.show_with_name(
+                self.resolution(),
+                format!("{}::{}", self.parent.1.type_name(), self.method.name)
+            )
+        )
     }
 }
 

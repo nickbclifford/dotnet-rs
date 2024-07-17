@@ -1,6 +1,8 @@
 use std::cmp::Ordering;
 
-use dotnetdll::prelude::{Instruction, LoadType, MethodSource, NumberSign, ResolvedDebug};
+use dotnetdll::prelude::{
+    ConversionType, Instruction, LoadType, MethodSource, NumberSign, ResolvedDebug,
+};
 
 use super::{intrinsics::intrinsic_call, CallStack, GCHandle, MethodInfo, StepResult};
 use crate::value::layout::{FieldLayoutManager, HasLayout};
@@ -460,6 +462,17 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 param0: source,
             } => {
                 let (method, lookup) = self.find_generic_method(source);
+                macro_rules! intrinsic {
+                    () => {{
+                        intrinsic_call(self, method, lookup);
+                        return StepResult::InstructionStepped;
+                    }};
+                }
+
+                if method.method.internal_call {
+                    intrinsic!();
+                }
+
                 if method
                     .parent
                     .1
@@ -477,8 +490,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         if ctor.parent.1.type_name()
                             == "System.Runtime.CompilerServices.IntrinsicAttribute"
                         {
-                            intrinsic_call(self, method, lookup);
-                            return StepResult::InstructionStepped;
+                            intrinsic!();
                         }
                     }
                 }
@@ -513,11 +525,93 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let val = compare!(sgn, < (Ordering::Less)) as i32;
                 push!(StackValue::Int32(val))
             }
-            Convert(_) => {}
-            ConvertOverflow(_, _) => {}
-            ConvertFloat32 => {}
-            ConvertFloat64 => {}
-            ConvertUnsignedToFloat => {}
+            Convert(t) => {
+                let value = pop!();
+
+                macro_rules! simple_cast {
+                    ($t:ty) => {
+                        match value {
+                            StackValue::Int32(i) => i as $t,
+                            StackValue::Int64(i) => i as $t,
+                            StackValue::NativeInt(i) => i as $t,
+                            StackValue::NativeFloat(f) => {
+                                todo!(
+                                    "truncate {} towards zero for conversion to {}",
+                                    f,
+                                    stringify!($t)
+                                )
+                            }
+                            v => todo!(
+                                "invalid type on stack ({:?}) for conversion to {}",
+                                v,
+                                stringify!($t)
+                            ),
+                        }
+                    };
+                }
+
+                macro_rules! convert_short_ints {
+                    ($t:ty) => {{
+                        let i = simple_cast!($t);
+                        push!(StackValue::Int32(i as i32));
+                    }};
+                }
+
+                macro_rules! convert_long_ints {
+                    ($variant:ident ( $t:ty )) => {{
+                        let i = simple_cast!($t);
+                        push!(StackValue::$variant(i));
+                    }};
+                    ($variant:ident ( $t:ty as $vt:ty )) => {{
+                        let i = match value {
+                            // all Rust casts from signed types will sign extend
+                            // so first we have to make them unsigned so they'll properly zero extend
+                            StackValue::Int32(i) => (i as u32) as $t,
+                            StackValue::Int64(i) => (i as u64) as $t,
+                            StackValue::NativeInt(i) => (i as usize) as $t,
+                            StackValue::NativeFloat(f) => {
+                                todo!("truncate {} towards zero for conversion to {}", f, stringify!($t))
+                            }
+                            v => todo!("invalid type on stack ({:?}) for conversion to {}", v, stringify!($t)),
+                        };
+                        push!(StackValue::$variant(i as $vt));
+                    }}
+                }
+
+                match t {
+                    ConversionType::Int8 => convert_short_ints!(i8),
+                    ConversionType::UInt8 => convert_short_ints!(u8),
+                    ConversionType::Int16 => convert_short_ints!(i16),
+                    ConversionType::UInt16 => convert_short_ints!(u16),
+                    ConversionType::Int32 => convert_short_ints!(i32),
+                    ConversionType::UInt32 => convert_short_ints!(u32),
+                    ConversionType::Int64 => convert_long_ints!(Int64(i64)),
+                    ConversionType::UInt64 => convert_long_ints!(Int64(u64 as i64)),
+                    ConversionType::IntPtr => convert_long_ints!(NativeInt(isize)),
+                    ConversionType::UIntPtr => convert_long_ints!(NativeInt(usize as isize)),
+                }
+            }
+            ConvertOverflow(t, sgn) => {
+                let value = pop!();
+                todo!(
+                    "{:?} conversion to {:?} with overflow detection ({:?})",
+                    t,
+                    sgn,
+                    value
+                )
+            }
+            ConvertFloat32 => {
+                let value = pop!();
+                todo!("conv.r4({:?})", value)
+            }
+            ConvertFloat64 => {
+                let value = pop!();
+                todo!("conv.r8({:?})", value)
+            }
+            ConvertUnsignedToFloat => {
+                let value = pop!();
+                todo!("conv.r.un({:?})", value)
+            }
             CopyMemoryBlock { .. } => {}
             Divide(sgn) => match sgn {
                 NumberSign::Signed => binary_arith_op!(/, { }),
@@ -547,14 +641,17 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::NativeInt(i) => i as *mut u8,
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p,
                     StackValue::ManagedPtr(ManagedPtr(p)) => p,
-                    v => todo!("invalid type on stack ({:?}) for ldind operation, expected pointer", v),
+                    v => todo!(
+                        "invalid type on stack ({:?}) for ldind operation, expected pointer",
+                        v
+                    ),
                 };
 
                 macro_rules! load_as_i32 {
                     ($t:ty) => {{
                         let val: $t = unsafe { *(ptr as *mut _) };
                         push!(StackValue::Int32(val as i32));
-                    }}
+                    }};
                 }
 
                 match t {
