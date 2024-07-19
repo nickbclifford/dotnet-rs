@@ -1,7 +1,8 @@
 use std::cmp::Ordering;
 
 use dotnetdll::prelude::{
-    ConversionType, Instruction, LoadType, MethodSource, NumberSign, ResolvedDebug,
+    BaseType, ConversionType, Instruction, LoadType, MethodReferenceParent, MethodSource,
+    NumberSign, ResolvedDebug, TypeSource, UserMethod,
 };
 
 use crate::value::{
@@ -15,25 +16,44 @@ use super::{intrinsics::intrinsic_call, CallStack, GCHandle, MethodInfo, StepRes
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     fn find_generic_method(&self, source: &MethodSource) -> (MethodDescription, GenericLookup) {
-        let mut generics: Option<Vec<_>> = None;
         let ctx = self.current_context();
-        let current_lookup = ctx.generics.clone();
+
+        let mut type_generics: Option<Vec<_>> = None;
+        let mut method_generics: Option<Vec<_>> = None;
+
         let method = match source {
             MethodSource::User(u) => *u,
             MethodSource::Generic(g) => {
-                generics = Some(
+                method_generics = Some(
                     g.parameters
                         .iter()
-                        .map(|t| current_lookup.make_concrete(ctx.resolution, t.clone()))
+                        .map(|t| ctx.generics.make_concrete(ctx.resolution, t.clone()))
                         .collect(),
                 );
                 g.base
             }
         };
-        let new_lookup = match generics {
-            None => current_lookup,
-            Some(g) => current_lookup.instantiate_method(g),
-        };
+
+        if let UserMethod::Reference(r) = method {
+            if let MethodReferenceParent::Type(t) = &ctx.resolution[r].parent {
+                let parent = ctx.generics.make_concrete(ctx.resolution, t.clone());
+                if let BaseType::Type {
+                    source: TypeSource::Generic { parameters, .. },
+                    ..
+                } = parent.get()
+                {
+                    type_generics = Some(parameters.clone());
+                }
+            }
+        }
+
+        let mut new_lookup = GenericLookup::default();
+        if let Some(ts) = type_generics {
+            new_lookup.type_generics = ts;
+        }
+        if let Some(ms) = method_generics {
+            new_lookup.method_generics = ms;
+        }
 
         (
             self.current_context().locate_method(method, &new_lookup),
@@ -51,10 +71,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             statics.init(description, self.current_context())
         };
         if let Some(m) = value {
-            // this is super hacky but we want to rerun the static member access instruction once we return from the initializer
-            let mut ip = &mut self.current_frame_mut().state.ip;
-            // *ip = ip.saturating_sub(1);
-            let ip = *ip;
+            let ip = self.current_frame_mut().state.ip;
             println!(
                 "{} -- static member accessed, calling static constructor (will return to ip {}) --",
                 "\t".repeat(self.frames.len() - 1),
@@ -76,6 +93,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         macro_rules! statics {
             (|$s:ident| $body:expr) => {{
+                #[allow(unused_mut)]
                 let mut $s = self.statics.borrow_mut();
                 $body
             }};
@@ -836,7 +854,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     // forgive me
                     let slice = unsafe {
                         std::slice::from_raw_parts(
-                            ptr.byte_offset(field_layout.position as isize),
+                            ptr.offset(field_layout.position as isize),
                             field_layout.layout.size(),
                         )
                     };
@@ -883,7 +901,50 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 push!(value.into_stack())
             }
-            LoadFieldAddress(_) => todo!("ldflda"),
+            LoadFieldAddress(source) => {
+                let field = self.current_context().locate_field(*source);
+                let name = &field.field.name;
+                let parent = pop!();
+
+                let source_ptr = match parent {
+                    StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
+                    StackValue::ObjectRef(ObjectRef(Some(h))) => {
+                        let object_type = self.current_context().get_heap_description(h);
+                        if !self.current_context().is_a(object_type, field.parent) {
+                            panic!(
+                                "tried to load field {}::{} from object of type {}",
+                                field.parent.1.type_name(),
+                                name,
+                                object_type.1.type_name()
+                            )
+                        }
+
+                        let data = h.borrow();
+                        match &*data {
+                            HeapStorage::Vec(_) => todo!("field on array"),
+                            HeapStorage::Obj(o) => o.instance_storage.get().as_ptr() as *mut u8,
+                            HeapStorage::Str(_) => todo!("field on string"),
+                            HeapStorage::Boxed(_) => todo!("field on boxed value type"),
+                        }
+                    }
+                    StackValue::NativeInt(i) => i as *mut u8,
+                    StackValue::UnmanagedPtr(UnmanagedPtr(ptr))
+                    | StackValue::ManagedPtr(ManagedPtr(ptr)) => ptr,
+                    rest => panic!("cannot load field address from stack value {:?}", rest),
+                };
+
+                let layout =
+                    FieldLayoutManager::instance_fields(field.parent, self.current_context());
+                let ptr = unsafe {
+                    source_ptr.offset(layout.fields.get(name.as_ref()).unwrap().position as isize)
+                };
+
+                if let StackValue::UnmanagedPtr(_) | StackValue::NativeInt(_) = parent {
+                    push!(StackValue::unmanaged_ptr(ptr))
+                } else {
+                    push!(StackValue::managed_ptr(ptr))
+                }
+            }
             LoadFieldSkipNullCheck(_) => {}
             LoadLength => {}
             LoadObject { .. } => {}
@@ -914,7 +975,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 let value = statics!(|s| {
                     let field_data = s.get(field.parent).get_field(name);
-                    StackValue::managed_ptr(unsafe { field_data.as_ptr() as *mut _ })
+                    StackValue::managed_ptr(field_data.as_ptr() as *mut _)
                 });
 
                 push!(value)
@@ -926,9 +987,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 ));
                 push!(val)
             }
-            LoadTokenField(_) => {}
-            LoadTokenMethod(_) => {}
-            LoadTokenType(_) => {}
+            LoadTokenField(_) => todo!("RuntimeFieldHandle"),
+            LoadTokenMethod(_) => todo!("RuntimeMethodHandle"),
+            LoadTokenType(_) => todo!("RuntimeTypeHandle"),
             LoadVirtualMethodPointer { .. } => {}
             MakeTypedReference(_) => {}
             NewArray(_) => {}
@@ -963,11 +1024,20 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let value = pop!();
                 let parent = pop!();
 
+                let ctx = self.current_context();
                 let write_data = |dest: &mut [u8]| {
-                    let t = self
-                        .current_context()
-                        .make_concrete(&field.field.return_type);
-                    CTSValue::new(&t, &self.current_context(), value).write(dest)
+                    let t = ctx.make_concrete(&field.field.return_type);
+                    CTSValue::new(&t, &ctx, value).write(dest)
+                };
+                let slice_from_pointer = |dest: *mut u8| {
+                    let layout = FieldLayoutManager::instance_fields(field.parent, ctx.clone());
+                    let field_layout = layout.fields.get(name.as_ref()).unwrap();
+                    unsafe {
+                        std::slice::from_raw_parts_mut(
+                            dest.offset(field_layout.position as isize),
+                            field_layout.layout.size(),
+                        )
+                    }
                 };
 
                 match parent {
@@ -994,10 +1064,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         }
                     }
                     StackValue::ValueType(_) => todo!("stfld for value type"),
-                    StackValue::NativeInt(_)
-                    | StackValue::UnmanagedPtr(_)
-                    | StackValue::ManagedPtr(_) => {
-                        todo!("stfld for pointer/ref")
+                    StackValue::NativeInt(i) => write_data(slice_from_pointer(i as *mut u8)),
+                    StackValue::UnmanagedPtr(UnmanagedPtr(ptr))
+                    | StackValue::ManagedPtr(ManagedPtr(ptr)) => {
+                        write_data(slice_from_pointer(ptr))
                     }
                     rest => panic!("stack value {:?} has no fields", rest),
                 }

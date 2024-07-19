@@ -114,8 +114,8 @@ impl StackValue<'_> {
             // important note: here we're returning a pointer to where these pointers are stored
             // NOT the pointers themselves, hence all the casting
             Self::ObjectRef(ObjectRef(o)) => (o as *const Option<_>) as *const u8,
-            Self::UnmanagedPtr(UnmanagedPtr(u)) => (u as *const (*mut _)) as *const u8,
-            Self::ManagedPtr(ManagedPtr(m)) => (m as *const (*mut _)) as *const u8,
+            Self::UnmanagedPtr(UnmanagedPtr(u)) => (u as *const *mut _) as *const u8,
+            Self::ManagedPtr(ManagedPtr(m)) => (m as *const *mut _) as *const u8,
             Self::ValueType(o) => o.instance_storage.get().as_ptr(),
         }
     }
@@ -315,8 +315,14 @@ impl<'gc> CTSValue<'gc> {
             }),
             BaseType::Type {
                 value_kind: Some(ValueKind::Class),
-                source,
-            } => Self::Ref(todo!()),
+                ..
+            } => match data {
+                StackValue::ObjectRef(o) => {
+                    // TODO: check declared type vs actual type?
+                    Self::Ref(o)
+                }
+                other => panic!("invalid stack value {:?} for object ref conversion", other),
+            },
             BaseType::Boolean => Self::Value(ValueType::Bool(convert_num::<u8>(data) != 0)),
             BaseType::Char => Self::Value(ValueType::Char(convert_num(data))),
             BaseType::Int8 => Self::Value(ValueType::Int8(convert_num(data))),

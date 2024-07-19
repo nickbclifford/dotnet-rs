@@ -41,6 +41,10 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             // TODO(threading): release mutex
             let _tag_object = stack.pop_stack();
         }
+        "static void System.GC::_SuppressFinalize(object)" => {
+            // TODO(gc): this object's finalizer should not be called
+            let _obj = stack.pop_stack();
+        }
         x => panic!("unsupported intrinsic call to {:?}", x),
     }
 

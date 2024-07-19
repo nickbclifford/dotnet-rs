@@ -1,10 +1,9 @@
-use std::{cell::RefCell, collections::HashMap, path::PathBuf};
+use std::{cell::RefCell, collections::HashMap, ffi::OsString, path::PathBuf};
 
-use clap::builder::OsStr;
 use dotnetdll::prelude::*;
 
 use crate::{
-    utils::{ResolutionS, static_res_from_file},
+    utils::{static_res_from_file, ResolutionS},
     value::{ConcreteType, FieldDescription, GenericLookup, MethodDescription, TypeDescription},
 };
 
@@ -20,7 +19,7 @@ impl Assemblies {
             .unwrap()
             .filter_map(|e| {
                 let path = e.unwrap().path();
-                if path.extension()? == OsStr::from("dll") {
+                if path.extension()? == OsString::from("dll") {
                     Some((
                         path.file_stem().unwrap().to_string_lossy().into_owned(),
                         None,
@@ -101,16 +100,32 @@ impl Assemblies {
     pub fn locate_type(&self, resolution: ResolutionS, handle: UserType) -> TypeDescription {
         match handle {
             UserType::Definition(d) => TypeDescription(resolution, &resolution[d]),
-            UserType::Reference(r) => {
-                let type_ref = &resolution[r];
+            UserType::Reference(r) => self.locate_type_ref(resolution, r),
+        }
+    }
 
-                use ResolutionScope::*;
-                match &type_ref.scope {
-                    ExternalModule(_) => todo!(),
-                    CurrentModule => todo!(),
-                    Assembly(a) => self.find_in_assembly(&resolution[*a], &type_ref.type_name()),
-                    Exported => todo!(),
-                    Nested(_) => todo!(),
+    fn locate_type_ref(&self, resolution: ResolutionS, r: TypeRefIndex) -> TypeDescription {
+        let type_ref = &resolution[r];
+
+        use ResolutionScope::*;
+        match &type_ref.scope {
+            ExternalModule(_) => todo!(),
+            CurrentModule => todo!(),
+            Assembly(a) => self.find_in_assembly(&resolution[*a], &type_ref.type_name()),
+            Exported => todo!(),
+            Nested(o) => {
+                let TypeDescription(res, owner) = self.locate_type_ref(resolution, *o);
+                match res
+                    .type_definitions
+                    .iter()
+                    .find(|t| t.type_name() == type_ref.type_name())
+                {
+                    None => panic!(
+                        "could not find type {} nested in {}",
+                        type_ref.type_name(),
+                        owner.type_name()
+                    ),
+                    Some(t) => TypeDescription(res, t),
                 }
             }
         }
