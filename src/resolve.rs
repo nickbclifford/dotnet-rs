@@ -3,10 +3,9 @@ use std::{cell::RefCell, collections::HashMap, path::PathBuf};
 use clap::builder::OsStr;
 use dotnetdll::prelude::*;
 
-use crate::value::{ConcreteType, FieldDescription};
 use crate::{
-    utils::{static_res_from_file, ResolutionS},
-    value::{GenericLookup, MethodDescription, TypeDescription},
+    utils::{ResolutionS, static_res_from_file},
+    value::{ConcreteType, FieldDescription, GenericLookup, MethodDescription, TypeDescription},
 };
 
 pub struct Assemblies {
@@ -195,9 +194,8 @@ impl Assemblies {
                 use MethodReferenceParent::*;
                 match &method_ref.parent {
                     Type(t) => {
-                        let parent_type = self.find_concrete_type(
-                            generic_inst.make_concrete(resolution, t.clone()),
-                        );
+                        let parent_type = self
+                            .find_concrete_type(generic_inst.make_concrete(resolution, t.clone()));
                         match self.find_method_in_type(
                             parent_type,
                             &method_ref.name,
@@ -260,17 +258,32 @@ impl Assemblies {
         }
     }
 
-    pub fn ancestors(
-        &self,
-        desc @ TypeDescription(resolution, child): TypeDescription,
-    ) -> Box<dyn Iterator<Item = TypeDescription>> {
-        match &child.extends {
-            None => Box::new(std::iter::once(desc)),
-            Some(TypeSource::User(parent) | TypeSource::Generic { base: parent, .. }) => {
-                let parent = self.locate_type(resolution, *parent);
-                Box::new(std::iter::once(parent).chain(self.ancestors(parent)))
-            }
+    pub fn ancestors(&self, child: TypeDescription) -> impl Iterator<Item = TypeDescription> + '_ {
+        AncestorsImpl {
+            assemblies: self,
+            child: Some(child),
         }
+    }
+}
+
+struct AncestorsImpl<'a> {
+    assemblies: &'a Assemblies,
+    child: Option<TypeDescription>,
+}
+impl Iterator for AncestorsImpl<'_> {
+    type Item = TypeDescription;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let child = self.child?;
+
+        self.child = match &child.1.extends {
+            None => None,
+            Some(TypeSource::User(parent) | TypeSource::Generic { base: parent, .. }) => {
+                Some(self.assemblies.locate_type(child.0, *parent))
+            }
+        };
+
+        Some(child)
     }
 }
 

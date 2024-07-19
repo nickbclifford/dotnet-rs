@@ -453,8 +453,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             BranchTruthy(i) => {
                 conditional_branch!(
                     match pop!() {
+                        StackValue::Int32(i) => i != 0,
+                        StackValue::Int64(i) => i != 0,
                         StackValue::NativeInt(i) => i != 0,
                         StackValue::ObjectRef(ObjectRef(o)) => o.is_some(),
+                        StackValue::UnmanagedPtr(UnmanagedPtr(p))
+                        | StackValue::ManagedPtr(ManagedPtr(p)) => !p.is_null(),
                         v => todo!("invalid type on stack ({:?}) for brtrue operation", v),
                     },
                     i
@@ -769,8 +773,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 skip_null_check, // TODO
                 param0: source,
             } => {
-                self.dump_stack();
-
                 let this_value = pop!();
                 let this_heap = match this_value {
                     StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
@@ -783,21 +785,22 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 // TODO: check explicit overrides
 
-                let mut found = false;
+                let mut found = None;
                 for parent in self.current_context().get_ancestors(this_type) {
                     if let Some(method) = self.current_context().find_method_in_type(
                         parent,
                         &base_method.method.name,
                         &base_method.method.signature,
                     ) {
-                        push!(this_value);
-                        self.call_frame(gc, MethodInfo::new(parent.0, method.method), lookup);
-                        found = true;
+                        found = Some((parent, method));
                         break;
                     }
                 }
 
-                if !found {
+                if let Some((parent, method)) = found {
+                    push!(this_value);
+                    self.call_frame(gc, MethodInfo::new(parent.0, method.method), lookup);
+                } else {
                     panic!("could not resolve virtual call");
                 }
             }
@@ -843,14 +846,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let value = match parent {
                     StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
                     StackValue::ObjectRef(ObjectRef(Some(h))) => {
-                        let pt = self.current_context().get_heap_description(h);
-                        let ancestors: Vec<_> = self.current_context().get_ancestors(pt).collect();
-                        if !ancestors.contains(&field.parent) {
+                        let object_type = self.current_context().get_heap_description(h);
+                        if !self.current_context().is_a(object_type, field.parent) {
                             panic!(
-                                "tried to load {}::{} on object of type {}",
+                                "tried to load field {}::{} from object of type {}",
                                 field.parent.1.type_name(),
                                 name,
-                                pt.1.type_name()
+                                object_type.1.type_name()
                             )
                         }
 
@@ -863,7 +865,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         }
                     }
                     StackValue::ValueType(ref o) => {
-                        if field.parent != o.description {
+                        if !self.current_context().is_a(o.description, field.parent) {
                             panic!(
                                 "tried to load field {}::{} from object of type {}",
                                 field.parent.1.type_name(),
@@ -971,14 +973,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 match parent {
                     StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
                     StackValue::ObjectRef(ObjectRef(Some(h))) => {
-                        let pt = self.current_context().get_heap_description(h);
-                        let ancestors: Vec<_> = self.current_context().get_ancestors(pt).collect();
-                        if !ancestors.contains(&field.parent) {
+                        let object_type = self.current_context().get_heap_description(h);
+                        if !self.current_context().is_a(object_type, field.parent) {
                             panic!(
-                                "tried to store field {}::{} on object of type {}",
+                                "tried to store field {}::{} to object of type {}",
                                 field.parent.1.type_name(),
                                 name,
-                                pt.1.type_name()
+                                object_type.1.type_name()
                             )
                         }
 
@@ -991,7 +992,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             HeapStorage::Str(_) => todo!("field on string"),
                             HeapStorage::Boxed(_) => todo!("field on boxed value type"),
                         }
-                        todo!("stfld for object ref")
                     }
                     StackValue::ValueType(_) => todo!("stfld for value type"),
                     StackValue::NativeInt(_)
@@ -1036,4 +1036,4 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 }
 
-        // TODO: inheritance of parent fields!
+// TODO: inheritance of parent fields!

@@ -73,10 +73,7 @@ impl FieldLayoutManager {
                 (
                     f.name.as_ref(),
                     f.offset,
-                    type_layout(
-                        context.make_concrete(&f.return_type),
-                        context.clone(),
-                    ),
+                    type_layout(context.make_concrete(&f.return_type), context.clone()),
                 )
             })
             .collect();
@@ -169,13 +166,16 @@ impl FieldLayoutManager {
         }
     }
 
-    pub fn instance_fields(
-        TypeDescription(_, description): TypeDescription,
-        context: Context,
-    ) -> Self {
+    pub fn instance_fields(td: TypeDescription, context: Context) -> Self {
+        // TODO: check for layout flags all the way down the chain? (II.22.8)
+        let mut ancestors: Vec<_> = context.get_ancestors(td).collect();
+        ancestors.reverse();
         Self::new(
-            description.fields.iter().filter(|f| !f.static_member),
-            description.flags.layout,
+            ancestors
+                .into_iter()
+                .flat_map(|a| a.1.fields.iter())
+                .filter(|f| !f.static_member),
+            td.1.flags.layout,
             context,
         )
     }

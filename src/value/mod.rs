@@ -24,7 +24,7 @@ pub struct Context<'a> {
     pub assemblies: &'a Assemblies,
     pub resolution: ResolutionS,
 }
-impl Context<'_> {
+impl<'a> Context<'a> {
     pub fn locate_type(&self, handle: UserType) -> TypeDescription {
         self.assemblies.locate_type(self.resolution, handle)
     }
@@ -56,15 +56,19 @@ impl Context<'_> {
     pub fn get_ancestors(
         &self,
         child_type: TypeDescription,
-    ) -> impl Iterator<Item = TypeDescription> {
+    ) -> impl Iterator<Item = TypeDescription> + 'a {
         self.assemblies.ancestors(child_type)
+    }
+
+    pub fn is_a(&self, value: TypeDescription, ancestor: TypeDescription) -> bool {
+        self.get_ancestors(value).any(|a| a == ancestor)
     }
 
     pub fn get_heap_description(&self, object: ObjectPtr) -> TypeDescription {
         match &*object.as_ref().borrow() {
             HeapStorage::Obj(o) => o.description,
-            HeapStorage::Vec(v) => self.assemblies.corlib_type("System.Array"),
-            HeapStorage::Str(s) => self.assemblies.corlib_type("System.String"),
+            HeapStorage::Vec(_) => self.assemblies.corlib_type("System.Array"),
+            HeapStorage::Str(_) => self.assemblies.corlib_type("System.String"),
             HeapStorage::Boxed(v) => v.description(self),
         }
     }
@@ -149,7 +153,7 @@ unsafe_empty_collect!(ManagedPtr);
 
 pub type ObjectPtr<'gc> = Gc<'gc, RefLock<HeapStorage<'gc>>>;
 
-#[derive(Copy, Clone, Debug, Collect)]
+#[derive(Copy, Clone, Collect)]
 #[collect(no_drop)]
 #[repr(transparent)]
 pub struct ObjectRef<'gc>(pub Option<ObjectPtr<'gc>>);
@@ -165,6 +169,17 @@ impl PartialEq for ObjectRef<'_> {
 impl<'gc> ObjectRef<'gc> {
     pub fn new(gc: GCHandle<'gc>, value: HeapStorage<'gc>) -> Self {
         Self(Some(Gc::new(gc, RefLock::new(value))))
+    }
+}
+impl Debug for ObjectRef<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            None => f.write_str("NULL"),
+            Some(gc) => {
+                let data = gc.borrow();
+                write!(f, "heap {:?}", data)
+            }
+        }
     }
 }
 
@@ -471,9 +486,10 @@ pub struct Vector<'gc> {
 unsafe impl Collect for Vector<'_> {
     #[inline]
     fn trace(&self, cc: &Collection) {
-        if self.layout.element_layout.is_gc_ptr() {
+        let element = &self.layout.element_layout;
+        if element.is_gc_ptr() {
             for i in 0..self.layout.length {
-                if let ObjectRef(Some(gc)) = read_gc_ptr(&self.storage[i..]) {
+                if let ObjectRef(Some(gc)) = read_gc_ptr(&self.storage[(i * element.size())..]) {
                     gc.trace(cc);
                 }
             }
