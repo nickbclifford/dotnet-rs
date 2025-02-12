@@ -435,7 +435,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 // TODO: pointer stuff
             }),
             And => binary_int_op!(&),
-            ArgumentList => {}
+            ArgumentList => todo!("arglist"),
             BranchEqual(i) => {
                 conditional_branch!(equal!(), i)
             }
@@ -453,7 +453,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 conditional_branch!(!equal!(), i)
             }
             Branch(i) => branch!(i),
-            Breakpoint => {}
+            Breakpoint => todo!("break"),
             BranchFalsy(i) => {
                 conditional_branch!(
                     match pop!() {
@@ -526,8 +526,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 );
                 moved_ip = true;
             }
-            CallConstrained(_, _) => {}
-            CallIndirect { .. } => {}
+            CallConstrained(_, _) => todo!("constrained. call"),
+            CallIndirect { .. } => todo!("calli"),
             CompareEqual => {
                 let val = equal!() as i32;
                 push!(StackValue::Int32(val))
@@ -647,10 +647,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 push!(val.clone());
                 push!(val);
             }
-            EndFilter => {}
-            EndFinally => {}
-            InitializeMemoryBlock { .. } => {}
-            Jump(_) => {}
+            EndFilter => todo!("endfilter"),
+            EndFinally => todo!("endfinally"),
+            InitializeMemoryBlock { .. } => todo!("initblk"),
+            Jump(_) => todo!("jmp"),
             LoadArgument(i) => {
                 let arg = self.get_argument(*i as usize);
                 push!(arg);
@@ -660,7 +660,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadConstantInt64(i) => push!(StackValue::Int64(*i)),
             LoadConstantFloat32(f) => push!(StackValue::NativeFloat(*f as f64)),
             LoadConstantFloat64(f) => push!(StackValue::NativeFloat(*f)),
-            LoadMethodPointer(_) => {}
+            LoadMethodPointer(_) => todo!("ldftn"),
             LoadIndirect { param0: t, .. } => {
                 let ptr = match pop!() {
                     StackValue::NativeInt(i) => i as *mut u8,
@@ -702,7 +702,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 push!(StackValue::managed_ptr(local.data_location() as *mut _));
             }
             LoadNull => push!(StackValue::null()),
-            Leave(_) => {}
+            Leave(_) => todo!("leave"),
             LocalMemoryAllocate => {
                 let size = match pop!() {
                     StackValue::Int32(i) => i as usize,
@@ -757,7 +757,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let val = pop!();
                 self.set_argument(gc, *i as usize, val);
             }
-            StoreIndirect { .. } => {}
+            StoreIndirect { .. } => todo!("stind"),
             StoreLocal(i) => {
                 let val = pop!();
                 self.set_local(gc, *i as usize, val);
@@ -776,7 +776,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             SubtractOverflow(sgn) => binary_checked_op!(sgn, checked_sub (f64 -), {
                 // TODO: pointer stuff
             }),
-            Switch(_) => {}
+            Switch(_) => todo!("switch"),
             Xor => binary_int_op!(^),
             BoxValue(t) => {
                 let t = self.current_context().make_concrete(t);
@@ -822,16 +822,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     panic!("could not resolve virtual call");
                 }
             }
-            CallVirtualConstrained(_, _) => {}
-            CallVirtualTail(_) => {}
-            CastClass { .. } => {}
-            CopyObject(_) => {}
-            InitializeForObject(_) => {}
-            IsInstance(_) => {}
-            LoadElement { .. } => {}
-            LoadElementPrimitive { .. } => {}
-            LoadElementAddress { .. } => {}
-            LoadElementAddressReadonly(_) => {}
+            CallVirtualConstrained(_, _) => todo!("constrained.callvirt"),
+            CallVirtualTail(_) => todo!("tail.callvirt"),
+            CastClass { .. } => todo!("castclass"),
+            CopyObject(_) => todo!("cpobj"),
+            InitializeForObject(_) => todo!("initobj"),
+            IsInstance(_) => todo!("isinst"),
+            LoadElement { .. } |
+            LoadElementPrimitive { .. } |
+            LoadElementAddress { .. } |
+            LoadElementAddressReadonly(_) => todo!("ldelem"),
             LoadField {
                 param0: source,
                 volatile, // TODO
@@ -945,9 +945,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     push!(StackValue::managed_ptr(ptr))
                 }
             }
-            LoadFieldSkipNullCheck(_) => {}
-            LoadLength => {}
-            LoadObject { .. } => {}
+            LoadFieldSkipNullCheck(_) => todo!("no.nullcheck ldfld"),
+            LoadLength => todo!("ldlen"),
+            LoadObject { .. } => todo!("ldobj"),
             LoadStaticField { param0: source, .. } => {
                 let field = self.current_context().locate_field(*source);
                 let name = &field.field.name;
@@ -990,9 +990,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadTokenField(_) => todo!("RuntimeFieldHandle"),
             LoadTokenMethod(_) => todo!("RuntimeMethodHandle"),
             LoadTokenType(_) => todo!("RuntimeTypeHandle"),
-            LoadVirtualMethodPointer { .. } => {}
-            MakeTypedReference(_) => {}
-            NewArray(_) => {}
+            LoadVirtualMethodPointer { .. } => todo!("ldvirtftn"),
+            MakeTypedReference(_) => todo!("mkrefany"),
+            NewArray(_) => todo!("newarr"),
             NewObject(ctor) => {
                 let (method, lookup) = self.find_generic_method(&MethodSource::User(*ctor));
 
@@ -1007,12 +1007,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 );
                 moved_ip = true;
             }
-            ReadTypedReferenceType => {}
-            ReadTypedReferenceValue(_) => {}
-            Rethrow => {}
-            Sizeof(_) => {}
-            StoreElement { .. } => {}
-            StoreElementPrimitive { .. } => {}
+            ReadTypedReferenceType => todo!("refanytype"),
+            ReadTypedReferenceValue(_) => todo!("refanyval"),
+            Rethrow => todo!("rethrow"),
+            Sizeof(_) => todo!("sizeof"),
+            StoreElement { .. } |
+            StoreElementPrimitive { .. } => todo!("stelem"),
             StoreField {
                 param0: source,
                 volatile, // TODO
@@ -1072,8 +1072,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     rest => panic!("stack value {:?} has no fields", rest),
                 }
             }
-            StoreFieldSkipNullCheck(_) => {}
-            StoreObject { .. } => {}
+            StoreFieldSkipNullCheck(_) => todo!("no.nullcheck stfld"),
+            StoreObject { .. } => todo!("stobj"),
             StoreStaticField { param0: source, .. } => {
                 let field = self.current_context().locate_field(*source);
                 let name = &field.field.name;
@@ -1096,8 +1096,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 // TODO: how will we propagate exceptions up the call stack?
                 return StepResult::MethodThrew;
             }
-            UnboxIntoAddress { .. } => {}
-            UnboxIntoValue(_) => {}
+            UnboxIntoAddress { .. } => todo!("unbox"),
+            UnboxIntoValue(_) => todo!("unbox.any")
         }
         if !moved_ip {
             state!(|s| s.ip += 1);
