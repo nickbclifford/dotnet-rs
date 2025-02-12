@@ -31,7 +31,8 @@ pub struct CallStack<'gc, 'm> {
 // this is sound, I think?
 unsafe impl<'gc, 'm> Collect for CallStack<'gc, 'm> {
     fn trace(&self, cc: &Collection) {
-        self.roots.trace(cc)
+        self.roots.trace(cc);
+        self.statics.borrow_mut().trace(cc);
     }
 }
 
