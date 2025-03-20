@@ -63,7 +63,7 @@ impl Executor {
                 }
                 StepResult::InstructionStepped => {}
             }
-            // TODO: check GC
+            // TODO(gc): poll arena for stats
         }
     }
 }

@@ -13,6 +13,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             // as far as I can tell, this signature only converts from readonly to writable ref
             // since we're just doing simple pointers for refs, I think we can safely treat it as a noop
         }
+        // TODO: these reinterpret casts need to change value-internal TypeDescriptions too probably
         "[Generic(2)] static ref M1 System.Runtime.CompilerServices.Unsafe::As(ref M0)" => {
             // likewise, this is just converting the destination types of ref pointers
         }

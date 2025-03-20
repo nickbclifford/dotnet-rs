@@ -115,18 +115,20 @@ impl Assemblies {
             Exported => todo!(),
             Nested(o) => {
                 let TypeDescription(res, owner) = self.locate_type_ref(resolution, *o);
-                match res
-                    .type_definitions
-                    .iter()
-                    .find(|t| t.type_name() == type_ref.type_name())
-                {
-                    None => panic!(
-                        "could not find type {} nested in {}",
-                        type_ref.type_name(),
-                        owner.type_name()
-                    ),
-                    Some(t) => TypeDescription(res, t),
+
+                for t in &res.type_definitions {
+                    if let Some(enc) = t.encloser {
+                        if t.type_name() == type_ref.type_name() && std::ptr::eq(&res[enc], owner) {
+                            return TypeDescription(res, t);
+                        }
+                    }
                 }
+
+                panic!(
+                    "could not find type {} nested in {}",
+                    type_ref.type_name(),
+                    owner.type_name()
+                )
             }
         }
     }
@@ -165,26 +167,16 @@ impl Assemblies {
 
     pub fn find_method_in_type(
         &self,
-        desc @ TypeDescription(res, parent_type): TypeDescription,
+        desc @ TypeDescription(_, parent_type): TypeDescription,
         name: &str,
         signature: &ManagedMethod<MethodType>,
     ) -> Option<MethodDescription> {
         for method in &parent_type.methods {
-            if method.name == name {
-                // TODO: properly check sigs instead of this horrifying hack lol
-                if signature.show(res) == method.signature.show(res) {
-                    // println!(
-                    //     "found {}",
-                    //     method.signature.show_with_name(
-                    //         res,
-                    //         format!("{}::{}", parent_type.type_name(), method.name)
-                    //     )
-                    // );
-                    return Some(MethodDescription {
-                        parent: desc,
-                        method,
-                    });
-                }
+            if method.name == name && signature == &method.signature {
+                return Some(MethodDescription {
+                    parent: desc,
+                    method,
+                });
             }
         }
 
