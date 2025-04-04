@@ -1,6 +1,6 @@
 use dotnetdll::prelude::*;
 
-use crate::{value::StackValue, vm::gc::GCArena};
+use crate::{value::StackValue, vm::stack::GCArena};
 
 use super::{MethodInfo, StepResult};
 
@@ -52,9 +52,7 @@ impl Executor {
                         return ExecutorResult::Exited(exit_code);
                     } else if !was_cctor {
                         // step the caller past the call instruction
-                        self.arena.mutate_root(|gc, c| {
-                            c.current_frame_mut().state.ip += 1;
-                        });
+                        self.arena.mutate_root(|gc, c| c.increment_ip());
                     }
                 }
                 StepResult::MethodThrew => {

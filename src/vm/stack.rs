@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use dotnetdll::prelude::{LocalVariable, ReturnType};
+use dotnetdll::prelude::{LocalVariable, ReturnType, TypeSource};
 use gc_arena::{
     lock::RefLock, unsafe_empty_collect, Arena, Collect, Collection, DynamicRoot, DynamicRootSet,
     Gc, Mutation, Rootable,
@@ -70,6 +70,12 @@ pub type GCArena = Arena<Rootable!['gc => CallStack<'gc, 'static>]>;
 
 pub type GCHandle<'gc> = &'gc Mutation<'gc>;
 
+macro_rules! msg {
+    ($src:expr, $($format:tt)+) => {
+        $src.msg!(format_args!($($format)+))
+    }
+}
+
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     pub fn new(gc: GCHandle<'gc>, assemblies: &'m Assemblies) -> Self {
         Self {
@@ -135,8 +141,20 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         method: MethodInfo<'m>,
         generic_inst: GenericLookup,
     ) {
-        let in_heap = ObjectRef::new(gc, HeapStorage::Obj(instance));
-        let value = StackValue::ObjectRef(in_heap);
+        let value = match &instance.description.1.extends {
+            Some(TypeSource::User(u))
+                if matches!(
+                    u.type_name(instance.description.0).as_str(),
+                    "System.Enum" | "System.ValueType"
+                ) =>
+            {
+                StackValue::ValueType(Box::new(instance))
+            }
+            _ => {
+                let in_heap = ObjectRef::new(gc, HeapStorage::Obj(instance));
+                StackValue::ObjectRef(in_heap)
+            }
+        };
 
         let mut args = vec![];
         for _ in 0..method.signature.parameters.len() {
@@ -236,6 +254,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.frames.last_mut().unwrap()
     }
 
+    pub fn increment_ip(&mut self) {
+        self.current_frame_mut().state.ip += 1;
+    }
+
     pub fn current_context(&self) -> Context {
         let f = self.current_frame();
         Context {
@@ -307,6 +329,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
     }
 
+    pub fn msg(&self, fmt: std::fmt::Arguments) {
+        println!("{}{}", "\t".repeat(self.frames.len() - 1), fmt);
+    }
+
+    // for debugging
+    #[allow(dead_code)]
     pub fn dump_stack(&self) {
         let mut contents: Vec<_> = self.stack[..self.top_of_stack()]
             .iter()

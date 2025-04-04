@@ -1,34 +1,100 @@
-use crate::value::{GenericLookup, ManagedPtr, MethodDescription, StackValue};
+use crate::value::{
+    ConcreteType, FieldDescription, GenericLookup, ManagedPtr, MethodDescription, Object,
+    ObjectRef, StackValue,
+};
+use dotnetdll::prelude::{BaseType, TypeSource};
 
-use super::CallStack;
+use super::{CallStack, GCHandle, MethodInfo};
+
+fn ref_as_ptr(v: StackValue) -> *mut u8 {
+    match v {
+        StackValue::ManagedPtr(ManagedPtr(p)) => p,
+        err => todo!(
+            "invalid type on stack ({:?}), expected managed pointer for ref parameter",
+            err
+        ),
+    }
+}
 
 pub fn intrinsic_call<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
     method: MethodDescription,
     generics: GenericLookup,
 ) {
     // TODO: real signature checking
     match format!("{:?}", method).as_str() {
-        "[Generic(1)] static ref M0 System.Runtime.CompilerServices.Unsafe::AsRef(ref M0)" => {
-            // as far as I can tell, this signature only converts from readonly to writable ref
-            // since we're just doing simple pointers for refs, I think we can safely treat it as a noop
-        }
-        // TODO: these reinterpret casts need to change value-internal TypeDescriptions too probably
-        "[Generic(2)] static ref M1 System.Runtime.CompilerServices.Unsafe::As(ref M0)" => {
-            // likewise, this is just converting the destination types of ref pointers
-        }
-        "[Generic(1)] static M0 System.Runtime.CompilerServices.Unsafe::As(object)" => {
-            // now the parameter is a GC object pointer that we're reinterpreting
-            // the description says no dynamic type checking - so also a noop?
-        }
-        "static void System.Threading.Monitor::ReliableEnter(object, ref bool)" => {
-            let success_flag = match stack.pop_stack() {
-                StackValue::ManagedPtr(ManagedPtr(p)) => p,
-                v => todo!(
-                    "invalid type on stack ({:?}), expected managed pointer for ref parameter",
-                    v
+        "[Generic(1)] static M0 System.Activator::CreateInstance()" => {
+            let target = &generics.method_generics[0];
+
+            let mut type_generics: &[ConcreteType] = &[];
+
+            let td = match target.get() {
+                BaseType::Object => stack.assemblies.corlib_type("System.Object"),
+                BaseType::Type { source, .. } => {
+                    let ut = match source {
+                        TypeSource::User(u) => *u,
+                        TypeSource::Generic { base, parameters } => {
+                            type_generics = parameters.as_slice();
+                            *base
+                        }
+                    };
+                    stack.assemblies.locate_type(target.resolution(), ut)
+                }
+                err => panic!(
+                    "cannot call parameterless constructor on primitive type {:?}",
+                    err
                 ),
             };
+
+            let instance = Object::new(td, stack.current_context());
+
+            for m in &td.1.methods {
+                if m.runtime_special_name
+                    && m.name == ".ctor"
+                    && m.signature.instance
+                    && m.signature.parameters.is_empty()
+                {
+                    super::msg!(
+                        stack,
+                        "-- invoking parameterless constructor for {} --",
+                        td.1.type_name()
+                    );
+
+                    // make sure to increment before we add a new frame
+                    stack.increment_ip();
+                    stack.constructor_frame(
+                        gc,
+                        instance,
+                        MethodInfo::new(td.0, m),
+                        GenericLookup {
+                            type_generics: type_generics.to_vec(),
+                            method_generics: vec![],
+                        },
+                    );
+                    return;
+                }
+            }
+
+            panic!("could not find a parameterless constructor in {:?}", td)
+        }
+        "static void System.ArgumentNullException::ThrowIfNull(object, string)" => {
+            let target = stack.pop_stack();
+            let argname = stack.pop_stack();
+            if let StackValue::ObjectRef(ObjectRef(None)) = target {
+                todo!("ArgumentNullException({:?})", argname)
+            }
+        }
+        "static void System.GC::_SuppressFinalize(object)" => {
+            // TODO(gc): this object's finalizer should not be called
+            let _obj = stack.pop_stack();
+        }
+        "static void System.Threading.Monitor::Exit(object)" => {
+            // TODO(threading): release mutex
+            let _tag_object = stack.pop_stack();
+        }
+        "static void System.Threading.Monitor::ReliableEnter(object, ref bool)" => {
+            let success_flag = ref_as_ptr(stack.pop_stack());
 
             // TODO(threading): actually acquire mutex
             let _tag_object = stack.pop_stack();
@@ -38,16 +104,40 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 *success_flag = 1u8;
             }
         }
-        "static void System.Threading.Monitor::Exit(object)" => {
-            // TODO(threading): release mutex
-            let _tag_object = stack.pop_stack();
+        "[Generic(1)] static M0 System.Threading.Volatile::Read(ref M0)" => {
+            let ptr = ref_as_ptr(stack.pop_stack()) as *const ObjectRef<'gc>;
+
+            let value = unsafe { std::ptr::read_volatile(ptr) };
+
+            stack.push_stack(gc, StackValue::ObjectRef(value));
         }
-        "static void System.GC::_SuppressFinalize(object)" => {
-            // TODO(gc): this object's finalizer should not be called
-            let _obj = stack.pop_stack();
+        "static void System.Threading.Volatile::Write(ref bool, bool)" => {
+            let value = match stack.pop_stack() {
+                StackValue::Int32(i) => i as u8,
+                err => todo!("invalid type on stack ({:?}), expected i32 for bool", err),
+            };
+
+            let src = ref_as_ptr(stack.pop_stack());
+
+            unsafe { std::ptr::write_volatile(src, value) };
         }
-        x => panic!("unsupported intrinsic call to {:?}", x),
+        x => panic!("unsupported intrinsic call to {}", x),
     }
 
-    stack.current_frame_mut().state.ip += 1;
+    stack.increment_ip();
+}
+
+pub fn intrinsic_field<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    field: FieldDescription,
+    _type_generics: Vec<ConcreteType>,
+) {
+    // TODO: real signature checking
+    match format!("{:?}", field).as_str() {
+        "static nint System.IntPtr::Zero" => stack.push_stack(gc, StackValue::NativeInt(0)),
+        x => panic!("unsupported load from intrinsic field {}", x),
+    }
+
+    stack.increment_ip();
 }

@@ -1,7 +1,7 @@
+use gc_arena::{Collect, Collection};
 use std::collections::HashMap;
 use std::marker::PhantomData;
-
-use gc_arena::{Collect, Collection};
+use std::ops::Range;
 
 use crate::value::{
     layout::{FieldLayoutManager, HasLayout},
@@ -29,8 +29,7 @@ unsafe impl Collect for FieldStorage<'_> {
 }
 
 impl FieldStorage<'_> {
-    pub fn instance_fields(description: TypeDescription, context: Context) -> Self {
-        let layout = FieldLayoutManager::instance_fields(description, context);
+    pub fn new(layout: FieldLayoutManager) -> Self {
         Self {
             storage: vec![0; layout.size()],
             layout,
@@ -38,31 +37,32 @@ impl FieldStorage<'_> {
         }
     }
 
+    pub fn instance_fields(description: TypeDescription, context: Context) -> Self {
+        Self::new(FieldLayoutManager::instance_fields(description, context))
+    }
+
     pub fn static_fields(description: TypeDescription, context: Context) -> Self {
-        let layout = FieldLayoutManager::static_fields(description, context);
-        Self {
-            storage: vec![0; layout.size()],
-            layout,
-            _contains_gc: PhantomData,
-        }
+        Self::new(FieldLayoutManager::static_fields(description, context))
     }
 
     pub fn get(&self) -> &[u8] {
         &self.storage
     }
 
-    pub fn get_field(&self, field: &str) -> &[u8] {
+    fn get_field_range(&self, field: &str) -> Range<usize> {
         match self.layout.fields.get(field) {
             None => panic!("field {} not found", field),
-            Some(l) => &self.storage[l.as_range()],
+            Some(l) => l.as_range(),
         }
     }
 
+    pub fn get_field(&self, field: &str) -> &[u8] {
+        &self.storage[self.get_field_range(field)]
+    }
+
     pub fn get_field_mut(&mut self, field: &str) -> &mut [u8] {
-        match self.layout.fields.get(field) {
-            None => panic!("field {} not found", field),
-            Some(l) => &mut self.storage[l.as_range()],
-        }
+        let r = self.get_field_range(field);
+        &mut self.storage[r]
     }
 }
 

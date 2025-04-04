@@ -4,12 +4,19 @@ use gc_arena::{unsafe_empty_collect, Collect};
 
 use crate::utils::ResolutionS;
 pub use executor::*;
-pub use gc::*;
+pub use stack::*;
 
 mod executor;
-mod gc;
+mod stack;
 mod instructions;
 mod intrinsics;
+
+macro_rules! msg {
+    ($src:expr, $($format:tt)*) => {
+        $src.msg(format_args!($($format)*))
+    }
+}
+pub(crate) use msg;
 
 // I.12.3.2
 #[derive(Clone)]

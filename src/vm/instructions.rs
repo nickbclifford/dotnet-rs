@@ -1,18 +1,14 @@
 use std::cmp::Ordering;
 
-use dotnetdll::prelude::{
-    BaseType, ConversionType, Instruction, LoadType, MethodReferenceParent, MethodSource,
-    NumberSign, ResolvedDebug, TypeSource, UserMethod,
-};
+use dotnetdll::prelude::*;
 
+use super::{intrinsics::*, CallStack, GCHandle, MethodInfo, StepResult};
 use crate::value::{
     layout::{FieldLayoutManager, HasLayout},
     string::CLRString,
     CTSValue, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, Object, ObjectRef,
     StackValue, TypeDescription, UnmanagedPtr, ValueType,
 };
-
-use super::{intrinsics::intrinsic_call, CallStack, GCHandle, MethodInfo, StepResult};
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     fn find_generic_method(&self, source: &MethodSource) -> (MethodDescription, GenericLookup) {
@@ -72,11 +68,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         };
         if let Some(m) = value {
             let ip = self.current_frame_mut().state.ip;
-            println!(
-                "{} -- static member accessed, calling static constructor (will return to ip {}) --",
-                "\t".repeat(self.frames.len() - 1),
+            super::msg!(
+                self,
+                "-- static member accessed, calling static constructor (will return to ip {}) --",
                 ip
             );
+
             self.call_frame(
                 gc,
                 MethodInfo::new(m.resolution(), m.method),
@@ -400,18 +397,17 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             };
         }
 
-        let frame_no = self.frames.len() - 1;
-        let i = state!(|s| {
-            let i = &s.info_handle.instructions[s.ip];
-            println!(
-                "{}[#{} | ip @ {}] about to execute {}",
-                "\t".repeat(frame_no),
-                frame_no,
-                s.ip,
-                i.show(s.info_handle.source_resolution)
-            );
-            i
-        });
+        let i = state!(|s| { &s.info_handle.instructions[s.ip] });
+        let ip = state!(|s| s.ip);
+        let i_res = state!(|s| s.info_handle.source_resolution);
+
+        super::msg!(
+            self,
+            "[#{} | ip @ {}] about to execute {}",
+            self.frames.len() - 1,
+            ip,
+            i.show(i_res)
+        );
 
         match i {
             Add => binary_arith_op!(wrapping_add (f64 +), {
@@ -488,37 +484,29 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             } => {
                 let (method, lookup) = self.find_generic_method(source);
                 macro_rules! intrinsic {
-                    () => {{
-                        intrinsic_call(self, method, lookup);
+                    () => {
+                        intrinsic_call(gc, self, method, lookup);
                         return StepResult::InstructionStepped;
-                    }};
+                    };
                 }
 
                 if method.method.internal_call {
                     intrinsic!();
                 }
 
-                if method
-                    .parent
-                    .1
-                    .type_name()
-                    .starts_with("System.Runtime.CompilerServices")
-                {
-                    for a in &method.method.attributes {
-                        // TODO: do I really need a full lookup to get the type name?
-                        let ctor = self.assemblies.locate_method(
-                            method.resolution(),
-                            a.constructor,
-                            &lookup,
-                        );
-                        // it's super cursed but this is basically hardcoded into coreclr
-                        if ctor.parent.1.type_name()
-                            == "System.Runtime.CompilerServices.IntrinsicAttribute"
-                        {
-                            intrinsic!();
-                        }
+                for a in &method.method.attributes {
+                    // TODO: do I really need a full lookup to get the type name?
+                    let ctor =
+                        self.assemblies
+                            .locate_method(method.resolution(), a.constructor, &lookup);
+                    // it's super cursed but this is basically hardcoded into coreclr
+                    if ctor.parent.1.type_name()
+                        == "System.Runtime.CompilerServices.IntrinsicAttribute"
+                    {
+                        intrinsic!();
                     }
                 }
+
                 self.call_frame(
                     gc,
                     MethodInfo::new(method.resolution(), method.method),
@@ -674,7 +662,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 macro_rules! load_as_i32 {
                     ($t:ty) => {{
-                        let val: $t = unsafe { *(ptr as *mut _) };
+                        let val: $t = unsafe { *(ptr as *const _) };
                         push!(StackValue::Int32(val as i32));
                     }};
                 }
@@ -690,7 +678,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     LoadType::Float32 => todo!("ldind.r4"),
                     LoadType::Float64 => todo!("ldind.r8"),
                     LoadType::IntPtr => todo!("ldind.i"),
-                    LoadType::Object => todo!("ldind.ref"),
+                    LoadType::Object => todo!("ldind.ref"), // look at intrinsic System.Threading.Volatile::Read impl
                 }
             }
             LoadLocal(i) => {
@@ -728,7 +716,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 v => todo!("invalid type on stack ({:?}) for ! operation", v),
             },
             NoOperation => {}
-            // TODO: how are booleans + boolean negation represented?
             Not => match pop!() {
                 StackValue::Int32(i) => push!(StackValue::Int32(!i)),
                 StackValue::Int64(i) => push!(StackValue::Int64(!i)),
@@ -828,10 +815,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             CopyObject(_) => todo!("cpobj"),
             InitializeForObject(_) => todo!("initobj"),
             IsInstance(_) => todo!("isinst"),
-            LoadElement { .. } |
-            LoadElementPrimitive { .. } |
-            LoadElementAddress { .. } |
-            LoadElementAddressReadonly(_) => todo!("ldelem"),
+            LoadElement { .. }
+            | LoadElementPrimitive { .. }
+            | LoadElementAddress { .. }
+            | LoadElementAddressReadonly(_) => todo!("ldelem"),
             LoadField {
                 param0: source,
                 volatile, // TODO
@@ -860,6 +847,33 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     };
                     read_data(slice)
                 };
+
+                if field.field.literal {
+                    todo!("field {}::{} has literal", field.parent.1.type_name(), name);
+                }
+                if let Some(c) = &field.field.default {
+                    todo!(
+                        "field {}::{} has constant {:?}",
+                        field.parent.1.type_name(),
+                        name,
+                        c
+                    );
+                }
+                // apparently i have to worry about intrinsic fields too? jesus
+                for a in &field.field.attributes {
+                    // TODO: do I really need a full lookup to get the type name?
+                    let ctor = self.assemblies.locate_method(
+                        field.parent.0,
+                        a.constructor,
+                        &GenericLookup::default(),
+                    );
+                    // it's super cursed but this is basically hardcoded into coreclr
+                    if ctor.parent.1.type_name()
+                        == "System.Runtime.CompilerServices.IntrinsicAttribute"
+                    {
+                        todo!("intrinsic fields???")
+                    }
+                }
 
                 let value = match parent {
                     StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
@@ -956,6 +970,39 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     return StepResult::InstructionStepped;
                 }
 
+                if field.field.literal {
+                    todo!("field {}::{} has literal", field.parent.1.type_name(), name);
+                }
+                if let Some(c) = &field.field.default {
+                    todo!(
+                        "field {}::{} has constant {:?}",
+                        field.parent.1.type_name(),
+                        name,
+                        c
+                    );
+                }
+                // apparently i have to worry about intrinsic fields too? jesus
+                for a in &field.field.attributes {
+                    // TODO: do I really need a full lookup to get the type name?
+                    let ctor = self.assemblies.locate_method(
+                        field.parent.0,
+                        a.constructor,
+                        &GenericLookup::default(),
+                    );
+                    // it's super cursed but this is basically hardcoded into coreclr
+                    if ctor.parent.1.type_name()
+                        == "System.Runtime.CompilerServices.IntrinsicAttribute"
+                    {
+                        intrinsic_field(
+                            gc,
+                            self,
+                            field,
+                            self.current_context().generics.type_generics.clone(),
+                        );
+                        return StepResult::InstructionStepped;
+                    }
+                }
+
                 let value = statics!(|s| {
                     let field_data = s.get(field.parent).get_field(name);
                     let t = self
@@ -997,6 +1044,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let (method, lookup) = self.find_generic_method(&MethodSource::User(*ctor));
 
                 let parent = method.parent;
+                match parent.1.type_name().as_str() {
+                    "System.IntPtr" => todo!("primitive constructors"),
+                    _ => {}
+                }
+
                 let instance = Object::new(parent, self.current_context());
 
                 self.constructor_frame(
@@ -1011,8 +1063,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             ReadTypedReferenceValue(_) => todo!("refanyval"),
             Rethrow => todo!("rethrow"),
             Sizeof(_) => todo!("sizeof"),
-            StoreElement { .. } |
-            StoreElementPrimitive { .. } => todo!("stelem"),
+            StoreElement { .. } | StoreElementPrimitive { .. } => todo!("stelem"),
             StoreField {
                 param0: source,
                 volatile, // TODO
@@ -1097,7 +1148,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 return StepResult::MethodThrew;
             }
             UnboxIntoAddress { .. } => todo!("unbox"),
-            UnboxIntoValue(_) => todo!("unbox.any")
+            UnboxIntoValue(_) => todo!("unbox.any"),
         }
         if !moved_ip {
             state!(|s| s.ip += 1);

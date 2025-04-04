@@ -88,7 +88,7 @@ pub enum StackValue<'gc> {
     ObjectRef(ObjectRef<'gc>),
     UnmanagedPtr(UnmanagedPtr),
     ManagedPtr(ManagedPtr),
-    ValueType(Object<'gc>),
+    ValueType(Box<Object<'gc>>),
 }
 impl StackValue<'_> {
     pub fn unmanaged_ptr(ptr: *mut u8) -> Self {
@@ -157,6 +157,12 @@ pub type ObjectPtr<'gc> = Gc<'gc, RefLock<HeapStorage<'gc>>>;
 #[collect(no_drop)]
 #[repr(transparent)]
 pub struct ObjectRef<'gc>(pub Option<ObjectPtr<'gc>>);
+
+//noinspection RsAssertEqual
+// we assume this type is pointer-sized basically everywhere
+// dependency-wise everything guarantees it; this is just a sanity check for the implementation
+const _: () = assert!(size_of::<ObjectRef>() == size_of::<usize>());
+
 impl PartialEq for ObjectRef<'_> {
     fn eq(&self, other: &Self) -> bool {
         match (self.0, other.0) {
@@ -277,6 +283,7 @@ pub enum CTSValue<'gc> {
 }
 impl<'gc> CTSValue<'gc> {
     pub fn new(t: &ConcreteType, context: &Context, data: StackValue<'gc>) -> Self {
+        use ValueType::*;
         match t.get() {
             BaseType::Type {
                 value_kind: None | Some(ValueKind::ValueType),
@@ -285,28 +292,28 @@ impl<'gc> CTSValue<'gc> {
                 TypeSource::User(u) => {
                     let t = context.locate_type(*u);
                     match t.1.type_name().as_str() {
-                        "System.Boolean" => ValueType::Bool(todo!()),
-                        "System.Char" => ValueType::Char(todo!()),
-                        "System.Single" => ValueType::Float32(match data {
+                        "System.Boolean" => Bool(todo!()),
+                        "System.Char" => Char(todo!()),
+                        "System.Single" => Float32(match data {
                             StackValue::NativeFloat(f) => f as f32,
                             other => panic!("invalid stack value {:?} for float conversion", other),
                         }),
-                        "System.Double" => ValueType::Float64(match data {
+                        "System.Double" => Float64(match data {
                             StackValue::NativeFloat(f) => f,
                             other => panic!("invalid stack value {:?} for float conversion", other),
                         }),
-                        "System.SByte" => ValueType::Int8(convert_num(data)),
-                        "System.Int16" => ValueType::Int16(convert_num(data)),
-                        "System.Int32" => ValueType::Int32(convert_num(data)),
-                        "System.Int64" => ValueType::Int64(convert_i64(data)),
-                        "System.IntPtr" => ValueType::NativeInt(convert_num(data)),
-                        "System.TypedReference" => ValueType::TypedRef,
-                        "System.Byte" => ValueType::UInt8(convert_num(data)),
-                        "System.UInt16" => ValueType::UInt16(convert_num(data)),
-                        "System.UInt32" => ValueType::UInt32(convert_num(data)),
-                        "System.UInt64" => ValueType::UInt64(convert_i64(data)),
-                        "System.UIntPtr" => ValueType::NativeUInt(convert_num(data)),
-                        _ => ValueType::Struct(todo!()),
+                        "System.SByte" => Int8(convert_num(data)),
+                        "System.Int16" => Int16(convert_num(data)),
+                        "System.Int32" => Int32(convert_num(data)),
+                        "System.Int64" => Int64(convert_i64(data)),
+                        "System.IntPtr" => NativeInt(convert_num(data)),
+                        "System.TypedReference" => TypedRef,
+                        "System.Byte" => UInt8(convert_num(data)),
+                        "System.UInt16" => UInt16(convert_num(data)),
+                        "System.UInt32" => UInt32(convert_num(data)),
+                        "System.UInt64" => UInt64(convert_i64(data)),
+                        "System.UIntPtr" => NativeUInt(convert_num(data)),
+                        _ => Struct(todo!()),
                     }
                 }
                 TypeSource::Generic { .. } => {
@@ -323,27 +330,27 @@ impl<'gc> CTSValue<'gc> {
                 }
                 other => panic!("invalid stack value {:?} for object ref conversion", other),
             },
-            BaseType::Boolean => Self::Value(ValueType::Bool(convert_num::<u8>(data) != 0)),
-            BaseType::Char => Self::Value(ValueType::Char(convert_num(data))),
-            BaseType::Int8 => Self::Value(ValueType::Int8(convert_num(data))),
-            BaseType::UInt8 => Self::Value(ValueType::UInt8(convert_num(data))),
-            BaseType::Int16 => Self::Value(ValueType::Int16(convert_num(data))),
-            BaseType::UInt16 => Self::Value(ValueType::UInt16(convert_num(data))),
-            BaseType::Int32 => Self::Value(ValueType::Int32(convert_num(data))),
-            BaseType::UInt32 => Self::Value(ValueType::UInt32(convert_num(data))),
-            BaseType::Int64 => Self::Value(ValueType::Int64(convert_i64(data))),
-            BaseType::UInt64 => Self::Value(ValueType::UInt64(convert_i64(data))),
-            BaseType::Float32 => Self::Value(ValueType::Float32(match data {
+            BaseType::Boolean => Self::Value(Bool(convert_num::<u8>(data) != 0)),
+            BaseType::Char => Self::Value(Char(convert_num(data))),
+            BaseType::Int8 => Self::Value(Int8(convert_num(data))),
+            BaseType::UInt8 => Self::Value(UInt8(convert_num(data))),
+            BaseType::Int16 => Self::Value(Int16(convert_num(data))),
+            BaseType::UInt16 => Self::Value(UInt16(convert_num(data))),
+            BaseType::Int32 => Self::Value(Int32(convert_num(data))),
+            BaseType::UInt32 => Self::Value(UInt32(convert_num(data))),
+            BaseType::Int64 => Self::Value(Int64(convert_i64(data))),
+            BaseType::UInt64 => Self::Value(UInt64(convert_i64(data))),
+            BaseType::Float32 => Self::Value(Float32(match data {
                 StackValue::NativeFloat(f) => f as f32,
                 other => panic!("invalid stack value {:?} for float conversion", other),
             })),
-            BaseType::Float64 => Self::Value(ValueType::Float64(match data {
+            BaseType::Float64 => Self::Value(Float64(match data {
                 StackValue::NativeFloat(f) => f,
                 other => panic!("invalid stack value {:?} for float conversion", other),
             })),
-            BaseType::IntPtr => Self::Value(ValueType::NativeInt(convert_num(data))),
+            BaseType::IntPtr => Self::Value(NativeInt(convert_num(data))),
             BaseType::UIntPtr | BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
-                Self::Value(ValueType::NativeUInt(convert_num(data)))
+                Self::Value(NativeUInt(convert_num(data)))
             }
             BaseType::Object => Self::Ref(match data {
                 StackValue::ObjectRef(o) => o,
@@ -354,6 +361,7 @@ impl<'gc> CTSValue<'gc> {
     }
 
     pub fn read(t: &ConcreteType, context: &Context, data: &[u8]) -> Self {
+        use ValueType::*;
         match t.get() {
             BaseType::Type {
                 value_kind: None | Some(ValueKind::ValueType),
@@ -362,22 +370,22 @@ impl<'gc> CTSValue<'gc> {
                 TypeSource::User(u) => {
                     let t = context.locate_type(*u);
                     match t.1.type_name().as_str() {
-                        "System.Boolean" => ValueType::Bool(data[0] != 0),
-                        "System.Char" => ValueType::Char(from_bytes!(u16, data)),
-                        "System.Single" => ValueType::Float32(from_bytes!(f32, data)),
-                        "System.Double" => ValueType::Float64(from_bytes!(f64, data)),
-                        "System.SByte" => ValueType::Int8(data[0] as i8),
-                        "System.Int16" => ValueType::Int16(from_bytes!(i16, data)),
-                        "System.Int32" => ValueType::Int32(from_bytes!(i32, data)),
-                        "System.Int64" => ValueType::Int64(from_bytes!(i64, data)),
-                        "System.IntPtr" => ValueType::NativeInt(from_bytes!(isize, data)),
-                        "System.TypedReference" => ValueType::TypedRef,
-                        "System.Byte" => ValueType::UInt8(data[0]),
-                        "System.UInt16" => ValueType::UInt16(from_bytes!(u16, data)),
-                        "System.UInt32" => ValueType::UInt32(from_bytes!(u32, data)),
-                        "System.UInt64" => ValueType::UInt64(from_bytes!(u64, data)),
-                        "System.UIntPtr" => ValueType::NativeUInt(from_bytes!(usize, data)),
-                        _ => ValueType::Struct(todo!()),
+                        "System.Boolean" => Bool(data[0] != 0),
+                        "System.Char" => Char(from_bytes!(u16, data)),
+                        "System.Single" => Float32(from_bytes!(f32, data)),
+                        "System.Double" => Float64(from_bytes!(f64, data)),
+                        "System.SByte" => Int8(data[0] as i8),
+                        "System.Int16" => Int16(from_bytes!(i16, data)),
+                        "System.Int32" => Int32(from_bytes!(i32, data)),
+                        "System.Int64" => Int64(from_bytes!(i64, data)),
+                        "System.IntPtr" => NativeInt(from_bytes!(isize, data)),
+                        "System.TypedReference" => TypedRef,
+                        "System.Byte" => UInt8(data[0]),
+                        "System.UInt16" => UInt16(from_bytes!(u16, data)),
+                        "System.UInt32" => UInt32(from_bytes!(u32, data)),
+                        "System.UInt64" => UInt64(from_bytes!(u64, data)),
+                        "System.UIntPtr" => NativeUInt(from_bytes!(usize, data)),
+                        _ => Struct(todo!()),
                     }
                 }
                 TypeSource::Generic { .. } => {
@@ -392,44 +400,46 @@ impl<'gc> CTSValue<'gc> {
             | BaseType::String
             | BaseType::Object
             | BaseType::Vector(_, _) => Self::Ref(read_gc_ptr(data)),
-            BaseType::Boolean => Self::Value(ValueType::Bool(data[0] != 0)),
-            BaseType::Char => Self::Value(ValueType::Char(from_bytes!(u16, data))),
-            BaseType::Int8 => Self::Value(ValueType::Int8(data[0] as i8)),
-            BaseType::UInt8 => Self::Value(ValueType::UInt8(data[0])),
-            BaseType::Int16 => Self::Value(ValueType::Int16(from_bytes!(i16, data))),
-            BaseType::UInt16 => Self::Value(ValueType::UInt16(from_bytes!(u16, data))),
-            BaseType::Int32 => Self::Value(ValueType::Int32(from_bytes!(i32, data))),
-            BaseType::UInt32 => Self::Value(ValueType::UInt32(from_bytes!(u32, data))),
-            BaseType::Int64 => Self::Value(ValueType::Int64(from_bytes!(i64, data))),
-            BaseType::UInt64 => Self::Value(ValueType::UInt64(from_bytes!(u64, data))),
-            BaseType::Float32 => Self::Value(ValueType::Float32(from_bytes!(f32, data))),
-            BaseType::Float64 => Self::Value(ValueType::Float64(from_bytes!(f64, data))),
-            BaseType::IntPtr => Self::Value(ValueType::NativeInt(from_bytes!(isize, data))),
+            BaseType::Boolean => Self::Value(Bool(data[0] != 0)),
+            BaseType::Char => Self::Value(Char(from_bytes!(u16, data))),
+            BaseType::Int8 => Self::Value(Int8(data[0] as i8)),
+            BaseType::UInt8 => Self::Value(UInt8(data[0])),
+            BaseType::Int16 => Self::Value(Int16(from_bytes!(i16, data))),
+            BaseType::UInt16 => Self::Value(UInt16(from_bytes!(u16, data))),
+            BaseType::Int32 => Self::Value(Int32(from_bytes!(i32, data))),
+            BaseType::UInt32 => Self::Value(UInt32(from_bytes!(u32, data))),
+            BaseType::Int64 => Self::Value(Int64(from_bytes!(i64, data))),
+            BaseType::UInt64 => Self::Value(UInt64(from_bytes!(u64, data))),
+            BaseType::Float32 => Self::Value(Float32(from_bytes!(f32, data))),
+            BaseType::Float64 => Self::Value(Float64(from_bytes!(f64, data))),
+            BaseType::IntPtr => Self::Value(NativeInt(from_bytes!(isize, data))),
             BaseType::UIntPtr | BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
-                Self::Value(ValueType::NativeUInt(from_bytes!(usize, data)))
+                Self::Value(NativeUInt(from_bytes!(usize, data)))
             }
         }
     }
 
     pub fn into_stack(self) -> StackValue<'gc> {
+        use CTSValue::*;
+        use ValueType::*;
         match self {
-            CTSValue::Value(ValueType::Bool(b)) => StackValue::Int32(b as i32),
-            CTSValue::Value(ValueType::Char(c)) => StackValue::Int32(c as i32),
-            CTSValue::Value(ValueType::Int8(i)) => StackValue::Int32(i as i32),
-            CTSValue::Value(ValueType::UInt8(i)) => StackValue::Int32(i as i32),
-            CTSValue::Value(ValueType::Int16(i)) => StackValue::Int32(i as i32),
-            CTSValue::Value(ValueType::UInt16(i)) => StackValue::Int32(i as i32),
-            CTSValue::Value(ValueType::Int32(i)) => StackValue::Int32(i),
-            CTSValue::Value(ValueType::UInt32(i)) => StackValue::Int32(i as i32),
-            CTSValue::Value(ValueType::Int64(i)) => StackValue::Int64(i),
-            CTSValue::Value(ValueType::UInt64(i)) => StackValue::Int64(i as i64),
-            CTSValue::Value(ValueType::NativeInt(i)) => StackValue::NativeInt(i),
-            CTSValue::Value(ValueType::NativeUInt(i)) => StackValue::NativeInt(i as isize),
-            CTSValue::Value(ValueType::Float32(f)) => StackValue::NativeFloat(f as f64),
-            CTSValue::Value(ValueType::Float64(f)) => StackValue::NativeFloat(f),
-            CTSValue::Value(ValueType::TypedRef) => todo!(),
-            CTSValue::Value(ValueType::Struct(s)) => StackValue::ValueType(s),
-            CTSValue::Ref(o) => StackValue::ObjectRef(o),
+            Value(Bool(b)) => StackValue::Int32(b as i32),
+            Value(Char(c)) => StackValue::Int32(c as i32),
+            Value(Int8(i)) => StackValue::Int32(i as i32),
+            Value(UInt8(i)) => StackValue::Int32(i as i32),
+            Value(Int16(i)) => StackValue::Int32(i as i32),
+            Value(UInt16(i)) => StackValue::Int32(i as i32),
+            Value(Int32(i)) => StackValue::Int32(i),
+            Value(UInt32(i)) => StackValue::Int32(i as i32),
+            Value(Int64(i)) => StackValue::Int64(i),
+            Value(UInt64(i)) => StackValue::Int64(i as i64),
+            Value(NativeInt(i)) => StackValue::NativeInt(i),
+            Value(NativeUInt(i)) => StackValue::NativeInt(i as isize),
+            Value(Float32(f)) => StackValue::NativeFloat(f as f64),
+            Value(Float64(f)) => StackValue::NativeFloat(f),
+            Value(TypedRef) => todo!(),
+            Value(Struct(s)) => StackValue::ValueType(Box::new(s)),
+            Ref(o) => StackValue::ObjectRef(o),
         }
     }
 
@@ -605,10 +615,27 @@ impl Debug for MethodDescription {
     }
 }
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Copy)]
 pub struct FieldDescription {
     pub parent: TypeDescription,
     pub field: &'static Field<'static>,
+}
+impl Debug for FieldDescription {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if self.field.static_member {
+            write!(f, "static ")?;
+        }
+
+        write!(
+            f,
+            "{} {}::{}",
+            self.field.return_type.show(self.parent.0),
+            self.parent.1.type_name(),
+            self.field.name
+        )?;
+
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
