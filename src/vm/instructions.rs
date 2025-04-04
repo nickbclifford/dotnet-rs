@@ -4,7 +4,7 @@ use dotnetdll::prelude::*;
 
 use super::{intrinsics::*, CallStack, GCHandle, MethodInfo, StepResult};
 use crate::value::{
-    layout::{FieldLayoutManager, HasLayout},
+    layout::{FieldLayoutManager, HasLayout, type_layout},
     string::CLRString,
     CTSValue, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, Object, ObjectRef,
     StackValue, TypeDescription, UnmanagedPtr, ValueType,
@@ -769,15 +769,19 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let t = self.current_context().make_concrete(t);
 
                 let value = pop!();
-                push!(StackValue::ObjectRef(ObjectRef::new(
-                    gc,
-                    HeapStorage::Boxed(ValueType::new(&t, &self.current_context(), value))
-                )));
+
+                if let StackValue::ObjectRef(_) = value {
+                    // boxing is a noop for all reference types
+                    push!(value);
+                } else {
+                    push!(StackValue::ObjectRef(ObjectRef::new(
+                        gc,
+                        HeapStorage::Boxed(ValueType::new(&t, &self.current_context(), value))
+                    )));
+                }
             }
-            CallVirtual {
-                skip_null_check, // TODO
-                param0: source,
-            } => {
+            CallVirtual { param0: source, .. } => {
+                // TODO: apparently managed pointers can be the this object?
                 let this_value = pop!();
                 let this_heap = match this_value {
                     StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
@@ -791,7 +795,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 // TODO: check explicit overrides
 
                 let mut found = None;
-                for parent in self.current_context().get_ancestors(this_type) {
+                for (parent, _) in self.current_context().get_ancestors(this_type) {
                     if let Some(method) = self.current_context().find_method_in_type(
                         parent,
                         &base_method.method.name,
@@ -813,7 +817,22 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             CallVirtualTail(_) => todo!("tail.callvirt"),
             CastClass { .. } => todo!("castclass"),
             CopyObject(_) => todo!("cpobj"),
-            InitializeForObject(_) => todo!("initobj"),
+            InitializeForObject(t) => {
+                let ctx = self.current_context();
+                let layout = type_layout(ctx.make_concrete(t), ctx);
+
+                let target = match pop!() {
+                    StackValue::ManagedPtr(ManagedPtr(p)) => p,
+                    StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p,
+                    err => todo!("invalid type on stack ({:?}) for initobj", err),
+                };
+
+                for i in 0..layout.size() {
+                    unsafe {
+                        target.add(i).write(0u8);
+                    }
+                }
+            }
             IsInstance(_) => todo!("isinst"),
             LoadElement { .. }
             | LoadElementPrimitive { .. }
@@ -1042,22 +1061,26 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             NewArray(_) => todo!("newarr"),
             NewObject(ctor) => {
                 let (method, lookup) = self.find_generic_method(&MethodSource::User(*ctor));
-
                 let parent = method.parent;
-                match parent.1.type_name().as_str() {
-                    "System.IntPtr" => todo!("primitive constructors"),
-                    _ => {}
+
+                // TODO: proper signature checking
+                match format!("{:?}", method).as_str() {
+                    "void System.IntPtr::.ctor(int)" => match pop!() {
+                        StackValue::Int32(i) => push!(StackValue::NativeInt(i as isize)),
+                        rest => todo!("invalid type on stack (expected int32, received {:?}", rest),
+                    },
+                    _ => {
+                        let instance = Object::new(parent, self.current_context());
+
+                        self.constructor_frame(
+                            gc,
+                            instance,
+                            MethodInfo::new(parent.0, method.method),
+                            lookup,
+                        );
+                        moved_ip = true;
+                    }
                 }
-
-                let instance = Object::new(parent, self.current_context());
-
-                self.constructor_frame(
-                    gc,
-                    instance,
-                    MethodInfo::new(parent.0, method.method),
-                    lookup,
-                );
-                moved_ip = true;
             }
             ReadTypedReferenceType => todo!("refanytype"),
             ReadTypedReferenceValue(_) => todo!("refanyval"),

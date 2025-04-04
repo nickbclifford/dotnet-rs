@@ -1,5 +1,4 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap};
 
 use dotnetdll::prelude::{LocalVariable, ReturnType, TypeSource};
 use gc_arena::{
@@ -7,11 +6,13 @@ use gc_arena::{
     Gc, Mutation, Rootable,
 };
 
-use crate::value::{HeapStorage, Object, ObjectRef};
 use crate::{
     resolve::Assemblies,
     utils::ResolutionS,
-    value::{storage::StaticStorageManager, Context, GenericLookup, StackValue},
+    value::{
+        storage::StaticStorageManager, Context, GenericLookup, HeapStorage, Object, ObjectRef,
+        StackValue,
+    },
     vm::{MethodInfo, MethodState},
 };
 
@@ -94,7 +95,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     fn init_locals(&mut self, gc: GCHandle<'gc>, locals: &'m [LocalVariable]) {
-        for l in locals {
+        for _ in locals {
             // TODO: proper values
             self.insert_value(gc, StackValue::null());
         }
@@ -141,6 +142,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         method: MethodInfo<'m>,
         generic_inst: GenericLookup,
     ) {
+        // newobj is typically not used for value types, but still works to put them on the stack (III.4.21)
         let value = match &instance.description.1.extends {
             Some(TypeSource::User(u))
                 if matches!(

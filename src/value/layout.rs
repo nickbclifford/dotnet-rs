@@ -5,7 +5,7 @@ use std::ops::Range;
 use dotnetdll::prelude::*;
 use enum_dispatch::enum_dispatch;
 
-use super::{ConcreteType, Context, TypeDescription};
+use super::{ConcreteType, Context, GenericLookup, TypeDescription};
 
 #[enum_dispatch]
 pub trait HasLayout {
@@ -60,23 +60,13 @@ impl HasLayout for FieldLayoutManager {
 }
 impl FieldLayoutManager {
     fn new<'a>(
-        fields: impl IntoIterator<Item = &'a Field<'static>>,
+        fields: impl IntoIterator<Item = (&'a str, Option<usize>, LayoutManager)>,
         layout: Layout,
-        context: Context,
     ) -> Self {
         let mut mapping = HashMap::new();
         let total_size;
 
-        let fields: Vec<_> = fields
-            .into_iter()
-            .map(|f| {
-                (
-                    f.name.as_ref(),
-                    f.offset,
-                    type_layout(context.make_concrete(&f.return_type), context.clone()),
-                )
-            })
-            .collect();
+        let fields: Vec<_> = fields.into_iter().collect();
 
         match layout {
             Layout::Automatic => {
@@ -166,29 +156,63 @@ impl FieldLayoutManager {
         }
     }
 
-    pub fn instance_fields(td: TypeDescription, context: Context) -> Self {
+    fn collect_fields(
+        td: TypeDescription,
+        context: Context,
+        mut predicate: impl FnMut(&Field) -> bool,
+    ) -> Self {
         // TODO: check for layout flags all the way down the chain? (II.22.8)
         let mut ancestors: Vec<_> = context.get_ancestors(td).collect();
         ancestors.reverse();
-        Self::new(
-            ancestors
-                .into_iter()
-                .flat_map(|a| a.1.fields.iter())
-                .filter(|f| !f.static_member),
-            td.1.flags.layout,
-            context,
-        )
+        // remove current type, since it gets special treatment
+        ancestors.pop();
+
+        let mut total_fields = vec![];
+        let mut add_field_layout = |f: &'static Field, ctx: &Context| {
+            let layout = type_layout(ctx.make_concrete(&f.return_type), ctx.clone());
+            total_fields.push((f.name.as_ref(), f.offset, layout));
+        };
+
+        for (TypeDescription(res, a), generic_params) in ancestors {
+            let new_lookup = GenericLookup {
+                type_generics: generic_params
+                    .into_iter()
+                    .map(|t| context.make_concrete(t))
+                    .collect(),
+                method_generics: vec![],
+            };
+            let new_ctx = Context {
+                generics: &new_lookup,
+                resolution: res,
+                assemblies: context.assemblies,
+            };
+            for f in &a.fields {
+                if !predicate(f) {
+                    continue;
+                }
+
+                add_field_layout(f, &new_ctx);
+            }
+        }
+
+        // now for the type's actually declared fields
+        for f in &td.1.fields {
+            if !predicate(f) {
+                continue;
+            }
+
+            add_field_layout(f, &context);
+        }
+
+        Self::new(total_fields, td.1.flags.layout)
     }
 
-    pub fn static_fields(
-        TypeDescription(_, description): TypeDescription,
-        context: Context,
-    ) -> Self {
-        Self::new(
-            description.fields.iter().filter(|f| f.static_member),
-            description.flags.layout,
-            context,
-        )
+    pub fn instance_fields(td: TypeDescription, context: Context) -> Self {
+        Self::collect_fields(td, context, |f| !f.static_member)
+    }
+
+    pub fn static_fields(td: TypeDescription, context: Context) -> Self {
+        Self::collect_fields(td, context, |f| f.static_member)
     }
 }
 
@@ -256,14 +280,28 @@ pub fn type_layout(t: ConcreteType, context: Context) -> LayoutManager {
             value_kind: Some(ValueKind::ValueType),
             source,
         } => {
+            let mut type_generics = vec![];
             let t = match source {
                 TypeSource::User(u) => context.locate_type(*u),
                 TypeSource::Generic { base, parameters } => {
-                    // TODO: new generic lookup context
+                    type_generics = parameters.clone();
                     context.locate_type(*base)
                 }
             };
-            FieldLayoutManager::instance_fields(t, context).into()
+
+            let new_lookup = GenericLookup {
+                type_generics,
+                method_generics: vec![],
+            };
+
+            FieldLayoutManager::instance_fields(
+                t,
+                Context {
+                    generics: &new_lookup,
+                    ..context
+                },
+            )
+            .into()
         }
         BaseType::Type { .. }
         | BaseType::Object

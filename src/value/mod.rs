@@ -12,7 +12,12 @@ use gc_arena::{lock::RefLock, unsafe_empty_collect, Collect, Collection, Gc};
 use layout::*;
 use storage::FieldStorage;
 
-use crate::{resolve::Assemblies, utils::ResolutionS, value::string::CLRString, vm::GCHandle};
+use crate::{
+    resolve::{Ancestor, Assemblies},
+    utils::ResolutionS,
+    value::string::CLRString,
+    vm::GCHandle,
+};
 
 pub mod layout;
 pub mod storage;
@@ -56,12 +61,12 @@ impl<'a> Context<'a> {
     pub fn get_ancestors(
         &self,
         child_type: TypeDescription,
-    ) -> impl Iterator<Item = TypeDescription> + 'a {
+    ) -> impl Iterator<Item = Ancestor<'a>> + 'a {
         self.assemblies.ancestors(child_type)
     }
 
     pub fn is_a(&self, value: TypeDescription, ancestor: TypeDescription) -> bool {
-        self.get_ancestors(value).any(|a| a == ancestor)
+        self.get_ancestors(value).any(|(a, _)| a == ancestor)
     }
 
     pub fn get_heap_description(&self, object: ObjectPtr) -> TypeDescription {
@@ -74,6 +79,12 @@ impl<'a> Context<'a> {
     }
 
     pub fn make_concrete<T: Clone + Into<MethodType>>(&self, t: &T) -> ConcreteType {
+        // let x = t.show(self.resolution);?
+        // println!("about to make {} concrete with {:?}", &x, self.generics);
+        // if x == "T0" {
+        //     println!("test");
+        // }
+
         self.generics.make_concrete(self.resolution, t.clone())
     }
 }
@@ -243,8 +254,11 @@ impl<'gc> ValueType<'gc> {
     pub fn new(t: &ConcreteType, context: &Context, data: StackValue<'gc>) -> Self {
         match CTSValue::new(t, context, data) {
             CTSValue::Value(v) => v,
-            CTSValue::Ref(_) => {
-                panic!("tried to instantiate value type, received object reference")
+            CTSValue::Ref(r) => {
+                panic!(
+                    "tried to instantiate value type, received object reference ({:?})",
+                    r
+                )
             }
         }
     }

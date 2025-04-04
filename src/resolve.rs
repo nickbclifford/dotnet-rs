@@ -265,7 +265,7 @@ impl Assemblies {
         }
     }
 
-    pub fn ancestors(&self, child: TypeDescription) -> impl Iterator<Item = TypeDescription> + '_ {
+    pub fn ancestors(&self, child: TypeDescription) -> impl Iterator<Item = Ancestor> + '_ {
         AncestorsImpl {
             assemblies: self,
             child: Some(child),
@@ -273,12 +273,14 @@ impl Assemblies {
     }
 }
 
+pub type Ancestor<'a> = (TypeDescription, Vec<&'a MemberType>);
+
 struct AncestorsImpl<'a> {
     assemblies: &'a Assemblies,
     child: Option<TypeDescription>,
 }
-impl Iterator for AncestorsImpl<'_> {
-    type Item = TypeDescription;
+impl<'a> Iterator for AncestorsImpl<'a> {
+    type Item = Ancestor<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let child = self.child?;
@@ -290,7 +292,12 @@ impl Iterator for AncestorsImpl<'_> {
             }
         };
 
-        Some(child)
+        let generics = match &child.1.extends {
+            Some(TypeSource::Generic { parameters, .. }) => parameters.iter().collect(),
+            _ => vec![],
+        };
+
+        Some((child, generics))
     }
 }
 
