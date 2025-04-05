@@ -1,10 +1,9 @@
-use std::cmp::Ordering;
-
 use dotnetdll::prelude::*;
+use std::cmp::Ordering;
 
 use super::{intrinsics::*, CallStack, GCHandle, MethodInfo, StepResult};
 use crate::value::{
-    layout::{FieldLayoutManager, HasLayout, type_layout},
+    layout::{type_layout, FieldLayoutManager, HasLayout},
     string::CLRString,
     CTSValue, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, Object, ObjectRef,
     StackValue, TypeDescription, UnmanagedPtr, ValueType,
@@ -133,12 +132,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         macro_rules! equal {
             () => {
                 match (pop!(), pop!()) {
-                    (StackValue::ManagedPtr(ManagedPtr(l)), StackValue::NativeInt(r)) => {
-                        l as isize == r
-                    }
-                    (StackValue::NativeInt(l), StackValue::ManagedPtr(ManagedPtr(r))) => {
-                        l == r as isize
-                    }
+                    (StackValue::ManagedPtr(m), StackValue::NativeInt(r)) => m.value as isize == r,
+                    (StackValue::NativeInt(l), StackValue::ManagedPtr(m)) => l == m.value as isize,
                     (StackValue::ObjectRef(l), StackValue::ObjectRef(r)) => l == r,
                     (l, r) => l.partial_cmp(&r) == Some(Ordering::Equal),
                 }
@@ -397,7 +392,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             };
         }
 
-        let i = state!(|s| { &s.info_handle.instructions[s.ip] });
+        let i = state!(|s| &s.info_handle.instructions[s.ip]);
         let ip = state!(|s| s.ip);
         let i_res = state!(|s| s.info_handle.source_resolution);
 
@@ -411,20 +406,20 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         match i {
             Add => binary_arith_op!(wrapping_add (f64 +), {
-                (StackValue::Int32(i), StackValue::ManagedPtr(ManagedPtr(p))) => {
+                (StackValue::Int32(i), StackValue::ManagedPtr(m)) => {
                     // TODO: proper mechanisms for safety and pointer arithmetic
                     unsafe {
-                        push!(StackValue::managed_ptr(p.offset(i as isize)))
+                        push!(StackValue::ManagedPtr(m.map_value(|p| p.offset(i as isize))))
                     }
                 },
-                (StackValue::NativeInt(i), StackValue::ManagedPtr(ManagedPtr(p))) => unsafe {
-                    push!(StackValue::managed_ptr(p.offset(i)))
+                (StackValue::NativeInt(i), StackValue::ManagedPtr(m)) => unsafe {
+                    push!(StackValue::ManagedPtr(m.map_value(|p| p.offset(i))))
                 },
-                (StackValue::ManagedPtr(ManagedPtr(p)), StackValue::Int32(i)) => unsafe {
-                    push!(StackValue::managed_ptr(p.offset(i as isize)))
-                },
-                (StackValue::ManagedPtr(ManagedPtr(p)), StackValue::NativeInt(i)) => unsafe {
-                    push!(StackValue::managed_ptr(p.offset(i)))
+                (StackValue::ManagedPtr(m), StackValue::Int32(i)) => unsafe {
+                        push!(StackValue::ManagedPtr(m.map_value(|p| p.offset(i as isize))))
+                    },
+                (StackValue::ManagedPtr(m), StackValue::NativeInt(i)) => unsafe {
+                    push!(StackValue::ManagedPtr(m.map_value(|p| p.offset(i))))
                 },
             }),
             AddOverflow(sgn) => binary_checked_op!(sgn, checked_add(f64+), {
@@ -458,7 +453,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         StackValue::NativeInt(i) => i == 0,
                         StackValue::ObjectRef(ObjectRef(o)) => o.is_none(),
                         StackValue::UnmanagedPtr(UnmanagedPtr(p))
-                        | StackValue::ManagedPtr(ManagedPtr(p)) => p.is_null(),
+                        | StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => p.is_null(),
                         v => todo!("invalid type on stack ({:?}) for brfalse operation", v),
                     },
                     i
@@ -472,7 +467,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         StackValue::NativeInt(i) => i != 0,
                         StackValue::ObjectRef(ObjectRef(o)) => o.is_some(),
                         StackValue::UnmanagedPtr(UnmanagedPtr(p))
-                        | StackValue::ManagedPtr(ManagedPtr(p)) => !p.is_null(),
+                        | StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => !p.is_null(),
                         v => todo!("invalid type on stack ({:?}) for brtrue operation", v),
                     },
                     i
@@ -528,7 +523,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 StackValue::NativeFloat(f) => {
                     if f.is_infinite() || f.is_nan() {
                         todo!("ArithmeticException in ckfinite");
-                        return StepResult::MethodThrew;
                     }
                     push!(StackValue::NativeFloat(f))
                 }
@@ -653,7 +647,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let ptr = match pop!() {
                     StackValue::NativeInt(i) => i as *mut u8,
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p,
-                    StackValue::ManagedPtr(ManagedPtr(p)) => p,
+                    StackValue::ManagedPtr(m) => m.value,
                     v => todo!(
                         "invalid type on stack ({:?}) for ldind operation, expected pointer",
                         v
@@ -687,7 +681,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             LoadLocalAddress(i) => {
                 let local = self.get_local(*i as usize);
-                push!(StackValue::managed_ptr(local.data_location() as *mut _));
+                let live_type = local.contains_type(self.current_context());
+                push!(StackValue::managed_ptr(
+                    local.data_location() as *mut _,
+                    live_type
+                ));
             }
             LoadNull => push!(StackValue::null()),
             Leave(_) => todo!("leave"),
@@ -750,14 +748,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 self.set_local(gc, *i as usize, val);
             }
             Subtract => binary_arith_op!(wrapping_sub (f64 -), {
-                (StackValue::ManagedPtr(ManagedPtr(p)), StackValue::Int32(i)) => unsafe {
-                    push!(StackValue::managed_ptr(p.offset(-i as isize)))
+                (StackValue::ManagedPtr(m), StackValue::Int32(i)) => unsafe {
+                    push!(StackValue::ManagedPtr(m.map_value(|p| p.offset(-i as isize))))
                 },
-                (StackValue::ManagedPtr(ManagedPtr(p)), StackValue::NativeInt(i)) => unsafe {
-                    push!(StackValue::managed_ptr(p.offset(-i)))
+                (StackValue::ManagedPtr(m), StackValue::NativeInt(i)) => unsafe {
+                    push!(StackValue::ManagedPtr(m.map_value(|p| p.offset(-i))))
                 },
-                (StackValue::ManagedPtr(ManagedPtr(p1)), StackValue::ManagedPtr(ManagedPtr(p2))) => {
-                    push!(StackValue::NativeInt((p1 as isize) - (p2 as isize)))
+                (StackValue::ManagedPtr(m1), StackValue::ManagedPtr(m2)) => {
+                    push!(StackValue::NativeInt((m1.value as isize) - (m2.value as isize)))
                 },
             }),
             SubtractOverflow(sgn) => binary_checked_op!(sgn, checked_sub (f64 -), {
@@ -781,16 +779,25 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 }
             }
             CallVirtual { param0: source, .. } => {
-                // TODO: apparently managed pointers can be the this object?
-                let this_value = pop!();
-                let this_heap = match this_value {
+                let (base_method, lookup) = self.find_generic_method(source);
+
+                let num_args = 1 + base_method.method.signature.parameters.len();
+                let mut args = Vec::new();
+                for _ in 0..num_args {
+                    args.push(pop!());
+                }
+                args.reverse();
+
+                // value types are passed as managed pointers (I.8.9.7)
+                let this_value = args[0].clone();
+                let this_type = match this_value {
                     StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
-                    StackValue::ObjectRef(ObjectRef(Some(o))) => o,
+                    StackValue::ObjectRef(ObjectRef(Some(o))) => {
+                        self.current_context().get_heap_description(o)
+                    },
+                    StackValue::ManagedPtr(m) => m.inner_type,
                     rest => panic!("invalid this argument for virtual call (expected object ref, received {:?})", rest)
                 };
-                let this_type = self.current_context().get_heap_description(this_heap);
-
-                let (base_method, lookup) = self.find_generic_method(source);
 
                 // TODO: check explicit overrides
 
@@ -807,8 +814,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 }
 
                 if let Some((parent, method)) = found {
-                    push!(this_value);
+                    for a in args {
+                        push!(a);
+                    }
                     self.call_frame(gc, MethodInfo::new(parent.0, method.method), lookup);
+                    moved_ip = true;
                 } else {
                     panic!("could not resolve virtual call");
                 }
@@ -822,7 +832,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let layout = type_layout(ctx.make_concrete(t), ctx);
 
                 let target = match pop!() {
-                    StackValue::ManagedPtr(ManagedPtr(p)) => p,
+                    StackValue::ManagedPtr(m) => m.value,
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p,
                     err => todo!("invalid type on stack ({:?}) for initobj", err),
                 };
@@ -928,7 +938,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     StackValue::NativeInt(i) => read_from_pointer(i as *mut u8),
                     StackValue::UnmanagedPtr(UnmanagedPtr(ptr))
-                    | StackValue::ManagedPtr(ManagedPtr(ptr)) => read_from_pointer(ptr),
+                    | StackValue::ManagedPtr(ManagedPtr { value: ptr, .. }) => {
+                        read_from_pointer(ptr)
+                    }
                     rest => panic!("stack value {:?} has no fields", rest),
                 };
 
@@ -962,7 +974,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     StackValue::NativeInt(i) => i as *mut u8,
                     StackValue::UnmanagedPtr(UnmanagedPtr(ptr))
-                    | StackValue::ManagedPtr(ManagedPtr(ptr)) => ptr,
+                    | StackValue::ManagedPtr(ManagedPtr { value: ptr, .. }) => ptr,
                     rest => panic!("cannot load field address from stack value {:?}", rest),
                 };
 
@@ -972,10 +984,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     source_ptr.offset(layout.fields.get(name.as_ref()).unwrap().position as isize)
                 };
 
+                let target_type = self.current_context().get_field_type(field);
+
                 if let StackValue::UnmanagedPtr(_) | StackValue::NativeInt(_) = parent {
                     push!(StackValue::unmanaged_ptr(ptr))
                 } else {
-                    push!(StackValue::managed_ptr(ptr))
+                    push!(StackValue::managed_ptr(ptr, target_type))
                 }
             }
             LoadFieldSkipNullCheck(_) => todo!("no.nullcheck ldfld"),
@@ -1039,9 +1053,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     return StepResult::InstructionStepped;
                 }
 
+                let field_type = self.current_context().get_field_type(field);
                 let value = statics!(|s| {
                     let field_data = s.get(field.parent).get_field(name);
-                    StackValue::managed_ptr(field_data.as_ptr() as *mut _)
+                    StackValue::managed_ptr(field_data.as_ptr() as *mut _, field_type)
                 });
 
                 push!(value)
@@ -1140,7 +1155,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::ValueType(_) => todo!("stfld for value type"),
                     StackValue::NativeInt(i) => write_data(slice_from_pointer(i as *mut u8)),
                     StackValue::UnmanagedPtr(UnmanagedPtr(ptr))
-                    | StackValue::ManagedPtr(ManagedPtr(ptr)) => {
+                    | StackValue::ManagedPtr(ManagedPtr { value: ptr, .. }) => {
                         write_data(slice_from_pointer(ptr))
                     }
                     rest => panic!("stack value {:?} has no fields", rest),

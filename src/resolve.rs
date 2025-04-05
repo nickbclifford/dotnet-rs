@@ -142,26 +142,25 @@ impl Assemblies {
 
                 self.locate_type(ty.resolution(), parent)
             }
-            BaseType::Boolean => todo!("System.Boolean"),
-            BaseType::Char => todo!("System.Char"),
-            BaseType::Int8 => todo!("System.Byte"),
-            BaseType::UInt8 => todo!("System.SByte"),
-            BaseType::Int16 => todo!("System.Int16"),
-            BaseType::UInt16 => todo!("System.UInt16"),
-            BaseType::Int32 => todo!("System.Int32"),
-            BaseType::UInt32 => todo!("System.UInt32"),
-            BaseType::Int64 => todo!("System.Int64"),
-            BaseType::UInt64 => todo!("System.UInt64"),
-            BaseType::Float32 => todo!("System.Single"),
-            BaseType::Float64 => todo!("System.Double"),
-            BaseType::IntPtr => todo!("System.IntPtr"),
-            BaseType::UIntPtr => todo!("System.UIntPtr"),
-            BaseType::Object => todo!("System.Object"),
-            BaseType::String => todo!("System.String"),
-            BaseType::Vector(_, _) | BaseType::Array(_, _) => todo!("System.Array"),
-            BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
-                todo!("pointer types have no .NET names")
+            BaseType::Boolean => self.corlib_type("System.Boolean"),
+            BaseType::Char => self.corlib_type("System.Char"),
+            BaseType::Int8 => self.corlib_type("System.Byte"),
+            BaseType::UInt8 => self.corlib_type("System.SByte"),
+            BaseType::Int16 => self.corlib_type("System.Int16"),
+            BaseType::UInt16 => self.corlib_type("System.UInt16"),
+            BaseType::Int32 => self.corlib_type("System.Int32"),
+            BaseType::UInt32 => self.corlib_type("System.UInt32"),
+            BaseType::Int64 => self.corlib_type("System.Int64"),
+            BaseType::UInt64 => self.corlib_type("System.UInt64"),
+            BaseType::Float32 => self.corlib_type("System.Single"),
+            BaseType::Float64 => self.corlib_type("System.Double"),
+            BaseType::IntPtr | BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
+                self.corlib_type("System.IntPtr")
             }
+            BaseType::UIntPtr => self.corlib_type("System.UIntPtr"),
+            BaseType::Object => self.corlib_type("System.Object"),
+            BaseType::String => self.corlib_type("System.String"),
+            BaseType::Vector(_, _) | BaseType::Array(_, _) => self.corlib_type("System.Array"),
         }
     }
 

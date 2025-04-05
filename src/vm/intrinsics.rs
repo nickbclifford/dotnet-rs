@@ -1,5 +1,5 @@
 use crate::value::{
-    ConcreteType, FieldDescription, GenericLookup, ManagedPtr, MethodDescription, Object,
+    ConcreteType, FieldDescription, GenericLookup, MethodDescription, Object,
     ObjectRef, StackValue,
 };
 use dotnetdll::prelude::{BaseType, TypeSource};
@@ -8,7 +8,7 @@ use super::{CallStack, GCHandle, MethodInfo};
 
 fn ref_as_ptr(v: StackValue) -> *mut u8 {
     match v {
-        StackValue::ManagedPtr(ManagedPtr(p)) => p,
+        StackValue::ManagedPtr(m) => m.value,
         err => todo!(
             "invalid type on stack ({:?}), expected managed pointer for ref parameter",
             err

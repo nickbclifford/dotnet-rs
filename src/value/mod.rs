@@ -79,13 +79,12 @@ impl<'a> Context<'a> {
     }
 
     pub fn make_concrete<T: Clone + Into<MethodType>>(&self, t: &T) -> ConcreteType {
-        // let x = t.show(self.resolution);?
-        // println!("about to make {} concrete with {:?}", &x, self.generics);
-        // if x == "T0" {
-        //     println!("test");
-        // }
-
         self.generics.make_concrete(self.resolution, t.clone())
+    }
+
+    pub fn get_field_type(&self, field: FieldDescription) -> TypeDescription {
+        self.assemblies
+            .find_concrete_type(self.make_concrete(&field.field.return_type))
     }
 }
 
@@ -105,8 +104,11 @@ impl StackValue<'_> {
     pub fn unmanaged_ptr(ptr: *mut u8) -> Self {
         Self::UnmanagedPtr(UnmanagedPtr(ptr))
     }
-    pub fn managed_ptr(ptr: *mut u8) -> Self {
-        Self::ManagedPtr(ManagedPtr(ptr))
+    pub fn managed_ptr(ptr: *mut u8, target_type: TypeDescription) -> Self {
+        Self::ManagedPtr(ManagedPtr {
+            value: ptr,
+            inner_type: target_type,
+        })
     }
     pub fn null() -> Self {
         Self::ObjectRef(ObjectRef(None))
@@ -125,9 +127,24 @@ impl StackValue<'_> {
             // important note: here we're returning a pointer to where these pointers are stored
             // NOT the pointers themselves, hence all the casting
             Self::ObjectRef(ObjectRef(o)) => (o as *const Option<_>) as *const u8,
-            Self::UnmanagedPtr(UnmanagedPtr(u)) => (u as *const *mut _) as *const u8,
-            Self::ManagedPtr(ManagedPtr(m)) => (m as *const *mut _) as *const u8,
+            Self::UnmanagedPtr(UnmanagedPtr(u)) => (u as *const *mut u8) as *const u8,
+            Self::ManagedPtr(m) => (m.value as *const *mut u8) as *const u8,
             Self::ValueType(o) => o.instance_storage.get().as_ptr(),
+        }
+    }
+
+    pub fn contains_type(&self, ctx: Context) -> TypeDescription {
+        match self {
+            Self::Int32(_) => ctx.assemblies.corlib_type("System.Int32"),
+            Self::Int64(_) => ctx.assemblies.corlib_type("System.Int64"),
+            Self::NativeInt(_) | Self::UnmanagedPtr(_) => {
+                ctx.assemblies.corlib_type("System.IntPtr")
+            }
+            Self::NativeFloat(_) => ctx.assemblies.corlib_type("System.Double"),
+            Self::ObjectRef(ObjectRef(Some(o))) => ctx.get_heap_description(*o),
+            Self::ObjectRef(ObjectRef(None)) => ctx.assemblies.corlib_type("System.Object"),
+            Self::ManagedPtr(m) => m.inner_type,
+            Self::ValueType(o) => o.description,
         }
     }
 }
@@ -154,11 +171,31 @@ impl PartialOrd for StackValue<'_> {
 
 // TODO: proper representations
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
-#[repr(transparent)]
 pub struct UnmanagedPtr(pub *mut u8);
-#[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
-#[repr(transparent)]
-pub struct ManagedPtr(pub *mut u8);
+#[derive(Copy, Clone, Debug)]
+pub struct ManagedPtr {
+    pub value: *mut u8,
+    pub inner_type: TypeDescription,
+}
+impl PartialEq for ManagedPtr {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+impl PartialOrd for ManagedPtr {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.value.partial_cmp(&other.value)
+    }
+}
+impl ManagedPtr {
+    pub fn map_value(self, transform: impl FnOnce(*mut u8) -> *mut u8) -> Self {
+        ManagedPtr {
+            value: transform(self.value),
+            inner_type: self.inner_type,
+        }
+    }
+}
+
 unsafe_empty_collect!(UnmanagedPtr);
 unsafe_empty_collect!(ManagedPtr);
 
