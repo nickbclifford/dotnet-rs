@@ -9,6 +9,8 @@ use crate::value::{
     StackValue, TypeDescription, UnmanagedPtr, ValueType,
 };
 
+const INTRINSIC_ATTR: &'static str = "System.Runtime.CompilerServices.IntrinsicAttribute";
+
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     fn find_generic_method(&self, source: &MethodSource) -> (MethodDescription, GenericLookup) {
         let ctx = self.current_context();
@@ -66,11 +68,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             statics.init(description, self.current_context())
         };
         if let Some(m) = value {
-            let ip = self.current_frame_mut().state.ip;
             super::msg!(
                 self,
                 "-- static member accessed, calling static constructor (will return to ip {}) --",
-                ip
+                self.current_frame().state.ip
             );
 
             self.call_frame(
@@ -490,14 +491,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 }
 
                 for a in &method.method.attributes {
-                    // TODO: do I really need a full lookup to get the type name?
-                    let ctor =
-                        self.assemblies
-                            .locate_method(method.resolution(), a.constructor, &lookup);
-                    // it's super cursed but this is basically hardcoded into coreclr
-                    if ctor.parent.1.type_name()
-                        == "System.Runtime.CompilerServices.IntrinsicAttribute"
-                    {
+                    let ctor = self.assemblies.locate_attribute(method.resolution(), a);
+                    if ctor.parent.1.type_name() == INTRINSIC_ATTR {
                         intrinsic!();
                     }
                 }
@@ -742,7 +737,43 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let val = pop!();
                 self.set_argument(gc, *i as usize, val);
             }
-            StoreIndirect { .. } => todo!("stind"),
+            StoreIndirect {
+                param0: store_type, ..
+            } => {
+                let val = pop!();
+                let ptr = match pop!() {
+                    StackValue::NativeInt(i) => i as *mut u8,
+                    StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p,
+                    StackValue::ManagedPtr(m) => m.value,
+                    v => todo!(
+                        "invalid type on stack ({:?}) for stind operation, expected pointer",
+                        v
+                    ),
+                };
+
+                macro_rules! store_from_i32 {
+                    ($t:ty) => {{
+                        let StackValue::Int32(v) = val else {
+                            todo!("invalid type on stack")
+                        };
+                        let p = ptr as *mut $t;
+                        unsafe {
+                            *p = v as $t;
+                        }
+                    }};
+                }
+
+                match store_type {
+                    StoreType::Int8 => store_from_i32!(i8),
+                    StoreType::Int16 => store_from_i32!(i16),
+                    StoreType::Int32 => store_from_i32!(i32),
+                    StoreType::Int64 => todo!("stind.i8"),
+                    StoreType::Float32 => todo!("stind.r4"),
+                    StoreType::Float64 => todo!("stind.r8"),
+                    StoreType::IntPtr => todo!("stind.i"),
+                    StoreType::Object => todo!("stind.ref"),
+                }
+            }
             StoreLocal(i) => {
                 let val = pop!();
                 self.set_local(gc, *i as usize, val);
@@ -788,6 +819,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 }
                 args.reverse();
 
+                println!("{:?}", args);
+
                 // value types are passed as managed pointers (I.8.9.7)
                 let this_value = args[0].clone();
                 let this_type = match this_value {
@@ -796,7 +829,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         self.current_context().get_heap_description(o)
                     },
                     StackValue::ManagedPtr(m) => m.inner_type,
-                    rest => panic!("invalid this argument for virtual call (expected object ref, received {:?})", rest)
+                    rest => panic!("invalid this argument for virtual call (expected ObjectRef or ManagedPtr, received {:?})", rest)
                 };
 
                 // TODO: check explicit overrides
@@ -853,6 +886,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 volatile, // TODO
                 ..
             } => {
+                self.dump_stack();
+
                 let field = self.current_context().locate_field(*source);
                 let name = &field.field.name;
                 let parent = pop!();
@@ -890,17 +925,15 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 }
                 // apparently i have to worry about intrinsic fields too? jesus
                 for a in &field.field.attributes {
-                    // TODO: do I really need a full lookup to get the type name?
-                    let ctor = self.assemblies.locate_method(
-                        field.parent.0,
-                        a.constructor,
-                        &GenericLookup::default(),
-                    );
-                    // it's super cursed but this is basically hardcoded into coreclr
-                    if ctor.parent.1.type_name()
-                        == "System.Runtime.CompilerServices.IntrinsicAttribute"
-                    {
-                        todo!("intrinsic fields???")
+                    let ctor = self.assemblies.locate_attribute(field.parent.0, a);
+                    if ctor.parent.1.type_name() == INTRINSIC_ATTR {
+                        intrinsic_field(
+                            gc,
+                            self,
+                            field,
+                            self.current_context().generics.type_generics.clone(),
+                        );
+                        return StepResult::InstructionStepped;
                     }
                 }
 
@@ -1014,18 +1047,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         c
                     );
                 }
-                // apparently i have to worry about intrinsic fields too? jesus
                 for a in &field.field.attributes {
-                    // TODO: do I really need a full lookup to get the type name?
-                    let ctor = self.assemblies.locate_method(
-                        field.parent.0,
-                        a.constructor,
-                        &GenericLookup::default(),
-                    );
-                    // it's super cursed but this is basically hardcoded into coreclr
-                    if ctor.parent.1.type_name()
-                        == "System.Runtime.CompilerServices.IntrinsicAttribute"
-                    {
+                    let ctor = self.assemblies.locate_attribute(field.parent.0, a);
+                    if ctor.parent.1.type_name() == INTRINSIC_ATTR {
                         intrinsic_field(
                             gc,
                             self,

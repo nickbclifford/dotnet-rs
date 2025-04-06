@@ -1,8 +1,8 @@
 use crate::value::{
-    ConcreteType, FieldDescription, GenericLookup, MethodDescription, Object,
-    ObjectRef, StackValue,
+    ConcreteType, FieldDescription, GenericLookup, MethodDescription, Object, ObjectRef, StackValue,
 };
 use dotnetdll::prelude::{BaseType, TypeSource};
+use std::sync::atomic::{AtomicI32, Ordering};
 
 use super::{CallStack, GCHandle, MethodInfo};
 
@@ -88,6 +88,25 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         "static void System.GC::_SuppressFinalize(object)" => {
             // TODO(gc): this object's finalizer should not be called
             let _obj = stack.pop_stack();
+        }
+        "static int System.Threading.Interlocked::CompareExchange(ref int, int, int)" => {
+            let StackValue::Int32(comparand) = stack.pop_stack() else {
+                todo!("invalid type on stack")
+            };
+            let StackValue::Int32(value) = stack.pop_stack() else {
+                todo!("invalid type on stack")
+            };
+            let target = ref_as_ptr(stack.pop_stack()) as *mut i32;
+
+            let atomic_view = unsafe { AtomicI32::from_ptr(target) };
+            let Ok(prev) = atomic_view.compare_exchange(
+                comparand,
+                value,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) else { panic!("atomic exchange failed??") };
+
+            stack.push_stack(gc, StackValue::Int32(prev));
         }
         "static void System.Threading.Monitor::Exit(object)" => {
             // TODO(threading): release mutex

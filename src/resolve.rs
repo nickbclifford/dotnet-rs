@@ -223,6 +223,18 @@ impl Assemblies {
         }
     }
 
+    pub fn locate_attribute(
+        &self,
+        resolution: ResolutionS,
+        attribute: &Attribute,
+    ) -> MethodDescription {
+        self.locate_method(
+            resolution,
+            attribute.constructor,
+            &GenericLookup::default(),
+        )
+    }
+
     pub fn locate_field(
         &self,
         resolution: ResolutionS,

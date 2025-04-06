@@ -1,5 +1,6 @@
 use gc_arena::{Collect, Collection};
 use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Range;
 
@@ -8,11 +9,17 @@ use crate::value::{
     read_gc_ptr, Context, MethodDescription, ObjectRef, TypeDescription,
 };
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct FieldStorage<'gc> {
     layout: FieldLayoutManager,
     storage: Vec<u8>,
     _contains_gc: PhantomData<&'gc ()>,
+}
+
+impl Debug for FieldStorage<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.storage)
+    }
 }
 
 unsafe impl Collect for FieldStorage<'_> {

@@ -86,6 +86,8 @@ impl<'a> Context<'a> {
         self.assemblies
             .find_concrete_type(self.make_concrete(&field.field.return_type))
     }
+
+
 }
 
 #[derive(Clone, Debug, Collect, PartialEq)]
@@ -119,16 +121,15 @@ impl StackValue<'_> {
             (r as *const T) as *const u8
         }
 
+        // remember that self is a reference here!
         match self {
             Self::Int32(i) => ref_to_ptr(i),
             Self::Int64(i) => ref_to_ptr(i),
             Self::NativeInt(i) => ref_to_ptr(i),
             Self::NativeFloat(f) => ref_to_ptr(f),
-            // important note: here we're returning a pointer to where these pointers are stored
-            // NOT the pointers themselves, hence all the casting
-            Self::ObjectRef(ObjectRef(o)) => (o as *const Option<_>) as *const u8,
-            Self::UnmanagedPtr(UnmanagedPtr(u)) => (u as *const *mut u8) as *const u8,
-            Self::ManagedPtr(m) => (m.value as *const *mut u8) as *const u8,
+            Self::ObjectRef(ObjectRef(o)) => ref_to_ptr(o),
+            Self::UnmanagedPtr(UnmanagedPtr(u)) => ref_to_ptr(u),
+            Self::ManagedPtr(m) => ref_to_ptr(&m.value),
             Self::ValueType(o) => o.instance_storage.get().as_ptr(),
         }
     }
