@@ -69,7 +69,7 @@ impl<'a> Context<'a> {
         self.get_ancestors(value).any(|(a, _)| a == ancestor)
     }
 
-    pub fn get_heap_description(&self, object: ObjectPtr) -> TypeDescription {
+    pub fn get_heap_description(&self, object: ObjectHandle) -> TypeDescription {
         match &*object.as_ref().borrow() {
             HeapStorage::Obj(o) => o.description,
             HeapStorage::Vec(_) => self.assemblies.corlib_type("System.Array"),
@@ -86,8 +86,6 @@ impl<'a> Context<'a> {
         self.assemblies
             .find_concrete_type(self.make_concrete(&field.field.return_type))
     }
-
-
 }
 
 #[derive(Clone, Debug, Collect, PartialEq)]
@@ -170,13 +168,17 @@ impl PartialOrd for StackValue<'_> {
     }
 }
 
-// TODO: proper representations
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 pub struct UnmanagedPtr(pub *mut u8);
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone)]
 pub struct ManagedPtr {
     pub value: *mut u8,
     pub inner_type: TypeDescription,
+}
+impl Debug for ManagedPtr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}] {:#?}", self.inner_type.1.type_name(), self.value)
+    }
 }
 impl PartialEq for ManagedPtr {
     fn eq(&self, other: &Self) -> bool {
@@ -200,17 +202,19 @@ impl ManagedPtr {
 unsafe_empty_collect!(UnmanagedPtr);
 unsafe_empty_collect!(ManagedPtr);
 
-pub type ObjectPtr<'gc> = Gc<'gc, RefLock<HeapStorage<'gc>>>;
+type ObjectInner<'gc> = RefLock<HeapStorage<'gc>>;
+pub type ObjectPtr = *const ObjectInner<'static>;
+pub type ObjectHandle<'gc> = Gc<'gc, ObjectInner<'gc>>;
 
 #[derive(Copy, Clone, Collect)]
 #[collect(no_drop)]
 #[repr(transparent)]
-pub struct ObjectRef<'gc>(pub Option<ObjectPtr<'gc>>);
+pub struct ObjectRef<'gc>(pub Option<ObjectHandle<'gc>>);
 
 //noinspection RsAssertEqual
 // we assume this type is pointer-sized basically everywhere
 // dependency-wise everything guarantees it; this is just a sanity check for the implementation
-const _: () = assert!(size_of::<ObjectRef>() == size_of::<usize>());
+const _: () = assert!(ObjectRef::SIZE == size_of::<usize>());
 
 impl PartialEq for ObjectRef<'_> {
     fn eq(&self, other: &Self) -> bool {
@@ -222,8 +226,33 @@ impl PartialEq for ObjectRef<'_> {
     }
 }
 impl<'gc> ObjectRef<'gc> {
+    const SIZE: usize = size_of::<ObjectRef>();
+
     pub fn new(gc: GCHandle<'gc>, value: HeapStorage<'gc>) -> Self {
         Self(Some(Gc::new(gc, RefLock::new(value))))
+    }
+
+    pub fn read(source: &[u8]) -> Self {
+        let mut ptr_bytes = [0u8; Self::SIZE];
+        ptr_bytes.copy_from_slice(&source[0..Self::SIZE]);
+        let ptr = usize::from_ne_bytes(ptr_bytes) as *const ObjectInner<'gc>;
+
+        if ptr.is_null() {
+            ObjectRef(None)
+        } else {
+            // SAFETY: since this came from Gc::as_ptr, we know it's valid
+            // also, this will only ever be called inside the context of a GC mutation, so it's okay for 'gc to be unbounded
+            ObjectRef(Some(unsafe { Gc::from_ptr(ptr) }))
+        }
+    }
+
+    pub fn write(&self, dest: &mut [u8]) {
+        let ptr: *const RefLock<_> = match self.0 {
+            None => std::ptr::null(),
+            Some(s) => Gc::as_ptr(s),
+        };
+        let ptr_bytes = (ptr as usize).to_ne_bytes();
+        dest.copy_from_slice(&ptr_bytes);
     }
 }
 impl Debug for ObjectRef<'_> {
@@ -231,8 +260,14 @@ impl Debug for ObjectRef<'_> {
         match self.0 {
             None => f.write_str("NULL"),
             Some(gc) => {
-                let data = gc.borrow();
-                write!(f, "heap {:?}", data)
+                let handle = gc.borrow();
+                let desc = match &*handle {
+                    HeapStorage::Obj(o) => o.description.1.type_name(),
+                    HeapStorage::Vec(v) => format!("vector of {:?}", v.element),
+                    HeapStorage::Str(s) => format!("{:?}", s),
+                    HeapStorage::Boxed(v) => format!("boxed {:?}", v),
+                };
+                write!(f, "[{}] {:#?}", desc, gc.as_ptr())
             }
         }
     }
@@ -451,7 +486,7 @@ impl<'gc> CTSValue<'gc> {
             | BaseType::Array(_, _)
             | BaseType::String
             | BaseType::Object
-            | BaseType::Vector(_, _) => Self::Ref(read_gc_ptr(data)),
+            | BaseType::Vector(_, _) => Self::Ref(ObjectRef::read(data)),
             BaseType::Boolean => Self::Value(Bool(data[0] != 0)),
             BaseType::Char => Self::Value(Char(from_bytes!(u16, data))),
             BaseType::Int8 => Self::Value(Int8(data[0] as i8)),
@@ -516,32 +551,9 @@ impl<'gc> CTSValue<'gc> {
                 TypedRef => dest.copy_from_slice(todo!()),
                 Struct(o) => dest.copy_from_slice(o.instance_storage.get()),
             },
-            CTSValue::Ref(o) => write_gc_ptr(*o, dest),
+            CTSValue::Ref(o) => o.write(dest),
         }
     }
-}
-
-// explicit lifetimes needed to avoid elision assigning both the same lifetime
-pub fn read_gc_ptr<'data, 'gc>(source: &'data [u8]) -> ObjectRef<'gc> {
-    let mut ptr_bytes = [0u8; size_of::<ObjectRef>()];
-    ptr_bytes.copy_from_slice(&source[0..size_of::<ObjectRef>()]);
-    let ptr = usize::from_ne_bytes(ptr_bytes) as *const RefLock<_>;
-
-    if ptr.is_null() {
-        ObjectRef(None)
-    } else {
-        // SAFETY: since this came from Gc::as_ptr, we know it's valid
-        // also, this will only ever be called inside the context of a GC mutation, so it's okay for 'gc to be unbounded
-        ObjectRef(Some(unsafe { Gc::from_ptr(ptr) }))
-    }
-}
-pub fn write_gc_ptr(ObjectRef(source): ObjectRef<'_>, dest: &mut [u8]) {
-    let ptr: *const RefLock<_> = match source {
-        None => std::ptr::null(),
-        Some(s) => Gc::as_ptr(s),
-    };
-    let ptr_bytes = (ptr as usize).to_ne_bytes();
-    dest.copy_from_slice(&ptr_bytes);
 }
 
 #[derive(Clone, Debug)]
@@ -557,7 +569,8 @@ unsafe impl Collect for Vector<'_> {
         let element = &self.layout.element_layout;
         if element.is_gc_ptr() {
             for i in 0..self.layout.length {
-                if let ObjectRef(Some(gc)) = read_gc_ptr(&self.storage[(i * element.size())..]) {
+                if let ObjectRef(Some(gc)) = ObjectRef::read(&self.storage[(i * element.size())..])
+                {
                     gc.trace(cc);
                 }
             }
@@ -598,9 +611,8 @@ impl<'gc> Object<'gc> {
 }
 impl Debug for Object<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Object")
-            .field("description", &self.description)
-            .field("storage", &self.instance_storage.get())
+        f.debug_tuple(&self.description.1.type_name())
+            .field(&self.instance_storage)
             .finish()
     }
 }

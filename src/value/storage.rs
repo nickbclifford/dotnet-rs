@@ -5,9 +5,16 @@ use std::marker::PhantomData;
 use std::ops::Range;
 
 use crate::value::{
-    layout::{FieldLayoutManager, HasLayout},
-    read_gc_ptr, Context, MethodDescription, ObjectRef, TypeDescription,
+    layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
+    Context, MethodDescription, ObjectRef, TypeDescription,
 };
+
+struct DebugStr(String);
+impl Debug for DebugStr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 #[derive(Clone, PartialEq)]
 pub struct FieldStorage<'gc> {
@@ -18,7 +25,43 @@ pub struct FieldStorage<'gc> {
 
 impl Debug for FieldStorage<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.storage)
+        let mut fs: Vec<(_, _)> = self
+            .layout
+            .fields
+            .iter()
+            .map(|(k, v)| {
+                let t = match &v.layout {
+                    LayoutManager::FieldLayoutManager(_) => "struct",
+                    LayoutManager::ArrayLayoutManager(_) => "arr",
+                    LayoutManager::Scalar(s) => match s {
+                        Scalar::ObjectRef => "obj",
+                        Scalar::Int8 => "i8",
+                        Scalar::Int16 => "i16",
+                        Scalar::Int32 => "i32",
+                        Scalar::Int64 => "i64",
+                        Scalar::NativeInt => "isize",
+                        Scalar::Float32 => "f32",
+                        Scalar::Float64 => "f64",
+                    },
+                };
+
+                let data = &self.storage[v.as_range()];
+                let data_rep = if v.layout.is_gc_ptr() {
+                    format!("{:?}", ObjectRef::read(data))
+                } else {
+                    let bytes: Vec<_> = data.iter().map(|b| format!("{:02x}", b)).collect();
+                    bytes.join(" ")
+                };
+
+                (v.position, DebugStr(format!("{} {}: {}", t, k, data_rep)))
+            })
+            .collect();
+
+        fs.sort_by_key(|(p, _)| *p);
+
+        f.debug_list()
+            .entries(fs.into_iter().map(|(_, r)| r))
+            .finish()
     }
 }
 
@@ -27,7 +70,7 @@ unsafe impl Collect for FieldStorage<'_> {
     fn trace(&self, cc: &Collection) {
         for field in self.layout.fields.values() {
             if field.layout.is_gc_ptr() {
-                if let ObjectRef(Some(gc)) = read_gc_ptr(&self.storage[field.position..]) {
+                if let ObjectRef(Some(gc)) = ObjectRef::read(&self.storage[field.position..]) {
                     gc.trace(cc);
                 }
             }
@@ -73,18 +116,39 @@ impl FieldStorage<'_> {
     }
 }
 
-#[derive(Clone, Debug, Collect)]
+#[derive(Clone, Collect)]
 #[collect(no_drop)]
 pub struct StaticStorage<'gc> {
     initialized: bool,
     storage: FieldStorage<'gc>,
 }
+impl Debug for StaticStorage<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if self.initialized {
+            Debug::fmt(&self.storage, f)
+        } else {
+            write!(f, "uninitialized")
+        }
+    }
+}
 
-#[derive(Clone, Debug, Collect)]
+#[derive(Clone, Collect)]
 #[collect(no_drop)]
 pub struct StaticStorageManager<'gc> {
     types: HashMap<TypeDescription, StaticStorage<'gc>>,
 }
+impl Debug for StaticStorageManager<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_map()
+            .entries(
+                self.types
+                    .iter()
+                    .map(|(k, v)| (DebugStr(k.1.type_name()), v)),
+            )
+            .finish()
+    }
+}
+
 impl<'gc> StaticStorageManager<'gc> {
     pub fn new() -> Self {
         Self {
@@ -114,20 +178,17 @@ impl<'gc> StaticStorageManager<'gc> {
         description: TypeDescription,
         context: Context,
     ) -> Option<MethodDescription> {
-        if !self.types.contains_key(&description) {
-            self.types.insert(
-                description,
-                StaticStorage {
-                    initialized: false,
-                    storage: FieldStorage::static_fields(description, context),
-                },
-            );
-        }
+        self.types
+            .entry(description.clone())
+            .or_insert_with(|| StaticStorage {
+                initialized: false,
+                storage: FieldStorage::static_fields(description, context),
+            });
 
         match description.static_initializer() {
             None => None,
             Some(m) => {
-                let mut t = self
+                let t = self
                     .types
                     .get_mut(&description)
                     .expect("missing type in static storage");

@@ -1,17 +1,16 @@
-use std::{cell::RefCell, collections::HashMap};
-
 use dotnetdll::prelude::{LocalVariable, ReturnType, TypeSource};
 use gc_arena::{
     lock::RefLock, unsafe_empty_collect, Arena, Collect, Collection, DynamicRoot, DynamicRootSet,
     Gc, Mutation, Rootable,
 };
+use std::{cell::RefCell, collections::HashMap, fs::OpenOptions, io::Write};
 
 use crate::{
     resolve::Assemblies,
     utils::ResolutionS,
     value::{
-        storage::StaticStorageManager, Context, GenericLookup, HeapStorage, Object, ObjectRef,
-        StackValue,
+        storage::StaticStorageManager, Context, GenericLookup, HeapStorage, Object, ObjectPtr,
+        ObjectRef, StackValue,
     },
     vm::{MethodInfo, MethodState},
 };
@@ -28,6 +27,7 @@ pub struct CallStack<'gc, 'm> {
     pub(crate) frames: Vec<StackFrame<'m>>,
     pub(crate) assemblies: &'m Assemblies,
     pub(crate) statics: RefCell<StaticStorageManager<'gc>>,
+    _all_objs: Vec<usize>, // secretly ObjectHandles, not traced for GCing because these are for runtime debugging
 }
 // this is sound, I think?
 unsafe impl<'gc, 'm> Collect for CallStack<'gc, 'm> {
@@ -71,12 +71,6 @@ pub type GCArena = Arena<Rootable!['gc => CallStack<'gc, 'static>]>;
 
 pub type GCHandle<'gc> = &'gc Mutation<'gc>;
 
-macro_rules! msg {
-    ($src:expr, $($format:tt)+) => {
-        $src.msg!(format_args!($($format)+))
-    }
-}
-
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     pub fn new(gc: GCHandle<'gc>, assemblies: &'m Assemblies) -> Self {
         Self {
@@ -85,6 +79,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             frames: vec![],
             assemblies,
             statics: RefCell::new(StaticStorageManager::new()),
+            _all_objs: vec![],
         }
     }
 
@@ -154,6 +149,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             _ => {
                 let in_heap = ObjectRef::new(gc, HeapStorage::Obj(instance));
+                let ObjectRef(Some(ptr)) = &in_heap else {
+                    unreachable!()
+                };
+                self._all_objs.push(Gc::as_ptr(*ptr) as usize);
                 StackValue::ObjectRef(in_heap)
             }
         };
@@ -334,10 +333,28 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     pub fn msg(&self, fmt: std::fmt::Arguments) {
         println!("{}{}", "\t".repeat(self.frames.len() - 1), fmt);
     }
+}
 
-    // for debugging
-    #[allow(dead_code)]
+// this block is all for runtime debug methods
+#[allow(dead_code)]
+impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     pub fn dump_stack(&self) {
+        use std::fs::OpenOptions;
+        use std::io::Write;
+
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open("stack.txt")
+            .unwrap();
+
+        macro_rules! dumpln {
+            ($($fmt:tt)*) => {
+                writeln!(f, $($fmt)*).unwrap();
+            };
+        }
+
         let mut contents: Vec<_> = self.stack[..self.top_of_stack()]
             .iter()
             .map(|h| format!("{:?}", self.get_slot(h)))
@@ -348,37 +365,88 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let mut insert = |i, value| {
             positions.entry(i).or_insert(vec![]).push(value);
         };
-        for (i, frame) in self.frames.iter().enumerate() {
+        for (i, frame) in self.frames.iter().enumerate().rev() {
             let base = &frame.base;
             insert(base.stack, format!("stack base of frame #{}", i));
             insert(base.locals, format!("locals base of frame #{}", i));
             insert(base.arguments, format!("arguments base of frame #{}", i))
         }
 
-        let longest = contents.iter().map(|s| s.len()).max().unwrap();
-        println!("│ {} │", " ".repeat(longest));
+        let longest = match contents.iter().map(|s| s.len()).max() {
+            Some(longest) => {
+                dumpln!("│ {} │", " ".repeat(longest));
 
-        let last_idx = contents.len() - 1;
+                let last_idx = contents.len() - 1;
 
-        if let Some(bases) = positions.get(&(last_idx + 1)) {
-            for b in bases {
-                println!("│ {:width$} │", b, width = longest);
-            }
-            println!("├─{}─┤", "─".repeat(longest));
-        }
-
-        for (i, entry) in contents.into_iter().enumerate() {
-            println!("│ {:width$} │", entry, width = longest);
-            if let Some(bases) = positions.get(&(last_idx - i)) {
-                for b in bases {
-                    println!("│ {:width$} │", b, width = longest);
+                if let Some(bases) = positions.get(&(last_idx + 1)) {
+                    for b in bases {
+                        dumpln!("├─ {:width$} │", b, width = longest);
+                    }
+                    dumpln!("├─{}─┤", "─".repeat(longest));
                 }
+
+                for (i, entry) in contents.into_iter().enumerate() {
+                    dumpln!("│ {:width$} │", entry, width = longest);
+                    if let Some(bases) = positions.get(&(last_idx - i)) {
+                        for b in bases {
+                            dumpln!("├─ {:width$}│", b, width = longest);
+                        }
+                    }
+                    if i != last_idx {
+                        dumpln!("├─{}─┤", "─".repeat(longest));
+                    }
+                }
+
+                longest
             }
-            if i != last_idx {
-                println!("├─{}─┤", "─".repeat(longest));
+            None => 0,
+        };
+
+        dumpln!("└─{}─┘", "─".repeat(longest));
+
+        f.flush().unwrap();
+    }
+
+    pub fn dump_statics(&self) {
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open("statics.txt")
+            .unwrap();
+
+        let s = self.statics.borrow();
+        write!(f, "{:#?}", &s).unwrap();
+
+        f.flush().unwrap();
+    }
+
+    pub fn dump_heap(&self) {
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open("heap.txt")
+            .unwrap();
+
+        for obj in &self._all_objs {
+            let ptr = *obj as ObjectPtr;
+            let gc = unsafe { Gc::from_ptr(ptr) };
+            let handle = gc.borrow();
+            if let HeapStorage::Obj(o) = &*handle {
+                writeln!(f, "{:#?} => {:#?}", ptr, o)
+            } else {
+                writeln!(f, "{:#?} => TODO other heap objects", ptr)
             }
+            .unwrap();
         }
 
-        println!("└─{}─┘", "─".repeat(longest))
+        f.flush().unwrap();
+    }
+
+    pub fn debug_dump(&self) {
+        self.dump_stack();
+        self.dump_statics();
+        self.dump_heap();
     }
 }

@@ -22,6 +22,8 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: GenericLookup,
 ) {
+    super::msg!(stack, "-- method marked as runtime intrinsic --");
+
     // TODO: real signature checking
     match format!("{:?}", method).as_str() {
         "[Generic(1)] static M0 System.Activator::CreateInstance()" => {
@@ -104,7 +106,9 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 value,
                 Ordering::Relaxed,
                 Ordering::Relaxed,
-            ) else { panic!("atomic exchange failed??") };
+            ) else {
+                panic!("atomic exchange failed??")
+            };
 
             stack.push_stack(gc, StackValue::Int32(prev));
         }
