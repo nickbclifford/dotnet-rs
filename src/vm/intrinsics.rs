@@ -1,6 +1,4 @@
-use crate::value::{
-    ConcreteType, FieldDescription, GenericLookup, MethodDescription, Object, ObjectRef, StackValue,
-};
+use crate::value::{ConcreteType, Context, FieldDescription, GenericLookup, MethodDescription, Object, ObjectRef, StackValue};
 use dotnetdll::prelude::{BaseType, TypeSource};
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -49,7 +47,17 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 ),
             };
 
-            let instance = Object::new(td, stack.current_context());
+            let new_lookup = GenericLookup {
+                type_generics: type_generics.to_vec(),
+                method_generics: vec![],
+            };
+
+            let new_ctx = Context {
+                generics: &new_lookup,
+                ..stack.current_context()
+            };
+
+            let instance = Object::new(td, new_ctx);
 
             for m in &td.1.methods {
                 if m.runtime_special_name
@@ -63,16 +71,11 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                         td.1.type_name()
                     );
 
-                    // make sure to increment before we add a new frame
-                    stack.increment_ip();
                     stack.constructor_frame(
                         gc,
                         instance,
                         MethodInfo::new(td.0, m),
-                        GenericLookup {
-                            type_generics: type_generics.to_vec(),
-                            method_generics: vec![],
-                        },
+                        new_lookup,
                     );
                     return;
                 }

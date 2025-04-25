@@ -1,4 +1,4 @@
-use dotnetdll::prelude::{LocalVariable, ReturnType, TypeSource};
+use dotnetdll::prelude::{BaseType, LocalVariable, ReturnType, TypeSource};
 use gc_arena::{
     lock::RefLock, unsafe_empty_collect, Arena, Collect, Collection, DynamicRoot, DynamicRootSet,
     Gc, Mutation, Rootable,
@@ -9,8 +9,8 @@ use crate::{
     resolve::Assemblies,
     utils::ResolutionS,
     value::{
-        storage::StaticStorageManager, Context, GenericLookup, HeapStorage, Object, ObjectPtr,
-        ObjectRef, StackValue,
+        storage::StaticStorageManager, ConcreteType, Context, GenericLookup, HeapStorage,
+        Object as ObjectInstance, ObjectPtr, ObjectRef, StackValue,
     },
     vm::{MethodInfo, MethodState},
 };
@@ -61,6 +61,7 @@ impl<'m> StackFrame<'m> {
     }
 }
 
+#[derive(Debug)]
 pub struct BasePointer {
     arguments: usize,
     locals: usize,
@@ -90,9 +91,67 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     fn init_locals(&mut self, gc: GCHandle<'gc>, locals: &'m [LocalVariable]) {
-        for _ in locals {
-            // TODO: proper values
-            self.insert_value(gc, StackValue::null());
+        for l in locals {
+            use BaseType::*;
+            use LocalVariable::*;
+            match l {
+                TypedReference => todo!("initialize typedref local"),
+                Variable {
+                    by_ref, var_type, ..
+                } => {
+                    if *by_ref {
+                        todo!("initialize byref local")
+                    }
+                    let ctx = self.current_context();
+
+                    let v = match ctx.make_concrete(var_type).get() {
+                        Type { source, .. } => {
+                            let mut type_generics: &[ConcreteType] = &[];
+                            let ut = match source {
+                                TypeSource::User(u) => *u,
+                                TypeSource::Generic { base, parameters } => {
+                                    type_generics = parameters.as_slice();
+                                    *base
+                                }
+                            };
+                            let desc = ctx.locate_type(ut);
+
+                            match &desc.1.extends {
+                                Some(TypeSource::User(u)) => match u.type_name(desc.0).as_str() {
+                                    "System.Enum" => todo!("init enum local"),
+                                    "System.ValueType" => {
+                                        let new_lookup = GenericLookup {
+                                            type_generics: type_generics.to_vec(),
+                                            method_generics: vec![],
+                                        };
+                                        let new_ctx = Context {
+                                            generics: &new_lookup,
+                                            ..ctx
+                                        };
+                                        let instance = ObjectInstance::new(desc, new_ctx);
+                                        StackValue::ValueType(Box::new(instance))
+                                    }
+                                    _ => StackValue::null(),
+                                },
+                                _ => StackValue::null(),
+                            }
+                        }
+                        Boolean | Int8 | UInt8 | Char | Int16 | UInt16 | Int32 | UInt32 => {
+                            StackValue::Int32(0)
+                        }
+                        Int64 | UInt64 => StackValue::Int64(0),
+                        Float32 | Float64 => StackValue::NativeFloat(0.0),
+                        IntPtr | UIntPtr | ValuePointer(_, _) | FunctionPointer(_) => {
+                            StackValue::NativeInt(0)
+                        }
+                        Object | String | Vector(_, _) | Array(_, _) => StackValue::null(),
+                    };
+
+                    println!("{v:?}");
+
+                    self.push_stack(gc, v);
+                }
+            }
         }
     }
 
@@ -133,7 +192,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     pub fn constructor_frame(
         &mut self,
         gc: GCHandle<'gc>,
-        instance: Object<'gc>,
+        instance: ObjectInstance<'gc>,
         method: MethodInfo<'m>,
         generic_inst: GenericLookup,
     ) {
@@ -211,7 +270,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         };
         let locals_base = self.top_of_stack();
         self.init_locals(gc, method.locals);
-        let stack_base = self.top_of_stack() + method.locals.len();
+        let stack_base = locals_base + method.locals.len();
 
         self.current_frame_mut().stack_height -= num_args;
         self.frames.push(StackFrame::new(
@@ -273,28 +332,38 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         f.base.stack + f.stack_height
     }
 
-    pub fn get_argument(&self, index: usize) -> StackValue<'gc> {
+    fn get_arg_handle(&self, index: usize) -> &StackSlotHandle {
         let bp = &self.current_frame().base;
-        let arg_handle = &self.stack[bp.arguments + index];
-        self.get_slot(arg_handle)
+        &self.stack[bp.arguments + index]
     }
 
-    pub fn get_local(&self, index: usize) -> StackValue<'gc> {
-        let bp = &self.current_frame().base;
-        let local_handle = &self.stack[bp.locals + index];
-        self.get_slot(local_handle)
+    pub fn get_argument(&self, index: usize) -> StackValue<'gc> {
+        self.get_slot(self.get_arg_handle(index))
     }
 
     pub fn set_argument(&self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
+        self.set_slot(gc, self.get_arg_handle(index), value);
+    }
+
+    fn get_local_handle(&self, index: usize) -> &StackSlotHandle {
         let bp = &self.current_frame().base;
-        let arg_handle = &self.stack[bp.arguments + index];
-        self.set_slot(gc, arg_handle, value);
+        &self.stack[bp.locals + index]
+    }
+
+    pub fn get_local(&self, index: usize) -> StackValue<'gc> {
+        self.get_slot(self.get_local_handle(index))
+    }
+
+    pub fn get_local_address(&self, index: usize) -> *const u8 {
+        let local_handle = self.get_local_handle(index);
+        // get_slot would copy the value out of the stack slot
+        // here, we want a reference to the actual internal location of it
+        let slot_ref = self.roots.fetch(&local_handle.0).borrow();
+        slot_ref.data_location()
     }
 
     pub fn set_local(&self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
-        let bp = &self.current_frame().base;
-        let local_handle = &self.stack[bp.locals + index];
-        self.set_slot(gc, local_handle, value);
+        self.set_slot(gc, self.get_local_handle(index), value);
     }
 
     pub fn push_stack(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {
@@ -368,7 +437,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         for (i, frame) in self.frames.iter().enumerate().rev() {
             let base = &frame.base;
             insert(base.stack, format!("stack base of frame #{}", i));
-            insert(base.locals, format!("locals base of frame #{}", i));
+            if base.locals != base.stack {
+                insert(base.locals, format!("locals base of frame #{}", i));
+            }
             insert(base.arguments, format!("arguments base of frame #{}", i))
         }
 
@@ -429,8 +500,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             .open("heap.txt")
             .unwrap();
 
-        for obj in &self._all_objs {
-            let ptr = *obj as ObjectPtr;
+        for &obj in &self._all_objs {
+            let ptr = obj as ObjectPtr;
             let gc = unsafe { Gc::from_ptr(ptr) };
             let handle = gc.borrow();
             if let HeapStorage::Obj(o) = &*handle {

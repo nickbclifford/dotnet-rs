@@ -15,7 +15,7 @@ use storage::FieldStorage;
 use crate::{
     resolve::{Ancestor, Assemblies},
     utils::ResolutionS,
-    value::string::CLRString,
+    value::{storage::DebugStr, string::CLRString},
     vm::GCHandle,
 };
 
@@ -118,8 +118,7 @@ impl StackValue<'_> {
         fn ref_to_ptr<T>(r: &T) -> *const u8 {
             (r as *const T) as *const u8
         }
-
-        // remember that self is a reference here!
+        
         match self {
             Self::Int32(i) => ref_to_ptr(i),
             Self::Int64(i) => ref_to_ptr(i),
@@ -267,7 +266,7 @@ impl Debug for ObjectRef<'_> {
                     HeapStorage::Str(s) => format!("{:?}", s),
                     HeapStorage::Boxed(v) => format!("boxed {:?}", v),
                 };
-                write!(f, "[{}] {:#?}", desc, gc.as_ptr())
+                write!(f, "[{}] {:#?}", desc, Gc::as_ptr(gc))
             }
         }
     }
@@ -364,6 +363,7 @@ macro_rules! from_bytes {
     };
 }
 
+#[derive(Debug)]
 pub enum CTSValue<'gc> {
     Value(ValueType<'gc>),
     Ref(ObjectRef<'gc>),
@@ -613,6 +613,10 @@ impl Debug for Object<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple(&self.description.1.type_name())
             .field(&self.instance_storage)
+            .field(&DebugStr(format!(
+                "stored at {:#?}",
+                self.instance_storage.get().as_ptr()
+            )))
             .finish()
     }
 }

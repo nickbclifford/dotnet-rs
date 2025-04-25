@@ -506,7 +506,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 tail_call, // TODO
                 param0: source,
             } => {
-                self.debug_dump();
                 let (method, lookup) = self.find_generic_method(source);
                 macro_rules! intrinsic {
                     () => {
@@ -707,7 +706,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let local = self.get_local(*i as usize);
                 let live_type = local.contains_type(self.current_context());
                 push!(managed_ptr(
-                    local.data_location() as *mut _,
+                    self.get_local_address(*i as usize) as *mut _,
                     live_type
                 ));
             }
@@ -735,14 +734,20 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 StackValue::Int32(i) => push!(Int32(-i)),
                 StackValue::Int64(i) => push!(Int64(-i)),
                 StackValue::NativeInt(i) => push!(NativeInt(-i)),
-                v => todo!("invalid type on stack ({:?}) for logical NOT, expected integer", v),
+                v => todo!(
+                    "invalid type on stack ({:?}) for logical NOT, expected integer",
+                    v
+                ),
             },
             NoOperation => {} // :3
             Not => match pop!() {
                 StackValue::Int32(i) => push!(Int32(!i)),
                 StackValue::Int64(i) => push!(Int64(!i)),
                 StackValue::NativeInt(i) => push!(NativeInt(!i)),
-                v => todo!("invalid type on stack ({:?}) for bitwise NOT, expected integer", v),
+                v => todo!(
+                    "invalid type on stack ({:?}) for bitwise NOT, expected integer",
+                    v
+                ),
             },
             Or => binary_int_op!(|),
             Pop => {
@@ -1152,13 +1157,15 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             HeapStorage::Boxed(_) => todo!("field on boxed value type"),
                         }
                     }
-                    StackValue::ValueType(_) => todo!("stfld for value type"),
                     StackValue::NativeInt(i) => write_data(slice_from_pointer(i as *mut u8)),
                     StackValue::UnmanagedPtr(UnmanagedPtr(ptr))
                     | StackValue::ManagedPtr(ManagedPtr { value: ptr, .. }) => {
                         write_data(slice_from_pointer(ptr))
                     }
-                    rest => panic!("stack value {:?} has no fields", rest),
+                    rest => panic!(
+                        "invalid type on stack (expected object or pointer, received {:?})",
+                        rest
+                    ),
                 }
             }
             StoreFieldSkipNullCheck(_) => todo!("no.nullcheck stfld"),

@@ -9,7 +9,7 @@ use crate::value::{
     Context, MethodDescription, ObjectRef, TypeDescription,
 };
 
-struct DebugStr(String);
+pub struct DebugStr(pub String);
 impl Debug for DebugStr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
