@@ -518,18 +518,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     intrinsic!();
                 }
 
+                let res = method.resolution();
+
                 for a in &method.method.attributes {
-                    let ctor = self.assemblies.locate_attribute(method.resolution(), a);
+                    let ctor = self.assemblies.locate_attribute(res, a);
                     if ctor.parent.1.type_name() == INTRINSIC_ATTR {
                         intrinsic!();
                     }
                 }
 
-                self.call_frame(
-                    gc,
-                    MethodInfo::new(method.resolution(), method.method),
-                    lookup,
-                );
+                if method.method.pinvoke.is_some() {
+                    self.external_call(method, gc);
+                    return StepResult::InstructionStepped;
+                }
+
+                self.call_frame(gc, MethodInfo::new(res, method.method), lookup);
                 moved_ip = true;
             }
             CallConstrained(_, _) => todo!("constrained. call"),

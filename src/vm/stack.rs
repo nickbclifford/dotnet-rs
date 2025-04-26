@@ -12,7 +12,7 @@ use crate::{
         storage::StaticStorageManager, ConcreteType, Context, GenericLookup, HeapStorage,
         Object as ObjectInstance, ObjectPtr, ObjectRef, StackValue,
     },
-    vm::{MethodInfo, MethodState},
+    vm::{pinvoke::NativeLibraries, MethodInfo, MethodState},
 };
 
 type StackSlot = Rootable![Gc<'_, RefLock<StackValue<'_>>>];
@@ -27,6 +27,7 @@ pub struct CallStack<'gc, 'm> {
     pub(crate) frames: Vec<StackFrame<'m>>,
     pub(crate) assemblies: &'m Assemblies,
     pub(crate) statics: RefCell<StaticStorageManager<'gc>>,
+    pub(crate) pinvoke: NativeLibraries,
     _all_objs: Vec<usize>, // secretly ObjectHandles, not traced for GCing because these are for runtime debugging
 }
 // this is sound, I think?
@@ -79,6 +80,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             stack: vec![],
             frames: vec![],
             assemblies,
+            pinvoke: NativeLibraries::new(assemblies.get_root()),
             statics: RefCell::new(StaticStorageManager::new()),
             _all_objs: vec![],
         }

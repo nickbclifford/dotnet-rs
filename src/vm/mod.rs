@@ -10,6 +10,7 @@ mod executor;
 mod stack;
 mod instructions;
 mod intrinsics;
+mod pinvoke;
 
 macro_rules! msg {
     ($src:expr, $($format:tt)*) => {

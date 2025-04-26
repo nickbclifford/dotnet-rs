@@ -35,6 +35,10 @@ impl Assemblies {
             entrypoint,
         }
     }
+    
+    pub fn get_root(&self) -> &str {
+        &self.assembly_root
+    }
 
     pub fn get_assembly(&self, name: &str) -> ResolutionS {
         let res = {
@@ -65,7 +69,7 @@ impl Assemblies {
 
     fn find_exported_type(&self, resolution: ResolutionS, e: &ExportedType) -> TypeDescription {
         match e.implementation {
-            TypeImplementation::Nested(x) => todo!(),
+            TypeImplementation::Nested(_) => todo!(),
             TypeImplementation::ModuleFile { .. } => todo!(),
             TypeImplementation::TypeForwarder(a) => {
                 self.find_in_assembly(&resolution[a], &e.type_name())
@@ -317,7 +321,7 @@ impl Resolver<'static> for Assemblies {
 
     fn find_type(
         &self,
-        name: &str,
+        _name: &str,
     ) -> Result<(&TypeDefinition<'static>, &Resolution<'static>), Self::Error> {
         todo!()
     }
