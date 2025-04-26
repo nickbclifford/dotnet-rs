@@ -59,7 +59,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             let instance = Object::new(td, new_ctx.clone());
 
-            for m in &td.1.methods {
+            for m in &td.definition.methods {
                 if m.runtime_special_name
                     && m.name == ".ctor"
                     && m.signature.instance
@@ -68,13 +68,13 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     super::msg!(
                         stack,
                         "-- invoking parameterless constructor for {} --",
-                        td.1.type_name()
+                        td.type_name()
                     );
 
                     stack.constructor_frame(
                         gc,
                         instance,
-                        MethodInfo::new(td.0, m, new_ctx),
+                        MethodInfo::new(td.resolution, m, new_ctx),
                         new_lookup,
                     );
                     return;

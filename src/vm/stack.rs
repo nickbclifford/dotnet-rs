@@ -118,8 +118,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             };
                             let desc = ctx.locate_type(ut);
 
-                            match &desc.1.extends {
-                                Some(TypeSource::User(u)) => match u.type_name(desc.0).as_str() {
+                            match &desc.definition.extends {
+                                Some(TypeSource::User(u)) => match u.type_name(desc.resolution).as_str() {
                                     "System.Enum" => todo!("init enum local"),
                                     "System.ValueType" => {
                                         let new_lookup = GenericLookup {
@@ -199,10 +199,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         generic_inst: GenericLookup,
     ) {
         // newobj is typically not used for value types, but still works to put them on the stack (III.4.21)
-        let value = match &instance.description.1.extends {
+        let value = match &instance.description.definition.extends {
             Some(TypeSource::User(u))
                 if matches!(
-                    u.type_name(instance.description.0).as_str(),
+                    u.type_name(instance.description.resolution).as_str(),
                     "System.Enum" | "System.ValueType"
                 ) =>
             {

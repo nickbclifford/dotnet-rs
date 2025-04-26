@@ -173,7 +173,7 @@ impl FieldLayoutManager {
             total_fields.push((f.name.as_ref(), f.offset, layout));
         };
 
-        for (TypeDescription(res, a), generic_params) in ancestors {
+        for (TypeDescription { resolution: res, definition: a }, generic_params) in ancestors {
             let new_lookup = GenericLookup {
                 type_generics: generic_params
                     .into_iter()
@@ -196,7 +196,7 @@ impl FieldLayoutManager {
         }
 
         // now for the type's actually declared fields
-        for f in &td.1.fields {
+        for f in &td.definition.fields {
             if !predicate(f) {
                 continue;
             }
@@ -204,7 +204,7 @@ impl FieldLayoutManager {
             add_field_layout(f, &context);
         }
 
-        Self::new(total_fields, td.1.flags.layout)
+        Self::new(total_fields, td.definition.flags.layout)
     }
 
     pub fn instance_fields(td: TypeDescription, context: Context) -> Self {

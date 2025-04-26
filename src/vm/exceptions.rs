@@ -6,7 +6,10 @@ use std::{
 
 use dotnetdll::prelude::*;
 
-use crate::value::{storage::DebugStr, ConcreteType, Context};
+use crate::{
+    utils::DebugStr,
+    value::{ConcreteType, Context},
+};
 
 #[derive(Clone)]
 pub struct ProtectedSection {

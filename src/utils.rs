@@ -1,6 +1,9 @@
 use dotnetdll::prelude::*;
-use std::io::Read;
-use std::path::Path;
+use std::{
+    fmt::{Debug, Formatter},
+    io::Read,
+    path::Path,
+};
 
 pub type ResolutionS = &'static Resolution<'static>;
 
@@ -12,4 +15,12 @@ pub fn static_res_from_file(path: impl AsRef<Path>) -> ResolutionS {
     let resolution = Resolution::parse(Box::leak(buf.into_boxed_slice()), ReadOptions::default())
         .expect("failed to parse file as .NET metadata");
     Box::leak(Box::new(resolution))
+}
+
+pub struct DebugStr(pub String);
+
+impl Debug for DebugStr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
 }

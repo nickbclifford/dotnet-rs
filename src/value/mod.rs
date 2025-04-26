@@ -9,19 +9,19 @@ use std::{
 use dotnetdll::prelude::*;
 use gc_arena::{lock::RefLock, unsafe_empty_collect, Collect, Collection, Gc};
 
-use layout::*;
-use storage::FieldStorage;
-
 use crate::{
     resolve::{Ancestor, Assemblies},
-    utils::ResolutionS,
-    value::{storage::DebugStr, string::CLRString},
+    utils::{DebugStr, ResolutionS},
+    value::string::CLRString,
     vm::GCHandle,
 };
 
 pub mod layout;
 pub mod storage;
 pub mod string;
+
+use layout::*;
+use storage::FieldStorage;
 
 #[derive(Clone)]
 pub struct Context<'a> {
@@ -176,7 +176,7 @@ pub struct ManagedPtr {
 }
 impl Debug for ManagedPtr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}] {:#?}", self.inner_type.1.type_name(), self.value)
+        write!(f, "[{}] {:#?}", self.inner_type.type_name(), self.value)
     }
 }
 impl PartialEq for ManagedPtr {
@@ -261,7 +261,7 @@ impl Debug for ObjectRef<'_> {
             Some(gc) => {
                 let handle = gc.borrow();
                 let desc = match &*handle {
-                    HeapStorage::Obj(o) => o.description.1.type_name(),
+                    HeapStorage::Obj(o) => o.description.type_name(),
                     HeapStorage::Vec(v) => format!("vector of {:?}", v.element),
                     HeapStorage::Str(s) => format!("{:?}", s),
                     HeapStorage::Boxed(v) => format!("boxed {:?}", v),
@@ -378,7 +378,7 @@ impl<'gc> CTSValue<'gc> {
             } => Self::Value(match source {
                 TypeSource::User(u) => {
                     let t = context.locate_type(*u);
-                    match t.1.type_name().as_str() {
+                    match t.type_name().as_str() {
                         "System.Boolean" => Bool(todo!()),
                         "System.Char" => Char(todo!()),
                         "System.Single" => Float32(match data {
@@ -456,7 +456,7 @@ impl<'gc> CTSValue<'gc> {
             } => Self::Value(match source {
                 TypeSource::User(u) => {
                     let t = context.locate_type(*u);
-                    match t.1.type_name().as_str() {
+                    match t.type_name().as_str() {
                         "System.Boolean" => Bool(data[0] != 0),
                         "System.Char" => Char(from_bytes!(u16, data)),
                         "System.Single" => Float32(from_bytes!(f32, data)),
@@ -608,7 +608,7 @@ impl<'gc> Object<'gc> {
 }
 impl Debug for Object<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple(&self.description.1.type_name())
+        f.debug_tuple(&self.description.type_name())
             .field(&self.instance_storage)
             .field(&DebugStr(format!(
                 "stored at {:#?}",
@@ -619,28 +619,31 @@ impl Debug for Object<'_> {
 }
 
 #[derive(Clone, Copy)]
-pub struct TypeDescription(pub ResolutionS, pub &'static TypeDefinition<'static>);
+pub struct TypeDescription {
+    pub resolution: ResolutionS,
+    pub definition: &'static TypeDefinition<'static>,
+}
 impl Debug for TypeDescription {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.1.show(self.0))
+        write!(f, "{}", self.definition.show(self.resolution))
     }
 }
 unsafe_empty_collect!(TypeDescription);
 impl PartialEq for TypeDescription {
     fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.0, other.0) && std::ptr::eq(self.1, other.1)
+        std::ptr::eq(self.resolution, other.resolution) && std::ptr::eq(self.definition, other.definition)
     }
 }
 impl Eq for TypeDescription {}
 impl Hash for TypeDescription {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        (self.0 as *const Resolution).hash(state);
-        (self.1 as *const TypeDefinition).hash(state);
+        (self.resolution as *const Resolution).hash(state);
+        (self.definition as *const TypeDefinition).hash(state);
     }
 }
 impl TypeDescription {
     pub fn static_initializer(&self) -> Option<MethodDescription> {
-        self.1.methods.iter().find_map(|m| {
+        self.definition.methods.iter().find_map(|m| {
             if m.runtime_special_name
                 && m.name == ".cctor"
                 && !m.signature.instance
@@ -655,6 +658,10 @@ impl TypeDescription {
             }
         })
     }
+    
+    pub fn type_name(&self) -> String {
+        self.definition.type_name()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -664,7 +671,7 @@ pub struct MethodDescription {
 }
 impl MethodDescription {
     pub fn resolution(&self) -> ResolutionS {
-        self.parent.0
+        self.parent.resolution
     }
 }
 impl Debug for MethodDescription {
@@ -674,7 +681,7 @@ impl Debug for MethodDescription {
             "{}",
             self.method.signature.show_with_name(
                 self.resolution(),
-                format!("{}::{}", self.parent.1.type_name(), self.method.name)
+                format!("{}::{}", self.parent.type_name(), self.method.name)
             )
         )
     }
@@ -694,8 +701,8 @@ impl Debug for FieldDescription {
         write!(
             f,
             "{} {}::{}",
-            self.field.return_type.show(self.parent.0),
-            self.parent.1.type_name(),
+            self.field.return_type.show(self.parent.resolution),
+            self.parent.type_name(),
             self.field.name
         )?;
 

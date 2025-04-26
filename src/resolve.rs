@@ -92,7 +92,10 @@ impl Assemblies {
                 }
                 panic!("could not find type {} in assembly {}", name, assembly.name)
             }
-            Some(t) => TypeDescription(res, t),
+            Some(t) => TypeDescription {
+                resolution: res,
+                definition: t
+            },
         }
     }
 
@@ -103,7 +106,10 @@ impl Assemblies {
     // TODO: cache
     pub fn locate_type(&self, resolution: ResolutionS, handle: UserType) -> TypeDescription {
         match handle {
-            UserType::Definition(d) => TypeDescription(resolution, &resolution[d]),
+            UserType::Definition(d) => TypeDescription {
+                resolution: resolution,
+                definition: &resolution[d]
+            },
             UserType::Reference(r) => self.locate_type_ref(resolution, r),
         }
     }
@@ -118,12 +124,15 @@ impl Assemblies {
             Assembly(a) => self.find_in_assembly(&resolution[*a], &type_ref.type_name()),
             Exported => todo!(),
             Nested(o) => {
-                let TypeDescription(res, owner) = self.locate_type_ref(resolution, *o);
+                let TypeDescription { resolution: res, definition: owner } = self.locate_type_ref(resolution, *o);
 
                 for t in &res.type_definitions {
                     if let Some(enc) = t.encloser {
                         if t.type_name() == type_ref.type_name() && std::ptr::eq(&res[enc], owner) {
-                            return TypeDescription(res, t);
+                            return TypeDescription {
+                                resolution: res,
+                                definition: t
+                            };
                         }
                     }
                 }
@@ -170,7 +179,7 @@ impl Assemblies {
 
     pub fn find_method_in_type(
         &self,
-        desc @ TypeDescription(_, parent_type): TypeDescription,
+        desc @ TypeDescription { resolution: _, definition: parent_type }: TypeDescription,
         name: &str,
         signature: &ManagedMethod<MethodType>,
     ) -> Option<MethodDescription> {
@@ -195,7 +204,10 @@ impl Assemblies {
     ) -> MethodDescription {
         match handle {
             UserMethod::Definition(d) => MethodDescription {
-                parent: TypeDescription(resolution, &resolution[d.parent_type()]),
+                parent: TypeDescription {
+                    resolution: resolution,
+                    definition: &resolution[d.parent_type()]
+                },
                 method: &resolution[d],
             },
             UserMethod::Reference(r) => {
@@ -215,7 +227,7 @@ impl Assemblies {
                                 "could not find {}",
                                 method_ref
                                     .signature
-                                    .show_with_name(parent_type.0, &method_ref.name)
+                                    .show_with_name(parent_type.resolution, &method_ref.name)
                             ),
                             Some(method) => method,
                         }
@@ -247,7 +259,10 @@ impl Assemblies {
     ) -> FieldDescription {
         match field {
             FieldSource::Definition(d) => FieldDescription {
-                parent: TypeDescription(resolution, &resolution[d.parent_type()]),
+                parent: TypeDescription {
+                    resolution: resolution,
+                    definition: &resolution[d.parent_type()]
+                },
                 field: &resolution[d],
             },
             FieldSource::Reference(r) => {
@@ -259,7 +274,7 @@ impl Assemblies {
                         let parent_type = self
                             .find_concrete_type(generic_inst.make_concrete(resolution, t.clone()));
 
-                        for field in &parent_type.1.fields {
+                        for field in &parent_type.definition.fields {
                             if field.name == field_ref.name {
                                 return FieldDescription {
                                     parent: parent_type,
@@ -270,7 +285,7 @@ impl Assemblies {
 
                         panic!(
                             "could not find {}::{}",
-                            parent_type.1.type_name(),
+                            parent_type.type_name(),
                             field_ref.name
                         )
                     }
@@ -300,14 +315,14 @@ impl<'a> Iterator for AncestorsImpl<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         let child = self.child?;
 
-        self.child = match &child.1.extends {
+        self.child = match &child.definition.extends {
             None => None,
             Some(TypeSource::User(parent) | TypeSource::Generic { base: parent, .. }) => {
-                Some(self.assemblies.locate_type(child.0, *parent))
+                Some(self.assemblies.locate_type(child.resolution, *parent))
             }
         };
 
-        let generics = match &child.1.extends {
+        let generics = match &child.definition.extends {
             Some(TypeSource::Generic { parameters, .. }) => parameters.iter().collect(),
             _ => vec![],
         };

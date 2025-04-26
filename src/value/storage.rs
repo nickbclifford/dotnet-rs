@@ -1,20 +1,17 @@
-use gc_arena::{Collect, Collection};
-use std::collections::HashMap;
-use std::fmt::{Debug, Formatter};
-use std::marker::PhantomData;
-use std::ops::Range;
-
-use crate::value::{
-    layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
-    Context, MethodDescription, ObjectRef, TypeDescription,
+use crate::{
+    utils::DebugStr,
+    value::{
+        layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
+        Context, MethodDescription, ObjectRef, TypeDescription,
+    },
 };
-
-pub struct DebugStr(pub String);
-impl Debug for DebugStr {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
+use gc_arena::{Collect, Collection};
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Formatter},
+    marker::PhantomData,
+    ops::Range,
+};
 
 #[derive(Clone, PartialEq)]
 pub struct FieldStorage<'gc> {
@@ -141,7 +138,7 @@ impl Debug for StaticStorageManager<'_> {
             .entries(
                 self.types
                     .iter()
-                    .map(|(k, v)| (DebugStr(k.1.type_name()), v)),
+                    .map(|(k, v)| (DebugStr(k.type_name()), v)),
             )
             .finish()
     }

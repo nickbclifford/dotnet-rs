@@ -399,21 +399,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 if $field.field.literal {
                     todo!(
                         "field {}::{} has literal",
-                        $field.parent.1.type_name(),
+                        $field.parent.type_name(),
                         $field.field.name
                     );
                 }
                 if let Some(c) = &$field.field.default {
                     todo!(
                         "field {}::{} has constant {:?}",
-                        $field.parent.1.type_name(),
+                        $field.parent.type_name(),
                         $field.field.name,
                         c
                     );
                 }
                 for a in &$field.field.attributes {
-                    let ctor = self.assemblies.locate_attribute($field.parent.0, a);
-                    if ctor.parent.1.type_name() == INTRINSIC_ATTR {
+                    let ctor = self.assemblies.locate_attribute($field.parent.resolution, a);
+                    if ctor.parent.type_name() == INTRINSIC_ATTR {
                         intrinsic_field(
                             gc,
                             self,
@@ -446,7 +446,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         super::msg!(
             self,
-            "[#{} | ip @ {}] about to execute {}",
+            "[#{} | ip @ {}] {}",
             self.frames.len() - 1,
             ip,
             i.show(i_res)
@@ -519,7 +519,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 for a in &method.method.attributes {
                     let ctor = self.assemblies.locate_attribute(res, a);
-                    if ctor.parent.1.type_name() == INTRINSIC_ATTR {
+                    if ctor.parent.type_name() == INTRINSIC_ATTR {
                         intrinsic!();
                     }
                 }
@@ -891,7 +891,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     self.call_frame(
                         gc,
-                        MethodInfo::new(parent.0, method.method, self.current_context()),
+                        MethodInfo::new(parent.resolution, method.method, self.current_context()),
                         lookup,
                     );
                     moved_ip = true;
@@ -958,9 +958,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         if !self.current_context().is_a(object_type, field.parent) {
                             panic!(
                                 "tried to load field {}::{} from object of type {}",
-                                field.parent.1.type_name(),
+                                field.parent.type_name(),
                                 name,
-                                object_type.1.type_name()
+                                object_type.type_name()
                             )
                         }
 
@@ -976,9 +976,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         if !self.current_context().is_a(o.description, field.parent) {
                             panic!(
                                 "tried to load field {}::{} from object of type {}",
-                                field.parent.1.type_name(),
+                                field.parent.type_name(),
                                 name,
-                                o.description.1.type_name()
+                                o.description.type_name()
                             )
                         }
                         read_data(o.instance_storage.get_field(name))
@@ -1005,9 +1005,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         if !self.current_context().is_a(object_type, field.parent) {
                             panic!(
                                 "tried to load field {}::{} from object of type {}",
-                                field.parent.1.type_name(),
+                                field.parent.type_name(),
                                 name,
-                                object_type.1.type_name()
+                                object_type.type_name()
                             )
                         }
 
@@ -1106,7 +1106,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         self.constructor_frame(
                             gc,
                             instance,
-                            MethodInfo::new(parent.0, method.method, self.current_context()),
+                            MethodInfo::new(parent.resolution, method.method, self.current_context()),
                             lookup,
                         );
                         moved_ip = true;
@@ -1152,9 +1152,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         if !self.current_context().is_a(object_type, field.parent) {
                             panic!(
                                 "tried to store field {}::{} to object of type {}",
-                                field.parent.1.type_name(),
+                                field.parent.type_name(),
                                 name,
-                                object_type.1.type_name()
+                                object_type.type_name()
                             )
                         }
 
