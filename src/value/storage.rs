@@ -70,9 +70,7 @@ unsafe impl Collect for FieldStorage<'_> {
     fn trace(&self, cc: &Collection) {
         for field in self.layout.fields.values() {
             if field.layout.is_gc_ptr() {
-                if let ObjectRef(Some(gc)) = ObjectRef::read(&self.storage[field.position..]) {
-                    gc.trace(cc);
-                }
+                ObjectRef::read(&self.storage[field.position..]).trace(cc);
             }
         }
     }

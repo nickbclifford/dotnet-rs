@@ -1,7 +1,9 @@
+use std::process::ExitCode;
 use clap::Parser;
 use dotnetdll::prelude::*;
 
 use crate::utils::static_res_from_file;
+use crate::vm::ExecutorResult;
 
 mod resolve;
 mod utils;
@@ -17,7 +19,7 @@ struct Args {
     entrypoint: String,
 }
 
-fn main() {
+fn main() -> ExitCode {
     let args = Args::parse();
 
     let resolution = static_res_from_file(args.entrypoint);
@@ -36,5 +38,9 @@ fn main() {
 
     executor.entrypoint(&resolution[entry_method]);
 
-    println!("{:#?}", executor.run())
+    let result = executor.run();
+    match result {
+        ExecutorResult::Exited(i) => ExitCode::from(i), 
+        ExecutorResult::Threw => todo!()
+    }
 }

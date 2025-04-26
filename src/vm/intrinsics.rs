@@ -1,5 +1,5 @@
 use crate::value::{ConcreteType, Context, FieldDescription, GenericLookup, MethodDescription, Object, ObjectRef, StackValue};
-use dotnetdll::prelude::{BaseType, TypeSource};
+use dotnetdll::prelude::*;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use super::{CallStack, GCHandle, MethodInfo};
@@ -57,7 +57,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 ..stack.current_context()
             };
 
-            let instance = Object::new(td, new_ctx);
+            let instance = Object::new(td, new_ctx.clone());
 
             for m in &td.1.methods {
                 if m.runtime_special_name
@@ -74,7 +74,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     stack.constructor_frame(
                         gc,
                         instance,
-                        MethodInfo::new(td.0, m),
+                        MethodInfo::new(td.0, m, new_ctx),
                         new_lookup,
                     );
                     return;

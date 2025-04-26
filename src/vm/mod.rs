@@ -1,16 +1,17 @@
-use dotnetdll::prelude::body::DataSection;
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
 
-use crate::utils::ResolutionS;
-pub use executor::*;
-pub use stack::*;
+use crate::{utils::ResolutionS, value::Context};
 
+mod exceptions;
 mod executor;
-mod stack;
 mod instructions;
 mod intrinsics;
 mod pinvoke;
+mod stack;
+
+pub use executor::*;
+pub use stack::*;
 
 macro_rules! msg {
     ($src:expr, $($format:tt)*) => {
@@ -37,27 +38,28 @@ impl<'m> MethodState<'m> {
 }
 unsafe_empty_collect!(MethodState<'_>);
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct MethodInfo<'a> {
     signature: &'a ManagedMethod<MethodType>,
     locals: &'a [LocalVariable],
-    exceptions: &'a [body::Exception],
+    exceptions: Vec<exceptions::ProtectedSection>,
     pub instructions: &'a [Instruction],
     pub source_resolution: ResolutionS,
     pub is_cctor: bool,
 }
 unsafe_empty_collect!(MethodInfo<'_>);
 impl<'m> MethodInfo<'m> {
-    pub fn new(source_resolution: ResolutionS, method: &'m Method<'m>) -> Self {
+    pub fn new(source_resolution: ResolutionS, method: &'m Method<'m>, ctx: Context) -> Self {
         let body = match &method.body {
             Some(b) => b,
             None => todo!("no body in executing method"),
         };
         let mut exceptions: &[body::Exception] = &[];
         for sec in &body.data_sections {
+            use body::DataSection::*;
             match sec {
-                DataSection::Unrecognized { .. } => {}
-                DataSection::ExceptionHandlers(e) => {
+                Unrecognized { .. } => {}
+                ExceptionHandlers(e) => {
                     exceptions = e;
                 }
             }
@@ -75,7 +77,7 @@ impl<'m> MethodInfo<'m> {
                 && method.signature.parameters.is_empty(),
             signature: &method.signature,
             locals: &body.header.local_variables,
-            exceptions,
+            exceptions: exceptions::parse(exceptions, ctx),
             instructions,
             source_resolution,
         }

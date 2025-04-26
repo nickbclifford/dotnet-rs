@@ -21,19 +21,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let method = match source {
             MethodSource::User(u) => *u,
             MethodSource::Generic(g) => {
-                method_generics = Some(
-                    g.parameters
-                        .iter()
-                        .map(|t| ctx.generics.make_concrete(ctx.resolution, t.clone()))
-                        .collect(),
-                );
+                method_generics = Some(g.parameters.iter().map(|t| ctx.make_concrete(t)).collect());
                 g.base
             }
         };
 
         if let UserMethod::Reference(r) = method {
             if let MethodReferenceParent::Type(t) = &ctx.resolution[r].parent {
-                let parent = ctx.generics.make_concrete(ctx.resolution, t.clone());
+                let parent = ctx.make_concrete(t);
                 if let BaseType::Type {
                     source: TypeSource::Generic { parameters, .. },
                     ..
@@ -74,10 +69,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 self.current_frame().state.ip
             );
 
+            let ctx = self.current_context();
+            let generics = ctx.generics.clone();
             self.call_frame(
                 gc,
-                MethodInfo::new(m.resolution(), m.method),
-                self.current_context().generics.clone(), // TODO: which type generics do static constructors get?
+                MethodInfo::new(m.resolution(), m.method, ctx),
+                generics, // TODO: which type generics do static constructors get?
             );
             true
         } else {
@@ -467,8 +464,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     push!(ManagedPtr(m.map_value(|p| p.offset(i))))
                 },
                 (StackValue::ManagedPtr(m), StackValue::Int32(i)) => unsafe {
-                        push!(ManagedPtr(m.map_value(|p| p.offset(i as isize))))
-                    },
+                    push!(ManagedPtr(m.map_value(|p| p.offset(i as isize))))
+                },
                 (StackValue::ManagedPtr(m), StackValue::NativeInt(i)) => unsafe {
                     push!(ManagedPtr(m.map_value(|p| p.offset(i))))
                 },
@@ -532,7 +529,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     return StepResult::InstructionStepped;
                 }
 
-                self.call_frame(gc, MethodInfo::new(res, method.method), lookup);
+                self.call_frame(
+                    gc,
+                    MethodInfo::new(res, method.method, self.current_context()),
+                    lookup,
+                );
                 moved_ip = true;
             }
             CallConstrained(_, _) => todo!("constrained. call"),
@@ -714,7 +715,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 ));
             }
             LoadNull => push!(null()),
-            Leave(_) => todo!("leave"),
+            Leave(_) => {
+                state!(|s| println!("{:#?}", s.info_handle.exceptions));
+                todo!("leave")
+            }
             LocalMemoryAllocate => {
                 let size = match pop!() {
                     StackValue::Int32(i) => i as usize,
@@ -885,7 +889,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     for a in args {
                         push!(a);
                     }
-                    self.call_frame(gc, MethodInfo::new(parent.0, method.method), lookup);
+                    self.call_frame(
+                        gc,
+                        MethodInfo::new(parent.0, method.method, self.current_context()),
+                        lookup,
+                    );
                     moved_ip = true;
                 } else {
                     panic!("could not resolve virtual call");
@@ -1098,7 +1106,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         self.constructor_frame(
                             gc,
                             instance,
-                            MethodInfo::new(parent.0, method.method),
+                            MethodInfo::new(parent.0, method.method, self.current_context()),
                             lookup,
                         );
                         moved_ip = true;
@@ -1204,5 +1212,3 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         StepResult::InstructionStepped
     }
 }
-
-// TODO: inheritance of parent fields!

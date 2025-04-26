@@ -118,7 +118,7 @@ impl StackValue<'_> {
         fn ref_to_ptr<T>(r: &T) -> *const u8 {
             (r as *const T) as *const u8
         }
-        
+
         match self {
             Self::Int32(i) => ref_to_ptr(i),
             Self::Int64(i) => ref_to_ptr(i),
@@ -569,10 +569,7 @@ unsafe impl Collect for Vector<'_> {
         let element = &self.layout.element_layout;
         if element.is_gc_ptr() {
             for i in 0..self.layout.length {
-                if let ObjectRef(Some(gc)) = ObjectRef::read(&self.storage[(i * element.size())..])
-                {
-                    gc.trace(cc);
-                }
+                ObjectRef::read(&self.storage[(i * element.size())..]).trace(cc);
             }
         }
     }

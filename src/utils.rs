@@ -1,4 +1,4 @@
-use dotnetdll::prelude::{ReadOptions, Resolution};
+use dotnetdll::prelude::*;
 use std::io::Read;
 use std::path::Path;
 

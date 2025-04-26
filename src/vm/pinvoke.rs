@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use dotnetdll::prelude::{BaseType, MethodType, Parameter, ParameterType};
+use dotnetdll::prelude::*;
 use libffi::middle::*;
 use libloading::{Library, Symbol};
 
