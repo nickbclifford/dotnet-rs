@@ -5,6 +5,7 @@ use crate::value::{
     CTSValue, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, Object, ObjectRef,
     StackValue, TypeDescription, UnmanagedPtr, ValueType,
 };
+use crate::vm::exceptions::{HandlerKind, ProtectedSection};
 use dotnetdll::prelude::*;
 use std::cmp::Ordering;
 use std::rc::Rc;
@@ -460,13 +461,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             if ps.instructions.contains(&ip)
                 && !self
                     .current_frame()
-                    .protection_stack
+                    .protected_sections
                     .iter()
                     .any(|(s, _)| Rc::ptr_eq(&ps, s))
             {
+                let handlers = ps.handlers.clone();
                 self.current_frame_mut()
-                    .protection_stack
-                    .push((ps, vec![]));
+                    .protected_sections
+                    .push_front((ps, handlers));
             }
         }
 
@@ -683,7 +685,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 push!(val);
             }
             EndFilter => todo!("endfilter"),
-            EndFinally => todo!("endfinally"),
+            EndFinally => {} // is this actually a nop?
             InitializeMemoryBlock { .. } => todo!("initblk"),
             Jump(_) => todo!("jmp"),
             LoadArgument(i) => {
@@ -741,10 +743,56 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 ));
             }
             LoadNull => push!(null()),
-            Leave(i) => {
-                println!("{:#?}", self.current_frame().protection_stack);
-                // TODO: figure out which protected sections we're leaving, add their handlers to the stack (ensuring correct lexical order for execution)
-                todo!("leave")
+            Leave(jump_target) => {
+                // this means we made it to the end of the try block
+
+                // NOTE this is mostly AI generated with a few manual tweaks
+
+                // in almost every case, this will only be one section
+                // however, it's possible to have nested finally blocks with no other instructions in between
+                // (if there were other instructions, the outer section would have another Leave at the end anyway)
+                let sections_to_leave = self
+                    .current_frame()
+                    .protected_sections
+                    .iter()
+                    .filter(|(s, _)| !s.instructions.contains(jump_target))
+                    .count();
+
+                let mut finally_handlers = Vec::new();
+                for (section, handlers) in self
+                    .current_frame_mut()
+                    .protected_sections
+                    .drain(..sections_to_leave)
+                {
+                    for handler in handlers {
+                        if let HandlerKind::Finally = handler.kind {
+                            finally_handlers.push((section.clone(), handler.clone()));
+                        }
+                    }
+                }
+
+                if finally_handlers.is_empty() {
+                    branch!(jump_target);
+                } else {
+                    // Execute finally handlers from innermost to outermost
+                    finally_handlers.reverse();
+
+                    // Take the first handler to execute
+                    let (_, first_handler) = finally_handlers.remove(0);
+
+                    if !finally_handlers.is_empty() {
+                        let leave_section = ProtectedSection {
+                            instructions: ip..*jump_target,
+                            handlers: finally_handlers.into_iter().map(|(_, h)| h).collect(),
+                        };
+
+                        self.current_frame_mut()
+                            .protected_sections
+                            .push_front((Rc::new(leave_section), Vec::new()));
+                    }
+
+                    branch!(&first_handler.instructions.start);
+                }
             }
             LocalMemoryAllocate => {
                 let size = match pop!() {

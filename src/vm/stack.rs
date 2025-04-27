@@ -14,6 +14,7 @@ use gc_arena::{
 };
 use std::rc::Rc;
 use std::{cell::RefCell, collections::HashMap, fs::OpenOptions, io::Write};
+use std::collections::VecDeque;
 
 type StackSlot = Rootable![Gc<'_, RefLock<StackValue<'_>>>];
 
@@ -45,7 +46,7 @@ pub struct StackFrame<'gc, 'm> {
     pub generic_inst: GenericLookup,
     pub source_resolution: ResolutionS,
     pub exception_value: Option<StackValue<'gc>>,
-    pub protection_stack: Vec<(Rc<ProtectedSection>, Vec<Handler>)>,
+    pub protected_sections: VecDeque<(Rc<ProtectedSection>, Vec<Handler>)>,
 }
 unsafe impl<'gc, 'm> Collect for StackFrame<'gc, 'm> {
     fn trace(&self, cc: &Collection) {
@@ -65,7 +66,7 @@ impl<'gc, 'm> StackFrame<'gc, 'm> {
             state: MethodState::new(method),
             generic_inst,
             exception_value: None,
-            protection_stack: vec![],
+            protected_sections: VecDeque::new(),
         }
     }
 }
@@ -157,9 +158,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         }
                         Object | String | Vector(_, _) | Array(_, _) => StackValue::null(),
                     };
-
-                    println!("{v:?}");
-
                     self.push_stack(gc, v);
                 }
             }

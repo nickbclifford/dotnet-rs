@@ -94,6 +94,15 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             // TODO(gc): this object's finalizer should not be called
             let _obj = stack.pop_stack();
         }
+        "static void System.Runtime.InteropServices.Marshal::SetLastPInvokeError(int)" => {
+            let StackValue::Int32(value) = stack.pop_stack() else {
+                todo!("invalid type on stack")
+            };
+            
+            unsafe {
+                super::pinvoke::LAST_ERROR = value;
+            }
+        }
         "static int System.Threading.Interlocked::CompareExchange(ref int, int, int)" => {
             let StackValue::Int32(comparand) = stack.pop_stack() else {
                 todo!("invalid type on stack")

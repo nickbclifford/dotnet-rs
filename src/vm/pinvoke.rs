@@ -9,6 +9,8 @@ use crate::{
     vm::{CallStack, GCHandle},
 };
 
+pub static mut LAST_ERROR: i32 = 0;
+
 pub struct NativeLibraries {
     root: PathBuf,
     libraries: HashMap<String, Library>,
