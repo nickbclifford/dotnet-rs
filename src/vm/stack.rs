@@ -1,10 +1,4 @@
-use dotnetdll::prelude::*;
-use gc_arena::{
-    lock::RefLock, unsafe_empty_collect, Arena, Collect, Collection, DynamicRoot, DynamicRootSet,
-    Gc, Mutation, Rootable,
-};
-use std::{cell::RefCell, collections::HashMap, fs::OpenOptions, io::Write};
-
+use crate::vm::exceptions::{Handler, ProtectedSection};
 use crate::{
     resolve::Assemblies,
     utils::ResolutionS,
@@ -14,6 +8,12 @@ use crate::{
     },
     vm::{pinvoke::NativeLibraries, MethodInfo, MethodState},
 };
+use dotnetdll::prelude::*;
+use gc_arena::{
+    lock::RefLock, Arena, Collect, Collection, DynamicRoot, DynamicRootSet, Gc, Mutation, Rootable,
+};
+use std::rc::Rc;
+use std::{cell::RefCell, collections::HashMap, fs::OpenOptions, io::Write};
 
 type StackSlot = Rootable![Gc<'_, RefLock<StackValue<'_>>>];
 
@@ -24,10 +24,10 @@ pub struct StackSlotHandle(DynamicRoot<StackSlot>);
 pub struct CallStack<'gc, 'm> {
     roots: DynamicRootSet<'gc>,
     stack: Vec<StackSlotHandle>,
-    pub(crate) frames: Vec<StackFrame<'m>>,
-    pub(crate) assemblies: &'m Assemblies,
-    pub(crate) statics: RefCell<StaticStorageManager<'gc>>,
-    pub(crate) pinvoke: NativeLibraries,
+    pub frames: Vec<StackFrame<'gc, 'm>>,
+    pub assemblies: &'m Assemblies,
+    pub statics: RefCell<StaticStorageManager<'gc>>,
+    pub pinvoke: NativeLibraries,
     _all_objs: Vec<usize>, // secretly ObjectHandles, not traced for GCing because these are for runtime debugging
 }
 // this is sound, I think?
@@ -38,15 +38,21 @@ unsafe impl<'gc, 'm> Collect for CallStack<'gc, 'm> {
     }
 }
 
-pub struct StackFrame<'m> {
+pub struct StackFrame<'gc, 'm> {
     pub stack_height: usize,
     pub base: BasePointer,
     pub state: MethodState<'m>,
     pub generic_inst: GenericLookup,
     pub source_resolution: ResolutionS,
+    pub exception_value: Option<StackValue<'gc>>,
+    pub protection_stack: Vec<(Rc<ProtectedSection>, Vec<Handler>)>,
 }
-unsafe_empty_collect!(StackFrame<'_>);
-impl<'m> StackFrame<'m> {
+unsafe impl<'gc, 'm> Collect for StackFrame<'gc, 'm> {
+    fn trace(&self, cc: &Collection) {
+        self.exception_value.trace(cc);
+    }
+}
+impl<'gc, 'm> StackFrame<'gc, 'm> {
     pub fn new(
         base_pointer: BasePointer,
         method: MethodInfo<'m>,
@@ -58,6 +64,8 @@ impl<'m> StackFrame<'m> {
             source_resolution: method.source_resolution,
             state: MethodState::new(method),
             generic_inst,
+            exception_value: None,
+            protection_stack: vec![],
         }
     }
 }
@@ -118,8 +126,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             };
                             let desc = ctx.locate_type(ut);
 
-                            match &desc.definition.extends {
-                                Some(TypeSource::User(u)) => match u.type_name(desc.resolution).as_str() {
+                            if let Some(TypeSource::User(u)) = &desc.definition.extends {
+                                match u.type_name(desc.resolution).as_str() {
                                     "System.Enum" => todo!("init enum local"),
                                     "System.ValueType" => {
                                         let new_lookup = GenericLookup {
@@ -134,8 +142,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                         StackValue::ValueType(Box::new(instance))
                                     }
                                     _ => StackValue::null(),
-                                },
-                                _ => StackValue::null(),
+                                }
+                            } else {
+                                StackValue::null()
                             }
                         }
                         Boolean | Int8 | UInt8 | Char | Int16 | UInt16 | Int32 | UInt32 => {
@@ -309,10 +318,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
     }
 
-    pub fn current_frame(&self) -> &StackFrame<'m> {
+    pub fn current_frame(&self) -> &StackFrame<'gc, 'm> {
         self.frames.last().unwrap()
     }
-    pub fn current_frame_mut(&mut self) -> &mut StackFrame<'m> {
+    pub fn current_frame_mut(&mut self) -> &mut StackFrame<'gc, 'm> {
         self.frames.last_mut().unwrap()
     }
 

@@ -4,12 +4,11 @@ use std::{
     ops::Range,
 };
 
-use dotnetdll::prelude::*;
-
 use crate::{
     utils::DebugStr,
     value::{ConcreteType, Context},
 };
+use dotnetdll::prelude::*;
 
 #[derive(Clone)]
 pub struct ProtectedSection {
@@ -38,9 +37,13 @@ impl Debug for Handler {
 
 #[derive(Clone)]
 pub enum HandlerKind {
+    // only triggers when exceptions are of this type
     Catch(ConcreteType),
+    // only triggers when the filter clause pointed to returns true
     Filter { clause_offset: usize },
+    // always triggers
     Finally,
+    // triggers on any exception
     Fault,
 }
 impl Debug for HandlerKind {
@@ -78,11 +81,13 @@ pub fn parse<'a>(
             });
     }
 
-    sections
+    let mut v: Vec<_> = sections
         .into_iter()
         .map(|(k, v)| ProtectedSection {
             instructions: k,
             handlers: v,
         })
-        .collect()
+        .collect();
+    v.sort_by_key(|s| (s.instructions.start, s.instructions.end));
+    v
 }

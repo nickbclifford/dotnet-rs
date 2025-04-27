@@ -1,5 +1,6 @@
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
+use std::rc::Rc;
 
 use crate::{utils::ResolutionS, value::Context};
 
@@ -42,7 +43,7 @@ unsafe_empty_collect!(MethodState<'_>);
 pub struct MethodInfo<'a> {
     signature: &'a ManagedMethod<MethodType>,
     locals: &'a [LocalVariable],
-    exceptions: Vec<exceptions::ProtectedSection>,
+    exceptions: Vec<Rc<exceptions::ProtectedSection>>,
     pub instructions: &'a [Instruction],
     pub source_resolution: ResolutionS,
     pub is_cctor: bool,
@@ -77,7 +78,10 @@ impl<'m> MethodInfo<'m> {
                 && method.signature.parameters.is_empty(),
             signature: &method.signature,
             locals: &body.header.local_variables,
-            exceptions: exceptions::parse(exceptions, ctx),
+            exceptions: exceptions::parse(exceptions, ctx)
+                .into_iter()
+                .map(Rc::new)
+                .collect(),
             instructions,
             source_resolution,
         }

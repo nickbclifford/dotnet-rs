@@ -6,7 +6,6 @@ use crate::{
     vm::stack::GCArena,
 };
 
-// TODO
 pub struct Executor {
     arena: &'static mut GCArena,
 }
@@ -52,7 +51,7 @@ impl Executor {
                     });
 
                     if self.arena.mutate(|gc, c| c.frames.len() == 0) {
-                        let exit_code = self.arena.mutate(|gc, c| match c.bottom_of_stack() {
+                        let exit_code = self.arena.mutate(|_, c| match c.bottom_of_stack() {
                             Some(StackValue::Int32(i)) => i as u8,
                             Some(_) => todo!("invalid value for entrypoint return"),
                             None => 0,
@@ -60,7 +59,7 @@ impl Executor {
                         return ExecutorResult::Exited(exit_code);
                     } else if !was_cctor {
                         // step the caller past the call instruction
-                        self.arena.mutate_root(|gc, c| c.increment_ip());
+                        self.arena.mutate_root(|_, c| c.increment_ip());
                     }
                 }
                 StepResult::MethodThrew => {

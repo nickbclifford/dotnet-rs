@@ -35,7 +35,7 @@ impl Assemblies {
             entrypoint,
         }
     }
-    
+
     pub fn get_root(&self) -> &str {
         &self.assembly_root
     }
@@ -94,7 +94,7 @@ impl Assemblies {
             }
             Some(t) => TypeDescription {
                 resolution: res,
-                definition: t
+                definition: t,
             },
         }
     }
@@ -107,8 +107,8 @@ impl Assemblies {
     pub fn locate_type(&self, resolution: ResolutionS, handle: UserType) -> TypeDescription {
         match handle {
             UserType::Definition(d) => TypeDescription {
-                resolution: resolution,
-                definition: &resolution[d]
+                resolution,
+                definition: &resolution[d],
             },
             UserType::Reference(r) => self.locate_type_ref(resolution, r),
         }
@@ -124,14 +124,17 @@ impl Assemblies {
             Assembly(a) => self.find_in_assembly(&resolution[*a], &type_ref.type_name()),
             Exported => todo!(),
             Nested(o) => {
-                let TypeDescription { resolution: res, definition: owner } = self.locate_type_ref(resolution, *o);
+                let TypeDescription {
+                    resolution: res,
+                    definition: owner,
+                } = self.locate_type_ref(resolution, *o);
 
                 for t in &res.type_definitions {
                     if let Some(enc) = t.encloser {
                         if t.type_name() == type_ref.type_name() && std::ptr::eq(&res[enc], owner) {
                             return TypeDescription {
                                 resolution: res,
-                                definition: t
+                                definition: t,
                             };
                         }
                     }
@@ -179,11 +182,11 @@ impl Assemblies {
 
     pub fn find_method_in_type(
         &self,
-        desc @ TypeDescription { resolution: _, definition: parent_type }: TypeDescription,
+        desc: TypeDescription,
         name: &str,
         signature: &ManagedMethod<MethodType>,
     ) -> Option<MethodDescription> {
-        for method in &parent_type.methods {
+        for method in &desc.definition.methods {
             if method.name == name && signature == &method.signature {
                 return Some(MethodDescription {
                     parent: desc,
@@ -205,8 +208,8 @@ impl Assemblies {
         match handle {
             UserMethod::Definition(d) => MethodDescription {
                 parent: TypeDescription {
-                    resolution: resolution,
-                    definition: &resolution[d.parent_type()]
+                    resolution,
+                    definition: &resolution[d.parent_type()],
                 },
                 method: &resolution[d],
             },
@@ -244,11 +247,7 @@ impl Assemblies {
         resolution: ResolutionS,
         attribute: &Attribute,
     ) -> MethodDescription {
-        self.locate_method(
-            resolution,
-            attribute.constructor,
-            &GenericLookup::default(),
-        )
+        self.locate_method(resolution, attribute.constructor, &GenericLookup::default())
     }
 
     pub fn locate_field(
@@ -260,8 +259,8 @@ impl Assemblies {
         match field {
             FieldSource::Definition(d) => FieldDescription {
                 parent: TypeDescription {
-                    resolution: resolution,
-                    definition: &resolution[d.parent_type()]
+                    resolution,
+                    definition: &resolution[d.parent_type()],
                 },
                 field: &resolution[d],
             },

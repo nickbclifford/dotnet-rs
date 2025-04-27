@@ -70,11 +70,12 @@ impl<'a> Context<'a> {
     }
 
     pub fn get_heap_description(&self, object: ObjectHandle) -> TypeDescription {
+        use HeapStorage::*;
         match &*object.as_ref().borrow() {
-            HeapStorage::Obj(o) => o.description,
-            HeapStorage::Vec(_) => self.assemblies.corlib_type("System.Array"),
-            HeapStorage::Str(_) => self.assemblies.corlib_type("System.String"),
-            HeapStorage::Boxed(v) => v.description(self),
+            Obj(o) => o.description,
+            Vec(_) => self.assemblies.corlib_type("System.Array"),
+            Str(_) => self.assemblies.corlib_type("System.String"),
+            Boxed(v) => v.description(self),
         }
     }
 
@@ -336,22 +337,23 @@ impl<'gc> ValueType<'gc> {
     }
 
     pub fn description(&self, context: &Context) -> TypeDescription {
+        let asms = &context.assemblies;
         match self {
-            ValueType::Bool(_) => context.assemblies.corlib_type("System.Boolean"),
-            ValueType::Char(_) => context.assemblies.corlib_type("System.Char"),
-            ValueType::Int8(_) => context.assemblies.corlib_type("System.SByte"),
-            ValueType::UInt8(_) => context.assemblies.corlib_type("System.Byte"),
-            ValueType::Int16(_) => context.assemblies.corlib_type("System.Int16"),
-            ValueType::UInt16(_) => context.assemblies.corlib_type("System.UInt16"),
-            ValueType::Int32(_) => context.assemblies.corlib_type("System.Int32"),
-            ValueType::UInt32(_) => context.assemblies.corlib_type("System.UInt32"),
-            ValueType::Int64(_) => context.assemblies.corlib_type("System.Int64"),
-            ValueType::UInt64(_) => context.assemblies.corlib_type("System.UInt64"),
-            ValueType::NativeInt(_) => context.assemblies.corlib_type("System.IntPtr"),
-            ValueType::NativeUInt(_) => context.assemblies.corlib_type("System.UIntPtr"),
-            ValueType::Float32(_) => context.assemblies.corlib_type("System.Single"),
-            ValueType::Float64(_) => context.assemblies.corlib_type("System.Double"),
-            ValueType::TypedRef => context.assemblies.corlib_type("System.TypedReference"),
+            ValueType::Bool(_) => asms.corlib_type("System.Boolean"),
+            ValueType::Char(_) => asms.corlib_type("System.Char"),
+            ValueType::Int8(_) => asms.corlib_type("System.SByte"),
+            ValueType::UInt8(_) => asms.corlib_type("System.Byte"),
+            ValueType::Int16(_) => asms.corlib_type("System.Int16"),
+            ValueType::UInt16(_) => asms.corlib_type("System.UInt16"),
+            ValueType::Int32(_) => asms.corlib_type("System.Int32"),
+            ValueType::UInt32(_) => asms.corlib_type("System.UInt32"),
+            ValueType::Int64(_) => asms.corlib_type("System.Int64"),
+            ValueType::UInt64(_) => asms.corlib_type("System.UInt64"),
+            ValueType::NativeInt(_) => asms.corlib_type("System.IntPtr"),
+            ValueType::NativeUInt(_) => asms.corlib_type("System.UIntPtr"),
+            ValueType::Float32(_) => asms.corlib_type("System.Single"),
+            ValueType::Float64(_) => asms.corlib_type("System.Double"),
+            ValueType::TypedRef => asms.corlib_type("System.TypedReference"),
             ValueType::Struct(s) => s.description,
         }
     }
@@ -631,7 +633,8 @@ impl Debug for TypeDescription {
 unsafe_empty_collect!(TypeDescription);
 impl PartialEq for TypeDescription {
     fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.resolution, other.resolution) && std::ptr::eq(self.definition, other.definition)
+        std::ptr::eq(self.resolution, other.resolution)
+            && std::ptr::eq(self.definition, other.definition)
     }
 }
 impl Eq for TypeDescription {}
@@ -658,7 +661,7 @@ impl TypeDescription {
             }
         })
     }
-    
+
     pub fn type_name(&self) -> String {
         self.definition.type_name()
     }

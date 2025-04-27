@@ -1,6 +1,3 @@
-use dotnetdll::prelude::*;
-use std::cmp::Ordering;
-
 use super::{intrinsics::*, CallStack, GCHandle, MethodInfo, StepResult};
 use crate::value::{
     layout::{type_layout, FieldLayoutManager, HasLayout},
@@ -8,6 +5,9 @@ use crate::value::{
     CTSValue, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, Object, ObjectRef,
     StackValue, TypeDescription, UnmanagedPtr, ValueType,
 };
+use dotnetdll::prelude::*;
+use std::cmp::Ordering;
+use std::rc::Rc;
 
 const INTRINSIC_ATTR: &'static str = "System.Runtime.CompilerServices.IntrinsicAttribute";
 
@@ -132,59 +132,62 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }};
         }
         macro_rules! equal {
-            () => {
+            () => {{
+                use StackValue::*;
                 match (pop!(), pop!()) {
-                    (StackValue::ManagedPtr(m), StackValue::NativeInt(r)) => m.value as isize == r,
-                    (StackValue::NativeInt(l), StackValue::ManagedPtr(m)) => l == m.value as isize,
-                    (StackValue::ObjectRef(l), StackValue::ObjectRef(r)) => l == r,
+                    (ManagedPtr(m), NativeInt(r)) => m.value as isize == r,
+                    (NativeInt(l), ManagedPtr(m)) => l == m.value as isize,
+                    (ObjectRef(l), ObjectRef(r)) => l == r,
                     (l, r) => l.partial_cmp(&r) == Some(Ordering::Equal),
                 }
-            };
+            }};
         }
         macro_rules! compare {
-            ($sgn:expr, $op:tt ( $order:pat )) => {
+            ($sgn:expr, $op:tt ( $order:pat )) => {{
+                use StackValue::*;
                 match (pop!(), pop!(), $sgn) {
-                    (StackValue::Int32(l), StackValue::Int32(r), Unsigned) => {
+                    (Int32(l), Int32(r), Unsigned) => {
                         (l as u32) $op (r as u32)
                     }
-                    (StackValue::Int32(l), StackValue::NativeInt(r), Unsigned) => {
+                    (Int32(l), NativeInt(r), Unsigned) => {
                         (l as usize) $op (r as usize)
                     }
-                    (StackValue::Int64(l), StackValue::Int64(r), Unsigned) => {
+                    (Int64(l), Int64(r), Unsigned) => {
                         (l as u64) $op (r as u64)
                     }
-                    (StackValue::NativeInt(l), StackValue::Int32(r), Unsigned) => {
+                    (NativeInt(l), Int32(r), Unsigned) => {
                         (l as usize) $op (r as usize)
                     }
-                    (StackValue::NativeInt(l), StackValue::NativeInt(r), Unsigned) => {
+                    (NativeInt(l), NativeInt(r), Unsigned) => {
                         (l as usize) $op (r as usize)
                     }
                     (l, r, _) => {
                         matches!(l.partial_cmp(&r), Some($order))
                     }
                 }
-            }
+            }}
         }
 
         macro_rules! binary_arith_op {
-            ($method:ident (f64 $op:tt) $(, { $($pat:pat => $arm:expr, )* } )?) => {
+            ($method:ident (f64 $op:tt) $(, { $($pat:pat => $arm:expr, )* } )?) => {{
+                use StackValue::*;
                 match (pop!(), pop!()) {
-                    (StackValue::Int32(i1), StackValue::Int32(i2)) => {
+                    (Int32(i1), Int32(i2)) => {
                         push!(Int32(i1.$method(i2)))
                     }
-                    (StackValue::Int32(i1), StackValue::NativeInt(i2)) => {
+                    (Int32(i1), NativeInt(i2)) => {
                         push!(NativeInt((i1 as isize).$method(i2)))
                     }
-                    (StackValue::Int64(i1), StackValue::Int64(i2)) => {
+                    (Int64(i1), Int64(i2)) => {
                         push!(Int64(i1.$method(i2)))
                     }
-                    (StackValue::NativeInt(i1), StackValue::Int32(i2)) => {
+                    (NativeInt(i1), Int32(i2)) => {
                         push!(NativeInt(i1.$method(i2 as isize)))
                     }
-                    (StackValue::NativeInt(i1), StackValue::NativeInt(i2)) => {
+                    (NativeInt(i1), NativeInt(i2)) => {
                         push!(NativeInt(i1.$method(i2)))
                     }
-                    (StackValue::NativeFloat(f1), StackValue::NativeFloat(f2)) => {
+                    (NativeFloat(f1), NativeFloat(f2)) => {
                         push!(NativeFloat(f1 $op f2))
                     }
                     $($($pat => $arm,)*)?
@@ -195,25 +198,26 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         stringify!($method)
                     ),
                 }
-            };
-            ($op:tt $(, { $($pat:pat => $arm:expr, )* })?) => {
+            }};
+            ($op:tt $(, { $($pat:pat => $arm:expr, )* })?) => {{
+                use StackValue::*;
                 match (pop!(), pop!()) {
-                    (StackValue::Int32(i1), StackValue::Int32(i2)) => {
+                    (Int32(i1), Int32(i2)) => {
                         push!(Int32(i1 $op i2))
                     }
-                    (StackValue::Int32(i1), StackValue::NativeInt(i2)) => {
+                    (Int32(i1), NativeInt(i2)) => {
                         push!(NativeInt((i1 as isize) $op i2))
                     }
-                    (StackValue::Int64(i1), StackValue::Int64(i2)) => {
+                    (Int64(i1), Int64(i2)) => {
                         push!(Int64(i1 $op i2))
                     }
-                    (StackValue::NativeInt(i1), StackValue::Int32(i2)) => {
+                    (NativeInt(i1), Int32(i2)) => {
                         push!(NativeInt(i1 $op (i2 as isize)))
                     }
-                    (StackValue::NativeInt(i1), StackValue::NativeInt(i2)) => {
+                    (NativeInt(i1), NativeInt(i2)) => {
                         push!(NativeInt(i1 $op i2))
                     }
-                    (StackValue::NativeFloat(f1), StackValue::NativeFloat(f2)) => {
+                    (NativeFloat(f1), NativeFloat(f2)) => {
                         push!(NativeFloat(f1 $op f2))
                     }
                     $($($pat => $arm,)*)?
@@ -224,51 +228,52 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         stringify!($op)
                     ),
                 }
-            };
+            }}
         }
         macro_rules! binary_checked_op {
-            ($sign:expr, $method:ident (f64 $op:tt) $(, { $($pat:pat => $arm:expr, )* })?) => {
+            ($sign:expr, $method:ident (f64 $op:tt) $(, { $($pat:pat => $arm:expr, )* })?) => {{
+                use StackValue::*;
                 match (pop!(), pop!(), $sign) {
-                    (StackValue::Int32(i1), StackValue::Int32(i2), Signed) => {
+                    (Int32(i1), Int32(i2), Signed) => {
                         let Some(val) = i1.$method(i2) else { todo!("OverflowException in {}", stringify!($method)) };
                         push!(Int32(val))
                     }
-                    (StackValue::Int32(i1), StackValue::NativeInt(i2), Signed) => {
+                    (Int32(i1), NativeInt(i2), Signed) => {
                         let Some(val) = (i1 as isize).$method(i2) else { todo!("OverflowException in {}", stringify!($method)) };
                         push!(NativeInt(val))
                     }
-                    (StackValue::Int64(i1), StackValue::Int64(i2), Signed) => {
+                    (Int64(i1), Int64(i2), Signed) => {
                         let Some(val) = i1.$method(i2) else { todo!("OverflowException in {}", stringify!($method)) };
                         push!(Int64(val));
                     }
-                    (StackValue::NativeInt(i1), StackValue::Int32(i2), Signed) => {
+                    (NativeInt(i1), Int32(i2), Signed) => {
                         let Some(val) = i1.$method(i2 as isize) else { todo!("OverflowException in {}", stringify!($method)) };
                         push!(NativeInt(val));
                     }
-                    (StackValue::NativeInt(i1), StackValue::NativeInt(i2), Signed) => {
+                    (NativeInt(i1), NativeInt(i2), Signed) => {
                         let Some(val) = i1.$method(i2) else { todo!("OverflowException in {}", stringify!($method)) };
                         push!(NativeInt(val));
                     }
-                    (StackValue::NativeFloat(f1), StackValue::NativeFloat(f2), Signed) => {
+                    (NativeFloat(f1), NativeFloat(f2), Signed) => {
                         push!(NativeFloat(f1 $op f2));
                     }
-                    (StackValue::Int32(i1), StackValue::Int32(i2), Unsigned) => {
+                    (Int32(i1), Int32(i2), Unsigned) => {
                         let Some(val) = (i1 as u32).$method(i2 as u32) else { todo!("OverflowException in {}", stringify!($method)) };
                         push!(Int32(val as i32))
                     }
-                    (StackValue::Int32(i1), StackValue::NativeInt(i2), Unsigned) => {
+                    (Int32(i1), NativeInt(i2), Unsigned) => {
                         let Some(val) = (i1 as usize).$method(i2 as usize) else { todo!("OverflowException in {}", stringify!($method)) };
                         push!(NativeInt(val as isize))
                     }
-                    (StackValue::Int64(i1), StackValue::Int64(i2), Unsigned) => {
+                    (Int64(i1), Int64(i2), Unsigned) => {
                         let Some(val) = (i1 as u64).$method(i2 as u64) else { todo!("OverflowException in {}", stringify!($method)) };
                         push!(Int64(val as i64));
                     }
-                    (StackValue::NativeInt(i1), StackValue::Int32(i2), Unsigned) => {
+                    (NativeInt(i1), Int32(i2), Unsigned) => {
                         let Some(val) = i1.$method(i2 as isize) else { todo!("OverflowException in {}", stringify!($method)) };
                         push!(NativeInt(val as isize));
                     }
-                    (StackValue::NativeInt(i1), StackValue::NativeInt(i2), Unsigned) => {
+                    (NativeInt(i1), NativeInt(i2), Unsigned) => {
                         let Some(val) = i1.$method(i2) else { todo!("OverflowException in {}", stringify!($method)) };
                         push!(NativeInt(val as isize));
                     }
@@ -281,24 +286,25 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         $sign
                     ),
                 }
-            };
+            }}
         }
         macro_rules! binary_int_op {
-            ($op:tt) => {
+            ($op:tt) => {{
+                use StackValue::*;
                 match (pop!(), pop!()) {
-                    (StackValue::Int32(i1), StackValue::Int32(i2)) => {
+                    (Int32(i1), Int32(i2)) => {
                         push!(Int32(i1 $op i2))
                     }
-                    (StackValue::Int32(i1), StackValue::NativeInt(i2)) => {
+                    (Int32(i1), NativeInt(i2)) => {
                         push!(NativeInt((i1 as isize) $op i2))
                     }
-                    (StackValue::Int64(i1), StackValue::Int64(i2)) => {
+                    (Int64(i1), Int64(i2)) => {
                         push!(Int64(i1 $op i2))
                     }
-                    (StackValue::NativeInt(i1), StackValue::Int32(i2)) => {
+                    (NativeInt(i1), Int32(i2)) => {
                         push!(NativeInt(i1 $op (i2 as isize)))
                     }
-                    (StackValue::NativeInt(i1), StackValue::NativeInt(i2)) => {
+                    (NativeInt(i1), NativeInt(i2)) => {
                         push!(NativeInt(i1 $op i2))
                     }
                     (v1, v2) => todo!(
@@ -308,22 +314,23 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         stringify!($op)
                     ),
                 }
-            };
-            ($op:tt as unsigned) => {
+            }};
+            ($op:tt as unsigned) => {{
+                use StackValue::*;
                 match (pop!(), pop!()) {
-                    (StackValue::Int32(i1), StackValue::Int32(i2)) => {
+                    (Int32(i1), Int32(i2)) => {
                         push!(Int32(((i1 as u32) $op (i2 as u32)) as i32))
                     }
-                    (StackValue::Int32(i1), StackValue::NativeInt(i2)) => {
+                    (Int32(i1), NativeInt(i2)) => {
                         push!(NativeInt(((i1 as usize) $op (i2 as usize)) as isize))
                     }
-                    (StackValue::Int64(i1), StackValue::Int64(i2)) => {
+                    (Int64(i1), Int64(i2)) => {
                         push!(Int64(((i1 as u64) $op (i2 as u64)) as i64))
                     }
-                    (StackValue::NativeInt(i1), StackValue::Int32(i2)) => {
+                    (NativeInt(i1), Int32(i2)) => {
                         push!(NativeInt(((i1 as usize) $op (i2 as usize)) as isize))
                     }
-                    (StackValue::NativeInt(i1), StackValue::NativeInt(i2)) => {
+                    (NativeInt(i1), NativeInt(i2)) => {
                         push!(NativeInt(((i1 as usize) $op (i2 as usize)) as isize))
                     }
                     (v1, v2) => todo!(
@@ -333,27 +340,28 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         stringify!($op)
                     ),
                 }
-            };
+            }}
         }
         macro_rules! shift_op {
-            ($op:tt) => {
+            ($op:tt) => {{
+                use StackValue::*;
                 match (pop!(), pop!()) {
-                    (StackValue::Int32(i1), StackValue::Int32(i2)) => {
+                    (Int32(i1), Int32(i2)) => {
                         push!(Int32(i1 $op i2))
                     }
-                    (StackValue::Int32(i1), StackValue::NativeInt(i2)) => {
+                    (Int32(i1), NativeInt(i2)) => {
                         push!(Int32(i1 $op i2))
                     }
-                    (StackValue::Int64(i1), StackValue::Int32(i2)) => {
+                    (Int64(i1), Int32(i2)) => {
                         push!(Int64(i1 $op i2))
                     }
-                    (StackValue::Int64(i1), StackValue::NativeInt(i2)) => {
+                    (Int64(i1), NativeInt(i2)) => {
                         push!(Int64(i1 $op i2))
                     }
-                    (StackValue::NativeInt(i1), StackValue::Int32(i2)) => {
+                    (NativeInt(i1), Int32(i2)) => {
                         push!(NativeInt(i1 $op i2))
                     }
-                    (StackValue::NativeInt(i1), StackValue::NativeInt(i2)) => {
+                    (NativeInt(i1), NativeInt(i2)) => {
                         push!(NativeInt(i1 $op i2))
                     }
                     (v1, v2) => todo!(
@@ -363,25 +371,26 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         stringify!($op)
                     ),
                 }
-            };
-            ($op:tt as unsigned) => {
-               match (pop!(), pop!()) {
-                    (StackValue::Int32(i1), StackValue::Int32(i2)) => {
+            }};
+            ($op:tt as unsigned) => {{
+                use StackValue::*;
+                match (pop!(), pop!()) {
+                    (Int32(i1), Int32(i2)) => {
                         push!(Int32(((i1 as u32) $op (i2 as u32)) as i32))
                     }
-                    (StackValue::Int32(i1), StackValue::NativeInt(i2)) => {
+                    (Int32(i1), NativeInt(i2)) => {
                         push!(Int32(((i1 as u32) $op (i2 as u32)) as i32))
                     }
-                    (StackValue::Int64(i1), StackValue::Int32(i2)) => {
+                    (Int64(i1), Int32(i2)) => {
                         push!(Int64(((i1 as u64) $op (i2 as u64)) as i64))
                     }
-                    (StackValue::Int64(i1), StackValue::NativeInt(i2)) => {
+                    (Int64(i1), NativeInt(i2)) => {
                         push!(Int64(((i1 as u64) $op (i2 as u64)) as i64))
                     }
-                    (StackValue::NativeInt(i1), StackValue::Int32(i2)) => {
+                    (NativeInt(i1), Int32(i2)) => {
                         push!(NativeInt(((i1 as usize) $op (i2 as usize)) as isize))
                     }
-                    (StackValue::NativeInt(i1), StackValue::NativeInt(i2)) => {
+                    (NativeInt(i1), NativeInt(i2)) => {
                         push!(NativeInt(((i1 as usize) $op (i2 as usize)) as isize))
                     }
                     (v1, v2) => todo!(
@@ -391,7 +400,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         stringify!($op)
                     ),
                 }
-            };
+            }}
         }
 
         macro_rules! check_special_fields {
@@ -412,7 +421,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     );
                 }
                 for a in &$field.field.attributes {
-                    let ctor = self.assemblies.locate_attribute($field.parent.resolution, a);
+                    let ctor = self
+                        .assemblies
+                        .locate_attribute($field.parent.resolution, a);
                     if ctor.parent.type_name() == INTRINSIC_ATTR {
                         intrinsic_field(
                             gc,
@@ -444,6 +455,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let ip = state!(|s| s.ip);
         let i_res = state!(|s| s.info_handle.source_resolution);
 
+        let sections = state!(|s| s.info_handle.exceptions.clone());
+        for ps in sections {
+            if ps.instructions.contains(&ip)
+                && !self
+                    .current_frame()
+                    .protection_stack
+                    .iter()
+                    .any(|(s, _)| Rc::ptr_eq(&ps, s))
+            {
+                self.current_frame_mut()
+                    .protection_stack
+                    .push((ps, vec![]));
+            }
+        }
+
         super::msg!(
             self,
             "[#{} | ip @ {}] {}",
@@ -454,19 +480,19 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         match i {
             Add => binary_arith_op!(wrapping_add (f64 +), {
-                (StackValue::Int32(i), StackValue::ManagedPtr(m)) => {
+                (Int32(i), ManagedPtr(m)) => {
                     // TODO: proper mechanisms for safety and pointer arithmetic
                     unsafe {
                         push!(ManagedPtr(m.map_value(|p| p.offset(i as isize))))
                     }
                 },
-                (StackValue::NativeInt(i), StackValue::ManagedPtr(m)) => unsafe {
+                (NativeInt(i), ManagedPtr(m)) => unsafe {
                     push!(ManagedPtr(m.map_value(|p| p.offset(i))))
                 },
-                (StackValue::ManagedPtr(m), StackValue::Int32(i)) => unsafe {
+                (ManagedPtr(m), Int32(i)) => unsafe {
                     push!(ManagedPtr(m.map_value(|p| p.offset(i as isize))))
                 },
-                (StackValue::ManagedPtr(m), StackValue::NativeInt(i)) => unsafe {
+                (ManagedPtr(m), NativeInt(i)) => unsafe {
                     push!(ManagedPtr(m.map_value(|p| p.offset(i))))
                 },
             }),
@@ -715,8 +741,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 ));
             }
             LoadNull => push!(null()),
-            Leave(_) => {
-                state!(|s| println!("{:#?}", s.info_handle.exceptions));
+            Leave(i) => {
+                println!("{:#?}", self.current_frame().protection_stack);
+                // TODO: figure out which protected sections we're leaving, add their handlers to the stack (ensuring correct lexical order for execution)
                 todo!("leave")
             }
             LocalMemoryAllocate => {
@@ -820,13 +847,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 self.set_local(gc, *i as usize, val);
             }
             Subtract => binary_arith_op!(wrapping_sub (f64 -), {
-                (StackValue::ManagedPtr(m), StackValue::Int32(i)) => unsafe {
+                (ManagedPtr(m), Int32(i)) => unsafe {
                     push!(ManagedPtr(m.map_value(|p| p.offset(-i as isize))))
                 },
-                (StackValue::ManagedPtr(m), StackValue::NativeInt(i)) => unsafe {
+                (ManagedPtr(m), NativeInt(i)) => unsafe {
                     push!(ManagedPtr(m.map_value(|p| p.offset(-i))))
                 },
-                (StackValue::ManagedPtr(m1), StackValue::ManagedPtr(m2)) => {
+                (ManagedPtr(m1), ManagedPtr(m2)) => {
                     push!(NativeInt((m1.value as isize) - (m2.value as isize)))
                 },
             }),
@@ -1106,7 +1133,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         self.constructor_frame(
                             gc,
                             instance,
-                            MethodInfo::new(parent.resolution, method.method, self.current_context()),
+                            MethodInfo::new(
+                                parent.resolution,
+                                method.method,
+                                self.current_context(),
+                            ),
                             lookup,
                         );
                         moved_ip = true;
@@ -1207,7 +1238,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             UnboxIntoValue(_) => todo!("unbox.any"),
         }
         if !moved_ip {
-            state!(|s| s.ip += 1);
+            self.increment_ip();
         }
         StepResult::InstructionStepped
     }
