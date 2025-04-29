@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, ffi::c_void, path::PathBuf};
 
 use dotnetdll::prelude::*;
 use libffi::middle::*;
@@ -174,14 +174,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 StackValue::NativeFloat(f) => Arg::new(f),
                 StackValue::UnmanagedPtr(p) => Arg::new(p),
                 StackValue::ManagedPtr(p) => Arg::new(p),
-                StackValue::ValueType(o) => Arg::new(o.instance_storage.get()),
+                StackValue::ValueType(o) => unsafe {
+                    std::mem::transmute(o.instance_storage.get().as_ptr() as *mut c_void)
+                },
                 rest => todo!("marshalling not yet supported for {:?}", rest),
             })
             .collect();
 
         match &method.method.signature.return_type.1 {
             None => {
-                let _: std::ffi::c_void = unsafe { cif.call(target, &arg_values) };
+                let _: c_void = unsafe { cif.call(target, &arg_values) };
             }
             Some(p) => {
                 let ParameterType::Value(t) = p else {
@@ -218,8 +220,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         StackValue::unmanaged_ptr(read_return!(*mut u8))
                     }
                     BaseType::Type { source, .. } => {
-                        use std::ffi::c_void;
-
                         let mut type_generics: &[ConcreteType] = &[];
                         let ut = match source {
                             TypeSource::User(u) => u,

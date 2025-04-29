@@ -4,7 +4,7 @@ use crate::value::{
 };
 use dotnetdll::prelude::*;
 use std::sync::atomic::{AtomicI32, Ordering};
-
+use crate::value::layout::type_layout;
 use super::{CallStack, GCHandle, MethodInfo};
 
 fn ref_as_ptr(v: StackValue) -> *mut u8 {
@@ -89,6 +89,12 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         "static void System.GC::_SuppressFinalize(object)" => {
             // TODO(gc): this object's finalizer should not be called
             let _obj = stack.pop_stack();
+        }
+        "[Generic(1)] static bool System.Runtime.CompilerServices.RuntimeHelpers::IsReferenceOrContainsReferences()" => {
+            let target = &generics.method_generics[0];
+            let layout = type_layout(target.clone(), stack.current_context());
+            
+            stack.push_stack(gc, StackValue::Int32(layout.is_or_contains_refs() as i32));
         }
         "static int System.Runtime.InteropServices.Marshal::GetLastPInvokeError()" => {
             let value = unsafe { super::pinvoke::LAST_ERROR };

@@ -2,8 +2,8 @@ use super::{intrinsics::*, CallStack, GCHandle, MethodInfo, StepResult};
 use crate::value::{
     layout::{type_layout, FieldLayoutManager, HasLayout},
     string::CLRString,
-    CTSValue, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, Object, ObjectRef,
-    StackValue, TypeDescription, UnmanagedPtr, ValueType,
+    CTSValue, Context, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, Object,
+    ObjectRef, StackValue, TypeDescription, UnmanagedPtr, ValueType, Vector,
 };
 use crate::vm::exceptions::{HandlerKind, ProtectedSection};
 use dotnetdll::prelude::*;
@@ -176,7 +176,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         macro_rules! binary_arith_op {
             ($method:ident (f64 $op:tt) $(, { $($pat:pat => $arm:expr, )* } )?) => {{
                 use StackValue::*;
-                match (pop!(), pop!()) {
+                let value2 = pop!();
+                let value1 = pop!();
+                match (value1, value2) {
                     (Int32(i1), Int32(i2)) => {
                         push!(Int32(i1.$method(i2)))
                     }
@@ -206,7 +208,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }};
             ($op:tt $(, { $($pat:pat => $arm:expr, )* })?) => {{
                 use StackValue::*;
-                match (pop!(), pop!()) {
+                let value2 = pop!();
+                let value1 = pop!();
+                match (value1, value2) {
                     (Int32(i1), Int32(i2)) => {
                         push!(Int32(i1 $op i2))
                     }
@@ -238,7 +242,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         macro_rules! binary_checked_op {
             ($sign:expr, $method:ident (f64 $op:tt) $(, { $($pat:pat => $arm:expr, )* })?) => {{
                 use StackValue::*;
-                match (pop!(), pop!(), $sign) {
+                let value2 = pop!();
+                let value1 = pop!();
+                match (value1, value2, $sign) {
                     (Int32(i1), Int32(i2), Signed) => {
                         let Some(val) = i1.$method(i2) else { todo!("OverflowException in {}", stringify!($method)) };
                         push!(Int32(val))
@@ -296,7 +302,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         macro_rules! binary_int_op {
             ($op:tt) => {{
                 use StackValue::*;
-                match (pop!(), pop!()) {
+                let value2 = pop!();
+                let value1 = pop!();
+                match (value1, value2) {
                     (Int32(i1), Int32(i2)) => {
                         push!(Int32(i1 $op i2))
                     }
@@ -322,7 +330,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }};
             ($op:tt as unsigned) => {{
                 use StackValue::*;
-                match (pop!(), pop!()) {
+                let value2 = pop!();
+                let value1 = pop!();
+                match (value1, value2) {
                     (Int32(i1), Int32(i2)) => {
                         push!(Int32(((i1 as u32) $op (i2 as u32)) as i32))
                     }
@@ -350,7 +360,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         macro_rules! shift_op {
             ($op:tt) => {{
                 use StackValue::*;
-                match (pop!(), pop!()) {
+                let value2 = pop!();
+                let value1 = pop!();
+                match (value1, value2) {
                     (Int32(i1), Int32(i2)) => {
                         push!(Int32(i1 $op i2))
                     }
@@ -379,7 +391,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }};
             ($op:tt as unsigned) => {{
                 use StackValue::*;
-                match (pop!(), pop!()) {
+                let value2 = pop!();
+                let value1 = pop!();
+                match (value1, value2) {
                     (Int32(i1), Int32(i2)) => {
                         push!(Int32(((i1 as u32) $op (i2 as u32)) as i32))
                     }
@@ -483,6 +497,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             ip,
             i.show(i_res)
         );
+
+        self.debug_dump();
 
         match i {
             Add => binary_arith_op!(wrapping_add (f64 +), {
@@ -703,7 +719,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     self.get_argument_address(*i as usize) as *mut _,
                     live_type
                 ));
-            },
+            }
             LoadConstantInt32(i) => push!(Int32(*i)),
             LoadConstantInt64(i) => push!(Int64(*i)),
             LoadConstantFloat32(f) => push!(NativeFloat(*f as f64)),
@@ -1003,25 +1019,77 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 s.fill(0);
             }
             IsInstance(_) => todo!("isinst"),
-            LoadElement { .. }
-            | LoadElementPrimitive { .. }
-            | LoadElementAddress { .. }
-            | LoadElementAddressReadonly(_) => todo!("ldelem"),
+            LoadElement { .. } | LoadElementAddress { .. } | LoadElementAddressReadonly(_) => {
+                todo!("ldelem")
+            }
+            LoadElementPrimitive {
+                param0: load_type, ..
+            } => {
+                use LoadType::*;
+
+                let index = match pop!() {
+                    StackValue::Int32(i) => i as usize,
+                    StackValue::NativeInt(i) => i as usize,
+                    rest => todo!(
+                        "invalid index for stelem (expected int32 or native int, received {:?})",
+                        rest
+                    ),
+                };
+                let array = pop!();
+
+                let StackValue::ObjectRef(ObjectRef(Some(heap))) = array else {
+                    todo!("expected array for ldlen, received {:?}", array)
+                };
+                let heap = heap.borrow();
+                let HeapStorage::Vec(array) = &*heap else {
+                    todo!("expected array for ldlen, received {:?}", heap)
+                };
+
+                let elem_size: usize = match load_type {
+                    Int8 | UInt8 => 1,
+                    Int16 | UInt16 => 2,
+                    Int32 | UInt32 => 4,
+                    Int64 => 8,
+                    Float32 => 4,
+                    Float64 => 8,
+                    IntPtr => size_of::<usize>(),
+                    Object => ObjectRef::SIZE,
+                };
+
+                let target = &array.get()[(elem_size * index)..(elem_size * (index + 1))];
+                macro_rules! from_bytes {
+                    ($t:ty) => {
+                        <$t>::from_ne_bytes(target.try_into().expect("source data was too small"))
+                    };
+                }
+
+                match load_type {
+                    Int8 => push!(Int32(from_bytes!(i8) as i32)),
+                    UInt8 => push!(Int32(from_bytes!(u8) as i32)),
+                    Int16 => push!(Int32(from_bytes!(i16) as i32)),
+                    UInt16 => push!(Int32(from_bytes!(u16) as i32)),
+                    Int32 => push!(Int32(from_bytes!(i32))),
+                    UInt32 => push!(Int32(from_bytes!(u32) as i32)),
+                    Int64 => push!(Int64(from_bytes!(i64))),
+                    Float32 => push!(NativeFloat(from_bytes!(f32) as f64)),
+                    Float64 => push!(NativeFloat(from_bytes!(f64))),
+                    IntPtr => push!(NativeInt(from_bytes!(usize) as isize)),
+                    Object => push!(ObjectRef(ObjectRef::read(target))),
+                }
+            }
             LoadField {
                 param0: source,
                 volatile, // TODO
                 ..
             } => {
-                let field = self.current_context().locate_field(*source);
-                let name = &field.field.name;
                 let parent = pop!();
+                let ctx = self.current_context();
+                let field = ctx.locate_field(*source);
+                let name = &field.field.name;
 
-                let read_data = |d| {
-                    let t = self
-                        .current_context()
-                        .make_concrete(&field.field.return_type);
-                    CTSValue::read(&t, &self.current_context(), d)
-                };
+                let t = ctx.get_field_type(field);
+
+                let read_data = |d| CTSValue::read(&t, &ctx, d);
                 let read_from_pointer = |ptr: *mut u8| {
                     let layout =
                         FieldLayoutManager::instance_fields(field.parent, self.current_context());
@@ -1117,7 +1185,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     source_ptr.offset(layout.fields.get(name.as_ref()).unwrap().position as isize)
                 };
 
-                let target_type = self.current_context().get_field_type(field);
+                let target_type = self.current_context().get_field_desc(field);
 
                 if let StackValue::UnmanagedPtr(_) | StackValue::NativeInt(_) = parent {
                     push!(unmanaged_ptr(ptr))
@@ -1126,7 +1194,18 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 }
             }
             LoadFieldSkipNullCheck(_) => todo!("no.nullcheck ldfld"),
-            LoadLength => todo!("ldlen"),
+            LoadLength => {
+                let array = pop!();
+                let StackValue::ObjectRef(ObjectRef(Some(heap))) = array else {
+                    todo!("expected array for ldlen, received {:?}", array)
+                };
+                let heap = heap.borrow();
+                let HeapStorage::Vec(array) = &*heap else {
+                    todo!("expected array for ldlen, received {:?}", heap)
+                };
+
+                push!(StackValue::NativeInt(array.layout.length as isize));
+            }
             LoadObject { .. } => todo!("ldobj"),
             LoadStaticField { param0: source, .. } => {
                 let field = self.current_context().locate_field(*source);
@@ -1155,7 +1234,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     return StepResult::InstructionStepped;
                 }
 
-                let field_type = self.current_context().get_field_type(field);
+                let field_type = self.current_context().get_field_desc(field);
                 let value = statics!(|s| {
                     let field_data = s.get(field.parent).get_field(name);
                     StackValue::managed_ptr(field_data.as_ptr() as *mut _, field_type)
@@ -1175,10 +1254,25 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadTokenType(_) => todo!("RuntimeTypeHandle"),
             LoadVirtualMethodPointer { .. } => todo!("ldvirtftn"),
             MakeTypedReference(_) => todo!("mkrefany"),
-            NewArray(_) => todo!("newarr"),
+            NewArray(elem_type) => {
+                let length = match pop!() {
+                    StackValue::Int32(i) => i as usize,
+                    StackValue::NativeInt(i) => i as usize,
+                    rest => todo!(
+                        "invalid length for newarr (expected int32 or native int, received {:?})",
+                        rest
+                    ),
+                };
+                let ctx = self.current_context();
+                let elem_type = ctx.make_concrete(elem_type);
+                let v = Vector::new(elem_type, length, ctx);
+                push!(ObjectRef(ObjectRef::new(gc, HeapStorage::Vec(v))));
+            }
             NewObject(ctor) => {
                 let (method, lookup) = self.find_generic_method(&MethodSource::User(*ctor));
                 let parent = method.parent;
+
+                let new_ctx = Context::with_type_generics(self.current_context(), &lookup);
 
                 // TODO: proper signature checking
                 match format!("{:?}", method).as_str() {
@@ -1187,16 +1281,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         rest => todo!("invalid type on stack (expected int32, received {:?}", rest),
                     },
                     _ => {
-                        let instance = Object::new(parent, self.current_context());
+                        let instance = Object::new(parent, new_ctx.clone());
 
                         self.constructor_frame(
                             gc,
                             instance,
-                            MethodInfo::new(
-                                parent.resolution,
-                                method.method,
-                                self.current_context(),
-                            ),
+                            MethodInfo::new(parent.resolution, method.method, new_ctx),
                             lookup,
                         );
                         moved_ip = true;
@@ -1207,23 +1297,78 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             ReadTypedReferenceValue(_) => todo!("refanyval"),
             Rethrow => todo!("rethrow"),
             Sizeof(_) => todo!("sizeof"),
-            StoreElement { .. } | StoreElementPrimitive { .. } => todo!("stelem"),
+            StoreElement { param0: source, .. } => todo!("stelem({source:?})"),
+            StoreElementPrimitive {
+                param0: store_type, ..
+            } => {
+                use StoreType::*;
+
+                let value = pop!();
+                let index = match pop!() {
+                    StackValue::Int32(i) => i as usize,
+                    StackValue::NativeInt(i) => i as usize,
+                    rest => todo!(
+                        "invalid index for stelem (expected int32 or native int, received {:?})",
+                        rest
+                    ),
+                };
+                let array = pop!();
+
+                let data: Vec<u8> = match value {
+                    StackValue::Int32(i) => i.to_ne_bytes().to_vec(),
+                    StackValue::Int64(i) => i.to_ne_bytes().to_vec(),
+                    StackValue::NativeInt(i) => i.to_ne_bytes().to_vec(),
+                    StackValue::NativeFloat(f) => f.to_ne_bytes().to_vec(),
+                    StackValue::ObjectRef(o) => {
+                        let mut vec = vec![0; ObjectRef::SIZE];
+                        o.write(&mut vec);
+                        vec
+                    }
+                    StackValue::UnmanagedPtr(UnmanagedPtr(p)) => {
+                        (p as usize).to_ne_bytes().to_vec()
+                    }
+                    StackValue::ManagedPtr(m) => (m.value as usize).to_ne_bytes().to_vec(),
+                    StackValue::ValueType(_) => {
+                        panic!("received valuetype for StoreElementPrimitive")
+                    }
+                };
+
+                let StackValue::ObjectRef(ObjectRef(Some(heap))) = array else {
+                    todo!("expected array for stelem, received {:?}", array)
+                };
+                let mut heap = heap.borrow_mut(gc);
+                let HeapStorage::Vec(array) = &mut *heap else {
+                    todo!("expected array for stelem, received {:?}", heap)
+                };
+
+                let elem_size: usize = match store_type {
+                    Int8 => 1,
+                    Int16 => 2,
+                    Int32 => 4,
+                    Int64 => 8,
+                    Float32 => 4,
+                    Float64 => 8,
+                    IntPtr => size_of::<usize>(),
+                    Object => ObjectRef::SIZE,
+                };
+
+                let target = &mut array.get_mut()[(elem_size * index)..(elem_size * (index + 1))];
+                target.copy_from_slice(&data);
+            }
             StoreField {
                 param0: source,
                 volatile, // TODO
                 ..
             } => {
-                let field = self.current_context().locate_field(*source);
-                let name = &field.field.name;
-
                 let value = pop!();
                 let parent = pop!();
 
                 let ctx = self.current_context();
-                let write_data = |dest: &mut [u8]| {
-                    let t = ctx.make_concrete(&field.field.return_type);
-                    CTSValue::new(&t, &ctx, value).write(dest)
-                };
+                let field = ctx.locate_field(*source);
+                let name = &field.field.name;
+                let t = ctx.get_field_type(field);
+
+                let write_data = |dest: &mut [u8]| CTSValue::new(&t, &ctx, value).write(dest);
                 let slice_from_pointer = |dest: *mut u8| {
                     let layout = FieldLayoutManager::instance_fields(field.parent, ctx.clone());
                     let field_layout = layout.fields.get(name.as_ref()).unwrap();
@@ -1238,8 +1383,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 match parent {
                     StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
                     StackValue::ObjectRef(ObjectRef(Some(h))) => {
-                        let object_type = self.current_context().get_heap_description(h);
-                        if !self.current_context().is_a(object_type, field.parent) {
+                        let object_type = ctx.get_heap_description(h);
+                        if !ctx.is_a(object_type, field.parent) {
                             panic!(
                                 "tried to store field {}::{} to object of type {}",
                                 field.parent.type_name(),

@@ -86,10 +86,20 @@ impl<'a> Context<'a> {
     pub fn make_concrete<T: Clone + Into<MethodType>>(&self, t: &T) -> ConcreteType {
         self.generics.make_concrete(self.resolution, t.clone())
     }
+    
+    pub fn get_field_type(&self, field: FieldDescription) -> ConcreteType {
+        let return_type = &field.field.return_type;
+        if field.field.by_ref {
+            let by_ref_t: MemberType = BaseType::pointer(return_type.clone()).into();
+            self.make_concrete(&by_ref_t)
+        } else {
+            self.make_concrete(return_type)
+        }
+    }
 
-    pub fn get_field_type(&self, field: FieldDescription) -> TypeDescription {
+    pub fn get_field_desc(&self, field: FieldDescription) -> TypeDescription {
         self.assemblies
-            .find_concrete_type(self.make_concrete(&field.field.return_type))
+            .find_concrete_type(self.get_field_type(field))
     }
 }
 
@@ -230,7 +240,7 @@ impl PartialEq for ObjectRef<'_> {
     }
 }
 impl<'gc> ObjectRef<'gc> {
-    const SIZE: usize = size_of::<ObjectRef>();
+    pub const SIZE: usize = size_of::<ObjectRef>();
 
     pub fn new(gc: GCHandle<'gc>, value: HeapStorage<'gc>) -> Self {
         Self(Some(Gc::new(gc, RefLock::new(value))))
@@ -307,7 +317,7 @@ pub enum ValueType<'gc> {
     Struct(Object<'gc>),
 }
 
-fn convert_num<T: TryFrom<i32> + TryFrom<isize>>(data: StackValue) -> T {
+fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(data: StackValue) -> T {
     match data {
         StackValue::Int32(i) => i
             .try_into()
@@ -315,7 +325,10 @@ fn convert_num<T: TryFrom<i32> + TryFrom<isize>>(data: StackValue) -> T {
         StackValue::NativeInt(i) => i
             .try_into()
             .unwrap_or_else(|_| panic!("failed to convert from isize")),
-        other => panic!("invalid stack value {:?} for integer conversion", other),
+        StackValue::UnmanagedPtr(UnmanagedPtr(p)) | StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => (p as usize)
+            .try_into()
+            .unwrap_or_else(|_| panic!("failed to convert from pointer")),
+        other => panic!("invalid stack value {:?} for conversion into {}", other, std::any::type_name::<T>()),
     }
 }
 fn convert_i64<T: TryFrom<i64>>(data: StackValue) -> T {
@@ -393,10 +406,10 @@ impl<'gc> CTSValue<'gc> {
                 let new_lookup = GenericLookup::new(type_generics.to_vec());
                 let new_ctx = Context::with_type_generics(context.clone(), &new_lookup);
                 let td = new_ctx.locate_type(*ut);
-                
+
                 let v = match td.type_name().as_str() {
-                    "System.Boolean" => Bool(todo!()),
-                    "System.Char" => Char(todo!()),
+                    "System.Boolean" => Bool(convert_num::<u8>(data) != 0),
+                    "System.Char" => Char(convert_num(data)),
                     "System.Single" => Float32(match data {
                         StackValue::NativeFloat(f) => f as f32,
                         other => panic!("invalid stack value {:?} for float conversion", other),
@@ -426,7 +439,7 @@ impl<'gc> CTSValue<'gc> {
                         other => panic!("cannot read stack value {:?} into type storage", other),
                     },
                 };
-                
+
                 Self::Value(v)
             },
             BaseType::Type {
@@ -461,7 +474,7 @@ impl<'gc> CTSValue<'gc> {
             BaseType::UIntPtr | BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
                 Self::Value(NativeUInt(convert_num(data)))
             }
-            BaseType::Object => Self::Ref(match data {
+            BaseType::Object | BaseType::Vector(_, _) => Self::Ref(match data {
                 StackValue::ObjectRef(o) => o,
                 other => panic!("expected object ref on stack, found {:?}", other),
             }),
@@ -487,7 +500,7 @@ impl<'gc> CTSValue<'gc> {
                 let new_lookup = GenericLookup::new(type_generics.to_vec());
                 let new_ctx = Context::with_type_generics(context.clone(), &new_lookup);
                 let td = new_ctx.locate_type(*ut);
-                
+
                 let v = match td.type_name().as_str() {
                     "System.Boolean" => Bool(data[0] != 0),
                     "System.Char" => Char(from_bytes!(u16, data)),
@@ -510,7 +523,7 @@ impl<'gc> CTSValue<'gc> {
                         Struct(instance)
                     },
                 };
-                
+
                 Self::Value(v)
             },
             BaseType::Type {
@@ -592,8 +605,8 @@ impl<'gc> CTSValue<'gc> {
 
 #[derive(Clone, Debug)]
 pub struct Vector<'gc> {
-    element: ConcreteType,
-    layout: ArrayLayoutManager,
+    pub element: ConcreteType,
+    pub layout: ArrayLayoutManager,
     storage: Vec<u8>,
     _contains_gc: PhantomData<&'gc ()>, // TODO: variance rules?
 }
@@ -610,19 +623,25 @@ unsafe impl Collect for Vector<'_> {
 }
 impl<'gc> Vector<'gc> {
     pub fn new(
-        gc: GCHandle<'gc>,
         element: ConcreteType,
         size: usize,
         context: Context,
-    ) -> Gc<'gc, Self> {
+    ) -> Self {
         let layout = ArrayLayoutManager::new(element.clone(), size, context);
-        let value = Self {
+        Self {
             storage: vec![0; layout.size()], // TODO: initialize properly
             layout,
             element,
             _contains_gc: PhantomData,
-        };
-        Gc::new(gc, value)
+        }
+    }
+
+    pub fn get(&self) -> &[u8] {
+        &self.storage
+    }
+
+    pub fn get_mut(&mut self) -> &mut [u8] {
+        &mut self.storage
     }
 }
 

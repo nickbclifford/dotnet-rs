@@ -5,7 +5,7 @@ use std::ops::Range;
 use dotnetdll::prelude::*;
 use enum_dispatch::enum_dispatch;
 
-use super::{ConcreteType, Context, GenericLookup, TypeDescription};
+use super::{ConcreteType, Context, FieldDescription, GenericLookup, TypeDescription};
 
 #[enum_dispatch]
 pub trait HasLayout {
@@ -22,6 +22,17 @@ pub enum LayoutManager {
 impl LayoutManager {
     pub fn is_gc_ptr(&self) -> bool {
         match self {
+            LayoutManager::Scalar(Scalar::ObjectRef) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_or_contains_refs(&self) -> bool {
+        match self {
+            LayoutManager::FieldLayoutManager(f) => {
+                f.fields.values().any(|f| f.layout.is_or_contains_refs())
+            }
+            LayoutManager::ArrayLayoutManager(a) => a.element_layout.is_or_contains_refs(),
             LayoutManager::Scalar(Scalar::ObjectRef) => true,
             _ => false,
         }
@@ -111,7 +122,7 @@ impl FieldLayoutManager {
                     if packing_size == 0 {
                         packing_size = size_of::<usize>();
                     }
-                    
+
                     let mut offset = 0;
 
                     for (name, _, layout) in fields {
@@ -126,7 +137,7 @@ impl FieldLayoutManager {
                         );
                         offset = aligned_offset + size;
                     }
-                    
+
                     total_size = align_up(offset, usize::max(packing_size, class_size));
                 }
             },
@@ -173,13 +184,14 @@ impl FieldLayoutManager {
         ancestors.pop();
 
         let mut total_fields = vec![];
-        let mut add_field_layout = |f: &'static Field, ctx: &Context| {
-            let layout = type_layout(ctx.make_concrete(&f.return_type), ctx.clone());
-            total_fields.push((f.name.as_ref(), f.offset, layout));
+        let mut add_field_layout = |f: FieldDescription, ctx: &Context| {
+            let t = ctx.get_field_type(f);
+            let layout = type_layout(t, ctx.clone());
+            total_fields.push((f.field.name.as_ref(), f.field.offset, layout));
         };
 
         for (
-            TypeDescription {
+            td @ TypeDescription {
                 resolution: res,
                 definition: a,
             },
@@ -202,7 +214,13 @@ impl FieldLayoutManager {
                     continue;
                 }
 
-                add_field_layout(f, &new_ctx);
+                add_field_layout(
+                    FieldDescription {
+                        parent: td,
+                        field: f,
+                    },
+                    &new_ctx,
+                );
             }
         }
 
@@ -212,7 +230,13 @@ impl FieldLayoutManager {
                 continue;
             }
 
-            add_field_layout(f, &context);
+            add_field_layout(
+                FieldDescription {
+                    parent: td,
+                    field: f,
+                },
+                &context,
+            );
         }
 
         Self::new(total_fields, td.definition.flags.layout)

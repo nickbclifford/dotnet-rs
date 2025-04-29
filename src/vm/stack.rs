@@ -213,13 +213,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             args.push(self.pop_stack());
         }
 
-        // the caller will see this as the newobj "return value" ?
-        self.push_stack(gc, value.clone());
-
-        // note that valuetypes receive the `this` parameter as a ManagedPtr
+        // first pushing the NewObject 'return value', then the value of the 'this' parameter
         if desc.is_value_type() {
-            self.push_stack(gc, StackValue::managed_ptr(value.data_location() as *mut _, desc));
+            self.push_stack(gc, value);
+            
+            self.push_stack(gc, StackValue::managed_ptr(self.top_of_stack_address() as *mut _, desc));
         } else {
+            self.push_stack(gc, value.clone());
+            
             self.push_stack(gc, value);
         }
 
