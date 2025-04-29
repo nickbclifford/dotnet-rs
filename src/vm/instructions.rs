@@ -135,7 +135,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         macro_rules! equal {
             () => {{
                 use StackValue::*;
-                match (pop!(), pop!()) {
+                let value2 = pop!();
+                let value1 = pop!();
+                match (value1, value2) {
                     (ManagedPtr(m), NativeInt(r)) => m.value as isize == r,
                     (NativeInt(l), ManagedPtr(m)) => l == m.value as isize,
                     (ObjectRef(l), ObjectRef(r)) => l == r,
@@ -146,7 +148,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         macro_rules! compare {
             ($sgn:expr, $op:tt ( $order:pat )) => {{
                 use StackValue::*;
-                match (pop!(), pop!(), $sgn) {
+                let value2 = pop!();
+                let value1 = pop!();
+                match (value1, value2, $sgn) {
                     (Int32(l), Int32(r), Unsigned) => {
                         (l as u32) $op (r as u32)
                     }
@@ -692,7 +696,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let arg = self.get_argument(*i as usize);
                 push!(arg);
             }
-            LoadArgumentAddress(_) => todo!("ldarga"),
+            LoadArgumentAddress(i) => {
+                let arg = self.get_argument(*i as usize);
+                let live_type = arg.contains_type(self.current_context());
+                push!(managed_ptr(
+                    self.get_argument_address(*i as usize) as *mut _,
+                    live_type
+                ));
+            },
             LoadConstantInt32(i) => push!(Int32(*i)),
             LoadConstantInt64(i) => push!(Int64(*i)),
             LoadConstantFloat32(f) => push!(NativeFloat(*f as f64)),

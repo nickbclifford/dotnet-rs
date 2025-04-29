@@ -30,6 +30,10 @@ pub struct Context<'a> {
     pub resolution: ResolutionS,
 }
 impl<'a> Context<'a> {
+    pub fn with_type_generics(ctx: Context<'a>, generics: &'a GenericLookup) -> Context<'a> {
+        Context { generics, ..ctx }
+    }
+
     pub fn locate_type(&self, handle: UserType) -> TypeDescription {
         self.assemblies.locate_type(self.resolution, handle)
     }
@@ -377,38 +381,54 @@ impl<'gc> CTSValue<'gc> {
             BaseType::Type {
                 value_kind: None | Some(ValueKind::ValueType),
                 source,
-            } => Self::Value(match source {
-                TypeSource::User(u) => {
-                    let t = context.locate_type(*u);
-                    match t.type_name().as_str() {
-                        "System.Boolean" => Bool(todo!()),
-                        "System.Char" => Char(todo!()),
-                        "System.Single" => Float32(match data {
-                            StackValue::NativeFloat(f) => f as f32,
-                            other => panic!("invalid stack value {:?} for float conversion", other),
-                        }),
-                        "System.Double" => Float64(match data {
-                            StackValue::NativeFloat(f) => f,
-                            other => panic!("invalid stack value {:?} for float conversion", other),
-                        }),
-                        "System.SByte" => Int8(convert_num(data)),
-                        "System.Int16" => Int16(convert_num(data)),
-                        "System.Int32" => Int32(convert_num(data)),
-                        "System.Int64" => Int64(convert_i64(data)),
-                        "System.IntPtr" => NativeInt(convert_num(data)),
-                        "System.TypedReference" => TypedRef,
-                        "System.Byte" => UInt8(convert_num(data)),
-                        "System.UInt16" => UInt16(convert_num(data)),
-                        "System.UInt32" => UInt32(convert_num(data)),
-                        "System.UInt64" => UInt64(convert_i64(data)),
-                        "System.UIntPtr" => NativeUInt(convert_num(data)),
-                        _ => Struct(todo!()),
+            } => {
+                let mut type_generics: &[ConcreteType] = &[];
+                let ut = match source {
+                    TypeSource::User(u) => u,
+                    TypeSource::Generic { base, parameters } => {
+                        type_generics = parameters.as_slice();
+                        base
                     }
-                }
-                TypeSource::Generic { .. } => {
-                    todo!("resolve types with generics")
-                }
-            }),
+                };
+                let new_lookup = GenericLookup::new(type_generics.to_vec());
+                let new_ctx = Context::with_type_generics(context.clone(), &new_lookup);
+                let td = new_ctx.locate_type(*ut);
+                
+                let v = match td.type_name().as_str() {
+                    "System.Boolean" => Bool(todo!()),
+                    "System.Char" => Char(todo!()),
+                    "System.Single" => Float32(match data {
+                        StackValue::NativeFloat(f) => f as f32,
+                        other => panic!("invalid stack value {:?} for float conversion", other),
+                    }),
+                    "System.Double" => Float64(match data {
+                        StackValue::NativeFloat(f) => f,
+                        other => panic!("invalid stack value {:?} for float conversion", other),
+                    }),
+                    "System.SByte" => Int8(convert_num(data)),
+                    "System.Int16" => Int16(convert_num(data)),
+                    "System.Int32" => Int32(convert_num(data)),
+                    "System.Int64" => Int64(convert_i64(data)),
+                    "System.IntPtr" => NativeInt(convert_num(data)),
+                    "System.TypedReference" => TypedRef,
+                    "System.Byte" => UInt8(convert_num(data)),
+                    "System.UInt16" => UInt16(convert_num(data)),
+                    "System.UInt32" => UInt32(convert_num(data)),
+                    "System.UInt64" => UInt64(convert_i64(data)),
+                    "System.UIntPtr" => NativeUInt(convert_num(data)),
+                    _ => match data {
+                        StackValue::ValueType(o) => {
+                            if !new_ctx.is_a(o.description, td) {
+                                panic!("type mismatch: expected {:?}, found {:?}", td, o.description);
+                            }
+                            Struct(*o)
+                        },
+                        other => panic!("cannot read stack value {:?} into type storage", other),
+                    },
+                };
+                
+                Self::Value(v)
+            },
             BaseType::Type {
                 value_kind: Some(ValueKind::Class),
                 ..
@@ -455,32 +475,44 @@ impl<'gc> CTSValue<'gc> {
             BaseType::Type {
                 value_kind: None | Some(ValueKind::ValueType),
                 source,
-            } => Self::Value(match source {
-                TypeSource::User(u) => {
-                    let t = context.locate_type(*u);
-                    match t.type_name().as_str() {
-                        "System.Boolean" => Bool(data[0] != 0),
-                        "System.Char" => Char(from_bytes!(u16, data)),
-                        "System.Single" => Float32(from_bytes!(f32, data)),
-                        "System.Double" => Float64(from_bytes!(f64, data)),
-                        "System.SByte" => Int8(data[0] as i8),
-                        "System.Int16" => Int16(from_bytes!(i16, data)),
-                        "System.Int32" => Int32(from_bytes!(i32, data)),
-                        "System.Int64" => Int64(from_bytes!(i64, data)),
-                        "System.IntPtr" => NativeInt(from_bytes!(isize, data)),
-                        "System.TypedReference" => TypedRef,
-                        "System.Byte" => UInt8(data[0]),
-                        "System.UInt16" => UInt16(from_bytes!(u16, data)),
-                        "System.UInt32" => UInt32(from_bytes!(u32, data)),
-                        "System.UInt64" => UInt64(from_bytes!(u64, data)),
-                        "System.UIntPtr" => NativeUInt(from_bytes!(usize, data)),
-                        _ => Struct(todo!()),
+            } => {
+                let mut type_generics: &[ConcreteType] = &[];
+                let ut = match source {
+                    TypeSource::User(u) => u,
+                    TypeSource::Generic { base, parameters } => {
+                        type_generics = parameters.as_slice();
+                        base
                     }
-                }
-                TypeSource::Generic { .. } => {
-                    todo!("resolve types with generics")
-                }
-            }),
+                };
+                let new_lookup = GenericLookup::new(type_generics.to_vec());
+                let new_ctx = Context::with_type_generics(context.clone(), &new_lookup);
+                let td = new_ctx.locate_type(*ut);
+                
+                let v = match td.type_name().as_str() {
+                    "System.Boolean" => Bool(data[0] != 0),
+                    "System.Char" => Char(from_bytes!(u16, data)),
+                    "System.Single" => Float32(from_bytes!(f32, data)),
+                    "System.Double" => Float64(from_bytes!(f64, data)),
+                    "System.SByte" => Int8(data[0] as i8),
+                    "System.Int16" => Int16(from_bytes!(i16, data)),
+                    "System.Int32" => Int32(from_bytes!(i32, data)),
+                    "System.Int64" => Int64(from_bytes!(i64, data)),
+                    "System.IntPtr" => NativeInt(from_bytes!(isize, data)),
+                    "System.TypedReference" => TypedRef,
+                    "System.Byte" => UInt8(data[0]),
+                    "System.UInt16" => UInt16(from_bytes!(u16, data)),
+                    "System.UInt32" => UInt32(from_bytes!(u32, data)),
+                    "System.UInt64" => UInt64(from_bytes!(u64, data)),
+                    "System.UIntPtr" => NativeUInt(from_bytes!(usize, data)),
+                    _ => {
+                        let mut instance = Object::new(td, new_ctx);
+                        instance.instance_storage.get_mut().copy_from_slice(data);
+                        Struct(instance)
+                    },
+                };
+                
+                Self::Value(v)
+            },
             BaseType::Type {
                 value_kind: Some(ValueKind::Class),
                 ..
@@ -665,6 +697,20 @@ impl TypeDescription {
     pub fn type_name(&self) -> String {
         self.definition.type_name()
     }
+
+    pub fn is_value_type(&self) -> bool {
+        match &self.definition.extends {
+            Some(TypeSource::User(u))
+            if matches!(
+                    u.type_name(self.resolution).as_str(),
+                    "System.Enum" | "System.ValueType"
+                ) =>
+                {
+                    true
+                }
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -751,6 +797,13 @@ pub struct GenericLookup {
     pub method_generics: Vec<ConcreteType>,
 }
 impl GenericLookup {
+    pub fn new(type_generics: Vec<ConcreteType>) -> Self {
+        Self {
+            type_generics,
+            method_generics: vec![],
+        }
+    }
+
     pub fn make_concrete(&self, source: ResolutionS, t: impl Into<MethodType>) -> ConcreteType {
         match t.into() {
             MethodType::Base(b) => {

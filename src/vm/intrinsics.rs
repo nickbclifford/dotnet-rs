@@ -1,4 +1,7 @@
-use crate::value::{ConcreteType, Context, FieldDescription, GenericLookup, MethodDescription, Object, ObjectRef, StackValue};
+use crate::value::{
+    ConcreteType, Context, FieldDescription, GenericLookup, MethodDescription, Object, ObjectRef,
+    StackValue,
+};
 use dotnetdll::prelude::*;
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -47,15 +50,8 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 ),
             };
 
-            let new_lookup = GenericLookup {
-                type_generics: type_generics.to_vec(),
-                method_generics: vec![],
-            };
-
-            let new_ctx = Context {
-                generics: &new_lookup,
-                ..stack.current_context()
-            };
+            let new_lookup = GenericLookup::new(type_generics.to_vec());
+            let new_ctx = Context::with_type_generics(stack.current_context(), &new_lookup);
 
             let instance = Object::new(td, new_ctx.clone());
 
@@ -94,14 +90,25 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             // TODO(gc): this object's finalizer should not be called
             let _obj = stack.pop_stack();
         }
+        "static int System.Runtime.InteropServices.Marshal::GetLastPInvokeError()" => {
+            let value = unsafe { super::pinvoke::LAST_ERROR };
+
+            stack.push_stack(gc, StackValue::Int32(value));
+        }
         "static void System.Runtime.InteropServices.Marshal::SetLastPInvokeError(int)" => {
             let StackValue::Int32(value) = stack.pop_stack() else {
                 todo!("invalid type on stack")
             };
-            
+
             unsafe {
                 super::pinvoke::LAST_ERROR = value;
             }
+        }
+        "static bool System.Runtime.Intrinsics.Vector128::get_IsHardwareAccelerated()" |
+        "static bool System.Runtime.Intrinsics.Vector256::get_IsHardwareAccelerated()" |
+        "static bool System.Runtime.Intrinsics.Vector512::get_IsHardwareAccelerated()" => {
+            // not in a million years, lol
+            stack.push_stack(gc, StackValue::Int32(0));
         }
         "static int System.Threading.Interlocked::CompareExchange(ref int, int, int)" => {
             let StackValue::Int32(comparand) = stack.pop_stack() else {

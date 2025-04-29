@@ -186,7 +186,37 @@ impl Assemblies {
         name: &str,
         signature: &ManagedMethod<MethodType>,
     ) -> Option<MethodDescription> {
-        for method in &desc.definition.methods {
+        let mut methods_to_search: Vec<_> = vec![];
+        let def = &desc.definition;
+        
+        let filter = |n: &str| n.contains('_');
+        
+        let (has_underscore, rest): (Vec<_>, _) = def.methods.iter().partition(|m| filter(m.name.as_ref()));
+        // prefixes required by the standard for properties and events:
+        // get_, set_, add_, remove_, raise_
+        if filter(name) {
+            for p in &def.properties {
+                if let Some(m) = &p.getter {
+                    methods_to_search.push(m);
+                }
+                if let Some(m) = &p.setter {
+                    methods_to_search.push(m);
+                }
+            }
+            for e in &def.events {
+                methods_to_search.push(&e.add_listener);
+                methods_to_search.push(&e.remove_listener);
+                if let Some(r) = &e.raise_event {
+                    methods_to_search.push(r);
+                }
+            }
+            methods_to_search.extend(has_underscore);
+        } else {
+            methods_to_search.extend(rest);
+        }
+        methods_to_search.extend(def.events.iter().flat_map(|e| &e.other));
+
+        for method in methods_to_search {
             if method.name == name && signature == &method.signature {
                 return Some(MethodDescription {
                     parent: desc,

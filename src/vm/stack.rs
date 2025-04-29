@@ -12,9 +12,10 @@ use dotnetdll::prelude::*;
 use gc_arena::{
     lock::RefLock, Arena, Collect, Collection, DynamicRoot, DynamicRootSet, Gc, Mutation, Rootable,
 };
+use std::collections::VecDeque;
+use std::fmt::Debug;
 use std::rc::Rc;
 use std::{cell::RefCell, collections::HashMap, fs::OpenOptions, io::Write};
-use std::collections::VecDeque;
 
 type StackSlot = Rootable![Gc<'_, RefLock<StackValue<'_>>>];
 
@@ -127,23 +128,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             };
                             let desc = ctx.locate_type(ut);
 
-                            if let Some(TypeSource::User(u)) = &desc.definition.extends {
-                                match u.type_name(desc.resolution).as_str() {
-                                    "System.Enum" => todo!("init enum local"),
-                                    "System.ValueType" => {
-                                        let new_lookup = GenericLookup {
-                                            type_generics: type_generics.to_vec(),
-                                            method_generics: vec![],
-                                        };
-                                        let new_ctx = Context {
-                                            generics: &new_lookup,
-                                            ..ctx
-                                        };
-                                        let instance = ObjectInstance::new(desc, new_ctx);
-                                        StackValue::ValueType(Box::new(instance))
-                                    }
-                                    _ => StackValue::null(),
-                                }
+                            if desc.is_value_type() {
+                                let new_lookup = GenericLookup::new(type_generics.to_vec());
+                                let new_ctx = Context::with_type_generics(ctx, &new_lookup);
+                                let instance = ObjectInstance::new(desc, new_ctx);
+                                StackValue::ValueType(Box::new(instance))
                             } else {
                                 StackValue::null()
                             }
@@ -205,24 +194,18 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         method: MethodInfo<'m>,
         generic_inst: GenericLookup,
     ) {
+        let desc = instance.description;
+
         // newobj is typically not used for value types, but still works to put them on the stack (III.4.21)
-        let value = match &instance.description.definition.extends {
-            Some(TypeSource::User(u))
-                if matches!(
-                    u.type_name(instance.description.resolution).as_str(),
-                    "System.Enum" | "System.ValueType"
-                ) =>
-            {
-                StackValue::ValueType(Box::new(instance))
-            }
-            _ => {
-                let in_heap = ObjectRef::new(gc, HeapStorage::Obj(instance));
-                let ObjectRef(Some(ptr)) = &in_heap else {
-                    unreachable!()
-                };
-                self._all_objs.push(Gc::as_ptr(*ptr) as usize);
-                StackValue::ObjectRef(in_heap)
-            }
+        let value = if desc.is_value_type() {
+            StackValue::ValueType(Box::new(instance))
+        } else {
+            let in_heap = ObjectRef::new(gc, HeapStorage::Obj(instance));
+            let ObjectRef(Some(ptr)) = &in_heap else {
+                unreachable!()
+            };
+            self._all_objs.push(Gc::as_ptr(*ptr) as usize);
+            StackValue::ObjectRef(in_heap)
         };
 
         let mut args = vec![];
@@ -233,8 +216,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         // the caller will see this as the newobj "return value" ?
         self.push_stack(gc, value.clone());
 
-        // this is the arguments array setup
-        self.push_stack(gc, value);
+        // note that valuetypes receive the `this` parameter as a ManagedPtr
+        if desc.is_value_type() {
+            self.push_stack(gc, StackValue::managed_ptr(value.data_location() as *mut _, desc));
+        } else {
+            self.push_stack(gc, value);
+        }
+
         for _ in 0..method.signature.parameters.len() {
             self.push_stack(gc, args.pop().unwrap());
         }
@@ -341,6 +329,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         f.base.stack + f.stack_height
     }
 
+    fn get_handle_location(&self, handle: &StackSlotHandle) -> *const u8 {
+        let slot_ref = self.roots.fetch(&handle.0).borrow();
+        slot_ref.data_location()
+    }
+
     fn get_arg_handle(&self, index: usize) -> &StackSlotHandle {
         let bp = &self.current_frame().base;
         &self.stack[bp.arguments + index]
@@ -348,6 +341,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn get_argument(&self, index: usize) -> StackValue<'gc> {
         self.get_slot(self.get_arg_handle(index))
+    }
+
+    pub fn get_argument_address(&self, index: usize) -> *const u8 {
+        self.get_handle_location(self.get_arg_handle(index))
     }
 
     pub fn set_argument(&self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
@@ -364,11 +361,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn get_local_address(&self, index: usize) -> *const u8 {
-        let local_handle = self.get_local_handle(index);
-        // get_slot would copy the value out of the stack slot
-        // here, we want a reference to the actual internal location of it
-        let slot_ref = self.roots.fetch(&local_handle.0).borrow();
-        slot_ref.data_location()
+        self.get_handle_location(self.get_local_handle(index))
     }
 
     pub fn set_local(&self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
@@ -396,6 +389,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             None => todo!("empty call stack"),
         }
+    }
+
+    pub fn top_of_stack_address(&self) -> *const u8 {
+        self.get_handle_location(&self.stack[self.top_of_stack() - 1])
     }
 
     pub fn bottom_of_stack(&self) -> Option<StackValue<'gc>> {

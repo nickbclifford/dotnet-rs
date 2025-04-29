@@ -105,9 +105,13 @@ impl FieldLayoutManager {
                     total_size = offset;
                 }
                 Some(SequentialLayout {
-                    packing_size,
+                    mut packing_size,
                     class_size,
                 }) => {
+                    if packing_size == 0 {
+                        packing_size = size_of::<usize>();
+                    }
+                    
                     let mut offset = 0;
 
                     for (name, _, layout) in fields {
@@ -122,7 +126,8 @@ impl FieldLayoutManager {
                         );
                         offset = aligned_offset + size;
                     }
-                    total_size = align_up(offset, class_size);
+                    
+                    total_size = align_up(offset, usize::max(packing_size, class_size));
                 }
             },
             Layout::Explicit(e) => {
@@ -173,14 +178,20 @@ impl FieldLayoutManager {
             total_fields.push((f.name.as_ref(), f.offset, layout));
         };
 
-        for (TypeDescription { resolution: res, definition: a }, generic_params) in ancestors {
-            let new_lookup = GenericLookup {
-                type_generics: generic_params
+        for (
+            TypeDescription {
+                resolution: res,
+                definition: a,
+            },
+            generic_params,
+        ) in ancestors
+        {
+            let new_lookup = GenericLookup::new(
+                generic_params
                     .into_iter()
                     .map(|t| context.make_concrete(t))
                     .collect(),
-                method_generics: vec![],
-            };
+            );
             let new_ctx = Context {
                 generics: &new_lookup,
                 resolution: res,
@@ -289,17 +300,11 @@ pub fn type_layout(t: ConcreteType, context: Context) -> LayoutManager {
                 }
             };
 
-            let new_lookup = GenericLookup {
-                type_generics,
-                method_generics: vec![],
-            };
+            let new_lookup = GenericLookup::new(type_generics);
 
             FieldLayoutManager::instance_fields(
                 t,
-                Context {
-                    generics: &new_lookup,
-                    ..context
-                },
+                Context::with_type_generics(context, &new_lookup),
             )
             .into()
         }

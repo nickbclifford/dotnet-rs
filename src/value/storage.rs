@@ -93,6 +93,10 @@ impl FieldStorage<'_> {
     pub fn get(&self) -> &[u8] {
         &self.storage
     }
+    
+    pub fn get_mut(&mut self) -> &mut [u8] {
+        &mut self.storage
+    }
 
     fn get_field_range(&self, field: &str) -> Range<usize> {
         match self.layout.fields.get(field) {
