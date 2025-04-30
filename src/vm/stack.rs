@@ -112,7 +112,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     by_ref, var_type, ..
                 } => {
                     if *by_ref {
-                        todo!("initialize byref local")
+                        // todo!("initialize byref local")
+                        // maybe i don't need to care and it will always be referenced appropriately?
                     }
                     let ctx = self.current_context();
 
@@ -130,7 +131,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                             if desc.is_value_type() {
                                 let new_lookup = GenericLookup::new(type_generics.to_vec());
-                                let new_ctx = Context::with_type_generics(ctx, &new_lookup);
+                                let new_ctx = Context::with_generics(ctx, &new_lookup);
                                 let instance = ObjectInstance::new(desc, new_ctx);
                                 StackValue::ValueType(Box::new(instance))
                             } else {
@@ -216,11 +217,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         // first pushing the NewObject 'return value', then the value of the 'this' parameter
         if desc.is_value_type() {
             self.push_stack(gc, value);
-            
-            self.push_stack(gc, StackValue::managed_ptr(self.top_of_stack_address() as *mut _, desc));
+
+            self.push_stack(
+                gc,
+                StackValue::managed_ptr(self.top_of_stack_address() as *mut _, desc),
+            );
         } else {
             self.push_stack(gc, value.clone());
-            
+
             self.push_stack(gc, value);
         }
 

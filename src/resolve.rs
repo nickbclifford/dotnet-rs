@@ -14,7 +14,7 @@ pub struct Assemblies {
 }
 
 impl Assemblies {
-    pub fn new<'a>(entrypoint: ResolutionS, assembly_root: String) -> Self {
+    pub fn new(entrypoint: ResolutionS, assembly_root: String) -> Self {
         let resolutions = std::fs::read_dir(&assembly_root)
             .unwrap()
             .filter_map(|e| {
@@ -188,10 +188,11 @@ impl Assemblies {
     ) -> Option<MethodDescription> {
         let mut methods_to_search: Vec<_> = vec![];
         let def = &desc.definition;
-        
+
         let filter = |n: &str| n.contains('_');
-        
-        let (has_underscore, rest): (Vec<_>, _) = def.methods.iter().partition(|m| filter(m.name.as_ref()));
+
+        let (has_underscore, rest): (Vec<_>, _) =
+            def.methods.iter().partition(|m| filter(m.name.as_ref()));
         // prefixes required by the standard for properties and events:
         // get_, set_, add_, remove_, raise_
         if filter(name) {
@@ -285,30 +286,46 @@ impl Assemblies {
         resolution: ResolutionS,
         field: FieldSource,
         generic_inst: &GenericLookup,
-    ) -> FieldDescription {
+    ) -> (FieldDescription, GenericLookup) {
         match field {
-            FieldSource::Definition(d) => FieldDescription {
-                parent: TypeDescription {
-                    resolution,
-                    definition: &resolution[d.parent_type()],
+            FieldSource::Definition(d) => (
+                FieldDescription {
+                    parent: TypeDescription {
+                        resolution,
+                        definition: &resolution[d.parent_type()],
+                    },
+                    field: &resolution[d],
                 },
-                field: &resolution[d],
-            },
+                generic_inst.clone(),
+            ),
             FieldSource::Reference(r) => {
                 let field_ref = &resolution[r];
 
                 use FieldReferenceParent::*;
                 match &field_ref.parent {
                     Type(t) => {
-                        let parent_type = self
-                            .find_concrete_type(generic_inst.make_concrete(resolution, t.clone()));
+                        let t = generic_inst.make_concrete(resolution, t.clone());
+                        let parent_type = self.find_concrete_type(t.clone());
 
                         for field in &parent_type.definition.fields {
                             if field.name == field_ref.name {
-                                return FieldDescription {
-                                    parent: parent_type,
-                                    field,
+                                let type_generics = if let BaseType::Type {
+                                    source: TypeSource::Generic { parameters, .. },
+                                    ..
+                                } = t.get()
+                                {
+                                    parameters.clone()
+                                } else {
+                                    vec![]
                                 };
+
+                                return (
+                                    FieldDescription {
+                                        parent: parent_type,
+                                        field,
+                                    },
+                                    GenericLookup::new(type_generics),
+                                );
                             }
                         }
 

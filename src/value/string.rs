@@ -1,5 +1,5 @@
+use gc_arena::{unsafe_empty_collect, Collect};
 use std::fmt::{Debug, Formatter};
-use gc_arena::{Collect, unsafe_empty_collect};
 
 #[derive(Clone)]
 pub struct CLRString(Vec<u16>);

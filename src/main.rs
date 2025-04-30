@@ -1,6 +1,6 @@
-use std::process::ExitCode;
 use clap::Parser;
 use dotnetdll::prelude::*;
+use std::process::ExitCode;
 
 use crate::utils::static_res_from_file;
 use crate::vm::ExecutorResult;
@@ -40,7 +40,7 @@ fn main() -> ExitCode {
 
     let result = executor.run();
     match result {
-        ExecutorResult::Exited(i) => ExitCode::from(i), 
-        ExecutorResult::Threw => todo!()
+        ExecutorResult::Exited(i) => ExitCode::from(i),
+        ExecutorResult::Threw => todo!(),
     }
 }

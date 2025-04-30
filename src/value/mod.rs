@@ -30,7 +30,7 @@ pub struct Context<'a> {
     pub resolution: ResolutionS,
 }
 impl<'a> Context<'a> {
-    pub fn with_type_generics(ctx: Context<'a>, generics: &'a GenericLookup) -> Context<'a> {
+    pub const fn with_generics(ctx: Context<'a>, generics: &'a GenericLookup) -> Context<'a> {
         Context { generics, ..ctx }
     }
 
@@ -47,7 +47,7 @@ impl<'a> Context<'a> {
             .locate_method(self.resolution, handle, generic_inst)
     }
 
-    pub fn locate_field(&self, field: FieldSource) -> FieldDescription {
+    pub fn locate_field(&self, field: FieldSource) -> (FieldDescription, GenericLookup) {
         self.assemblies
             .locate_field(self.resolution, field, self.generics)
     }
@@ -86,7 +86,7 @@ impl<'a> Context<'a> {
     pub fn make_concrete<T: Clone + Into<MethodType>>(&self, t: &T) -> ConcreteType {
         self.generics.make_concrete(self.resolution, t.clone())
     }
-    
+
     pub fn get_field_type(&self, field: FieldDescription) -> ConcreteType {
         let return_type = &field.field.return_type;
         if field.field.by_ref {
@@ -325,10 +325,15 @@ fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(data: StackVal
         StackValue::NativeInt(i) => i
             .try_into()
             .unwrap_or_else(|_| panic!("failed to convert from isize")),
-        StackValue::UnmanagedPtr(UnmanagedPtr(p)) | StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => (p as usize)
+        StackValue::UnmanagedPtr(UnmanagedPtr(p))
+        | StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => (p as usize)
             .try_into()
             .unwrap_or_else(|_| panic!("failed to convert from pointer")),
-        other => panic!("invalid stack value {:?} for conversion into {}", other, std::any::type_name::<T>()),
+        other => panic!(
+            "invalid stack value {:?} for conversion into {}",
+            other,
+            std::any::type_name::<T>()
+        ),
     }
 }
 fn convert_i64<T: TryFrom<i64>>(data: StackValue) -> T {
@@ -404,7 +409,7 @@ impl<'gc> CTSValue<'gc> {
                     }
                 };
                 let new_lookup = GenericLookup::new(type_generics.to_vec());
-                let new_ctx = Context::with_type_generics(context.clone(), &new_lookup);
+                let new_ctx = Context::with_generics(context.clone(), &new_lookup);
                 let td = new_ctx.locate_type(*ut);
 
                 let v = match td.type_name().as_str() {
@@ -432,16 +437,19 @@ impl<'gc> CTSValue<'gc> {
                     _ => match data {
                         StackValue::ValueType(o) => {
                             if !new_ctx.is_a(o.description, td) {
-                                panic!("type mismatch: expected {:?}, found {:?}", td, o.description);
+                                panic!(
+                                    "type mismatch: expected {:?}, found {:?}",
+                                    td, o.description
+                                );
                             }
                             Struct(*o)
-                        },
+                        }
                         other => panic!("cannot read stack value {:?} into type storage", other),
                     },
                 };
 
                 Self::Value(v)
-            },
+            }
             BaseType::Type {
                 value_kind: Some(ValueKind::Class),
                 ..
@@ -498,7 +506,7 @@ impl<'gc> CTSValue<'gc> {
                     }
                 };
                 let new_lookup = GenericLookup::new(type_generics.to_vec());
-                let new_ctx = Context::with_type_generics(context.clone(), &new_lookup);
+                let new_ctx = Context::with_generics(context.clone(), &new_lookup);
                 let td = new_ctx.locate_type(*ut);
 
                 let v = match td.type_name().as_str() {
@@ -521,11 +529,11 @@ impl<'gc> CTSValue<'gc> {
                         let mut instance = Object::new(td, new_ctx);
                         instance.instance_storage.get_mut().copy_from_slice(data);
                         Struct(instance)
-                    },
+                    }
                 };
 
                 Self::Value(v)
-            },
+            }
             BaseType::Type {
                 value_kind: Some(ValueKind::Class),
                 ..
@@ -622,11 +630,7 @@ unsafe impl Collect for Vector<'_> {
     }
 }
 impl<'gc> Vector<'gc> {
-    pub fn new(
-        element: ConcreteType,
-        size: usize,
-        context: Context,
-    ) -> Self {
+    pub fn new(element: ConcreteType, size: usize, context: Context) -> Self {
         let layout = ArrayLayoutManager::new(element.clone(), size, context);
         Self {
             storage: vec![0; layout.size()], // TODO: initialize properly
@@ -720,13 +724,13 @@ impl TypeDescription {
     pub fn is_value_type(&self) -> bool {
         match &self.definition.extends {
             Some(TypeSource::User(u))
-            if matches!(
+                if matches!(
                     u.type_name(self.resolution).as_str(),
                     "System.Enum" | "System.ValueType"
                 ) =>
-                {
-                    true
-                }
+            {
+                true
+            }
             _ => false,
         }
     }
@@ -830,13 +834,6 @@ impl GenericLookup {
             }
             MethodType::TypeGeneric(i) => self.type_generics[i].clone(),
             MethodType::MethodGeneric(i) => self.method_generics[i].clone(),
-        }
-    }
-
-    pub fn instantiate_method(&self, parameters: Vec<ConcreteType>) -> Self {
-        Self {
-            method_generics: parameters,
-            ..self.clone()
         }
     }
 }

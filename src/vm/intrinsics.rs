@@ -1,11 +1,11 @@
+use super::{CallStack, GCHandle, MethodInfo};
+use crate::value::layout::{type_layout, FieldLayoutManager};
 use crate::value::{
     ConcreteType, Context, FieldDescription, GenericLookup, MethodDescription, Object, ObjectRef,
     StackValue,
 };
 use dotnetdll::prelude::*;
 use std::sync::atomic::{AtomicI32, Ordering};
-use crate::value::layout::type_layout;
-use super::{CallStack, GCHandle, MethodInfo};
 
 fn ref_as_ptr(v: StackValue) -> *mut u8 {
     match v {
@@ -24,6 +24,8 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
     generics: GenericLookup,
 ) {
     super::msg!(stack, "-- method marked as runtime intrinsic --");
+
+    let ctx = Context::with_generics(stack.current_context(), &generics);
 
     // TODO: real signature checking
     match format!("{:?}", method).as_str() {
@@ -51,7 +53,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             };
 
             let new_lookup = GenericLookup::new(type_generics.to_vec());
-            let new_ctx = Context::with_type_generics(stack.current_context(), &new_lookup);
+            let new_ctx = Context::with_generics(ctx, &new_lookup);
 
             let instance = Object::new(td, new_ctx.clone());
 
@@ -92,8 +94,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         }
         "[Generic(1)] static bool System.Runtime.CompilerServices.RuntimeHelpers::IsReferenceOrContainsReferences()" => {
             let target = &generics.method_generics[0];
-            let layout = type_layout(target.clone(), stack.current_context());
-            
+            let layout = type_layout(target.clone(), ctx);
             stack.push_stack(gc, StackValue::Int32(layout.is_or_contains_refs() as i32));
         }
         "static int System.Runtime.InteropServices.Marshal::GetLastPInvokeError()" => {
@@ -115,6 +116,18 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         "static bool System.Runtime.Intrinsics.Vector512::get_IsHardwareAccelerated()" => {
             // not in a million years, lol
             stack.push_stack(gc, StackValue::Int32(0));
+        }
+        "int System.Span`1::get_Length()" => {
+            let span = stack.assemblies.corlib_type("System.Span`1");
+            let layout = FieldLayoutManager::instance_fields(
+                span,
+                Context::with_generics(ctx, &generics)
+            );
+            let value = unsafe {
+                let target = ref_as_ptr(stack.pop_stack()).add(layout.fields["_length"].position) as *const i32;
+                *target
+            };
+            stack.push_stack(gc, StackValue::Int32(value));
         }
         "static int System.Threading.Interlocked::CompareExchange(ref int, int, int)" => {
             let StackValue::Int32(comparand) = stack.pop_stack() else {

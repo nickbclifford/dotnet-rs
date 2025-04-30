@@ -93,7 +93,7 @@ impl FieldStorage<'_> {
     pub fn get(&self) -> &[u8] {
         &self.storage
     }
-    
+
     pub fn get_mut(&mut self) -> &mut [u8] {
         &mut self.storage
     }
@@ -139,11 +139,7 @@ pub struct StaticStorageManager<'gc> {
 impl Debug for StaticStorageManager<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_map()
-            .entries(
-                self.types
-                    .iter()
-                    .map(|(k, v)| (DebugStr(k.type_name()), v)),
-            )
+            .entries(self.types.iter().map(|(k, v)| (DebugStr(k.type_name()), v)))
             .finish()
     }
 }

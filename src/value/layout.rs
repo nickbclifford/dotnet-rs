@@ -326,11 +326,8 @@ pub fn type_layout(t: ConcreteType, context: Context) -> LayoutManager {
 
             let new_lookup = GenericLookup::new(type_generics);
 
-            FieldLayoutManager::instance_fields(
-                t,
-                Context::with_type_generics(context, &new_lookup),
-            )
-            .into()
+            FieldLayoutManager::instance_fields(t, Context::with_generics(context, &new_lookup))
+                .into()
         }
         BaseType::Type { .. }
         | BaseType::Object

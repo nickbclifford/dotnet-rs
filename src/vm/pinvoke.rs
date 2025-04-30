@@ -57,7 +57,7 @@ fn type_to_layout(t: &TypeSource<ConcreteType>, ctx: Context) -> FieldLayoutMana
         }
     };
     let new_lookup = GenericLookup::new(type_generics.to_vec());
-    let new_ctx = Context::with_type_generics(ctx, &new_lookup);
+    let new_ctx = Context::with_generics(ctx, &new_lookup);
     let td = new_ctx.locate_type(*ut);
 
     FieldLayoutManager::instance_fields(td, new_ctx.clone()).into()
@@ -112,7 +112,7 @@ fn type_to_ffi(t: &ConcreteType, ctx: Context) -> Type {
                 _ => vec![],
             };
             let new_lookup = GenericLookup::new(type_generics);
-            let new_ctx = Context::with_type_generics(ctx, &new_lookup);
+            let new_ctx = Context::with_generics(ctx, &new_lookup);
 
             let layout = type_to_layout(source, new_ctx);
             layout_to_ffi(layout.into())
@@ -229,7 +229,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             }
                         };
                         let new_lookup = GenericLookup::new(type_generics.to_vec());
-                        let new_ctx = Context::with_type_generics(ctx, &new_lookup);
+                        let new_ctx = Context::with_generics(ctx, &new_lookup);
                         let td = new_ctx.locate_type(*ut);
 
                         let mut instance = Object::new(td, new_ctx);
