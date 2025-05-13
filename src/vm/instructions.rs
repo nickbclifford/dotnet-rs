@@ -7,8 +7,7 @@ use crate::value::{
 };
 use crate::vm::exceptions::{HandlerKind, ProtectedSection};
 use dotnetdll::prelude::*;
-use std::cmp::Ordering;
-use std::rc::Rc;
+use std::{cmp::Ordering, rc::Rc};
 
 const INTRINSIC_ATTR: &'static str = "System.Runtime.CompilerServices.IntrinsicAttribute";
 
@@ -601,15 +600,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let val = compare!(sgn, > (Ordering::Greater)) as i32;
                 push!(Int32(val))
             }
-            CheckFinite => match pop!() {
-                StackValue::NativeFloat(f) => {
-                    if f.is_infinite() || f.is_nan() {
-                        todo!("ArithmeticException in ckfinite");
-                    }
-                    push!(NativeFloat(f))
+            CheckFinite => {
+                expect_stack!(let NativeFloat(f) = pop!());
+                if f.is_infinite() || f.is_nan() {
+                    todo!("ArithmeticException in ckfinite");
                 }
-                v => todo!("invalid type on stack ({:?}) for ckfinite operation", v),
-            },
+                push!(NativeFloat(f));
+            }
             CompareLess(sgn) => {
                 let val = compare!(sgn, < (Ordering::Less)) as i32;
                 push!(Int32(val))
@@ -905,9 +902,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 macro_rules! store_from_i32 {
                     ($t:ty) => {{
-                        let StackValue::Int32(v) = val else {
-                            todo!("invalid type on stack")
-                        };
+                        expect_stack!(let Int32(v) = val);
                         let p = ptr as *mut $t;
                         unsafe {
                             *p = v as $t;
@@ -1060,8 +1055,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 };
                 let array = pop!();
 
-                let StackValue::ObjectRef(ObjectRef(Some(heap))) = array else {
-                    todo!("expected array for ldlen, received {:?}", array)
+                expect_stack!(let ObjectRef(obj) = array);
+                let ObjectRef(Some(heap)) = obj else {
+                    todo!("NullPointerException")
                 };
                 let heap = heap.borrow();
                 let HeapStorage::Vec(array) = &*heap else {
@@ -1218,9 +1214,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             LoadFieldSkipNullCheck(_) => todo!("no.nullcheck ldfld"),
             LoadLength => {
-                let array = pop!();
-                let StackValue::ObjectRef(ObjectRef(Some(heap))) = array else {
-                    todo!("expected array for ldlen, received {:?}", array)
+                expect_stack!(let ObjectRef(obj) = pop!());
+                let ObjectRef(Some(heap)) = obj else {
+                    todo!("NullPointerException")
                 };
                 let heap = heap.borrow();
                 let HeapStorage::Vec(array) = &*heap else {
@@ -1266,10 +1262,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 push!(value)
             }
             LoadString(cs) => {
-                let val = StackValue::ObjectRef(ObjectRef::new(
-                    gc,
-                    HeapStorage::Str(CLRString::new(cs.clone())),
-                ));
+                let val = StackValue::string(gc, CLRString::new(cs.clone()));
                 push!(val)
             }
             LoadTokenField(_) => todo!("RuntimeFieldHandle"),
@@ -1299,10 +1292,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 // TODO: proper signature checking
                 match format!("{:?}", method).as_str() {
-                    "void System.IntPtr::.ctor(int)" => match pop!() {
-                        StackValue::Int32(i) => push!(NativeInt(i as isize)),
-                        rest => todo!("invalid type on stack (expected int32, received {:?}", rest),
-                    },
+                    "void System.IntPtr::.ctor(int)" => {
+                        expect_stack!(let Int32(i) = pop!());
+                        push!(NativeInt(i as isize));
+                    }
                     _ => {
                         let instance = Object::new(parent, new_ctx.clone());
 
@@ -1356,8 +1349,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                 };
 
-                let StackValue::ObjectRef(ObjectRef(Some(heap))) = array else {
-                    todo!("expected array for stelem, received {:?}", array)
+                expect_stack!(let ObjectRef(obj) = array);
+                let ObjectRef(Some(heap)) = obj else {
+                    todo!("NullPointerException")
                 };
                 let mut heap = heap.borrow_mut(gc);
                 let HeapStorage::Vec(array) = &mut *heap else {
