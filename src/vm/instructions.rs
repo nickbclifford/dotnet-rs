@@ -559,7 +559,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     };
                 }
 
-                if method.method.internal_call {
+                if method.method.internal_call
+                    || (method.parent.type_name() == "System.Environment"
+                        && method.method.name == "GetEnvironmentVariableCore")
+                {
                     intrinsic!();
                 }
 
@@ -655,6 +658,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             StackValue::Int32(i) => (i as u32) as $t,
                             StackValue::Int64(i) => (i as u64) as $t,
                             StackValue::NativeInt(i) => (i as usize) as $t,
+                            StackValue::UnmanagedPtr(UnmanagedPtr(p)) |
+                            StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => (p as usize) as $t,
                             StackValue::NativeFloat(f) => {
                                 todo!("truncate {} towards zero for conversion to {}", f, stringify!($t))
                             }
@@ -958,6 +963,20 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             CallVirtual { param0: source, .. } => {
                 let (base_method, lookup) = self.find_generic_method(source);
+
+                if base_method.parent.type_name() == "System.String"
+                    && matches!(
+                        base_method.method.name.as_ref(),
+                        "GetPinnableReference"
+                            | "get_Length"
+                            | "get_Chars"
+                            | "IndexOf"
+                            | "Substring"
+                    )
+                {
+                    intrinsic_call(gc, self, base_method, lookup);
+                    return StepResult::InstructionStepped;
+                }
 
                 let num_args = 1 + base_method.method.signature.parameters.len();
                 let mut args = Vec::new();

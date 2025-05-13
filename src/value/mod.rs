@@ -115,7 +115,7 @@ pub enum StackValue<'gc> {
     ManagedPtr(ManagedPtr),
     ValueType(Box<Object<'gc>>),
 }
-impl StackValue<'_> {
+impl<'gc> StackValue<'gc> {
     pub fn unmanaged_ptr(ptr: *mut u8) -> Self {
         Self::UnmanagedPtr(UnmanagedPtr(ptr))
     }
@@ -127,6 +127,12 @@ impl StackValue<'_> {
     }
     pub fn null() -> Self {
         Self::ObjectRef(ObjectRef(None))
+    }
+    pub fn string(gc: GCHandle<'gc>, s: CLRString) -> Self {
+        Self::ObjectRef(ObjectRef(Some(Gc::new(
+            gc,
+            RefLock::new(HeapStorage::Str(s)),
+        ))))
     }
 
     pub fn data_location(&self) -> *const u8 {
@@ -482,7 +488,7 @@ impl<'gc> CTSValue<'gc> {
             BaseType::UIntPtr | BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
                 Self::Value(NativeUInt(convert_num(data)))
             }
-            BaseType::Object | BaseType::Vector(_, _) => Self::Ref(match data {
+            BaseType::Object | BaseType::Vector(_, _) | BaseType::String => Self::Ref(match data {
                 StackValue::ObjectRef(o) => o,
                 other => panic!("expected object ref on stack, found {:?}", other),
             }),
