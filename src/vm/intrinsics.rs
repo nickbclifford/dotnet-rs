@@ -32,6 +32,19 @@ fn ref_as_ptr(v: StackValue) -> *mut u8 {
     }
 }
 
+fn span_to_slice<'gc, 'a>(span: Object<'gc>) -> &'a [u8] {
+    let mut ptr_data = [0u8; size_of::<usize>()];
+    let mut len_data = [0u8; size_of::<i32>()];
+    
+    ptr_data.copy_from_slice(span.instance_storage.get_field("_reference"));
+    len_data.copy_from_slice(span.instance_storage.get_field("_length"));
+    
+    let ptr = usize::from_ne_bytes(ptr_data);
+    let len = i32::from_ne_bytes(len_data) as usize;
+    
+    unsafe { std::slice::from_raw_parts(ptr as *const u8, len) }
+}
+
 pub fn intrinsic_call<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -130,13 +143,26 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         }
         "static string System.Environment::GetEnvironmentVariableCore(string)" => {
             let value = with_string!(pop!(), |s| {
-                std::env::var(s.as_string()).unwrap_or_default()
+                std::env::var(s.as_string())
             });
-            push!(StackValue::string(gc, CLRString::from(value)));
+            match value.ok() {
+                Some(s) => push!(StackValue::string(gc, CLRString::from(s))),
+                None => push!(StackValue::null()),
+            }
         }
         "static void System.GC::_SuppressFinalize(object)" => {
             // TODO(gc): this object's finalizer should not be called
             let _obj = pop!();
+        }
+        "static bool System.MemoryExtensions::Equals(valuetype System.ReadOnlySpan`1<char>, valuetype System.ReadOnlySpan`1<char>, valuetype System.StringComparison)" => {
+            expect_stack!(let Int32(_culture_comparison) = pop!()); // TODO(i18n): respect StringComparison rules
+            expect_stack!(let ValueType(b) = pop!());
+            expect_stack!(let ValueType(a) = pop!());
+            
+            let a = span_to_slice(*a);
+            let b = span_to_slice(*b);
+            
+            push!(StackValue::Int32((a == b) as i32));
         }
         "[Generic(1)] static bool System.Runtime.CompilerServices.RuntimeHelpers::IsReferenceOrContainsReferences()" => {
             let target = &generics.method_generics[0];
@@ -247,6 +273,12 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             unsafe { std::ptr::write_volatile(src, as_bool) };
         }
+        "static bool System.String::Equals(string, string)" => {
+            let b = with_string!(pop!(), |b| b.to_vec());
+            let a = with_string!(pop!(), |a| a.to_vec());
+
+            push!(StackValue::Int32(if a == b { 1 } else { 0 }));
+        }
         "char System.String::get_Chars(int)" => {
             expect_stack!(let Int32(index) = pop!());
             let value = with_string!(pop!(), |s| s[index as usize]);
@@ -281,6 +313,20 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 None => -1,
                 Some(i) => i as i32,
             }));
+        }
+        "static valuetype System.ReadOnlySpan`1<char> System.String::op_Implicit(string)" => {
+            let (ptr, len) = with_string!(pop!(), |s| (s.as_ptr(), s.len()));
+
+            let span_type = stack.assemblies.corlib_type("System.ReadOnlySpan`1");
+            let new_lookup = GenericLookup::new(vec![ctx!().make_concrete(&BaseType::Char)]);
+            let ctx = Context::with_generics(ctx!(), &new_lookup);
+
+            let mut span = Object::new(span_type, ctx);
+            
+            span.instance_storage.get_field_mut("_reference").copy_from_slice(&(ptr as usize).to_ne_bytes());
+            span.instance_storage.get_field_mut("_length").copy_from_slice(&(len as i32).to_ne_bytes());
+
+            push!(StackValue::ValueType(Box::new(span)));
         }
         "string System.String::Substring(int)" => {
             expect_stack!(let Int32(start_at) = pop!());

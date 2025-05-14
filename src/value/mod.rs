@@ -13,7 +13,7 @@ use crate::{
     resolve::{Ancestor, Assemblies},
     utils::{DebugStr, ResolutionS},
     value::string::CLRString,
-    vm::GCHandle,
+    vm::{intrinsics::expect_stack, GCHandle},
 };
 
 pub mod layout;
@@ -283,11 +283,11 @@ impl Debug for ObjectRef<'_> {
                 let handle = gc.borrow();
                 let desc = match &*handle {
                     HeapStorage::Obj(o) => o.description.type_name(),
-                    HeapStorage::Vec(v) => format!("vector of {:?}", v.element),
+                    HeapStorage::Vec(v) => format!("{:?}[{}]", v.element, v.layout.length),
                     HeapStorage::Str(s) => format!("{:?}", s),
                     HeapStorage::Boxed(v) => format!("boxed {:?}", v),
                 };
-                write!(f, "[{}] {:#?}", desc, Gc::as_ptr(gc))
+                write!(f, "{} @ {:#?}", desc, Gc::as_ptr(gc))
             }
         }
     }
@@ -335,6 +335,12 @@ fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(data: StackVal
         | StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => (p as usize)
             .try_into()
             .unwrap_or_else(|_| panic!("failed to convert from pointer")),
+        // StackValue::ObjectRef(ObjectRef(Some(o))) => (Gc::as_ptr(o) as usize)
+        //     .try_into()
+        //     .unwrap_or_else(|_| panic!("failed to convert from pointer")),
+        // StackValue::ObjectRef(ObjectRef(None)) => 0usize
+        //     .try_into()
+        //     .unwrap_or_else(|_| panic!("failed to convert from pointer")),
         other => panic!(
             "invalid stack value {:?} for conversion into {}",
             other,
@@ -421,13 +427,13 @@ impl<'gc> CTSValue<'gc> {
                 let v = match td.type_name().as_str() {
                     "System.Boolean" => Bool(convert_num::<u8>(data) != 0),
                     "System.Char" => Char(convert_num(data)),
-                    "System.Single" => Float32(match data {
-                        StackValue::NativeFloat(f) => f as f32,
-                        other => panic!("invalid stack value {:?} for float conversion", other),
+                    "System.Single" => Float32({
+                        expect_stack!(let NativeFloat(f) = data);
+                        f as f32
                     }),
-                    "System.Double" => Float64(match data {
-                        StackValue::NativeFloat(f) => f,
-                        other => panic!("invalid stack value {:?} for float conversion", other),
+                    "System.Double" => Float64({
+                        expect_stack!(let NativeFloat(f) = data);
+                        f
                     }),
                     "System.SByte" => Int8(convert_num(data)),
                     "System.Int16" => Int16(convert_num(data)),
@@ -440,18 +446,16 @@ impl<'gc> CTSValue<'gc> {
                     "System.UInt32" => UInt32(convert_num(data)),
                     "System.UInt64" => UInt64(convert_i64(data)),
                     "System.UIntPtr" => NativeUInt(convert_num(data)),
-                    _ => match data {
-                        StackValue::ValueType(o) => {
-                            if !new_ctx.is_a(o.description, td) {
-                                panic!(
-                                    "type mismatch: expected {:?}, found {:?}",
-                                    td, o.description
-                                );
-                            }
-                            Struct(*o)
+                    _ => {
+                        expect_stack!(let ValueType(o) = data);
+                        if !new_ctx.is_a(o.description, td) {
+                            panic!(
+                                "type mismatch: expected {:?}, found {:?}",
+                                td, o.description
+                            );
                         }
-                        other => panic!("cannot read stack value {:?} into type storage", other),
-                    },
+                        Struct(*o)
+                    }
                 };
 
                 Self::Value(v)
@@ -459,13 +463,10 @@ impl<'gc> CTSValue<'gc> {
             BaseType::Type {
                 value_kind: Some(ValueKind::Class),
                 ..
-            } => match data {
-                StackValue::ObjectRef(o) => {
-                    // TODO: check declared type vs actual type?
-                    Self::Ref(o)
-                }
-                other => panic!("invalid stack value {:?} for object ref conversion", other),
-            },
+            } => {
+                expect_stack!(let ObjectRef(o) = data);
+                Self::Ref(o)
+            }
             BaseType::Boolean => Self::Value(Bool(convert_num::<u8>(data) != 0)),
             BaseType::Char => Self::Value(Char(convert_num(data))),
             BaseType::Int8 => Self::Value(Int8(convert_num(data))),
@@ -488,9 +489,9 @@ impl<'gc> CTSValue<'gc> {
             BaseType::UIntPtr | BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
                 Self::Value(NativeUInt(convert_num(data)))
             }
-            BaseType::Object | BaseType::Vector(_, _) | BaseType::String => Self::Ref(match data {
-                StackValue::ObjectRef(o) => o,
-                other => panic!("expected object ref on stack, found {:?}", other),
+            BaseType::Object | BaseType::Vector(_, _) | BaseType::String => Self::Ref({
+                expect_stack!(let ObjectRef(o) = data);
+                o
             }),
             rest => todo!("tried to deserialize StackValue {:?}", rest),
         }
@@ -500,7 +501,7 @@ impl<'gc> CTSValue<'gc> {
         use ValueType::*;
         match t.get() {
             BaseType::Type {
-                value_kind: None | Some(ValueKind::ValueType),
+                value_kind: Some(ValueKind::ValueType),
                 source,
             } => {
                 let mut type_generics: &[ConcreteType] = &[];
@@ -540,10 +541,7 @@ impl<'gc> CTSValue<'gc> {
 
                 Self::Value(v)
             }
-            BaseType::Type {
-                value_kind: Some(ValueKind::Class),
-                ..
-            }
+            BaseType::Type { .. }
             | BaseType::Array(_, _)
             | BaseType::String
             | BaseType::Object
@@ -617,7 +615,7 @@ impl<'gc> CTSValue<'gc> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Vector<'gc> {
     pub element: ConcreteType,
     pub layout: ArrayLayoutManager,
@@ -652,6 +650,30 @@ impl<'gc> Vector<'gc> {
 
     pub fn get_mut(&mut self) -> &mut [u8] {
         &mut self.storage
+    }
+}
+impl Debug for Vector<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(
+                std::iter::once(format!(
+                    "vector of {:?} (length {})",
+                    self.element, self.layout.length
+                ))
+                .chain(self.storage.chunks(self.layout.element_layout.size()).map(
+                    if self.layout.element_layout.is_gc_ptr() {
+                        |chunk: &[u8]| format!("{:?}", ObjectRef::read(chunk))
+                    } else {
+                        |chunk: &[u8]| {
+                            let bytes: Vec<_> =
+                                chunk.iter().map(|b| format!("{:02x}", b)).collect();
+                            bytes.join(" ")
+                        }
+                    },
+                ))
+                .map(DebugStr),
+            )
+            .finish()
     }
 }
 
@@ -724,21 +746,32 @@ impl TypeDescription {
     }
 
     pub fn type_name(&self) -> String {
-        self.definition.type_name()
+        self.definition.nested_type_name(self.resolution)
     }
 
-    pub fn is_value_type(&self) -> bool {
+    pub fn is_enum(&self) -> Option<&MemberType> {
         match &self.definition.extends {
             Some(TypeSource::User(u))
-                if matches!(
-                    u.type_name(self.resolution).as_str(),
-                    "System.Enum" | "System.ValueType"
-                ) =>
+                if matches!(u.type_name(self.resolution).as_str(), "System.Enum") =>
             {
-                true
+                let inner = self.definition.fields.first()?;
+                if inner.runtime_special_name && inner.name == "value__" {
+                    Some(&inner.return_type)
+                } else {
+                    None
+                }
             }
-            _ => false,
+            _ => None,
         }
+    }
+
+    pub fn is_value_type(&self, ctx: &Context) -> bool {
+        for (a, _) in ctx.get_ancestors(*self) {
+            if matches!(a.type_name().as_str(), "System.Enum" | "System.ValueType") {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -805,6 +838,10 @@ impl ConcreteType {
         &*self.base
     }
 
+    pub fn get_mut(&mut self) -> &mut BaseType<Self> {
+        &mut *self.base
+    }
+
     pub fn resolution(&self) -> ResolutionS {
         self.source
     }
@@ -817,6 +854,18 @@ impl Debug for ConcreteType {
 impl ResolvedDebug for ConcreteType {
     fn show(&self, _res: &Resolution) -> String {
         format!("{:?}", self)
+    }
+}
+impl PartialEq for ConcreteType {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.source, other.source) && self.base == other.base
+    }
+}
+impl Eq for ConcreteType {}
+impl Hash for ConcreteType {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (self.source as *const Resolution).hash(state);
+        self.base.hash(state);
     }
 }
 
@@ -833,11 +882,9 @@ impl GenericLookup {
         }
     }
 
-    pub fn make_concrete(&self, source: ResolutionS, t: impl Into<MethodType>) -> ConcreteType {
+    pub fn make_concrete(&self, res: ResolutionS, t: impl Into<MethodType>) -> ConcreteType {
         match t.into() {
-            MethodType::Base(b) => {
-                ConcreteType::new(source, b.map(|t| self.make_concrete(source, t)))
-            }
+            MethodType::Base(b) => ConcreteType::new(res, b.map(|t| self.make_concrete(res, t))),
             MethodType::TypeGeneric(i) => self.type_generics[i].clone(),
             MethodType::MethodGeneric(i) => self.method_generics[i].clone(),
         }

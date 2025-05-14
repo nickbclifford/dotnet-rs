@@ -1,11 +1,13 @@
 use super::{intrinsics::*, CallStack, GCHandle, MethodInfo, StepResult};
-use crate::value::{
-    layout::{type_layout, FieldLayoutManager, HasLayout},
-    string::CLRString,
-    CTSValue, Context, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, Object,
-    ObjectRef, StackValue, TypeDescription, UnmanagedPtr, ValueType, Vector,
+use crate::{
+    value::{
+        layout::{type_layout, FieldLayoutManager, HasLayout},
+        string::CLRString,
+        CTSValue, Context, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, Object,
+        ObjectRef, StackValue, TypeDescription, UnmanagedPtr, ValueType, Vector,
+    },
+    vm::exceptions::{HandlerKind, ProtectedSection},
 };
-use crate::vm::exceptions::{HandlerKind, ProtectedSection};
 use dotnetdll::prelude::*;
 use std::{cmp::Ordering, rc::Rc};
 
@@ -496,6 +498,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             ip,
             i.show(i_res)
         );
+
+        if ip == 200 {
+            println!("test");
+        }
 
         self.debug_dump();
 
@@ -1036,7 +1042,25 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let s = unsafe { std::slice::from_raw_parts_mut(target, layout.size()) };
                 s.fill(0);
             }
-            IsInstance(_) => todo!("isinst"),
+            IsInstance(target) => {
+                expect_stack!(let ObjectRef(target_obj) = pop!());
+                if let ObjectRef(Some(o)) = target_obj {
+                    let ctx = self.current_context();
+                    let obj_type = ctx.get_heap_description(o);
+                    let target_type = self
+                        .assemblies
+                        .find_concrete_type(ctx.make_concrete(target));
+
+                    if ctx.is_a(obj_type, target_type) {
+                        push!(ObjectRef(target_obj));
+                    } else {
+                        push!(null());
+                    }
+                } else {
+                    // isinst returns null for null inputs (III.4.6)
+                    push!(null());
+                }
+            }
             LoadElement { .. } | LoadElementAddress { .. } | LoadElementAddressReadonly(_) => {
                 todo!("ldelem")
             }
@@ -1280,9 +1304,54 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     ),
                 };
                 let ctx = self.current_context();
-                let elem_type = ctx.make_concrete(elem_type);
+                let mut elem_type = ctx.make_concrete(elem_type);
+                macro_rules! normalize_primitives {
+                    ($($name:literal => $t:ident),+) => {{
+                        let repr = format!("{:?}", elem_type);
+                        $(
+                            if repr.as_str() == $name || repr.as_str() == format!("[System.Runtime]{}", $name) {
+                                elem_type = ctx.make_concrete(&BaseType::$t);
+                            }
+                        )+
+                    }}
+                }
+
+                normalize_primitives! {
+                    "System.Boolean" => Boolean,
+                    "System.Char" => Char,
+                    "System.Byte" => UInt8,
+                    "System.SByte" => Int8,
+                    "System.Int16" => Int16,
+                    "System.UInt16" => UInt16,
+                    "System.Int32" => Int32,
+                    "System.UInt32" => UInt32,
+                    "System.Int64" => Int64,
+                    "System.UInt64" => UInt64,
+                    "System.Single" => Float32,
+                    "System.Double" => Float64,
+                    "System.IntPtr" => IntPtr,
+                    "System.UIntPtr" => UIntPtr,
+                    "System.Object" => Object,
+                    "System.String" => String
+                }
+
+                if let BaseType::Type { source, value_kind } = elem_type.get_mut() {
+                    // generic context doesn't really matter here since we're just doing pure ancestry lookups
+                    let ut = match source {
+                        TypeSource::User(u) => *u,
+                        TypeSource::Generic { base, .. } => *base,
+                    };
+                    let td = ctx.locate_type(ut);
+                    if td.is_value_type(&ctx) {
+                        println!("value type by definition");
+                        *value_kind = Some(ValueKind::ValueType);
+                    }
+                }
+
                 let v = Vector::new(elem_type, length, ctx);
-                push!(ObjectRef(ObjectRef::new(gc, HeapStorage::Vec(v))));
+                let o = ObjectRef::new(gc, HeapStorage::Vec(v));
+                self.register_new_object(&o);
+                push!(ObjectRef(o));
             }
             NewObject(ctor) => {
                 let (method, lookup) = self.find_generic_method(&MethodSource::User(*ctor));
@@ -1330,7 +1399,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 };
                 let array = pop!();
 
-                let data: Vec<u8> = match value {
+                let mut data: Vec<u8> = match value {
                     StackValue::Int32(i) => i.to_ne_bytes().to_vec(),
                     StackValue::Int64(i) => i.to_ne_bytes().to_vec(),
                     StackValue::NativeInt(i) => i.to_ne_bytes().to_vec(),
@@ -1368,6 +1437,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     IntPtr => size_of::<usize>(),
                     Object => ObjectRef::SIZE,
                 };
+                data.truncate(elem_size);
 
                 let target = &mut array.get_mut()[(elem_size * index)..(elem_size * (index + 1))];
                 target.copy_from_slice(&data);

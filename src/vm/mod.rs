@@ -7,7 +7,7 @@ use crate::{utils::ResolutionS, value::Context};
 mod exceptions;
 mod executor;
 mod instructions;
-mod intrinsics;
+pub(crate) mod intrinsics;
 mod pinvoke;
 mod stack;
 

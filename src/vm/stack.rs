@@ -30,7 +30,7 @@ pub struct CallStack<'gc, 'm> {
     pub assemblies: &'m Assemblies,
     pub statics: RefCell<StaticStorageManager<'gc>>,
     pub pinvoke: NativeLibraries,
-    _all_objs: Vec<usize>, // secretly ObjectHandles, not traced for GCing because these are for runtime debugging
+    pub _all_objs: Vec<usize>, // secretly ObjectHandles, not traced for GCing because these are for runtime debugging
 }
 // this is sound, I think?
 unsafe impl<'gc, 'm> Collect for CallStack<'gc, 'm> {
@@ -129,7 +129,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             };
                             let desc = ctx.locate_type(ut);
 
-                            if desc.is_value_type() {
+                            if desc.is_value_type(&ctx) {
                                 let new_lookup = GenericLookup::new(type_generics.to_vec());
                                 let new_ctx = Context::with_generics(ctx, &new_lookup);
                                 let instance = ObjectInstance::new(desc, new_ctx);
@@ -188,6 +188,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         ));
     }
 
+    pub fn register_new_object(&mut self, instance: &ObjectRef<'gc>) {
+        let ObjectRef(Some(ptr)) = instance else {
+            unreachable!()
+        };
+        self._all_objs.push(Gc::as_ptr(*ptr) as usize);
+    }
+
     pub fn constructor_frame(
         &mut self,
         gc: GCHandle<'gc>,
@@ -198,14 +205,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let desc = instance.description;
 
         // newobj is typically not used for value types, but still works to put them on the stack (III.4.21)
-        let value = if desc.is_value_type() {
+        let value = if desc.is_value_type(&self.current_context()) {
             StackValue::ValueType(Box::new(instance))
         } else {
             let in_heap = ObjectRef::new(gc, HeapStorage::Obj(instance));
-            let ObjectRef(Some(ptr)) = &in_heap else {
-                unreachable!()
-            };
-            self._all_objs.push(Gc::as_ptr(*ptr) as usize);
+            self.register_new_object(&in_heap);
             StackValue::ObjectRef(in_heap)
         };
 
@@ -215,7 +219,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
 
         // first pushing the NewObject 'return value', then the value of the 'this' parameter
-        if desc.is_value_type() {
+        if desc.is_value_type(&self.current_context()) {
             self.push_stack(gc, value);
 
             self.push_stack(
@@ -515,10 +519,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             let ptr = obj as ObjectPtr;
             let gc = unsafe { Gc::from_ptr(ptr) };
             let handle = gc.borrow();
-            if let HeapStorage::Obj(o) = &*handle {
-                writeln!(f, "{:#?} => {:#?}", ptr, o)
-            } else {
-                writeln!(f, "{:#?} => TODO other heap objects", ptr)
+            match &*handle {
+                HeapStorage::Obj(o) => {
+                    writeln!(f, "{:#?} => {:#?}", ptr, o)
+                }
+                HeapStorage::Vec(v) => {
+                    writeln!(f, "{:#?} => {:#?}", ptr, v)
+                },
+                _ => {
+                    writeln!(f, "{:#?} => TODO other heap objects", ptr)
+                }
             }
             .unwrap();
         }

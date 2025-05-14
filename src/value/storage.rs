@@ -1,7 +1,7 @@
 use crate::{
     utils::DebugStr,
     value::{
-        layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
+        layout::{FieldLayoutManager, HasLayout},
         Context, MethodDescription, ObjectRef, TypeDescription,
     },
 };
@@ -27,21 +27,6 @@ impl Debug for FieldStorage<'_> {
             .fields
             .iter()
             .map(|(k, v)| {
-                let t = match &v.layout {
-                    LayoutManager::FieldLayoutManager(_) => "struct",
-                    LayoutManager::ArrayLayoutManager(_) => "arr",
-                    LayoutManager::Scalar(s) => match s {
-                        Scalar::ObjectRef => "obj",
-                        Scalar::Int8 => "i8",
-                        Scalar::Int16 => "i16",
-                        Scalar::Int32 => "i32",
-                        Scalar::Int64 => "i64",
-                        Scalar::NativeInt => "isize",
-                        Scalar::Float32 => "f32",
-                        Scalar::Float64 => "f64",
-                    },
-                };
-
                 let data = &self.storage[v.as_range()];
                 let data_rep = if v.layout.is_gc_ptr() {
                     format!("{:?}", ObjectRef::read(data))
@@ -50,7 +35,10 @@ impl Debug for FieldStorage<'_> {
                     bytes.join(" ")
                 };
 
-                (v.position, DebugStr(format!("{} {}: {}", t, k, data_rep)))
+                (
+                    v.position,
+                    DebugStr(format!("{} {}: {}", v.layout.type_tag(), k, data_rep)),
+                )
             })
             .collect();
 

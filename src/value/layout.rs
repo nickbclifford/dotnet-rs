@@ -1,9 +1,8 @@
+use dotnetdll::prelude::*;
+use enum_dispatch::enum_dispatch;
 use std::collections::HashMap;
 use std::mem::size_of;
 use std::ops::Range;
-
-use dotnetdll::prelude::*;
-use enum_dispatch::enum_dispatch;
 
 use super::{ConcreteType, Context, FieldDescription, GenericLookup, TypeDescription};
 
@@ -35,6 +34,23 @@ impl LayoutManager {
             LayoutManager::ArrayLayoutManager(a) => a.element_layout.is_or_contains_refs(),
             LayoutManager::Scalar(Scalar::ObjectRef) => true,
             _ => false,
+        }
+    }
+
+    pub fn type_tag(&self) -> &'static str {
+        match &self {
+            LayoutManager::FieldLayoutManager(_) => "struct",
+            LayoutManager::ArrayLayoutManager(_) => "arr",
+            LayoutManager::Scalar(s) => match s {
+                Scalar::ObjectRef => "obj",
+                Scalar::Int8 => "i8",
+                Scalar::Int16 => "i16",
+                Scalar::Int32 => "i32",
+                Scalar::Int64 => "i64",
+                Scalar::NativeInt => "isize",
+                Scalar::Float32 => "f32",
+                Scalar::Float64 => "f64",
+            },
         }
     }
 }
@@ -268,10 +284,6 @@ impl ArrayLayoutManager {
             length,
         }
     }
-
-    pub fn element_offset(&self, index: usize) -> usize {
-        self.element_layout.size() * index
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -325,9 +337,14 @@ pub fn type_layout(t: ConcreteType, context: Context) -> LayoutManager {
             };
 
             let new_lookup = GenericLookup::new(type_generics);
+            let ctx = Context::with_generics(context, &new_lookup);
 
-            FieldLayoutManager::instance_fields(t, Context::with_generics(context, &new_lookup))
-                .into()
+            if let Some(inner) = t.is_enum() {
+                type_layout(ctx.make_concrete(inner), ctx)
+            } else {
+                FieldLayoutManager::instance_fields(t, ctx)
+                    .into()
+            }
         }
         BaseType::Type { .. }
         | BaseType::Object
