@@ -15,7 +15,11 @@ pub struct Assemblies {
 
 impl Assemblies {
     pub fn new(entrypoint: ResolutionS, assembly_root: String) -> Self {
-        let resolutions = std::fs::read_dir(&assembly_root)
+        
+        let resolutions = if assembly_root.is_empty() {
+            HashMap::new()
+        } else {
+            std::fs::read_dir(&assembly_root)
             .unwrap()
             .filter_map(|e| {
                 let path = e.unwrap().path();
@@ -28,7 +32,8 @@ impl Assemblies {
                     None
                 }
             })
-            .collect();
+            .collect()
+        };
         Self {
             assembly_root,
             external: RefCell::new(resolutions),
