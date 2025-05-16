@@ -102,7 +102,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.stack.push(StackSlotHandle(handle));
     }
 
-    fn init_locals(&mut self, gc: GCHandle<'gc>, locals: &'m [LocalVariable]) {
+    fn init_locals(&mut self, locals: &'m [LocalVariable]) -> Vec<StackValue<'gc>> {
+        let mut values = vec![];
+
         for l in locals {
             use BaseType::*;
             use LocalVariable::*;
@@ -148,10 +150,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         }
                         Object | String | Vector(_, _) | Array(_, _) => StackValue::null(),
                     };
-                    self.push_stack(gc, v);
+                    values.push(v);
                 }
             }
         }
+        values
     }
 
     fn get_slot(&self, handle: &StackSlotHandle) -> StackValue<'gc> {
@@ -160,6 +163,24 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     fn set_slot(&self, gc: GCHandle<'gc>, handle: &StackSlotHandle, value: StackValue<'gc>) {
         *self.roots.fetch(&handle.0).borrow_mut(gc) = value;
+    }
+
+    fn set_slot_at(&mut self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
+        match self.stack.get(index) {
+            Some(h) => {
+                self.set_slot(gc, h, value);
+            }
+            None => {
+                for _ in self.top_of_stack()..index {
+                    self.insert_value(gc, StackValue::null());
+                }
+                self.insert_value(gc, value);
+            }
+        };
+    }
+    
+    fn mark_slot_available(&mut self, gc: GCHandle<'gc>, index: usize) {
+        self.set_slot(gc, &self.stack[index], StackValue::null());
     }
 
     pub fn entrypoint_frame(
@@ -174,7 +195,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             self.insert_value(gc, a);
         }
         let locals_base = self.stack.len();
-        self.init_locals(gc, method.locals);
+        for v in self.init_locals(method.locals) {
+            self.insert_value(gc, v);
+        }
         let stack_base = self.stack.len();
 
         self.frames.push(StackFrame::new(
@@ -275,8 +298,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             )
         };
         let locals_base = self.top_of_stack();
-        self.init_locals(gc, method.locals);
-        let stack_base = locals_base + method.locals.len();
+        let local_values = self.init_locals(method.locals);
+        let mut local_index = 0;
+        for v in local_values {
+            self.set_slot_at(gc, locals_base + local_index, v);
+            local_index += 1;
+        }
+        let stack_base = locals_base + local_index;
 
         self.current_frame_mut().stack_height -= num_args;
         self.frames.push(StackFrame::new(
@@ -296,8 +324,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         // and put the return value on the first slot (now open)
         let frame = self.frames.pop().unwrap();
 
-        for handle in &self.stack[frame.base.arguments..frame.base.stack] {
-            self.set_slot(gc, handle, StackValue::null());
+        for index in frame.base.arguments..frame.base.stack {
+            self.mark_slot_available(gc, index);
         }
 
         let signature = frame.state.info_handle.signature;
@@ -378,14 +406,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn push_stack(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {
-        match self.stack.get(self.top_of_stack()) {
-            Some(h) => {
-                self.set_slot(gc, h, value);
-            }
-            None => {
-                self.insert_value(gc, value);
-            }
-        };
+        self.set_slot_at(gc, self.top_of_stack(), value);
         self.current_frame_mut().stack_height += 1;
     }
 
@@ -525,7 +546,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 }
                 HeapStorage::Vec(v) => {
                     writeln!(f, "{:#?} => {:#?}", ptr, v)
-                },
+                }
                 _ => {
                     writeln!(f, "{:#?} => TODO other heap objects", ptr)
                 }
