@@ -499,10 +499,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             i.show(i_res)
         );
 
-        if ip == 200 {
-            println!("test");
-        }
-
         self.debug_dump();
 
         match i {
@@ -766,7 +762,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     LoadType::Float32 => todo!("ldind.r4"),
                     LoadType::Float64 => todo!("ldind.r8"),
                     LoadType::IntPtr => todo!("ldind.i"),
-                    LoadType::Object => todo!("ldind.ref"), // look at intrinsic System.Threading.Volatile::Read impl
+                    LoadType::Object => {
+                        let val = unsafe { *(ptr as *const ObjectRef) };
+                        push!(ObjectRef(val));
+                    }
                 }
             }
             LoadLocal(i) => {
@@ -924,7 +923,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StoreType::Float32 => todo!("stind.r4"),
                     StoreType::Float64 => todo!("stind.r8"),
                     StoreType::IntPtr => todo!("stind.i"),
-                    StoreType::Object => todo!("stind.ref"),
+                    StoreType::Object => {
+                        expect_stack!(let ObjectRef(o) = val);
+                        let p = ptr as *mut ObjectRef;
+                        unsafe {
+                            *p = o;
+                        }
+                    }
                 }
             }
             StoreLocal(i) => {

@@ -1,21 +1,28 @@
-use crate::vm::exceptions::{Handler, ProtectedSection};
 use crate::{
     resolve::Assemblies,
-    utils::ResolutionS,
+    utils::{decompose_type_source, ResolutionS},
     value::{
-        storage::StaticStorageManager, ConcreteType, Context, GenericLookup, HeapStorage,
+        storage::StaticStorageManager, Context, GenericLookup, HeapStorage,
         Object as ObjectInstance, ObjectPtr, ObjectRef, StackValue,
     },
-    vm::{pinvoke::NativeLibraries, MethodInfo, MethodState},
+    vm::{
+        exceptions::{Handler, ProtectedSection},
+        pinvoke::NativeLibraries,
+        MethodInfo, MethodState,
+    },
 };
 use dotnetdll::prelude::*;
 use gc_arena::{
     lock::RefLock, Arena, Collect, Collection, DynamicRoot, DynamicRootSet, Gc, Mutation, Rootable,
 };
-use std::collections::VecDeque;
-use std::fmt::Debug;
-use std::rc::Rc;
-use std::{cell::RefCell, collections::HashMap, fs::OpenOptions, io::Write};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, VecDeque},
+    fmt::Debug,
+    fs::OpenOptions,
+    io::Write,
+    rc::Rc,
+};
 
 type StackSlot = Rootable![Gc<'_, RefLock<StackValue<'_>>>];
 
@@ -30,7 +37,8 @@ pub struct CallStack<'gc, 'm> {
     pub assemblies: &'m Assemblies,
     pub statics: RefCell<StaticStorageManager<'gc>>,
     pub pinvoke: NativeLibraries,
-    pub _all_objs: Vec<usize>, // secretly ObjectHandles, not traced for GCing because these are for runtime debugging
+    // secretly ObjectHandles, not traced for GCing because these are for runtime debugging
+    _all_objs: Vec<usize>,
 }
 // this is sound, I think?
 unsafe impl<'gc, 'm> Collect for CallStack<'gc, 'm> {
@@ -121,18 +129,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                     let v = match ctx.make_concrete(var_type).get() {
                         Type { source, .. } => {
-                            let mut type_generics: &[ConcreteType] = &[];
-                            let ut = match source {
-                                TypeSource::User(u) => *u,
-                                TypeSource::Generic { base, parameters } => {
-                                    type_generics = parameters.as_slice();
-                                    *base
-                                }
-                            };
+                            let (ut, type_generics) = decompose_type_source(source);
                             let desc = ctx.locate_type(ut);
 
                             if desc.is_value_type(&ctx) {
-                                let new_lookup = GenericLookup::new(type_generics.to_vec());
+                                let new_lookup = GenericLookup::new(type_generics);
                                 let new_ctx = Context::with_generics(ctx, &new_lookup);
                                 let instance = ObjectInstance::new(desc, new_ctx);
                                 StackValue::ValueType(Box::new(instance))
@@ -178,7 +179,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
         };
     }
-    
+
     fn mark_slot_available(&mut self, gc: GCHandle<'gc>, index: usize) {
         self.set_slot(gc, &self.stack[index], StackValue::null());
     }
@@ -331,13 +332,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let signature = frame.state.info_handle.signature;
 
         // only return value to caller if the method actually declares a return type
-        match (&signature.return_type, self.stack.get(frame.base.stack)) {
-            (ReturnType(_, Some(_)), Some(handle)) => {
-                let return_value = self.get_slot(handle);
-                // since we popped the returning frame off, this now refers to the caller frame
-                self.push_stack(gc, return_value);
-            }
-            _ => {}
+        if let (ReturnType(_, Some(_)), Some(handle)) =
+            (&signature.return_type, self.stack.get(frame.base.stack))
+        {
+            let return_value = self.get_slot(handle);
+            // since we popped the returning frame off, this now refers to the caller frame
+            self.push_stack(gc, return_value);
         }
     }
 

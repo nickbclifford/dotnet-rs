@@ -11,7 +11,7 @@ use gc_arena::{lock::RefLock, unsafe_empty_collect, Collect, Collection, Gc};
 
 use crate::{
     resolve::{Ancestor, Assemblies},
-    utils::{DebugStr, ResolutionS},
+    utils::{decompose_type_source, DebugStr, ResolutionS},
     value::string::CLRString,
     vm::{intrinsics::expect_stack, GCHandle},
 };
@@ -412,17 +412,15 @@ impl<'gc> CTSValue<'gc> {
                 value_kind: None | Some(ValueKind::ValueType),
                 source,
             } => {
-                let mut type_generics: &[ConcreteType] = &[];
-                let ut = match source {
-                    TypeSource::User(u) => u,
-                    TypeSource::Generic { base, parameters } => {
-                        type_generics = parameters.as_slice();
-                        base
-                    }
-                };
-                let new_lookup = GenericLookup::new(type_generics.to_vec());
+                let (ut, type_generics) = decompose_type_source(source);
+                let new_lookup = GenericLookup::new(type_generics);
                 let new_ctx = Context::with_generics(context.clone(), &new_lookup);
-                let td = new_ctx.locate_type(*ut);
+                let td = new_ctx.locate_type(ut);
+
+                if let Some(e) = td.is_enum() {
+                    let enum_type = new_ctx.make_concrete(e);
+                    return CTSValue::new(&enum_type, context, data);
+                }
 
                 let v = match td.type_name().as_str() {
                     "System.Boolean" => Bool(convert_num::<u8>(data) != 0),
@@ -463,7 +461,10 @@ impl<'gc> CTSValue<'gc> {
             BaseType::Type {
                 value_kind: Some(ValueKind::Class),
                 ..
-            } => {
+            }
+            | BaseType::Object
+            | BaseType::Vector(_, _)
+            | BaseType::String => {
                 expect_stack!(let ObjectRef(o) = data);
                 Self::Ref(o)
             }
@@ -489,10 +490,6 @@ impl<'gc> CTSValue<'gc> {
             BaseType::UIntPtr | BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
                 Self::Value(NativeUInt(convert_num(data)))
             }
-            BaseType::Object | BaseType::Vector(_, _) | BaseType::String => Self::Ref({
-                expect_stack!(let ObjectRef(o) = data);
-                o
-            }),
             rest => todo!("tried to deserialize StackValue {:?}", rest),
         }
     }
@@ -504,17 +501,15 @@ impl<'gc> CTSValue<'gc> {
                 value_kind: Some(ValueKind::ValueType),
                 source,
             } => {
-                let mut type_generics: &[ConcreteType] = &[];
-                let ut = match source {
-                    TypeSource::User(u) => u,
-                    TypeSource::Generic { base, parameters } => {
-                        type_generics = parameters.as_slice();
-                        base
-                    }
-                };
-                let new_lookup = GenericLookup::new(type_generics.to_vec());
+                let (ut, type_generics) = decompose_type_source(source);
+                let new_lookup = GenericLookup::new(type_generics);
                 let new_ctx = Context::with_generics(context.clone(), &new_lookup);
-                let td = new_ctx.locate_type(*ut);
+                let td = new_ctx.locate_type(ut);
+
+                if let Some(e) = td.is_enum() {
+                    let enum_type = new_ctx.make_concrete(e);
+                    return CTSValue::read(&enum_type, context, data);
+                }
 
                 let v = match td.type_name().as_str() {
                     "System.Boolean" => Bool(data[0] != 0),

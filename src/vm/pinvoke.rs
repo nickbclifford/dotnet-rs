@@ -5,6 +5,7 @@ use libffi::middle::*;
 use libloading::{Library, Symbol};
 
 use crate::{
+    utils::decompose_type_source,
     value::{
         layout::{FieldLayoutManager, LayoutManager, Scalar},
         ConcreteType, Context, GenericLookup, MethodDescription, Object, StackValue,
@@ -48,17 +49,10 @@ impl NativeLibraries {
 }
 
 fn type_to_layout(t: &TypeSource<ConcreteType>, ctx: Context) -> FieldLayoutManager {
-    let mut type_generics: &[ConcreteType] = &[];
-    let ut = match t {
-        TypeSource::User(u) => u,
-        TypeSource::Generic { base, parameters } => {
-            type_generics = parameters.as_slice();
-            base
-        }
-    };
-    let new_lookup = GenericLookup::new(type_generics.to_vec());
+    let (ut, type_generics) = decompose_type_source(t);
+    let new_lookup = GenericLookup::new(type_generics);
     let new_ctx = Context::with_generics(ctx, &new_lookup);
-    let td = new_ctx.locate_type(*ut);
+    let td = new_ctx.locate_type(ut);
 
     FieldLayoutManager::instance_fields(td, new_ctx.clone()).into()
 }
@@ -220,17 +214,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         StackValue::unmanaged_ptr(read_return!(*mut u8))
                     }
                     BaseType::Type { source, .. } => {
-                        let mut type_generics: &[ConcreteType] = &[];
-                        let ut = match source {
-                            TypeSource::User(u) => u,
-                            TypeSource::Generic { base, parameters } => {
-                                type_generics = parameters.as_slice();
-                                base
-                            }
-                        };
-                        let new_lookup = GenericLookup::new(type_generics.to_vec());
+                        let (ut, type_generics) = decompose_type_source(source);
+                        let new_lookup = GenericLookup::new(type_generics);
                         let new_ctx = Context::with_generics(ctx, &new_lookup);
-                        let td = new_ctx.locate_type(*ut);
+                        let td = new_ctx.locate_type(ut);
 
                         let mut instance = Object::new(td, new_ctx);
 

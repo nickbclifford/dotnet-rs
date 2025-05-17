@@ -24,3 +24,15 @@ impl Debug for DebugStr {
         write!(f, "{}", self.0)
     }
 }
+
+pub fn decompose_type_source<T: Clone>(t: &TypeSource<T>) -> (UserType, Vec<T>) {
+    let mut type_generics: &[T] = &[];
+    let ut = match t {
+        TypeSource::User(u) => *u,
+        TypeSource::Generic { base, parameters } => {
+            type_generics = parameters.as_slice();
+            *base
+        }
+    };
+    (ut, type_generics.to_vec())
+}

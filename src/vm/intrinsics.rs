@@ -1,9 +1,12 @@
 use super::{CallStack, GCHandle, MethodInfo};
-use crate::value::{
-    layout::{type_layout, FieldLayoutManager, HasLayout},
-    string::CLRString,
-    ConcreteType, Context, FieldDescription, GenericLookup, HeapStorage, MethodDescription, Object,
-    ObjectRef, StackValue,
+use crate::{
+    utils::decompose_type_source,
+    value::{
+        layout::{type_layout, FieldLayoutManager, HasLayout},
+        string::CLRString,
+        ConcreteType, Context, FieldDescription, GenericLookup, HeapStorage, MethodDescription, Object,
+        ObjectRef, StackValue,
+    }
 };
 use dotnetdll::prelude::*;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -85,18 +88,13 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         "[Generic(1)] static M0 System.Activator::CreateInstance()" => {
             let target = &generics.method_generics[0];
 
-            let mut type_generics: &[ConcreteType] = &[];
+            let mut type_generics = vec![];
 
             let td = match target.get() {
                 BaseType::Object => stack.assemblies.corlib_type("System.Object"),
                 BaseType::Type { source, .. } => {
-                    let ut = match source {
-                        TypeSource::User(u) => *u,
-                        TypeSource::Generic { base, parameters } => {
-                            type_generics = parameters.as_slice();
-                            *base
-                        }
-                    };
+                    let (ut, generics) = decompose_type_source(source);
+                    type_generics = generics;
                     stack.assemblies.locate_type(target.resolution(), ut)
                 }
                 err => panic!(
@@ -105,7 +103,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 ),
             };
 
-            let new_lookup = GenericLookup::new(type_generics.to_vec());
+            let new_lookup = GenericLookup::new(type_generics);
             let new_ctx = Context::with_generics(ctx!(), &new_lookup);
 
             let instance = Object::new(td, new_ctx.clone());
@@ -348,6 +346,7 @@ pub fn intrinsic_field<'gc, 'm: 'gc>(
     // TODO: real signature checking
     match format!("{:?}", field).as_str() {
         "static nint System.IntPtr::Zero" => stack.push_stack(gc, StackValue::NativeInt(0)),
+        "static string System.String::Empty" => stack.push_stack(gc, StackValue::string(gc, CLRString::new(vec![]))),
         x => panic!("unsupported load from intrinsic field {}", x),
     }
 
