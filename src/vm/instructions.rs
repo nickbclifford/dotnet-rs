@@ -1296,7 +1296,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             LoadTokenField(_) => todo!("RuntimeFieldHandle"),
             LoadTokenMethod(_) => todo!("RuntimeMethodHandle"),
-            LoadTokenType(_) => todo!("RuntimeTypeHandle"),
+            LoadTokenType(target) => {
+                let target_type = self.current_context().make_concrete(target);
+                todo!("find RuntimeType corresponding to {:?}", target_type)
+                // after ^^^, build RuntimeTypeHandle referencing it
+            },
             LoadVirtualMethodPointer { .. } => todo!("ldvirtftn"),
             MakeTypedReference(_) => todo!("mkrefany"),
             NewArray(elem_type) => {

@@ -13,6 +13,8 @@ pub struct Assemblies {
     pub entrypoint: ResolutionS,
 }
 
+// TODO: process [Stub(InPlaceOf = ...)] attributes in support library to stub out internal value types
+
 impl Assemblies {
     pub fn new(entrypoint: ResolutionS, assembly_root: String) -> Self {
         let resolutions = std::fs::read_dir(&assembly_root)
