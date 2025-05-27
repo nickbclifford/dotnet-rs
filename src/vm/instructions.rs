@@ -17,13 +17,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     fn find_generic_method(&self, source: &MethodSource) -> (MethodDescription, GenericLookup) {
         let ctx = self.current_context();
 
-        let mut type_generics: Option<Vec<_>> = None;
-        let mut method_generics: Option<Vec<_>> = None;
+        let mut new_lookup = ctx.generics.clone();
 
         let method = match source {
             MethodSource::User(u) => *u,
             MethodSource::Generic(g) => {
-                method_generics = Some(g.parameters.iter().map(|t| ctx.make_concrete(t)).collect());
+                new_lookup.method_generics = g.parameters.iter().map(|t| ctx.make_concrete(t)).collect();
                 g.base
             }
         };
@@ -36,21 +35,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     ..
                 } = parent.get()
                 {
-                    type_generics = Some(parameters.clone());
+                    new_lookup.type_generics = parameters.clone();
                 }
             }
         }
 
-        let mut new_lookup = GenericLookup::default();
-        if let Some(ts) = type_generics {
-            new_lookup.type_generics = ts;
-        }
-        if let Some(ms) = method_generics {
-            new_lookup.method_generics = ms;
-        }
-
         (
-            self.current_context().locate_method(method, &new_lookup),
+            ctx.locate_method(method, &new_lookup),
             new_lookup,
         )
     }
