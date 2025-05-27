@@ -1,1 +1,7 @@
 /target
+.idea
+
+# debug dumps
+heap.txt
+stack.txt
+statics.txt

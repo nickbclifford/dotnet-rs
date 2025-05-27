@@ -1297,10 +1297,39 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadTokenField(_) => todo!("RuntimeFieldHandle"),
             LoadTokenMethod(_) => todo!("RuntimeMethodHandle"),
             LoadTokenType(target) => {
+                // TODO: System.Type documentation suggests that maybe we need to preserve generic variables
                 let target_type = self.current_context().make_concrete(target);
-                todo!("find RuntimeType corresponding to {:?}", target_type)
-                // after ^^^, build RuntimeTypeHandle referencing it
-            },
+
+                let rth = self.assemblies.corlib_type("System.RuntimeTypeHandle");
+                let mut instance = Object::new(rth, self.current_context());
+                let handle_location = instance.instance_storage.get_field_mut("_value");
+                if let Some(obj) = self.runtime_types.get(&target_type) {
+                    obj.write(handle_location);
+                } else {
+                    let key = target_type.clone();
+                    let rt = self.assemblies.corlib_type("System.RuntimeType");
+                    let mut rt_obj = Object::new(rt, self.current_context());
+
+                    let res_handle =
+                        (target_type.resolution() as *const Resolution as usize).to_ne_bytes();
+                    rt_obj
+                        .instance_storage
+                        .get_field_mut("resolution")
+                        .copy_from_slice(&res_handle);
+                    let tt_handle = (target_type.into_raw() as usize).to_ne_bytes();
+                    rt_obj
+                        .instance_storage
+                        .get_field_mut("baseType")
+                        .copy_from_slice(&tt_handle);
+
+                    let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
+                    self.register_new_object(&obj_ref);
+                    self.runtime_types.insert(key, obj_ref.clone());
+                    obj_ref.write(handle_location);
+                }
+
+                push!(ValueType(Box::new(instance)))
+            }
             LoadVirtualMethodPointer { .. } => todo!("ldvirtftn"),
             MakeTypedReference(_) => todo!("mkrefany"),
             NewArray(elem_type) => {

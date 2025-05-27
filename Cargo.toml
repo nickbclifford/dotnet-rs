@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
-dotnetdll = "0.0.4"
+dotnetdll = "0.0.5"
 enum_dispatch = "0.3"
 gc-arena = "0.5"
 libffi = "4"

@@ -331,6 +331,11 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let value = with_string!(pop!(), |s| s.split_at(start_at as usize).0.to_vec());
             push!(StackValue::string(gc, CLRString::new(value)));
         }
+        "static System.Type System.Type::GetTypeFromHandle(valuetype System.RuntimeTypeHandle)" => {
+            expect_stack!(let ValueType(handle) = pop!());
+            let target = ObjectRef::read(handle.instance_storage.get_field("_value"));
+            push!(StackValue::ObjectRef(target));
+        }
         x => panic!("unsupported intrinsic call to {}", x),
     }
 

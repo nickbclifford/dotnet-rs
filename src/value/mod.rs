@@ -840,6 +840,10 @@ impl ConcreteType {
     pub fn resolution(&self) -> ResolutionS {
         self.source
     }
+
+    pub fn into_raw(self) -> *const BaseType<Self> {
+        Box::into_raw(self.base)
+    }
 }
 impl Debug for ConcreteType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

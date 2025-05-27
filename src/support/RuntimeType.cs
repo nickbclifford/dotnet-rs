@@ -4,10 +4,11 @@ using System.Runtime.CompilerServices;
 
 namespace DotnetRs;
 
+[Stub(InPlaceOf = "System.RuntimeType")]
 internal class RuntimeType : Type
 {
     private nint resolution;
-    private nint definition;
+    private nint baseType; 
     
     [MethodImpl(MethodImplOptions.InternalCall)]
     private extern Assembly GetAssembly();

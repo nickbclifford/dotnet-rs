@@ -1,23 +1,23 @@
-use std::{cell::RefCell, collections::HashMap, ffi::OsString, path::PathBuf};
-
-use dotnetdll::prelude::*;
-
 use crate::{
     utils::{static_res_from_file, ResolutionS},
     value::{ConcreteType, FieldDescription, GenericLookup, MethodDescription, TypeDescription},
 };
+use dotnetdll::prelude::*;
+use std::{cell::RefCell, collections::HashMap, error::Error, ffi::OsString, path::PathBuf};
 
 pub struct Assemblies {
     assembly_root: String,
     external: RefCell<HashMap<String, Option<ResolutionS>>>,
     pub entrypoint: ResolutionS,
+    stubs: HashMap<String, TypeDescription>,
 }
 
-// TODO: process [Stub(InPlaceOf = ...)] attributes in support library to stub out internal value types
+const SUPPORT_LIBRARY: &'static [u8] = include_bytes!("support/bin/Debug/net9.0/support.dll");
+pub const SUPPORT_ASSEMBLY: &'static str = "__dotnetrs_support";
 
 impl Assemblies {
     pub fn new(entrypoint: ResolutionS, assembly_root: String) -> Self {
-        let resolutions = std::fs::read_dir(&assembly_root)
+        let mut resolutions: HashMap<_, _> = std::fs::read_dir(&assembly_root)
             .unwrap()
             .filter_map(|e| {
                 let path = e.unwrap().path();
@@ -31,11 +31,46 @@ impl Assemblies {
                 }
             })
             .collect();
-        Self {
+
+        let support_res: ResolutionS = Box::leak(Box::new(
+            Resolution::parse(SUPPORT_LIBRARY, ReadOptions::default()).unwrap(),
+        ));
+        resolutions.insert(SUPPORT_ASSEMBLY.to_string(), Some(support_res));
+        let mut this = Self {
             assembly_root,
             external: RefCell::new(resolutions),
             entrypoint,
+            stubs: HashMap::new(),
+        };
+
+        for t in &support_res.type_definitions {
+            for a in &t.attributes {
+                // the target stub attribute is internal to the support library,
+                // so the constructor reference will always be a Definition variant
+                let parent = match a.constructor {
+                    UserMethod::Definition(d) => &support_res[d.parent_type()],
+                    UserMethod::Reference(_) => {
+                        continue;
+                    }
+                };
+                if parent.type_name() == "DotnetRs.StubAttribute" {
+                    let data = a.instantiation_data(&this, support_res).unwrap();
+                    for n in data.named_args {
+                        if let NamedArg::Field("InPlaceOf", FixedArg::String(Some(target))) = n {
+                            this.stubs.insert(
+                                target.to_string(),
+                                TypeDescription {
+                                    resolution: support_res,
+                                    definition: t,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
         }
+
+        this
     }
 
     pub fn get_root(&self) -> &str {
@@ -84,6 +119,10 @@ impl Assemblies {
         assembly: &ExternalAssemblyReference,
         name: &str,
     ) -> TypeDescription {
+        if let Some(t) = self.stubs.get(name) {
+            return *t;
+        }
+
         let res = self.get_assembly(assembly.name.as_ref());
         match res.type_definitions.iter().find(|t| t.type_name() == name) {
             None => {
@@ -108,10 +147,17 @@ impl Assemblies {
     // TODO: cache
     pub fn locate_type(&self, resolution: ResolutionS, handle: UserType) -> TypeDescription {
         match handle {
-            UserType::Definition(d) => TypeDescription {
-                resolution,
-                definition: &resolution[d],
-            },
+            UserType::Definition(d) => {
+                let definition = &resolution[d];
+                if let Some(t) = self.stubs.get(&definition.type_name()) {
+                    return *t;
+                }
+
+                TypeDescription {
+                    resolution,
+                    definition,
+                }
+            }
             UserType::Reference(r) => self.locate_type_ref(resolution, r),
         }
     }
@@ -379,13 +425,26 @@ impl<'a> Iterator for AncestorsImpl<'a> {
     }
 }
 
+#[derive(Debug)]
+pub struct AttrResolveError;
+impl Error for AttrResolveError {}
+impl std::fmt::Display for AttrResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "could not resolve attribute")
+    }
+}
+
 impl Resolver<'static> for Assemblies {
-    type Error = AlwaysFails; // TODO: error handling
+    type Error = AttrResolveError; // TODO: error handling
 
     fn find_type(
         &self,
         _name: &str,
     ) -> Result<(&TypeDefinition<'static>, &Resolution<'static>), Self::Error> {
-        todo!()
+        if _name.contains("=") {
+            todo!("fully qualified name {}", _name)
+        }
+        let td = self.corlib_type(_name);
+        Ok((&td.definition, &td.resolution))
     }
 }

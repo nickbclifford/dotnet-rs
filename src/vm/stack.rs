@@ -2,7 +2,7 @@ use crate::{
     resolve::Assemblies,
     utils::{decompose_type_source, ResolutionS},
     value::{
-        storage::StaticStorageManager, Context, GenericLookup, HeapStorage,
+        storage::StaticStorageManager, ConcreteType, Context, GenericLookup, HeapStorage,
         Object as ObjectInstance, ObjectPtr, ObjectRef, StackValue,
     },
     vm::{
@@ -37,6 +37,7 @@ pub struct CallStack<'gc, 'm> {
     pub assemblies: &'m Assemblies,
     pub statics: RefCell<StaticStorageManager<'gc>>,
     pub pinvoke: NativeLibraries,
+    pub runtime_types: HashMap<ConcreteType, ObjectRef<'gc>>,
     // secretly ObjectHandles, not traced for GCing because these are for runtime debugging
     _all_objs: Vec<usize>,
 }
@@ -100,6 +101,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             assemblies,
             pinvoke: NativeLibraries::new(assemblies.get_root()),
             statics: RefCell::new(StaticStorageManager::new()),
+            runtime_types: HashMap::new(),
             _all_objs: vec![],
         }
     }
