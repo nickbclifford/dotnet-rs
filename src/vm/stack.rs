@@ -46,6 +46,9 @@ unsafe impl<'gc, 'm> Collect for CallStack<'gc, 'm> {
     fn trace(&self, cc: &Collection) {
         self.roots.trace(cc);
         self.statics.borrow_mut().trace(cc);
+        for o in self.runtime_types.values() {
+            o.trace(cc);
+        }
     }
 }
 

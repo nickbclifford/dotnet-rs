@@ -2,7 +2,7 @@ use super::{CallStack, GCHandle, MethodInfo};
 use crate::{
     utils::decompose_type_source,
     value::{
-        layout::{type_layout, FieldLayoutManager, HasLayout},
+        layout::*,
         string::CLRString,
         ConcreteType, Context, FieldDescription, GenericLookup, HeapStorage, MethodDescription, Object,
         ObjectRef, StackValue,
@@ -28,6 +28,7 @@ pub(crate) use expect_stack;
 fn ref_as_ptr(v: StackValue) -> *mut u8 {
     match v {
         StackValue::ManagedPtr(m) => m.value,
+        StackValue::NativeInt(i) => i as *mut u8,
         err => todo!(
             "invalid type on stack ({:?}), expected managed pointer for ref parameter",
             err
@@ -139,6 +140,23 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 todo!("ArgumentNullException({:?})", argname)
             }
         }
+        "[Generic(1)] static void System.Buffer::Memmove(ref M0, ref M0, nuint)" => {
+            expect_stack!(let NativeInt(len) = pop!());
+            let src = ref_as_ptr(pop!());
+            let dst = ref_as_ptr(pop!());
+
+            let target = &generics.method_generics[0];
+            let layout = type_layout(target.clone(), ctx!());
+            let total_count = len as usize * layout.size();
+
+            unsafe {
+                std::ptr::copy(
+                    src,
+                    dst,
+                    total_count
+                );
+            }
+        }
         "static string System.Environment::GetEnvironmentVariableCore(string)" => {
             let value = with_string!(pop!(), |s| {
                 std::env::var(s.as_string())
@@ -166,6 +184,40 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let target = &generics.method_generics[0];
             let layout = type_layout(target.clone(), ctx!());
             push!(StackValue::Int32(layout.is_or_contains_refs() as i32));
+        }
+        "[Generic(1)] static ref M0 System.Runtime.CompilerServices.Unsafe::Add(ref M0, nint)" => {
+            let target_type = stack.assemblies.find_concrete_type(generics.method_generics[0].clone());
+            expect_stack!(let NativeInt(offset) = pop!());
+            let m = ref_as_ptr(pop!());
+            push!(StackValue::managed_ptr(unsafe { m.offset(offset) }, target_type));
+        }
+        "[Generic(1)] static M0 System.Runtime.CompilerServices.Unsafe::ReadUnaligned(void*)" => {
+            expect_stack!(let NativeInt(ptr) = pop!());
+            let target = &generics.method_generics[0];
+            let layout = type_layout(target.clone(), ctx!());
+
+            macro_rules! vol_read_into {
+                ($t:ty) => {
+                    unsafe {
+                        std::ptr::read_volatile(ptr as *const $t)
+                    }
+                };
+            }
+
+            let v = match layout {
+                LayoutManager::Scalar(s) => match s {
+                    Scalar::ObjectRef => StackValue::ObjectRef(vol_read_into!(ObjectRef)),
+                    Scalar::Int8 => StackValue::Int32(vol_read_into!(i8) as i32),
+                    Scalar::Int16 => StackValue::Int32(vol_read_into!(i16) as i32),
+                    Scalar::Int32 => StackValue::Int32(vol_read_into!(i32)),
+                    Scalar::Int64 => StackValue::Int64(vol_read_into!(i64)),
+                    Scalar::NativeInt => StackValue::NativeInt(vol_read_into!(isize)),
+                    Scalar::Float32 => StackValue::NativeFloat(vol_read_into!(f32) as f64),
+                    Scalar::Float64 => StackValue::NativeFloat(vol_read_into!(f64)),
+                },
+                _ => todo!("unsupported layout for read unaligned"),
+            };
+            push!(v);
         }
         "static int System.Runtime.InteropServices.Marshal::GetLastPInvokeError()" => {
             let value = unsafe { super::pinvoke::LAST_ERROR };
@@ -277,12 +329,18 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             push!(StackValue::Int32(if a == b { 1 } else { 0 }));
         }
+        "static string System.String::FastAllocateString(int)" => {
+            expect_stack!(let Int32(len) = pop!());
+            let value = CLRString::new(vec![0u16; len as usize]);
+            push!(StackValue::string(gc, value));
+        }
         "char System.String::get_Chars(int)" => {
             expect_stack!(let Int32(index) = pop!());
             let value = with_string!(pop!(), |s| s[index as usize]);
             push!(StackValue::Int32(value as i32));
         }
-        "<req System.Runtime.InteropServices.InAttribute> ref char System.String::GetPinnableReference()" => {
+        "<req System.Runtime.InteropServices.InAttribute> ref char System.String::GetPinnableReference()" |
+        "ref char System.String::GetRawStringData()" => {
             let ptr = with_string!(pop!(), |s| s.as_ptr() as *mut u8);
             let value = StackValue::managed_ptr(ptr, stack.assemblies.corlib_type("System.Char"));
             push!(value);
@@ -335,6 +393,11 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             expect_stack!(let ValueType(handle) = pop!());
             let target = ObjectRef::read(handle.instance_storage.get_field("_value"));
             push!(StackValue::ObjectRef(target));
+        }
+        "static bool System.Type::op_Equality(System.Type, System.Type)" => {
+            expect_stack!(let ObjectRef(o2) = pop!());
+            expect_stack!(let ObjectRef(o1) = pop!());
+            push!(StackValue::Int32((o1 == o2) as i32));
         }
         x => panic!("unsupported intrinsic call to {}", x),
     }

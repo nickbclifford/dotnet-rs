@@ -563,6 +563,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 if method.method.internal_call
                     || (method.parent.type_name() == "System.Environment"
                         && method.method.name == "GetEnvironmentVariableCore")
+                    || (method.parent.type_name() == "System.String"
+                        && matches!(
+                            method.method.name.as_ref(),
+                            "GetPinnableReference"
+                                | "get_Length"
+                                | "get_Chars"
+                                | "GetRawStringData"
+                                | "IndexOf"
+                                | "Substring"
+                        ))
                 {
                     intrinsic!();
                 }
@@ -976,6 +986,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         "GetPinnableReference"
                             | "get_Length"
                             | "get_Chars"
+                            | "GetRawStringData"
                             | "IndexOf"
                             | "Substring"
                     )
@@ -1419,7 +1430,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             ReadTypedReferenceType => todo!("refanytype"),
             ReadTypedReferenceValue(_) => todo!("refanyval"),
             Rethrow => todo!("rethrow"),
-            Sizeof(_) => todo!("sizeof"),
+            Sizeof(t) => {
+                let ctx = self.current_context();
+                let target = ctx.make_concrete(t);
+                let layout = type_layout(target, ctx);
+                push!(Int32(layout.size() as i32));
+            },
             StoreElement { param0: source, .. } => todo!("stelem({source:?})"),
             StoreElementPrimitive {
                 param0: store_type, ..
