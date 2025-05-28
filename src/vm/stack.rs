@@ -115,7 +115,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.stack.push(StackSlotHandle(handle));
     }
 
-    fn init_locals(&mut self, locals: &'m [LocalVariable]) -> Vec<StackValue<'gc>> {
+    fn init_locals(
+        &mut self,
+        locals: &'m [LocalVariable],
+        generics: &GenericLookup,
+    ) -> Vec<StackValue<'gc>> {
         let mut values = vec![];
 
         for l in locals {
@@ -130,7 +134,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         // todo!("initialize byref local")
                         // maybe i don't need to care and it will always be referenced appropriately?
                     }
-                    let ctx = self.current_context();
+                    let ctx = Context::with_generics(self.current_context(), generics);
 
                     let v = match ctx.make_concrete(var_type).get() {
                         Type { source, .. } => {
@@ -138,7 +142,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             let desc = ctx.locate_type(ut);
 
                             if desc.is_value_type(&ctx) {
-                                let new_lookup = GenericLookup::new(type_generics);
+                                let new_lookup = GenericLookup {
+                                    type_generics,
+                                    ..generics.clone()
+                                };
                                 let new_ctx = Context::with_generics(ctx, &new_lookup);
                                 let instance = ObjectInstance::new(desc, new_ctx);
                                 StackValue::ValueType(Box::new(instance))
@@ -201,7 +208,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             self.insert_value(gc, a);
         }
         let locals_base = self.stack.len();
-        for v in self.init_locals(method.locals) {
+        for v in self.init_locals(method.locals, &generic_inst) {
             self.insert_value(gc, v);
         }
         let stack_base = self.stack.len();
@@ -304,7 +311,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             )
         };
         let locals_base = self.top_of_stack();
-        let local_values = self.init_locals(method.locals);
+        let local_values = self.init_locals(method.locals, &generic_inst);
         let mut local_index = 0;
         for v in local_values {
             self.set_slot_at(gc, locals_base + local_index, v);

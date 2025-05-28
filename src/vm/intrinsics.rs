@@ -191,33 +191,74 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let m = ref_as_ptr(pop!());
             push!(StackValue::managed_ptr(unsafe { m.offset(offset) }, target_type));
         }
+        "[Generic(2)] static ref M1 System.Runtime.CompilerServices.Unsafe::As(ref M0)" => {
+            let target_type = stack.assemblies.find_concrete_type(generics.method_generics[1].clone());
+            let m = ref_as_ptr(pop!());
+            push!(StackValue::managed_ptr(m, target_type));
+        }
+        "[Generic(1)] static nint System.Runtime.CompilerServices.Unsafe::ByteOffset(ref M0, ref M0)" => {
+            let r = ref_as_ptr(pop!());
+            let l = ref_as_ptr(pop!());
+            let offset = (l as isize) - (r as isize);
+            push!(StackValue::NativeInt(offset));
+        }
         "[Generic(1)] static M0 System.Runtime.CompilerServices.Unsafe::ReadUnaligned(void*)" => {
             expect_stack!(let NativeInt(ptr) = pop!());
             let target = &generics.method_generics[0];
             let layout = type_layout(target.clone(), ctx!());
 
-            macro_rules! vol_read_into {
+            macro_rules! read_ua {
                 ($t:ty) => {
                     unsafe {
-                        std::ptr::read_volatile(ptr as *const $t)
+                        std::ptr::read_unaligned(ptr as *const $t)
                     }
                 };
             }
 
             let v = match layout {
                 LayoutManager::Scalar(s) => match s {
-                    Scalar::ObjectRef => StackValue::ObjectRef(vol_read_into!(ObjectRef)),
-                    Scalar::Int8 => StackValue::Int32(vol_read_into!(i8) as i32),
-                    Scalar::Int16 => StackValue::Int32(vol_read_into!(i16) as i32),
-                    Scalar::Int32 => StackValue::Int32(vol_read_into!(i32)),
-                    Scalar::Int64 => StackValue::Int64(vol_read_into!(i64)),
-                    Scalar::NativeInt => StackValue::NativeInt(vol_read_into!(isize)),
-                    Scalar::Float32 => StackValue::NativeFloat(vol_read_into!(f32) as f64),
-                    Scalar::Float64 => StackValue::NativeFloat(vol_read_into!(f64)),
+                    Scalar::ObjectRef => StackValue::ObjectRef(read_ua!(ObjectRef)),
+                    Scalar::Int8 => StackValue::Int32(read_ua!(i8) as i32),
+                    Scalar::Int16 => StackValue::Int32(read_ua!(i16) as i32),
+                    Scalar::Int32 => StackValue::Int32(read_ua!(i32)),
+                    Scalar::Int64 => StackValue::Int64(read_ua!(i64)),
+                    Scalar::NativeInt => StackValue::NativeInt(read_ua!(isize)),
+                    Scalar::Float32 => StackValue::NativeFloat(read_ua!(f32) as f64),
+                    Scalar::Float64 => StackValue::NativeFloat(read_ua!(f64)),
                 },
                 _ => todo!("unsupported layout for read unaligned"),
             };
             push!(v);
+        }
+        "[Generic(1)] static void System.Runtime.CompilerServices.Unsafe::WriteUnaligned(void*, M0)" => {
+            // equivalent to unaligned.stobj
+            let target = &generics.method_generics[0];
+            let layout = type_layout(target.clone(), ctx!());
+            let value = pop!();
+            expect_stack!(let NativeInt(ptr) = pop!());
+            
+            macro_rules! write_ua {
+                ($variant:ident, $t:ty) => {{
+                    expect_stack!(let $variant(v) = value);
+                    unsafe {
+                        std::ptr::write_unaligned(ptr as *mut _, v as $t);
+                    }
+                }};
+            }
+            
+            match layout {
+                LayoutManager::Scalar(s) => match s {
+                    Scalar::ObjectRef => write_ua!(ObjectRef, ObjectRef),
+                    Scalar::Int8 => write_ua!(Int32, i8),
+                    Scalar::Int16 => write_ua!(Int32, i16),
+                    Scalar::Int32 => write_ua!(Int32, i32),
+                    Scalar::Int64 => write_ua!(Int64, i64),
+                    Scalar::NativeInt => write_ua!(NativeInt, isize),
+                    Scalar::Float32 => write_ua!(NativeFloat, f32),
+                    Scalar::Float64 => write_ua!(NativeFloat, f64),
+                }
+                _ => todo!("unsupported layout for write unaligned"),
+            }
         }
         "static int System.Runtime.InteropServices.Marshal::GetLastPInvokeError()" => {
             let value = unsafe { super::pinvoke::LAST_ERROR };
@@ -309,6 +350,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             }
         }
         "[Generic(1)] static M0 System.Threading.Volatile::Read(ref M0)" => {
+            // note that this method's signature restricts the generic to only reference types
             let ptr = ref_as_ptr(pop!()) as *const ObjectRef<'gc>;
 
             let value = unsafe { std::ptr::read_volatile(ptr) };

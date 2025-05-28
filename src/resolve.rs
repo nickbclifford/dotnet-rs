@@ -309,7 +309,7 @@ impl Assemblies {
                                 "could not find {}",
                                 method_ref
                                     .signature
-                                    .show_with_name(parent_type.resolution, &method_ref.name)
+                                    .show_with_name(resolution, &method_ref.name)
                             ),
                             Some(method) => method,
                         }
