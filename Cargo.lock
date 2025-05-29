@@ -180,9 +180,9 @@ dependencies = [
 
 [[package]]
 name = "dotnetdll"
-version = "0.0.5"
+version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57572ce358e7b4a8e027e31e7c8b719a907b641413bfd94630bb7291007b6144"
+checksum = "07f7566e2e63f8cafe2f1516549fe31068980d85bc777eac2fb0e1da3633b0d3"
 dependencies = [
  "bitfield",
  "bitvec",

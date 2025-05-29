@@ -551,6 +551,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     };
                 }
 
+                // TODO: more centralized location for which methods are explicitly handled in this manner
                 if method.method.internal_call
                     || (method.parent.type_name() == "System.Environment"
                         && method.method.name == "GetEnvironmentVariableCore")
@@ -971,6 +972,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             CallVirtual { param0: source, .. } => {
                 let (base_method, lookup) = self.find_generic_method(source);
 
+                // see note in Call
                 if base_method.parent.type_name() == "System.String"
                     && matches!(
                         base_method.method.name.as_ref(),

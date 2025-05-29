@@ -59,7 +59,7 @@ impl<'a> Context<'a> {
         signature: &ManagedMethod<MethodType>,
     ) -> Option<MethodDescription> {
         self.assemblies
-            .find_method_in_type(parent_type, name, signature)
+            .find_method_in_type(parent_type, name, signature, self.resolution)
     }
 
     pub fn get_ancestors(

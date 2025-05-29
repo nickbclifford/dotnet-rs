@@ -1,3 +1,4 @@
+use crate::utils::decompose_type_source;
 use crate::{
     utils::{static_res_from_file, ResolutionS},
     value::{ConcreteType, FieldDescription, GenericLookup, MethodDescription, TypeDescription},
@@ -228,11 +229,145 @@ impl Assemblies {
         }
     }
 
+    fn type_slices_equal(
+        &self,
+        res1: ResolutionS,
+        a: &[MethodType],
+        res2: ResolutionS,
+        b: &[MethodType],
+    ) -> bool {
+        if a.len() != b.len() {
+            return false;
+        }
+        for (a, b) in a.iter().zip(b.iter()) {
+            if !self.types_equal(res1, a, res2, b) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn types_equal(
+        &self,
+        res1: ResolutionS,
+        a: &MethodType,
+        res2: ResolutionS,
+        b: &MethodType,
+    ) -> bool {
+        match (a, b) {
+            (MethodType::Base(l), MethodType::Base(r)) => match (l.as_ref(), r.as_ref()) {
+                (BaseType::Type { source: ts1, .. }, BaseType::Type { source: ts2, .. }) => {
+                    let (ut1, generics1) = decompose_type_source(ts1);
+                    let (ut2, generics2) = decompose_type_source(ts2);
+                    let td1 = self.locate_type(res1, ut1);
+                    let td2 = self.locate_type(res2, ut2);
+                    td1.type_name() == td2.type_name()
+                        && self.type_slices_equal(res1, &generics1, res2, &generics2)
+                }
+                (BaseType::Boolean, BaseType::Boolean) => true,
+                (BaseType::Char, BaseType::Char) => true,
+                (BaseType::Int8, BaseType::Int8) => true,
+                (BaseType::UInt8, BaseType::UInt8) => true,
+                (BaseType::Int16, BaseType::Int16) => true,
+                (BaseType::UInt16, BaseType::UInt16) => true,
+                (BaseType::Int32, BaseType::Int32) => true,
+                (BaseType::UInt32, BaseType::UInt32) => true,
+                (BaseType::Int64, BaseType::Int64) => true,
+                (BaseType::UInt64, BaseType::UInt64) => true,
+                (BaseType::Float32, BaseType::Float32) => true,
+                (BaseType::Float64, BaseType::Float64) => true,
+                (BaseType::IntPtr, BaseType::IntPtr) => true,
+                (BaseType::UIntPtr, BaseType::UIntPtr) => true,
+                (BaseType::Object, BaseType::Object) => true,
+                (BaseType::String, BaseType::String) => true,
+                (BaseType::Vector(_, l), BaseType::Vector(_, r)) => {
+                    // TODO: CustomTypeModifiers
+                    self.types_equal(res1, l, res2, r)
+                }
+                (BaseType::Array(l, _), BaseType::Array(r, _)) => {
+                    // TODO: ArrayShapes
+                    self.types_equal(res1, l, res2, r)
+                }
+                (BaseType::ValuePointer(_, l), BaseType::ValuePointer(_, r)) => {
+                    // TODO: CustomTypeModifiers
+                    match (l.as_ref(), r.as_ref()) {
+                        (None, None) => true,
+                        (Some(t1), Some(t2)) => self.types_equal(res1, t1, res2, t2),
+                        _ => false,
+                    }
+                }
+                (BaseType::FunctionPointer(l), BaseType::FunctionPointer(r)) => todo!(),
+                _ => false,
+            },
+            (MethodType::TypeGeneric(i1), MethodType::TypeGeneric(i2)) => i1 == i2,
+            (MethodType::MethodGeneric(i1), MethodType::MethodGeneric(i2)) => i1 == i2,
+            _ => false,
+        }
+    }
+
+    fn param_types_equal(
+        &self,
+        res1: ResolutionS,
+        a: &ParameterType<MethodType>,
+        res2: ResolutionS,
+        b: &ParameterType<MethodType>,
+    ) -> bool {
+        match (a, b) {
+            (ParameterType::Value(l), ParameterType::Value(r))
+            | (ParameterType::Ref(l), ParameterType::Ref(r)) => self.types_equal(res1, l, res2, r),
+            (ParameterType::TypedReference, ParameterType::TypedReference) => true,
+            _ => false,
+        }
+    }
+
+    fn params_equal(
+        &self,
+        res1: ResolutionS,
+        a: &[Parameter<MethodType>],
+        res2: ResolutionS,
+        b: &[Parameter<MethodType>],
+    ) -> bool {
+        if a.len() != b.len() {
+            return false;
+        }
+        for (Parameter(_, a), Parameter(_, b)) in a.iter().zip(b.iter()) {
+            // TODO: CustomTypeModifiers
+            if !self.param_types_equal(res1, a, res2, b) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn signatures_equal(
+        &self,
+        res1: ResolutionS,
+        a: &ManagedMethod<MethodType>,
+        res2: ResolutionS,
+        b: &ManagedMethod<MethodType>,
+    ) -> bool {
+        if a.instance != b.instance {
+            return false;
+        }
+        match (&a.return_type, &b.return_type) {
+            (ReturnType(_, None), ReturnType(_, None)) => {
+                self.params_equal(res1, &a.parameters, res2, &b.parameters)
+            }
+            (ReturnType(_, Some(l)), ReturnType(_, Some(r)))
+                if self.param_types_equal(res1, l, res2, r) =>
+            {
+                self.params_equal(res1, &a.parameters, res2, &b.parameters)
+            }
+            _ => false,
+        }
+    }
+
     pub fn find_method_in_type(
         &self,
         desc: TypeDescription,
         name: &str,
         signature: &ManagedMethod<MethodType>,
+        sig_res: ResolutionS,
     ) -> Option<MethodDescription> {
         let mut methods_to_search: Vec<_> = vec![];
         let def = &desc.definition;
@@ -265,8 +400,10 @@ impl Assemblies {
         }
         methods_to_search.extend(def.events.iter().flat_map(|e| &e.other));
 
-        for method in methods_to_search {
-            if method.name == name && signature == &method.signature {
+        for method in &methods_to_search {
+            if method.name == name
+                && self.signatures_equal(sig_res, signature, desc.resolution, &method.signature)
+            {
                 return Some(MethodDescription {
                     parent: desc,
                     method,
@@ -304,6 +441,7 @@ impl Assemblies {
                             parent_type,
                             &method_ref.name,
                             &method_ref.signature,
+                            resolution,
                         ) {
                             None => panic!(
                                 "could not find {}",
