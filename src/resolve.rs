@@ -1,6 +1,5 @@
-use crate::utils::decompose_type_source;
 use crate::{
-    utils::{static_res_from_file, ResolutionS},
+    utils::{decompose_type_source, static_res_from_file, ResolutionS},
     value::{ConcreteType, FieldDescription, GenericLookup, MethodDescription, TypeDescription},
 };
 use dotnetdll::prelude::*;

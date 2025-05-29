@@ -711,8 +711,7 @@ impl Debug for TypeDescription {
 unsafe_empty_collect!(TypeDescription);
 impl PartialEq for TypeDescription {
     fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.resolution, other.resolution)
-            && std::ptr::eq(self.definition, other.definition)
+        std::ptr::eq(self.definition, other.definition)
     }
 }
 impl Eq for TypeDescription {}
@@ -790,6 +789,11 @@ impl Debug for MethodDescription {
                 format!("{}::{}", self.parent.type_name(), self.method.name)
             )
         )
+    }
+}
+impl PartialEq for MethodDescription {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.method, other.method)
     }
 }
 

@@ -301,8 +301,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         //              │                │              │                      │                       │
         // ─────────────┴────────────────┴──────────────┴──────────────────────┴───────────────────────┴──────
 
-        let num_args =
-            if method.signature.instance { 1 } else { 0 } + method.signature.parameters.len();
+        let num_args = method.signature.instance as usize + method.signature.parameters.len();
         let Some(argument_base) = self.top_of_stack().checked_sub(num_args) else {
             panic!(
                 "not enough values on stack! expected {} arguments, found {}",

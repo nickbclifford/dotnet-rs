@@ -22,7 +22,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let method = match source {
             MethodSource::User(u) => *u,
             MethodSource::Generic(g) => {
-                new_lookup.method_generics = g.parameters.iter().map(|t| ctx.make_concrete(t)).collect();
+                new_lookup.method_generics =
+                    g.parameters.iter().map(|t| ctx.make_concrete(t)).collect();
                 g.base
             }
         };
@@ -40,10 +41,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
         }
 
-        (
-            ctx.locate_method(method, &new_lookup),
-            new_lookup,
-        )
+        (ctx.locate_method(method, &new_lookup), new_lookup)
     }
 
     fn initialize_static_storage(
@@ -539,10 +537,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             BranchTruthy(i) => {
                 conditional_branch!(!is_nullish!(pop!()), i)
             }
-            Call {
-                tail_call, // TODO
-                param0: source,
-            } => {
+            Call { param0: source, .. } => {
                 let (method, lookup) = self.find_generic_method(source);
                 macro_rules! intrinsic {
                     () => {
@@ -594,7 +589,36 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 );
                 moved_ip = true;
             }
-            CallConstrained(_, _) => todo!("constrained. call"),
+            CallConstrained(constraint, source) => {
+                // according to the standard, this doesn't really make sense
+                // because the constrained prefix should only be on callvirt
+                // however, this appears to be used for static interface dispatch?
+
+                let constraint_type = self.current_context().make_concrete(constraint);
+                let (method, lookup) = self.find_generic_method(source);
+
+                let td = self.assemblies.find_concrete_type(constraint_type.clone());
+
+                for o in td.definition.overrides.iter() {
+                    let target = self.current_context().locate_method(o.implementation, &lookup);
+                    let declaration = self.current_context().locate_method(o.declaration, &lookup);
+                    if method == declaration {
+                        super::msg!(self, "-- dispatching to {:?} --", target);
+                        self.call_frame(
+                            gc,
+                            MethodInfo::new(
+                                target.resolution(),
+                                target.method,
+                                Context::with_generics(self.current_context(), &lookup),
+                            ),
+                            lookup,
+                        );
+                        return StepResult::InstructionStepped;
+                    }
+                }
+
+                panic!("could not find method to dispatch to for constrained call({:?}, {:?})", constraint_type, method);
+            }
             CallIndirect { .. } => todo!("calli"),
             CompareEqual => {
                 let val = equal!() as i32;
@@ -1428,7 +1452,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let target = ctx.make_concrete(t);
                 let layout = type_layout(target, ctx);
                 push!(Int32(layout.size() as i32));
-            },
+            }
             StoreElement { param0: source, .. } => todo!("stelem({source:?})"),
             StoreElementPrimitive {
                 param0: store_type, ..
