@@ -335,12 +335,6 @@ fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(data: StackVal
         | StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => (p as usize)
             .try_into()
             .unwrap_or_else(|_| panic!("failed to convert from pointer")),
-        // StackValue::ObjectRef(ObjectRef(Some(o))) => (Gc::as_ptr(o) as usize)
-        //     .try_into()
-        //     .unwrap_or_else(|_| panic!("failed to convert from pointer")),
-        // StackValue::ObjectRef(ObjectRef(None)) => 0usize
-        //     .try_into()
-        //     .unwrap_or_else(|_| panic!("failed to convert from pointer")),
         other => panic!(
             "invalid stack value {:?} for conversion into {}",
             other,
@@ -348,11 +342,18 @@ fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(data: StackVal
         ),
     }
 }
-fn convert_i64<T: TryFrom<i64>>(data: StackValue) -> T {
+fn convert_i64<T: TryFrom<i64>>(data: StackValue) -> T
+where
+    T::Error: std::error::Error,
+{
     match data {
-        StackValue::Int64(i) => i
-            .try_into()
-            .unwrap_or_else(|_| panic!("failed to convert from i64")),
+        StackValue::Int64(i) => i.try_into().unwrap_or_else(|e| {
+            panic!(
+                "failed to convert from i64 to {} ({})",
+                std::any::type_name::<T>(),
+                e
+            )
+        }),
         other => panic!("invalid stack value {:?} for integer conversion", other),
     }
 }
@@ -498,7 +499,7 @@ impl<'gc> CTSValue<'gc> {
         use ValueType::*;
         match t.get() {
             BaseType::Type {
-                value_kind: Some(ValueKind::ValueType),
+                value_kind: None | Some(ValueKind::ValueType),
                 source,
             } => {
                 let (ut, type_generics) = decompose_type_source(source);
@@ -536,7 +537,10 @@ impl<'gc> CTSValue<'gc> {
 
                 Self::Value(v)
             }
-            BaseType::Type { .. }
+            BaseType::Type {
+                value_kind: Some(ValueKind::Class),
+                ..
+            }
             | BaseType::Array(_, _)
             | BaseType::String
             | BaseType::Object

@@ -9,10 +9,9 @@ use crate::{
     }
 };
 use dotnetdll::prelude::*;
-use std::sync::atomic::{AtomicI32, Ordering};
 
 macro_rules! expect_stack {
-    (let $variant:ident ( $inner:ident ) = $v:expr) => {
+    (let $variant:ident ( $inner:ident $(as $t:ty)? ) = $v:expr) => {
         let $inner = match $v {
             StackValue::$variant($inner) => $inner,
             err => panic!(
@@ -21,6 +20,9 @@ macro_rules! expect_stack {
                 stringify!($variant)
             ),
         };
+        $(
+            let $inner = $inner as $t;
+        )?
     };
 }
 pub(crate) use expect_stack;
@@ -318,6 +320,8 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             push!(StackValue::Int32(value));
         }
         "static int System.Threading.Interlocked::CompareExchange(ref int, int, int)" => {
+            use std::sync::atomic::{AtomicI32, Ordering};
+            
             expect_stack!(let Int32(comparand) = pop!());
             expect_stack!(let Int32(value) = pop!());
             let target = ref_as_ptr(pop!()) as *mut i32;
@@ -380,6 +384,16 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             expect_stack!(let Int32(index) = pop!());
             let value = with_string!(pop!(), |s| s[index as usize]);
             push!(StackValue::Int32(value as i32));
+        }
+        "int System.String::GetHashCodeOrdinalIgnoreCase()" => {
+            use std::hash::*;
+            
+            let mut h = DefaultHasher::new();
+            let value = with_string!(pop!(), |s| String::from_utf16_lossy(&s).to_uppercase().into_bytes());
+            value.hash(&mut h);
+            let code = h.finish();
+            
+            push!(StackValue::Int32(code as i32));
         }
         "<req System.Runtime.InteropServices.InAttribute> ref char System.String::GetPinnableReference()" |
         "ref char System.String::GetRawStringData()" => {

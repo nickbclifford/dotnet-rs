@@ -600,7 +600,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let td = self.assemblies.find_concrete_type(constraint_type.clone());
 
                 for o in td.definition.overrides.iter() {
-                    let target = self.current_context().locate_method(o.implementation, &lookup);
+                    let target = self
+                        .current_context()
+                        .locate_method(o.implementation, &lookup);
                     let declaration = self.current_context().locate_method(o.declaration, &lookup);
                     if method == declaration {
                         super::msg!(self, "-- dispatching to {:?} --", target);
@@ -617,7 +619,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                 }
 
-                panic!("could not find method to dispatch to for constrained call({:?}, {:?})", constraint_type, method);
+                panic!(
+                    "could not find method to dispatch to for constrained call({:?}, {:?})",
+                    constraint_type, method
+                );
             }
             CallIndirect { .. } => todo!("calli"),
             CompareEqual => {
@@ -648,13 +653,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             StackValue::Int32(i) => i as $t,
                             StackValue::Int64(i) => i as $t,
                             StackValue::NativeInt(i) => i as $t,
-                            StackValue::NativeFloat(f) => {
-                                todo!(
-                                    "truncate {} towards zero for conversion to {}",
-                                    f,
-                                    stringify!($t)
-                                )
-                            }
+                            StackValue::NativeFloat(f) => f as $t,
                             v => todo!(
                                 "invalid type on stack ({:?}) for conversion to {}",
                                 v,
@@ -717,12 +716,30 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 )
             }
             ConvertFloat32 => {
-                let value = pop!();
-                todo!("conv.r4({:?})", value)
+                let v = match pop!() {
+                    StackValue::Int32(i) => i as f32,
+                    StackValue::Int64(i) => i as f32,
+                    StackValue::NativeInt(i) => i as f32,
+                    StackValue::NativeFloat(i) => i as f32,
+                    rest => todo!(
+                        "invalid type on stack ({:?}) for conversion to float32",
+                        rest
+                    ),
+                };
+                push!(NativeFloat(v as f64));
             }
             ConvertFloat64 => {
-                let value = pop!();
-                todo!("conv.r8({:?})", value)
+                let v = match pop!() {
+                    StackValue::Int32(i) => i as f64,
+                    StackValue::Int64(i) => i as f64,
+                    StackValue::NativeInt(i) => i as f64,
+                    StackValue::NativeFloat(i) => i,
+                    rest => todo!(
+                        "invalid type on stack ({:?}) for conversion to float64",
+                        rest
+                    ),
+                };
+                push!(NativeFloat(v));
             }
             ConvertUnsignedToFloat => {
                 let value = pop!();
@@ -1006,6 +1023,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             | "GetRawStringData"
                             | "IndexOf"
                             | "Substring"
+                            | "GetHashCodeOrdinalIgnoreCase"
                     )
                 {
                     intrinsic_call(gc, self, base_method, lookup);
@@ -1094,8 +1112,24 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     push!(null());
                 }
             }
-            LoadElement { .. } | LoadElementAddress { .. } | LoadElementAddressReadonly(_) => {
-                todo!("ldelem")
+            LoadElement { param0: load_type, .. } => {
+                expect_stack!(let Int32(index as usize) = pop!());
+                expect_stack!(let ObjectRef(obj) = pop!());
+                let ObjectRef(Some(heap)) = obj else {
+                    todo!("NullPointerException")
+                };
+                let heap = heap.borrow();
+                let HeapStorage::Vec(array) = &*heap else {
+                    todo!("expected array for ldelem, received {:?}", heap)
+                };
+
+                let ctx = self.current_context();
+                let load_type = ctx.make_concrete(load_type);
+                let elem_size = array.layout.element_layout.size();
+
+                let target = &array.get()[(elem_size * index)..(elem_size * (index + 1))];
+                let value = CTSValue::read(&load_type, &ctx, target).into_stack();
+                push!(value);
             }
             LoadElementPrimitive {
                 param0: load_type, ..
@@ -1153,6 +1187,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     Object => push!(ObjectRef(ObjectRef::read(target))),
                 }
             }
+            LoadElementAddress { .. } | LoadElementAddressReadonly(_) => todo!("ldelema"),
             LoadField {
                 param0: source,
                 volatile, // TODO
@@ -1409,7 +1444,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     };
                     let td = ctx.locate_type(ut);
                     if td.is_value_type(&ctx) {
-                        println!("value type by definition");
                         *value_kind = Some(ValueKind::ValueType);
                     }
                 }
