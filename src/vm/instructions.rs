@@ -1357,7 +1357,22 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let val = StackValue::string(gc, CLRString::new(cs.clone()));
                 push!(val)
             }
-            LoadTokenField(_) => todo!("RuntimeFieldHandle"),
+            LoadTokenField(source) => {
+                let (field, lookup) = self.current_context().locate_field(*source);
+                let idx = match self.runtime_fields.iter().position(|(f, _)| *f == field) {
+                    Some(i) => i,
+                    None => {
+                        self.runtime_fields.push((field, lookup));
+                        self.runtime_fields.len() - 1
+                    }
+                };
+                
+                let rfh = self.assemblies.corlib_type("System.RuntimeFieldHandle");
+                let mut instance = Object::new(rfh, self.current_context());
+                instance.instance_storage.get_field_mut("_value").copy_from_slice(&idx.to_ne_bytes());
+                
+                push!(ValueType(Box::new(instance)));
+            },
             LoadTokenMethod(_) => todo!("RuntimeMethodHandle"),
             LoadTokenType(target) => {
                 // TODO: System.Type documentation suggests that maybe we need to preserve generic variables

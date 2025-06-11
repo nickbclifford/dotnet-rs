@@ -23,6 +23,7 @@ use std::{
     io::Write,
     rc::Rc,
 };
+use crate::value::FieldDescription;
 
 type StackSlot = Rootable![Gc<'_, RefLock<StackValue<'_>>>];
 
@@ -38,6 +39,7 @@ pub struct CallStack<'gc, 'm> {
     pub statics: RefCell<StaticStorageManager<'gc>>,
     pub pinvoke: NativeLibraries,
     pub runtime_types: HashMap<ConcreteType, ObjectRef<'gc>>,
+    pub runtime_fields: Vec<(FieldDescription, GenericLookup)>,
     // secretly ObjectHandles, not traced for GCing because these are for runtime debugging
     _all_objs: Vec<usize>,
 }
@@ -105,6 +107,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             pinvoke: NativeLibraries::new(assemblies.get_root()),
             statics: RefCell::new(StaticStorageManager::new()),
             runtime_types: HashMap::new(),
+            runtime_fields: vec![],
             _all_objs: vec![],
         }
     }

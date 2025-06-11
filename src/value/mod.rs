@@ -800,6 +800,7 @@ impl PartialEq for MethodDescription {
         std::ptr::eq(self.method, other.method)
     }
 }
+impl Eq for MethodDescription {}
 
 #[derive(Clone, Copy)]
 pub struct FieldDescription {
@@ -823,6 +824,12 @@ impl Debug for FieldDescription {
         Ok(())
     }
 }
+impl PartialEq for FieldDescription {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.field, other.field)
+    }
+}
+impl Eq for FieldDescription {}
 
 #[derive(Clone)]
 pub struct ConcreteType {

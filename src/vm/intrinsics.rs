@@ -51,6 +51,8 @@ fn span_to_slice<'gc, 'a>(span: Object<'gc>) -> &'a [u8] {
     unsafe { std::slice::from_raw_parts(ptr as *const u8, len) }
 }
 
+const STATIC_ARRAY_TYPE_PREFIX: &str = "__StaticArrayInitTypeSize=";
+
 pub fn intrinsic_call<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -181,6 +183,41 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let b = span_to_slice(*b);
             
             push!(StackValue::Int32((a == b) as i32));
+        }
+        "[Generic(1)] static valuetype System.ReadOnlySpan`1<M0> System.Runtime.CompilerServices.RuntimeHelpers::CreateSpan(valuetype System.RuntimeFieldHandle)" => {
+            let target = &generics.method_generics[0];
+            let target_size = type_layout(target.clone(), ctx!()).size();
+            expect_stack!(let ValueType(field_handle) = pop!());
+            
+            let mut idx_buf = [0u8; size_of::<usize>()];
+            idx_buf.copy_from_slice(field_handle.instance_storage.get_field("_value"));
+            let idx = usize::from_ne_bytes(idx_buf);
+            let (FieldDescription { field, .. }, lookup) = &stack.runtime_fields[idx];
+            let field_type = Context::with_generics(ctx!(), &lookup).make_concrete(&field.return_type);
+            let field_desc = stack.assemblies.find_concrete_type(field_type.clone());
+
+            let Some(data) = &field.initial_value else { todo!("ArgumentException: field has no initial value") };
+            
+            if field_desc.definition.name.starts_with(STATIC_ARRAY_TYPE_PREFIX) {
+                let size_str = field_desc.definition.name.split_at(STATIC_ARRAY_TYPE_PREFIX.len()).1;
+                let end_idx = match size_str.find('_') {
+                    None => size_str.len(),
+                    Some(i) => i
+                };
+                let size_txt = &size_str[..end_idx];
+                let size = size_txt.parse::<usize>().unwrap();
+                let data = &data[0..size];
+                
+                let span = stack.assemblies.corlib_type("System.ReadOnlySpan`1");
+                let span_lookup = GenericLookup::new(vec![field_type]);
+                let mut instance = Object::new(span, Context::with_generics(ctx!(), &span_lookup));
+                instance.instance_storage.get_field_mut("_reference").copy_from_slice(&(data.as_ptr() as usize).to_ne_bytes());
+                instance.instance_storage.get_field_mut("_length").copy_from_slice(&((size / target_size) as i32).to_ne_bytes());
+                    
+                push!(StackValue::ValueType(Box::new(instance)));
+            } else {
+                todo!("initial field data for {:?}", field_desc);
+            }
         }
         "[Generic(1)] static bool System.Runtime.CompilerServices.RuntimeHelpers::IsReferenceOrContainsReferences()" => {
             let target = &generics.method_generics[0];
