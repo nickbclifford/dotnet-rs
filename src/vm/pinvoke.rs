@@ -134,7 +134,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
         stack_values.reverse();
 
-        let module = method.resolution()[p.import_scope].name.as_ref();
+        let res = method.resolution().0;
+        let module = res[p.import_scope].name.as_ref();
         let function = p.import_name.as_ref();
 
         super::msg!(
@@ -143,7 +144,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             method
                 .method
                 .signature
-                .show_with_name(method.resolution(), format!("{module}::{function}"))
+                .show_with_name(res, format!("{module}::{function}"))
         );
 
         let target = self.pinvoke.get_function(module, function);

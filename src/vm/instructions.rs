@@ -44,7 +44,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         (ctx.locate_method(method, &new_lookup), new_lookup)
     }
 
-    fn initialize_static_storage(
+    pub fn initialize_static_storage(
         &mut self,
         gc: GCHandle<'gc>,
         description: TypeDescription,
@@ -56,7 +56,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         if let Some(m) = value {
             super::msg!(
                 self,
-                "-- static member accessed, calling static constructor (will return to ip {}) --",
+                "-- calling static constructor (will return to ip {}) --",
                 self.current_frame().state.ip
             );
 
@@ -485,7 +485,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             "[#{} | ip @ {}] {}",
             self.frames.len() - 1,
             ip,
-            i.show(i_res)
+            i.show(i_res.0)
         );
 
         self.debug_dump();
@@ -560,6 +560,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                 | "IndexOf"
                                 | "Substring"
                         ))
+                    || (method.parent.type_name() == "System.Runtime.CompilerServices.RuntimeHelpers"
+                        && method.method.name == "RunClassConstructor")
                 {
                     intrinsic!();
                 }
@@ -993,7 +995,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             SubtractOverflow(sgn) => binary_checked_op!(sgn, checked_sub (f64 -), {
                 // TODO: pointer stuff
             }),
-            Switch(_) => todo!("switch"),
+            Switch(targets) => {
+                expect_stack!(let Int32(value as usize) = pop!());
+                conditional_branch!(value < targets.len(), &targets[value]);
+            }
             Xor => binary_int_op!(^),
             BoxValue(t) => {
                 let t = self.current_context().make_concrete(t);
@@ -1389,7 +1394,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let mut rt_obj = Object::new(rt, self.current_context());
 
                     let res_handle =
-                        (target_type.resolution() as *const Resolution as usize).to_ne_bytes();
+                        (target_type.resolution().as_raw() as usize).to_ne_bytes();
                     rt_obj
                         .instance_storage
                         .get_field_mut("resolution")
@@ -1502,7 +1507,26 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let layout = type_layout(target, ctx);
                 push!(Int32(layout.size() as i32));
             }
-            StoreElement { param0: source, .. } => todo!("stelem({source:?})"),
+            StoreElement { param0: source, .. } => {
+                let value = pop!();
+                expect_stack!(let Int32(index as usize) = pop!());
+                expect_stack!(let ObjectRef(obj) = pop!());
+                let ObjectRef(Some(heap)) = obj else {
+                    todo!("NullPointerException")
+                };
+                let mut heap = heap.borrow_mut(gc);
+                let HeapStorage::Vec(array) = &mut *heap else {
+                    todo!("expected array for stelem, received {:?}", heap)
+                };
+
+                let ctx = self.current_context();
+                let store_type = ctx.make_concrete(source);
+                let elem_size = array.layout.element_layout.size();
+
+                let target = &mut array.get_mut()[(elem_size * index)..(elem_size * (index + 1))];
+                let data = CTSValue::new(&store_type, &ctx, value);
+                data.write(target);
+            },
             StoreElementPrimitive {
                 param0: store_type, ..
             } => {

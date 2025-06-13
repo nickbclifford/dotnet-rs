@@ -26,6 +26,8 @@ macro_rules! expect_stack {
     };
 }
 pub(crate) use expect_stack;
+use crate::utils::ResolutionS;
+use crate::value::TypeDescription;
 
 fn ref_as_ptr(v: StackValue) -> *mut u8 {
     match v {
@@ -90,6 +92,44 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
     // TODO: real signature checking
     match format!("{:?}", method).as_str() {
+        "DotnetRs.Assembly DotnetRs.RuntimeType::GetAssembly()" => {
+            expect_stack!(let ObjectRef(obj) = pop!());
+            let ObjectRef(Some(o)) = obj else {
+                unreachable!()
+            };
+            let heap = o.borrow();
+            let HeapStorage::Obj(instance) = &*heap else {
+                unreachable!()
+            };
+            
+            let mut res_data = [0u8; size_of::<usize>()];
+            res_data.copy_from_slice(instance.instance_storage.get_field("resolution"));
+            let res = unsafe { &*(usize::from_ne_bytes(res_data) as *const _) };
+            let res = ResolutionS(res);
+            
+            let value = match stack.runtime_asms.get(&res) {
+                Some(o) => *o,
+                None => {
+                    let resolution = instance.description.resolution;
+                    let definition = resolution.0.type_definitions.iter().find(|a| a.type_name() == "DotnetRs.Assembly").unwrap();
+                    let mut asm_handle = Object::new(TypeDescription { resolution, definition }, ctx!());
+                    asm_handle.instance_storage.get_field_mut("resolution").copy_from_slice(&res_data);
+                    let v = ObjectRef::new(gc, HeapStorage::Obj(asm_handle));
+                    stack.runtime_asms.insert(res, v);
+                    v
+                }
+            };
+            push!(StackValue::ObjectRef(value));
+        }
+        "valuetype [System.Runtime]System.RuntimeTypeHandle DotnetRs.RuntimeType::GetTypeHandle()" => {
+            expect_stack!(let ObjectRef(obj) = pop!());
+
+            let rth = stack.assemblies.corlib_type("System.RuntimeTypeHandle");
+            let mut instance = Object::new(rth, ctx!());
+            obj.write(instance.instance_storage.get_field_mut("_value"));
+
+            push!(StackValue::ValueType(Box::new(instance)));
+        }
         "[Generic(1)] static M0 System.Activator::CreateInstance()" => {
             let target = &generics.method_generics[0];
 
@@ -183,6 +223,21 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let b = span_to_slice(*b);
             
             push!(StackValue::Int32((a == b) as i32));
+        }
+        "static void System.Runtime.CompilerServices.RuntimeHelpers::RunClassConstructor(valuetype System.RuntimeTypeHandle)" => {
+            // https://github.com/dotnet/runtime/blob/main/src/libraries/System.Private.CoreLib/src/System/SR.cs#L78
+            expect_stack!(let ValueType(handle) = pop!());
+            let rt = ObjectRef::read(handle.instance_storage.get_field("_value"));
+            let target = ConcreteType::from_runtime_type(rt);
+            let target = stack.assemblies.find_concrete_type(target);
+            if stack.initialize_static_storage(gc, target) {
+                let second_to_last = stack.frames.len() - 2;
+                let ip = &mut stack.frames[second_to_last].state.ip;
+                *ip += 1;
+                let i = *ip;
+                super::msg!(stack, "-- (explicit initialization, setting return ip to {}) --", i);
+                return;
+            }
         }
         "[Generic(1)] static valuetype System.ReadOnlySpan`1<M0> System.Runtime.CompilerServices.RuntimeHelpers::CreateSpan(valuetype System.RuntimeFieldHandle)" => {
             let target = &generics.method_generics[0];
@@ -463,7 +518,8 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 Some(i) => i as i32,
             }));
         }
-        "static valuetype System.ReadOnlySpan`1<char> System.String::op_Implicit(string)" => {
+        "static valuetype System.ReadOnlySpan`1<char> System.String::op_Implicit(string)" |
+        "static valuetype System.ReadOnlySpan`1<char> System.MemoryExtensions::AsSpan(string)" => {
             let (ptr, len) = with_string!(pop!(), |s| (s.as_ptr(), s.len()));
 
             let span_type = stack.assemblies.corlib_type("System.ReadOnlySpan`1");

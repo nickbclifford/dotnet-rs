@@ -30,13 +30,13 @@ fn main() -> ExitCode {
         None => panic!("expected input module to have an entry point, received one without"),
     };
 
-    let assemblies = resolve::Assemblies::new(&resolution, args.assemblies);
+    let assemblies = resolve::Assemblies::new(resolution, args.assemblies);
     let assemblies = Box::leak(Box::new(assemblies));
 
     let arena = Box::new(vm::GCArena::new(|gc| vm::CallStack::new(gc, assemblies)));
     let mut executor = vm::Executor::new(Box::leak(arena));
 
-    executor.entrypoint(&resolution[entry_method]);
+    executor.entrypoint(&resolution.0[entry_method]);
 
     let result = executor.run();
     match result {

@@ -32,10 +32,10 @@ impl Assemblies {
             })
             .collect();
 
-        let support_res: ResolutionS = Box::leak(Box::new(
+        let support_res = Box::leak(Box::new(
             Resolution::parse(SUPPORT_LIBRARY, ReadOptions::default()).unwrap(),
         ));
-        resolutions.insert(SUPPORT_ASSEMBLY.to_string(), Some(support_res));
+        resolutions.insert(SUPPORT_ASSEMBLY.to_string(), Some(ResolutionS(support_res)));
         let mut this = Self {
             assembly_root,
             external: RefCell::new(resolutions),
@@ -54,13 +54,13 @@ impl Assemblies {
                     }
                 };
                 if parent.type_name() == "DotnetRs.StubAttribute" {
-                    let data = a.instantiation_data(&this, support_res).unwrap();
+                    let data = a.instantiation_data(&this, &*support_res).unwrap();
                     for n in data.named_args {
                         if let NamedArg::Field("InPlaceOf", FixedArg::String(Some(target))) = n {
                             this.stubs.insert(
                                 target.to_string(),
                                 TypeDescription {
-                                    resolution: support_res,
+                                    resolution: ResolutionS(support_res),
                                     definition: t,
                                 },
                             );
@@ -123,18 +123,18 @@ impl Assemblies {
             return *t;
         }
 
-        let res = self.get_assembly(assembly.name.as_ref());
+        let ResolutionS(res) = self.get_assembly(assembly.name.as_ref());
         match res.type_definitions.iter().find(|t| t.type_name() == name) {
             None => {
                 for e in &res.exported_types {
                     if e.type_name() == name {
-                        return self.find_exported_type(res, e);
+                        return self.find_exported_type(ResolutionS(res), e);
                     }
                 }
                 panic!("could not find type {} in assembly {}", name, assembly.name)
             }
             Some(t) => TypeDescription {
-                resolution: res,
+                resolution: ResolutionS(res),
                 definition: t,
             },
         }
@@ -148,7 +148,7 @@ impl Assemblies {
     pub fn locate_type(&self, resolution: ResolutionS, handle: UserType) -> TypeDescription {
         match handle {
             UserType::Definition(d) => {
-                let definition = &resolution[d];
+                let definition = &resolution.0[d];
                 if let Some(t) = self.stubs.get(&definition.type_name()) {
                     return *t;
                 }
@@ -177,7 +177,7 @@ impl Assemblies {
                     definition: owner,
                 } = self.locate_type_ref(resolution, *o);
 
-                for t in &res.type_definitions {
+                for t in &res.0.type_definitions {
                     if let Some(enc) = t.encloser {
                         if t.type_name() == type_ref.type_name() && std::ptr::eq(&res[enc], owner) {
                             return TypeDescription {
@@ -424,12 +424,12 @@ impl Assemblies {
             UserMethod::Definition(d) => MethodDescription {
                 parent: TypeDescription {
                     resolution,
-                    definition: &resolution[d.parent_type()],
+                    definition: &resolution.0[d.parent_type()],
                 },
-                method: &resolution[d],
+                method: &resolution.0[d],
             },
             UserMethod::Reference(r) => {
-                let method_ref = &resolution[r];
+                let method_ref = &resolution.0[r];
 
                 use MethodReferenceParent::*;
                 match &method_ref.parent {
@@ -446,7 +446,7 @@ impl Assemblies {
                                 "could not find {}",
                                 method_ref
                                     .signature
-                                    .show_with_name(resolution, &method_ref.name)
+                                    .show_with_name(resolution.0, &method_ref.name)
                             ),
                             Some(method) => method,
                         }
@@ -477,14 +477,14 @@ impl Assemblies {
                 FieldDescription {
                     parent: TypeDescription {
                         resolution,
-                        definition: &resolution[d.parent_type()],
+                        definition: &resolution.0[d.parent_type()],
                     },
-                    field: &resolution[d],
+                    field: &resolution.0[d],
                 },
                 generic_inst.clone(),
             ),
             FieldSource::Reference(r) => {
-                let field_ref = &resolution[r];
+                let field_ref = &resolution.0[r];
 
                 use FieldReferenceParent::*;
                 match &field_ref.parent {
@@ -582,6 +582,6 @@ impl Resolver<'static> for Assemblies {
             todo!("fully qualified name {}", _name)
         }
         let td = self.corlib_type(_name);
-        Ok((&td.definition, &td.resolution))
+        Ok((&td.definition, &td.resolution.0))
     }
 }

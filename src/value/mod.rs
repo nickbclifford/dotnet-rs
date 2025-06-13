@@ -709,7 +709,7 @@ pub struct TypeDescription {
 }
 impl Debug for TypeDescription {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.definition.show(self.resolution))
+        write!(f, "{}", self.definition.show(self.resolution.0))
     }
 }
 unsafe_empty_collect!(TypeDescription);
@@ -721,7 +721,6 @@ impl PartialEq for TypeDescription {
 impl Eq for TypeDescription {}
 impl Hash for TypeDescription {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        (self.resolution as *const Resolution).hash(state);
         (self.definition as *const TypeDefinition).hash(state);
     }
 }
@@ -744,13 +743,13 @@ impl TypeDescription {
     }
 
     pub fn type_name(&self) -> String {
-        self.definition.nested_type_name(self.resolution)
+        self.definition.nested_type_name(self.resolution.0)
     }
 
     pub fn is_enum(&self) -> Option<&MemberType> {
         match &self.definition.extends {
             Some(TypeSource::User(u))
-                if matches!(u.type_name(self.resolution).as_str(), "System.Enum") =>
+                if matches!(u.type_name(self.resolution.0).as_str(), "System.Enum") =>
             {
                 let inner = self.definition.fields.first()?;
                 if inner.runtime_special_name && inner.name == "value__" {
@@ -789,7 +788,7 @@ impl Debug for MethodDescription {
             f,
             "{}",
             self.method.signature.show_with_name(
-                self.resolution(),
+                self.resolution().0,
                 format!("{}::{}", self.parent.type_name(), self.method.name)
             )
         )
@@ -816,7 +815,7 @@ impl Debug for FieldDescription {
         write!(
             f,
             "{} {}::{}",
-            self.field.return_type.show(self.parent.resolution),
+            self.field.return_type.show(self.parent.resolution.0),
             self.parent.type_name(),
             self.field.name
         )?;
@@ -831,7 +830,7 @@ impl PartialEq for FieldDescription {
 }
 impl Eq for FieldDescription {}
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ConcreteType {
     source: ResolutionS,
     base: Box<BaseType<Self>>,
@@ -842,6 +841,27 @@ impl ConcreteType {
             source,
             base: Box::new(base),
         }
+    }
+
+    pub fn from_runtime_type(obj: ObjectRef) -> Self {
+        let ObjectRef(Some(o)) = obj else {
+            unreachable!()
+        };
+        let heap = o.borrow();
+        let HeapStorage::Obj(instance) = &*heap else {
+            unreachable!()
+        };
+
+        let mut res_buf = [0u8; size_of::<usize>()];
+        res_buf.copy_from_slice(instance.instance_storage.get_field("resolution"));
+        let source = unsafe { &*(usize::from_ne_bytes(res_buf) as *const Resolution) };
+        let source = ResolutionS(source);
+
+        let mut type_buf = [0u8; size_of::<usize>()];
+        type_buf.copy_from_slice(instance.instance_storage.get_field("baseType"));
+        let base = unsafe { Box::from_raw(usize::from_ne_bytes(type_buf) as *mut _) };
+
+        ConcreteType { source, base }
     }
 
     pub fn get(&self) -> &BaseType<Self> {
@@ -856,30 +876,18 @@ impl ConcreteType {
         self.source
     }
 
-    pub fn into_raw(self) -> *const BaseType<Self> {
+    pub fn into_raw(self) -> *mut BaseType<Self> {
         Box::into_raw(self.base)
     }
 }
 impl Debug for ConcreteType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.get().show(self.source))
+        write!(f, "{}", self.get().show(self.source.0))
     }
 }
 impl ResolvedDebug for ConcreteType {
     fn show(&self, _res: &Resolution) -> String {
         format!("{:?}", self)
-    }
-}
-impl PartialEq for ConcreteType {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.source, other.source) && self.base == other.base
-    }
-}
-impl Eq for ConcreteType {}
-impl Hash for ConcreteType {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        (self.source as *const Resolution).hash(state);
-        self.base.hash(state);
     }
 }
 

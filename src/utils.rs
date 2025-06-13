@@ -4,8 +4,38 @@ use std::{
     io::Read,
     path::Path,
 };
+use std::hash::Hash;
+use std::ops::Deref;
 
-pub type ResolutionS = &'static Resolution<'static>;
+#[derive(Clone, Copy)]
+pub struct ResolutionS(pub &'static Resolution<'static>);
+impl ResolutionS {
+    pub fn as_raw(self) -> *const Resolution<'static> {
+        self.0 as *const _
+    }
+}
+impl Deref for ResolutionS {
+    type Target = Resolution<'static>;
+    fn deref(&self) -> &'static Self::Target {
+        self.0
+    }
+}
+impl Debug for ResolutionS {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ResolutionS({:#?})", self.as_raw())
+    }   
+}
+impl PartialEq for ResolutionS {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0, other.0)
+    }
+}
+impl Eq for ResolutionS {}
+impl Hash for ResolutionS {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::ptr::hash(self.0, state);
+    }
+}
 
 pub fn static_res_from_file(path: impl AsRef<Path>) -> ResolutionS {
     let mut file = std::fs::File::open(&path)
@@ -14,7 +44,7 @@ pub fn static_res_from_file(path: impl AsRef<Path>) -> ResolutionS {
     file.read_to_end(&mut buf).expect("failed to read file");
     let resolution = Resolution::parse(Box::leak(buf.into_boxed_slice()), ReadOptions::default())
         .expect("failed to parse file as .NET metadata");
-    Box::leak(Box::new(resolution))
+    ResolutionS(Box::leak(Box::new(resolution)))
 }
 
 pub struct DebugStr(pub String);
