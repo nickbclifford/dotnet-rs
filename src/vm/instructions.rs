@@ -48,10 +48,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         &mut self,
         gc: GCHandle<'gc>,
         description: TypeDescription,
+        generics: GenericLookup
     ) -> bool {
+        let ctx = Context::with_generics(self.current_context(), &generics);
         let value = {
             let mut statics = self.statics.borrow_mut();
-            statics.init(description, self.current_context())
+            statics.init(description, ctx.clone())
         };
         if let Some(m) = value {
             super::msg!(
@@ -59,13 +61,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 "-- calling static constructor (will return to ip {}) --",
                 self.current_frame().state.ip
             );
-
-            let ctx = self.current_context();
-            let generics = ctx.generics.clone();
             self.call_frame(
                 gc,
                 MethodInfo::new(m.resolution(), m.method, ctx),
-                generics, // TODO: which type generics do static constructors get?
+                generics,
             );
             true
         } else {
@@ -1326,8 +1325,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadStaticField { param0: source, .. } => {
                 let (field, lookup) = self.current_context().locate_field(*source);
                 let name = &field.field.name;
-
-                if self.initialize_static_storage(gc, field.parent) {
+                
+                if self.initialize_static_storage(gc, field.parent, lookup.clone()) {
                     return StepResult::InstructionStepped;
                 }
 
@@ -1345,7 +1344,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let (field, lookup) = self.current_context().locate_field(*source);
                 let name = &field.field.name;
 
-                if self.initialize_static_storage(gc, field.parent) {
+                if self.initialize_static_storage(gc, field.parent, lookup.clone()) {
                     return StepResult::InstructionStepped;
                 }
 
@@ -1653,7 +1652,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let (field, lookup) = self.current_context().locate_field(*source);
                 let name = &field.field.name;
 
-                if self.initialize_static_storage(gc, field.parent) {
+                if self.initialize_static_storage(gc, field.parent, lookup.clone()) {
                     return StepResult::InstructionStepped;
                 }
 

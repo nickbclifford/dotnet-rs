@@ -852,10 +852,8 @@ impl ConcreteType {
             unreachable!()
         };
 
-        let mut res_buf = [0u8; size_of::<usize>()];
-        res_buf.copy_from_slice(instance.instance_storage.get_field("resolution"));
-        let source = unsafe { &*(usize::from_ne_bytes(res_buf) as *const Resolution) };
-        let source = ResolutionS(source);
+        let source =
+            unsafe { ResolutionS::from_raw(instance.instance_storage.get_field("resolution")) };
 
         let mut type_buf = [0u8; size_of::<usize>()];
         type_buf.copy_from_slice(instance.instance_storage.get_field("baseType"));

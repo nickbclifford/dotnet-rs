@@ -13,6 +13,13 @@ impl ResolutionS {
     pub fn as_raw(self) -> *const Resolution<'static> {
         self.0 as *const _
     }
+    
+    pub unsafe fn from_raw(data: &[u8]) -> Self {
+        let mut res_data = [0u8; size_of::<usize>()];
+        res_data.copy_from_slice(data);
+        let res = &*(usize::from_ne_bytes(res_data) as *const _);
+        Self(res)
+    }
 }
 impl Deref for ResolutionS {
     type Target = Resolution<'static>;
@@ -23,7 +30,7 @@ impl Deref for ResolutionS {
 impl Debug for ResolutionS {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "ResolutionS({:#?})", self.as_raw())
-    }   
+    }
 }
 impl PartialEq for ResolutionS {
     fn eq(&self, other: &Self) -> bool {

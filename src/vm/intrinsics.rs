@@ -101,11 +101,9 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let HeapStorage::Obj(instance) = &*heap else {
                 unreachable!()
             };
-            
-            let mut res_data = [0u8; size_of::<usize>()];
-            res_data.copy_from_slice(instance.instance_storage.get_field("resolution"));
-            let res = unsafe { &*(usize::from_ne_bytes(res_data) as *const _) };
-            let res = ResolutionS(res);
+
+            let res =
+                unsafe { ResolutionS::from_raw(instance.instance_storage.get_field("resolution")) };
             
             let value = match stack.runtime_asms.get(&res) {
                 Some(o) => *o,
@@ -113,13 +111,27 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     let resolution = instance.description.resolution;
                     let definition = resolution.0.type_definitions.iter().find(|a| a.type_name() == "DotnetRs.Assembly").unwrap();
                     let mut asm_handle = Object::new(TypeDescription { resolution, definition }, ctx!());
-                    asm_handle.instance_storage.get_field_mut("resolution").copy_from_slice(&res_data);
+                    let data = (res.as_raw() as usize).to_ne_bytes();
+                    asm_handle.instance_storage.get_field_mut("resolution").copy_from_slice(&data);
                     let v = ObjectRef::new(gc, HeapStorage::Obj(asm_handle));
                     stack.runtime_asms.insert(res, v);
                     v
                 }
             };
             push!(StackValue::ObjectRef(value));
+        }
+        "string DotnetRs.RuntimeType::GetNamespace()" => {
+            expect_stack!(let ObjectRef(obj) = pop!());
+            let target = ConcreteType::from_runtime_type(obj);
+            let target = stack.assemblies.find_concrete_type(target);
+            match &target.definition.namespace {
+                Some(ns) => {
+                    push!(StackValue::string(gc, CLRString::from(ns.as_ref())));
+                },
+                None => {
+                    push!(StackValue::null());
+                }
+            }
         }
         "valuetype [System.Runtime]System.RuntimeTypeHandle DotnetRs.RuntimeType::GetTypeHandle()" => {
             expect_stack!(let ObjectRef(obj) = pop!());
@@ -230,12 +242,12 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let rt = ObjectRef::read(handle.instance_storage.get_field("_value"));
             let target = ConcreteType::from_runtime_type(rt);
             let target = stack.assemblies.find_concrete_type(target);
-            if stack.initialize_static_storage(gc, target) {
+            if stack.initialize_static_storage(gc, target, generics) {
                 let second_to_last = stack.frames.len() - 2;
                 let ip = &mut stack.frames[second_to_last].state.ip;
                 *ip += 1;
                 let i = *ip;
-                super::msg!(stack, "-- (explicit initialization, setting return ip to {}) --", i);
+                super::msg!(stack, "-- explicit initialization! setting return ip to {} --", i);
                 return;
             }
         }
