@@ -10,6 +10,7 @@ use crate::{
 };
 use dotnetdll::prelude::*;
 use std::{cmp::Ordering, rc::Rc};
+use crate::utils::decompose_type_source;
 
 const INTRINSIC_ATTR: &'static str = "System.Runtime.CompilerServices.IntrinsicAttribute";
 
@@ -776,7 +777,17 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadConstantInt64(i) => push!(Int64(*i)),
             LoadConstantFloat32(f) => push!(NativeFloat(*f as f64)),
             LoadConstantFloat64(f) => push!(NativeFloat(*f)),
-            LoadMethodPointer(_) => todo!("ldftn"),
+            LoadMethodPointer(source) => {
+                let (method, lookup) = self.find_generic_method(source);
+                let idx = match self.runtime_methods.iter().position(|(m, g)| *m == method && *g == lookup) {
+                    Some(i) => i,
+                    None => {
+                        self.runtime_methods.push((method, lookup));
+                        self.runtime_methods.len() - 1
+                    }
+                };
+                push!(NativeInt(idx as isize));
+            }
             LoadIndirect { param0: t, .. } => {
                 let ptr = match pop!() {
                     StackValue::NativeInt(i) => i as *mut u8,
@@ -1119,20 +1130,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadElement { param0: load_type, .. } => {
                 expect_stack!(let Int32(index as usize) = pop!());
                 expect_stack!(let ObjectRef(obj) = pop!());
-                let ObjectRef(Some(heap)) = obj else {
-                    todo!("NullPointerException")
-                };
-                let heap = heap.borrow();
-                let HeapStorage::Vec(array) = &*heap else {
-                    todo!("expected array for ldelem, received {:?}", heap)
-                };
 
                 let ctx = self.current_context();
                 let load_type = ctx.make_concrete(load_type);
-                let elem_size = array.layout.element_layout.size();
-
-                let target = &array.get()[(elem_size * index)..(elem_size * (index + 1))];
-                let value = CTSValue::read(&load_type, &ctx, target).into_stack();
+                let value = obj.as_vector(|array| {
+                    let elem_size = array.layout.element_layout.size();
+                    let target = &array.get()[(elem_size * index)..(elem_size * (index + 1))];
+                    CTSValue::read(&load_type, &ctx, target).into_stack()
+                });
                 push!(value);
             }
             LoadElementPrimitive {
@@ -1151,13 +1156,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let array = pop!();
 
                 expect_stack!(let ObjectRef(obj) = array);
-                let ObjectRef(Some(heap)) = obj else {
-                    todo!("NullPointerException")
-                };
-                let heap = heap.borrow();
-                let HeapStorage::Vec(array) = &*heap else {
-                    todo!("expected array for ldlen, received {:?}", heap)
-                };
 
                 let elem_size: usize = match load_type {
                     Int8 | UInt8 => 1,
@@ -1170,26 +1168,29 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     Object => ObjectRef::SIZE,
                 };
 
-                let target = &array.get()[(elem_size * index)..(elem_size * (index + 1))];
-                macro_rules! from_bytes {
-                    ($t:ty) => {
-                        <$t>::from_ne_bytes(target.try_into().expect("source data was too small"))
-                    };
-                }
+                let value = obj.as_vector(|array| {
+                    let target = &array.get()[(elem_size * index)..(elem_size * (index + 1))];
+                    macro_rules! from_bytes {
+                        ($t:ty) => {
+                            <$t>::from_ne_bytes(target.try_into().expect("source data was too small"))
+                        };
+                    }
 
-                match load_type {
-                    Int8 => push!(Int32(from_bytes!(i8) as i32)),
-                    UInt8 => push!(Int32(from_bytes!(u8) as i32)),
-                    Int16 => push!(Int32(from_bytes!(i16) as i32)),
-                    UInt16 => push!(Int32(from_bytes!(u16) as i32)),
-                    Int32 => push!(Int32(from_bytes!(i32))),
-                    UInt32 => push!(Int32(from_bytes!(u32) as i32)),
-                    Int64 => push!(Int64(from_bytes!(i64))),
-                    Float32 => push!(NativeFloat(from_bytes!(f32) as f64)),
-                    Float64 => push!(NativeFloat(from_bytes!(f64))),
-                    IntPtr => push!(NativeInt(from_bytes!(usize) as isize)),
-                    Object => push!(ObjectRef(ObjectRef::read(target))),
-                }
+                    match load_type {
+                        Int8 => StackValue::Int32(from_bytes!(i8) as i32),
+                        UInt8 => StackValue::Int32(from_bytes!(u8) as i32),
+                        Int16 => StackValue::Int32(from_bytes!(i16) as i32),
+                        UInt16 => StackValue::Int32(from_bytes!(u16) as i32),
+                        Int32 => StackValue::Int32(from_bytes!(i32)),
+                        UInt32 => StackValue::Int32(from_bytes!(u32) as i32),
+                        Int64 => StackValue::Int64(from_bytes!(i64)),
+                        Float32 => StackValue::NativeFloat(from_bytes!(f32) as f64),
+                        Float64 => StackValue::NativeFloat(from_bytes!(f64)),
+                        IntPtr => StackValue::NativeInt(from_bytes!(usize) as isize),
+                        Object => StackValue::ObjectRef(ObjectRef::read(target)),
+                    }
+                });
+                push!(value);
             }
             LoadElementAddress { .. } | LoadElementAddressReadonly(_) => todo!("ldelema"),
             LoadField {
@@ -1311,15 +1312,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadFieldSkipNullCheck(_) => todo!("no.nullcheck ldfld"),
             LoadLength => {
                 expect_stack!(let ObjectRef(obj) = pop!());
-                let ObjectRef(Some(heap)) = obj else {
-                    todo!("NullPointerException")
-                };
-                let heap = heap.borrow();
-                let HeapStorage::Vec(array) = &*heap else {
-                    todo!("expected array for ldlen, received {:?}", heap)
-                };
-
-                push!(StackValue::NativeInt(array.layout.length as isize));
+                let len = obj.as_vector(|a| a.layout.length as isize);
+                push!(NativeInt(len));
             }
             LoadObject { .. } => todo!("ldobj"),
             LoadStaticField { param0: source, .. } => {
@@ -1363,7 +1357,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             LoadTokenField(source) => {
                 let (field, lookup) = self.current_context().locate_field(*source);
-                let idx = match self.runtime_fields.iter().position(|(f, _)| *f == field) {
+                let idx = match self.runtime_fields.iter().position(|(f, g)| *f == field && *g == lookup) {
                     Some(i) => i,
                     None => {
                         self.runtime_fields.push((field, lookup));
@@ -1457,10 +1451,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 if let BaseType::Type { source, value_kind } = elem_type.get_mut() {
                     // generic context doesn't really matter here since we're just doing pure ancestry lookups
-                    let ut = match source {
-                        TypeSource::User(u) => *u,
-                        TypeSource::Generic { base, .. } => *base,
-                    };
+                    let (ut, _) = decompose_type_source(source);
                     let td = ctx.locate_type(ut);
                     if td.is_value_type(&ctx) {
                         *value_kind = Some(ValueKind::ValueType);
@@ -1473,10 +1464,25 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 push!(ObjectRef(o));
             }
             NewObject(ctor) => {
-                let (method, lookup) = self.find_generic_method(&MethodSource::User(*ctor));
+                let (mut method, lookup) = self.find_generic_method(&MethodSource::User(*ctor));
                 let parent = method.parent;
-
                 let new_ctx = Context::with_generics(self.current_context(), &lookup);
+                
+                match (&method.method.body, &parent.definition.extends) {
+                    (None, Some(ts)) => {
+                        let (ut, _) = decompose_type_source(ts);
+                        let type_name = ut.type_name(parent.resolution.0);
+                        // delegate types are only allowed to have these base types
+                        if matches!(type_name.as_ref(), "System.Delegate" | "System.MulticastDelegate") {
+                            let base = self.assemblies.corlib_type(&type_name);
+                            method = MethodDescription {
+                                parent: base,
+                                method: base.definition.methods.iter().find(|m| m.name == ".ctor").unwrap(),
+                            };
+                        }
+                    }
+                    _ => {}
+                }
 
                 // TODO: proper signature checking
                 match format!("{:?}", method).as_str() {
@@ -1490,7 +1496,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         self.constructor_frame(
                             gc,
                             instance,
-                            MethodInfo::new(parent.resolution, method.method, new_ctx),
+                            MethodInfo::new(method.resolution(), method.method, new_ctx),
                             lookup,
                         );
                         moved_ip = true;

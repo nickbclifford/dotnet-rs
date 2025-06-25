@@ -94,21 +94,15 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
     match format!("{:?}", method).as_str() {
         "DotnetRs.Assembly DotnetRs.RuntimeType::GetAssembly()" => {
             expect_stack!(let ObjectRef(obj) = pop!());
-            let ObjectRef(Some(o)) = obj else {
-                unreachable!()
-            };
-            let heap = o.borrow();
-            let HeapStorage::Obj(instance) = &*heap else {
-                unreachable!()
-            };
 
-            let res =
-                unsafe { ResolutionS::from_raw(instance.instance_storage.get_field("resolution")) };
+            let res = obj.as_object(|instance| {
+                unsafe { ResolutionS::from_raw(instance.instance_storage.get_field("resolution")) }
+            });
             
             let value = match stack.runtime_asms.get(&res) {
                 Some(o) => *o,
                 None => {
-                    let resolution = instance.description.resolution;
+                    let resolution = obj.as_object(|i| i.description.resolution);
                     let definition = resolution.0.type_definitions.iter().find(|a| a.type_name() == "DotnetRs.Assembly").unwrap();
                     let mut asm_handle = Object::new(TypeDescription { resolution, definition }, ctx!());
                     let data = (res.as_raw() as usize).to_ne_bytes();
@@ -296,6 +290,11 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             expect_stack!(let NativeInt(offset) = pop!());
             let m = ref_as_ptr(pop!());
             push!(StackValue::managed_ptr(unsafe { m.offset(offset) }, target_type));
+        }
+        "[Generic(1)] static bool System.Runtime.CompilerServices.Unsafe::AreSame(ref M0, ref M0)" => {
+            let m1 = ref_as_ptr(pop!());
+            let m2 = ref_as_ptr(pop!());
+            push!(StackValue::Int32((m1 == m2) as i32));
         }
         "[Generic(2)] static ref M1 System.Runtime.CompilerServices.Unsafe::As(ref M0)" => {
             let target_type = stack.assemblies.find_concrete_type(generics.method_generics[1].clone());

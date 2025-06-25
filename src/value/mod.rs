@@ -274,6 +274,32 @@ impl<'gc> ObjectRef<'gc> {
         let ptr_bytes = (ptr as usize).to_ne_bytes();
         dest.copy_from_slice(&ptr_bytes);
     }
+    
+    pub fn as_object<T>(&self, op: impl FnOnce(&Object<'gc>) -> T) -> T {
+        let ObjectRef(Some(o)) = &self else {
+            // TODO: NullPointerException
+            panic!("called ObjectRef::as_object on NULL object reference")
+        };
+        let heap = o.borrow();
+        let HeapStorage::Obj(instance) = &*heap else {
+            panic!("called ObjectRef::as_object on non-object heap reference")
+        };
+        
+        op(instance)
+    }
+    
+    pub fn as_vector<T>(&self, op: impl FnOnce(&Vector<'gc>) -> T) -> T {
+        let ObjectRef(Some(o)) = &self else {
+            // TODO: NullPointerException
+            panic!("called ObjectRef::as_vector on NULL object reference")
+        };
+        let heap = o.borrow();
+        let HeapStorage::Vec(instance) = &*heap else {
+            panic!("called ObjectRef::as_vector on non-vector heap reference")
+        };
+        
+        op(instance)
+    }
 }
 impl Debug for ObjectRef<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -844,22 +870,16 @@ impl ConcreteType {
     }
 
     pub fn from_runtime_type(obj: ObjectRef) -> Self {
-        let ObjectRef(Some(o)) = obj else {
-            unreachable!()
-        };
-        let heap = o.borrow();
-        let HeapStorage::Obj(instance) = &*heap else {
-            unreachable!()
-        };
+        obj.as_object(|instance| {
+            let source =
+                unsafe { ResolutionS::from_raw(instance.instance_storage.get_field("resolution")) };
 
-        let source =
-            unsafe { ResolutionS::from_raw(instance.instance_storage.get_field("resolution")) };
+            let mut type_buf = [0u8; size_of::<usize>()];
+            type_buf.copy_from_slice(instance.instance_storage.get_field("baseType"));
+            let base = unsafe { Box::from_raw(usize::from_ne_bytes(type_buf) as *mut _) };
 
-        let mut type_buf = [0u8; size_of::<usize>()];
-        type_buf.copy_from_slice(instance.instance_storage.get_field("baseType"));
-        let base = unsafe { Box::from_raw(usize::from_ne_bytes(type_buf) as *mut _) };
-
-        ConcreteType { source, base }
+            ConcreteType { source, base }
+        })
     }
 
     pub fn get(&self) -> &BaseType<Self> {
@@ -889,7 +909,7 @@ impl ResolvedDebug for ConcreteType {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct GenericLookup {
     pub type_generics: Vec<ConcreteType>,
     pub method_generics: Vec<ConcreteType>,

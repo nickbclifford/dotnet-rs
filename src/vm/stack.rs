@@ -23,7 +23,7 @@ use std::{
     io::Write,
     rc::Rc,
 };
-use crate::value::FieldDescription;
+use crate::value::{FieldDescription, MethodDescription};
 
 type StackSlot = Rootable![Gc<'_, RefLock<StackValue<'_>>>];
 
@@ -40,6 +40,7 @@ pub struct CallStack<'gc, 'm> {
     pub pinvoke: NativeLibraries,
     pub runtime_asms: HashMap<ResolutionS, ObjectRef<'gc>>,
     pub runtime_types: HashMap<ConcreteType, ObjectRef<'gc>>,
+    pub runtime_methods: Vec<(MethodDescription, GenericLookup)>,
     pub runtime_fields: Vec<(FieldDescription, GenericLookup)>,
     // secretly ObjectHandles, not traced for GCing because these are for runtime debugging
     _all_objs: Vec<usize>,
@@ -109,6 +110,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             statics: RefCell::new(StaticStorageManager::new()),
             runtime_asms: HashMap::new(),
             runtime_types: HashMap::new(),
+            runtime_methods: vec![],
             runtime_fields: vec![],
             _all_objs: vec![],
         }
@@ -452,7 +454,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn msg(&self, fmt: std::fmt::Arguments) {
-        println!("{}{}", "\t".repeat(self.frames.len() - 1), fmt);
+        println!("{}{}", "\t".repeat((self.frames.len() - 1) % 10), fmt);
     }
 }
 

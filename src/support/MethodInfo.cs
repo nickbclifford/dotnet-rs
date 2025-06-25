@@ -43,8 +43,8 @@ internal class MethodInfo : System.Reflection.MethodInfo
     public override MethodAttributes Attributes => GetMethodFlags();
     
     [MethodImpl(MethodImplOptions.InternalCall)]
-    private extern RuntimeMethodHandle GetMethodHandle();
-    public override RuntimeMethodHandle MethodHandle => GetMethodHandle();
+    private extern System.RuntimeMethodHandle GetMethodHandle();
+    public override System.RuntimeMethodHandle MethodHandle => GetMethodHandle();
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     public override extern System.Reflection.MethodInfo GetBaseDefinition();
