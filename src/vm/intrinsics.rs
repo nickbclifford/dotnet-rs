@@ -5,7 +5,7 @@ use crate::{
         layout::*,
         string::CLRString,
         ConcreteType, Context, FieldDescription, GenericLookup, HeapStorage, MethodDescription, Object,
-        ObjectRef, StackValue,
+        ObjectRef, StackValue, TypeDescription
     }
 };
 use dotnetdll::prelude::*;
@@ -26,8 +26,7 @@ macro_rules! expect_stack {
     };
 }
 pub(crate) use expect_stack;
-use crate::utils::ResolutionS;
-use crate::value::TypeDescription;
+use crate::resolve::SUPPORT_ASSEMBLY;
 
 fn ref_as_ptr(v: StackValue) -> *mut u8 {
     match v {
@@ -51,6 +50,16 @@ fn span_to_slice<'gc, 'a>(span: Object<'gc>) -> &'a [u8] {
     let len = i32::from_ne_bytes(len_data) as usize;
     
     unsafe { std::slice::from_raw_parts(ptr as *const u8, len) }
+}
+
+fn from_runtime_type(obj: ObjectRef) -> ConcreteType {
+    obj.as_object(|instance| {
+        let mut ct = [0u8; size_of::<usize>()];
+        ct.copy_from_slice(instance.instance_storage.get_field("concreteType"));
+        unsafe {
+            &*(usize::from_ne_bytes(ct) as *const ConcreteType)
+        }
+    }).clone()
 }
 
 const STATIC_ARRAY_TYPE_PREFIX: &str = "__StaticArrayInitTypeSize=";
@@ -95,20 +104,19 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         "DotnetRs.Assembly DotnetRs.RuntimeType::GetAssembly()" => {
             expect_stack!(let ObjectRef(obj) = pop!());
 
-            let res = obj.as_object(|instance| {
-                unsafe { ResolutionS::from_raw(instance.instance_storage.get_field("resolution")) }
-            });
-            
-            let value = match stack.runtime_asms.get(&res) {
+            let target_type = from_runtime_type(obj);
+            let target_type = stack.assemblies.find_concrete_type(target_type);
+
+            let value = match stack.runtime_asms.get(&target_type.resolution) {
                 Some(o) => *o,
-                None => {
+                None => { 
                     let resolution = obj.as_object(|i| i.description.resolution);
                     let definition = resolution.0.type_definitions.iter().find(|a| a.type_name() == "DotnetRs.Assembly").unwrap();
                     let mut asm_handle = Object::new(TypeDescription { resolution, definition }, ctx!());
-                    let data = (res.as_raw() as usize).to_ne_bytes();
+                    let data = (target_type.resolution.as_raw() as usize).to_ne_bytes();
                     asm_handle.instance_storage.get_field_mut("resolution").copy_from_slice(&data);
                     let v = ObjectRef::new(gc, HeapStorage::Obj(asm_handle));
-                    stack.runtime_asms.insert(res, v);
+                    stack.runtime_asms.insert(target_type.resolution, v);
                     v
                 }
             };
@@ -116,7 +124,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         }
         "string DotnetRs.RuntimeType::GetNamespace()" => {
             expect_stack!(let ObjectRef(obj) = pop!());
-            let target = ConcreteType::from_runtime_type(obj);
+            let target = from_runtime_type(obj);
             let target = stack.assemblies.find_concrete_type(target);
             match &target.definition.namespace {
                 Some(ns) => {
@@ -126,6 +134,14 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     push!(StackValue::null());
                 }
             }
+        }
+        "string DotnetRs.RuntimeType::GetName()" => {
+            // just the regular name, not the fully qualified name
+            // https://learn.microsoft.com/en-us/dotnet/api/system.reflection.memberinfo.name?view=net-9.0#remarks
+            expect_stack!(let ObjectRef(obj) = pop!());
+            let target = from_runtime_type(obj);
+            let target = stack.assemblies.find_concrete_type(target);
+            push!(StackValue::string(gc, CLRString::from(target.definition.name.as_ref())));
         }
         "valuetype [System.Runtime]System.RuntimeTypeHandle DotnetRs.RuntimeType::GetTypeHandle()" => {
             expect_stack!(let ObjectRef(obj) = pop!());
@@ -216,6 +232,22 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 None => push!(StackValue::null()),
             }
         }
+        "static System.Collections.Generic.EqualityComparer`1<T0> System.Collections.Generic.EqualityComparer`1::get_Default()" => {
+            let rt_type = stack.get_rt_type(gc, generics.type_generics[0].clone());
+            push!(StackValue::ValueType(Box::new(rt_type)));
+
+            let res = stack.assemblies.get_assembly(SUPPORT_ASSEMBLY);
+            let mut target = None;
+            for t in res.0.type_definitions.iter() {
+                if t.type_name() == "DotnetRs.Comparers.Equality" {
+                    target = t.methods.iter().find(|m| m.name == "GetDefault");
+                    break;
+                }
+            }
+            let method = target.unwrap();
+            stack.call_frame(gc, MethodInfo::new(res, method, ctx!()), GenericLookup::default());
+            return;
+        }
         "static void System.GC::_SuppressFinalize(object)" => {
             // TODO(gc): this object's finalizer should not be called
             let _obj = pop!();
@@ -234,7 +266,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             // https://github.com/dotnet/runtime/blob/main/src/libraries/System.Private.CoreLib/src/System/SR.cs#L78
             expect_stack!(let ValueType(handle) = pop!());
             let rt = ObjectRef::read(handle.instance_storage.get_field("_value"));
-            let target = ConcreteType::from_runtime_type(rt);
+            let target = from_runtime_type(rt);
             let target = stack.assemblies.find_concrete_type(target);
             if stack.initialize_static_storage(gc, target, generics) {
                 let second_to_last = stack.frames.len() - 2;
@@ -300,6 +332,9 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let target_type = stack.assemblies.find_concrete_type(generics.method_generics[1].clone());
             let m = ref_as_ptr(pop!());
             push!(StackValue::managed_ptr(m, target_type));
+        }
+        "[Generic(1)] static ref M0 System.Runtime.CompilerServices.Unsafe::AsRef(ref M0)" => {
+            // I think this is a noop since none of the types or locations are actually changing
         }
         "[Generic(1)] static nint System.Runtime.CompilerServices.Unsafe::ByteOffset(ref M0, ref M0)" => {
             let r = ref_as_ptr(pop!());
@@ -488,6 +523,22 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let value = with_string!(pop!(), |s| s[index as usize]);
             push!(StackValue::Int32(value as i32));
         }
+        "static string System.String::Concat(valuetype System.ReadOnlySpan`1<char>, valuetype System.ReadOnlySpan`1<char>, valuetype System.ReadOnlySpan`1<char>)" => {
+            expect_stack!(let ValueType(span2) = pop!());
+            expect_stack!(let ValueType(span1) = pop!());
+            expect_stack!(let ValueType(span0) = pop!());
+            
+            fn char_span_into_str(span: Object) -> Vec<u16> {
+                span_to_slice(span).chunks_exact(2).map(|c| u16::from_ne_bytes([c[0], c[1]])).collect::<Vec<_>>()
+            }
+            
+            let data0 = char_span_into_str(*span0);
+            let data1 = char_span_into_str(*span1);
+            let data2 = char_span_into_str(*span2);
+            
+            let value = CLRString::new(data0.into_iter().chain(data1.into_iter()).chain(data2.into_iter()).collect());
+            push!(StackValue::string(gc, value));
+        }
         "int System.String::GetHashCodeOrdinalIgnoreCase()" => {
             use std::hash::*;
             
@@ -553,6 +604,14 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             expect_stack!(let ValueType(handle) = pop!());
             let target = ObjectRef::read(handle.instance_storage.get_field("_value"));
             push!(StackValue::ObjectRef(target));
+        }
+        "bool System.Type::get_IsValueType()" => {
+            expect_stack!(let ObjectRef(o) = pop!());
+            let target = from_runtime_type(o);
+            let target = stack.assemblies.find_concrete_type(target);
+            
+            let value = target.is_value_type(&ctx!());
+            push!(StackValue::Int32(value as i32));
         }
         "static bool System.Type::op_Equality(System.Type, System.Type)" => {
             expect_stack!(let ObjectRef(o2) = pop!());

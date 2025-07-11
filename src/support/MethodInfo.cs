@@ -4,7 +4,7 @@ using System.Runtime.CompilerServices;
 
 namespace DotnetRs;
 
-internal class MethodInfo : System.Reflection.MethodInfo
+public class MethodInfo : System.Reflection.MethodInfo
 {
     [MethodImpl(MethodImplOptions.InternalCall)]
     public override extern object[] GetCustomAttributes(bool inherit);

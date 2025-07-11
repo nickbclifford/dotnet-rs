@@ -287,6 +287,19 @@ impl<'gc> ObjectRef<'gc> {
         
         op(instance)
     }
+
+    pub fn as_object_mut<T>(&self, gc: GCHandle<'gc>, op: impl FnOnce(&mut Object<'gc>) -> T) -> T {
+        let ObjectRef(Some(o)) = &self else {
+            // TODO: NullPointerException
+            panic!("called ObjectRef::as_object_mut on NULL object reference")
+        };
+        let mut heap = o.borrow_mut(gc);
+        let HeapStorage::Obj(instance) = &mut *heap else {
+            panic!("called ObjectRef::as_object_mut on non-object heap reference")
+        };
+
+        op(instance)
+    }
     
     pub fn as_vector<T>(&self, op: impl FnOnce(&Vector<'gc>) -> T) -> T {
         let ObjectRef(Some(o)) = &self else {
@@ -869,19 +882,6 @@ impl ConcreteType {
         }
     }
 
-    pub fn from_runtime_type(obj: ObjectRef) -> Self {
-        obj.as_object(|instance| {
-            let source =
-                unsafe { ResolutionS::from_raw(instance.instance_storage.get_field("resolution")) };
-
-            let mut type_buf = [0u8; size_of::<usize>()];
-            type_buf.copy_from_slice(instance.instance_storage.get_field("baseType"));
-            let base = unsafe { Box::from_raw(usize::from_ne_bytes(type_buf) as *mut _) };
-
-            ConcreteType { source, base }
-        })
-    }
-
     pub fn get(&self) -> &BaseType<Self> {
         &*self.base
     }
@@ -892,10 +892,6 @@ impl ConcreteType {
 
     pub fn resolution(&self) -> ResolutionS {
         self.source
-    }
-
-    pub fn into_raw(self) -> *mut BaseType<Self> {
-        Box::into_raw(self.base)
     }
 }
 impl Debug for ConcreteType {

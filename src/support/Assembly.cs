@@ -1,6 +1,6 @@
 namespace DotnetRs;
 
-internal class Assembly : System.Reflection.Assembly
+public class Assembly : System.Reflection.Assembly
 {
     private nint resolution;
 }

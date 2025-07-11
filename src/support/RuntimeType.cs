@@ -7,8 +7,7 @@ namespace DotnetRs;
 [Stub(InPlaceOf = "System.RuntimeType")]
 internal class RuntimeType : Type
 {
-    private nint resolution;
-    private nint baseType; 
+    private nint concreteType;
     
     [MethodImpl(MethodImplOptions.InternalCall)]
     private extern Assembly GetAssembly();

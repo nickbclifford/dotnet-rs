@@ -1,6 +1,6 @@
 namespace DotnetRs;
 
-internal class Module : System.Reflection.Module
+public class Module : System.Reflection.Module
 {
     private IntPtr resolution;
 }
