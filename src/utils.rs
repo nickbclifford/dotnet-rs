@@ -29,7 +29,7 @@ impl Deref for ResolutionS {
 }
 impl Debug for ResolutionS {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ResolutionS({:#?})", self.as_raw())
+        write!(f, "ResolutionS({} @ {:#?})", self.0.assembly.as_ref().unwrap().name, self.as_raw())
     }
 }
 impl PartialEq for ResolutionS {

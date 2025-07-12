@@ -19,8 +19,9 @@ macro_rules! msg {
         $src.msg(format_args!($($format)*))
     }
 }
+use crate::resolve::Assemblies;
+use crate::value::GenericLookup;
 pub(crate) use msg;
-
 
 // I.12.3.2
 #[derive(Clone)]
@@ -51,7 +52,12 @@ pub struct MethodInfo<'a> {
 }
 unsafe_empty_collect!(MethodInfo<'_>);
 impl<'m> MethodInfo<'m> {
-    pub fn new(source_resolution: ResolutionS, method: &'m Method<'m>, ctx: Context) -> Self {
+    pub fn new<'c>(
+        source_resolution: ResolutionS,
+        method: &'m Method<'m>,
+        generics: &'c GenericLookup,
+        assemblies: &'c Assemblies,
+    ) -> Self {
         let body = match &method.body {
             Some(b) => b,
             None => todo!("no body in executing method"),
@@ -70,6 +76,12 @@ impl<'m> MethodInfo<'m> {
         let instructions = match &method.body {
             Some(b) => b.instructions.as_slice(),
             None => todo!("cannot call method with empty body"),
+        };
+
+        let ctx = Context {
+            generics,
+            assemblies,
+            resolution: source_resolution,
         };
 
         Self {

@@ -10,6 +10,9 @@ internal class RuntimeType : Type
     private nint concreteType;
     
     [MethodImpl(MethodImplOptions.InternalCall)]
+    public override extern Type MakeGenericType(params Type[] typeArguments);
+    
+    [MethodImpl(MethodImplOptions.InternalCall)]
     private extern Assembly GetAssembly();
     public override System.Reflection.Assembly Assembly => GetAssembly();
 
@@ -159,4 +162,6 @@ internal class RuntimeType : Type
 
     [MethodImpl(MethodImplOptions.InternalCall)]    
     public override extern bool IsDefined(Type attributeType, bool inherit);
+    
+    
 }

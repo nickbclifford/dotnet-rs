@@ -24,15 +24,14 @@ impl Executor {
     pub fn entrypoint(&mut self, method: &'static Method<'static>) {
         // TODO: initialize argv (entry point args are either string[] or nothing, II.15.4.1.2)
         self.arena.mutate_root(|gc, c| {
-            let ctx = Context {
-                generics: &Default::default(),
-                assemblies: c.assemblies,
-                resolution: c.assemblies.entrypoint,
-            };
-
             c.entrypoint_frame(
                 gc,
-                MethodInfo::new(c.assemblies.entrypoint, method, ctx),
+                MethodInfo::new(
+                    c.assemblies.entrypoint,
+                    method,
+                    &Default::default(),
+                    c.assemblies,
+                ),
                 Default::default(),
                 vec![],
             )

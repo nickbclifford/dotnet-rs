@@ -190,7 +190,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     stack.constructor_frame(
                         gc,
                         instance,
-                        MethodInfo::new(td.resolution, m, new_ctx),
+                        MethodInfo::new(td.resolution, m, &new_lookup, &stack.assemblies),
                         new_lookup,
                     );
                     return;
@@ -233,19 +233,20 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             }
         }
         "static System.Collections.Generic.EqualityComparer`1<T0> System.Collections.Generic.EqualityComparer`1::get_Default()" => {
-            let rt_type = stack.get_rt_type(gc, generics.type_generics[0].clone());
-            push!(StackValue::ValueType(Box::new(rt_type)));
+            let target = generics.type_generics[0].clone();
+            let rt = stack.get_runtime_type(gc, target);
+            push!(StackValue::ObjectRef(rt));
 
-            let res = stack.assemblies.get_assembly(SUPPORT_ASSEMBLY);
-            let mut target = None;
-            for t in res.0.type_definitions.iter() {
-                if t.type_name() == "DotnetRs.Comparers.Equality" {
-                    target = t.methods.iter().find(|m| m.name == "GetDefault");
-                    break;
-                }
-            }
-            let method = target.unwrap();
-            stack.call_frame(gc, MethodInfo::new(res, method, ctx!()), GenericLookup::default());
+            let parent = stack.assemblies.find_in_assembly(
+                &ExternalAssemblyReference::new(SUPPORT_ASSEMBLY),
+                "DotnetRs.Comparers.Equality"
+            );
+            let method = parent.definition.methods.iter().find(|m| m.name == "GetDefault").unwrap();
+            stack.call_frame(
+                gc,
+                MethodInfo::new(parent.resolution, method, &GenericLookup::default(), &stack.assemblies),
+                GenericLookup::default()
+            );
             return;
         }
         "static void System.GC::_SuppressFinalize(object)" => {
@@ -311,6 +312,16 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             } else {
                 todo!("initial field data for {:?}", field_desc);
             }
+        }
+        "[Generic(1)] static bool System.Runtime.CompilerServices.RuntimeHelpers::IsBitwiseEquatable()" => {
+            let target = &generics.method_generics[0];
+            let layout = type_layout(target.clone(), ctx!());
+            let value = match layout {
+                LayoutManager::Scalar(Scalar::ObjectRef) => false,
+                LayoutManager::Scalar(_) => true,
+                _ => false
+            };
+            push!(StackValue::Int32(value as i32));
         }
         "[Generic(1)] static bool System.Runtime.CompilerServices.RuntimeHelpers::IsReferenceOrContainsReferences()" => {
             let target = &generics.method_generics[0];

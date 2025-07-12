@@ -63,7 +63,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 "-- calling static constructor (will return to ip {}) --",
                 self.current_frame().state.ip
             );
-            self.call_frame(gc, MethodInfo::new(m.resolution(), m.method, ctx), generics);
+            self.call_frame(gc, MethodInfo::new(m.resolution(), m.method, &generics, &self.assemblies), generics);
             true
         } else {
             false
@@ -584,7 +584,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     MethodInfo::new(
                         res,
                         method.method,
-                        Context::with_generics(self.current_context(), &lookup),
+                        &lookup,
+                        &self.assemblies
                     ),
                     lookup,
                 );
@@ -612,7 +613,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             MethodInfo::new(
                                 target.resolution(),
                                 target.method,
-                                Context::with_generics(self.current_context(), &lookup),
+                                &lookup,
+                                &self.assemblies
                             ),
                             lookup,
                         );
@@ -1086,7 +1088,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     self.call_frame(
                         gc,
-                        MethodInfo::new(parent.resolution, method.method, self.current_context()),
+                        MethodInfo::new(parent.resolution, method.method, &lookup, &self.assemblies),
                         lookup,
                     );
                     moved_ip = true;
@@ -1390,7 +1392,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 // TODO: System.Type documentation suggests that maybe we need to preserve generic variables
                 let target_type = self.current_context().make_concrete(target);
 
-                let instance = self.get_rt_type(gc, target_type);
+                let instance = self.get_handle_for_type(gc, target_type);
 
                 push!(ValueType(Box::new(instance)))
             }
@@ -1492,7 +1494,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         self.constructor_frame(
                             gc,
                             instance,
-                            MethodInfo::new(method.resolution(), method.method, new_ctx),
+                            MethodInfo::new(method.resolution(), method.method, &lookup, &self.assemblies),
                             lookup,
                         );
                         moved_ip = true;
@@ -1680,29 +1682,31 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         StepResult::InstructionStepped
     }
 
-    pub fn get_rt_type(&mut self, gc: GCHandle<'gc>, target_type: ConcreteType) -> Object<'gc> {
+    pub fn get_runtime_type(&mut self, gc: GCHandle<'gc>, target_type: ConcreteType) -> ObjectRef<'gc> {
+        if let Some(obj) = self.runtime_types.get(&target_type) {
+            return *obj;
+        }
+        let rt = self.assemblies.corlib_type("System.RuntimeType");
+        let rt_obj = Object::new(rt, self.current_context());
+        let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
+        self.register_new_object(&obj_ref);
+        let key = target_type.clone();
+        let entry = self.runtime_types.entry(key).insert_entry(obj_ref);
+        let type_ptr = entry.key() as *const ConcreteType as usize;
+        entry.get().as_object_mut(gc, |instance| {
+            instance
+                .instance_storage
+                .get_field_mut("concreteType")
+                .copy_from_slice(&type_ptr.to_ne_bytes());
+        });
+        obj_ref
+    }
+
+    pub fn get_handle_for_type(&mut self, gc: GCHandle<'gc>, target_type: ConcreteType) -> Object<'gc> {
         let rth = self.assemblies.corlib_type("System.RuntimeTypeHandle");
         let mut instance = Object::new(rth, self.current_context());
         let handle_location = instance.instance_storage.get_field_mut("_value");
-        if let Some(obj) = self.runtime_types.get(&target_type) {
-            obj.write(handle_location);
-        } else {
-            let rt = self.assemblies.corlib_type("System.RuntimeType");
-            let rt_obj = Object::new(rt, self.current_context());
-            let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
-            self.register_new_object(&obj_ref);
-            obj_ref.write(handle_location);
-
-            let key = target_type.clone();
-            let entry = self.runtime_types.entry(key).insert_entry(obj_ref);
-            let type_ptr = entry.key() as *const ConcreteType as usize;
-            entry.get().as_object_mut(gc, |instance| {
-                instance
-                    .instance_storage
-                    .get_field_mut("concreteType")
-                    .copy_from_slice(&type_ptr.to_ne_bytes());
-            })
-        }
+        self.get_runtime_type(gc, target_type).write(handle_location);
         instance
     }
 }
