@@ -63,7 +63,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 "-- calling static constructor (will return to ip {}) --",
                 self.current_frame().state.ip
             );
-            self.call_frame(gc, MethodInfo::new(m.resolution(), m.method, &generics, &self.assemblies), generics);
+            self.call_frame(
+                gc,
+                MethodInfo::new(m.resolution(), m.method, &generics, &self.assemblies),
+                generics,
+            );
             true
         } else {
             false
@@ -581,12 +585,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 self.call_frame(
                     gc,
-                    MethodInfo::new(
-                        res,
-                        method.method,
-                        &lookup,
-                        &self.assemblies
-                    ),
+                    MethodInfo::new(res, method.method, &lookup, &self.assemblies),
                     lookup,
                 );
                 moved_ip = true;
@@ -614,7 +613,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                 target.resolution(),
                                 target.method,
                                 &lookup,
-                                &self.assemblies
+                                &self.assemblies,
                             ),
                             lookup,
                         );
@@ -1072,10 +1071,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 let mut found = None;
                 for (parent, _) in self.current_context().get_ancestors(this_type) {
-                    if let Some(method) = self.current_context().find_method_in_type(
+                    if let Some(method) = self.assemblies.find_method_in_type(
                         parent,
                         &base_method.method.name,
                         &base_method.method.signature,
+                        base_method.resolution(),
                     ) {
                         found = Some((parent, method));
                         break;
@@ -1086,9 +1086,18 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     for a in args {
                         push!(a);
                     }
+                    if method.method.internal_call {
+                        intrinsic_call(gc, self, method, lookup);
+                        return StepResult::InstructionStepped;
+                    }
                     self.call_frame(
                         gc,
-                        MethodInfo::new(parent.resolution, method.method, &lookup, &self.assemblies),
+                        MethodInfo::new(
+                            parent.resolution,
+                            method.method,
+                            &lookup,
+                            &self.assemblies,
+                        ),
                         lookup,
                     );
                     moved_ip = true;
@@ -1494,7 +1503,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         self.constructor_frame(
                             gc,
                             instance,
-                            MethodInfo::new(method.resolution(), method.method, &lookup, &self.assemblies),
+                            MethodInfo::new(
+                                method.resolution(),
+                                method.method,
+                                &lookup,
+                                &self.assemblies,
+                            ),
                             lookup,
                         );
                         moved_ip = true;
@@ -1682,7 +1696,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         StepResult::InstructionStepped
     }
 
-    pub fn get_runtime_type(&mut self, gc: GCHandle<'gc>, target_type: ConcreteType) -> ObjectRef<'gc> {
+    pub fn get_runtime_type(
+        &mut self,
+        gc: GCHandle<'gc>,
+        target_type: ConcreteType,
+    ) -> ObjectRef<'gc> {
         if let Some(obj) = self.runtime_types.get(&target_type) {
             return *obj;
         }
@@ -1702,11 +1720,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         obj_ref
     }
 
-    pub fn get_handle_for_type(&mut self, gc: GCHandle<'gc>, target_type: ConcreteType) -> Object<'gc> {
+    pub fn get_handle_for_type(
+        &mut self,
+        gc: GCHandle<'gc>,
+        target_type: ConcreteType,
+    ) -> Object<'gc> {
         let rth = self.assemblies.corlib_type("System.RuntimeTypeHandle");
         let mut instance = Object::new(rth, self.current_context());
         let handle_location = instance.instance_storage.get_field_mut("_value");
-        self.get_runtime_type(gc, target_type).write(handle_location);
+        self.get_runtime_type(gc, target_type)
+            .write(handle_location);
         instance
     }
 }

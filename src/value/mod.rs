@@ -52,16 +52,6 @@ impl<'a> Context<'a> {
             .locate_field(self.resolution, field, self.generics)
     }
 
-    pub fn find_method_in_type(
-        &self,
-        parent_type: TypeDescription,
-        name: &str,
-        signature: &ManagedMethod<MethodType>,
-    ) -> Option<MethodDescription> {
-        self.assemblies
-            .find_method_in_type(parent_type, name, signature, self.resolution)
-    }
-
     pub fn get_ancestors(
         &self,
         child_type: TypeDescription,
