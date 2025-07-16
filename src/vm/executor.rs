@@ -2,7 +2,7 @@ use dotnetdll::prelude::*;
 
 use super::{MethodInfo, StepResult};
 use crate::{
-    value::{Context, StackValue},
+    value::StackValue,
     vm::stack::GCArena,
 };
 

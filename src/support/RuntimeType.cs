@@ -13,6 +13,9 @@ internal class RuntimeType : Type
     public override extern Type MakeGenericType(params Type[] typeArguments);
     
     [MethodImpl(MethodImplOptions.InternalCall)]
+    public override extern bool IsAssignableFrom(Type? target);
+    
+    [MethodImpl(MethodImplOptions.InternalCall)]
     private extern Assembly GetAssembly();
     public override System.Reflection.Assembly Assembly => GetAssembly();
 

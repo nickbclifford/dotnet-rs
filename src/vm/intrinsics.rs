@@ -2,11 +2,9 @@ use super::{CallStack, GCHandle, MethodInfo};
 use crate::{
     utils::decompose_type_source,
     value::{
-        layout::*,
-        string::CLRString,
-        ConcreteType, Context, FieldDescription, GenericLookup, HeapStorage, MethodDescription, Object,
-        ObjectRef, StackValue, TypeDescription
-    }
+        layout::*, string::CLRString, ConcreteType, Context, FieldDescription, GenericLookup,
+        HeapStorage, MethodDescription, Object, ObjectRef, StackValue, TypeDescription,
+    },
 };
 use dotnetdll::prelude::*;
 
@@ -25,8 +23,8 @@ macro_rules! expect_stack {
         )?
     };
 }
-pub(crate) use expect_stack;
 use crate::resolve::SUPPORT_ASSEMBLY;
+pub(crate) use expect_stack;
 
 fn ref_as_ptr(v: StackValue) -> *mut u8 {
     match v {
@@ -42,13 +40,13 @@ fn ref_as_ptr(v: StackValue) -> *mut u8 {
 fn span_to_slice<'gc, 'a>(span: Object<'gc>) -> &'a [u8] {
     let mut ptr_data = [0u8; size_of::<usize>()];
     let mut len_data = [0u8; size_of::<i32>()];
-    
+
     ptr_data.copy_from_slice(span.instance_storage.get_field("_reference"));
     len_data.copy_from_slice(span.instance_storage.get_field("_length"));
-    
+
     let ptr = usize::from_ne_bytes(ptr_data);
     let len = i32::from_ne_bytes(len_data) as usize;
-    
+
     unsafe { std::slice::from_raw_parts(ptr as *const u8, len) }
 }
 
@@ -56,10 +54,9 @@ fn from_runtime_type(obj: ObjectRef) -> ConcreteType {
     obj.as_object(|instance| {
         let mut ct = [0u8; size_of::<usize>()];
         ct.copy_from_slice(instance.instance_storage.get_field("concreteType"));
-        unsafe {
-            &*(usize::from_ne_bytes(ct) as *const ConcreteType)
-        }
-    }).clone()
+        unsafe { &*(usize::from_ne_bytes(ct) as *const ConcreteType) }
+    })
+    .clone()
 }
 
 const STATIC_ARRAY_TYPE_PREFIX: &str = "__StaticArrayInitTypeSize=";
@@ -109,9 +106,12 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             let value = match stack.runtime_asms.get(&target_type.resolution) {
                 Some(o) => *o,
-                None => { 
+                None => {
                     let resolution = obj.as_object(|i| i.description.resolution);
-                    let definition = resolution.0.type_definitions.iter().find(|a| a.type_name() == "DotnetRs.Assembly").unwrap();
+                    let definition = resolution.0.type_definitions
+                        .iter()
+                        .find(|a| a.type_name() == "DotnetRs.Assembly")
+                        .unwrap();
                     let mut asm_handle = Object::new(TypeDescription { resolution, definition }, ctx!());
                     let data = (target_type.resolution.as_raw() as usize).to_ne_bytes();
                     asm_handle.instance_storage.get_field_mut("resolution").copy_from_slice(&data);
@@ -151,6 +151,38 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             obj.write(instance.instance_storage.get_field_mut("_value"));
 
             push!(StackValue::ValueType(Box::new(instance)));
+        }
+        "[System.Runtime]System.Type DotnetRs.RuntimeType::MakeGenericType([System.Runtime]System.Type[])" => {
+            expect_stack!(let ObjectRef(parameters) = pop!());
+            expect_stack!(let ObjectRef(target) = pop!());
+            let rt = from_runtime_type(target);
+            match rt.get() {
+                BaseType::Type { source, .. } => {
+                    let (ut, _) = decompose_type_source(source);
+                    let name = ut.type_name(rt.resolution().0);
+                    let fragments: Vec<_> = name.split('`').collect();
+                    if fragments.len() <= 1 {
+                        todo!("ArgumentException: type is not generic")
+                    }
+                    let n_params: usize = fragments[1].parse().unwrap();
+                    let mut params = vec![];
+                    for i in 0..n_params {
+                        parameters.as_vector(|v| {
+                            let start = i * size_of::<ObjectRef>();
+                            let end = start + size_of::<ObjectRef>();
+                            let param = ObjectRef::read(&v.get()[start..end]);
+                            params.push(from_runtime_type(param));
+                        });
+                    }
+                    let new_type = ConcreteType::new(rt.resolution(), BaseType::Type {
+                        source: TypeSource::generic(ut, params),
+                        value_kind: None
+                    });
+                    let new_rt = stack.get_runtime_type(gc, new_type);
+                    push!(StackValue::ObjectRef(new_rt));
+                }
+                _ => todo!("ArgumentException: cannot make generic type from {:?}", rt),
+            }
         }
         "[Generic(1)] static M0 System.Activator::CreateInstance()" => {
             let target = &generics.method_generics[0];
@@ -257,10 +289,10 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             expect_stack!(let Int32(_culture_comparison) = pop!()); // TODO(i18n): respect StringComparison rules
             expect_stack!(let ValueType(b) = pop!());
             expect_stack!(let ValueType(a) = pop!());
-            
+
             let a = span_to_slice(*a);
             let b = span_to_slice(*b);
-            
+
             push!(StackValue::Int32((a == b) as i32));
         }
         "static void System.Runtime.CompilerServices.RuntimeHelpers::RunClassConstructor(valuetype System.RuntimeTypeHandle)" => {
@@ -282,7 +314,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let target = &generics.method_generics[0];
             let target_size = type_layout(target.clone(), ctx!()).size();
             expect_stack!(let ValueType(field_handle) = pop!());
-            
+
             let mut idx_buf = [0u8; size_of::<usize>()];
             idx_buf.copy_from_slice(field_handle.instance_storage.get_field("_value"));
             let idx = usize::from_ne_bytes(idx_buf);
@@ -291,7 +323,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let field_desc = stack.assemblies.find_concrete_type(field_type.clone());
 
             let Some(data) = &field.initial_value else { todo!("ArgumentException: field has no initial value") };
-            
+
             if field_desc.definition.name.starts_with(STATIC_ARRAY_TYPE_PREFIX) {
                 let size_str = field_desc.definition.name.split_at(STATIC_ARRAY_TYPE_PREFIX.len()).1;
                 let end_idx = match size_str.find('_') {
@@ -301,13 +333,13 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 let size_txt = &size_str[..end_idx];
                 let size = size_txt.parse::<usize>().unwrap();
                 let data = &data[0..size];
-                
+
                 let span = stack.assemblies.corlib_type("System.ReadOnlySpan`1");
                 let span_lookup = GenericLookup::new(vec![field_type]);
                 let mut instance = Object::new(span, Context::with_generics(ctx!(), &span_lookup));
                 instance.instance_storage.get_field_mut("_reference").copy_from_slice(&(data.as_ptr() as usize).to_ne_bytes());
                 instance.instance_storage.get_field_mut("_length").copy_from_slice(&((size / target_size) as i32).to_ne_bytes());
-                    
+
                 push!(StackValue::ValueType(Box::new(instance)));
             } else {
                 todo!("initial field data for {:?}", field_desc);
@@ -387,7 +419,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let layout = type_layout(target.clone(), ctx!());
             let value = pop!();
             expect_stack!(let NativeInt(ptr) = pop!());
-            
+
             macro_rules! write_ua {
                 ($variant:ident, $t:ty) => {{
                     expect_stack!(let $variant(v) = value);
@@ -396,7 +428,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     }
                 }};
             }
-            
+
             match layout {
                 LayoutManager::Scalar(s) => match s {
                     Scalar::ObjectRef => write_ua!(ObjectRef, ObjectRef),
@@ -470,7 +502,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         }
         "static int System.Threading.Interlocked::CompareExchange(ref int, int, int)" => {
             use std::sync::atomic::{AtomicI32, Ordering};
-            
+
             expect_stack!(let Int32(comparand) = pop!());
             expect_stack!(let Int32(value) = pop!());
             let target = ref_as_ptr(pop!()) as *mut i32;
@@ -538,26 +570,26 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             expect_stack!(let ValueType(span2) = pop!());
             expect_stack!(let ValueType(span1) = pop!());
             expect_stack!(let ValueType(span0) = pop!());
-            
+
             fn char_span_into_str(span: Object) -> Vec<u16> {
                 span_to_slice(span).chunks_exact(2).map(|c| u16::from_ne_bytes([c[0], c[1]])).collect::<Vec<_>>()
             }
-            
+
             let data0 = char_span_into_str(*span0);
             let data1 = char_span_into_str(*span1);
             let data2 = char_span_into_str(*span2);
-            
+
             let value = CLRString::new(data0.into_iter().chain(data1.into_iter()).chain(data2.into_iter()).collect());
             push!(StackValue::string(gc, value));
         }
         "int System.String::GetHashCodeOrdinalIgnoreCase()" => {
             use std::hash::*;
-            
+
             let mut h = DefaultHasher::new();
             let value = with_string!(pop!(), |s| String::from_utf16_lossy(&s).to_uppercase().into_bytes());
             value.hash(&mut h);
             let code = h.finish();
-            
+
             push!(StackValue::Int32(code as i32));
         }
         "<req System.Runtime.InteropServices.InAttribute> ref char System.String::GetPinnableReference()" |
@@ -600,7 +632,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let ctx = Context::with_generics(ctx!(), &new_lookup);
 
             let mut span = Object::new(span_type, ctx);
-            
+
             span.instance_storage.get_field_mut("_reference").copy_from_slice(&(ptr as usize).to_ne_bytes());
             span.instance_storage.get_field_mut("_length").copy_from_slice(&(len as i32).to_ne_bytes());
 
@@ -620,7 +652,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             expect_stack!(let ObjectRef(o) = pop!());
             let target = from_runtime_type(o);
             let target = stack.assemblies.find_concrete_type(target);
-            
+
             let value = target.is_value_type(&ctx!());
             push!(StackValue::Int32(value as i32));
         }
@@ -644,7 +676,9 @@ pub fn intrinsic_field<'gc, 'm: 'gc>(
     // TODO: real signature checking
     match format!("{:?}", field).as_str() {
         "static nint System.IntPtr::Zero" => stack.push_stack(gc, StackValue::NativeInt(0)),
-        "static string System.String::Empty" => stack.push_stack(gc, StackValue::string(gc, CLRString::new(vec![]))),
+        "static string System.String::Empty" => {
+            stack.push_stack(gc, StackValue::string(gc, CLRString::new(vec![])))
+        }
         x => panic!("unsupported load from intrinsic field {}", x),
     }
 
