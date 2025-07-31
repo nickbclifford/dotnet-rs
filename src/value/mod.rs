@@ -1,3 +1,12 @@
+use crate::{
+    resolve::{Ancestor, Assemblies},
+    utils::{decompose_type_source, DebugStr, ResolutionS},
+    value::string::CLRString,
+    vm::{intrinsics::expect_stack, GCHandle},
+};
+
+use dotnetdll::prelude::*;
+use gc_arena::{lock::RefLock, unsafe_empty_collect, Collect, Collection, Gc};
 use std::{
     cmp::Ordering,
     fmt::{Debug, Formatter},
@@ -6,22 +15,13 @@ use std::{
     mem::size_of,
 };
 
-use dotnetdll::prelude::*;
-use gc_arena::{lock::RefLock, unsafe_empty_collect, Collect, Collection, Gc};
-
-use crate::{
-    resolve::{Ancestor, Assemblies},
-    utils::{decompose_type_source, DebugStr, ResolutionS},
-    value::string::CLRString,
-    vm::{intrinsics::expect_stack, GCHandle},
-};
-
 pub mod layout;
-pub mod storage;
-pub mod string;
-
 use layout::*;
+
+pub mod storage;
 use storage::FieldStorage;
+
+pub mod string;
 
 #[derive(Clone)]
 pub struct Context<'a> {
@@ -264,7 +264,7 @@ impl<'gc> ObjectRef<'gc> {
         let ptr_bytes = (ptr as usize).to_ne_bytes();
         dest.copy_from_slice(&ptr_bytes);
     }
-    
+
     pub fn as_object<T>(&self, op: impl FnOnce(&Object<'gc>) -> T) -> T {
         let ObjectRef(Some(o)) = &self else {
             // TODO: NullPointerException
@@ -274,7 +274,7 @@ impl<'gc> ObjectRef<'gc> {
         let HeapStorage::Obj(instance) = &*heap else {
             panic!("called ObjectRef::as_object on non-object heap reference")
         };
-        
+
         op(instance)
     }
 
@@ -290,7 +290,7 @@ impl<'gc> ObjectRef<'gc> {
 
         op(instance)
     }
-    
+
     pub fn as_vector<T>(&self, op: impl FnOnce(&Vector<'gc>) -> T) -> T {
         let ObjectRef(Some(o)) = &self else {
             // TODO: NullPointerException
@@ -300,7 +300,7 @@ impl<'gc> ObjectRef<'gc> {
         let HeapStorage::Vec(instance) = &*heap else {
             panic!("called ObjectRef::as_vector on non-vector heap reference")
         };
-        
+
         op(instance)
     }
 }

@@ -1,7 +1,6 @@
-use super::{MethodInfo, StepResult};
 use crate::{
     value::{MethodDescription, StackValue},
-    vm::stack::GCArena,
+    vm::{stack::GCArena, MethodInfo, StepResult},
 };
 
 pub struct Executor {

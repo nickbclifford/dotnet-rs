@@ -1,10 +1,8 @@
+use super::{ConcreteType, Context, FieldDescription, GenericLookup, TypeDescription};
+
 use dotnetdll::prelude::*;
 use enum_dispatch::enum_dispatch;
-use std::collections::HashMap;
-use std::mem::size_of;
-use std::ops::Range;
-
-use super::{ConcreteType, Context, FieldDescription, GenericLookup, TypeDescription};
+use std::{collections::HashMap, mem::size_of, ops::Range};
 
 #[enum_dispatch]
 pub trait HasLayout {
@@ -342,8 +340,7 @@ pub fn type_layout(t: ConcreteType, context: Context) -> LayoutManager {
             if let Some(inner) = t.is_enum() {
                 type_layout(ctx.make_concrete(inner), ctx)
             } else {
-                FieldLayoutManager::instance_fields(t, ctx)
-                    .into()
+                FieldLayoutManager::instance_fields(t, ctx).into()
             }
         }
         BaseType::Type { .. }

@@ -1,12 +1,15 @@
-use crate::value::{GenericLookup, HeapStorage, MethodDescription, Object, ObjectRef};
-use crate::vm::{CallStack, GCHandle};
+use crate::{
+    value::{ConcreteType, GenericLookup, HeapStorage, MethodDescription, Object, ObjectRef},
+    vm::{CallStack, GCHandle},
+};
+
 use dotnetdll::prelude::MethodType;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RuntimeType {
     pub target: MethodType,
     pub source: MethodDescription,
-    pub generics: GenericLookup
+    pub generics: GenericLookup,
 }
 
 impl<'gc> TryFrom<ObjectRef<'gc>> for RuntimeType {
@@ -21,7 +24,16 @@ impl<'gc> TryFrom<ObjectRef<'gc>> for RuntimeType {
             }
             ct.copy_from_slice(instance.instance_storage.get_field("pointerToKey"));
             Ok(unsafe { &*(usize::from_ne_bytes(ct) as *const RuntimeType) })
-        }).cloned()
+        })
+        .cloned()
+    }
+}
+
+impl From<RuntimeType> for ConcreteType {
+    fn from(value: RuntimeType) -> Self {
+        value
+            .generics
+            .make_concrete(value.source.resolution(), value.target)
     }
 }
 
@@ -46,16 +58,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         obj_ref
     }
 
-    pub fn get_handle_for_type(
-        &mut self,
-        gc: GCHandle<'gc>,
-        target: RuntimeType,
-    ) -> Object<'gc> {
+    pub fn get_handle_for_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> Object<'gc> {
         let rth = self.assemblies.corlib_type("System.RuntimeTypeHandle");
         let mut instance = Object::new(rth, self.current_context());
         let handle_location = instance.instance_storage.get_field_mut("_value");
-        self.get_runtime_type(gc, target)
-            .write(handle_location);
+        self.get_runtime_type(gc, target).write(handle_location);
         instance
     }
 }

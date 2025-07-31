@@ -1,13 +1,16 @@
 pub mod reflection;
+use reflection::RuntimeType;
 
-use super::{CallStack, GCHandle, MethodInfo};
 use crate::{
+    resolve::SUPPORT_ASSEMBLY,
     utils::decompose_type_source,
     value::{
         layout::*, string::CLRString, ConcreteType, Context, FieldDescription, GenericLookup,
-        HeapStorage, MethodDescription, Object, ObjectRef, StackValue, TypeDescription,
+        HeapStorage, MethodDescription, Object, ObjectRef, StackValue,
     },
+    vm::{CallStack, GCHandle, MethodInfo},
 };
+
 use dotnetdll::prelude::*;
 
 macro_rules! expect_stack {
@@ -25,9 +28,7 @@ macro_rules! expect_stack {
         )?
     };
 }
-use crate::resolve::SUPPORT_ASSEMBLY;
 pub(crate) use expect_stack;
-use crate::vm::intrinsics::reflection::RuntimeType;
 
 fn ref_as_ptr(v: StackValue) -> *mut u8 {
     match v {
@@ -90,7 +91,9 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
     super::msg!(stack, "-- method marked as runtime intrinsic --");
 
-    // TODO: move all RuntimeType implementations into reflection.rs
+    // TODO: move all RuntimeType implementations into reflection.rs,
+    //       move all String implementations into crate::value::string
+    
     // TODO: real signature checking
     match format!("{:?}", method).as_str() {
         "DotnetRs.Assembly DotnetRs.RuntimeType::GetAssembly()" => {
@@ -154,29 +157,29 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             expect_stack!(let ObjectRef(parameters) = pop!());
             expect_stack!(let ObjectRef(target) = pop!());
             let rt: RuntimeType = target.try_into().unwrap();
-            todo!("collapse generic type to concrete for MakeGenericType");
-            // match rt.get() {
-            //     BaseType::Type { source, .. } => {
-            //         let (ut, _) = decompose_type_source(source);
-            //         let name = ut.type_name(rt.resolution().0);
-            //         let fragments: Vec<_> = name.split('`').collect();
-            //         if fragments.len() <= 1 {
-            //             todo!("ArgumentException: type is not generic")
-            //         }
-            //         let n_params: usize = fragments[1].parse().unwrap();
-            //         let mut params = vec![];
-            //         for i in 0..n_params {
-            //             parameters.as_vector(|v| {
-            //                 let start = i * size_of::<ObjectRef>();
-            //                 let end = start + size_of::<ObjectRef>();
-            //                 let param = ObjectRef::read(&v.get()[start..end]);
-            //                 params.push(from_runtime_type(param));
-            //             });
-            //         }
-            //         todo!("make generic type from {:?}", params);
-            //     }
-            //     _ => todo!("ArgumentException: cannot make generic type from {:?}", rt),
-            // }
+            let rt: ConcreteType = rt.into();
+            match rt.get() {
+                BaseType::Type { source, .. } => {
+                    let (ut, _) = decompose_type_source(source);
+                    let name = ut.type_name(rt.resolution().0);
+                    let fragments: Vec<_> = name.split('`').collect();
+                    if fragments.len() <= 1 {
+                        todo!("ArgumentException: type is not generic")
+                    }
+                    let n_params: usize = fragments[1].parse().unwrap();
+                    let mut params: Vec<RuntimeType> = vec![];
+                    for i in 0..n_params {
+                        parameters.as_vector(|v| {
+                            let start = i * size_of::<ObjectRef>();
+                            let end = start + size_of::<ObjectRef>();
+                            let param = ObjectRef::read(&v.get()[start..end]);
+                            params.push(param.try_into().unwrap());
+                        });
+                    }
+                    todo!("make generic type from {:?}", params);
+                }
+                _ => todo!("ArgumentException: cannot make generic type from {:?}", rt),
+            }
         }
         "[Generic(1)] static M0 System.Activator::CreateInstance()" => {
             let target = &generics.method_generics[0];
@@ -303,16 +306,16 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             expect_stack!(let ValueType(handle) = pop!());
             let rt = ObjectRef::read(handle.instance_storage.get_field("_value"));
             let target: RuntimeType = rt.try_into().unwrap();
-            todo!("collapse generic type to concrete for RunClassConstructor");
-            // let target = stack.assemblies.find_concrete_type(target);
-            // if stack.initialize_static_storage(gc, target, generics) {
-            //     let second_to_last = stack.frames.len() - 2;
-            //     let ip = &mut stack.frames[second_to_last].state.ip;
-            //     *ip += 1;
-            //     let i = *ip;
-            //     super::msg!(stack, "-- explicit initialization! setting return ip to {} --", i);
-            //     return;
-            // }
+            let target: ConcreteType = target.into();
+            let target = stack.assemblies.find_concrete_type(target);
+            if stack.initialize_static_storage(gc, target, generics) {
+                let second_to_last = stack.frames.len() - 2;
+                let ip = &mut stack.frames[second_to_last].state.ip;
+                *ip += 1;
+                let i = *ip;
+                super::msg!(stack, "-- explicit initialization! setting return ip to {} --", i);
+                return;
+            }
         }
         "[Generic(1)] static valuetype System.ReadOnlySpan`1<M0> System.Runtime.CompilerServices.RuntimeHelpers::CreateSpan(valuetype System.RuntimeFieldHandle)" => {
             let target = &generics.method_generics[0];
@@ -655,11 +658,11 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         "bool System.Type::get_IsValueType()" => {
             expect_stack!(let ObjectRef(o) = pop!());
             let target: RuntimeType = o.try_into().unwrap();
-            todo!("collapse generics for IsValueType");
-            // let target = stack.assemblies.find_concrete_type(target);
-            //
-            // let value = target.is_value_type(&ctx!());
-            // push!(StackValue::Int32(value as i32));
+            let target: ConcreteType = target.into();
+            let target = stack.assemblies.find_concrete_type(target);
+
+            let value = target.is_value_type(&ctx!());
+            push!(StackValue::Int32(value as i32));
         }
         "static bool System.Type::op_Equality(System.Type, System.Type)" => {
             expect_stack!(let ObjectRef(o2) = pop!());

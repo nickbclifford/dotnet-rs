@@ -1,10 +1,12 @@
+use crate::{
+    utils::static_res_from_file,
+    value::{MethodDescription, TypeDescription},
+    vm::ExecutorResult,
+};
+
 use clap::Parser;
 use dotnetdll::prelude::*;
 use std::process::ExitCode;
-
-use crate::utils::static_res_from_file;
-use crate::value::{MethodDescription, TypeDescription};
-use crate::vm::ExecutorResult;
 
 mod resolve;
 mod utils;
@@ -31,7 +33,7 @@ fn main() -> ExitCode {
         None => panic!("expected input module to have an entry point, received one without"),
     };
 
-    let assemblies = resolve::Assemblies::new(resolution, args.assemblies);
+    let assemblies = resolve::Assemblies::new(args.assemblies);
     let assemblies = Box::leak(Box::new(assemblies));
 
     let arena = Box::new(vm::GCArena::new(|gc| vm::CallStack::new(gc, assemblies)));

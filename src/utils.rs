@@ -1,11 +1,11 @@
 use dotnetdll::prelude::*;
 use std::{
     fmt::{Debug, Formatter},
+    hash::Hash,
     io::Read,
+    ops::Deref,
     path::Path,
 };
-use std::hash::Hash;
-use std::ops::Deref;
 
 #[derive(Clone, Copy)]
 pub struct ResolutionS(pub &'static Resolution<'static>);
@@ -13,7 +13,7 @@ impl ResolutionS {
     pub fn as_raw(self) -> *const Resolution<'static> {
         self.0 as *const _
     }
-    
+
     pub unsafe fn from_raw(data: &[u8]) -> Self {
         let mut res_data = [0u8; size_of::<usize>()];
         res_data.copy_from_slice(data);
@@ -29,7 +29,12 @@ impl Deref for ResolutionS {
 }
 impl Debug for ResolutionS {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ResolutionS({} @ {:#?})", self.0.assembly.as_ref().unwrap().name, self.as_raw())
+        write!(
+            f,
+            "ResolutionS({} @ {:#?})",
+            self.0.assembly.as_ref().unwrap().name,
+            self.as_raw()
+        )
     }
 }
 impl PartialEq for ResolutionS {

@@ -1,15 +1,18 @@
-use super::{intrinsics::*, CallStack, GCHandle, MethodInfo, StepResult};
-use crate::utils::decompose_type_source;
-use crate::vm::intrinsics::reflection::RuntimeType;
 use crate::{
+    utils::decompose_type_source,
     value::{
         layout::{type_layout, FieldLayoutManager, HasLayout},
         string::CLRString,
         CTSValue, Context, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, Object,
         ObjectRef, StackValue, TypeDescription, UnmanagedPtr, ValueType, Vector,
     },
-    vm::exceptions::{HandlerKind, ProtectedSection},
+    vm::{
+        exceptions::{HandlerKind, ProtectedSection},
+        intrinsics::{reflection::RuntimeType, *},
+        CallStack, GCHandle, MethodInfo, StepResult,
+    },
 };
+
 use dotnetdll::prelude::*;
 use std::{cmp::Ordering, rc::Rc};
 
@@ -1323,7 +1326,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let len = obj.as_vector(|a| a.layout.length as isize);
                 push!(NativeInt(len));
             }
-            LoadObject { param0: load_type, .. } => {
+            LoadObject {
+                param0: load_type, ..
+            } => {
                 let source_ptr = match pop!() {
                     StackValue::NativeInt(i) => i as *mut u8,
                     StackValue::UnmanagedPtr(p) => p.0,
@@ -1335,7 +1340,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let load_type = ctx.make_concrete(load_type);
                 let layout = type_layout(load_type.clone(), ctx);
                 let source = unsafe { std::slice::from_raw_parts(source_ptr, layout.size()) };
-                let value = CTSValue::read(&load_type, &self.current_context(), source).into_stack();
+                let value =
+                    CTSValue::read(&load_type, &self.current_context(), source).into_stack();
                 push!(value);
             }
             LoadStaticField { param0: source, .. } => {
@@ -1511,11 +1517,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         self.constructor_frame(
                             gc,
                             instance,
-                            MethodInfo::new(
-                                method,
-                                &lookup,
-                                &self.assemblies,
-                            ),
+                            MethodInfo::new(method, &lookup, &self.assemblies),
                             lookup,
                         );
                         moved_ip = true;

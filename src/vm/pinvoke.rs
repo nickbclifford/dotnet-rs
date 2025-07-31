@@ -1,9 +1,3 @@
-use std::{collections::HashMap, ffi::c_void, path::PathBuf};
-
-use dotnetdll::prelude::*;
-use libffi::middle::*;
-use libloading::{Library, Symbol};
-
 use crate::{
     utils::decompose_type_source,
     value::{
@@ -12,6 +6,11 @@ use crate::{
     },
     vm::{CallStack, GCHandle},
 };
+
+use dotnetdll::prelude::*;
+use libffi::middle::*;
+use libloading::{Library, Symbol};
+use std::{collections::HashMap, ffi::c_void, path::PathBuf};
 
 pub static mut LAST_ERROR: i32 = 0;
 

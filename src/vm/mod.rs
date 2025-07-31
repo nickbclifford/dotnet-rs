@@ -1,8 +1,11 @@
+use crate::{
+    resolve::Assemblies,
+    value::{Context, GenericLookup, MethodDescription},
+};
+
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
 use std::rc::Rc;
-
-use crate::value::Context;
 
 mod exceptions;
 mod executor;
@@ -19,8 +22,6 @@ macro_rules! msg {
         $src.msg(format_args!($($format)*))
     }
 }
-use crate::resolve::Assemblies;
-use crate::value::{GenericLookup, MethodDescription};
 pub(crate) use msg;
 
 // I.12.3.2
@@ -95,7 +96,7 @@ impl MethodInfo<'static> {
                 .map(Rc::new)
                 .collect(),
             instructions,
-            source: method
+            source: method,
         }
     }
 }

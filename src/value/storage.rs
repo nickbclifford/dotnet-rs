@@ -5,6 +5,7 @@ use crate::{
         Context, MethodDescription, ObjectRef, TypeDescription,
     },
 };
+
 use gc_arena::{Collect, Collection};
 use std::{
     collections::HashMap,

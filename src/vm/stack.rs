@@ -2,8 +2,8 @@ use crate::{
     resolve::Assemblies,
     utils::{decompose_type_source, ResolutionS},
     value::{
-        storage::StaticStorageManager, Context, GenericLookup, HeapStorage,
-        Object as ObjectInstance, ObjectPtr, ObjectRef, StackValue, FieldDescription, MethodDescription
+        storage::StaticStorageManager, Context, FieldDescription, GenericLookup, HeapStorage,
+        MethodDescription, Object as ObjectInstance, ObjectPtr, ObjectRef, StackValue,
     },
     vm::{
         exceptions::{Handler, ProtectedSection},
@@ -12,6 +12,7 @@ use crate::{
         MethodInfo, MethodState,
     },
 };
+
 use dotnetdll::prelude::*;
 use gc_arena::{
     lock::RefLock, Arena, Collect, Collection, DynamicRoot, DynamicRootSet, Gc, Mutation, Rootable,
@@ -322,7 +323,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             )
         };
         let locals_base = self.top_of_stack();
-        let local_values = self.init_locals(method.source.resolution(), method.locals, &generic_inst);
+        let local_values =
+            self.init_locals(method.source.resolution(), method.locals, &generic_inst);
         let mut local_index = 0;
         for v in local_values {
             self.set_slot_at(gc, locals_base + local_index, v);

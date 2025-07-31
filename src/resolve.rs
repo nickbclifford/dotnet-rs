@@ -2,13 +2,13 @@ use crate::{
     utils::{decompose_type_source, static_res_from_file, ResolutionS},
     value::{ConcreteType, FieldDescription, GenericLookup, MethodDescription, TypeDescription},
 };
+
 use dotnetdll::prelude::*;
 use std::{cell::RefCell, collections::HashMap, error::Error, ffi::OsString, path::PathBuf};
 
 pub struct Assemblies {
     assembly_root: String,
     external: RefCell<HashMap<String, Option<ResolutionS>>>,
-    pub entrypoint: ResolutionS,
     stubs: HashMap<String, TypeDescription>,
 }
 
@@ -16,7 +16,7 @@ const SUPPORT_LIBRARY: &'static [u8] = include_bytes!("support/bin/Debug/net9.0/
 pub const SUPPORT_ASSEMBLY: &'static str = "__dotnetrs_support";
 
 impl Assemblies {
-    pub fn new(entrypoint: ResolutionS, assembly_root: String) -> Self {
+    pub fn new(assembly_root: String) -> Self {
         let mut resolutions: HashMap<_, _> = std::fs::read_dir(&assembly_root)
             .unwrap()
             .filter_map(|e| {
@@ -39,7 +39,6 @@ impl Assemblies {
         let mut this = Self {
             assembly_root,
             external: RefCell::new(resolutions),
-            entrypoint,
             stubs: HashMap::new(),
         };
 
