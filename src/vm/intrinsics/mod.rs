@@ -5,10 +5,12 @@ use crate::{
     resolve::SUPPORT_ASSEMBLY,
     utils::decompose_type_source,
     value::{
-        layout::*, string::CLRString, ConcreteType, Context, FieldDescription, GenericLookup,
-        HeapStorage, MethodDescription, Object, ObjectRef, StackValue,
+        layout::*,
+        string::{string_intrinsic_call, with_string, CLRString},
+        ConcreteType, Context, FieldDescription, GenericLookup, HeapStorage, MethodDescription,
+        Object, ObjectRef, StackValue,
     },
-    vm::{CallStack, GCHandle, MethodInfo},
+    vm::{intrinsics::reflection::runtime_type_intrinsic_call, CallStack, GCHandle, MethodInfo},
 };
 
 use dotnetdll::prelude::*;
@@ -41,7 +43,7 @@ fn ref_as_ptr(v: StackValue) -> *mut u8 {
     }
 }
 
-fn span_to_slice<'gc, 'a>(span: Object<'gc>) -> &'a [u8] {
+pub fn span_to_slice<'gc, 'a>(span: Object<'gc>) -> &'a [u8] {
     let mut ptr_data = [0u8; size_of::<usize>()];
     let mut len_data = [0u8; size_of::<i32>()];
 
@@ -72,17 +74,6 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             stack.push_stack(gc, $value)
         };
     }
-    macro_rules! with_string {
-        ($value:expr, |$s:ident| $code:expr) => {{
-            expect_stack!(let ObjectRef(obj) = $value);
-            let ObjectRef(Some(obj)) = obj else { todo!("NullPointerException") };
-            let heap = obj.borrow();
-            let HeapStorage::Str($s) = &*heap else {
-                todo!("invalid type on stack, expected string")
-            };
-            $code
-        }};
-    }
     macro_rules! ctx {
         () => {
             Context::with_generics(stack.current_context(), &generics)
@@ -91,96 +82,18 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
     super::msg!(stack, "-- method marked as runtime intrinsic --");
 
-    // TODO: move all RuntimeType implementations into reflection.rs,
-    //       move all String implementations into crate::value::string
-    
+    if method.parent.definition.type_name() == "DotnetRs.RuntimeType" {
+        return runtime_type_intrinsic_call(gc, stack, method, generics);
+    }
+
+    if method.parent.definition.type_name() == "System.String"
+        && method.method.name != "op_Implicit"
+    {
+        return string_intrinsic_call(gc, stack, method, generics);
+    }
+
     // TODO: real signature checking
     match format!("{:?}", method).as_str() {
-        "DotnetRs.Assembly DotnetRs.RuntimeType::GetAssembly()" => {
-            expect_stack!(let ObjectRef(obj) = pop!());
-
-            let target_type: RuntimeType = obj.try_into().unwrap();
-            todo!("get assembly (generic param vs reg type)");
-            // let target_type = stack.assemblies.find_concrete_type(target_type);
-            //
-            // let value = match stack.runtime_asms.get(&target_type.resolution) {
-            //     Some(o) => *o,
-            //     None => {
-            //         let resolution = obj.as_object(|i| i.description.resolution);
-            //         let definition = resolution.0.type_definitions
-            //             .iter()
-            //             .find(|a| a.type_name() == "DotnetRs.Assembly")
-            //             .unwrap();
-            //         let mut asm_handle = Object::new(TypeDescription { resolution, definition }, ctx!());
-            //         let data = (target_type.resolution.as_raw() as usize).to_ne_bytes();
-            //         asm_handle.instance_storage.get_field_mut("resolution").copy_from_slice(&data);
-            //         let v = ObjectRef::new(gc, HeapStorage::Obj(asm_handle));
-            //         stack.runtime_asms.insert(target_type.resolution, v);
-            //         v
-            //     }
-            // };
-            // push!(StackValue::ObjectRef(value));
-        }
-        "string DotnetRs.RuntimeType::GetNamespace()" => {
-            expect_stack!(let ObjectRef(obj) = pop!());
-            let target: RuntimeType = obj.try_into().unwrap();
-            todo!("get namespace (generic param vs reg type)");
-            // let target = stack.assemblies.find_concrete_type(target);
-            // match &target.definition.namespace {
-            //     Some(ns) => {
-            //         push!(StackValue::string(gc, CLRString::from(ns.as_ref())));
-            //     },
-            //     None => {
-            //         push!(StackValue::null());
-            //     }
-            // }
-        }
-        "string DotnetRs.RuntimeType::GetName()" => {
-            // just the regular name, not the fully qualified name
-            // https://learn.microsoft.com/en-us/dotnet/api/system.reflection.memberinfo.name?view=net-9.0#remarks
-            expect_stack!(let ObjectRef(obj) = pop!());
-            let target: RuntimeType = obj.try_into().unwrap();
-            todo!("get name (generic param vs reg type)");
-            // let target = stack.assemblies.find_concrete_type(target);
-            // push!(StackValue::string(gc, CLRString::from(target.definition.name.as_ref())));
-        }
-        "valuetype [System.Runtime]System.RuntimeTypeHandle DotnetRs.RuntimeType::GetTypeHandle()" => {
-            expect_stack!(let ObjectRef(obj) = pop!());
-
-            let rth = stack.assemblies.corlib_type("System.RuntimeTypeHandle");
-            let mut instance = Object::new(rth, ctx!());
-            obj.write(instance.instance_storage.get_field_mut("_value"));
-
-            push!(StackValue::ValueType(Box::new(instance)));
-        }
-        "[System.Runtime]System.Type DotnetRs.RuntimeType::MakeGenericType([System.Runtime]System.Type[])" => {
-            expect_stack!(let ObjectRef(parameters) = pop!());
-            expect_stack!(let ObjectRef(target) = pop!());
-            let rt: RuntimeType = target.try_into().unwrap();
-            let rt: ConcreteType = rt.into();
-            match rt.get() {
-                BaseType::Type { source, .. } => {
-                    let (ut, _) = decompose_type_source(source);
-                    let name = ut.type_name(rt.resolution().0);
-                    let fragments: Vec<_> = name.split('`').collect();
-                    if fragments.len() <= 1 {
-                        todo!("ArgumentException: type is not generic")
-                    }
-                    let n_params: usize = fragments[1].parse().unwrap();
-                    let mut params: Vec<RuntimeType> = vec![];
-                    for i in 0..n_params {
-                        parameters.as_vector(|v| {
-                            let start = i * size_of::<ObjectRef>();
-                            let end = start + size_of::<ObjectRef>();
-                            let param = ObjectRef::read(&v.get()[start..end]);
-                            params.push(param.try_into().unwrap());
-                        });
-                    }
-                    todo!("make generic type from {:?}", params);
-                }
-                _ => todo!("ArgumentException: cannot make generic type from {:?}", rt),
-            }
-        }
         "[Generic(1)] static M0 System.Activator::CreateInstance()" => {
             let target = &generics.method_generics[0];
 
@@ -557,79 +470,6 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             unsafe { std::ptr::write_volatile(src, as_bool) };
         }
-        "static bool System.String::Equals(string, string)" => {
-            let b = with_string!(pop!(), |b| b.to_vec());
-            let a = with_string!(pop!(), |a| a.to_vec());
-
-            push!(StackValue::Int32(if a == b { 1 } else { 0 }));
-        }
-        "static string System.String::FastAllocateString(int)" => {
-            expect_stack!(let Int32(len) = pop!());
-            let value = CLRString::new(vec![0u16; len as usize]);
-            push!(StackValue::string(gc, value));
-        }
-        "char System.String::get_Chars(int)" => {
-            expect_stack!(let Int32(index) = pop!());
-            let value = with_string!(pop!(), |s| s[index as usize]);
-            push!(StackValue::Int32(value as i32));
-        }
-        "static string System.String::Concat(valuetype System.ReadOnlySpan`1<char>, valuetype System.ReadOnlySpan`1<char>, valuetype System.ReadOnlySpan`1<char>)" => {
-            expect_stack!(let ValueType(span2) = pop!());
-            expect_stack!(let ValueType(span1) = pop!());
-            expect_stack!(let ValueType(span0) = pop!());
-
-            fn char_span_into_str(span: Object) -> Vec<u16> {
-                span_to_slice(span).chunks_exact(2).map(|c| u16::from_ne_bytes([c[0], c[1]])).collect::<Vec<_>>()
-            }
-
-            let data0 = char_span_into_str(*span0);
-            let data1 = char_span_into_str(*span1);
-            let data2 = char_span_into_str(*span2);
-
-            let value = CLRString::new(data0.into_iter().chain(data1.into_iter()).chain(data2.into_iter()).collect());
-            push!(StackValue::string(gc, value));
-        }
-        "int System.String::GetHashCodeOrdinalIgnoreCase()" => {
-            use std::hash::*;
-
-            let mut h = DefaultHasher::new();
-            let value = with_string!(pop!(), |s| String::from_utf16_lossy(&s).to_uppercase().into_bytes());
-            value.hash(&mut h);
-            let code = h.finish();
-
-            push!(StackValue::Int32(code as i32));
-        }
-        "<req System.Runtime.InteropServices.InAttribute> ref char System.String::GetPinnableReference()" |
-        "ref char System.String::GetRawStringData()" => {
-            let ptr = with_string!(pop!(), |s| s.as_ptr() as *mut u8);
-            let value = StackValue::managed_ptr(ptr, stack.assemblies.corlib_type("System.Char"));
-            push!(value);
-        }
-        "int System.String::get_Length()" => {
-            let len = with_string!(pop!(), |s| s.len());
-            push!(StackValue::Int32(len as i32));
-        }
-        "int System.String::IndexOf(char)" => {
-            expect_stack!(let Int32(c) = pop!());
-            let c = c as u16;
-            let index = with_string!(pop!(), |s| s.iter().position(|x| *x == c));
-
-            push!(StackValue::Int32(match index {
-                None => -1,
-                Some(i) => i as i32,
-            }));
-        }
-        "int System.String::IndexOf(char, int)" => {
-            expect_stack!(let Int32(start_at) = pop!());
-            expect_stack!(let Int32(c) = pop!());
-            let c = c as u16;
-            let index = with_string!(pop!(), |s| s.iter().skip(start_at as usize).position(|x| *x == c));
-
-            push!(StackValue::Int32(match index {
-                None => -1,
-                Some(i) => i as i32,
-            }));
-        }
         "static valuetype System.ReadOnlySpan`1<char> System.String::op_Implicit(string)" |
         "static valuetype System.ReadOnlySpan`1<char> System.MemoryExtensions::AsSpan(string)" => {
             let (ptr, len) = with_string!(pop!(), |s| (s.as_ptr(), s.len()));
@@ -644,11 +484,6 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             span.instance_storage.get_field_mut("_length").copy_from_slice(&(len as i32).to_ne_bytes());
 
             push!(StackValue::ValueType(Box::new(span)));
-        }
-        "string System.String::Substring(int)" => {
-            expect_stack!(let Int32(start_at) = pop!());
-            let value = with_string!(pop!(), |s| s.split_at(start_at as usize).0.to_vec());
-            push!(StackValue::string(gc, CLRString::new(value)));
         }
         "static System.Type System.Type::GetTypeFromHandle(valuetype System.RuntimeTypeHandle)" => {
             expect_stack!(let ValueType(handle) = pop!());

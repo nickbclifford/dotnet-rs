@@ -45,7 +45,7 @@ impl LayoutManager {
                 Scalar::Int16 => "i16",
                 Scalar::Int32 => "i32",
                 Scalar::Int64 => "i64",
-                Scalar::NativeInt => "isize",
+                Scalar::NativeInt => "ptr",
                 Scalar::Float32 => "f32",
                 Scalar::Float64 => "f64",
             },
