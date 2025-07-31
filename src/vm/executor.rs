@@ -1,8 +1,6 @@
-use dotnetdll::prelude::*;
-
 use super::{MethodInfo, StepResult};
 use crate::{
-    value::StackValue,
+    value::{MethodDescription, StackValue},
     vm::stack::GCArena,
 };
 
@@ -21,17 +19,12 @@ impl Executor {
         Self { arena }
     }
 
-    pub fn entrypoint(&mut self, method: &'static Method<'static>) {
+    pub fn entrypoint(&mut self, method: MethodDescription) {
         // TODO: initialize argv (entry point args are either string[] or nothing, II.15.4.1.2)
         self.arena.mutate_root(|gc, c| {
             c.entrypoint_frame(
                 gc,
-                MethodInfo::new(
-                    c.assemblies.entrypoint,
-                    method,
-                    &Default::default(),
-                    c.assemblies,
-                ),
+                MethodInfo::new(method, &Default::default(), c.assemblies),
                 Default::default(),
                 vec![],
             )

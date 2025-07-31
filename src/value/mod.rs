@@ -829,6 +829,11 @@ impl PartialEq for MethodDescription {
     }
 }
 impl Eq for MethodDescription {}
+impl Hash for MethodDescription {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (self.method as *const Method).hash(state);
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct FieldDescription {
@@ -895,7 +900,7 @@ impl ResolvedDebug for ConcreteType {
     }
 }
 
-#[derive(Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
 pub struct GenericLookup {
     pub type_generics: Vec<ConcreteType>,
     pub method_generics: Vec<ConcreteType>,

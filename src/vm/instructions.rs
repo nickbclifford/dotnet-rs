@@ -1,6 +1,6 @@
 use super::{intrinsics::*, CallStack, GCHandle, MethodInfo, StepResult};
 use crate::utils::decompose_type_source;
-use crate::value::ConcreteType;
+use crate::vm::intrinsics::reflection::RuntimeType;
 use crate::{
     value::{
         layout::{type_layout, FieldLayoutManager, HasLayout},
@@ -65,7 +65,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             );
             self.call_frame(
                 gc,
-                MethodInfo::new(m.resolution(), m.method, &generics, &self.assemblies),
+                MethodInfo::new(m, &generics, &self.assemblies),
                 generics,
             );
             true
@@ -463,7 +463,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         let i = state!(|s| &s.info_handle.instructions[s.ip]);
         let ip = state!(|s| s.ip);
-        let i_res = state!(|s| s.info_handle.source_resolution);
+        let i_res = state!(|s| s.info_handle.source.resolution());
 
         let sections = state!(|s| s.info_handle.exceptions.clone());
         for ps in sections {
@@ -585,7 +585,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 self.call_frame(
                     gc,
-                    MethodInfo::new(res, method.method, &lookup, &self.assemblies),
+                    MethodInfo::new(method, &lookup, &self.assemblies),
                     lookup,
                 );
                 moved_ip = true;
@@ -609,12 +609,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         super::msg!(self, "-- dispatching to {:?} --", target);
                         self.call_frame(
                             gc,
-                            MethodInfo::new(
-                                target.resolution(),
-                                target.method,
-                                &lookup,
-                                &self.assemblies,
-                            ),
+                            MethodInfo::new(target, &lookup, &self.assemblies),
                             lookup,
                         );
                         return StepResult::InstructionStepped;
@@ -1077,12 +1072,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         &base_method.method.signature,
                         base_method.resolution(),
                     ) {
-                        found = Some((parent, method));
+                        found = Some(method);
                         break;
                     }
                 }
 
-                if let Some((parent, method)) = found {
+                if let Some(method) = found {
                     for a in args {
                         push!(a);
                     }
@@ -1092,12 +1087,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     self.call_frame(
                         gc,
-                        MethodInfo::new(
-                            parent.resolution,
-                            method.method,
-                            &lookup,
-                            &self.assemblies,
-                        ),
+                        MethodInfo::new(method, &lookup, &self.assemblies),
                         lookup,
                     );
                     moved_ip = true;
@@ -1333,7 +1323,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let len = obj.as_vector(|a| a.layout.length as isize);
                 push!(NativeInt(len));
             }
-            LoadObject { .. } => todo!("ldobj"),
+            LoadObject { param0: load_type, .. } => {
+                let source_ptr = match pop!() {
+                    StackValue::NativeInt(i) => i as *mut u8,
+                    StackValue::UnmanagedPtr(p) => p.0,
+                    StackValue::ManagedPtr(p) => p.value,
+                    rest => panic!("invalid type on stack ({:?}) for ldobj", rest),
+                };
+
+                let ctx = self.current_context();
+                let load_type = ctx.make_concrete(load_type);
+                let layout = type_layout(load_type.clone(), ctx);
+                let source = unsafe { std::slice::from_raw_parts(source_ptr, layout.size()) };
+                let value = CTSValue::read(&load_type, &self.current_context(), source).into_stack();
+                push!(value);
+            }
             LoadStaticField { param0: source, .. } => {
                 let (field, lookup) = self.current_context().locate_field(*source);
                 let name = &field.field.name;
@@ -1398,8 +1402,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             LoadTokenMethod(_) => todo!("RuntimeMethodHandle"),
             LoadTokenType(target) => {
-                // TODO: System.Type documentation suggests that maybe we need to preserve generic variables
-                let target_type = self.current_context().make_concrete(target);
+                let current_method = state!(|s| s.info_handle.source);
+                let target_type = RuntimeType {
+                    target: target.clone(),
+                    source: current_method,
+                    generics: self.current_context().generics.clone(),
+                };
 
                 let instance = self.get_handle_for_type(gc, target_type);
 
@@ -1504,8 +1512,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             gc,
                             instance,
                             MethodInfo::new(
-                                method.resolution(),
-                                method.method,
+                                method,
                                 &lookup,
                                 &self.assemblies,
                             ),
@@ -1694,42 +1701,5 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             self.increment_ip();
         }
         StepResult::InstructionStepped
-    }
-
-    pub fn get_runtime_type(
-        &mut self,
-        gc: GCHandle<'gc>,
-        target_type: ConcreteType,
-    ) -> ObjectRef<'gc> {
-        if let Some(obj) = self.runtime_types.get(&target_type) {
-            return *obj;
-        }
-        let rt = self.assemblies.corlib_type("System.RuntimeType");
-        let rt_obj = Object::new(rt, self.current_context());
-        let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
-        self.register_new_object(&obj_ref);
-        let key = target_type.clone();
-        let entry = self.runtime_types.entry(key).insert_entry(obj_ref);
-        let type_ptr = entry.key() as *const ConcreteType as usize;
-        entry.get().as_object_mut(gc, |instance| {
-            instance
-                .instance_storage
-                .get_field_mut("concreteType")
-                .copy_from_slice(&type_ptr.to_ne_bytes());
-        });
-        obj_ref
-    }
-
-    pub fn get_handle_for_type(
-        &mut self,
-        gc: GCHandle<'gc>,
-        target_type: ConcreteType,
-    ) -> Object<'gc> {
-        let rth = self.assemblies.corlib_type("System.RuntimeTypeHandle");
-        let mut instance = Object::new(rth, self.current_context());
-        let handle_location = instance.instance_storage.get_field_mut("_value");
-        self.get_runtime_type(gc, target_type)
-            .write(handle_location);
-        instance
     }
 }

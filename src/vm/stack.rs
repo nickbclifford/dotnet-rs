@@ -2,11 +2,12 @@ use crate::{
     resolve::Assemblies,
     utils::{decompose_type_source, ResolutionS},
     value::{
-        storage::StaticStorageManager, ConcreteType, Context, GenericLookup, HeapStorage,
-        Object as ObjectInstance, ObjectPtr, ObjectRef, StackValue,
+        storage::StaticStorageManager, Context, GenericLookup, HeapStorage,
+        Object as ObjectInstance, ObjectPtr, ObjectRef, StackValue, FieldDescription, MethodDescription
     },
     vm::{
         exceptions::{Handler, ProtectedSection},
+        intrinsics::reflection::RuntimeType,
         pinvoke::NativeLibraries,
         MethodInfo, MethodState,
     },
@@ -23,7 +24,6 @@ use std::{
     io::Write,
     rc::Rc,
 };
-use crate::value::{FieldDescription, MethodDescription};
 
 type StackSlot = Rootable![Gc<'_, RefLock<StackValue<'_>>>];
 
@@ -39,7 +39,7 @@ pub struct CallStack<'gc, 'm> {
     pub statics: RefCell<StaticStorageManager<'gc>>,
     pub pinvoke: NativeLibraries,
     pub runtime_asms: HashMap<ResolutionS, ObjectRef<'gc>>,
-    pub runtime_types: HashMap<ConcreteType, ObjectRef<'gc>>,
+    pub runtime_types: HashMap<RuntimeType, ObjectRef<'gc>>,
     pub runtime_methods: Vec<(MethodDescription, GenericLookup)>,
     pub runtime_fields: Vec<(FieldDescription, GenericLookup)>,
     // secretly ObjectHandles, not traced for GCing because these are for runtime debugging
@@ -79,7 +79,7 @@ impl<'gc, 'm> StackFrame<'gc, 'm> {
         Self {
             stack_height: 0,
             base: base_pointer,
-            source_resolution: method.source_resolution,
+            source_resolution: method.source.resolution(),
             state: MethodState::new(method),
             generic_inst,
             exception_value: None,
@@ -220,7 +220,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             self.insert_value(gc, a);
         }
         let locals_base = self.stack.len();
-        for v in self.init_locals(method.source_resolution, method.locals, &generic_inst) {
+        for v in self.init_locals(method.source.resolution(), method.locals, &generic_inst) {
             self.insert_value(gc, v);
         }
         let stack_base = self.stack.len();
@@ -322,7 +322,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             )
         };
         let locals_base = self.top_of_stack();
-        let local_values = self.init_locals(method.source_resolution, method.locals, &generic_inst);
+        let local_values = self.init_locals(method.source.resolution(), method.locals, &generic_inst);
         let mut local_index = 0;
         for v in local_values {
             self.set_slot_at(gc, locals_base + local_index, v);

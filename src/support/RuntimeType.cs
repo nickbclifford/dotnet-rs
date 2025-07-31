@@ -7,13 +7,57 @@ namespace DotnetRs;
 [Stub(InPlaceOf = "System.RuntimeType")]
 internal class RuntimeType : Type
 {
-    private nint concreteType;
+    private nint pointerToKey;
     
     [MethodImpl(MethodImplOptions.InternalCall)]
     public override extern Type MakeGenericType(params Type[] typeArguments);
-    
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    public override extern bool IsAssignableFrom(Type? target);
+
+    public override bool IsAssignableFrom(Type? c)
+    {
+        // https://learn.microsoft.com/en-us/dotnet/api/system.type.isassignablefrom?view=net-9.0#returns
+        if (c == null)
+            return false;
+
+        if (c == this)
+            return true;
+
+        // Check inheritance
+        var baseType = c.BaseType;
+        while (baseType != null)
+        {
+            if (baseType == this)
+                return true;
+            baseType = baseType.BaseType;
+        }
+
+        // Check interface implementation
+        if (IsInterface)
+        {
+            var interfaces = c.GetInterfaces();
+            if (interfaces.Any(t => t == this))
+            {
+                return true;
+            }
+        }
+
+        // Check generic parameter constraints
+        if (c.IsGenericParameter)
+        {
+            var constraints = c.GetGenericParameterConstraints();
+            if (constraints.Any(t => t == this))
+            {
+                return true;
+            }
+        }
+
+        // Check nullable value types
+        if (c.IsValueType && IsGenericType && GetGenericTypeDefinition() == typeof(Nullable<>))
+        {
+            return GetGenericArguments()[0] == c;
+        }
+
+        return false;
+    }
     
     [MethodImpl(MethodImplOptions.InternalCall)]
     private extern Assembly GetAssembly();
@@ -31,9 +75,15 @@ internal class RuntimeType : Type
     private extern string GetName();
     public override string Name => GetName();
 
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    private extern string? GetFullName();
-    public override string? FullName => GetFullName();
+    public override string FullName
+    {
+        get
+        {
+            var name = GetName();
+            var ns = GetNamespace();
+            return ns == null ? name : $"{ns}.{name}";
+        }
+    }
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     private extern Module GetModule();

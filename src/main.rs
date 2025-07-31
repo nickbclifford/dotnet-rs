@@ -3,6 +3,7 @@ use dotnetdll::prelude::*;
 use std::process::ExitCode;
 
 use crate::utils::static_res_from_file;
+use crate::value::{MethodDescription, TypeDescription};
 use crate::vm::ExecutorResult;
 
 mod resolve;
@@ -36,7 +37,14 @@ fn main() -> ExitCode {
     let arena = Box::new(vm::GCArena::new(|gc| vm::CallStack::new(gc, assemblies)));
     let mut executor = vm::Executor::new(Box::leak(arena));
 
-    executor.entrypoint(&resolution.0[entry_method]);
+    let entrypoint = MethodDescription {
+        parent: TypeDescription {
+            resolution,
+            definition: &resolution.0[entry_method.parent_type()],
+        },
+        method: &resolution.0[entry_method],
+    };
+    executor.entrypoint(entrypoint);
 
     let result = executor.run();
     match result {

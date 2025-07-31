@@ -2,7 +2,7 @@ use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
 use std::rc::Rc;
 
-use crate::{utils::ResolutionS, value::Context};
+use crate::value::Context;
 
 mod exceptions;
 mod executor;
@@ -20,7 +20,7 @@ macro_rules! msg {
     }
 }
 use crate::resolve::Assemblies;
-use crate::value::GenericLookup;
+use crate::value::{GenericLookup, MethodDescription};
 pub(crate) use msg;
 
 // I.12.3.2
@@ -47,18 +47,17 @@ pub struct MethodInfo<'a> {
     locals: &'a [LocalVariable],
     exceptions: Vec<Rc<exceptions::ProtectedSection>>,
     pub instructions: &'a [Instruction],
-    pub source_resolution: ResolutionS,
+    pub source: MethodDescription,
     pub is_cctor: bool,
 }
 unsafe_empty_collect!(MethodInfo<'_>);
-impl<'m> MethodInfo<'m> {
+impl MethodInfo<'static> {
     pub fn new<'c>(
-        source_resolution: ResolutionS,
-        method: &'m Method<'m>,
+        method: MethodDescription,
         generics: &'c GenericLookup,
         assemblies: &'c Assemblies,
     ) -> Self {
-        let body = match &method.body {
+        let body = match &method.method.body {
             Some(b) => b,
             None => todo!("no body in executing method"),
         };
@@ -73,7 +72,7 @@ impl<'m> MethodInfo<'m> {
             }
         }
 
-        let instructions = match &method.body {
+        let instructions = match &method.method.body {
             Some(b) => b.instructions.as_slice(),
             None => todo!("cannot call method with empty body"),
         };
@@ -81,22 +80,22 @@ impl<'m> MethodInfo<'m> {
         let ctx = Context {
             generics,
             assemblies,
-            resolution: source_resolution,
+            resolution: method.resolution(),
         };
 
         Self {
-            is_cctor: method.runtime_special_name
-                && method.name == ".cctor"
-                && !method.signature.instance
-                && method.signature.parameters.is_empty(),
-            signature: &method.signature,
+            is_cctor: method.method.runtime_special_name
+                && method.method.name == ".cctor"
+                && !method.method.signature.instance
+                && method.method.signature.parameters.is_empty(),
+            signature: &method.method.signature,
             locals: &body.header.local_variables,
             exceptions: exceptions::parse(exceptions, ctx)
                 .into_iter()
                 .map(Rc::new)
                 .collect(),
             instructions,
-            source_resolution,
+            source: method
         }
     }
 }

@@ -1,3 +1,5 @@
+pub mod reflection;
+
 use super::{CallStack, GCHandle, MethodInfo};
 use crate::{
     utils::decompose_type_source,
@@ -25,6 +27,7 @@ macro_rules! expect_stack {
 }
 use crate::resolve::SUPPORT_ASSEMBLY;
 pub(crate) use expect_stack;
+use crate::vm::intrinsics::reflection::RuntimeType;
 
 fn ref_as_ptr(v: StackValue) -> *mut u8 {
     match v {
@@ -48,15 +51,6 @@ fn span_to_slice<'gc, 'a>(span: Object<'gc>) -> &'a [u8] {
     let len = i32::from_ne_bytes(len_data) as usize;
 
     unsafe { std::slice::from_raw_parts(ptr as *const u8, len) }
-}
-
-fn from_runtime_type(obj: ObjectRef) -> ConcreteType {
-    obj.as_object(|instance| {
-        let mut ct = [0u8; size_of::<usize>()];
-        ct.copy_from_slice(instance.instance_storage.get_field("concreteType"));
-        unsafe { &*(usize::from_ne_bytes(ct) as *const ConcreteType) }
-    })
-    .clone()
 }
 
 const STATIC_ARRAY_TYPE_PREFIX: &str = "__StaticArrayInitTypeSize=";
@@ -96,52 +90,56 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
     super::msg!(stack, "-- method marked as runtime intrinsic --");
 
+    // TODO: move all RuntimeType implementations into reflection.rs
     // TODO: real signature checking
     match format!("{:?}", method).as_str() {
         "DotnetRs.Assembly DotnetRs.RuntimeType::GetAssembly()" => {
             expect_stack!(let ObjectRef(obj) = pop!());
 
-            let target_type = from_runtime_type(obj);
-            let target_type = stack.assemblies.find_concrete_type(target_type);
-
-            let value = match stack.runtime_asms.get(&target_type.resolution) {
-                Some(o) => *o,
-                None => {
-                    let resolution = obj.as_object(|i| i.description.resolution);
-                    let definition = resolution.0.type_definitions
-                        .iter()
-                        .find(|a| a.type_name() == "DotnetRs.Assembly")
-                        .unwrap();
-                    let mut asm_handle = Object::new(TypeDescription { resolution, definition }, ctx!());
-                    let data = (target_type.resolution.as_raw() as usize).to_ne_bytes();
-                    asm_handle.instance_storage.get_field_mut("resolution").copy_from_slice(&data);
-                    let v = ObjectRef::new(gc, HeapStorage::Obj(asm_handle));
-                    stack.runtime_asms.insert(target_type.resolution, v);
-                    v
-                }
-            };
-            push!(StackValue::ObjectRef(value));
+            let target_type: RuntimeType = obj.try_into().unwrap();
+            todo!("get assembly (generic param vs reg type)");
+            // let target_type = stack.assemblies.find_concrete_type(target_type);
+            //
+            // let value = match stack.runtime_asms.get(&target_type.resolution) {
+            //     Some(o) => *o,
+            //     None => {
+            //         let resolution = obj.as_object(|i| i.description.resolution);
+            //         let definition = resolution.0.type_definitions
+            //             .iter()
+            //             .find(|a| a.type_name() == "DotnetRs.Assembly")
+            //             .unwrap();
+            //         let mut asm_handle = Object::new(TypeDescription { resolution, definition }, ctx!());
+            //         let data = (target_type.resolution.as_raw() as usize).to_ne_bytes();
+            //         asm_handle.instance_storage.get_field_mut("resolution").copy_from_slice(&data);
+            //         let v = ObjectRef::new(gc, HeapStorage::Obj(asm_handle));
+            //         stack.runtime_asms.insert(target_type.resolution, v);
+            //         v
+            //     }
+            // };
+            // push!(StackValue::ObjectRef(value));
         }
         "string DotnetRs.RuntimeType::GetNamespace()" => {
             expect_stack!(let ObjectRef(obj) = pop!());
-            let target = from_runtime_type(obj);
-            let target = stack.assemblies.find_concrete_type(target);
-            match &target.definition.namespace {
-                Some(ns) => {
-                    push!(StackValue::string(gc, CLRString::from(ns.as_ref())));
-                },
-                None => {
-                    push!(StackValue::null());
-                }
-            }
+            let target: RuntimeType = obj.try_into().unwrap();
+            todo!("get namespace (generic param vs reg type)");
+            // let target = stack.assemblies.find_concrete_type(target);
+            // match &target.definition.namespace {
+            //     Some(ns) => {
+            //         push!(StackValue::string(gc, CLRString::from(ns.as_ref())));
+            //     },
+            //     None => {
+            //         push!(StackValue::null());
+            //     }
+            // }
         }
         "string DotnetRs.RuntimeType::GetName()" => {
             // just the regular name, not the fully qualified name
             // https://learn.microsoft.com/en-us/dotnet/api/system.reflection.memberinfo.name?view=net-9.0#remarks
             expect_stack!(let ObjectRef(obj) = pop!());
-            let target = from_runtime_type(obj);
-            let target = stack.assemblies.find_concrete_type(target);
-            push!(StackValue::string(gc, CLRString::from(target.definition.name.as_ref())));
+            let target: RuntimeType = obj.try_into().unwrap();
+            todo!("get name (generic param vs reg type)");
+            // let target = stack.assemblies.find_concrete_type(target);
+            // push!(StackValue::string(gc, CLRString::from(target.definition.name.as_ref())));
         }
         "valuetype [System.Runtime]System.RuntimeTypeHandle DotnetRs.RuntimeType::GetTypeHandle()" => {
             expect_stack!(let ObjectRef(obj) = pop!());
@@ -155,34 +153,30 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         "[System.Runtime]System.Type DotnetRs.RuntimeType::MakeGenericType([System.Runtime]System.Type[])" => {
             expect_stack!(let ObjectRef(parameters) = pop!());
             expect_stack!(let ObjectRef(target) = pop!());
-            let rt = from_runtime_type(target);
-            match rt.get() {
-                BaseType::Type { source, .. } => {
-                    let (ut, _) = decompose_type_source(source);
-                    let name = ut.type_name(rt.resolution().0);
-                    let fragments: Vec<_> = name.split('`').collect();
-                    if fragments.len() <= 1 {
-                        todo!("ArgumentException: type is not generic")
-                    }
-                    let n_params: usize = fragments[1].parse().unwrap();
-                    let mut params = vec![];
-                    for i in 0..n_params {
-                        parameters.as_vector(|v| {
-                            let start = i * size_of::<ObjectRef>();
-                            let end = start + size_of::<ObjectRef>();
-                            let param = ObjectRef::read(&v.get()[start..end]);
-                            params.push(from_runtime_type(param));
-                        });
-                    }
-                    let new_type = ConcreteType::new(rt.resolution(), BaseType::Type {
-                        source: TypeSource::generic(ut, params),
-                        value_kind: None
-                    });
-                    let new_rt = stack.get_runtime_type(gc, new_type);
-                    push!(StackValue::ObjectRef(new_rt));
-                }
-                _ => todo!("ArgumentException: cannot make generic type from {:?}", rt),
-            }
+            let rt: RuntimeType = target.try_into().unwrap();
+            todo!("collapse generic type to concrete for MakeGenericType");
+            // match rt.get() {
+            //     BaseType::Type { source, .. } => {
+            //         let (ut, _) = decompose_type_source(source);
+            //         let name = ut.type_name(rt.resolution().0);
+            //         let fragments: Vec<_> = name.split('`').collect();
+            //         if fragments.len() <= 1 {
+            //             todo!("ArgumentException: type is not generic")
+            //         }
+            //         let n_params: usize = fragments[1].parse().unwrap();
+            //         let mut params = vec![];
+            //         for i in 0..n_params {
+            //             parameters.as_vector(|v| {
+            //                 let start = i * size_of::<ObjectRef>();
+            //                 let end = start + size_of::<ObjectRef>();
+            //                 let param = ObjectRef::read(&v.get()[start..end]);
+            //                 params.push(from_runtime_type(param));
+            //             });
+            //         }
+            //         todo!("make generic type from {:?}", params);
+            //     }
+            //     _ => todo!("ArgumentException: cannot make generic type from {:?}", rt),
+            // }
         }
         "[Generic(1)] static M0 System.Activator::CreateInstance()" => {
             let target = &generics.method_generics[0];
@@ -219,10 +213,15 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                         td.type_name()
                     );
 
+                    let desc = MethodDescription {
+                        parent: td,
+                        method: m
+                    };
+
                     stack.constructor_frame(
                         gc,
                         instance,
-                        MethodInfo::new(td.resolution, m, &new_lookup, &stack.assemblies),
+                        MethodInfo::new(desc, &new_lookup, &stack.assemblies),
                         new_lookup,
                     );
                     return;
@@ -265,8 +264,12 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             }
         }
         "static System.Collections.Generic.EqualityComparer`1<T0> System.Collections.Generic.EqualityComparer`1::get_Default()" => {
-            let target = generics.type_generics[0].clone();
-            let rt = stack.get_runtime_type(gc, target);
+            let target = MethodType::TypeGeneric(0);
+            let rt = stack.get_runtime_type(gc, RuntimeType {
+                target,
+                source: method,
+                generics,
+            });
             push!(StackValue::ObjectRef(rt));
 
             let parent = stack.assemblies.find_in_assembly(
@@ -276,7 +279,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let method = parent.definition.methods.iter().find(|m| m.name == "GetDefault").unwrap();
             stack.call_frame(
                 gc,
-                MethodInfo::new(parent.resolution, method, &GenericLookup::default(), &stack.assemblies),
+                MethodInfo::new(MethodDescription { parent, method }, &GenericLookup::default(), &stack.assemblies),
                 GenericLookup::default()
             );
             return;
@@ -299,16 +302,17 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             // https://github.com/dotnet/runtime/blob/main/src/libraries/System.Private.CoreLib/src/System/SR.cs#L78
             expect_stack!(let ValueType(handle) = pop!());
             let rt = ObjectRef::read(handle.instance_storage.get_field("_value"));
-            let target = from_runtime_type(rt);
-            let target = stack.assemblies.find_concrete_type(target);
-            if stack.initialize_static_storage(gc, target, generics) {
-                let second_to_last = stack.frames.len() - 2;
-                let ip = &mut stack.frames[second_to_last].state.ip;
-                *ip += 1;
-                let i = *ip;
-                super::msg!(stack, "-- explicit initialization! setting return ip to {} --", i);
-                return;
-            }
+            let target: RuntimeType = rt.try_into().unwrap();
+            todo!("collapse generic type to concrete for RunClassConstructor");
+            // let target = stack.assemblies.find_concrete_type(target);
+            // if stack.initialize_static_storage(gc, target, generics) {
+            //     let second_to_last = stack.frames.len() - 2;
+            //     let ip = &mut stack.frames[second_to_last].state.ip;
+            //     *ip += 1;
+            //     let i = *ip;
+            //     super::msg!(stack, "-- explicit initialization! setting return ip to {} --", i);
+            //     return;
+            // }
         }
         "[Generic(1)] static valuetype System.ReadOnlySpan`1<M0> System.Runtime.CompilerServices.RuntimeHelpers::CreateSpan(valuetype System.RuntimeFieldHandle)" => {
             let target = &generics.method_generics[0];
@@ -650,11 +654,12 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         }
         "bool System.Type::get_IsValueType()" => {
             expect_stack!(let ObjectRef(o) = pop!());
-            let target = from_runtime_type(o);
-            let target = stack.assemblies.find_concrete_type(target);
-
-            let value = target.is_value_type(&ctx!());
-            push!(StackValue::Int32(value as i32));
+            let target: RuntimeType = o.try_into().unwrap();
+            todo!("collapse generics for IsValueType");
+            // let target = stack.assemblies.find_concrete_type(target);
+            //
+            // let value = target.is_value_type(&ctx!());
+            // push!(StackValue::Int32(value as i32));
         }
         "static bool System.Type::op_Equality(System.Type, System.Type)" => {
             expect_stack!(let ObjectRef(o2) = pop!());
