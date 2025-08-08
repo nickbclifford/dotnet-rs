@@ -6,14 +6,59 @@ use crate::{
     },
     vm::{intrinsics::expect_stack, CallStack, GCHandle},
 };
+use dotnetdll::prelude::{BaseType, MethodType, TypeSource};
+use std::hash::{Hash, Hasher};
 
-use dotnetdll::prelude::{BaseType, MethodType};
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct RuntimeType {
     pub target: MethodType,
     pub source: MethodDescription,
     pub generics: GenericLookup,
+}
+impl PartialEq for RuntimeType {
+    fn eq(&self, other: &Self) -> bool {
+        match &self.target {
+            MethodType::Base(b)
+                if !matches!(
+                    &**b,
+                    BaseType::Type {
+                        source: TypeSource::Generic { .. },
+                        ..
+                    }
+                ) =>
+            {
+                self.target == other.target
+            }
+            _ => {
+                self.target == other.target
+                    && self.source == other.source
+                    && self.generics == other.generics
+            }
+        }
+    }
+}
+impl Eq for RuntimeType {}
+impl Hash for RuntimeType {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match &self.target {
+            MethodType::Base(b)
+                if !matches!(
+                    &**b,
+                    BaseType::Type {
+                        source: TypeSource::Generic { .. },
+                        ..
+                    }
+                ) =>
+            {
+                self.target.hash(state);
+            }
+            _ => {
+                self.target.hash(state);
+                self.source.hash(state);
+                self.generics.hash(state);
+            }
+        }
+    }
 }
 
 impl<'gc> TryFrom<ObjectRef<'gc>> for RuntimeType {
