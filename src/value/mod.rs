@@ -635,7 +635,7 @@ impl<'gc> CTSValue<'gc> {
                 NativeUInt(i) => dest.copy_from_slice(&i.to_ne_bytes()),
                 Float32(f) => dest.copy_from_slice(&f.to_ne_bytes()),
                 Float64(f) => dest.copy_from_slice(&f.to_ne_bytes()),
-                TypedRef => dest.copy_from_slice(todo!()),
+                TypedRef => todo!("typedref implementation"),
                 Struct(o) => dest.copy_from_slice(o.instance_storage.get()),
             },
             CTSValue::Ref(o) => o.write(dest),
@@ -878,11 +878,11 @@ impl ConcreteType {
     }
 
     pub fn get(&self) -> &BaseType<Self> {
-        &*self.base
+        &self.base
     }
 
     pub fn get_mut(&mut self) -> &mut BaseType<Self> {
-        &mut *self.base
+        &mut self.base
     }
 
     pub fn resolution(&self) -> ResolutionS {

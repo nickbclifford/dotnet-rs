@@ -53,7 +53,7 @@ fn type_to_layout(t: &TypeSource<ConcreteType>, ctx: Context) -> FieldLayoutMana
     let new_ctx = Context::with_generics(ctx, &new_lookup);
     let td = new_ctx.locate_type(ut);
 
-    FieldLayoutManager::instance_fields(td, new_ctx.clone()).into()
+    FieldLayoutManager::instance_fields(td, new_ctx.clone())
 }
 
 fn layout_to_ffi(l: LayoutManager) -> Type {
@@ -169,7 +169,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 StackValue::UnmanagedPtr(p) => Arg::new(p),
                 StackValue::ManagedPtr(p) => Arg::new(p),
                 StackValue::ValueType(o) => unsafe {
-                    std::mem::transmute(o.instance_storage.get().as_ptr() as *mut c_void)
+                    std::mem::transmute::<*mut c_void, Arg>(o.instance_storage.get().as_ptr() as _)
                 },
                 rest => todo!("marshalling not yet supported for {:?}", rest),
             })

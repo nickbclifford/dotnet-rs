@@ -16,7 +16,7 @@ use crate::{
 use dotnetdll::prelude::*;
 use std::{cmp::Ordering, rc::Rc};
 
-const INTRINSIC_ATTR: &'static str = "System.Runtime.CompilerServices.IntrinsicAttribute";
+const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttribute";
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     fn find_generic_method(&self, source: &MethodSource) -> (MethodDescription, GenericLookup) {
@@ -66,11 +66,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 "-- calling static constructor (will return to ip {}) --",
                 self.current_frame().state.ip
             );
-            self.call_frame(
-                gc,
-                MethodInfo::new(m, &generics, &self.assemblies),
-                generics,
-            );
+            self.call_frame(gc, MethodInfo::new(m, &generics, self.assemblies), generics);
             true
         } else {
             false
@@ -588,7 +584,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 self.call_frame(
                     gc,
-                    MethodInfo::new(method, &lookup, &self.assemblies),
+                    MethodInfo::new(method, &lookup, self.assemblies),
                     lookup,
                 );
                 moved_ip = true;
@@ -612,7 +608,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         super::msg!(self, "-- dispatching to {:?} --", target);
                         self.call_frame(
                             gc,
-                            MethodInfo::new(target, &lookup, &self.assemblies),
+                            MethodInfo::new(target, &lookup, self.assemblies),
                             lookup,
                         );
                         return StepResult::InstructionStepped;
@@ -1090,7 +1086,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     self.call_frame(
                         gc,
-                        MethodInfo::new(method, &lookup, &self.assemblies),
+                        MethodInfo::new(method, &lookup, self.assemblies),
                         lookup,
                     );
                     moved_ip = true;
@@ -1206,7 +1202,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadElementAddress { .. } | LoadElementAddressReadonly(_) => todo!("ldelema"),
             LoadField {
                 param0: source,
-                volatile, // TODO
+                volatile: _, // TODO
                 ..
             } => {
                 let parent = pop!();
@@ -1224,7 +1220,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let field_layout = layout.fields.get(name.as_ref()).unwrap();
                     let slice = unsafe {
                         std::slice::from_raw_parts(
-                            ptr.offset(field_layout.position as isize),
+                            ptr.add(field_layout.position),
                             field_layout.layout.size(),
                         )
                     };
@@ -1308,9 +1304,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 let layout =
                     FieldLayoutManager::instance_fields(field.parent, self.current_context());
-                let ptr = unsafe {
-                    source_ptr.offset(layout.fields.get(name.as_ref()).unwrap().position as isize)
-                };
+                let ptr =
+                    unsafe { source_ptr.add(layout.fields.get(name.as_ref()).unwrap().position) };
 
                 let target_type = self.current_context().get_field_desc(field);
 
@@ -1481,28 +1476,25 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let parent = method.parent;
                 let new_ctx = Context::with_generics(self.current_context(), &lookup);
 
-                match (&method.method.body, &parent.definition.extends) {
-                    (None, Some(ts)) => {
-                        let (ut, _) = decompose_type_source(ts);
-                        let type_name = ut.type_name(parent.resolution.0);
-                        // delegate types are only allowed to have these base types
-                        if matches!(
-                            type_name.as_ref(),
-                            "System.Delegate" | "System.MulticastDelegate"
-                        ) {
-                            let base = self.assemblies.corlib_type(&type_name);
-                            method = MethodDescription {
-                                parent: base,
-                                method: base
-                                    .definition
-                                    .methods
-                                    .iter()
-                                    .find(|m| m.name == ".ctor")
-                                    .unwrap(),
-                            };
-                        }
+                if let (None, Some(ts)) = (&method.method.body, &parent.definition.extends) {
+                    let (ut, _) = decompose_type_source(ts);
+                    let type_name = ut.type_name(parent.resolution.0);
+                    // delegate types are only allowed to have these base types
+                    if matches!(
+                        type_name.as_ref(),
+                        "System.Delegate" | "System.MulticastDelegate"
+                    ) {
+                        let base = self.assemblies.corlib_type(&type_name);
+                        method = MethodDescription {
+                            parent: base,
+                            method: base
+                                .definition
+                                .methods
+                                .iter()
+                                .find(|m| m.name == ".ctor")
+                                .unwrap(),
+                        };
                     }
-                    _ => {}
                 }
 
                 // TODO: proper signature checking
@@ -1517,7 +1509,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         self.constructor_frame(
                             gc,
                             instance,
-                            MethodInfo::new(method, &lookup, &self.assemblies),
+                            MethodInfo::new(method, &lookup, self.assemblies),
                             lookup,
                         );
                         moved_ip = true;
@@ -1614,7 +1606,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             StoreField {
                 param0: source,
-                volatile, // TODO
+                volatile: _, // TODO
                 ..
             } => {
                 let value = pop!();
@@ -1633,7 +1625,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let field_layout = layout.fields.get(name.as_ref()).unwrap();
                     unsafe {
                         std::slice::from_raw_parts_mut(
-                            dest.offset(field_layout.position as isize),
+                            dest.add(field_layout.position),
                             field_layout.layout.size(),
                         )
                     }

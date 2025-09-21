@@ -145,7 +145,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     let ctx = Context {
                         generics,
-                        assemblies: &self.assemblies,
+                        assemblies: self.assemblies,
                         resolution,
                     };
 
@@ -377,7 +377,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.current_frame_mut().state.ip += 1;
     }
 
-    pub fn current_context(&self) -> Context {
+    pub fn current_context(&self) -> Context<'_> {
         let f = self.current_frame();
         Context {
             generics: &f.generic_inst,
@@ -493,7 +493,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         let mut positions: HashMap<usize, Vec<String>> = HashMap::new();
         let mut insert = |i, value| {
-            positions.entry(i).or_insert(vec![]).push(value);
+            positions.entry(i).or_default().push(value);
         };
         for (i, frame) in self.frames.iter().enumerate().rev() {
             let base = &frame.base;

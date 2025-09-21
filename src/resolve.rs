@@ -4,7 +4,7 @@ use crate::{
 };
 
 use dotnetdll::prelude::*;
-use std::{cell::RefCell, collections::HashMap, error::Error, ffi::OsString, path::PathBuf};
+use std::{cell::RefCell, collections::HashMap, error::Error, path::PathBuf};
 
 pub struct Assemblies {
     assembly_root: String,
@@ -12,8 +12,8 @@ pub struct Assemblies {
     stubs: HashMap<String, TypeDescription>,
 }
 
-const SUPPORT_LIBRARY: &'static [u8] = include_bytes!("support/bin/Debug/net9.0/support.dll");
-pub const SUPPORT_ASSEMBLY: &'static str = "__dotnetrs_support";
+const SUPPORT_LIBRARY: &[u8] = include_bytes!("support/bin/Debug/net9.0/support.dll");
+pub const SUPPORT_ASSEMBLY: &str = "__dotnetrs_support";
 
 impl Assemblies {
     pub fn new(assembly_root: String) -> Self {
@@ -21,7 +21,7 @@ impl Assemblies {
             .unwrap()
             .filter_map(|e| {
                 let path = e.unwrap().path();
-                if path.extension()? == OsString::from("dll") {
+                if path.extension()? == "dll" {
                     Some((
                         path.file_stem().unwrap().to_string_lossy().into_owned(),
                         None,
@@ -294,7 +294,7 @@ impl Assemblies {
                         _ => false,
                     }
                 }
-                (BaseType::FunctionPointer(l), BaseType::FunctionPointer(r)) => todo!(),
+                (BaseType::FunctionPointer(_l), BaseType::FunctionPointer(_r)) => todo!(),
                 _ => false,
             },
             (MethodType::TypeGeneric(i1), MethodType::TypeGeneric(i2)) => i1 == i2,
@@ -525,7 +525,7 @@ impl Assemblies {
         }
     }
 
-    pub fn ancestors(&self, child: TypeDescription) -> impl Iterator<Item = Ancestor> + '_ {
+    pub fn ancestors(&self, child: TypeDescription) -> impl Iterator<Item = Ancestor<'_>> + '_ {
         AncestorsImpl {
             assemblies: self,
             child: Some(child),
@@ -581,6 +581,6 @@ impl Resolver<'static> for Assemblies {
             todo!("fully qualified name {}", _name)
         }
         let td = self.corlib_type(_name);
-        Ok((&td.definition, &td.resolution.0))
+        Ok((td.definition, td.resolution.0))
     }
 }

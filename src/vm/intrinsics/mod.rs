@@ -137,7 +137,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     stack.constructor_frame(
                         gc,
                         instance,
-                        MethodInfo::new(desc, &new_lookup, &stack.assemblies),
+                        MethodInfo::new(desc, &new_lookup, stack.assemblies),
                         new_lookup,
                     );
                     return;
@@ -195,7 +195,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let method = parent.definition.methods.iter().find(|m| m.name == "GetDefault").unwrap();
             stack.call_frame(
                 gc,
-                MethodInfo::new(MethodDescription { parent, method }, &GenericLookup::default(), &stack.assemblies),
+                MethodInfo::new(MethodDescription { parent, method }, &GenericLookup::default(), stack.assemblies),
                 GenericLookup::default()
             );
             return;
@@ -239,7 +239,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             idx_buf.copy_from_slice(field_handle.instance_storage.get_field("_value"));
             let idx = usize::from_ne_bytes(idx_buf);
             let (FieldDescription { field, .. }, lookup) = &stack.runtime_fields[idx];
-            let field_type = Context::with_generics(ctx!(), &lookup).make_concrete(&field.return_type);
+            let field_type = Context::with_generics(ctx!(), lookup).make_concrete(&field.return_type);
             let field_desc = stack.assemblies.find_concrete_type(field_type.clone());
 
             let Some(data) = &field.initial_value else { todo!("ArgumentException: field has no initial value") };

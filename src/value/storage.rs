@@ -163,7 +163,7 @@ impl<'gc> StaticStorageManager<'gc> {
         context: Context,
     ) -> Option<MethodDescription> {
         self.types
-            .entry(description.clone())
+            .entry(description)
             .or_insert_with(|| StaticStorage {
                 initialized: false,
                 storage: FieldStorage::static_fields(description, context),

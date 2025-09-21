@@ -107,14 +107,14 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
             let data1 = char_span_into_str(*span1);
             let data2 = char_span_into_str(*span2);
 
-            let value = CLRString::new(data0.into_iter().chain(data1.into_iter()).chain(data2.into_iter()).collect());
+            let value = CLRString::new(data0.into_iter().chain(data1).chain(data2).collect());
             push!(StackValue::string(gc, value));
         }
         "int System.String::GetHashCodeOrdinalIgnoreCase()" => {
             use std::hash::*;
 
             let mut h = DefaultHasher::new();
-            let value = with_string!(pop!(), |s| String::from_utf16_lossy(&s).to_uppercase().into_bytes());
+            let value = with_string!(pop!(), |s| String::from_utf16_lossy(s).to_uppercase().into_bytes());
             value.hash(&mut h);
             let code = h.finish();
 

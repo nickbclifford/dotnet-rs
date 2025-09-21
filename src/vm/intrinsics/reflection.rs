@@ -133,6 +133,18 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             stack.push_stack(gc, $value)
         };
     }
+    macro_rules! desc_from_type {
+        ($target:expr, $type:expr) => {
+            if let BaseType::Type { source, .. } = $type.as_ref() {
+                let (ut, _) = decompose_type_source(source);
+                stack
+                    .assemblies
+                    .locate_type($target.source.resolution(), ut)
+            } else {
+                stack.assemblies.find_concrete_type($target.into())
+            }
+        };
+    }
 
     // TODO: real signature checking
     match format!("{:?}", method).as_str() {
@@ -150,12 +162,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             //  this property returns the assembly that contains the generic type that defines T."
             match &target_type.target {
                 MethodType::Base(t) => {
-                    let description = if let BaseType::Type { source, .. } = &**t {
-                        let (ut, _) = decompose_type_source(source);
-                        stack.assemblies.locate_type(target_type.source.resolution(), ut)
-                    } else {
-                        stack.assemblies.find_concrete_type(target_type.into())
-                    };
+                    let description = desc_from_type!(target_type, t);
                     let value = match stack.runtime_asms.get(&description.resolution) {
                         Some(o) => *o,
                         None => {
@@ -191,15 +198,10 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             //  the generic type definition that defines T."
             // "If the current Type object represents a generic parameter and a generic type definition
             //  is not available, such as for a signature type returned by MakeGenericMethodParameter,
-            // this property returns null."
+            //  this property returns null."
             match &target_type.target {
                 MethodType::Base(t) => {
-                    let description = if let BaseType::Type { source, .. } = &**t {
-                        let (ut, _) = decompose_type_source(source);
-                        stack.assemblies.locate_type(target_type.source.resolution(), ut)
-                    } else {
-                        stack.assemblies.find_concrete_type(target_type.into())
-                    };
+                    let description = desc_from_type!(target_type, t);
                     match description.definition.namespace.as_ref() {
                         None => push!(StackValue::null()),
                         Some(n) => push!(StackValue::string(gc, CLRString::from(n)))

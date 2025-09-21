@@ -18,10 +18,7 @@ pub enum LayoutManager {
 }
 impl LayoutManager {
     pub fn is_gc_ptr(&self) -> bool {
-        match self {
-            LayoutManager::Scalar(Scalar::ObjectRef) => true,
-            _ => false,
-        }
+        matches!(self, LayoutManager::Scalar(Scalar::ObjectRef))
     }
 
     pub fn is_or_contains_refs(&self) -> bool {
