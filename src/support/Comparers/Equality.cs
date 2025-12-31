@@ -1,10 +1,12 @@
 using System.Collections;
 using System.Runtime.CompilerServices;
+using JetBrains.Annotations;
 
 namespace DotnetRs.Comparers;
 
 public class Equality
 {
+    [UsedImplicitly]
     internal static IEqualityComparer GetDefault(RuntimeType type)
     {
         // https://github.com/dotnet/runtime/blob/main/src/coreclr/System.Private.CoreLib/src/System/Collections/Generic/ComparerHelpers.cs#L62

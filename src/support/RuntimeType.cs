@@ -1,13 +1,14 @@
 using System.Globalization;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using JetBrains.Annotations;
 
 namespace DotnetRs;
 
 [Stub(InPlaceOf = "System.RuntimeType")]
 internal class RuntimeType : Type
 {
-    private nint pointerToKey;
+    [UsedImplicitly] private nint pointerToKey;
     
     [MethodImpl(MethodImplOptions.InternalCall)]
     public override extern Type MakeGenericType(params Type[] typeArguments);

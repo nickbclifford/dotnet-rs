@@ -1,3 +1,5 @@
+using JetBrains.Annotations;
+
 namespace DotnetRs;
 
 [AttributeUsage(AttributeTargets.Class |
@@ -5,5 +7,5 @@ namespace DotnetRs;
 ]
 public class StubAttribute : Attribute
 {
-    public required string InPlaceOf;
+    [UsedImplicitly] public required string InPlaceOf;
 }

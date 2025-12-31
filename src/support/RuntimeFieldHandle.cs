@@ -1,12 +1,13 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.Serialization;
+using JetBrains.Annotations;
 
 namespace DotnetRs;
 
 [Stub(InPlaceOf = "System.RuntimeFieldHandle")]
 public struct RuntimeFieldHandle : IEquatable<RuntimeFieldHandle>, ISerializable
 {
-    private nint _value;
+    [UsedImplicitly] private nint _value;
     public IntPtr Value => _value;
     
     [MethodImpl(MethodImplOptions.InternalCall)]
