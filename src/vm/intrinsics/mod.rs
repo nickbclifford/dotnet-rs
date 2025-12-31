@@ -147,10 +147,10 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             panic!("could not find a parameterless constructor in {:?}", td)
         }
         "static void System.ArgumentNullException::ThrowIfNull(object, string)" => {
+            let _param_name = pop!();
             let target = pop!();
-            let argname = pop!();
             if let StackValue::ObjectRef(ObjectRef(None)) = target {
-                todo!("ArgumentNullException({:?})", argname)
+                todo!("ArgumentNullException({:?})", target);
             }
         }
         "[Generic(1)] static void System.Buffer::Memmove(ref M0, ref M0, nuint)" => {
@@ -163,11 +163,48 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let total_count = len as usize * layout.size();
 
             unsafe {
-                std::ptr::copy(
-                    src,
-                    dst,
-                    total_count
-                );
+                std::ptr::copy(src, dst, total_count);
+            }
+        }
+        "static valuetype System.Runtime.CompilerServices.MethodTable* System.Runtime.CompilerServices.RuntimeHelpers::GetMethodTable(object)" => {
+            let obj = pop!();
+            let object_type = match obj {
+                StackValue::ObjectRef(ObjectRef(Some(h))) => ctx!().get_heap_description(h),
+                StackValue::ObjectRef(ObjectRef(None)) => todo!("GetMethodTable(null)"),
+                _ => panic!("GetMethodTable called on non-object: {:?}", obj),
+            };
+
+            // Check if we already have a method table for this type
+            let mt_ptr = stack
+                .method_tables
+                .borrow()
+                .get(&object_type)
+                .map(|p| p.as_ref().as_ptr() as isize);
+            if let Some(ptr) = mt_ptr {
+                push!(StackValue::NativeInt(ptr));
+            } else {
+                // Otherwise create it
+                let mt_type = stack
+                    .assemblies
+                    .corlib_type("System.Runtime.CompilerServices.MethodTable");
+                let mt_ctx = stack.current_context().for_type(mt_type);
+                let layout = FieldLayoutManager::instance_fields(mt_type, mt_ctx.clone());
+
+                let mut data = vec![0u8; layout.total_size].into_boxed_slice();
+
+                // Find Flags field
+                if let Some(field_layout) = layout.fields.get("Flags") {
+                    let mut flags: u32 = 0;
+                    if object_type.has_finalizer(&ctx!()) {
+                        flags |= 0x100000;
+                    }
+                    data[field_layout.position..field_layout.position + 4]
+                        .copy_from_slice(&flags.to_ne_bytes());
+                }
+
+                let ptr = data.as_ptr();
+                stack.method_tables.borrow_mut().insert(object_type, data);
+                push!(StackValue::NativeInt(ptr as isize));
             }
         }
         "static string System.Environment::GetEnvironmentVariableCore(string)" => {
@@ -200,7 +237,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             );
             return;
         }
-        "static void System.GC::_SuppressFinalize(object)" => {
+        "static void System.GC::_SuppressFinalize(object)" | "static void System.GC::SuppressFinalizeInternal(object)" => {
             // TODO(gc): this object's finalizer should not be called
             let _obj = pop!();
         }
@@ -453,6 +490,11 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             unsafe {
                 *success_flag = 1u8;
             }
+        }
+        "static bool System.Threading.Monitor::TryEnter_FastPath(object)" => {
+            let _obj = pop!();
+            // TODO(threading): actually acquire mutex
+            push!(StackValue::Int32(1));
         }
         "[Generic(1)] static M0 System.Threading.Volatile::Read(ref M0)" => {
             // note that this method's signature restricts the generic to only reference types

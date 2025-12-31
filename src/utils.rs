@@ -4,7 +4,7 @@ use std::{
     hash::Hash,
     io::Read,
     ops::Deref,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 #[derive(Clone, Copy)]
@@ -60,6 +60,38 @@ pub fn static_res_from_file(path: impl AsRef<Path>) -> ResolutionS {
     let resolution = Resolution::parse(Box::leak(buf.into_boxed_slice()), ReadOptions::default())
         .expect("failed to parse file as .NET metadata");
     ResolutionS(Box::leak(Box::new(resolution)))
+}
+
+pub fn find_dotnet_sdk_path() -> Option<PathBuf> {
+    let mut search_paths = vec![PathBuf::from("/usr/share/dotnet/shared/Microsoft.NETCore.App")];
+
+    if let Ok(home) = std::env::var("HOME") {
+        search_paths.push(PathBuf::from(home).join(".dotnet/shared/Microsoft.NETCore.App"));
+    }
+
+    if let Ok(dotnet_root) = std::env::var("DOTNET_ROOT") {
+        search_paths.insert(0, PathBuf::from(dotnet_root).join("shared/Microsoft.NETCore.App"));
+    }
+
+    for base_path in search_paths {
+        if !base_path.exists() {
+            continue;
+        }
+
+        let mut versions: Vec<_> = std::fs::read_dir(base_path)
+            .ok()?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+            .map(|e| e.path())
+            .collect();
+
+        versions.sort();
+        if let Some(latest) = versions.pop() {
+            return Some(latest);
+        }
+    }
+
+    None
 }
 
 pub struct DebugStr(pub String);

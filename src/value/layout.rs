@@ -254,10 +254,12 @@ impl FieldLayoutManager {
     }
 
     pub fn instance_fields(td: TypeDescription, context: Context) -> Self {
+        let context = context.for_type(td);
         Self::collect_fields(td, context, |f| !f.static_member)
     }
 
     pub fn static_fields(td: TypeDescription, context: Context) -> Self {
+        let context = context.for_type(td);
         Self::collect_fields(td, context, |f| f.static_member)
     }
 }
@@ -307,6 +309,10 @@ impl HasLayout for Scalar {
 }
 
 pub fn type_layout(t: ConcreteType, context: Context) -> LayoutManager {
+    let context = Context {
+        resolution: t.resolution(),
+        ..context
+    };
     match t.get() {
         BaseType::Boolean | BaseType::Int8 | BaseType::UInt8 => Scalar::Int8.into(),
         BaseType::Char | BaseType::Int16 | BaseType::UInt16 => Scalar::Int16.into(),

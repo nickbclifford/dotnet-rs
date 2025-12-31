@@ -34,6 +34,14 @@ impl<'a> Context<'a> {
         Context { generics, ..ctx }
     }
 
+    pub fn for_type(&self, td: TypeDescription) -> Context<'a> {
+        Context {
+            resolution: td.resolution,
+            generics: self.generics,
+            assemblies: self.assemblies,
+        }
+    }
+
     pub fn locate_type(&self, handle: UserType) -> TypeDescription {
         self.assemblies.locate_type(self.resolution, handle)
     }
@@ -794,6 +802,29 @@ impl TypeDescription {
     pub fn is_value_type(&self, ctx: &Context) -> bool {
         for (a, _) in ctx.get_ancestors(*self) {
             if matches!(a.type_name().as_str(), "System.Enum" | "System.ValueType") {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn has_finalizer(&self, ctx: &Context) -> bool {
+        for (ancestor, _) in ctx.get_ancestors(*self) {
+            let ns = ancestor.definition.namespace.as_deref().unwrap_or("");
+            let name = &ancestor.definition.name;
+            if ns == "System" && name == "Object" {
+                continue;
+            }
+            if ns == "System" && name == "ValueType" {
+                continue;
+            }
+            if ns == "System" && name == "Enum" {
+                continue;
+            }
+
+            if ancestor.definition.methods.iter().any(|m| {
+                m.name == "Finalize" && m.virtual_member && m.signature.parameters.is_empty()
+            }) {
                 return true;
             }
         }

@@ -145,7 +145,46 @@ impl Assemblies {
     }
 
     pub fn corlib_type(&self, name: &str) -> TypeDescription {
-        self.find_in_assembly(&ExternalAssemblyReference::new("mscorlib"), name)
+        let mut tried_mscorlib = false;
+        if self.external.borrow().contains_key("mscorlib") {
+            let res = self.get_assembly("mscorlib");
+            if let Some(t) = self.try_find_in_assembly(res, name) {
+                return t;
+            }
+            tried_mscorlib = true;
+        }
+
+        if self.external.borrow().contains_key("System.Private.CoreLib") {
+            let res = self.get_assembly("System.Private.CoreLib");
+            if let Some(t) = self.try_find_in_assembly(res, name) {
+                return t;
+            }
+        }
+
+        // Fallback to old behavior which panics if not found
+        if tried_mscorlib {
+            panic!("could not find type {} in corlib", name);
+        } else {
+            self.find_in_assembly(&ExternalAssemblyReference::new("mscorlib"), name)
+        }
+    }
+
+    fn try_find_in_assembly(&self, resolution: ResolutionS, name: &str) -> Option<TypeDescription> {
+        let res = resolution.0;
+        if let Some(t) = res.type_definitions.iter().find(|t| t.type_name() == name) {
+            return Some(TypeDescription {
+                resolution,
+                definition: t,
+            });
+        }
+
+        for e in &res.exported_types {
+            if e.type_name() == name {
+                return Some(self.find_exported_type(resolution, e));
+            }
+        }
+
+        None
     }
 
     // TODO: cache

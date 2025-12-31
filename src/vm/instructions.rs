@@ -55,7 +55,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         description: TypeDescription,
         generics: GenericLookup,
     ) -> bool {
-        let ctx = Context::with_generics(self.current_context(), &generics);
+        let ctx = Context {
+            resolution: description.resolution,
+            generics: &generics,
+            assemblies: self.assemblies,
+        };
         let value = {
             let mut statics = self.statics.borrow_mut();
             statics.init(description, ctx.clone())

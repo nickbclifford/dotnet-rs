@@ -4,6 +4,7 @@ use crate::{
     value::{
         storage::StaticStorageManager, Context, FieldDescription, GenericLookup, HeapStorage,
         MethodDescription, Object as ObjectInstance, ObjectPtr, ObjectRef, StackValue,
+        TypeDescription,
     },
     vm::{
         exceptions::{Handler, ProtectedSection},
@@ -43,6 +44,7 @@ pub struct CallStack<'gc, 'm> {
     pub runtime_types: HashMap<RuntimeType, ObjectRef<'gc>>,
     pub runtime_methods: Vec<(MethodDescription, GenericLookup)>,
     pub runtime_fields: Vec<(FieldDescription, GenericLookup)>,
+    pub method_tables: RefCell<HashMap<TypeDescription, Box<[u8]>>>,
     // secretly ObjectHandles, not traced for GCing because these are for runtime debugging
     _all_objs: Vec<usize>,
 }
@@ -113,6 +115,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             runtime_types: HashMap::new(),
             runtime_methods: vec![],
             runtime_fields: vec![],
+            method_tables: RefCell::new(HashMap::new()),
             _all_objs: vec![],
         }
     }
