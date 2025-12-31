@@ -219,6 +219,8 @@ impl FieldLayoutManager {
                 generics: &new_lookup,
                 resolution: res,
                 assemblies: context.assemblies,
+                type_owner: Some(td),
+                method_owner: None,
             };
             for f in &a.fields {
                 if !predicate(f) {

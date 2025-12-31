@@ -8,7 +8,7 @@ namespace DotnetRs;
 [Stub(InPlaceOf = "System.RuntimeType")]
 internal class RuntimeType : Type
 {
-    [UsedImplicitly] private nint pointerToKey;
+    [UsedImplicitly] private nint index;
     
     [MethodImpl(MethodImplOptions.InternalCall)]
     public override extern Type MakeGenericType(params Type[] typeArguments);
@@ -93,6 +93,16 @@ internal class RuntimeType : Type
     [MethodImpl(MethodImplOptions.InternalCall)]
     private extern string? GetNamespace();
     public override string? Namespace => GetNamespace();
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private extern bool GetIsGenericType();
+    public override bool IsGenericType => GetIsGenericType();
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    public override extern Type GetGenericTypeDefinition();
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    public override extern Type[] GetGenericArguments();
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     private extern System.RuntimeTypeHandle GetTypeHandle();

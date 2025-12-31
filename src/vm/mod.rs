@@ -82,6 +82,8 @@ impl MethodInfo<'static> {
             generics,
             assemblies,
             resolution: method.resolution(),
+            type_owner: Some(method.parent),
+            method_owner: Some(method),
         };
 
         Self {

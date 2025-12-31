@@ -42,6 +42,7 @@ pub struct CallStack<'gc, 'm> {
     pub pinvoke: NativeLibraries,
     pub runtime_asms: HashMap<ResolutionS, ObjectRef<'gc>>,
     pub runtime_types: HashMap<RuntimeType, ObjectRef<'gc>>,
+    pub runtime_types_list: Vec<RuntimeType>,
     pub runtime_methods: Vec<(MethodDescription, GenericLookup)>,
     pub runtime_fields: Vec<(FieldDescription, GenericLookup)>,
     pub method_tables: RefCell<HashMap<TypeDescription, Box<[u8]>>>,
@@ -113,6 +114,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             statics: RefCell::new(StaticStorageManager::new()),
             runtime_asms: HashMap::new(),
             runtime_types: HashMap::new(),
+            runtime_types_list: vec![],
             runtime_methods: vec![],
             runtime_fields: vec![],
             method_tables: RefCell::new(HashMap::new()),
@@ -128,7 +130,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     fn init_locals(
         &mut self,
-        resolution: ResolutionS,
+        method: MethodDescription,
         locals: &'m [LocalVariable],
         generics: &GenericLookup,
     ) -> Vec<StackValue<'gc>> {
@@ -149,7 +151,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let ctx = Context {
                         generics,
                         assemblies: self.assemblies,
-                        resolution,
+                        resolution: method.resolution(),
+                        type_owner: Some(method.parent),
+                        method_owner: Some(method),
                     };
 
                     let v = match ctx.make_concrete(var_type).get() {
@@ -224,7 +228,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             self.insert_value(gc, a);
         }
         let locals_base = self.stack.len();
-        for v in self.init_locals(method.source.resolution(), method.locals, &generic_inst) {
+        for v in self.init_locals(method.source, method.locals, &generic_inst) {
             self.insert_value(gc, v);
         }
         let stack_base = self.stack.len();
@@ -327,7 +331,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         };
         let locals_base = self.top_of_stack();
         let local_values =
-            self.init_locals(method.source.resolution(), method.locals, &generic_inst);
+            self.init_locals(method.source, method.locals, &generic_inst);
         let mut local_index = 0;
         for v in local_values {
             self.set_slot_at(gc, locals_base + local_index, v);
@@ -390,6 +394,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             generics: &f.generic_inst,
             assemblies: self.assemblies,
             resolution: f.source_resolution,
+            type_owner: Some(f.state.info_handle.source.parent),
+            method_owner: Some(f.state.info_handle.source),
         }
     }
 

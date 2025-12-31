@@ -1,5 +1,4 @@
 pub mod reflection;
-use reflection::RuntimeType;
 
 use crate::{
     resolve::SUPPORT_ASSEMBLY,
@@ -218,11 +217,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         }
         "static System.Collections.Generic.EqualityComparer`1<T0> System.Collections.Generic.EqualityComparer`1::get_Default()" => {
             let target = MethodType::TypeGeneric(0);
-            let rt = stack.get_runtime_type(gc, RuntimeType {
-                target,
-                source: method,
-                generics,
-            });
+            let rt = stack.get_runtime_type(gc, stack.make_runtime_type(&stack.current_context(), &target));
             push!(StackValue::ObjectRef(rt));
 
             let parent = stack.assemblies.find_in_assembly(
@@ -255,8 +250,8 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             // https://github.com/dotnet/runtime/blob/main/src/libraries/System.Private.CoreLib/src/System/SR.cs#L78
             expect_stack!(let ValueType(handle) = pop!());
             let rt = ObjectRef::read(handle.instance_storage.get_field("_value"));
-            let target: RuntimeType = rt.try_into().unwrap();
-            let target: ConcreteType = target.into();
+            let target = stack.resolve_runtime_type(rt.expect_object_ref());
+            let target: ConcreteType = target.clone().into();
             let target = stack.assemblies.find_concrete_type(target);
             if stack.initialize_static_storage(gc, target, generics) {
                 let second_to_last = stack.frames.len() - 2;
@@ -534,8 +529,8 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         }
         "bool System.Type::get_IsValueType()" => {
             expect_stack!(let ObjectRef(o) = pop!());
-            let target: RuntimeType = o.try_into().unwrap();
-            let target: ConcreteType = target.into();
+            let target = stack.resolve_runtime_type(o);
+            let target: ConcreteType = target.clone().into();
             let target = stack.assemblies.find_concrete_type(target);
 
             let value = target.is_value_type(&ctx!());

@@ -8,7 +8,7 @@ use crate::{
     },
     vm::{
         exceptions::{HandlerKind, ProtectedSection},
-        intrinsics::{reflection::RuntimeType, *},
+        intrinsics::*,
         CallStack, GCHandle, MethodInfo, StepResult,
     },
 };
@@ -59,6 +59,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             resolution: description.resolution,
             generics: &generics,
             assemblies: self.assemblies,
+            type_owner: Some(description),
+            method_owner: None,
         };
         let value = {
             let mut statics = self.statics.borrow_mut();
@@ -1407,12 +1409,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             LoadTokenMethod(_) => todo!("RuntimeMethodHandle"),
             LoadTokenType(target) => {
-                let current_method = state!(|s| s.info_handle.source);
-                let target_type = RuntimeType {
-                    target: target.clone(),
-                    source: current_method,
-                    generics: self.current_context().generics.clone(),
-                };
+                let target_type = self.make_runtime_type(&self.current_context(), target);
 
                 let instance = self.get_handle_for_type(gc, target_type);
 

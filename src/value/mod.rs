@@ -28,6 +28,8 @@ pub struct Context<'a> {
     pub generics: &'a GenericLookup,
     pub assemblies: &'a Assemblies,
     pub resolution: ResolutionS,
+    pub type_owner: Option<TypeDescription>,
+    pub method_owner: Option<MethodDescription>,
 }
 impl<'a> Context<'a> {
     pub const fn with_generics(ctx: Context<'a>, generics: &'a GenericLookup) -> Context<'a> {
@@ -39,6 +41,8 @@ impl<'a> Context<'a> {
             resolution: td.resolution,
             generics: self.generics,
             assemblies: self.assemblies,
+            type_owner: Some(td),
+            method_owner: None,
         }
     }
 
@@ -271,6 +275,13 @@ impl<'gc> ObjectRef<'gc> {
         };
         let ptr_bytes = (ptr as usize).to_ne_bytes();
         dest.copy_from_slice(&ptr_bytes);
+    }
+
+    pub fn expect_object_ref(self) -> Self {
+        if self.0.is_none() {
+            panic!("NullPointerException");
+        }
+        self
     }
 
     pub fn as_object<T>(&self, op: impl FnOnce(&Object<'gc>) -> T) -> T {
@@ -900,6 +911,27 @@ pub struct ConcreteType {
     source: ResolutionS,
     base: Box<BaseType<Self>>,
 }
+impl From<TypeDescription> for ConcreteType {
+    fn from(td: TypeDescription) -> Self {
+        let index = td
+            .resolution
+            .0
+            .type_definitions
+            .iter()
+            .position(|t| std::ptr::eq(t, td.definition))
+            .expect("TypeDescription has invalid definition pointer");
+        Self::new(
+            td.resolution,
+            BaseType::Type {
+                source: TypeSource::User(UserType::Definition(
+                    td.resolution.0.type_definition_index(index).unwrap(),
+                )),
+                value_kind: None,
+            },
+        )
+    }
+}
+
 impl ConcreteType {
     pub fn new(source: ResolutionS, base: BaseType<Self>) -> Self {
         ConcreteType {

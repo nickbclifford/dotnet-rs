@@ -145,6 +145,10 @@ impl Assemblies {
     }
 
     pub fn corlib_type(&self, name: &str) -> TypeDescription {
+        if let Some(t) = self.stubs.get(name) {
+            return *t;
+        }
+
         let mut tried_mscorlib = false;
         if self.external.borrow().contains_key("mscorlib") {
             let res = self.get_assembly("mscorlib");
@@ -156,6 +160,13 @@ impl Assemblies {
 
         if self.external.borrow().contains_key("System.Private.CoreLib") {
             let res = self.get_assembly("System.Private.CoreLib");
+            if let Some(t) = self.try_find_in_assembly(res, name) {
+                return t;
+            }
+        }
+
+        if self.external.borrow().contains_key(SUPPORT_ASSEMBLY) {
+            let res = self.get_assembly(SUPPORT_ASSEMBLY);
             if let Some(t) = self.try_find_in_assembly(res, name) {
                 return t;
             }
