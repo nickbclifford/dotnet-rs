@@ -2,9 +2,9 @@ use crate::{
     resolve::Assemblies,
     utils::{decompose_type_source, ResolutionS},
     value::{
-        storage::StaticStorageManager, Context, FieldDescription, GenericLookup, HeapStorage,
-        MethodDescription, Object as ObjectInstance, ObjectPtr, ObjectRef, StackValue,
-        TypeDescription,
+        storage::StaticStorageManager, ConcreteType, FieldDescription, GenericLookup, HeapStorage,
+        MethodDescription, Object as ObjectInstance, ObjectHandle, ObjectPtr, ObjectRef,
+        ResolutionContext, StackValue, TypeDescription,
     },
     vm::{
         exceptions::{Handler, ProtectedSection},
@@ -148,7 +148,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         // todo!("initialize byref local")
                         // maybe i don't need to care and it will always be referenced appropriately?
                     }
-                    let ctx = Context {
+                    let ctx = ResolutionContext {
                         generics,
                         assemblies: self.assemblies,
                         resolution: method.resolution(),
@@ -166,8 +166,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                     type_generics,
                                     ..generics.clone()
                                 };
-                                let new_ctx = Context::with_generics(ctx, &new_lookup);
-                                let instance = ObjectInstance::new(desc, new_ctx);
+                                let new_ctx = ctx.with_generics(&new_lookup);
+                                let instance = ObjectInstance::new(desc, &new_ctx);
                                 StackValue::ValueType(Box::new(instance))
                             } else {
                                 StackValue::null()
@@ -330,8 +330,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             )
         };
         let locals_base = self.top_of_stack();
-        let local_values =
-            self.init_locals(method.source, method.locals, &generic_inst);
+        let local_values = self.init_locals(method.source, method.locals, &generic_inst);
         let mut local_index = 0;
         for v in local_values {
             self.set_slot_at(gc, locals_base + local_index, v);
@@ -388,15 +387,39 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.current_frame_mut().state.ip += 1;
     }
 
-    pub fn current_context(&self) -> Context<'_> {
+    pub fn current_context(&self) -> ResolutionContext<'_> {
         let f = self.current_frame();
-        Context {
+        ResolutionContext {
             generics: &f.generic_inst,
             assemblies: self.assemblies,
             resolution: f.source_resolution,
             type_owner: Some(f.state.info_handle.source.parent),
             method_owner: Some(f.state.info_handle.source),
         }
+    }
+
+    pub fn ctx_with_generics<'a>(&'a self, generics: &'a GenericLookup) -> ResolutionContext<'a> {
+        self.current_context().with_generics(generics)
+    }
+
+    pub fn make_concrete<T: Clone + Into<MethodType>>(&self, t: &T) -> ConcreteType {
+        self.current_context().make_concrete(t)
+    }
+
+    pub fn locate_type(&self, handle: UserType) -> TypeDescription {
+        self.current_context().locate_type(handle)
+    }
+
+    pub fn locate_field(&self, handle: FieldSource) -> (FieldDescription, GenericLookup) {
+        self.current_context().locate_field(handle)
+    }
+
+    pub fn is_a(&self, value: TypeDescription, ancestor: TypeDescription) -> bool {
+        self.current_context().is_a(value, ancestor)
+    }
+
+    pub fn get_heap_description(&self, object: ObjectHandle<'gc>) -> TypeDescription {
+        self.current_context().get_heap_description(object)
     }
 
     pub fn top_of_stack(&self) -> usize {

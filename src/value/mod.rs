@@ -23,21 +23,49 @@ use storage::FieldStorage;
 
 pub mod string;
 
-#[derive(Clone)]
-pub struct Context<'a> {
+#[derive(Clone, Copy)]
+pub struct ResolutionContext<'a> {
     pub generics: &'a GenericLookup,
     pub assemblies: &'a Assemblies,
     pub resolution: ResolutionS,
     pub type_owner: Option<TypeDescription>,
     pub method_owner: Option<MethodDescription>,
 }
-impl<'a> Context<'a> {
-    pub const fn with_generics(ctx: Context<'a>, generics: &'a GenericLookup) -> Context<'a> {
-        Context { generics, ..ctx }
+impl<'a> ResolutionContext<'a> {
+    pub fn new(
+        generics: &'a GenericLookup,
+        assemblies: &'a Assemblies,
+        resolution: ResolutionS,
+    ) -> Self {
+        Self {
+            generics,
+            assemblies,
+            resolution,
+            type_owner: None,
+            method_owner: None,
+        }
     }
 
-    pub fn for_type(&self, td: TypeDescription) -> Context<'a> {
-        Context {
+    pub fn for_method(
+        method: MethodDescription,
+        assemblies: &'a Assemblies,
+        generics: &'a GenericLookup,
+    ) -> Self {
+        Self {
+            generics,
+            assemblies,
+            resolution: method.resolution(),
+            type_owner: Some(method.parent),
+            method_owner: Some(method),
+        }
+    }
+
+    pub fn with_generics(&self, generics: &'a GenericLookup) -> ResolutionContext<'a> {
+        ResolutionContext { generics, ..*self }
+    }
+
+    pub fn for_type(&self, td: TypeDescription) -> ResolutionContext<'a> {
+        ResolutionContext {
             resolution: td.resolution,
             generics: self.generics,
             assemblies: self.assemblies,
@@ -154,7 +182,7 @@ impl<'gc> StackValue<'gc> {
         }
     }
 
-    pub fn contains_type(&self, ctx: Context) -> TypeDescription {
+    pub fn contains_type(&self, ctx: &ResolutionContext) -> TypeDescription {
         match self {
             Self::Int32(_) => ctx.assemblies.corlib_type("System.Int32"),
             Self::Int64(_) => ctx.assemblies.corlib_type("System.Int64"),
@@ -407,7 +435,7 @@ where
 }
 
 impl<'gc> ValueType<'gc> {
-    pub fn new(t: &ConcreteType, context: &Context, data: StackValue<'gc>) -> Self {
+    pub fn new(t: &ConcreteType, context: &ResolutionContext, data: StackValue<'gc>) -> Self {
         match CTSValue::new(t, context, data) {
             CTSValue::Value(v) => v,
             CTSValue::Ref(r) => {
@@ -419,7 +447,7 @@ impl<'gc> ValueType<'gc> {
         }
     }
 
-    pub fn description(&self, context: &Context) -> TypeDescription {
+    pub fn description(&self, context: &ResolutionContext) -> TypeDescription {
         let asms = &context.assemblies;
         match self {
             ValueType::Bool(_) => asms.corlib_type("System.Boolean"),
@@ -454,7 +482,7 @@ pub enum CTSValue<'gc> {
     Ref(ObjectRef<'gc>),
 }
 impl<'gc> CTSValue<'gc> {
-    pub fn new(t: &ConcreteType, context: &Context, data: StackValue<'gc>) -> Self {
+    pub fn new(t: &ConcreteType, context: &ResolutionContext, data: StackValue<'gc>) -> Self {
         use ValueType::*;
         match t.get() {
             BaseType::Type {
@@ -463,7 +491,7 @@ impl<'gc> CTSValue<'gc> {
             } => {
                 let (ut, type_generics) = decompose_type_source(source);
                 let new_lookup = GenericLookup::new(type_generics);
-                let new_ctx = Context::with_generics(context.clone(), &new_lookup);
+                let new_ctx = context.with_generics(&new_lookup);
                 let td = new_ctx.locate_type(ut);
 
                 if let Some(e) = td.is_enum() {
@@ -543,7 +571,7 @@ impl<'gc> CTSValue<'gc> {
         }
     }
 
-    pub fn read(t: &ConcreteType, context: &Context, data: &[u8]) -> Self {
+    pub fn read(t: &ConcreteType, context: &ResolutionContext, data: &[u8]) -> Self {
         use ValueType::*;
         match t.get() {
             BaseType::Type {
@@ -552,7 +580,7 @@ impl<'gc> CTSValue<'gc> {
             } => {
                 let (ut, type_generics) = decompose_type_source(source);
                 let new_lookup = GenericLookup::new(type_generics);
-                let new_ctx = Context::with_generics(context.clone(), &new_lookup);
+                let new_ctx = context.with_generics(&new_lookup);
                 let td = new_ctx.locate_type(ut);
 
                 if let Some(e) = td.is_enum() {
@@ -577,7 +605,7 @@ impl<'gc> CTSValue<'gc> {
                     "System.UInt64" => UInt64(from_bytes!(u64, data)),
                     "System.UIntPtr" => NativeUInt(from_bytes!(usize, data)),
                     _ => {
-                        let mut instance = Object::new(td, new_ctx);
+                        let mut instance = Object::new(td, &new_ctx);
                         instance.instance_storage.get_mut().copy_from_slice(data);
                         Struct(instance)
                     }
@@ -681,7 +709,7 @@ unsafe impl Collect for Vector<'_> {
     }
 }
 impl<'gc> Vector<'gc> {
-    pub fn new(element: ConcreteType, size: usize, context: Context) -> Self {
+    pub fn new(element: ConcreteType, size: usize, context: &ResolutionContext) -> Self {
         let layout = ArrayLayoutManager::new(element.clone(), size, context);
         Self {
             storage: vec![0; layout.size()], // TODO: initialize properly
@@ -731,7 +759,7 @@ pub struct Object<'gc> {
     pub instance_storage: FieldStorage<'gc>,
 }
 impl<'gc> Object<'gc> {
-    pub fn new(description: TypeDescription, context: Context) -> Self {
+    pub fn new(description: TypeDescription, context: &ResolutionContext) -> Self {
         Self {
             description,
             instance_storage: FieldStorage::instance_fields(description, context),
@@ -810,7 +838,7 @@ impl TypeDescription {
         }
     }
 
-    pub fn is_value_type(&self, ctx: &Context) -> bool {
+    pub fn is_value_type(&self, ctx: &ResolutionContext) -> bool {
         for (a, _) in ctx.get_ancestors(*self) {
             if matches!(a.type_name().as_str(), "System.Enum" | "System.ValueType") {
                 return true;
@@ -819,7 +847,7 @@ impl TypeDescription {
         false
     }
 
-    pub fn has_finalizer(&self, ctx: &Context) -> bool {
+    pub fn has_finalizer(&self, ctx: &ResolutionContext) -> bool {
         for (ancestor, _) in ctx.get_ancestors(*self) {
             let ns = ancestor.definition.namespace.as_deref().unwrap_or("");
             let name = &ancestor.definition.name;

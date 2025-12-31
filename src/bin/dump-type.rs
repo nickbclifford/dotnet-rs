@@ -3,7 +3,11 @@ use dotnet_rs::utils::{find_dotnet_sdk_path, static_res_from_file};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Dump the structure and bodies of a specified type")]
+#[command(
+    author,
+    version,
+    about = "Dump the structure and bodies of a specified type"
+)]
 struct Args {
     /// The assembly to search in (e.g. System.Runtime, or path to a DLL)
     assembly: String,
@@ -128,7 +132,10 @@ fn main() {
     }
 }
 
-fn print_type_info(_resolution: dotnet_rs::utils::ResolutionS, type_def: &dotnetdll::prelude::TypeDefinition) {
+fn print_type_info(
+    _resolution: dotnet_rs::utils::ResolutionS,
+    type_def: &dotnetdll::prelude::TypeDefinition,
+) {
     println!(
         "Type: {}.{}",
         type_def.namespace.as_deref().unwrap_or(""),
@@ -159,6 +166,9 @@ fn print_type_info(_resolution: dotnet_rs::utils::ResolutionS, type_def: &dotnet
 
     println!("\nProperties:");
     for prop in &type_def.properties {
-        println!("  - {}: getter: {:?}, setter: {:?}", prop.name, prop.getter, prop.setter);
+        println!(
+            "  - {}: getter: {:?}, setter: {:?}",
+            prop.name, prop.getter, prop.setter
+        );
     }
 }

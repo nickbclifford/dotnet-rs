@@ -1,8 +1,10 @@
-use super::{ConcreteType, Context, FieldDescription, GenericLookup, TypeDescription};
+use super::{
+    ConcreteType, FieldDescription, GenericLookup, ObjectRef, ResolutionContext, TypeDescription,
+};
 
 use dotnetdll::prelude::*;
 use enum_dispatch::enum_dispatch;
-use std::{collections::HashMap, mem::size_of, ops::Range};
+use std::{collections::HashMap, ops::Range};
 
 #[enum_dispatch]
 pub trait HasLayout {
@@ -103,7 +105,7 @@ impl FieldLayoutManager {
                             layout,
                         },
                     );
-                    offset += align_up(size, size_of::<usize>());
+                    offset += align_up(size, ObjectRef::SIZE);
                 }
 
                 total_size = offset;
@@ -131,7 +133,7 @@ impl FieldLayoutManager {
                     class_size,
                 }) => {
                     if packing_size == 0 {
-                        packing_size = size_of::<usize>();
+                        packing_size = ObjectRef::SIZE;
                     }
 
                     let mut offset = 0;
@@ -185,7 +187,7 @@ impl FieldLayoutManager {
 
     fn collect_fields(
         td: TypeDescription,
-        context: Context,
+        context: &ResolutionContext,
         mut predicate: impl FnMut(&Field) -> bool,
     ) -> Self {
         // TODO: check for layout flags all the way down the chain? (II.22.8)
@@ -195,9 +197,9 @@ impl FieldLayoutManager {
         ancestors.pop();
 
         let mut total_fields = vec![];
-        let mut add_field_layout = |f: FieldDescription, ctx: &Context| {
+        let mut add_field_layout = |f: FieldDescription, ctx: &ResolutionContext| {
             let t = ctx.get_field_type(f);
-            let layout = type_layout(t, ctx.clone());
+            let layout = type_layout(t, ctx);
             total_fields.push((f.field.name.as_ref(), f.field.offset, layout));
         };
 
@@ -215,7 +217,7 @@ impl FieldLayoutManager {
                     .map(|t| context.make_concrete(t))
                     .collect(),
             );
-            let new_ctx = Context {
+            let new_ctx = ResolutionContext {
                 generics: &new_lookup,
                 resolution: res,
                 assemblies: context.assemblies,
@@ -255,14 +257,14 @@ impl FieldLayoutManager {
         Self::new(total_fields, td.definition.flags.layout)
     }
 
-    pub fn instance_fields(td: TypeDescription, context: Context) -> Self {
+    pub fn instance_fields(td: TypeDescription, context: &ResolutionContext) -> Self {
         let context = context.for_type(td);
-        Self::collect_fields(td, context, |f| !f.static_member)
+        Self::collect_fields(td, &context, |f| !f.static_member)
     }
 
-    pub fn static_fields(td: TypeDescription, context: Context) -> Self {
+    pub fn static_fields(td: TypeDescription, context: &ResolutionContext) -> Self {
         let context = context.for_type(td);
-        Self::collect_fields(td, context, |f| f.static_member)
+        Self::collect_fields(td, &context, |f| f.static_member)
     }
 }
 
@@ -277,7 +279,7 @@ impl HasLayout for ArrayLayoutManager {
     }
 }
 impl ArrayLayoutManager {
-    pub fn new(element: ConcreteType, length: usize, context: Context) -> Self {
+    pub fn new(element: ConcreteType, length: usize, context: &ResolutionContext) -> Self {
         Self {
             element_layout: Box::new(type_layout(element, context)),
             length,
@@ -303,17 +305,17 @@ impl HasLayout for Scalar {
             Scalar::Int16 => 2,
             Scalar::Int32 => 4,
             Scalar::Int64 => 8,
-            Scalar::ObjectRef | Scalar::NativeInt => size_of::<usize>(),
+            Scalar::ObjectRef | Scalar::NativeInt => ObjectRef::SIZE,
             Scalar::Float32 => 4,
             Scalar::Float64 => 8,
         }
     }
 }
 
-pub fn type_layout(t: ConcreteType, context: Context) -> LayoutManager {
-    let context = Context {
+pub fn type_layout(t: ConcreteType, context: &ResolutionContext) -> LayoutManager {
+    let context = ResolutionContext {
         resolution: t.resolution(),
-        ..context
+        ..*context
     };
     match t.get() {
         BaseType::Boolean | BaseType::Int8 | BaseType::UInt8 => Scalar::Int8.into(),
@@ -340,12 +342,12 @@ pub fn type_layout(t: ConcreteType, context: Context) -> LayoutManager {
             };
 
             let new_lookup = GenericLookup::new(type_generics);
-            let ctx = Context::with_generics(context, &new_lookup);
+            let ctx = context.with_generics(&new_lookup);
 
             if let Some(inner) = t.is_enum() {
-                type_layout(ctx.make_concrete(inner), ctx)
+                type_layout(ctx.make_concrete(inner), &ctx)
             } else {
-                FieldLayoutManager::instance_fields(t, ctx).into()
+                FieldLayoutManager::instance_fields(t, &ctx).into()
             }
         }
         BaseType::Type { .. }

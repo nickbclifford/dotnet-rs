@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     utils::DebugStr,
-    value::{ConcreteType, Context},
+    value::{ConcreteType, ResolutionContext},
 };
 use dotnetdll::prelude::*;
 
@@ -60,7 +60,7 @@ impl Debug for HandlerKind {
 
 pub fn parse<'a>(
     source: impl IntoIterator<Item = &'a body::Exception>,
-    ctx: Context,
+    ctx: &ResolutionContext,
 ) -> Vec<ProtectedSection> {
     let mut sections = HashMap::new();
     for exc in source.into_iter() {

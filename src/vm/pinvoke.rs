@@ -2,7 +2,7 @@ use crate::{
     utils::decompose_type_source,
     value::{
         layout::{FieldLayoutManager, LayoutManager, Scalar},
-        ConcreteType, Context, GenericLookup, MethodDescription, Object, StackValue,
+        ConcreteType, GenericLookup, MethodDescription, Object, ResolutionContext, StackValue,
     },
     vm::{CallStack, GCHandle},
 };
@@ -47,13 +47,13 @@ impl NativeLibraries {
     }
 }
 
-fn type_to_layout(t: &TypeSource<ConcreteType>, ctx: Context) -> FieldLayoutManager {
+fn type_to_layout(t: &TypeSource<ConcreteType>, ctx: &ResolutionContext) -> FieldLayoutManager {
     let (ut, type_generics) = decompose_type_source(t);
     let new_lookup = GenericLookup::new(type_generics);
-    let new_ctx = Context::with_generics(ctx, &new_lookup);
+    let new_ctx = ctx.with_generics(&new_lookup);
     let td = new_ctx.locate_type(ut);
 
-    FieldLayoutManager::instance_fields(td, new_ctx.clone())
+    FieldLayoutManager::instance_fields(td, &new_ctx)
 }
 
 fn layout_to_ffi(l: LayoutManager) -> Type {
@@ -81,7 +81,7 @@ fn layout_to_ffi(l: LayoutManager) -> Type {
     }
 }
 
-fn type_to_ffi(t: &ConcreteType, ctx: Context) -> Type {
+fn type_to_ffi(t: &ConcreteType, ctx: &ResolutionContext) -> Type {
     match t.get() {
         BaseType::Int8 => Type::i8(),
         BaseType::UInt8 => Type::u8(),
@@ -105,16 +105,16 @@ fn type_to_ffi(t: &ConcreteType, ctx: Context) -> Type {
                 _ => vec![],
             };
             let new_lookup = GenericLookup::new(type_generics);
-            let new_ctx = Context::with_generics(ctx, &new_lookup);
+            let new_ctx = ctx.with_generics(&new_lookup);
 
-            let layout = type_to_layout(source, new_ctx);
+            let layout = type_to_layout(source, &new_ctx);
             layout_to_ffi(layout.into())
         }
         rest => todo!("marshalling not yet supported for {:?}", rest),
     }
 }
 
-fn param_to_type(p: &ParameterType<MethodType>, ctx: Context) -> Type {
+fn param_to_type(p: &ParameterType<MethodType>, ctx: &ResolutionContext) -> Type {
     let ParameterType::Value(t) = p else {
         todo!("marshalling ref/typedref parameters")
     };
@@ -151,11 +151,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let ctx = self.current_context();
         let mut args: Vec<Type> = vec![];
         for Parameter(_, p) in &method.method.signature.parameters {
-            args.push(param_to_type(p, ctx.clone()));
+            args.push(param_to_type(p, &ctx));
         }
         let return_type = match &method.method.signature.return_type.1 {
             None => Type::void(),
-            Some(s) => param_to_type(s, ctx.clone()),
+            Some(s) => param_to_type(s, &ctx),
         };
         let cif = Cif::new(args, return_type);
 
@@ -216,10 +216,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     BaseType::Type { source, .. } => {
                         let (ut, type_generics) = decompose_type_source(source);
                         let new_lookup = GenericLookup::new(type_generics);
-                        let new_ctx = Context::with_generics(ctx, &new_lookup);
+                        let new_ctx = ctx.with_generics(&new_lookup);
                         let td = new_ctx.locate_type(ut);
 
-                        let mut instance = Object::new(td, new_ctx);
+                        let mut instance = Object::new(td, &new_ctx);
 
                         // Arg is just a wrapper around a *mut c_void
                         let mut args: Vec<*mut c_void> = unsafe {

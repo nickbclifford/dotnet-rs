@@ -6,8 +6,8 @@ use crate::{
     value::{
         layout::*,
         string::{string_intrinsic_call, with_string, CLRString},
-        ConcreteType, Context, FieldDescription, GenericLookup, HeapStorage, MethodDescription,
-        Object, ObjectRef, StackValue,
+        ConcreteType, FieldDescription, GenericLookup, HeapStorage, MethodDescription, Object,
+        ObjectRef, StackValue,
     },
     vm::{intrinsics::reflection::runtime_type_intrinsic_call, CallStack, GCHandle, MethodInfo},
 };
@@ -43,7 +43,7 @@ fn ref_as_ptr(v: StackValue) -> *mut u8 {
 }
 
 pub fn span_to_slice<'gc, 'a>(span: Object<'gc>) -> &'a [u8] {
-    let mut ptr_data = [0u8; size_of::<usize>()];
+    let mut ptr_data = [0u8; ObjectRef::SIZE];
     let mut len_data = [0u8; size_of::<i32>()];
 
     ptr_data.copy_from_slice(span.instance_storage.get_field("_reference"));
@@ -75,7 +75,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
     }
     macro_rules! ctx {
         () => {
-            Context::with_generics(stack.current_context(), &generics)
+            &stack.current_context().with_generics(&generics)
         };
     }
 
@@ -112,9 +112,9 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             };
 
             let new_lookup = GenericLookup::new(type_generics);
-            let new_ctx = Context::with_generics(ctx!(), &new_lookup);
+            let new_ctx = ctx!().with_generics(&new_lookup);
 
-            let instance = Object::new(td, new_ctx.clone());
+            let instance = Object::new(td, &new_ctx);
 
             for m in &td.definition.methods {
                 if m.runtime_special_name
@@ -187,7 +187,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     .assemblies
                     .corlib_type("System.Runtime.CompilerServices.MethodTable");
                 let mt_ctx = stack.current_context().for_type(mt_type);
-                let layout = FieldLayoutManager::instance_fields(mt_type, mt_ctx.clone());
+                let layout = FieldLayoutManager::instance_fields(mt_type, &mt_ctx);
 
                 let mut data = vec![0u8; layout.total_size].into_boxed_slice();
 
@@ -267,11 +267,11 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let target_size = type_layout(target.clone(), ctx!()).size();
             expect_stack!(let ValueType(field_handle) = pop!());
 
-            let mut idx_buf = [0u8; size_of::<usize>()];
+            let mut idx_buf = [0u8; ObjectRef::SIZE];
             idx_buf.copy_from_slice(field_handle.instance_storage.get_field("_value"));
             let idx = usize::from_ne_bytes(idx_buf);
             let (FieldDescription { field, .. }, lookup) = &stack.runtime_fields[idx];
-            let field_type = Context::with_generics(ctx!(), lookup).make_concrete(&field.return_type);
+            let field_type = ctx!().with_generics(lookup).make_concrete(&field.return_type);
             let field_desc = stack.assemblies.find_concrete_type(field_type.clone());
 
             let Some(data) = &field.initial_value else { todo!("ArgumentException: field has no initial value") };
@@ -288,7 +288,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
                 let span = stack.assemblies.corlib_type("System.ReadOnlySpan`1");
                 let span_lookup = GenericLookup::new(vec![field_type]);
-                let mut instance = Object::new(span, Context::with_generics(ctx!(), &span_lookup));
+                let mut instance = Object::new(span, &ctx!().with_generics(&span_lookup));
                 instance.instance_storage.get_field_mut("_reference").copy_from_slice(&(data.as_ptr() as usize).to_ne_bytes());
                 instance.instance_storage.get_field_mut("_length").copy_from_slice(&((size / target_size) as i32).to_ne_bytes());
 
@@ -513,9 +513,9 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             let span_type = stack.assemblies.corlib_type("System.ReadOnlySpan`1");
             let new_lookup = GenericLookup::new(vec![ctx!().make_concrete(&BaseType::Char)]);
-            let ctx = Context::with_generics(ctx!(), &new_lookup);
+            let ctx = ctx!().with_generics(&new_lookup);
 
-            let mut span = Object::new(span_type, ctx);
+            let mut span = Object::new(span_type, &ctx);
 
             span.instance_storage.get_field_mut("_reference").copy_from_slice(&(ptr as usize).to_ne_bytes());
             span.instance_storage.get_field_mut("_length").copy_from_slice(&(len as i32).to_ne_bytes());

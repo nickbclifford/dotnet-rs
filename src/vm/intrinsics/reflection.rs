@@ -1,16 +1,13 @@
 use crate::{
     utils::decompose_type_source,
     value::{
-        string::CLRString, ConcreteType, Context, GenericLookup, HeapStorage, MethodDescription,
-        Object, ObjectRef, StackValue, TypeDescription, Vector,
+        string::CLRString, ConcreteType, GenericLookup, HeapStorage, MethodDescription, Object,
+        ObjectRef, ResolutionContext, StackValue, TypeDescription, Vector,
     },
     vm::{intrinsics::expect_stack, CallStack, GCHandle},
 };
 use dotnetdll::prelude::{BaseType, MethodType, TypeSource};
-use std::{
-    fmt::Debug,
-    hash::Hash,
-};
+use std::{fmt::Debug, hash::Hash};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum RuntimeType {
@@ -38,7 +35,9 @@ impl RuntimeType {
 impl From<RuntimeType> for ConcreteType {
     fn from(value: RuntimeType) -> Self {
         match value {
-            RuntimeType::Structure(res, base) => ConcreteType::new(res, base.map(|t| (*t).into())),
+            RuntimeType::Structure(res, base) => {
+                ConcreteType::new(res, base.map(|t| RuntimeType::into(*t)))
+            }
             rest => todo!("convert {rest:?} to ConcreteType"),
         }
     }
@@ -50,7 +49,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             return *obj;
         }
         let rt = self.assemblies.corlib_type("DotnetRs.RuntimeType");
-        let rt_obj = Object::new(rt, self.current_context());
+        let rt_obj = Object::new(rt, &self.current_context());
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
         self.register_new_object(&obj_ref);
 
@@ -69,18 +68,19 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> &RuntimeType {
         obj.as_object(|instance| {
-            let mut ct = [0u8; size_of::<usize>()];
+            let mut ct = [0u8; ObjectRef::SIZE];
             ct.copy_from_slice(instance.instance_storage.get_field("index"));
             let index = usize::from_ne_bytes(ct);
             &self.runtime_types_list[index]
         })
     }
 
-    pub fn make_runtime_type(&self, ctx: &Context, t: &MethodType) -> RuntimeType {
+    pub fn make_runtime_type(&self, ctx: &ResolutionContext, t: &MethodType) -> RuntimeType {
         match t {
-            MethodType::Base(b) => {
-                RuntimeType::Structure(ctx.resolution, b.clone().map(|t| Box::new(self.make_runtime_type(ctx, &t))))
-            }
+            MethodType::Base(b) => RuntimeType::Structure(
+                ctx.resolution,
+                b.clone().map(|t| Box::new(self.make_runtime_type(ctx, &t))),
+            ),
             MethodType::TypeGeneric(i) => RuntimeType::TypeParameter {
                 owner: ctx.type_owner.expect("missing type owner"),
                 index: *i as u16,
@@ -94,7 +94,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn get_handle_for_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> Object<'gc> {
         let rth = self.assemblies.corlib_type("System.RuntimeTypeHandle");
-        let mut instance = Object::new(rth, self.current_context());
+        let mut instance = Object::new(rth, &self.current_context());
         let handle_location = instance.instance_storage.get_field_mut("_value");
         self.get_runtime_type(gc, target).write(handle_location);
         instance
@@ -133,13 +133,10 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                         .iter()
                         .find(|a| a.type_name() == "DotnetRs.Assembly")
                         .unwrap();
-                    let mut asm_handle = Object::new(TypeDescription { resolution, definition }, Context {
-                        generics: &generics,
-                        assemblies: stack.assemblies,
-                        resolution,
-                        type_owner: None,
-                        method_owner: None,
-                    });
+                    let mut asm_handle = Object::new(
+                        TypeDescription { resolution, definition },
+                        &ResolutionContext::new(&generics, stack.assemblies, resolution),
+                    );
                     let data = (resolution.as_raw() as usize).to_ne_bytes();
                     asm_handle.instance_storage.get_field_mut("resolution").copy_from_slice(&data);
                     let v = ObjectRef::new(gc, HeapStorage::Obj(asm_handle));
@@ -184,7 +181,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 RuntimeType::TypeParameter { index, owner } => {
                      owner.definition.generic_parameters[*index as usize].name.to_string()
                 }
-                RuntimeType::MethodParameter { index, owner } => {
+                RuntimeType::MethodParameter { index, owner: _ } => {
                      // TODO: find where generic parameters are on Method
                      format!("!!{}", index)
                 }
@@ -252,11 +249,11 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
 
             let type_type_td = stack.assemblies.corlib_type("System.Type");
             let type_type = ConcreteType::from(type_type_td);
-            let mut vector = Vector::new(type_type, args.len(), stack.current_context());
+            let mut vector = Vector::new(type_type, args.len(), &stack.current_context());
             for (i, arg) in args.into_iter().enumerate() {
                 let rt = (*arg).clone();
                 let arg_obj = stack.get_runtime_type(gc, rt);
-                arg_obj.write(&mut vector.get_mut()[(i * size_of::<usize>())..]);
+                arg_obj.write(&mut vector.get_mut()[(i * ObjectRef::SIZE)..]);
             }
             push!(StackValue::ObjectRef(ObjectRef::new(gc, HeapStorage::Vec(vector))));
         }
@@ -264,7 +261,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             expect_stack!(let ObjectRef(obj) = pop!());
 
             let rth = stack.assemblies.corlib_type("System.RuntimeTypeHandle");
-            let mut instance = Object::new(rth, stack.current_context());
+            let mut instance = Object::new(rth, &stack.current_context());
             obj.write(instance.instance_storage.get_field_mut("_value"));
 
             push!(StackValue::ValueType(Box::new(instance)));
@@ -273,15 +270,15 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             expect_stack!(let ObjectRef(parameters) = pop!());
             expect_stack!(let ObjectRef(target) = pop!());
             let target_rt = stack.resolve_runtime_type(target);
-            
+
             if let RuntimeType::Structure(res, base) = target_rt {
                 if let BaseType::Type { source, value_kind } = base {
                      let (ut, _) = decompose_type_source(source);
-                     
+
                      let param_objs = parameters.as_vector(|v| {
                          let mut result = vec![];
                          for i in 0..v.layout.length {
-                             result.push(ObjectRef::read(&v.get()[(i * size_of::<usize>())..]));
+                             result.push(ObjectRef::read(&v.get()[(i * ObjectRef::SIZE)..]));
                          }
                          result
                      });
@@ -296,7 +293,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                          },
                          value_kind: *value_kind,
                      });
-                     
+
                      let rt_obj = stack.get_runtime_type(gc, new_rt);
                      push!(StackValue::ObjectRef(rt_obj));
                 } else {

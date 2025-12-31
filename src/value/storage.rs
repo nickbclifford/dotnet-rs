@@ -2,7 +2,7 @@ use crate::{
     utils::DebugStr,
     value::{
         layout::{FieldLayoutManager, HasLayout},
-        Context, MethodDescription, ObjectRef, TypeDescription,
+        MethodDescription, ObjectRef, ResolutionContext, TypeDescription,
     },
 };
 
@@ -71,11 +71,11 @@ impl FieldStorage<'_> {
         }
     }
 
-    pub fn instance_fields(description: TypeDescription, context: Context) -> Self {
+    pub fn instance_fields(description: TypeDescription, context: &ResolutionContext) -> Self {
         Self::new(FieldLayoutManager::instance_fields(description, context))
     }
 
-    pub fn static_fields(description: TypeDescription, context: Context) -> Self {
+    pub fn static_fields(description: TypeDescription, context: &ResolutionContext) -> Self {
         Self::new(FieldLayoutManager::static_fields(description, context))
     }
 
@@ -168,7 +168,7 @@ impl<'gc> StaticStorageManager<'gc> {
     pub fn init(
         &mut self,
         description: TypeDescription,
-        context: Context,
+        context: &ResolutionContext,
     ) -> Option<MethodDescription> {
         self.types
             .entry(description)

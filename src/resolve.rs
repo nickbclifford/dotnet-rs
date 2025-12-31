@@ -158,7 +158,11 @@ impl Assemblies {
             tried_mscorlib = true;
         }
 
-        if self.external.borrow().contains_key("System.Private.CoreLib") {
+        if self
+            .external
+            .borrow()
+            .contains_key("System.Private.CoreLib")
+        {
             let res = self.get_assembly("System.Private.CoreLib");
             if let Some(t) = self.try_find_in_assembly(res, name) {
                 return t;

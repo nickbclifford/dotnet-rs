@@ -1,6 +1,6 @@
 use crate::{
     resolve::Assemblies,
-    value::{Context, GenericLookup, MethodDescription},
+    value::{GenericLookup, MethodDescription, ResolutionContext},
 };
 
 use dotnetdll::prelude::*;
@@ -78,13 +78,7 @@ impl MethodInfo<'static> {
             None => todo!("cannot call method with empty body"),
         };
 
-        let ctx = Context {
-            generics,
-            assemblies,
-            resolution: method.resolution(),
-            type_owner: Some(method.parent),
-            method_owner: Some(method),
-        };
+        let ctx = ResolutionContext::for_method(method, assemblies, generics);
 
         Self {
             is_cctor: method.method.runtime_special_name
@@ -93,7 +87,7 @@ impl MethodInfo<'static> {
                 && method.method.signature.parameters.is_empty(),
             signature: &method.method.signature,
             locals: &body.header.local_variables,
-            exceptions: exceptions::parse(exceptions, ctx)
+            exceptions: exceptions::parse(exceptions, &ctx)
                 .into_iter()
                 .map(Rc::new)
                 .collect(),

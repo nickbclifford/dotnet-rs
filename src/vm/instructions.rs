@@ -3,8 +3,8 @@ use crate::{
     value::{
         layout::{type_layout, FieldLayoutManager, HasLayout},
         string::CLRString,
-        CTSValue, Context, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, Object,
-        ObjectRef, StackValue, TypeDescription, UnmanagedPtr, ValueType, Vector,
+        CTSValue, GenericLookup, HeapStorage, ManagedPtr, MethodDescription, Object, ObjectRef,
+        ResolutionContext, StackValue, TypeDescription, UnmanagedPtr, ValueType, Vector,
     },
     vm::{
         exceptions::{HandlerKind, ProtectedSection},
@@ -55,7 +55,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         description: TypeDescription,
         generics: GenericLookup,
     ) -> bool {
-        let ctx = Context {
+        let ctx = ResolutionContext {
             resolution: description.resolution,
             generics: &generics,
             assemblies: self.assemblies,
@@ -64,7 +64,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         };
         let value = {
             let mut statics = self.statics.borrow_mut();
-            statics.init(description, ctx.clone())
+            statics.init(description, &ctx)
         };
         if let Some(m) = value {
             super::msg!(
@@ -767,7 +767,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             LoadArgumentAddress(i) => {
                 let arg = self.get_argument(*i as usize);
-                let live_type = arg.contains_type(self.current_context());
+                let live_type = arg.contains_type(&self.current_context());
                 push!(managed_ptr(
                     self.get_argument_address(*i as usize) as *mut _,
                     live_type
@@ -833,7 +833,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             LoadLocalAddress(i) => {
                 let local = self.get_local(*i as usize);
-                let live_type = local.contains_type(self.current_context());
+                let live_type = local.contains_type(&self.current_context());
                 push!(managed_ptr(
                     self.get_local_address(*i as usize) as *mut _,
                     live_type
@@ -1106,7 +1106,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             CopyObject(_) => todo!("cpobj"),
             InitializeForObject(t) => {
                 let ctx = self.current_context();
-                let layout = type_layout(ctx.make_concrete(t), ctx);
+                let layout = type_layout(ctx.make_concrete(t), &ctx);
 
                 let target = match pop!() {
                     StackValue::ManagedPtr(m) => m.value,
@@ -1175,8 +1175,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     Int64 => 8,
                     Float32 => 4,
                     Float64 => 8,
-                    IntPtr => size_of::<usize>(),
-                    Object => ObjectRef::SIZE,
+                    IntPtr | Object => ObjectRef::SIZE,
                 };
 
                 let value = obj.as_vector(|array| {
@@ -1212,17 +1211,17 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 ..
             } => {
                 let parent = pop!();
-                let (field, lookup) = self.current_context().locate_field(*source);
+                let (field, lookup) = self.locate_field(*source);
 
                 check_special_fields!(field);
 
-                let ctx = Context::with_generics(self.current_context(), &lookup);
+                let ctx = self.ctx_with_generics(&lookup);
                 let name = &field.field.name;
                 let t = ctx.get_field_type(field);
 
                 let read_data = |d| CTSValue::read(&t, &ctx, d);
                 let read_from_pointer = |ptr: *mut u8| {
-                    let layout = FieldLayoutManager::instance_fields(field.parent, ctx.clone());
+                    let layout = FieldLayoutManager::instance_fields(field.parent, &ctx);
                     let field_layout = layout.fields.get(name.as_ref()).unwrap();
                     let slice = unsafe {
                         std::slice::from_raw_parts(
@@ -1276,10 +1275,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 push!(value.into_stack())
             }
             LoadFieldAddress(source) => {
-                let (field, lookup) = self.current_context().locate_field(*source);
+                let (field, lookup) = self.locate_field(*source);
                 let name = &field.field.name;
                 let parent = pop!();
-                let ctx = Context::with_generics(self.current_context(), &lookup);
+                let ctx = self.ctx_with_generics(&lookup);
 
                 let source_ptr = match parent {
                     StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
@@ -1309,7 +1308,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 };
 
                 let layout =
-                    FieldLayoutManager::instance_fields(field.parent, self.current_context());
+                    FieldLayoutManager::instance_fields(field.parent, &self.current_context());
                 let ptr =
                     unsafe { source_ptr.add(layout.fields.get(name.as_ref()).unwrap().position) };
 
@@ -1339,14 +1338,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 let ctx = self.current_context();
                 let load_type = ctx.make_concrete(load_type);
-                let layout = type_layout(load_type.clone(), ctx);
+                let layout = type_layout(load_type.clone(), &ctx);
                 let source = unsafe { std::slice::from_raw_parts(source_ptr, layout.size()) };
                 let value =
                     CTSValue::read(&load_type, &self.current_context(), source).into_stack();
                 push!(value);
             }
             LoadStaticField { param0: source, .. } => {
-                let (field, lookup) = self.current_context().locate_field(*source);
+                let (field, lookup) = self.locate_field(*source);
                 let name = &field.field.name;
 
                 if self.initialize_static_storage(gc, field.parent, lookup.clone()) {
@@ -1355,7 +1354,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 check_special_fields!(field);
 
-                let ctx = Context::with_generics(self.current_context(), &lookup);
+                let ctx = self.ctx_with_generics(&lookup);
                 let value = statics!(|s| {
                     let field_data = s.get(field.parent).get_field(name);
                     let t = ctx.make_concrete(&field.field.return_type);
@@ -1364,14 +1363,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 push!(value)
             }
             LoadStaticFieldAddress(source) => {
-                let (field, lookup) = self.current_context().locate_field(*source);
+                let (field, lookup) = self.locate_field(*source);
                 let name = &field.field.name;
 
                 if self.initialize_static_storage(gc, field.parent, lookup.clone()) {
                     return StepResult::InstructionStepped;
                 }
 
-                let ctx = Context::with_generics(self.current_context(), &lookup);
+                let ctx = self.ctx_with_generics(&lookup);
                 let field_type = ctx.get_field_desc(field);
                 let value = statics!(|s| {
                     let field_data = s.get(field.parent).get_field(name);
@@ -1399,7 +1398,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 };
 
                 let rfh = self.assemblies.corlib_type("System.RuntimeFieldHandle");
-                let mut instance = Object::new(rfh, self.current_context());
+                let mut instance = Object::new(rfh, &self.current_context());
                 instance
                     .instance_storage
                     .get_field_mut("_value")
@@ -1467,7 +1466,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                 }
 
-                let v = Vector::new(elem_type, length, ctx);
+                let v = Vector::new(elem_type, length, &ctx);
                 let o = ObjectRef::new(gc, HeapStorage::Vec(v));
                 self.register_new_object(&o);
                 push!(ObjectRef(o));
@@ -1475,7 +1474,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             NewObject(ctor) => {
                 let (mut method, lookup) = self.find_generic_method(&MethodSource::User(*ctor));
                 let parent = method.parent;
-                let new_ctx = Context::with_generics(self.current_context(), &lookup);
+                let new_ctx = self.ctx_with_generics(&lookup);
 
                 if let (None, Some(ts)) = (&method.method.body, &parent.definition.extends) {
                     let (ut, _) = decompose_type_source(ts);
@@ -1505,7 +1504,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         push!(NativeInt(i as isize));
                     }
                     _ => {
-                        let instance = Object::new(parent, new_ctx.clone());
+                        let instance = Object::new(parent, &new_ctx);
 
                         self.constructor_frame(
                             gc,
@@ -1523,7 +1522,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             Sizeof(t) => {
                 let ctx = self.current_context();
                 let target = ctx.make_concrete(t);
-                let layout = type_layout(target, ctx);
+                let layout = type_layout(target, &ctx);
                 push!(Int32(layout.size() as i32));
             }
             StoreElement { param0: source, .. } => {
@@ -1597,8 +1596,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     Int64 => 8,
                     Float32 => 4,
                     Float64 => 8,
-                    IntPtr => size_of::<usize>(),
-                    Object => ObjectRef::SIZE,
+                    IntPtr | Object => ObjectRef::SIZE,
                 };
                 data.truncate(elem_size);
 
@@ -1613,16 +1611,15 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let value = pop!();
                 let parent = pop!();
 
-                let ctx = self.current_context();
-                let (field, lookup) = ctx.locate_field(*source);
-                let ctx = Context::with_generics(ctx, &lookup);
+                let (field, lookup) = self.locate_field(*source);
+                let ctx = self.ctx_with_generics(&lookup);
 
                 let t = ctx.get_field_type(field);
                 let name = &field.field.name;
 
                 let write_data = |dest: &mut [u8]| CTSValue::new(&t, &ctx, value).write(dest);
                 let slice_from_pointer = |dest: *mut u8| {
-                    let layout = FieldLayoutManager::instance_fields(field.parent, ctx.clone());
+                    let layout = FieldLayoutManager::instance_fields(field.parent, &ctx);
                     let field_layout = layout.fields.get(name.as_ref()).unwrap();
                     unsafe {
                         std::slice::from_raw_parts_mut(
@@ -1669,7 +1666,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             StoreFieldSkipNullCheck(_) => todo!("no.nullcheck stfld"),
             StoreObject { .. } => todo!("stobj"),
             StoreStaticField { param0: source, .. } => {
-                let (field, lookup) = self.current_context().locate_field(*source);
+                let (field, lookup) = self.locate_field(*source);
                 let name = &field.field.name;
 
                 if self.initialize_static_storage(gc, field.parent, lookup.clone()) {
@@ -1677,7 +1674,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 }
 
                 let value = pop!();
-                let ctx = Context::with_generics(self.current_context(), &lookup);
+                let ctx = self.ctx_with_generics(&lookup);
                 statics!(|s| {
                     let field_data = s.get_mut(field.parent).get_field_mut(name);
                     let t = ctx.make_concrete(&field.field.return_type);
