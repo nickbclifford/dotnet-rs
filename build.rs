@@ -1,9 +1,9 @@
-use std::process::Command;
 use std::path::Path;
+use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=src/support/support.csproj");
-    
+
     fn watch_dir(dir: &Path) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let entry = entry.unwrap();
@@ -19,7 +19,7 @@ fn main() {
         }
     }
     watch_dir(Path::new("src/support"));
-    
+
     let status = Command::new("dotnet")
         .args(["build", "src/support/support.csproj", "-c", "Debug"])
         .status()
