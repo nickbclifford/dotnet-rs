@@ -114,3 +114,19 @@ fn run_fixtures() {
         }
     }
 }
+
+/// This test is intended for debugging purposes and is not part of the regular CI.
+/// It runs a "Hello, World!" program using the full .NET SDK libraries.
+/// To run this test, use:
+/// `cargo test hello_world -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn hello_world() {
+    let fixture_path = Path::new("tests/debug_fixtures/hello_world_0.cs");
+    let output_dir = Path::new("tests/bin/hello_world_0");
+    build_test(fixture_path, output_dir);
+
+    let dll_path = output_dir.join("SingleFile.dll");
+    let exit_code = run_test_dll(&dll_path);
+    assert_eq!(exit_code, 0);
+}
