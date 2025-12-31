@@ -12,7 +12,7 @@ pub struct Assemblies {
     stubs: HashMap<String, TypeDescription>,
 }
 
-const SUPPORT_LIBRARY: &[u8] = include_bytes!("support/bin/Debug/net9.0/support.dll");
+const SUPPORT_LIBRARY: &[u8] = include_bytes!("support/bin/Debug/net10.0/support.dll");
 pub const SUPPORT_ASSEMBLY: &str = "__dotnetrs_support";
 
 impl Assemblies {
