@@ -139,7 +139,15 @@ impl<'gc> StaticStorageManager<'gc> {
             types: HashMap::new(),
         }
     }
+}
 
+impl<'gc> Default for StaticStorageManager<'gc> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<'gc> StaticStorageManager<'gc> {
     pub fn get(&self, description: TypeDescription) -> &FieldStorage<'gc> {
         &self
             .types

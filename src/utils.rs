@@ -14,6 +14,9 @@ impl ResolutionS {
         self.0 as *const _
     }
 
+    /// # Safety
+    ///
+    /// The `data` slice must contain a valid pointer to a `Resolution<'static>` in native endianness.
     pub unsafe fn from_raw(data: &[u8]) -> Self {
         let mut res_data = [0u8; size_of::<usize>()];
         res_data.copy_from_slice(data);

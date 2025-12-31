@@ -362,7 +362,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         {
             let return_value = self.get_slot(handle);
             // since we popped the returning frame off, this now refers to the caller frame
-            self.push_stack(gc, return_value);
+            if !self.frames.is_empty() {
+                self.push_stack(gc, return_value);
+            } else {
+                self.set_slot_at(gc, 0, return_value);
+            }
         }
     }
 

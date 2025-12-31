@@ -6,24 +6,20 @@ use crate::{
     },
     vm::{intrinsics::expect_stack, CallStack, GCHandle},
 };
-use dotnetdll::prelude::{BaseType, MethodType, ResolvedDebug, TypeSource};
+use dotnetdll::prelude::{BaseType, MethodType};
 use std::{
     fmt::Debug,
     hash::{Hash, Hasher},
 };
 
-fn is_generic(t: &MethodType) -> bool {
-    match t {
-        MethodType::Base(b) => match &**b {
-            BaseType::Type { source, .. } => matches!(source, TypeSource::Generic { .. }),
-            BaseType::Array(t, ..)
-            | BaseType::Vector(_, t)
-            | BaseType::ValuePointer(_, Some(t)) => is_generic(t),
-            _ => false,
-        },
-        _ => true,
-    }
-}
+// TODO: it is becoming increasingly clear that just storing the type descriptor is not enough
+// we need to strictly differentiate between:
+// - generic type definitions
+// - generic type instantiations
+// - unassigned generic parameters
+// - concrete types
+// - nested types
+// see generic reflection guides https://learn.microsoft.com/en-us/dotnet/api/system.type.isgenerictype?view=net-9.0#remarks
 
 #[derive(Clone)]
 pub struct RuntimeType {
@@ -32,33 +28,19 @@ pub struct RuntimeType {
     pub generics: GenericLookup,
 }
 impl PartialEq for RuntimeType {
-    fn eq(&self, other: &Self) -> bool {
-        if is_generic(&self.target) || is_generic(&other.target) {
-            self.target == other.target
-                && self.source == other.source
-                && self.generics == other.generics
-        } else {
-            self.target == other.target
-        }
+    fn eq(&self, _other: &Self) -> bool {
+        todo!()
+    }
+}
+impl Hash for RuntimeType {
+    fn hash<H: Hasher>(&self, _state: &mut H) {
+        todo!()
     }
 }
 impl Eq for RuntimeType {}
-impl Hash for RuntimeType {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        if is_generic(&self.target) {
-            self.source.hash(state);
-            self.generics.hash(state);
-        }
-        self.target.hash(state);
-    }
-}
 impl Debug for RuntimeType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if is_generic(&self.target) {
-            write!(f, "{:?}{:?}", self.target, self.generics)
-        } else {
-            write!(f, "{}", self.target.show(self.source.resolution().0))
-        }
+    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        todo!()
     }
 }
 
@@ -250,6 +232,11 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                             params.push(param.try_into().unwrap());
                         });
                     }
+                    // TODO: concretize generics as much as possible, being mindful of open parameters
+                    // "a generic type that has unassigned type parameters,
+                    //  a type that is nested in a generic type definition or in an open constructed type
+                    //  or a generic type that has a type argument for which the ContainsGenericParameters property is true"
+                    // https://learn.microsoft.com/en-us/dotnet/api/system.type.isgenerictype?view=net-9.0
                     todo!("make RuntimeType for {name} with generics {params:?}");
                 }
                 _ => todo!("ArgumentException: cannot make generic type from {:?}", rt),

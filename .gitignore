@@ -5,3 +5,11 @@
 heap.txt
 stack.txt
 statics.txt
+
+# .NET artifacts
+bin/
+obj/
+!src/bin/
+
+# Junie
+.junie/

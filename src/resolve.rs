@@ -55,14 +55,19 @@ impl Assemblies {
                 if parent.type_name() == "DotnetRs.StubAttribute" {
                     let data = a.instantiation_data(&this, &*support_res).unwrap();
                     for n in data.named_args {
-                        if let NamedArg::Field("InPlaceOf", FixedArg::String(Some(target))) = n {
-                            this.stubs.insert(
-                                target.to_string(),
-                                TypeDescription {
-                                    resolution: ResolutionS(support_res),
-                                    definition: t,
-                                },
-                            );
+                        match n {
+                            NamedArg::Field(name, FixedArg::String(Some(target)))
+                                if name == "InPlaceOf" =>
+                            {
+                                this.stubs.insert(
+                                    target.to_string(),
+                                    TypeDescription {
+                                        resolution: ResolutionS(support_res),
+                                        definition: t,
+                                    },
+                                );
+                            }
+                            _ => {}
                         }
                     }
                 }

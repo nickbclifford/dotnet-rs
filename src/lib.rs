@@ -8,21 +8,25 @@ use clap::Parser;
 use dotnetdll::prelude::*;
 use std::process::ExitCode;
 
-mod resolve;
-mod utils;
-mod value;
-mod vm;
+pub mod resolve;
+pub mod utils;
+pub mod value;
+pub mod vm;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "My CLI tool")]
-struct Args {
+#[command(
+    author,
+    version,
+    about = "An experimental interpreter for the .NET runtime"
+)]
+pub struct Args {
     #[arg(short, long, value_name = "FOLDER")]
-    assemblies: String,
+    pub assemblies: String,
     #[arg(value_name = "DLL")]
-    entrypoint: String,
+    pub entrypoint: String,
 }
 
-fn main() -> ExitCode {
+pub fn run_cli() -> ExitCode {
     let args = Args::parse();
 
     let resolution = static_res_from_file(args.entrypoint);
