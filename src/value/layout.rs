@@ -50,6 +50,14 @@ impl LayoutManager {
             },
         }
     }
+
+    pub fn alignment(&self) -> usize {
+        match self {
+            LayoutManager::FieldLayoutManager(f) => f.alignment,
+            LayoutManager::ArrayLayoutManager(a) => a.element_layout.alignment(),
+            LayoutManager::Scalar(s) => s.alignment(),
+        }
+    }
 }
 
 fn align_up(value: usize, align: usize) -> usize {
@@ -76,6 +84,7 @@ impl FieldLayout {
 pub struct FieldLayoutManager {
     pub fields: HashMap<String, FieldLayout>,
     pub total_size: usize,
+    pub alignment: usize,
 }
 impl HasLayout for FieldLayoutManager {
     fn size(&self) -> usize {
@@ -89,6 +98,7 @@ impl FieldLayoutManager {
     ) -> Self {
         let mut mapping = HashMap::new();
         let total_size;
+        let mut max_alignment = 1;
 
         let fields: Vec<_> = fields.into_iter().collect();
 
@@ -97,91 +107,81 @@ impl FieldLayoutManager {
                 let mut offset = 0;
 
                 for (name, _, layout) in fields {
-                    let size = layout.size();
+                    let field_align = layout.alignment();
+                    max_alignment = max_alignment.max(field_align);
+
+                    let aligned_offset = align_up(offset, field_align);
                     mapping.insert(
                         name.to_string(),
                         FieldLayout {
-                            position: offset,
-                            layout,
+                            position: aligned_offset,
+                            layout: layout.clone(),
                         },
                     );
-                    offset += align_up(size, ObjectRef::SIZE);
+                    offset = aligned_offset + layout.size();
                 }
 
-                total_size = offset;
+                total_size = align_up(offset, max_alignment);
             }
-            Layout::Sequential(s) => match s {
-                None => {
-                    let mut offset = 0;
+            Layout::Sequential(s) => {
+                let (packing_size, class_size) = match s {
+                    None => (8, 0),
+                    Some(SequentialLayout {
+                        packing_size,
+                        class_size,
+                    }) => (if packing_size == 0 { 8 } else { packing_size }, class_size),
+                };
 
-                    for (name, _, layout) in fields {
-                        let size = layout.size();
-                        mapping.insert(
-                            name.to_string(),
-                            FieldLayout {
-                                position: offset,
-                                layout,
-                            },
-                        );
-                        offset += size;
-                    }
+                let mut offset = 0;
 
-                    total_size = offset;
+                for (name, _, layout) in fields {
+                    let field_align = layout.alignment().min(packing_size);
+                    max_alignment = max_alignment.max(field_align);
+
+                    let aligned_offset = align_up(offset, field_align);
+                    mapping.insert(
+                        name.to_string(),
+                        FieldLayout {
+                            position: aligned_offset,
+                            layout: layout.clone(),
+                        },
+                    );
+                    offset = aligned_offset + layout.size();
                 }
-                Some(SequentialLayout {
-                    mut packing_size,
-                    class_size,
-                }) => {
-                    if packing_size == 0 {
-                        packing_size = ObjectRef::SIZE;
-                    }
 
-                    let mut offset = 0;
-
-                    for (name, _, layout) in fields {
-                        let size = layout.size();
-                        let aligned_offset = align_up(offset, packing_size);
-                        mapping.insert(
-                            name.to_string(),
-                            FieldLayout {
-                                position: aligned_offset,
-                                layout,
-                            },
-                        );
-                        offset = aligned_offset + size;
-                    }
-
-                    total_size = align_up(offset, usize::max(packing_size, class_size));
-                }
-            },
+                total_size = align_up(offset, max_alignment).max(class_size);
+            }
             Layout::Explicit(e) => {
-                for (name, offset, layout) in fields {
-                    match offset {
+                let mut offset = 0;
+                for (name, o, layout) in fields {
+                    max_alignment = max_alignment.max(layout.alignment());
+                    match o {
                         None => panic!(
                             "explicit field layout requires all fields to have defined offsets"
                         ),
-                        Some(o) => mapping.insert(
-                            name.to_string(),
-                            FieldLayout {
-                                position: o,
-                                layout,
-                            },
-                        ),
+                        Some(o) => {
+                            mapping.insert(
+                                name.to_string(),
+                                FieldLayout {
+                                    position: o,
+                                    layout: layout.clone(),
+                                },
+                            );
+                            offset = offset.max(o + layout.size());
+                        }
                     };
                 }
                 total_size = match e {
-                    Some(ExplicitLayout { class_size }) => class_size,
-                    None => match mapping.values().max_by_key(|l| l.position) {
-                        None => 0,
-                        Some(FieldLayout { position, layout }) => position + layout.size(),
-                    },
-                }
+                    Some(ExplicitLayout { class_size }) => class_size.max(offset),
+                    None => offset,
+                };
             }
         }
 
         Self {
             fields: mapping,
             total_size,
+            alignment: max_alignment,
         }
     }
 
@@ -309,6 +309,11 @@ impl HasLayout for Scalar {
             Scalar::Float32 => 4,
             Scalar::Float64 => 8,
         }
+    }
+}
+impl Scalar {
+    pub fn alignment(&self) -> usize {
+        self.size()
     }
 }
 

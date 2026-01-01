@@ -48,7 +48,11 @@ pub fn is_intrinsic(method: MethodDescription, assemblies: &crate::resolve::Asse
         [System.String::GetHashCodeOrdinalIgnoreCase()],
         [static System.String::Concat(ReadOnlySpan<char>, ReadOnlySpan<char>, ReadOnlySpan<char>)],
         [static System.Runtime.CompilerServices.RuntimeHelpers::RunClassConstructor(System.RuntimeTypeHandle)],
-        [System.Type::get_TypeHandle()]
+        [System.Type::get_TypeHandle()],
+        [static System.Runtime.InteropServices.Marshal::SizeOf(System.Type)],
+        [static System.Runtime.InteropServices.Marshal::SizeOf<1>()],
+        [static System.Runtime.InteropServices.Marshal::OffsetOf(System.Type, string)],
+        [static System.Runtime.InteropServices.Marshal::OffsetOf<1>(string)]
     ) {
         return true;
     }
@@ -463,6 +467,58 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let value = unsafe { super::pinvoke::LAST_ERROR };
 
             push!(StackValue::Int32(value));
+        },
+        [static System.Runtime.InteropServices.Marshal::SizeOf(System.Type)] => {
+            let type_obj = match pop!() {
+                StackValue::ObjectRef(o) => o,
+                rest => panic!("Marshal.SizeOf(Type) called on non-object: {:?}", rest),
+            };
+            let runtime_type = stack.resolve_runtime_type(type_obj);
+            let concrete_type = runtime_type.to_concrete(stack.assemblies);
+            let layout = type_layout(concrete_type, ctx!());
+            push!(StackValue::Int32(layout.size() as i32));
+        },
+        [static System.Runtime.InteropServices.Marshal::SizeOf<1>()] => {
+            let concrete_type = generics.method_generics[0].clone();
+            let layout = type_layout(concrete_type, ctx!());
+            push!(StackValue::Int32(layout.size() as i32));
+        },
+        [static System.Runtime.InteropServices.Marshal::OffsetOf(System.Type, string)] => {
+            let field_name_val = pop!();
+            let type_obj = match pop!() {
+                StackValue::ObjectRef(o) => o,
+                rest => panic!("Marshal.OffsetOf(Type, string) called on non-object: {:?}", rest),
+            };
+            let field_name = with_string!(stack, gc, field_name_val, |s| s.as_string());
+            let runtime_type = stack.resolve_runtime_type(type_obj);
+            let concrete_type = runtime_type.to_concrete(stack.assemblies);
+            let layout = type_layout(concrete_type.clone(), ctx!());
+
+            if let LayoutManager::FieldLayoutManager(flm) = layout {
+                if let Some(field) = flm.fields.get(&field_name) {
+                    push!(StackValue::NativeInt(field.position as isize));
+                } else {
+                    panic!("Field {} not found in type {:?}", field_name, concrete_type);
+                }
+            } else {
+                panic!("Type {:?} does not have field layout", concrete_type);
+            }
+        },
+        [static System.Runtime.InteropServices.Marshal::OffsetOf<1>(string)] => {
+            let field_name_val = pop!();
+            let field_name = with_string!(stack, gc, field_name_val, |s| s.as_string());
+            let concrete_type = generics.method_generics[0].clone();
+            let layout = type_layout(concrete_type.clone(), ctx!());
+
+            if let LayoutManager::FieldLayoutManager(flm) = layout {
+                if let Some(field) = flm.fields.get(&field_name) {
+                    push!(StackValue::NativeInt(field.position as isize));
+                } else {
+                    panic!("Field {} not found in type {:?}", field_name, concrete_type);
+                }
+            } else {
+                panic!("Type {:?} does not have field layout", concrete_type);
+            }
         },
         [static System.Runtime.InteropServices.Marshal::SetLastPInvokeError(int)] => {
             vm_expect_stack!(let Int32(value) = pop!());
