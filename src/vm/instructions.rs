@@ -1260,7 +1260,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 check_special_fields!(field);
 
-                let ctx = self.ctx_with_generics(&lookup);
+                let ctx = self.current_context().for_type_with_generics(field.parent, &lookup);
                 let name = &field.field.name;
                 let t = ctx.get_field_type(field);
 
@@ -1323,7 +1323,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let (field, lookup) = self.locate_field(*source);
                 let name = &field.field.name;
                 let parent = pop!();
-                let ctx = self.ctx_with_generics(&lookup);
+                let ctx = self.current_context().for_type_with_generics(field.parent, &lookup);
 
                 let source_ptr = match parent {
                     StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
@@ -1393,8 +1393,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 }
 
                 check_special_fields!(field);
-
-                let ctx = self.ctx_with_generics(&lookup);
+                let ctx = self.current_context().for_type_with_generics(field.parent, &lookup);
                 let value = statics!(|s| {
                     let field_data = s.get(field.parent).get_field(name);
                     let t = ctx.make_concrete(&field.field.return_type);
@@ -1410,7 +1409,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     return StepResult::InstructionStepped;
                 }
 
-                let ctx = self.ctx_with_generics(&lookup);
+                let ctx = self.current_context().for_type_with_generics(field.parent, &lookup);
                 let field_type = ctx.get_field_desc(field);
                 let value = statics!(|s| {
                     let field_data = s.get(field.parent).get_field(name);
@@ -1499,7 +1498,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             NewObject(ctor) => {
                 let (mut method, lookup) = self.find_generic_method(&MethodSource::User(*ctor));
                 let parent = method.parent;
-                let new_ctx = self.ctx_with_generics(&lookup);
+                let new_ctx = self.current_context().for_type_with_generics(parent, &lookup);
 
                 if let (None, Some(ts)) = (&method.method.body, &parent.definition.extends) {
                     let (ut, _) = decompose_type_source(ts);
@@ -1637,7 +1636,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let parent = pop!();
 
                 let (field, lookup) = self.locate_field(*source);
-                let ctx = self.ctx_with_generics(&lookup);
+                let ctx = self.current_context().for_type_with_generics(field.parent, &lookup);
 
                 let t = ctx.get_field_type(field);
                 let name = &field.field.name;
@@ -1699,7 +1698,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 }
 
                 let value = pop!();
-                let ctx = self.ctx_with_generics(&lookup);
+                let ctx = self.current_context().for_type_with_generics(field.parent, &lookup);
                 statics!(|s| {
                     let field_data = s.get_mut(field.parent).get_field_mut(name);
                     let t = ctx.make_concrete(&field.field.return_type);

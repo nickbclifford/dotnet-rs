@@ -65,9 +65,17 @@ impl<'a> ResolutionContext<'a> {
     }
 
     pub fn for_type(&self, td: TypeDescription) -> ResolutionContext<'a> {
+        self.for_type_with_generics(td, self.generics)
+    }
+
+    pub fn for_type_with_generics(
+        &self,
+        td: TypeDescription,
+        generics: &'a GenericLookup,
+    ) -> ResolutionContext<'a> {
         ResolutionContext {
             resolution: td.resolution,
-            generics: self.generics,
+            generics,
             assemblies: self.assemblies,
             type_owner: Some(td),
             method_owner: None,

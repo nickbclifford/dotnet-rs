@@ -5,13 +5,41 @@ use crate::{
         ObjectRef, ResolutionContext, StackValue, TypeDescription, Vector,
     },
     vm::{CallStack, GCHandle},
+    resolve::Assemblies,
 };
 use dotnetdll::prelude::{BaseType, MethodType, TypeSource};
 use std::{fmt::Debug, hash::Hash};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct RuntimeMethodSignature;
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum RuntimeType {
-    Structure(crate::utils::ResolutionS, BaseType<Box<RuntimeType>>),
+    Void,
+    Boolean,
+    Char,
+    Int8,
+    UInt8,
+    Int16,
+    UInt16,
+    Int32,
+    UInt32,
+    Int64,
+    UInt64,
+    Float32,
+    Float64,
+    IntPtr,
+    UIntPtr,
+    Object,
+    String,
+    Type(TypeDescription),
+    Generic(TypeDescription, Vec<RuntimeType>),
+    Vector(Box<RuntimeType>),
+    Array(Box<RuntimeType>, u32),
+    Pointer(Box<RuntimeType>),
+    ByRef(Box<RuntimeType>),
+    ValuePointer(Box<RuntimeType>, bool),
+    FunctionPointer(RuntimeMethodSignature),
     TypeParameter {
         owner: TypeDescription,
         index: u16,
@@ -23,20 +51,151 @@ pub enum RuntimeType {
 }
 
 impl RuntimeType {
-    pub fn resolution(&self) -> crate::utils::ResolutionS {
+    pub fn resolution(&self, assemblies: &Assemblies) -> crate::utils::ResolutionS {
         match self {
-            RuntimeType::Structure(res, _) => *res,
+            RuntimeType::Void
+            | RuntimeType::Boolean
+            | RuntimeType::Char
+            | RuntimeType::Int8
+            | RuntimeType::UInt8
+            | RuntimeType::Int16
+            | RuntimeType::UInt16
+            | RuntimeType::Int32
+            | RuntimeType::UInt32
+            | RuntimeType::Int64
+            | RuntimeType::UInt64
+            | RuntimeType::Float32
+            | RuntimeType::Float64
+            | RuntimeType::IntPtr
+            | RuntimeType::UIntPtr
+            | RuntimeType::Object
+            | RuntimeType::String
+            | RuntimeType::Vector(_)
+            | RuntimeType::Array(_, _)
+            | RuntimeType::Pointer(_)
+            | RuntimeType::ByRef(_)
+            | RuntimeType::ValuePointer(_, _)
+            | RuntimeType::FunctionPointer(_) => assemblies.corlib_type("System.Object").resolution,
+            RuntimeType::Type(td) => td.resolution,
+            RuntimeType::Generic(td, _) => td.resolution,
             RuntimeType::TypeParameter { owner, .. } => owner.resolution,
             RuntimeType::MethodParameter { owner, .. } => owner.resolution(),
         }
     }
-}
 
-impl From<RuntimeType> for ConcreteType {
-    fn from(value: RuntimeType) -> Self {
-        match value {
-            RuntimeType::Structure(res, base) => {
-                ConcreteType::new(res, base.map(|t| RuntimeType::into(*t)))
+    pub fn get_name(&self) -> String {
+        match self {
+            RuntimeType::Void => "Void".to_string(),
+            RuntimeType::Boolean => "Boolean".to_string(),
+            RuntimeType::Char => "Char".to_string(),
+            RuntimeType::Int8 => "SByte".to_string(),
+            RuntimeType::UInt8 => "Byte".to_string(),
+            RuntimeType::Int16 => "Int16".to_string(),
+            RuntimeType::UInt16 => "UInt16".to_string(),
+            RuntimeType::Int32 => "Int32".to_string(),
+            RuntimeType::UInt32 => "UInt32".to_string(),
+            RuntimeType::Int64 => "Int64".to_string(),
+            RuntimeType::UInt64 => "UInt64".to_string(),
+            RuntimeType::Float32 => "Single".to_string(),
+            RuntimeType::Float64 => "Double".to_string(),
+            RuntimeType::IntPtr => "IntPtr".to_string(),
+            RuntimeType::UIntPtr => "UIntPtr".to_string(),
+            RuntimeType::Object => "Object".to_string(),
+            RuntimeType::String => "String".to_string(),
+            RuntimeType::Type(td) | RuntimeType::Generic(td, _) => td.definition.name.to_string(),
+            RuntimeType::Vector(t) => format!("{}[]", t.get_name()),
+            RuntimeType::Array(t, rank) => {
+                let commas = if *rank > 1 {
+                    ",".repeat(*rank as usize - 1)
+                } else {
+                    "".to_string()
+                };
+                format!("{}[{}]", t.get_name(), commas)
+            }
+            RuntimeType::Pointer(t) => format!("{}*", t.get_name()),
+            RuntimeType::ByRef(t) => format!("{}&", t.get_name()),
+            RuntimeType::ValuePointer(t, _) => format!("{}*", t.get_name()),
+            RuntimeType::TypeParameter { owner, index } => owner
+                .definition
+                .generic_parameters
+                .get(*index as usize)
+                .map(|p| p.name.to_string())
+                .unwrap_or_else(|| format!("!{}", index)),
+            RuntimeType::MethodParameter { index, .. } => format!("!!{}", index),
+            RuntimeType::FunctionPointer(_) => "method*".to_string(),
+        }
+    }
+
+    pub fn to_concrete(&self, assemblies: &Assemblies) -> ConcreteType {
+        let corlib_res = assemblies.corlib_type("System.Object").resolution;
+        match self {
+            RuntimeType::Void => ConcreteType::from(assemblies.corlib_type("System.Void")),
+            RuntimeType::Boolean => ConcreteType::new(corlib_res, BaseType::Boolean),
+            RuntimeType::Char => ConcreteType::new(corlib_res, BaseType::Char),
+            RuntimeType::Int8 => ConcreteType::new(corlib_res, BaseType::Int8),
+            RuntimeType::UInt8 => ConcreteType::new(corlib_res, BaseType::UInt8),
+            RuntimeType::Int16 => ConcreteType::new(corlib_res, BaseType::Int16),
+            RuntimeType::UInt16 => ConcreteType::new(corlib_res, BaseType::UInt16),
+            RuntimeType::Int32 => ConcreteType::new(corlib_res, BaseType::Int32),
+            RuntimeType::UInt32 => ConcreteType::new(corlib_res, BaseType::UInt32),
+            RuntimeType::Int64 => ConcreteType::new(corlib_res, BaseType::Int64),
+            RuntimeType::UInt64 => ConcreteType::new(corlib_res, BaseType::UInt64),
+            RuntimeType::Float32 => ConcreteType::new(corlib_res, BaseType::Float32),
+            RuntimeType::Float64 => ConcreteType::new(corlib_res, BaseType::Float64),
+            RuntimeType::IntPtr => ConcreteType::new(corlib_res, BaseType::IntPtr),
+            RuntimeType::UIntPtr => ConcreteType::new(corlib_res, BaseType::UIntPtr),
+            RuntimeType::Object => ConcreteType::new(corlib_res, BaseType::Object),
+            RuntimeType::String => ConcreteType::new(corlib_res, BaseType::String),
+            RuntimeType::Type(td) => ConcreteType::from(*td),
+            RuntimeType::Generic(td, args) => {
+                let index = td
+                    .resolution
+                    .0
+                    .type_definitions
+                    .iter()
+                    .position(|t| std::ptr::eq(t, td.definition))
+                    .unwrap();
+                let source = TypeSource::Generic {
+                    base: dotnetdll::prelude::UserType::Definition(
+                        td.resolution.0.type_definition_index(index).expect("invalid type definition"),
+                    ),
+                    parameters: args
+                        .iter()
+                        .map(|a| a.to_concrete(assemblies))
+                        .collect(),
+                };
+                ConcreteType::new(
+                    td.resolution,
+                    BaseType::Type {
+                        source,
+                        value_kind: None,
+                    },
+                )
+            }
+            RuntimeType::Vector(t) => {
+                ConcreteType::new(corlib_res, BaseType::Vector(vec![], t.to_concrete(assemblies)))
+            }
+            RuntimeType::Array(t, rank) => {
+                ConcreteType::new(
+                    corlib_res,
+                    BaseType::Array(
+                        t.to_concrete(assemblies),
+                        dotnetdll::binary::signature::encoded::ArrayShape {
+                            rank: *rank as usize,
+                            sizes: vec![],
+                            lower_bounds: vec![],
+                        },
+                    ),
+                )
+            }
+            RuntimeType::Pointer(t) | RuntimeType::ByRef(t) | RuntimeType::ValuePointer(t, _) => {
+                 ConcreteType::new(
+                    corlib_res,
+                    BaseType::ValuePointer(vec![], Some(t.to_concrete(assemblies))),
+                )
+            }
+            RuntimeType::FunctionPointer(_) => {
+                todo!("convert FunctionPointer to ConcreteType")
             }
             rest => todo!("convert {rest:?} to ConcreteType"),
         }
@@ -77,10 +236,54 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn make_runtime_type(&self, ctx: &ResolutionContext, t: &MethodType) -> RuntimeType {
         match t {
-            MethodType::Base(b) => RuntimeType::Structure(
-                ctx.resolution,
-                b.clone().map(|t| Box::new(self.make_runtime_type(ctx, &t))),
-            ),
+            MethodType::Base(b) => match &**b {
+                BaseType::Boolean => RuntimeType::Boolean,
+                BaseType::Char => RuntimeType::Char,
+                BaseType::Int8 => RuntimeType::Int8,
+                BaseType::UInt8 => RuntimeType::UInt8,
+                BaseType::Int16 => RuntimeType::Int16,
+                BaseType::UInt16 => RuntimeType::UInt16,
+                BaseType::Int32 => RuntimeType::Int32,
+                BaseType::UInt32 => RuntimeType::UInt32,
+                BaseType::Int64 => RuntimeType::Int64,
+                BaseType::UInt64 => RuntimeType::UInt64,
+                BaseType::Float32 => RuntimeType::Float32,
+                BaseType::Float64 => RuntimeType::Float64,
+                BaseType::IntPtr => RuntimeType::IntPtr,
+                BaseType::UIntPtr => RuntimeType::UIntPtr,
+                BaseType::Object => RuntimeType::Object,
+                BaseType::String => RuntimeType::String,
+                BaseType::Type { source, .. } => {
+                    let (ut, generics) = decompose_type_source(source);
+                    let td = ctx.locate_type(ut);
+                    if generics.is_empty() {
+                        RuntimeType::Type(td)
+                    } else {
+                        RuntimeType::Generic(
+                            td,
+                            generics
+                                .iter()
+                                .map(|g| self.make_runtime_type(ctx, g))
+                                .collect(),
+                        )
+                    }
+                }
+                BaseType::Vector(_, t) => {
+                    RuntimeType::Vector(Box::new(self.make_runtime_type(ctx, &t.clone())))
+                }
+                BaseType::Array(t, shape) => {
+                    RuntimeType::Array(Box::new(self.make_runtime_type(ctx, &t.clone())), shape.rank as u32)
+                }
+                BaseType::ValuePointer(_, t) => match t {
+                    Some(inner) => {
+                        RuntimeType::Pointer(Box::new(self.make_runtime_type(ctx, &inner.clone())))
+                    }
+                    None => RuntimeType::IntPtr,
+                },
+                BaseType::FunctionPointer(_sig) => {
+                    RuntimeType::FunctionPointer(RuntimeMethodSignature)
+                }
+            },
             MethodType::TypeGeneric(i) => RuntimeType::TypeParameter {
                 owner: ctx.type_owner.expect("missing type owner"),
                 index: *i as u16,
@@ -100,7 +303,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         instance
     }
 
-    pub fn get_runtime_method_index(&mut self, gc: GCHandle<'gc>, method: MethodDescription, lookup: GenericLookup) -> u16 {
+    pub fn get_runtime_method_index(&mut self, _gc: GCHandle<'gc>, method: MethodDescription, lookup: GenericLookup) -> u16 {
         let idx = match self
             .runtime_methods
             .iter()
@@ -139,7 +342,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             vm_expect_stack!(let ObjectRef(obj) = pop!());
 
             let target_type = stack.resolve_runtime_type(obj);
-            let resolution = target_type.resolution();
+            let resolution = target_type.resolution(stack.assemblies);
 
             let value = match stack.runtime_asms.get(&resolution) {
                 Some(o) => *o,
@@ -166,84 +369,42 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             match target_type {
-                RuntimeType::Structure(_, base) => {
-                    if let BaseType::Type { source, .. } = base {
-                        let (ut, _) = decompose_type_source(source);
-                        let td = stack.assemblies.locate_type(target_type.resolution(), ut);
-                        match td.definition.namespace.as_ref() {
-                            None => push!(StackValue::null()),
-                            Some(n) => push!(StackValue::string(gc, CLRString::from(n)))
-                        }
-                    } else {
-                        push!(StackValue::null())
+                RuntimeType::Type(td) | RuntimeType::Generic(td, _) => {
+                    match td.definition.namespace.as_ref() {
+                        None => push!(StackValue::null()),
+                        Some(n) => push!(StackValue::string(gc, CLRString::from(n))),
                     }
                 }
-                _ => push!(StackValue::null())
+                _ => push!(StackValue::string(gc, CLRString::from("System"))),
             }
         }
         "string DotnetRs.RuntimeType::GetName()" => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
-            let name = match target_type {
-                RuntimeType::Structure(_, base) => {
-                    match base {
-                        BaseType::Type { source, .. } => {
-                            let (ut, _) = decompose_type_source(source);
-                            ut.type_name(target_type.resolution().0).to_string()
-                        }
-                        b => format!("{:?}", b)
-                    }
-                }
-                RuntimeType::TypeParameter { index, owner } => {
-                     owner.definition.generic_parameters[*index as usize].name.to_string()
-                }
-                RuntimeType::MethodParameter { index, owner: _ } => {
-                     // TODO: find where generic parameters are on Method
-                     format!("!!{}", index)
-                }
-            };
-            push!(StackValue::string(gc, CLRString::from(name)));
+            push!(StackValue::string(gc, CLRString::from(target_type.get_name())));
         }
         "bool DotnetRs.RuntimeType::GetIsGenericType()" => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
-            let is_generic = match target_type {
-                RuntimeType::Structure(_, BaseType::Type { source, .. }) => {
-                    let (_, generics) = decompose_type_source(source);
-                    !generics.is_empty()
-                }
-                _ => false
-            };
+            let is_generic = matches!(target_type, RuntimeType::Generic(_, _));
             push!(StackValue::Int32(if is_generic { 1 } else { 0 }));
         }
         "System.Type DotnetRs.RuntimeType::GetGenericTypeDefinition()" => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             match target_type {
-                RuntimeType::Structure(res, base) => {
-                    if let BaseType::Type { source, value_kind } = base {
-                        let (ut, _) = decompose_type_source(source);
-                        let td = stack.assemblies.locate_type(*res, ut);
-                        let n_params = td.definition.generic_parameters.len();
-                        let mut params = Vec::with_capacity(n_params);
-                        for i in 0..n_params {
-                            params.push(Box::new(RuntimeType::TypeParameter {
-                                owner: td,
-                                index: i as u16,
-                            }));
-                        }
-                        let def_rt = RuntimeType::Structure(*res, BaseType::Type {
-                            source: TypeSource::Generic {
-                                base: ut,
-                                parameters: params,
-                            },
-                            value_kind: *value_kind,
+                RuntimeType::Generic(td, _) => {
+                    let n_params = td.definition.generic_parameters.len();
+                    let mut params = Vec::with_capacity(n_params);
+                    for i in 0..n_params {
+                        params.push(RuntimeType::TypeParameter {
+                            owner: *td,
+                            index: i as u16,
                         });
-                        let rt_obj = stack.get_runtime_type(gc, def_rt);
-                        push!(StackValue::ObjectRef(rt_obj));
-                    } else {
-                        todo!("InvalidOperationException: not a generic type")
                     }
+                    let def_rt = RuntimeType::Generic(*td, params);
+                    let rt_obj = stack.get_runtime_type(gc, def_rt);
+                    push!(StackValue::ObjectRef(rt_obj));
                 }
                 _ => todo!("InvalidOperationException: not a generic type")
             }
@@ -252,14 +413,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             let args = match target_type {
-                RuntimeType::Structure(_, base) => {
-                    if let BaseType::Type { source, .. } = base {
-                        let (_, generics) = decompose_type_source(source);
-                        generics
-                    } else {
-                        vec![]
-                    }
-                }
+                RuntimeType::Generic(_, args) => args.clone(),
                 _ => vec![]
             };
 
@@ -267,8 +421,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             let type_type = ConcreteType::from(type_type_td);
             let mut vector = Vector::new(type_type, args.len(), &stack.current_context());
             for (i, arg) in args.into_iter().enumerate() {
-                let rt = (*arg).clone();
-                let arg_obj = stack.get_runtime_type(gc, rt);
+                let arg_obj = stack.get_runtime_type(gc, arg);
                 arg_obj.write(&mut vector.get_mut()[(i * ObjectRef::SIZE)..]);
             }
             push!(StackValue::ObjectRef(ObjectRef::new(gc, HeapStorage::Vec(vector))));
@@ -287,36 +440,24 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             vm_expect_stack!(let ObjectRef(target) = pop!());
             let target_rt = stack.resolve_runtime_type(target);
 
-            if let RuntimeType::Structure(res, base) = target_rt {
-                if let BaseType::Type { source, value_kind } = base {
-                     let (ut, _) = decompose_type_source(source);
-
-                     let param_objs = parameters.as_vector(|v| {
-                         let mut result = vec![];
-                         for i in 0..v.layout.length {
-                             result.push(ObjectRef::read(&v.get()[(i * ObjectRef::SIZE)..]));
-                         }
-                         result
-                     });
-                     let mut new_generics = Vec::with_capacity(param_objs.len());
-                     for p_obj in param_objs {
-                         new_generics.push(Box::new(stack.resolve_runtime_type(p_obj).clone()));
+            if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_rt {
+                 let param_objs = parameters.as_vector(|v| {
+                     let mut result = vec![];
+                     for i in 0..v.layout.length {
+                         result.push(ObjectRef::read(&v.get()[(i * ObjectRef::SIZE)..]));
                      }
-                     let new_rt = RuntimeType::Structure(*res, BaseType::Type {
-                         source: TypeSource::Generic {
-                             base: ut,
-                             parameters: new_generics,
-                         },
-                         value_kind: *value_kind,
-                     });
+                     result
+                 });
+                 let mut new_generics = Vec::with_capacity(param_objs.len());
+                 for p_obj in param_objs {
+                     new_generics.push(stack.resolve_runtime_type(p_obj).clone());
+                 }
+                 let new_rt = RuntimeType::Generic(*td, new_generics);
 
-                     let rt_obj = stack.get_runtime_type(gc, new_rt);
-                     push!(StackValue::ObjectRef(rt_obj));
-                } else {
-                    todo!("MakeGenericType on non-type")
-                }
+                 let rt_obj = stack.get_runtime_type(gc, new_rt);
+                 push!(StackValue::ObjectRef(rt_obj));
             } else {
-                todo!("MakeGenericType on non-structure")
+                todo!("MakeGenericType on non-type")
             }
         }
         rest => todo!("reflection intrinsic {rest}"),

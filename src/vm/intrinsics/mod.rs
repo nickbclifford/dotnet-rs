@@ -7,10 +7,10 @@ use crate::{
         layout::*,
         string::{string_intrinsic_call, with_string, CLRString},
         ConcreteType, FieldDescription, GenericLookup, HeapStorage, MethodDescription, Object,
-        ObjectRef, StackValue,
+        ObjectRef, ResolutionContext, StackValue,
     },
     vm::{
-        intrinsics::reflection::{runtime_type_intrinsic_call, RuntimeType},
+        intrinsics::reflection::runtime_type_intrinsic_call,
         CallStack, GCHandle, MethodInfo,
     },
 };
@@ -55,9 +55,10 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             vm_msg!($($args)*)
         }
     }
+    let ctx = ResolutionContext::for_method(method, stack.assemblies, &generics);
     macro_rules! ctx {
         () => {
-            &stack.current_context().with_generics(&generics)
+            &ctx
         };
     }
 
@@ -233,7 +234,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             vm_expect_stack!(let ValueType(handle) = pop!());
             let rt = ObjectRef::read(handle.instance_storage.get_field("_value"));
             let target = stack.resolve_runtime_type(rt.expect_object_ref());
-            let target: ConcreteType = target.clone().into();
+            let target: ConcreteType = target.to_concrete(stack.assemblies);
             let target = stack.assemblies.find_concrete_type(target);
             if stack.initialize_static_storage(gc, target, generics) {
                 let second_to_last = stack.frames.len() - 2;
@@ -518,18 +519,10 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         "bool System.Type::get_IsValueType()" => {
             vm_expect_stack!(let ObjectRef(o) = pop!());
             let target = stack.resolve_runtime_type(o);
-            match target {
-                RuntimeType::Structure(_, _) => {
-                    let target: ConcreteType = target.clone().into();
-                    let target = stack.assemblies.find_concrete_type(target);
-
-                    let value = target.is_value_type(&ctx!());
-                    push!(StackValue::Int32(value as i32));
-                }
-                _ => {
-                    push!(StackValue::Int32(0));
-                }
-            }
+            let target_ct = target.to_concrete(stack.assemblies);
+            let target_desc = stack.assemblies.find_concrete_type(target_ct);
+            let value = target_desc.is_value_type(&ctx!());
+            push!(StackValue::Int32(value as i32));
         }
         "static bool System.Type::op_Equality(System.Type, System.Type)" => {
             vm_expect_stack!(let ObjectRef(o2) = pop!());
