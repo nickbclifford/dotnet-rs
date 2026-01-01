@@ -7,7 +7,7 @@ use crate::{
         ResolutionContext, StackValue, TypeDescription,
     },
     vm::{
-        exceptions::{Handler, ProtectedSection},
+        exceptions::ExceptionState,
         intrinsics::reflection::RuntimeType,
         pinvoke::NativeLibraries,
         MethodInfo, MethodState, StepResult,
@@ -20,11 +20,10 @@ use gc_arena::{
 };
 use std::{
     cell::RefCell,
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     fmt::Debug,
     fs::OpenOptions,
     io::Write,
-    rc::Rc,
 };
 
 type StackSlot = Rootable![Gc<'_, RefLock<StackValue<'_>>>];
@@ -35,7 +34,7 @@ pub struct StackSlotHandle(DynamicRoot<StackSlot>);
 
 pub struct CallStack<'gc, 'm> {
     roots: DynamicRootSet<'gc>,
-    stack: Vec<StackSlotHandle>,
+    pub stack: Vec<StackSlotHandle>,
     pub frames: Vec<StackFrame<'gc, 'm>>,
     pub assemblies: &'m Assemblies,
     pub statics: RefCell<StaticStorageManager<'gc>>,
@@ -48,7 +47,11 @@ pub struct CallStack<'gc, 'm> {
     pub runtime_fields: Vec<(FieldDescription, GenericLookup)>,
     pub runtime_field_objs: HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>,
     pub method_tables: RefCell<HashMap<TypeDescription, Box<[u8]>>>,
-    pub pending_exception: Option<ObjectRef<'gc>>,
+    pub exception_mode: ExceptionState<'gc>,
+    pub suspended_frames: Vec<StackFrame<'gc, 'm>>,
+    pub suspended_stack: Vec<StackSlotHandle>,
+    pub original_ip: usize,
+    pub original_stack_height: usize,
     // secretly ObjectHandles, not traced for GCing because these are for runtime debugging
     _all_objs: Vec<usize>,
 }
@@ -57,6 +60,12 @@ unsafe impl<'gc, 'm> Collect for CallStack<'gc, 'm> {
     fn trace(&self, cc: &Collection) {
         self.roots.trace(cc);
         self.statics.borrow_mut().trace(cc);
+        for f in &self.frames {
+            f.trace(cc);
+        }
+        for f in &self.suspended_frames {
+            f.trace(cc);
+        }
         for o in self.runtime_types.values() {
             o.trace(cc);
         }
@@ -66,7 +75,7 @@ unsafe impl<'gc, 'm> Collect for CallStack<'gc, 'm> {
         for o in self.runtime_field_objs.values() {
             o.trace(cc);
         }
-        self.pending_exception.trace(cc);
+        self.exception_mode.trace(cc);
     }
 }
 
@@ -76,12 +85,12 @@ pub struct StackFrame<'gc, 'm> {
     pub state: MethodState<'m>,
     pub generic_inst: GenericLookup,
     pub source_resolution: ResolutionS,
-    pub exception_value: Option<StackValue<'gc>>,
-    pub protected_sections: VecDeque<(Rc<ProtectedSection>, Vec<Handler>)>,
+    /// The exceptions currently being handled by catch blocks in this frame (required for rethrow).
+    pub exception_stack: Vec<ObjectRef<'gc>>,
 }
 unsafe impl<'gc, 'm> Collect for StackFrame<'gc, 'm> {
     fn trace(&self, cc: &Collection) {
-        self.exception_value.trace(cc);
+        self.exception_stack.trace(cc);
     }
 }
 impl<'gc, 'm> StackFrame<'gc, 'm> {
@@ -96,17 +105,16 @@ impl<'gc, 'm> StackFrame<'gc, 'm> {
             source_resolution: method.source.resolution(),
             state: MethodState::new(method),
             generic_inst,
-            exception_value: None,
-            protected_sections: VecDeque::new(),
+            exception_stack: Vec::new(),
         }
     }
 }
 
 #[derive(Debug)]
 pub struct BasePointer {
-    arguments: usize,
-    locals: usize,
-    stack: usize,
+    pub arguments: usize,
+    pub locals: usize,
+    pub stack: usize,
 }
 
 pub type GCArena = Arena<Rootable!['gc => CallStack<'gc, 'static>]>;
@@ -130,7 +138,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             runtime_fields: vec![],
             runtime_field_objs: HashMap::new(),
             method_tables: RefCell::new(HashMap::new()),
-            pending_exception: None,
+            exception_mode: ExceptionState::None,
+            suspended_frames: vec![],
+            suspended_stack: vec![],
+            original_ip: 0,
+            original_stack_height: 0,
             _all_objs: vec![],
         }
     }
@@ -225,9 +237,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         };
     }
 
-    fn mark_slot_available(&mut self, gc: GCHandle<'gc>, index: usize) {
-        self.set_slot(gc, &self.stack[index], StackValue::null());
-    }
 
     pub fn entrypoint_frame(
         &mut self,
@@ -369,24 +378,32 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         // and put the return value on the first slot (now open)
         let frame = self.frames.pop().unwrap();
 
-        for index in frame.base.arguments..frame.base.stack {
-            self.mark_slot_available(gc, index);
-        }
-
         let signature = frame.state.info_handle.signature;
 
         // only return value to caller if the method actually declares a return type
-        if let (ReturnType(_, Some(_)), Some(handle)) =
+        let return_value = if let (ReturnType(_, Some(_)), Some(handle)) =
             (&signature.return_type, self.stack.get(frame.base.stack))
         {
-            let return_value = self.get_slot(handle);
+            Some(self.get_slot(handle))
+        } else {
+            None
+        };
+
+        self.stack.truncate(frame.base.arguments);
+
+        if let Some(return_value) = return_value {
             // since we popped the returning frame off, this now refers to the caller frame
             if !self.frames.is_empty() {
                 self.push_stack(gc, return_value);
             } else {
-                self.set_slot_at(gc, 0, return_value);
+                self.insert_value(gc, return_value);
             }
         }
+    }
+
+    pub fn unwind_frame(&mut self, _gc: GCHandle<'gc>) {
+        let frame = self.frames.pop().expect("unwind_frame called with empty stack");
+        self.stack.truncate(frame.base.arguments);
     }
 
     pub fn current_frame(&self) -> &StackFrame<'gc, 'm> {
@@ -519,7 +536,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
         self.register_new_object(&obj_ref);
 
-        self.pending_exception = Some(obj_ref);
+        self.exception_mode = ExceptionState::Throwing(obj_ref);
         StepResult::MethodThrew
     }
 

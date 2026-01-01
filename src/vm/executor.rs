@@ -54,7 +54,9 @@ impl Executor {
                     }
                 }
                 StepResult::MethodThrew => {
-                    return ExecutorResult::Threw;
+                    if self.arena.mutate(|_, c| c.frames.is_empty()) {
+                        return ExecutorResult::Threw;
+                    }
                 }
                 StepResult::InstructionStepped => {}
             }

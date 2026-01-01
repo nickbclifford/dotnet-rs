@@ -1,4 +1,5 @@
 use std::{
+    cmp::Reverse,
     collections::HashMap,
     fmt::{Debug, Formatter},
     ops::Range,
@@ -6,9 +7,47 @@ use std::{
 
 use crate::{
     utils::DebugStr,
-    value::{ConcreteType, ResolutionContext},
+    value::{ConcreteType, ObjectRef, ResolutionContext},
 };
 use dotnetdll::prelude::*;
+use gc_arena::{unsafe_empty_collect, Collect};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HandlerAddress {
+    pub frame_index: usize,
+    pub section_index: usize,
+    pub handler_index: usize,
+}
+unsafe_empty_collect!(HandlerAddress);
+
+#[derive(Collect)]
+#[collect(no_drop)]
+pub enum ExceptionState<'gc> {
+    None,
+    Throwing(ObjectRef<'gc>),
+    Searching {
+        exception: ObjectRef<'gc>,
+        state: HandlerAddress,
+    },
+    Filtering {
+        exception: ObjectRef<'gc>,
+        state: HandlerAddress,
+    },
+    Unwinding {
+        exception: ObjectRef<'gc>,
+        target: HandlerAddress,
+        state: HandlerAddress,
+    },
+    ExecutingHandler {
+        exception: ObjectRef<'gc>,
+        target: HandlerAddress,
+        state: HandlerAddress,
+    },
+    Leaving {
+        target: usize,
+        state: HandlerAddress,
+    },
+}
 
 #[derive(Clone)]
 pub struct ProtectedSection {
@@ -88,6 +127,6 @@ pub fn parse<'a>(
             handlers: v,
         })
         .collect();
-    v.sort_by_key(|s| (s.instructions.start, s.instructions.end));
+    v.sort_by_key(|s| (Reverse(s.instructions.start), s.instructions.end));
     v
 }

@@ -8,14 +8,14 @@ use crate::{
         ResolutionContext, StackValue, TypeDescription, UnmanagedPtr, ValueType, Vector,
     },
     vm::{
-        exceptions::{HandlerKind, ProtectedSection},
+        exceptions::{ExceptionState, HandlerAddress, HandlerKind},
         intrinsics::*,
         CallStack, GCHandle, MethodInfo, StepResult,
     },
 };
 
 use dotnetdll::prelude::*;
-use std::{cmp::Ordering, rc::Rc};
+use std::cmp::Ordering;
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     fn find_generic_method(&self, source: &MethodSource) -> (MethodDescription, GenericLookup) {
@@ -78,7 +78,312 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
     }
 
+    fn handle_exception(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        match self.exception_mode {
+            ExceptionState::None => StepResult::InstructionStepped,
+            ExceptionState::Throwing(exception) => {
+                // Preempt any existing exception handling state (nested exceptions)
+                self.suspended_stack.clear();
+                self.suspended_frames.clear();
+
+                self.exception_mode = ExceptionState::Searching {
+                    exception,
+                    state: HandlerAddress {
+                        frame_index: self.frames.len() - 1,
+                        section_index: 0,
+                        handler_index: 0,
+                    },
+                };
+                self.handle_exception(gc)
+            }
+            ExceptionState::Searching { exception, state } => {
+                self.search_for_handler(gc, exception, state)
+            }
+            ExceptionState::Filtering { .. } => StepResult::InstructionStepped,
+            ExceptionState::ExecutingHandler { .. } => StepResult::InstructionStepped,
+            ExceptionState::Leaving { target, mut state } => {
+                let (ip, exceptions_count) = {
+                    let frame = &self.frames[state.frame_index];
+                    (frame.state.ip, frame.state.info_handle.exceptions.len())
+                };
+
+                for s_idx in state.section_index..exceptions_count {
+                    let (in_try, in_handler, handlers, section_instructions_contains_target) = {
+                        let section =
+                            &self.frames[state.frame_index].state.info_handle.exceptions[s_idx];
+                        let in_try = section.instructions.contains(&ip);
+                        let handlers = section.handlers.clone();
+                        let in_handler = handlers.iter().any(|h| h.instructions.contains(&ip));
+                        let section_instructions_contains_target =
+                            section.instructions.contains(&target);
+                        (
+                            in_try,
+                            in_handler,
+                            handlers,
+                            section_instructions_contains_target,
+                        )
+                    };
+
+                    if (in_try || in_handler) && !section_instructions_contains_target {
+                        for h_idx in state.handler_index..handlers.len() {
+                            let handler_kind = handlers[h_idx].kind.clone();
+                            let handler_start = handlers[h_idx].instructions.start;
+
+                            if handlers[h_idx].instructions.contains(&ip) {
+                                match handler_kind {
+                                    HandlerKind::Catch(_) | HandlerKind::Filter { .. } => {
+                                        self.frames[state.frame_index].exception_stack.pop();
+                                    }
+                                    _ => {}
+                                }
+                                continue;
+                            }
+
+                            if let HandlerKind::Finally = handler_kind {
+                                // Found a finally handler to run!
+                                let next_state = if h_idx + 1 < handlers.len() {
+                                    HandlerAddress {
+                                        frame_index: state.frame_index,
+                                        section_index: s_idx,
+                                        handler_index: h_idx + 1,
+                                    }
+                                } else {
+                                    HandlerAddress {
+                                        frame_index: state.frame_index,
+                                        section_index: s_idx + 1,
+                                        handler_index: 0,
+                                    }
+                                };
+
+                                self.exception_mode = ExceptionState::Leaving {
+                                    target,
+                                    state: next_state,
+                                };
+
+                                // Execute the handler
+                                let frame = &mut self.frames[state.frame_index];
+                                frame.state.ip = handler_start;
+                                frame.stack_height = 0;
+
+                                return StepResult::InstructionStepped;
+                            }
+                        }
+                    }
+                    state.handler_index = 0;
+                }
+
+                // We reached the target!
+                self.exception_mode = ExceptionState::None;
+                let frame = &mut self.frames[state.frame_index];
+                frame.state.ip = target;
+                frame.stack_height = 0;
+                StepResult::InstructionStepped
+            }
+            ExceptionState::Unwinding {
+                exception,
+                target,
+                mut state,
+            } => {
+                while state.frame_index >= target.frame_index {
+                    let (ip, exceptions_count) = {
+                        let frame = &self.frames[state.frame_index];
+                        (frame.state.ip, frame.state.info_handle.exceptions.len())
+                    };
+
+                    for s_idx in state.section_index..exceptions_count {
+                        let section =
+                            &self.frames[state.frame_index].state.info_handle.exceptions[s_idx];
+
+                        // If we are in the target frame, we only care about handlers that are more nested than the target.
+                        // Since they are sorted innermost-first, this means s_idx < target.section_index.
+                        if state.frame_index == target.frame_index && s_idx >= target.section_index
+                        {
+                            break;
+                        }
+
+                        if section.instructions.contains(&ip) {
+                            for h_idx in state.handler_index..section.handlers.len() {
+                                let handler_kind = section.handlers[h_idx].kind.clone();
+                                let handler_start = section.handlers[h_idx].instructions.start;
+                                match handler_kind {
+                                    HandlerKind::Finally | HandlerKind::Fault => {
+                                        // Found a finally/fault handler to run!
+                                        let next_state = if h_idx + 1 < section.handlers.len() {
+                                            HandlerAddress {
+                                                frame_index: state.frame_index,
+                                                section_index: s_idx,
+                                                handler_index: h_idx + 1,
+                                            }
+                                        } else {
+                                            HandlerAddress {
+                                                frame_index: state.frame_index,
+                                                section_index: s_idx + 1,
+                                                handler_index: 0,
+                                            }
+                                        };
+
+                                        self.exception_mode = ExceptionState::ExecutingHandler {
+                                            exception,
+                                            target,
+                                            state: next_state,
+                                        };
+
+                                        // Execute the handler
+                                        let frame = &mut self.frames[state.frame_index];
+                                        frame.state.ip = handler_start;
+                                        // ECMA-335, III.4.19: Fault/Finally handlers start with an empty stack.
+                                        // Wait, actually they don't have the exception on stack.
+                                        frame.stack_height = 0;
+
+                                        return StepResult::InstructionStepped;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        state.handler_index = 0;
+                    }
+
+                    if state.frame_index == target.frame_index {
+                        break;
+                    }
+
+                    // No more handlers in this frame, pop it and move to caller
+                    self.unwind_frame(gc);
+                    state.frame_index -= 1;
+                    state.section_index = 0;
+                    state.handler_index = 0;
+
+                    // Update IP for the next frame
+                    // Note: we don't increment IP because we want to stay at the call site or throw site.
+                }
+
+                // We reached the target!
+                self.exception_mode = ExceptionState::None;
+                let (handler_kind, handler_start) = {
+                    let section = &self.frames[target.frame_index].state.info_handle.exceptions
+                        [target.section_index];
+                    let handler = &section.handlers[target.handler_index];
+                    (handler.kind.clone(), handler.instructions.start)
+                };
+
+                let frame = &mut self.frames[target.frame_index];
+                frame.state.ip = handler_start;
+                frame.stack_height = 0;
+
+                match handler_kind {
+                    HandlerKind::Catch(_) | HandlerKind::Filter { .. } => {
+                        // Push exception for catch blocks
+                        frame.exception_stack.push(exception);
+                        vm_push!(self, gc, StackValue::ObjectRef(exception));
+                    }
+                    _ => unreachable!("Target handler must be catch or filter"),
+                }
+
+                StepResult::InstructionStepped
+            }
+        }
+    }
+
+    fn search_for_handler(
+        &mut self,
+        gc: GCHandle<'gc>,
+        exception: ObjectRef<'gc>,
+        mut state: HandlerAddress,
+    ) -> StepResult {
+        while state.frame_index < self.frames.len() {
+            let (ip, exceptions_count) = {
+                let frame = &self.frames[state.frame_index];
+                (frame.state.ip, frame.state.info_handle.exceptions.len())
+            };
+
+            for s_idx in state.section_index..exceptions_count {
+                let section = &self.frames[state.frame_index].state.info_handle.exceptions[s_idx];
+                if section.instructions.contains(&ip) {
+                    for h_idx in state.handler_index..section.handlers.len() {
+                        let kind = section.handlers[h_idx].kind.clone();
+                        match kind {
+                            HandlerKind::Catch(t) => {
+                                let exc_type = self.get_heap_description(exception.0.unwrap());
+                                let catch_type = self.assemblies.find_concrete_type(t.clone());
+                                if self.is_a(exc_type, catch_type) {
+                                    self.exception_mode = ExceptionState::Unwinding {
+                                        exception,
+                                        target: HandlerAddress {
+                                            frame_index: state.frame_index,
+                                            section_index: s_idx,
+                                            handler_index: h_idx,
+                                        },
+                                        state: HandlerAddress {
+                                            frame_index: self.frames.len() - 1,
+                                            section_index: 0,
+                                            handler_index: 0,
+                                        },
+                                    };
+                                    return StepResult::InstructionStepped;
+                                }
+                            }
+                            HandlerKind::Filter { clause_offset } => {
+                                let h_addr = HandlerAddress {
+                                    frame_index: state.frame_index,
+                                    section_index: s_idx,
+                                    handler_index: h_idx,
+                                };
+                                self.exception_mode = ExceptionState::Filtering {
+                                    exception,
+                                    state: h_addr,
+                                };
+
+                                // Suspend state
+                                let stack_base = self.frames[state.frame_index].base.stack;
+                                self.suspended_stack = self.stack.split_off(stack_base);
+                                self.suspended_frames =
+                                    self.frames.split_off(state.frame_index + 1);
+
+                                let frame = &mut self.frames[state.frame_index];
+                                self.original_ip = frame.state.ip;
+                                self.original_stack_height = frame.stack_height;
+
+                                frame.state.ip = clause_offset;
+                                frame.stack_height = 0;
+                                frame.exception_stack.push(exception);
+                                vm_push!(self, gc, StackValue::ObjectRef(exception));
+
+                                return StepResult::InstructionStepped;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                state.handler_index = 0;
+            }
+
+            if state.frame_index == 0 {
+                break;
+            }
+            state.frame_index -= 1;
+            state.section_index = 0;
+            state.handler_index = 0;
+        }
+
+        // No handler found - this will pop all frames in Executor
+        self.exception_mode = ExceptionState::None;
+        self.frames.clear();
+        self.stack.clear();
+        StepResult::MethodThrew
+    }
+
     pub fn step(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        if matches!(
+            self.exception_mode,
+            ExceptionState::Throwing(_)
+                | ExceptionState::Searching { .. }
+                | ExceptionState::Unwinding { .. }
+                | ExceptionState::Leaving { .. }
+        ) {
+            return self.handle_exception(gc);
+        }
+
         use Instruction::*;
         use NumberSign::*;
 
@@ -461,22 +766,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let ip = state!(|s| s.ip);
         let i_res = state!(|s| s.info_handle.source.resolution());
 
-        let sections = state!(|s| s.info_handle.exceptions.clone());
-        for ps in sections {
-            if ps.instructions.contains(&ip)
-                && !self
-                    .current_frame()
-                    .protected_sections
-                    .iter()
-                    .any(|(s, _)| Rc::ptr_eq(&ps, s))
-            {
-                let handlers = ps.handlers.clone();
-                self.current_frame_mut()
-                    .protected_sections
-                    .push_front((ps, handlers));
-            }
-        }
-
         vm_msg!(
             self,
             "[#{} | ip @ {}] {}",
@@ -762,8 +1051,73 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 push!(val.clone());
                 push!(val);
             }
-            EndFilter => todo!("endfilter"),
-            EndFinally => {} // is this actually a nop?
+            EndFilter => {
+                let result = pop!();
+                let result_val = match result {
+                    StackValue::Int32(i) => i,
+                    _ => panic!("EndFilter expected Int32, found {:?}", result),
+                };
+
+                let (exception, state) = match self.exception_mode {
+                    ExceptionState::Filtering { exception, state } => (exception, state),
+                    _ => panic!("EndFilter called but not in Filtering mode"),
+                };
+
+                // Restore suspended state
+                // Note: we use state.frame_index because the filter ran in that frame.
+                // It might have called other methods, but those should have returned by now.
+                self.stack
+                    .truncate(self.frames[state.frame_index].base.stack);
+                self.stack.append(&mut self.suspended_stack);
+                self.frames.append(&mut self.suspended_frames);
+
+                let frame = &mut self.frames[state.frame_index];
+                frame.exception_stack.pop();
+                frame.state.ip = self.original_ip;
+                frame.stack_height = self.original_stack_height;
+
+                if result_val != 0 {
+                    // Filter matched!
+                    self.exception_mode = ExceptionState::Unwinding {
+                        exception,
+                        target: state,
+                        state: HandlerAddress {
+                            frame_index: self.frames.len() - 1,
+                            section_index: 0,
+                            handler_index: 0,
+                        },
+                    };
+                } else {
+                    // Filter did not match, continue searching
+                    let mut next_state = state;
+                    next_state.handler_index += 1;
+                    self.exception_mode = ExceptionState::Searching {
+                        exception,
+                        state: next_state,
+                    };
+                }
+                return self.handle_exception(gc);
+            }
+            EndFinally => {
+                match self.exception_mode {
+                    ExceptionState::ExecutingHandler {
+                        exception,
+                        target,
+                        state,
+                    } => {
+                        self.exception_mode = ExceptionState::Unwinding {
+                            exception,
+                            target,
+                            state,
+                        };
+                        return self.handle_exception(gc);
+                    }
+                    ExceptionState::Leaving { .. } => {
+                        return self.handle_exception(gc);
+                    }
+                    _ => panic!("endfinally called outside of handler"),
+                }
+            }
             InitializeMemoryBlock { .. } => {
                 let size = match pop!() {
                     StackValue::Int32(i) => i as usize,
@@ -868,55 +1222,15 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             LoadNull => push!(null()),
             Leave(jump_target) => {
-                // this means we made it to the end of the try block
-
-                // NOTE this is mostly AI generated with a few manual tweaks
-
-                // in almost every case, this will only be one section
-                // however, it's possible to have nested finally blocks with no other instructions in between
-                // (if there were other instructions, the outer section would have another Leave at the end anyway)
-                let sections_to_leave = self
-                    .current_frame()
-                    .protected_sections
-                    .iter()
-                    .filter(|(s, _)| !s.instructions.contains(jump_target))
-                    .count();
-
-                let mut finally_handlers = Vec::new();
-                for (section, handlers) in self
-                    .current_frame_mut()
-                    .protected_sections
-                    .drain(..sections_to_leave)
-                {
-                    for handler in handlers {
-                        if let HandlerKind::Finally = handler.kind {
-                            finally_handlers.push((section.clone(), handler.clone()));
-                        }
-                    }
-                }
-
-                if finally_handlers.is_empty() {
-                    branch!(jump_target);
-                } else {
-                    // Execute finally handlers from innermost to outermost
-                    finally_handlers.reverse();
-
-                    // Take the first handler to execute
-                    let (_, first_handler) = finally_handlers.remove(0);
-
-                    if !finally_handlers.is_empty() {
-                        let leave_section = ProtectedSection {
-                            instructions: ip..*jump_target,
-                            handlers: finally_handlers.into_iter().map(|(_, h)| h).collect(),
-                        };
-
-                        self.current_frame_mut()
-                            .protected_sections
-                            .push_front((Rc::new(leave_section), Vec::new()));
-                    }
-
-                    branch!(&first_handler.instructions.start);
-                }
+                self.exception_mode = ExceptionState::Leaving {
+                    target: *jump_target,
+                    state: HandlerAddress {
+                        frame_index: self.frames.len() - 1,
+                        section_index: 0,
+                        handler_index: 0,
+                    },
+                };
+                return self.handle_exception(gc);
             }
             LocalMemoryAllocate => {
                 let size = match pop!() {
@@ -1562,7 +1876,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             ReadTypedReferenceType => todo!("refanytype"),
             ReadTypedReferenceValue(_) => todo!("refanyval"),
-            Rethrow => todo!("rethrow"),
+            Rethrow => {
+                let exception = self
+                    .current_frame()
+                    .exception_stack
+                    .last()
+                    .cloned()
+                    .expect("rethrow without active exception");
+                self.exception_mode = ExceptionState::Throwing(exception);
+                return self.handle_exception(gc);
+            }
             Sizeof(t) => {
                 let ctx = self.current_context();
                 let target = ctx.make_concrete(t);
@@ -1755,8 +2078,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 if exc.0.is_none() {
                     return self.throw_by_name(gc, "System.NullReferenceException");
                 }
-                self.pending_exception = Some(exc);
-                return StepResult::MethodThrew;
+                self.exception_mode = ExceptionState::Throwing(exc);
+                return self.handle_exception(gc);
             }
             UnboxIntoAddress { .. } => todo!("unbox"),
             UnboxIntoValue(_) => todo!("unbox.any"),
