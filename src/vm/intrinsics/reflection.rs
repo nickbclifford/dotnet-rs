@@ -1,4 +1,6 @@
 use crate::{
+    match_method,
+    resolve::Assemblies,
     utils::decompose_type_source,
     value::{
         string::CLRString, ConcreteType, FieldDescription, GenericLookup, HeapStorage,
@@ -6,14 +8,12 @@ use crate::{
         Vector,
     },
     vm::{CallStack, GCHandle, StepResult},
-    resolve::Assemblies,
 };
-use crate::match_method;
 use dotnetdll::prelude::{BaseType, MethodType, TypeSource};
 use std::{fmt::Debug, hash::Hash};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct RuntimeMethodSignature;
+pub struct RuntimeMethodSignature; // TODO
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum RuntimeType {
@@ -159,12 +159,12 @@ impl RuntimeType {
                     .unwrap();
                 let source = TypeSource::Generic {
                     base: dotnetdll::prelude::UserType::Definition(
-                        td.resolution.0.type_definition_index(index).expect("invalid type definition"),
+                        td.resolution
+                            .0
+                            .type_definition_index(index)
+                            .expect("invalid type definition"),
                     ),
-                    parameters: args
-                        .iter()
-                        .map(|a| a.to_concrete(assemblies))
-                        .collect(),
+                    parameters: args.iter().map(|a| a.to_concrete(assemblies)).collect(),
                 };
                 ConcreteType::new(
                     td.resolution,
@@ -174,24 +174,23 @@ impl RuntimeType {
                     },
                 )
             }
-            RuntimeType::Vector(t) => {
-                ConcreteType::new(corlib_res, BaseType::Vector(vec![], t.to_concrete(assemblies)))
-            }
-            RuntimeType::Array(t, rank) => {
-                ConcreteType::new(
-                    corlib_res,
-                    BaseType::Array(
-                        t.to_concrete(assemblies),
-                        dotnetdll::binary::signature::encoded::ArrayShape {
-                            rank: *rank as usize,
-                            sizes: vec![],
-                            lower_bounds: vec![],
-                        },
-                    ),
-                )
-            }
+            RuntimeType::Vector(t) => ConcreteType::new(
+                corlib_res,
+                BaseType::Vector(vec![], t.to_concrete(assemblies)),
+            ),
+            RuntimeType::Array(t, rank) => ConcreteType::new(
+                corlib_res,
+                BaseType::Array(
+                    t.to_concrete(assemblies),
+                    dotnetdll::binary::signature::encoded::ArrayShape {
+                        rank: *rank as usize,
+                        sizes: vec![],
+                        lower_bounds: vec![],
+                    },
+                ),
+            ),
             RuntimeType::Pointer(t) | RuntimeType::ByRef(t) | RuntimeType::ValuePointer(t, _) => {
-                 ConcreteType::new(
+                ConcreteType::new(
                     corlib_res,
                     BaseType::ValuePointer(vec![], Some(t.to_concrete(assemblies))),
                 )
@@ -235,7 +234,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         })
     }
 
-    pub fn resolve_runtime_method(&self, obj: ObjectRef<'gc>) -> &(MethodDescription, GenericLookup) {
+    pub fn resolve_runtime_method(
+        &self,
+        obj: ObjectRef<'gc>,
+    ) -> &(MethodDescription, GenericLookup) {
         obj.as_object(|instance| {
             let data = instance.instance_storage.get_field("index");
             let index = usize::from_ne_bytes(data.try_into().unwrap());
@@ -288,9 +290,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 BaseType::Vector(_, t) => {
                     RuntimeType::Vector(Box::new(self.make_runtime_type(ctx, &t.clone())))
                 }
-                BaseType::Array(t, shape) => {
-                    RuntimeType::Array(Box::new(self.make_runtime_type(ctx, &t.clone())), shape.rank as u32)
-                }
+                BaseType::Array(t, shape) => RuntimeType::Array(
+                    Box::new(self.make_runtime_type(ctx, &t.clone())),
+                    shape.rank as u32,
+                ),
                 BaseType::ValuePointer(_, t) => match t {
                     Some(inner) => {
                         RuntimeType::Pointer(Box::new(self.make_runtime_type(ctx, &inner.clone())))
@@ -320,7 +323,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         instance
     }
 
-    pub fn get_runtime_method_index(&mut self, _gc: GCHandle<'gc>, method: MethodDescription, lookup: GenericLookup) -> u16 {
+    pub fn get_runtime_method_index(
+        &mut self,
+        _gc: GCHandle<'gc>,
+        method: MethodDescription,
+        lookup: GenericLookup,
+    ) -> u16 {
         let idx = match self
             .runtime_methods
             .iter()
@@ -335,7 +343,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         idx as u16
     }
 
-    pub fn get_runtime_field_index(&mut self, _gc: GCHandle<'gc>, field: FieldDescription, lookup: GenericLookup) -> u16 {
+    pub fn get_runtime_field_index(
+        &mut self,
+        _gc: GCHandle<'gc>,
+        field: FieldDescription,
+        lookup: GenericLookup,
+    ) -> u16 {
         let idx = match self
             .runtime_fields
             .iter()
@@ -350,21 +363,30 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         idx as u16
     }
 
-    pub fn get_runtime_method_obj(&mut self, gc: GCHandle<'gc>, method: MethodDescription, lookup: GenericLookup) -> ObjectRef<'gc> {
+    pub fn get_runtime_method_obj(
+        &mut self,
+        gc: GCHandle<'gc>,
+        method: MethodDescription,
+        lookup: GenericLookup,
+    ) -> ObjectRef<'gc> {
         if let Some(obj) = self.runtime_method_objs.get(&(method, lookup.clone())) {
             return *obj;
         }
 
         let is_ctor = method.method.name == ".ctor" || method.method.name == ".cctor";
-        let class_name = if is_ctor { "DotnetRs.ConstructorInfo" } else { "DotnetRs.MethodInfo" };
-        
+        let class_name = if is_ctor {
+            "DotnetRs.ConstructorInfo"
+        } else {
+            "DotnetRs.MethodInfo"
+        };
+
         let rt = self.assemblies.corlib_type(class_name);
         let rt_obj = Object::new(rt, &self.current_context());
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
         self.register_new_object(&obj_ref);
 
         let index = self.get_runtime_method_index(gc, method, lookup.clone());
-        
+
         obj_ref.as_object_mut(gc, |instance| {
             instance
                 .instance_storage
@@ -376,7 +398,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         obj_ref
     }
 
-    pub fn get_runtime_field_obj(&mut self, gc: GCHandle<'gc>, field: FieldDescription, lookup: GenericLookup) -> ObjectRef<'gc> {
+    pub fn get_runtime_field_obj(
+        &mut self,
+        gc: GCHandle<'gc>,
+        field: FieldDescription,
+        lookup: GenericLookup,
+    ) -> ObjectRef<'gc> {
         if let Some(obj) = self.runtime_field_objs.get(&(field, lookup.clone())) {
             return *obj;
         }
@@ -387,7 +414,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.register_new_object(&obj_ref);
 
         let index = self.get_runtime_field_index(gc, field, lookup.clone());
-        
+
         obj_ref.as_object_mut(gc, |instance| {
             instance
                 .instance_storage
@@ -418,7 +445,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
     }
 
     match_method!(method, {
-        ["DotnetRs.RuntimeType"::GetAssembly()] => {
+        [DotnetRs.RuntimeType::GetAssembly()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
 
             let target_type = stack.resolve_runtime_type(obj);
@@ -446,7 +473,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             push!(StackValue::ObjectRef(value));
             Some(StepResult::InstructionStepped)
         },
-        ["DotnetRs.RuntimeType"::GetNamespace()] => {
+        [DotnetRs.RuntimeType::GetNamespace()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             match target_type {
@@ -460,20 +487,20 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             }
             Some(StepResult::InstructionStepped)
         },
-        ["DotnetRs.RuntimeType"::GetName()] => {
+        [DotnetRs.RuntimeType::GetName()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             push!(StackValue::string(gc, CLRString::from(target_type.get_name())));
             Some(StepResult::InstructionStepped)
         },
-        ["DotnetRs.RuntimeType"::GetIsGenericType()] => {
+        [DotnetRs.RuntimeType::GetIsGenericType()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             let is_generic = matches!(target_type, RuntimeType::Generic(_, _));
             push!(StackValue::Int32(if is_generic { 1 } else { 0 }));
             Some(StepResult::InstructionStepped)
         },
-        ["DotnetRs.RuntimeType"::GetGenericTypeDefinition()] => {
+        [DotnetRs.RuntimeType::GetGenericTypeDefinition()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             match target_type {
@@ -494,7 +521,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             }
             Some(StepResult::InstructionStepped)
         },
-        ["DotnetRs.RuntimeType"::GetGenericArguments()] => {
+        [DotnetRs.RuntimeType::GetGenericArguments()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             let args = match target_type {
@@ -512,7 +539,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             push!(StackValue::ObjectRef(ObjectRef::new(gc, HeapStorage::Vec(vector))));
             Some(StepResult::InstructionStepped)
         },
-        ["DotnetRs.RuntimeType"::GetTypeHandle()] => {
+        [DotnetRs.RuntimeType::GetTypeHandle()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
 
             let rth = stack.assemblies.corlib_type("System.RuntimeTypeHandle");
@@ -522,7 +549,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             push!(StackValue::ValueType(Box::new(instance)));
             Some(StepResult::InstructionStepped)
         },
-        ["DotnetRs.RuntimeType"::MakeGenericType(object[])] => {
+        [DotnetRs.RuntimeType::MakeGenericType(object[])] => {
             vm_expect_stack!(let ObjectRef(parameters) = pop!());
             vm_expect_stack!(let ObjectRef(target) = pop!());
             let target_rt = stack.resolve_runtime_type(target);
@@ -572,53 +599,54 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
     }
 
     match_method!(method, {
-        ["DotnetRs.MethodInfo"::GetName()] => {
+        [DotnetRs.MethodInfo::GetName()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (method, _) = stack.resolve_runtime_method(obj);
             push!(StackValue::string(gc, CLRString::from(&method.method.name)));
             Some(StepResult::InstructionStepped)
         },
-        ["DotnetRs.ConstructorInfo"::GetName()] => {
+        [DotnetRs.ConstructorInfo::GetName()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (method, _) = stack.resolve_runtime_method(obj);
             push!(StackValue::string(gc, CLRString::from(&method.method.name)));
             Some(StepResult::InstructionStepped)
         },
-        ["DotnetRs.MethodInfo"::GetDeclaringType()] => {
+        [DotnetRs.MethodInfo::GetDeclaringType()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (method, _) = stack.resolve_runtime_method(obj);
             let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(method.parent));
             push!(StackValue::ObjectRef(rt_obj));
             Some(StepResult::InstructionStepped)
         },
-        ["DotnetRs.ConstructorInfo"::GetDeclaringType()] => {
+        [DotnetRs.ConstructorInfo::GetDeclaringType()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (method, _) = stack.resolve_runtime_method(obj);
             let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(method.parent));
             push!(StackValue::ObjectRef(rt_obj));
             Some(StepResult::InstructionStepped)
         },
-        ["DotnetRs.MethodInfo"::GetMethodHandle()] => {
+        [DotnetRs.MethodInfo::GetMethodHandle()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
-            
+
             let rmh = stack.assemblies.corlib_type("System.RuntimeMethodHandle");
             let mut instance = Object::new(rmh, &stack.current_context());
             obj.write(instance.instance_storage.get_field_mut("_value"));
-            
+
             push!(StackValue::ValueType(Box::new(instance)));
             Some(StepResult::InstructionStepped)
         },
-        ["DotnetRs.ConstructorInfo"::GetMethodHandle()] => {
+        [DotnetRs.ConstructorInfo::GetMethodHandle()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
-            
+
             let rmh = stack.assemblies.corlib_type("System.RuntimeMethodHandle");
             let mut instance = Object::new(rmh, &stack.current_context());
             obj.write(instance.instance_storage.get_field_mut("_value"));
-            
+
             push!(StackValue::ValueType(Box::new(instance)));
             Some(StepResult::InstructionStepped)
         },
-    }).expect("unimplemented method info intrinsic");
+    })
+    .expect("unimplemented method info intrinsic");
 
     stack.increment_ip();
     StepResult::InstructionStepped
@@ -642,30 +670,31 @@ pub fn runtime_field_info_intrinsic_call<'gc, 'm: 'gc>(
     }
 
     match_method!(method, {
-        ["DotnetRs.FieldInfo"::GetName()] => {
+        [DotnetRs.FieldInfo::GetName()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (field, _) = stack.resolve_runtime_field(obj);
             push!(StackValue::string(gc, CLRString::from(&field.field.name)));
             Some(StepResult::InstructionStepped)
         },
-        ["DotnetRs.FieldInfo"::GetDeclaringType()] => {
+        [DotnetRs.FieldInfo::GetDeclaringType()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (field, _) = stack.resolve_runtime_field(obj);
             let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(field.parent));
             push!(StackValue::ObjectRef(rt_obj));
             Some(StepResult::InstructionStepped)
         },
-        ["DotnetRs.FieldInfo"::GetFieldHandle()] => {
+        [DotnetRs.FieldInfo::GetFieldHandle()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
-            
+
             let rfh = stack.assemblies.corlib_type("System.RuntimeFieldHandle");
             let mut instance = Object::new(rfh, &stack.current_context());
             obj.write(instance.instance_storage.get_field_mut("_value"));
-            
+
             push!(StackValue::ValueType(Box::new(instance)));
             Some(StepResult::InstructionStepped)
         },
-    }).expect("unimplemented field info intrinsic");
+    })
+    .expect("unimplemented field info intrinsic");
 
     stack.increment_ip();
     StepResult::InstructionStepped

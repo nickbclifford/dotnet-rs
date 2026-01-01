@@ -41,18 +41,18 @@ pub fn is_intrinsic(method: MethodDescription, assemblies: &crate::resolve::Asse
     }
 
     if any_match_method!(method,
-        [static "System.Environment"::GetEnvironmentVariableCore(string)],
-        ["System.String"::GetPinnableReference()],
-        ["System.String"::get_Length()],
-        ["System.String"::get_Chars(int)],
-        ["System.String"::GetRawStringData()],
-        ["System.String"::IndexOf(char)],
-        ["System.String"::IndexOf(char, int)],
-        ["System.String"::Substring(int)],
-        ["System.String"::GetHashCodeOrdinalIgnoreCase()],
-        [static "System.String"::Concat(ReadOnlySpan<char>, ReadOnlySpan<char>, ReadOnlySpan<char>)],
-        [static "System.Runtime.CompilerServices.RuntimeHelpers"::RunClassConstructor("System.RuntimeTypeHandle")],
-        ["System.Type"::get_TypeHandle()]
+        [static System.Environment::GetEnvironmentVariableCore(string)],
+        [System.String::GetPinnableReference()],
+        [System.String::get_Length()],
+        [System.String::get_Chars(int)],
+        [System.String::GetRawStringData()],
+        [System.String::IndexOf(char)],
+        [System.String::IndexOf(char, int)],
+        [System.String::Substring(int)],
+        [System.String::GetHashCodeOrdinalIgnoreCase()],
+        [static System.String::Concat(ReadOnlySpan<char>, ReadOnlySpan<char>, ReadOnlySpan<char>)],
+        [static System.Runtime.CompilerServices.RuntimeHelpers::RunClassConstructor(System.RuntimeTypeHandle)],
+        [System.Type::get_TypeHandle()]
     ) {
         return true;
     }
@@ -84,8 +84,8 @@ pub fn is_intrinsic_field(
     }
 
     if any_match_field!(field,
-        [static "System.IntPtr"::Zero],
-        [static "System.String"::Empty]
+        [static System.IntPtr::Zero],
+        [static System.String::Empty]
     ) {
         return true;
     }
@@ -159,7 +159,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
     }
 
     match_method!(method, {
-        [static "System.Activator"::CreateInstance<1>()] => {
+        [static System.Activator::CreateInstance<1>()] => {
             let target = &generics.method_generics[0];
 
             let mut type_generics = vec![];
@@ -211,14 +211,14 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             panic!("could not find a parameterless constructor in {:?}", td)
         },
-        [static "System.ArgumentNullException"::ThrowIfNull(object, string)] => {
+        [static System.ArgumentNullException::ThrowIfNull(object, string)] => {
             let _param_name = pop!();
             let target = pop!();
             if let StackValue::ObjectRef(ObjectRef(None)) = target {
                 return stack.throw_by_name(gc, "System.ArgumentNullException");
             }
         },
-        [static "System.Buffer"::Memmove<1>(ref !!0, ref !!0, nint)] => {
+        [static System.Buffer::Memmove<1>(ref !!0, ref !!0, nint)] => {
             vm_expect_stack!(let NativeInt(len) = pop!());
             let src = pop!().as_ptr();
             let dst = pop!().as_ptr();
@@ -231,7 +231,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 std::ptr::copy(src, dst, total_count);
             }
         },
-        [static "System.Runtime.CompilerServices.RuntimeHelpers"::GetMethodTable(object)] => {
+        [static System.Runtime.CompilerServices.RuntimeHelpers::GetMethodTable(object)] => {
             let obj = pop!();
             let object_type = match obj {
                 StackValue::ObjectRef(ObjectRef(Some(h))) => ctx!().get_heap_description(h),
@@ -272,7 +272,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 push!(StackValue::NativeInt(ptr as isize));
             }
         },
-        [static "System.Environment"::GetEnvironmentVariableCore(string)] => {
+        [static System.Environment::GetEnvironmentVariableCore(string)] => {
             let value = with_string!(stack, gc, pop!(), |s| {
                 std::env::var(s.as_string())
             });
@@ -298,12 +298,12 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             );
             return StepResult::InstructionStepped;
         },
-        [static "System.GC"::_SuppressFinalize(object)]
-        | [static "System.GC"::SuppressFinalizeInternal(object)] => {
+        [static System.GC::_SuppressFinalize(object)]
+        | [static System.GC::SuppressFinalizeInternal(object)] => {
             // TODO(gc): this object's finalizer should not be called
             let _obj = pop!();
         },
-        [static "System.MemoryExtensions"::Equals(ReadOnlySpan<char>, ReadOnlySpan<char>, "System.StringComparison")] => {
+        [static System.MemoryExtensions::Equals(ReadOnlySpan<char>, ReadOnlySpan<char>, System.StringComparison)] => {
             vm_expect_stack!(let Int32(_culture_comparison) = pop!()); // TODO(i18n): respect StringComparison rules
             vm_expect_stack!(let ValueType(b) = pop!());
             vm_expect_stack!(let ValueType(a) = pop!());
@@ -313,7 +313,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             push!(StackValue::Int32((a == b) as i32));
         },
-        [static "System.Runtime.CompilerServices.RuntimeHelpers"::RunClassConstructor("System.RuntimeTypeHandle")] => {
+        [static System.Runtime.CompilerServices.RuntimeHelpers::RunClassConstructor(System.RuntimeTypeHandle)] => {
             // https://github.com/dotnet/runtime/blob/main/src/libraries/System.Private.CoreLib/src/System/SR.cs#L78
             vm_expect_stack!(let ValueType(handle) = pop!());
             let rt = ObjectRef::read(handle.instance_storage.get_field("_value"));
@@ -329,7 +329,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 return StepResult::InstructionStepped;
             }
         },
-        [static "System.Runtime.CompilerServices.RuntimeHelpers"::CreateSpan<1>("System.RuntimeFieldHandle")] => {
+        [static System.Runtime.CompilerServices.RuntimeHelpers::CreateSpan<1>(System.RuntimeFieldHandle)] => {
             let target = &generics.method_generics[0];
             let target_size = type_layout(target.clone(), ctx!()).size();
             vm_expect_stack!(let ValueType(field_handle) = pop!());
@@ -364,7 +364,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 todo!("initial field data for {:?}", field_desc);
             }
         },
-        [static "System.Runtime.CompilerServices.RuntimeHelpers"::IsBitwiseEquatable<1>()] => {
+        [static System.Runtime.CompilerServices.RuntimeHelpers::IsBitwiseEquatable<1>()] => {
             let target = &generics.method_generics[0];
             let layout = type_layout(target.clone(), ctx!());
             let value = match layout {
@@ -374,38 +374,38 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             };
             push!(StackValue::Int32(value as i32));
         },
-        [static "System.Runtime.CompilerServices.RuntimeHelpers"::IsReferenceOrContainsReferences<1>()] => {
+        [static System.Runtime.CompilerServices.RuntimeHelpers::IsReferenceOrContainsReferences<1>()] => {
             let target = &generics.method_generics[0];
             let layout = type_layout(target.clone(), ctx!());
             push!(StackValue::Int32(layout.is_or_contains_refs() as i32));
         },
-        [static "System.Runtime.CompilerServices.Unsafe"::Add<1>(ref !!0, nint)] => {
+        [static System.Runtime.CompilerServices.Unsafe::Add<1>(ref !!0, nint)] => {
             let target_type = stack.assemblies.find_concrete_type(generics.method_generics[0].clone());
             vm_expect_stack!(let NativeInt(offset) = pop!());
             let m = pop!().as_ptr();
             push!(StackValue::managed_ptr(unsafe { m.offset(offset) }, target_type));
         },
-        [static "System.Runtime.CompilerServices.Unsafe"::AreSame<1>(ref !!0, ref !!0)] => {
+        [static System.Runtime.CompilerServices.Unsafe::AreSame<1>(ref !!0, ref !!0)] => {
             let m1 = pop!().as_ptr();
             let m2 = pop!().as_ptr();
             push!(StackValue::Int32((m1 == m2) as i32));
         },
-        [static "System.Runtime.CompilerServices.Unsafe"::As<2>(ref !!0)] => {
+        [static System.Runtime.CompilerServices.Unsafe::As<2>(ref !!0)] => {
             let target_type = stack.assemblies.find_concrete_type(generics.method_generics[1].clone());
             let m = pop!().as_ptr();
             push!(StackValue::managed_ptr(m, target_type));
         },
-        [static "System.Runtime.CompilerServices.Unsafe"::AsRef<1>(ref !!0)] => {
+        [static System.Runtime.CompilerServices.Unsafe::AsRef<1>(ref !!0)] => {
             // I think this is a noop since none of the types or locations are actually changing
         },
-        [static "System.Runtime.CompilerServices.Unsafe"::ByteOffset<1>(ref !!0, ref !!0)] => {
+        [static System.Runtime.CompilerServices.Unsafe::ByteOffset<1>(ref !!0, ref !!0)] => {
             let r = pop!().as_ptr();
             let l = pop!().as_ptr();
             let offset = (l as isize) - (r as isize);
             push!(StackValue::NativeInt(offset));
         },
-        [static "System.Runtime.CompilerServices.Unsafe"::ReadUnaligned<1>(nint)]
-        | [static "System.Runtime.CompilerServices.Unsafe"::ReadUnaligned<1>(* void)] => {
+        [static System.Runtime.CompilerServices.Unsafe::ReadUnaligned<1>(nint)]
+        | [static System.Runtime.CompilerServices.Unsafe::ReadUnaligned<1>(* void)] => {
             vm_expect_stack!(let NativeInt(ptr) = pop!());
             let target = &generics.method_generics[0];
             let layout = type_layout(target.clone(), ctx!());
@@ -433,7 +433,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             };
             push!(v);
         },
-        [static "System.Runtime.CompilerServices.Unsafe"::WriteUnaligned<1>(nint, !!0)] => {
+        [static System.Runtime.CompilerServices.Unsafe::WriteUnaligned<1>(nint, !!0)] => {
             // equivalent to unaligned.stobj
             let target = &generics.method_generics[0];
             let layout = type_layout(target.clone(), ctx!());
@@ -463,21 +463,21 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 _ => todo!("unsupported layout for write unaligned"),
             }
         },
-        [static "System.Runtime.InteropServices.Marshal"::GetLastPInvokeError()] => {
+        [static System.Runtime.InteropServices.Marshal::GetLastPInvokeError()] => {
             let value = unsafe { super::pinvoke::LAST_ERROR };
 
             push!(StackValue::Int32(value));
         },
-        [static "System.Runtime.InteropServices.Marshal"::SetLastPInvokeError(int)] => {
+        [static System.Runtime.InteropServices.Marshal::SetLastPInvokeError(int)] => {
             vm_expect_stack!(let Int32(value) = pop!());
 
             unsafe {
                 super::pinvoke::LAST_ERROR = value;
             }
         },
-        [static "System.Runtime.Intrinsics.Vector128"::get_IsHardwareAccelerated()]
-        | [static "System.Runtime.Intrinsics.Vector256"::get_IsHardwareAccelerated()]
-        | [static "System.Runtime.Intrinsics.Vector512"::get_IsHardwareAccelerated()] => {
+        [static System.Runtime.Intrinsics.Vector128::get_IsHardwareAccelerated()]
+        | [static System.Runtime.Intrinsics.Vector256::get_IsHardwareAccelerated()]
+        | [static System.Runtime.Intrinsics.Vector512::get_IsHardwareAccelerated()] => {
             // not in a million years, lol
             push!(StackValue::Int32(0));
         },
@@ -519,7 +519,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             };
             push!(StackValue::Int32(value));
         },
-        [static "System.Threading.Interlocked"::CompareExchange(ref int, int, int)] => {
+        [static System.Threading.Interlocked::CompareExchange(ref int, int, int)] => {
             use std::sync::atomic::{AtomicI32, Ordering};
 
             vm_expect_stack!(let Int32(comparand) = pop!());
@@ -538,11 +538,11 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             push!(StackValue::Int32(prev));
         },
-        [static "System.Threading.Monitor"::Exit(object)] => {
+        [static System.Threading.Monitor::Exit(object)] => {
             // TODO(threading): release mutex
             let _tag_object = pop!();
         },
-        [static "System.Threading.Monitor"::ReliableEnter(object, ref bool)] => {
+        [static System.Threading.Monitor::ReliableEnter(object, ref bool)] => {
             let success_flag = pop!().as_ptr();
 
             // TODO(threading): actually acquire mutex
@@ -553,12 +553,12 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 *success_flag = 1u8;
             }
         },
-        [static "System.Threading.Monitor"::TryEnter_FastPath(object)] => {
+        [static System.Threading.Monitor::TryEnter_FastPath(object)] => {
             let _obj = pop!();
             // TODO(threading): actually acquire mutex
             push!(StackValue::Int32(1));
         },
-        [static "System.Threading.Volatile"::Read<1>(ref !!0)] => {
+        [static System.Threading.Volatile::Read<1>(ref !!0)] => {
             // note that this method's signature restricts the generic to only reference types
             let ptr = pop!().as_ptr() as *const ObjectRef<'gc>;
 
@@ -566,7 +566,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             push!(StackValue::ObjectRef(value));
         },
-        [static "System.Threading.Volatile"::Write(ref bool, bool)] => {
+        [static System.Threading.Volatile::Write(ref bool, bool)] => {
             vm_expect_stack!(let Int32(value) = pop!());
             let as_bool = value as u8;
 
@@ -574,8 +574,8 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             unsafe { std::ptr::write_volatile(src, as_bool) };
         },
-        [static "System.String"::op_Implicit(string)]
-        | [static "System.MemoryExtensions"::AsSpan(string)] => {
+        [static System.String::op_Implicit(string)]
+        | [static System.MemoryExtensions::AsSpan(string)] => {
             let (ptr, len) = with_string!(stack, gc, pop!(), |s| (s.as_ptr(), s.len()));
 
             let span_type = stack.assemblies.corlib_type("System.ReadOnlySpan`1");
@@ -589,35 +589,35 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             push!(StackValue::ValueType(Box::new(span)));
         },
-        [static "System.Type"::GetTypeFromHandle("System.RuntimeTypeHandle")] => {
+        [static System.Type::GetTypeFromHandle(System.RuntimeTypeHandle)] => {
             vm_expect_stack!(let ValueType(handle) = pop!());
             let target = ObjectRef::read(handle.instance_storage.get_field("_value"));
             push!(StackValue::ObjectRef(target));
         },
-        [static "System.Reflection.MethodBase"::GetMethodFromHandle("System.RuntimeMethodHandle")] => {
+        [static System.Reflection.MethodBase::GetMethodFromHandle(System.RuntimeMethodHandle)] => {
             vm_expect_stack!(let ValueType(handle) = pop!());
             let target = ObjectRef::read(handle.instance_storage.get_field("_value"));
             push!(StackValue::ObjectRef(target));
         },
-        [static "System.Reflection.FieldInfo"::GetFieldFromHandle("System.RuntimeFieldHandle")] => {
+        [static System.Reflection.FieldInfo::GetFieldFromHandle(System.RuntimeFieldHandle)] => {
             vm_expect_stack!(let ValueType(handle) = pop!());
             let target = ObjectRef::read(handle.instance_storage.get_field("_value"));
             push!(StackValue::ObjectRef(target));
         },
-        [static "System.RuntimeTypeHandle"::ToIntPtr("System.RuntimeTypeHandle")] => {
+        [static System.RuntimeTypeHandle::ToIntPtr(System.RuntimeTypeHandle)] => {
             vm_expect_stack!(let ValueType(handle) = pop!());
             let target = handle.instance_storage.get_field("_value");
             let val = usize::from_ne_bytes(target.try_into().unwrap());
             push!(StackValue::NativeInt(val as isize));
         },
-        ["System.RuntimeMethodHandle"::GetFunctionPointer()] => {
+        [System.RuntimeMethodHandle::GetFunctionPointer()] => {
             vm_expect_stack!(let ValueType(handle) = pop!());
             let method_obj = ObjectRef::read(handle.instance_storage.get_field("_value"));
             let (method, lookup) = stack.resolve_runtime_method(method_obj);
             let index = stack.get_runtime_method_index(gc, *method, lookup.clone());
             push!(StackValue::NativeInt(index as isize));
         },
-        ["System.Type"::get_IsValueType()] => {
+        [System.Type::get_IsValueType()] => {
             vm_expect_stack!(let ObjectRef(o) = pop!());
             let target = stack.resolve_runtime_type(o);
             let target_ct = target.to_concrete(stack.assemblies);
@@ -625,12 +625,12 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let value = target_desc.is_value_type(&ctx!());
             push!(StackValue::Int32(value as i32));
         },
-        [static "System.Type"::op_Equality(any, any)] => {
+        [static System.Type::op_Equality(any, any)] => {
             vm_expect_stack!(let ObjectRef(o2) = pop!());
             vm_expect_stack!(let ObjectRef(o1) = pop!());
             push!(StackValue::Int32((o1 == o2) as i32));
         },
-        ["System.Type"::get_TypeHandle()] => {
+        [System.Type::get_TypeHandle()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
 
             let rth = stack.assemblies.corlib_type("System.RuntimeTypeHandle");
@@ -652,10 +652,10 @@ pub fn intrinsic_field<'gc, 'm: 'gc>(
     _type_generics: Vec<ConcreteType>,
 ) {
     match_field!(field, {
-        [static "System.IntPtr"::Zero] => {
+        [static System.IntPtr::Zero] => {
             stack.push_stack(gc, StackValue::NativeInt(0));
         },
-        [static "System.String"::Empty] => {
+        [static System.String::Empty] => {
             stack.push_stack(gc, StackValue::string(gc, CLRString::new(vec![])));
         },
     }).expect("unsupported load from intrinsic field");

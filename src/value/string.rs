@@ -82,14 +82,14 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
     }
 
     match_method!(method, {
-        [static "System.String"::Equals(string, string)] => {
+        [static System.String::Equals(string, string)] => {
             let b = string_op!(pop!(), |b| b.to_vec());
             let a = string_op!(pop!(), |a| a.to_vec());
 
             push!(StackValue::Int32(if a == b { 1 } else { 0 }));
             Some(StepResult::InstructionStepped)
         },
-        [static "System.String"::FastAllocateString(int)] => {
+        [static System.String::FastAllocateString(int)] => {
             let len = match pop!() {
                 StackValue::Int32(i) => i as usize,
                 rest => panic!("invalid length for FastAllocateString: {:?}", rest),
@@ -98,8 +98,8 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
             push!(StackValue::string(gc, value));
             Some(StepResult::InstructionStepped)
         },
-        [static "System.String"::FastAllocateString(
-            * "System.Runtime.CompilerServices.MethodTable",
+        [static System.String::FastAllocateString(
+            * System.Runtime.CompilerServices.MethodTable,
             nint
         )] => {
             let len = match pop!() {
@@ -111,13 +111,13 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
             push!(StackValue::string(gc, value));
             Some(StepResult::InstructionStepped)
         },
-        ["System.String"::get_Chars(int)] => {
+        [System.String::get_Chars(int)] => {
             vm_expect_stack!(let Int32(index) = pop!());
             let value = string_op!(pop!(), |s| s[index as usize]);
             push!(StackValue::Int32(value as i32));
             Some(StepResult::InstructionStepped)
         },
-        [static "System.String"::Concat(ReadOnlySpan<char>, ReadOnlySpan<char>, ReadOnlySpan<char>)] => {
+        [static System.String::Concat(ReadOnlySpan<char>, ReadOnlySpan<char>, ReadOnlySpan<char>)] => {
             vm_expect_stack!(let ValueType(span2) = pop!());
             vm_expect_stack!(let ValueType(span1) = pop!());
             vm_expect_stack!(let ValueType(span0) = pop!());
@@ -137,7 +137,7 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
             push!(StackValue::string(gc, value));
             Some(StepResult::InstructionStepped)
         },
-        ["System.String"::GetHashCodeOrdinalIgnoreCase()] => {
+        [System.String::GetHashCodeOrdinalIgnoreCase()] => {
             use std::hash::*;
 
             let mut h = DefaultHasher::new();
@@ -150,24 +150,24 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
             push!(StackValue::Int32(code as i32));
             Some(StepResult::InstructionStepped)
         },
-        ["System.String"::GetPinnableReference()] => {
+        [System.String::GetPinnableReference()] => {
             let ptr = string_op!(pop!(), |s| s.as_ptr() as *mut u8);
             let value = StackValue::managed_ptr(ptr, stack.assemblies.corlib_type("System.Char"));
             push!(value);
             Some(StepResult::InstructionStepped)
         },
-        ["System.String"::GetRawStringData()] => {
+        [System.String::GetRawStringData()] => {
             let ptr = string_op!(pop!(), |s| s.as_ptr() as *mut u8);
             let value = StackValue::managed_ptr(ptr, stack.assemblies.corlib_type("System.Char"));
             push!(value);
             Some(StepResult::InstructionStepped)
         },
-        ["System.String"::get_Length()] => {
+        [System.String::get_Length()] => {
             let len = string_op!(pop!(), |s| s.len());
             push!(StackValue::Int32(len as i32));
             Some(StepResult::InstructionStepped)
         },
-        ["System.String"::IndexOf(char)] => {
+        [System.String::IndexOf(char)] => {
             vm_expect_stack!(let Int32(c) = pop!());
             let c = c as u16;
             let index = string_op!(pop!(), |s| s.iter().position(|x| *x == c));
@@ -178,7 +178,7 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
             }));
             Some(StepResult::InstructionStepped)
         },
-        ["System.String"::IndexOf(char, int)] => {
+        [System.String::IndexOf(char, int)] => {
             vm_expect_stack!(let Int32(start_at) = pop!());
             vm_expect_stack!(let Int32(c) = pop!());
             let c = c as u16;
@@ -193,7 +193,7 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
             }));
             Some(StepResult::InstructionStepped)
         },
-        ["System.String"::Substring(int)] => {
+        [System.String::Substring(int)] => {
             vm_expect_stack!(let Int32(start_at) = pop!());
             let value = string_op!(pop!(), |s| s.split_at(start_at as usize).0.to_vec());
             push!(StackValue::string(gc, CLRString::new(value)));

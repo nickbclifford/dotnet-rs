@@ -126,112 +126,204 @@ macro_rules! parse_type {
     (any) => { $crate::vm::intrinsics::matcher::TypeMatcher::Any };
     (! ! $n:literal) => { $crate::vm::intrinsics::matcher::TypeMatcher::MethodGeneric($n) };
     ($t:ident [ ]) => { $crate::vm::intrinsics::matcher::TypeMatcher::Array(Box::new($crate::parse_type!($t))) };
+    ($($t:ident).+ [ ]) => { $crate::vm::intrinsics::matcher::TypeMatcher::Array(Box::new($crate::parse_type!($($t).+))) };
     (ReadOnlySpan < ! ! $n:literal >) => { $crate::vm::intrinsics::matcher::TypeMatcher::ReadOnlySpan(Box::new($crate::vm::intrinsics::matcher::TypeMatcher::MethodGeneric($n))) };
     (ReadOnlySpan < $t:ident >) => { $crate::vm::intrinsics::matcher::TypeMatcher::ReadOnlySpan(Box::new($crate::parse_type!($t))) };
+    (ReadOnlySpan < $($t:ident).+ >) => { $crate::vm::intrinsics::matcher::TypeMatcher::ReadOnlySpan(Box::new($crate::parse_type!($($t).+))) };
     (ref ! ! $n:literal) => { $crate::vm::intrinsics::matcher::TypeMatcher::ManagedPtr(Box::new($crate::vm::intrinsics::matcher::TypeMatcher::MethodGeneric($n))) };
     (ref $t:ident) => { $crate::vm::intrinsics::matcher::TypeMatcher::ManagedPtr(Box::new($crate::parse_type!($t))) };
+    (ref $($t:ident).+) => { $crate::vm::intrinsics::matcher::TypeMatcher::ManagedPtr(Box::new($crate::parse_type!($($t).+))) };
     (ref $name:literal) => { $crate::vm::intrinsics::matcher::TypeMatcher::ManagedPtr(Box::new($crate::vm::intrinsics::matcher::TypeMatcher::ValueType($name))) };
     (* ! ! $n:literal) => { $crate::vm::intrinsics::matcher::TypeMatcher::Pointer(Box::new($crate::vm::intrinsics::matcher::TypeMatcher::MethodGeneric($n))) };
     (* $t:ident) => { $crate::vm::intrinsics::matcher::TypeMatcher::Pointer(Box::new($crate::parse_type!($t))) };
+    (* $($t:ident).+) => { $crate::vm::intrinsics::matcher::TypeMatcher::Pointer(Box::new($crate::parse_type!($($t).+))) };
     (* $name:literal) => { $crate::vm::intrinsics::matcher::TypeMatcher::Pointer(Box::new($crate::vm::intrinsics::matcher::TypeMatcher::ValueType($name))) };
+    ($($t:ident).+) => { $crate::vm::intrinsics::matcher::TypeMatcher::ValueType(stringify!($($t).+)) };
     ($name:literal) => { $crate::vm::intrinsics::matcher::TypeMatcher::ValueType($name) };
     ($other:expr) => { $other };
 }
 
 #[macro_export]
-macro_rules! munch_types {
-    (@accum [ $($acc:expr,)* ] ) => {
+macro_rules! __munch_types {
+    ([ $($acc:expr,)* ] ) => {
         [ $($acc),* ]
     };
 
     // Comma
-    (@accum [ $($acc:expr,)* ] , $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* ] $($rest)*)
+    ([ $($acc:expr,)* ] , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* ] $($rest)*)
     };
 
     // ReadOnlySpan<T>
-    (@accum [ $($acc:expr,)* ] ReadOnlySpan < ! ! $n:literal > $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* $crate::parse_type!(ReadOnlySpan < ! ! $n >), ] $($rest)*)
+    ([ $($acc:expr,)* ] ReadOnlySpan < ! ! $n:literal > , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(ReadOnlySpan < ! ! $n >), ] $($rest)*)
     };
-    (@accum [ $($acc:expr,)* ] ReadOnlySpan < $t:ident > $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* $crate::parse_type!(ReadOnlySpan < $t >), ] $($rest)*)
+    ([ $($acc:expr,)* ] ReadOnlySpan < ! ! $n:literal >) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(ReadOnlySpan < ! ! $n >), ])
+    };
+    ([ $($acc:expr,)* ] ReadOnlySpan < $t:ident > , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(ReadOnlySpan < $t >), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] ReadOnlySpan < $t:ident >) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(ReadOnlySpan < $t >), ])
+    };
+    ([ $($acc:expr,)* ] ReadOnlySpan < $($t:ident).+ > , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(ReadOnlySpan < $($t).+ >), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] ReadOnlySpan < $($t:ident).+ >) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(ReadOnlySpan < $($t).+ >), ])
     };
 
     // ref T
-    (@accum [ $($acc:expr,)* ] ref ! ! $n:literal $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* $crate::parse_type!(ref ! ! $n), ] $($rest)*)
+    ([ $($acc:expr,)* ] ref ! ! $n:literal , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(ref ! ! $n), ] $($rest)*)
     };
-    (@accum [ $($acc:expr,)* ] ref $t:ident $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* $crate::parse_type!(ref $t), ] $($rest)*)
+    ([ $($acc:expr,)* ] ref ! ! $n:literal) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(ref ! ! $n), ])
     };
-    (@accum [ $($acc:expr,)* ] ref $t:literal $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* $crate::parse_type!(ref $t), ] $($rest)*)
+    ([ $($acc:expr,)* ] ref $t:ident , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(ref $t), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] ref $t:ident) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(ref $t), ])
+    };
+    ([ $($acc:expr,)* ] ref $($t:ident).+ , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(ref $($t).+), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] ref $($t:ident).+) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(ref $($t).+), ])
+    };
+    ([ $($acc:expr,)* ] ref $t:literal , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(ref $t), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] ref $t:literal) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(ref $t), ])
     };
 
     // * T
-    (@accum [ $($acc:expr,)* ] * ! ! $n:literal $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* $crate::parse_type!(* ! ! $n), ] $($rest)*)
+    ([ $($acc:expr,)* ] * ! ! $n:literal , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(* ! ! $n), ] $($rest)*)
     };
-    (@accum [ $($acc:expr,)* ] * $t:ident $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* $crate::parse_type!(* $t), ] $($rest)*)
+    ([ $($acc:expr,)* ] * ! ! $n:literal) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(* ! ! $n), ])
     };
-    (@accum [ $($acc:expr,)* ] * $t:literal $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* $crate::parse_type!(* $t), ] $($rest)*)
+    ([ $($acc:expr,)* ] * $t:ident , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(* $t), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] * $t:ident) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(* $t), ])
+    };
+    ([ $($acc:expr,)* ] * $($t:ident).+ , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(* $($t).+), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] * $($t:ident).+) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(* $($t).+), ])
+    };
+    ([ $($acc:expr,)* ] * $t:literal , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(* $t), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] * $t:literal) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(* $t), ])
     };
 
     // !!N
-    (@accum [ $($acc:expr,)* ] ! ! $n:literal $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* $crate::parse_type!(! ! $n), ] $($rest)*)
+    ([ $($acc:expr,)* ] ! ! $n:literal $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(! ! $n), ] $($rest)*)
     };
 
     // Array T[]
-    (@accum [ $($acc:expr,)* ] $t:ident [ ] $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* $crate::parse_type!($t [ ]), ] $($rest)*)
+    ([ $($acc:expr,)* ] $t:ident [ ] , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!($t [ ]), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] $t:ident [ ]) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!($t [ ]), ])
+    };
+    ([ $($acc:expr,)* ] $($t:ident).+ [ ] , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!($($t).+ [ ]), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] $($t:ident).+ [ ]) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!($($t).+ [ ]), ])
     };
 
     // Primitives and idents
-    (@accum [ $($acc:expr,)* ] string $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* $crate::parse_type!(string), ] $($rest)*)
+    ([ $($acc:expr,)* ] string , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(string), ] $($rest)*)
     };
-    (@accum [ $($acc:expr,)* ] int $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* $crate::parse_type!(int), ] $($rest)*)
+    ([ $($acc:expr,)* ] string) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(string), ])
     };
-    (@accum [ $($acc:expr,)* ] nint $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* $crate::parse_type!(nint), ] $($rest)*)
+    ([ $($acc:expr,)* ] int , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(int), ] $($rest)*)
     };
-    (@accum [ $($acc:expr,)* ] object $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* $crate::parse_type!(object), ] $($rest)*)
+    ([ $($acc:expr,)* ] int) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(int), ])
     };
-    (@accum [ $($acc:expr,)* ] bool $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* $crate::parse_type!(bool), ] $($rest)*)
+    ([ $($acc:expr,)* ] nint , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(nint), ] $($rest)*)
     };
-    (@accum [ $($acc:expr,)* ] char $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* $crate::parse_type!(char), ] $($rest)*)
+    ([ $($acc:expr,)* ] nint) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(nint), ])
     };
-    (@accum [ $($acc:expr,)* ] void $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* $crate::parse_type!(void), ] $($rest)*)
+    ([ $($acc:expr,)* ] object , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(object), ] $($rest)*)
     };
-    (@accum [ $($acc:expr,)* ] any $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* $crate::parse_type!(any), ] $($rest)*)
+    ([ $($acc:expr,)* ] object) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(object), ])
+    };
+    ([ $($acc:expr,)* ] bool , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(bool), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] bool) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(bool), ])
+    };
+    ([ $($acc:expr,)* ] char , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(char), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] char) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(char), ])
+    };
+    ([ $($acc:expr,)* ] void , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(void), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] void) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(void), ])
+    };
+    ([ $($acc:expr,)* ] any , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(any), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] any) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(any), ])
     };
 
     // Literal type names
-    (@accum [ $($acc:expr,)* ] $t:literal $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* $crate::parse_type!($t), ] $($rest)*)
+    ([ $($acc:expr,)* ] $t:literal , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!($t), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] $t:literal) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!($t), ])
+    };
+
+    // Non-quoted type names
+    ([ $($acc:expr,)* ] $($t:ident).+ , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!($($t).+), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] $($t:ident).+) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!($($t).+), ])
     };
 
     // Fallback for expressions
-    (@accum [ $($acc:expr,)* ] $t:expr) => {
-        $crate::munch_types!(@accum [ $($acc,)* $t, ] )
+    ([ $($acc:expr,)* ] $t:expr) => {
+        $crate::__munch_types!([ $($acc,)* $t, ] )
     };
-    (@accum [ $($acc:expr,)* ] $t:expr , $($rest:tt)*) => {
-        $crate::munch_types!(@accum [ $($acc,)* $t, ] , $($rest)*)
+    ([ $($acc:expr,)* ] $t:expr , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $t, ] , $($rest)*)
     };
 }
 
 #[macro_export]
 macro_rules! match_method {
     ($method:expr, { $( [ $($rule:tt)+ ] $(| [ $($rule_or:tt)+ ] )* => $body:expr ),* $(,)? }) => {
+        #[allow(unreachable_code)]
         $(
             if $crate::match_method!($method, $($rule)+) $( || $crate::match_method!($method, $($rule_or)+) )* {
                 Some({ $body })
@@ -240,13 +332,94 @@ macro_rules! match_method {
             None
         }
     };
+    ($method:expr, static $($type:ident).+ :: $name:ident < $generic_params:tt > ( $($param:tt)* )) => {
+        $crate::vm::intrinsics::matcher::matches_method(
+            $method,
+            true,
+            stringify!($($type).+),
+            stringify!($name),
+            &$crate::__munch_types!([] $($param)*),
+            $generic_params
+        )
+    };
+    ($method:expr, static $($type:ident).+ :: $name:literal < $generic_params:tt > ( $($param:tt)* )) => {
+        $crate::vm::intrinsics::matcher::matches_method(
+            $method,
+            true,
+            stringify!($($type).+),
+            $name,
+            &$crate::__munch_types!([] $($param)*),
+            $generic_params
+        )
+    };
+    ($method:expr, $($type:ident).+ :: $name:ident < $generic_params:tt > ( $($param:tt)* )) => {
+        $crate::vm::intrinsics::matcher::matches_method(
+            $method,
+            false,
+            stringify!($($type).+),
+            stringify!($name),
+            &$crate::__munch_types!([] $($param)*),
+            $generic_params
+        )
+    };
+    ($method:expr, $($type:ident).+ :: $name:literal < $generic_params:tt > ( $($param:tt)* )) => {
+        $crate::vm::intrinsics::matcher::matches_method(
+            $method,
+            false,
+            stringify!($($type).+),
+            $name,
+            &$crate::__munch_types!([] $($param)*),
+            $generic_params
+        )
+    };
+    ($method:expr, static $($type:ident).+ :: $name:ident ( $($param:tt)* )) => {
+        $crate::vm::intrinsics::matcher::matches_method(
+            $method,
+            true,
+            stringify!($($type).+),
+            stringify!($name),
+            &$crate::__munch_types!([] $($param)*),
+            0
+        )
+    };
+    ($method:expr, static $($type:ident).+ :: $name:literal ( $($param:tt)* )) => {
+        $crate::vm::intrinsics::matcher::matches_method(
+            $method,
+            true,
+            stringify!($($type).+),
+            $name,
+            &$crate::__munch_types!([] $($param)*),
+            0
+        )
+    };
+    ($method:expr, $($type:ident).+ :: $name:ident ( $($param:tt)* )) => {
+        $crate::vm::intrinsics::matcher::matches_method(
+            $method,
+            false,
+            stringify!($($type).+),
+            stringify!($name),
+            &$crate::__munch_types!([] $($param)*),
+            0
+        )
+    };
+    ($method:expr, $($type:ident).+ :: $name:literal ( $($param:tt)* )) => {
+        $crate::vm::intrinsics::matcher::matches_method(
+            $method,
+            false,
+            stringify!($($type).+),
+            $name,
+            &$crate::__munch_types!([] $($param)*),
+            0
+        )
+    };
+
     ($method:expr, static $type:literal :: $name:ident < $generic_params:tt > ( $($param:tt)* )) => {
         $crate::vm::intrinsics::matcher::matches_method(
             $method,
             true,
             $type,
             stringify!($name),
-            &$crate::munch_types!(@accum [] $($param)*),
+            &$crate::__munch_types!([] $($param)*),
             $generic_params
         )
     };
@@ -256,7 +429,7 @@ macro_rules! match_method {
             true,
             $type,
             $name,
-            &$crate::munch_types!(@accum [] $($param)*),
+            &$crate::__munch_types!([] $($param)*),
             $generic_params
         )
     };
@@ -266,7 +439,7 @@ macro_rules! match_method {
             false,
             $type,
             stringify!($name),
-            &$crate::munch_types!(@accum [] $($param)*),
+            &$crate::__munch_types!([] $($param)*),
             $generic_params
         )
     };
@@ -276,7 +449,7 @@ macro_rules! match_method {
             false,
             $type,
             $name,
-            &$crate::munch_types!(@accum [] $($param)*),
+            &$crate::__munch_types!([] $($param)*),
             $generic_params
         )
     };
@@ -286,7 +459,7 @@ macro_rules! match_method {
             true,
             $type,
             stringify!($name),
-            &$crate::munch_types!(@accum [] $($param)*),
+            &$crate::__munch_types!([] $($param)*),
             0
         )
     };
@@ -296,7 +469,7 @@ macro_rules! match_method {
             true,
             $type,
             $name,
-            &$crate::munch_types!(@accum [] $($param)*),
+            &$crate::__munch_types!([] $($param)*),
             0
         )
     };
@@ -306,7 +479,7 @@ macro_rules! match_method {
             false,
             $type,
             stringify!($name),
-            &$crate::munch_types!(@accum [] $($param)*),
+            &$crate::__munch_types!([] $($param)*),
             0
         )
     };
@@ -316,7 +489,7 @@ macro_rules! match_method {
             false,
             $type,
             $name,
-            &$crate::munch_types!(@accum [] $($param)*),
+            &$crate::__munch_types!([] $($param)*),
             0
         )
     };
@@ -347,6 +520,39 @@ macro_rules! match_field {
             None
         }
     };
+    ($field:expr, static $($type:ident).+ :: $name:ident) => {
+        $crate::vm::intrinsics::matcher::matches_field(
+            $field,
+            true,
+            stringify!($($type).+),
+            stringify!($name),
+        )
+    };
+    ($field:expr, static $($type:ident).+ :: $name:literal) => {
+        $crate::vm::intrinsics::matcher::matches_field(
+            $field,
+            true,
+            stringify!($($type).+),
+            $name,
+        )
+    };
+    ($field:expr, $($type:ident).+ :: $name:ident) => {
+        $crate::vm::intrinsics::matcher::matches_field(
+            $field,
+            false,
+            stringify!($($type).+),
+            stringify!($name),
+        )
+    };
+    ($field:expr, $($type:ident).+ :: $name:literal) => {
+        $crate::vm::intrinsics::matcher::matches_field(
+            $field,
+            false,
+            stringify!($($type).+),
+            $name,
+        )
+    };
+
     ($field:expr, static $type:literal :: $name:ident) => {
         $crate::vm::intrinsics::matcher::matches_field(
             $field,
