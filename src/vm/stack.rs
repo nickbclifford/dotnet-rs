@@ -537,7 +537,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.register_new_object(&obj_ref);
 
         self.exception_mode = ExceptionState::Throwing(obj_ref);
-        StepResult::MethodThrew
+        self.handle_exception(gc)
     }
 
     pub fn resolve_virtual_method(
