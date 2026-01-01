@@ -1,6 +1,6 @@
-use crate::value::{MethodDescription, FieldDescription};
-use dotnetdll::prelude::*;
 use crate::utils::decompose_type_source;
+use crate::value::{FieldDescription, MethodDescription};
+use dotnetdll::prelude::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeMatcher {
@@ -59,7 +59,9 @@ impl TypeMatcher {
             (TypeMatcher::MethodGeneric(i), MethodType::MethodGeneric(mi)) => *i as usize == *mi,
             (TypeMatcher::Pointer(inner), MethodType::Base(b)) => match &**b {
                 BaseType::ValuePointer(_, Some(t)) => inner.matches_type(t),
-                BaseType::ValuePointer(_, None) => matches!(**inner, TypeMatcher::Void | TypeMatcher::Any),
+                BaseType::ValuePointer(_, None) => {
+                    matches!(**inner, TypeMatcher::Void | TypeMatcher::Any)
+                }
                 _ => false,
             },
             (TypeMatcher::ReadOnlySpan(inner), MethodType::Base(b)) => {

@@ -1,7 +1,7 @@
 use crate::{
+    match_method,
     value::{GenericLookup, HeapStorage, MethodDescription, Object, ObjectRef, StackValue},
     vm::{intrinsics::span_to_slice, CallStack, GCHandle, StepResult},
-    match_method,
 };
 
 use gc_arena::{unsafe_empty_collect, Collect};

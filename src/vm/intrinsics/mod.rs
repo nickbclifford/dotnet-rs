@@ -1,7 +1,8 @@
-pub mod reflection;
 pub mod matcher;
+pub mod reflection;
 
 use crate::{
+    any_match_field, any_match_method, match_field, match_method,
     resolve::SUPPORT_ASSEMBLY,
     utils::decompose_type_source,
     value::{
@@ -11,22 +12,17 @@ use crate::{
         ObjectRef, ResolutionContext, StackValue,
     },
     vm::{
-        intrinsics::{
-            reflection::{
-                runtime_field_info_intrinsic_call, runtime_method_info_intrinsic_call,
-                runtime_type_intrinsic_call,
-            },
+        intrinsics::reflection::{
+            runtime_field_info_intrinsic_call, runtime_method_info_intrinsic_call,
+            runtime_type_intrinsic_call,
         },
         CallStack, GCHandle, MethodInfo, StepResult,
     },
-    match_method, match_field, any_match_method, any_match_field,
 };
 
 use dotnetdll::prelude::*;
 
 pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttribute";
-
-
 
 pub fn is_intrinsic(method: MethodDescription, assemblies: &crate::resolve::Assemblies) -> bool {
     if method.method.internal_call {
@@ -658,7 +654,8 @@ pub fn intrinsic_field<'gc, 'm: 'gc>(
         [static System.String::Empty] => {
             stack.push_stack(gc, StackValue::string(gc, CLRString::new(vec![])));
         },
-    }).expect("unsupported load from intrinsic field");
+    })
+    .expect("unsupported load from intrinsic field");
 
     stack.increment_ip();
 }

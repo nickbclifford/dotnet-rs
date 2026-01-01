@@ -170,11 +170,7 @@ impl<'a> ResolutionContext<'a> {
         if let Some(base) = base {
             ConcreteType::new(res, base)
         } else {
-            if let BaseType::Type {
-                source,
-                value_kind,
-            } = t.get_mut()
-            {
+            if let BaseType::Type { source, value_kind } = t.get_mut() {
                 if value_kind.is_none() {
                     let (ut, _) = decompose_type_source(source);
                     let td = self.locate_type(ut);
@@ -645,9 +641,10 @@ impl<'gc> CTSValue<'gc> {
             BaseType::UIntPtr | BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
                 Self::Value(NativeUInt(from_bytes!(usize, data)))
             }
-            BaseType::Object | BaseType::String | BaseType::Vector(_, _) | BaseType::Array(_, _) => {
-                Self::Ref(ObjectRef::read(data))
-            }
+            BaseType::Object
+            | BaseType::String
+            | BaseType::Vector(_, _)
+            | BaseType::Array(_, _) => Self::Ref(ObjectRef::read(data)),
             BaseType::Type {
                 value_kind: Some(ValueKind::Class),
                 ..
