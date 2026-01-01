@@ -378,15 +378,14 @@ impl<'gc> ObjectRef<'gc> {
 
     pub fn expect_object_ref(self) -> Self {
         if self.0.is_none() {
-            panic!("NullPointerException");
+            panic!("NullReferenceException");
         }
         self
     }
 
     pub fn as_object<T>(&self, op: impl FnOnce(&Object<'gc>) -> T) -> T {
         let ObjectRef(Some(o)) = &self else {
-            // TODO: NullPointerException
-            panic!("called ObjectRef::as_object on NULL object reference")
+            panic!("NullReferenceException: called ObjectRef::as_object on NULL object reference")
         };
         let heap = o.borrow();
         let HeapStorage::Obj(instance) = &*heap else {
@@ -398,8 +397,7 @@ impl<'gc> ObjectRef<'gc> {
 
     pub fn as_object_mut<T>(&self, gc: GCHandle<'gc>, op: impl FnOnce(&mut Object<'gc>) -> T) -> T {
         let ObjectRef(Some(o)) = &self else {
-            // TODO: NullPointerException
-            panic!("called ObjectRef::as_object_mut on NULL object reference")
+            panic!("NullReferenceException: called ObjectRef::as_object_mut on NULL object reference")
         };
         let mut heap = o.borrow_mut(gc);
         let HeapStorage::Obj(instance) = &mut *heap else {
@@ -411,8 +409,7 @@ impl<'gc> ObjectRef<'gc> {
 
     pub fn as_vector<T>(&self, op: impl FnOnce(&Vector<'gc>) -> T) -> T {
         let ObjectRef(Some(o)) = &self else {
-            // TODO: NullPointerException
-            panic!("called ObjectRef::as_vector on NULL object reference")
+            panic!("NullReferenceException: called ObjectRef::as_vector on NULL object reference")
         };
         let heap = o.borrow();
         let HeapStorage::Vec(instance) = &*heap else {
@@ -617,7 +614,7 @@ impl<'gc> CTSValue<'gc> {
                 }
                 Self::Value(Struct(*o))
             }
-            rest => todo!("tried to deserialize StackValue {:?}", rest),
+            rest => panic!("tried to deserialize StackValue {:?}", rest),
         }
     }
 

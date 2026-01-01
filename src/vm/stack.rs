@@ -491,7 +491,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 self.current_frame_mut().stack_height -= 1;
                 value
             }
-            None => todo!("empty call stack"),
+            None => panic!("empty call stack"),
         }
     }
 

@@ -56,6 +56,6 @@ pub fn run_cli() -> ExitCode {
     let result = executor.run();
     match result {
         ExecutorResult::Exited(i) => ExitCode::from(i),
-        ExecutorResult::Threw => todo!(),
+        ExecutorResult::Threw => todo!("pretty output for crashing on unhandled exception"),
     }
 }

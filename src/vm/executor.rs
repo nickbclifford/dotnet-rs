@@ -44,7 +44,7 @@ impl Executor {
                     if self.arena.mutate(|_, c| c.frames.is_empty()) {
                         let exit_code = self.arena.mutate(|_, c| match c.bottom_of_stack() {
                             Some(StackValue::Int32(i)) => i as u8,
-                            Some(_) => todo!("invalid value for entrypoint return"),
+                            Some(_) => panic!("invalid value for entrypoint return"),
                             None => 0,
                         });
                         return ExecutorResult::Exited(exit_code);

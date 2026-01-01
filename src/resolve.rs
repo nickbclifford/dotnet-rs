@@ -95,7 +95,7 @@ impl Assemblies {
                 file.push(format!("{name}.dll"));
                 let resolution = static_res_from_file(file);
                 match &resolution.assembly {
-                    None => todo!("no assembly present in external module"),
+                    None => panic!("no assembly present in external module"),
                     Some(a) => {
                         self.external
                             .borrow_mut()

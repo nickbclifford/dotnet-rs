@@ -4,7 +4,7 @@ use crate::{
     utils::decompose_type_source,
     value::{
         string::CLRString, ConcreteType, FieldDescription, GenericLookup, HeapStorage,
-        MethodDescription, Object, ObjectRef, ResolutionContext, StackValue, TypeDescription,
+        MethodDescription, Object, ObjectRef, ResolutionContext, TypeDescription,
         Vector,
     },
     vm::{CallStack, GCHandle, StepResult},
@@ -194,9 +194,6 @@ impl RuntimeType {
                     corlib_res,
                     BaseType::ValuePointer(vec![], Some(t.to_concrete(assemblies))),
                 )
-            }
-            RuntimeType::FunctionPointer(_) => {
-                todo!("convert FunctionPointer to ConcreteType")
             }
             rest => todo!("convert {rest:?} to ConcreteType"),
         }
@@ -515,7 +512,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                     let rt_obj = stack.get_runtime_type(gc, def_rt);
                     push!(ObjectRef(rt_obj));
                 }
-                _ => todo!("InvalidOperationException: not a generic type")
+                _ => return stack.throw_by_name(gc, "System.InvalidOperationException")
             }
             Some(StepResult::InstructionStepped)
         },
@@ -569,7 +566,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                  let rt_obj = stack.get_runtime_type(gc, new_rt);
                  push!(ObjectRef(rt_obj));
             } else {
-                todo!("MakeGenericType on non-type")
+                return stack.throw_by_name(gc, "System.InvalidOperationException");
             }
             Some(StepResult::InstructionStepped)
         },

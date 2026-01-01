@@ -190,7 +190,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         push!(NativeFloat(f1 $op f2))
                     }
                     $($($pat => $arm,)*)?
-                    (v1, v2) => todo!(
+                    (v1, v2) => panic!(
                         "invalid types on stack ({:?}, {:?}) for {} operation",
                         v1,
                         v2,
@@ -222,7 +222,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         push!(NativeFloat(f1 $op f2))
                     }
                     $($($pat => $arm,)*)?
-                    (v1, v2) => todo!(
+                    (v1, v2) => panic!(
                         "invalid types on stack ({:?}, {:?}) for {} operation",
                         v1,
                         v2,
@@ -281,7 +281,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         push!(NativeInt(val as isize));
                     }
                     $($($pat => $arm,)*)?
-                    (v1, v2, _) => todo!(
+                    (v1, v2, _) => panic!(
                         "invalid types on stack ({:?}, {:?}) for {} {:?} operation",
                         v1,
                         v2,
@@ -312,7 +312,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     (NativeInt(i1), NativeInt(i2)) => {
                         push!(NativeInt(i1 $op i2))
                     }
-                    (v1, v2) => todo!(
+                    (v1, v2) => panic!(
                         "invalid types on stack ({:?}, {:?}) for {} operation",
                         v1,
                         v2,
@@ -340,7 +340,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     (NativeInt(i1), NativeInt(i2)) => {
                         push!(NativeInt(((i1 as usize) $op (i2 as usize)) as isize))
                     }
-                    (v1, v2) => todo!(
+                    (v1, v2) => panic!(
                         "invalid types on stack ({:?}, {:?}) for {} unsigned operation",
                         v1,
                         v2,
@@ -373,7 +373,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     (NativeInt(i1), NativeInt(i2)) => {
                         push!(NativeInt(i1 $op i2))
                     }
-                    (v1, v2) => todo!(
+                    (v1, v2) => panic!(
                         "invalid types on stack ({:?}, {:?}) for {} operation",
                         v1,
                         v2,
@@ -404,7 +404,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     (NativeInt(i1), NativeInt(i2)) => {
                         push!(NativeInt(((i1 as usize) $op (i2 as usize)) as isize))
                     }
-                    (v1, v2) => todo!(
+                    (v1, v2) => panic!(
                         "invalid types on stack ({:?}, {:?}) for {} operation",
                         v1,
                         v2,
@@ -452,7 +452,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::ObjectRef(ObjectRef(o)) => o.is_none(),
                     StackValue::UnmanagedPtr(UnmanagedPtr(p))
                     | StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => p.is_null(),
-                    v => todo!("invalid type on stack ({:?}) for truthiness check", v),
+                    v => panic!("invalid type on stack ({:?}) for truthiness check", v),
                 }
             };
         }
@@ -619,7 +619,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             StackValue::Int64(i) => i as $t,
                             StackValue::NativeInt(i) => i as $t,
                             StackValue::NativeFloat(f) => f as $t,
-                            v => todo!(
+                            v => panic!(
                                 "invalid type on stack ({:?}) for conversion to {}",
                                 v,
                                 stringify!($t)
@@ -652,7 +652,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             StackValue::NativeFloat(f) => {
                                 todo!("truncate {} towards zero for conversion to {}", f, stringify!($t))
                             }
-                            v => todo!("invalid type on stack ({:?}) for conversion to {}", v, stringify!($t)),
+                            v => panic!("invalid type on stack ({:?}) for conversion to {}", v, stringify!($t)),
                         };
                         push!($variant(i as $vt));
                     }}
@@ -686,7 +686,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::Int64(i) => i as f32,
                     StackValue::NativeInt(i) => i as f32,
                     StackValue::NativeFloat(i) => i as f32,
-                    rest => todo!(
+                    rest => panic!(
                         "invalid type on stack ({:?}) for conversion to float32",
                         rest
                     ),
@@ -699,7 +699,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::Int64(i) => i as f64,
                     StackValue::NativeInt(i) => i as f64,
                     StackValue::NativeFloat(i) => i,
-                    rest => todo!(
+                    rest => panic!(
                         "invalid type on stack ({:?}) for conversion to float64",
                         rest
                     ),
@@ -714,7 +714,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let size = match pop!() {
                     StackValue::Int32(i) => i as usize,
                     StackValue::NativeInt(i) => i as usize,
-                    rest => todo!(
+                    rest => panic!(
                         "invalid type for size in cpblk (expected int32 or native int, received {:?})",
                         rest
                     ),
@@ -723,7 +723,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::NativeInt(i) => i as *const u8,
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p as *const u8,
                     StackValue::ManagedPtr(m) => m.value as *const u8,
-                    rest => todo!(
+                    rest => panic!(
                         "invalid type for src in cpblk (expected pointer, received {:?})",
                         rest
                     ),
@@ -732,7 +732,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::NativeInt(i) => i as *mut u8,
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p,
                     StackValue::ManagedPtr(m) => m.value,
-                    rest => todo!(
+                    rest => panic!(
                         "invalid type for dest in cpblk (expected pointer, received {:?})",
                         rest
                     ),
@@ -768,14 +768,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let size = match pop!() {
                     StackValue::Int32(i) => i as usize,
                     StackValue::NativeInt(i) => i as usize,
-                    rest => todo!(
+                    rest => panic!(
                         "invalid type for size in initblk (expected int32 or native int, received {:?})",
                         rest
                     ),
                 };
                 let val = match pop!() {
                     StackValue::Int32(i) => i as u8,
-                    rest => todo!(
+                    rest => panic!(
                         "invalid type for value in initblk (expected int32, received {:?})",
                         rest
                     ),
@@ -784,7 +784,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::NativeInt(i) => i as *mut u8,
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p,
                     StackValue::ManagedPtr(m) => m.value,
-                    rest => todo!(
+                    rest => panic!(
                         "invalid type for address in initblk (expected pointer, received {:?})",
                         rest
                     ),
@@ -922,7 +922,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let size = match pop!() {
                     StackValue::Int32(i) => i as usize,
                     StackValue::NativeInt(i) => i as usize,
-                    v => todo!(
+                    v => panic!(
                         "invalid type on stack ({:?}) for local memory allocation size",
                         v
                     ),
@@ -940,7 +940,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 StackValue::Int32(i) => push!(Int32(-i)),
                 StackValue::Int64(i) => push!(Int64(-i)),
                 StackValue::NativeInt(i) => push!(NativeInt(-i)),
-                v => todo!(
+                v => panic!(
                     "invalid type on stack ({:?}) for logical NOT, expected integer",
                     v
                 ),
@@ -950,7 +950,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 StackValue::Int32(i) => push!(Int32(!i)),
                 StackValue::Int64(i) => push!(Int64(!i)),
                 StackValue::NativeInt(i) => push!(NativeInt(!i)),
-                v => todo!(
+                v => panic!(
                     "invalid type on stack ({:?}) for bitwise NOT, expected integer",
                     v
                 ),
@@ -1504,7 +1504,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let length = match pop!() {
                     StackValue::Int32(i) => i as usize,
                     StackValue::NativeInt(i) => i as usize,
-                    rest => todo!(
+                    rest => panic!(
                         "invalid length for newarr (expected int32 or native int, received {:?})",
                         rest
                     ),
@@ -1583,7 +1583,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 };
                 let mut heap = heap.borrow_mut(gc);
                 let HeapStorage::Vec(array) = &mut *heap else {
-                    todo!("expected array for stelem, received {:?}", heap)
+                    panic!("expected array for stelem, received {:?}", heap)
                 };
 
                 if index >= array.layout.length {
@@ -1607,7 +1607,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let index = match pop!() {
                     StackValue::Int32(i) => i as usize,
                     StackValue::NativeInt(i) => i as usize,
-                    rest => todo!(
+                    rest => panic!(
                         "invalid index for stelem (expected int32 or native int, received {:?})",
                         rest
                     ),
@@ -1639,7 +1639,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 };
                 let mut heap = heap.borrow_mut(gc);
                 let HeapStorage::Vec(array) = &mut *heap else {
-                    todo!("expected array for stelem, received {:?}", heap)
+                    panic!("expected array for stelem, received {:?}", heap)
                 };
 
                 if index >= array.layout.length {

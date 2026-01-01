@@ -55,7 +55,7 @@ impl MethodInfo<'static> {
     ) -> Self {
         let body = match &method.method.body {
             Some(b) => b,
-            None => todo!("no body in executing method"),
+            None => panic!("no body in executing method"),
         };
         let mut exceptions: &[body::Exception] = &[];
         for sec in &body.data_sections {
@@ -70,7 +70,7 @@ impl MethodInfo<'static> {
 
         let instructions = match &method.method.body {
             Some(b) => b.instructions.as_slice(),
-            None => todo!("cannot call method with empty body"),
+            None => panic!("cannot call method with empty body"),
         };
 
         let ctx = ResolutionContext::for_method(method, assemblies, generics);

@@ -230,7 +230,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let obj = pop!();
             let object_type = match obj {
                 StackValue::ObjectRef(ObjectRef(Some(h))) => ctx.get_heap_description(h),
-                StackValue::ObjectRef(ObjectRef(None)) => todo!("GetMethodTable(null)"),
+                StackValue::ObjectRef(ObjectRef(None)) => return stack.throw_by_name(gc, "System.NullReferenceException"),
                 _ => panic!("GetMethodTable called on non-object: {:?}", obj),
             };
 
@@ -441,7 +441,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     Scalar::Float32 => StackValue::NativeFloat(read_ua!(f32) as f64),
                     Scalar::Float64 => StackValue::NativeFloat(read_ua!(f64)),
                 },
-                _ => todo!("unsupported layout for read unaligned"),
+                _ => panic!("unsupported layout for read unaligned"),
             };
             push!(v);
         },
@@ -472,7 +472,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     Scalar::Float32 => write_ua!(NativeFloat, f32),
                     Scalar::Float64 => write_ua!(NativeFloat, f64),
                 }
-                _ => todo!("unsupported layout for write unaligned"),
+                _ => panic!("unsupported layout for write unaligned"),
             }
         },
         [static System.Runtime.InteropServices.Marshal::GetLastPInvokeError()] => {
@@ -536,7 +536,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             vm_expect_stack!(let Int32(index) = pop!());
             vm_expect_stack!(let ManagedPtr(m) = pop!());
             if !m.inner_type.type_name().contains("Span") {
-                todo!("invalid type on stack");
+                panic!("invalid type on stack");
             }
             let span_layout = FieldLayoutManager::instance_fields(
                 m.inner_type,
@@ -558,7 +558,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         ["System.Span`1"::get_Length()] | ["System.ReadOnlySpan`1"::get_Length()] => {
             vm_expect_stack!(let ManagedPtr(m) = pop!());
             if !m.inner_type.type_name().contains("Span") {
-                todo!("invalid type on stack");
+                panic!("invalid type on stack");
             }
             let layout = FieldLayoutManager::instance_fields(
                 m.inner_type,
