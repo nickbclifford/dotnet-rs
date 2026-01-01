@@ -256,7 +256,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 // Find Flags field
                 if let Some(field_layout) = layout.fields.get("Flags") {
                     let mut flags: u32 = 0;
-                    if object_type.has_finalizer(&ctx!()) {
+                    if object_type.has_finalizer(ctx!()) {
                         flags |= 0x100000;
                     }
                     data[field_layout.position..field_layout.position + 4]
@@ -618,7 +618,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let target = stack.resolve_runtime_type(o);
             let target_ct = target.to_concrete(stack.assemblies);
             let target_desc = stack.assemblies.find_concrete_type(target_ct);
-            let value = target_desc.is_value_type(&ctx!());
+            let value = target_desc.is_value_type(ctx!());
             push!(StackValue::Int32(value as i32));
         },
         [static System.Type::op_Equality(any, any)] => {
