@@ -84,9 +84,17 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
 
             push!(StackValue::Int32(if a == b { 1 } else { 0 }));
         }
-        "static string System.String::FastAllocateString(int)" => {
-            expect_stack!(let Int32(len) = pop!());
-            let value = CLRString::new(vec![0u16; len as usize]);
+        "static string System.String::FastAllocateString(int)" |
+        "static string System.String::FastAllocateString(valuetype System.Runtime.CompilerServices.MethodTable*, nint)" => {
+            let len = match pop!() {
+                StackValue::Int32(i) => i as usize,
+                StackValue::NativeInt(i) => i as usize,
+                rest => panic!("invalid length for FastAllocateString: {:?}", rest),
+            };
+            if method.method.signature.parameters.len() == 2 {
+                pop!(); // pop method table pointer
+            }
+            let value = CLRString::new(vec![0u16; len]);
             push!(StackValue::string(gc, value));
         }
         "char System.String::get_Chars(int)" => {

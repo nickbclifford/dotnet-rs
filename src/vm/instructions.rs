@@ -747,7 +747,37 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let value = pop!();
                 todo!("conv.r.un({:?})", value)
             }
-            CopyMemoryBlock { .. } => {}
+            CopyMemoryBlock { .. } => {
+                let size = match pop!() {
+                    StackValue::Int32(i) => i as usize,
+                    StackValue::NativeInt(i) => i as usize,
+                    rest => todo!(
+                        "invalid type for size in cpblk (expected int32 or native int, received {:?})",
+                        rest
+                    ),
+                };
+                let src = match pop!() {
+                    StackValue::NativeInt(i) => i as *const u8,
+                    StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p as *const u8,
+                    StackValue::ManagedPtr(m) => m.value as *const u8,
+                    rest => todo!(
+                        "invalid type for src in cpblk (expected pointer, received {:?})",
+                        rest
+                    ),
+                };
+                let dest = match pop!() {
+                    StackValue::NativeInt(i) => i as *mut u8,
+                    StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p,
+                    StackValue::ManagedPtr(m) => m.value,
+                    rest => todo!(
+                        "invalid type for dest in cpblk (expected pointer, received {:?})",
+                        rest
+                    ),
+                };
+                unsafe {
+                    std::ptr::copy_nonoverlapping(src, dest, size);
+                }
+            }
             Divide(sgn) => match sgn {
                 Signed => binary_arith_op!(/),
                 Unsigned => binary_int_op!(/ as unsigned),
@@ -759,7 +789,35 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             EndFilter => todo!("endfilter"),
             EndFinally => {} // is this actually a nop?
-            InitializeMemoryBlock { .. } => todo!("initblk"),
+            InitializeMemoryBlock { .. } => {
+                let size = match pop!() {
+                    StackValue::Int32(i) => i as usize,
+                    StackValue::NativeInt(i) => i as usize,
+                    rest => todo!(
+                        "invalid type for size in initblk (expected int32 or native int, received {:?})",
+                        rest
+                    ),
+                };
+                let val = match pop!() {
+                    StackValue::Int32(i) => i as u8,
+                    rest => todo!(
+                        "invalid type for value in initblk (expected int32, received {:?})",
+                        rest
+                    ),
+                };
+                let addr = match pop!() {
+                    StackValue::NativeInt(i) => i as *mut u8,
+                    StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p,
+                    StackValue::ManagedPtr(m) => m.value,
+                    rest => todo!(
+                        "invalid type for address in initblk (expected pointer, received {:?})",
+                        rest
+                    ),
+                };
+                unsafe {
+                    std::ptr::write_bytes(addr, val, size);
+                }
+            }
             Jump(_) => todo!("jmp"),
             LoadArgument(i) => {
                 let arg = self.get_argument(*i as usize);
@@ -779,17 +837,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadConstantFloat64(f) => push!(NativeFloat(*f)),
             LoadMethodPointer(source) => {
                 let (method, lookup) = self.find_generic_method(source);
-                let idx = match self
-                    .runtime_methods
-                    .iter()
-                    .position(|(m, g)| *m == method && *g == lookup)
-                {
-                    Some(i) => i,
-                    None => {
-                        self.runtime_methods.push((method, lookup));
-                        self.runtime_methods.len() - 1
-                    }
-                };
+                let idx = self.get_runtime_method_index(gc, method, lookup);
                 push!(NativeInt(idx as isize));
             }
             LoadIndirect { param0: t, .. } => {
@@ -817,10 +865,22 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     LoadType::UInt16 => load_as_i32!(u16),
                     LoadType::Int32 => load_as_i32!(i32),
                     LoadType::UInt32 => load_as_i32!(u32),
-                    LoadType::Int64 => todo!("ldind.i8"),
-                    LoadType::Float32 => todo!("ldind.r4"),
-                    LoadType::Float64 => todo!("ldind.r8"),
-                    LoadType::IntPtr => todo!("ldind.i"),
+                    LoadType::Int64 => {
+                        let val: i64 = unsafe { *(ptr as *const _) };
+                        push!(Int64(val));
+                    }
+                    LoadType::Float32 => {
+                        let val: f32 = unsafe { *(ptr as *const _) };
+                        push!(NativeFloat(val as f64));
+                    }
+                    LoadType::Float64 => {
+                        let val: f64 = unsafe { *(ptr as *const _) };
+                        push!(NativeFloat(val));
+                    }
+                    LoadType::IntPtr => {
+                        let val: isize = unsafe { *(ptr as *const _) };
+                        push!(NativeInt(val));
+                    }
                     LoadType::Object => {
                         let val = unsafe { *(ptr as *const ObjectRef) };
                         push!(ObjectRef(val));
@@ -978,10 +1038,34 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StoreType::Int8 => store_from_i32!(i8),
                     StoreType::Int16 => store_from_i32!(i16),
                     StoreType::Int32 => store_from_i32!(i32),
-                    StoreType::Int64 => todo!("stind.i8"),
-                    StoreType::Float32 => todo!("stind.r4"),
-                    StoreType::Float64 => todo!("stind.r8"),
-                    StoreType::IntPtr => todo!("stind.i"),
+                    StoreType::Int64 => {
+                        expect_stack!(let Int64(v) = val);
+                        let p = ptr as *mut i64;
+                        unsafe {
+                            *p = v;
+                        }
+                    }
+                    StoreType::Float32 => {
+                        expect_stack!(let NativeFloat(v) = val);
+                        let p = ptr as *mut f32;
+                        unsafe {
+                            *p = v as f32;
+                        }
+                    }
+                    StoreType::Float64 => {
+                        expect_stack!(let NativeFloat(v) = val);
+                        let p = ptr as *mut f64;
+                        unsafe {
+                            *p = v;
+                        }
+                    }
+                    StoreType::IntPtr => {
+                        expect_stack!(let NativeInt(v) = val);
+                        let p = ptr as *mut isize;
+                        unsafe {
+                            *p = v;
+                        }
+                    }
                     StoreType::Object => {
                         expect_stack!(let ObjectRef(o) = val);
                         let p = ptr as *mut ObjectRef;
@@ -1406,7 +1490,19 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 push!(ValueType(Box::new(instance)));
             }
-            LoadTokenMethod(_) => todo!("RuntimeMethodHandle"),
+            LoadTokenMethod(source) => {
+                let (method, lookup) = self.find_generic_method(source);
+                let idx = self.get_runtime_method_index(gc, method, lookup);
+
+                let rmh = self.assemblies.corlib_type("System.RuntimeMethodHandle");
+                let mut instance = Object::new(rmh, &self.current_context());
+                instance
+                    .instance_storage
+                    .get_field_mut("_value")
+                    .copy_from_slice(&idx.to_ne_bytes());
+
+                push!(ValueType(Box::new(instance)));
+            }
             LoadTokenType(target) => {
                 let target_type = self.make_runtime_type(&self.current_context(), target);
 
@@ -1414,7 +1510,31 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 push!(ValueType(Box::new(instance)))
             }
-            LoadVirtualMethodPointer { .. } => todo!("ldvirtftn"),
+            LoadVirtualMethodPointer { param0: source, .. } => {
+                let (base_method, lookup) = self.find_generic_method(source);
+                expect_stack!(let ObjectRef(obj) = pop!());
+                let ObjectRef(Some(o)) = obj else {
+                    todo!("null pointer exception in ldvirtftn")
+                };
+                let object_type = self.current_context().get_heap_description(o);
+                
+                let mut method = None;
+                for (parent, _) in self.current_context().get_ancestors(object_type) {
+                    if let Some(m) = self.assemblies.find_method_in_type(
+                        parent,
+                        &base_method.method.name,
+                        &base_method.method.signature,
+                        base_method.resolution(),
+                    ) {
+                        method = Some(m);
+                        break;
+                    }
+                }
+                let method = method.expect("could not find virtual method implementation");
+
+                let idx = self.get_runtime_method_index(gc, method, lookup);
+                push!(NativeInt(idx as isize));
+            }
             MakeTypedReference(_) => todo!("mkrefany"),
             NewArray(elem_type) => {
                 let length = match pop!() {

@@ -99,6 +99,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.get_runtime_type(gc, target).write(handle_location);
         instance
     }
+
+    pub fn get_runtime_method_index(&mut self, gc: GCHandle<'gc>, method: MethodDescription, lookup: GenericLookup) -> u16 {
+        let idx = match self
+            .runtime_methods
+            .iter()
+            .position(|(m, g)| *m == method && *g == lookup)
+        {
+            Some(i) => i,
+            None => {
+                self.runtime_methods.push((method, lookup));
+                self.runtime_methods.len() - 1
+            }
+        };
+        idx as u16
+    }
 }
 
 pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
@@ -129,13 +144,14 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             let value = match stack.runtime_asms.get(&resolution) {
                 Some(o) => *o,
                 None => {
-                    let definition = resolution.0.type_definitions
+                    let support_res = stack.assemblies.get_assembly(crate::resolve::SUPPORT_ASSEMBLY);
+                    let definition = support_res.0.type_definitions
                         .iter()
                         .find(|a| a.type_name() == "DotnetRs.Assembly")
-                        .unwrap();
+                        .expect("could not find DotnetRs.Assembly in support library");
                     let mut asm_handle = Object::new(
-                        TypeDescription { resolution, definition },
-                        &ResolutionContext::new(&generics, stack.assemblies, resolution),
+                        TypeDescription { resolution: support_res, definition },
+                        &ResolutionContext::new(&generics, stack.assemblies, support_res),
                     );
                     let data = (resolution.as_raw() as usize).to_ne_bytes();
                     asm_handle.instance_storage.get_field_mut("resolution").copy_from_slice(&data);

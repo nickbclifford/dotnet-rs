@@ -9,7 +9,10 @@ use crate::{
         ConcreteType, FieldDescription, GenericLookup, HeapStorage, MethodDescription, Object,
         ObjectRef, StackValue,
     },
-    vm::{intrinsics::reflection::runtime_type_intrinsic_call, CallStack, GCHandle, MethodInfo},
+    vm::{
+        intrinsics::reflection::{runtime_type_intrinsic_call, RuntimeType},
+        CallStack, GCHandle, MethodInfo,
+    },
 };
 
 use dotnetdll::prelude::*;
@@ -527,14 +530,27 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let target = ObjectRef::read(handle.instance_storage.get_field("_value"));
             push!(StackValue::ObjectRef(target));
         }
+        "static nint System.RuntimeTypeHandle::ToIntPtr(valuetype System.RuntimeTypeHandle)" => {
+            expect_stack!(let ValueType(handle) = pop!());
+            let target = handle.instance_storage.get_field("_value");
+            let val = usize::from_ne_bytes(target.try_into().unwrap());
+            push!(StackValue::NativeInt(val as isize));
+        }
         "bool System.Type::get_IsValueType()" => {
             expect_stack!(let ObjectRef(o) = pop!());
             let target = stack.resolve_runtime_type(o);
-            let target: ConcreteType = target.clone().into();
-            let target = stack.assemblies.find_concrete_type(target);
+            match target {
+                RuntimeType::Structure(_, _) => {
+                    let target: ConcreteType = target.clone().into();
+                    let target = stack.assemblies.find_concrete_type(target);
 
-            let value = target.is_value_type(&ctx!());
-            push!(StackValue::Int32(value as i32));
+                    let value = target.is_value_type(&ctx!());
+                    push!(StackValue::Int32(value as i32));
+                }
+                _ => {
+                    push!(StackValue::Int32(0));
+                }
+            }
         }
         "static bool System.Type::op_Equality(System.Type, System.Type)" => {
             expect_stack!(let ObjectRef(o2) = pop!());
