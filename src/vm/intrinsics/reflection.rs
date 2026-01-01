@@ -599,43 +599,23 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
     }
 
     match_method!(method, {
-        [DotnetRs.MethodInfo::GetName()] => {
+        [DotnetRs.MethodInfo::GetName()]
+        | [DotnetRs.ConstructorInfo::GetName()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (method, _) = stack.resolve_runtime_method(obj);
             push!(StackValue::string(gc, CLRString::from(&method.method.name)));
             Some(StepResult::InstructionStepped)
         },
-        [DotnetRs.ConstructorInfo::GetName()] => {
-            vm_expect_stack!(let ObjectRef(obj) = pop!());
-            let (method, _) = stack.resolve_runtime_method(obj);
-            push!(StackValue::string(gc, CLRString::from(&method.method.name)));
-            Some(StepResult::InstructionStepped)
-        },
-        [DotnetRs.MethodInfo::GetDeclaringType()] => {
+        [DotnetRs.MethodInfo::GetDeclaringType()]
+        | [DotnetRs.ConstructorInfo::GetDeclaringType()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (method, _) = stack.resolve_runtime_method(obj);
             let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(method.parent));
             push!(StackValue::ObjectRef(rt_obj));
             Some(StepResult::InstructionStepped)
         },
-        [DotnetRs.ConstructorInfo::GetDeclaringType()] => {
-            vm_expect_stack!(let ObjectRef(obj) = pop!());
-            let (method, _) = stack.resolve_runtime_method(obj);
-            let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(method.parent));
-            push!(StackValue::ObjectRef(rt_obj));
-            Some(StepResult::InstructionStepped)
-        },
-        [DotnetRs.MethodInfo::GetMethodHandle()] => {
-            vm_expect_stack!(let ObjectRef(obj) = pop!());
-
-            let rmh = stack.assemblies.corlib_type("System.RuntimeMethodHandle");
-            let mut instance = Object::new(rmh, &stack.current_context());
-            obj.write(instance.instance_storage.get_field_mut("_value"));
-
-            push!(StackValue::ValueType(Box::new(instance)));
-            Some(StepResult::InstructionStepped)
-        },
-        [DotnetRs.ConstructorInfo::GetMethodHandle()] => {
+        [DotnetRs.MethodInfo::GetMethodHandle()]
+        | [DotnetRs.ConstructorInfo::GetMethodHandle()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
 
             let rmh = stack.assemblies.corlib_type("System.RuntimeMethodHandle");

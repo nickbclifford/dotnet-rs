@@ -150,13 +150,8 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
             push!(StackValue::Int32(code as i32));
             Some(StepResult::InstructionStepped)
         },
-        [System.String::GetPinnableReference()] => {
-            let ptr = string_op!(pop!(), |s| s.as_ptr() as *mut u8);
-            let value = StackValue::managed_ptr(ptr, stack.assemblies.corlib_type("System.Char"));
-            push!(value);
-            Some(StepResult::InstructionStepped)
-        },
-        [System.String::GetRawStringData()] => {
+        [System.String::GetPinnableReference()]
+        | [System.String::GetRawStringData()] => {
             let ptr = string_op!(pop!(), |s| s.as_ptr() as *mut u8);
             let value = StackValue::managed_ptr(ptr, stack.assemblies.corlib_type("System.Char"));
             push!(value);

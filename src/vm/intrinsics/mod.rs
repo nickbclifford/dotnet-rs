@@ -130,11 +130,6 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         }
     }
     let ctx = ResolutionContext::for_method(method, stack.assemblies, &generics);
-    macro_rules! ctx {
-        () => {
-            &ctx
-        };
-    }
 
     msg!(stack, "-- method marked as runtime intrinsic --");
 
@@ -178,7 +173,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             };
 
             let new_lookup = GenericLookup::new(type_generics);
-            let new_ctx = ctx!().with_generics(&new_lookup);
+            let new_ctx = ctx.with_generics(&new_lookup);
 
             let instance = Object::new(td, &new_ctx);
 
@@ -224,7 +219,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let dst = pop!().as_ptr();
 
             let target = &generics.method_generics[0];
-            let layout = type_layout(target.clone(), ctx!());
+            let layout = type_layout(target.clone(), &ctx);
             let total_count = len as usize * layout.size();
 
             unsafe {
@@ -234,7 +229,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         [static System.Runtime.CompilerServices.RuntimeHelpers::GetMethodTable(object)] => {
             let obj = pop!();
             let object_type = match obj {
-                StackValue::ObjectRef(ObjectRef(Some(h))) => ctx!().get_heap_description(h),
+                StackValue::ObjectRef(ObjectRef(Some(h))) => ctx.get_heap_description(h),
                 StackValue::ObjectRef(ObjectRef(None)) => todo!("GetMethodTable(null)"),
                 _ => panic!("GetMethodTable called on non-object: {:?}", obj),
             };
@@ -260,7 +255,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 // Find Flags field
                 if let Some(field_layout) = layout.fields.get("Flags") {
                     let mut flags: u32 = 0;
-                    if object_type.has_finalizer(ctx!()) {
+                    if object_type.has_finalizer(&ctx) {
                         flags |= 0x100000;
                     }
                     data[field_layout.position..field_layout.position + 4]
@@ -331,14 +326,14 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         },
         [static System.Runtime.CompilerServices.RuntimeHelpers::CreateSpan<1>(System.RuntimeFieldHandle)] => {
             let target = &generics.method_generics[0];
-            let target_size = type_layout(target.clone(), ctx!()).size();
+            let target_size = type_layout(target.clone(), &ctx).size();
             vm_expect_stack!(let ValueType(field_handle) = pop!());
 
             let mut idx_buf = [0u8; ObjectRef::SIZE];
             idx_buf.copy_from_slice(field_handle.instance_storage.get_field("_value"));
             let idx = usize::from_ne_bytes(idx_buf);
             let (FieldDescription { field, .. }, lookup) = &stack.runtime_fields[idx];
-            let field_type = ctx!().with_generics(lookup).make_concrete(&field.return_type);
+            let field_type = ctx.with_generics(lookup).make_concrete(&field.return_type);
             let field_desc = stack.assemblies.find_concrete_type(field_type.clone());
 
             let Some(data) = &field.initial_value else { return stack.throw_by_name(gc, "System.ArgumentException") };
@@ -355,7 +350,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
                 let span = stack.assemblies.corlib_type("System.ReadOnlySpan`1");
                 let span_lookup = GenericLookup::new(vec![field_type]);
-                let mut instance = Object::new(span, &ctx!().with_generics(&span_lookup));
+                let mut instance = Object::new(span, &ctx.with_generics(&span_lookup));
                 instance.instance_storage.get_field_mut("_reference").copy_from_slice(&(data.as_ptr() as usize).to_ne_bytes());
                 instance.instance_storage.get_field_mut("_length").copy_from_slice(&((size / target_size) as i32).to_ne_bytes());
 
@@ -366,7 +361,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         },
         [static System.Runtime.CompilerServices.RuntimeHelpers::IsBitwiseEquatable<1>()] => {
             let target = &generics.method_generics[0];
-            let layout = type_layout(target.clone(), ctx!());
+            let layout = type_layout(target.clone(), &ctx);
             let value = match layout {
                 LayoutManager::Scalar(Scalar::ObjectRef) => false,
                 LayoutManager::Scalar(_) => true,
@@ -376,27 +371,44 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         },
         [static System.Runtime.CompilerServices.RuntimeHelpers::IsReferenceOrContainsReferences<1>()] => {
             let target = &generics.method_generics[0];
-            let layout = type_layout(target.clone(), ctx!());
+            let layout = type_layout(target.clone(), &ctx);
             push!(StackValue::Int32(layout.is_or_contains_refs() as i32));
         },
         [static System.Runtime.CompilerServices.Unsafe::Add<1>(ref !!0, nint)] => {
-            let target_type = stack.assemblies.find_concrete_type(generics.method_generics[0].clone());
+            let target = &generics.method_generics[0];
+            let target_type = stack.assemblies.find_concrete_type(target.clone());
+            let layout = type_layout(target.clone(), &ctx);
             vm_expect_stack!(let NativeInt(offset) = pop!());
             let m = pop!().as_ptr();
-            push!(StackValue::managed_ptr(unsafe { m.offset(offset) }, target_type));
+            push!(StackValue::managed_ptr(
+                unsafe { m.offset(offset * layout.size() as isize) },
+                target_type
+            ));
         },
         [static System.Runtime.CompilerServices.Unsafe::AreSame<1>(ref !!0, ref !!0)] => {
             let m1 = pop!().as_ptr();
             let m2 = pop!().as_ptr();
             push!(StackValue::Int32((m1 == m2) as i32));
         },
+        [static System.Runtime.CompilerServices.Unsafe::As<1>(object)]
+        | [static System.Runtime.CompilerServices.Unsafe::AsRef<1>(ref !!0)] => {
+            let o = pop!();
+            push!(o);
+        },
         [static System.Runtime.CompilerServices.Unsafe::As<2>(ref !!0)] => {
             let target_type = stack.assemblies.find_concrete_type(generics.method_generics[1].clone());
             let m = pop!().as_ptr();
             push!(StackValue::managed_ptr(m, target_type));
         },
-        [static System.Runtime.CompilerServices.Unsafe::AsRef<1>(ref !!0)] => {
-            // I think this is a noop since none of the types or locations are actually changing
+        [static System.Runtime.CompilerServices.Unsafe::AsRef<1>(* void)] => {
+            let target_type = stack.assemblies.find_concrete_type(generics.method_generics[0].clone());
+            vm_expect_stack!(let NativeInt(ptr) = pop!());
+            push!(StackValue::managed_ptr(ptr as *mut u8, target_type));
+        },
+        [static System.Runtime.CompilerServices.Unsafe::SizeOf<1>()] => {
+            let target = &generics.method_generics[0];
+            let layout = type_layout(target.clone(), &ctx);
+            push!(StackValue::Int32(layout.size() as i32));
         },
         [static System.Runtime.CompilerServices.Unsafe::ByteOffset<1>(ref !!0, ref !!0)] => {
             let r = pop!().as_ptr();
@@ -408,7 +420,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         | [static System.Runtime.CompilerServices.Unsafe::ReadUnaligned<1>(* void)] => {
             vm_expect_stack!(let NativeInt(ptr) = pop!());
             let target = &generics.method_generics[0];
-            let layout = type_layout(target.clone(), ctx!());
+            let layout = type_layout(target.clone(), &ctx);
 
             macro_rules! read_ua {
                 ($t:ty) => {
@@ -436,7 +448,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         [static System.Runtime.CompilerServices.Unsafe::WriteUnaligned<1>(nint, !!0)] => {
             // equivalent to unaligned.stobj
             let target = &generics.method_generics[0];
-            let layout = type_layout(target.clone(), ctx!());
+            let layout = type_layout(target.clone(), &ctx);
             let value = pop!();
             vm_expect_stack!(let NativeInt(ptr) = pop!());
 
@@ -468,47 +480,34 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             push!(StackValue::Int32(value));
         },
-        [static System.Runtime.InteropServices.Marshal::SizeOf(System.Type)] => {
-            let type_obj = match pop!() {
-                StackValue::ObjectRef(o) => o,
-                rest => panic!("Marshal.SizeOf(Type) called on non-object: {:?}", rest),
-            };
-            let runtime_type = stack.resolve_runtime_type(type_obj);
-            let concrete_type = runtime_type.to_concrete(stack.assemblies);
-            let layout = type_layout(concrete_type, ctx!());
-            push!(StackValue::Int32(layout.size() as i32));
-        },
-        [static System.Runtime.InteropServices.Marshal::SizeOf<1>()] => {
-            let concrete_type = generics.method_generics[0].clone();
-            let layout = type_layout(concrete_type, ctx!());
-            push!(StackValue::Int32(layout.size() as i32));
-        },
-        [static System.Runtime.InteropServices.Marshal::OffsetOf(System.Type, string)] => {
-            let field_name_val = pop!();
-            let type_obj = match pop!() {
-                StackValue::ObjectRef(o) => o,
-                rest => panic!("Marshal.OffsetOf(Type, string) called on non-object: {:?}", rest),
-            };
-            let field_name = with_string!(stack, gc, field_name_val, |s| s.as_string());
-            let runtime_type = stack.resolve_runtime_type(type_obj);
-            let concrete_type = runtime_type.to_concrete(stack.assemblies);
-            let layout = type_layout(concrete_type.clone(), ctx!());
-
-            if let LayoutManager::FieldLayoutManager(flm) = layout {
-                if let Some(field) = flm.fields.get(&field_name) {
-                    push!(StackValue::NativeInt(field.position as isize));
-                } else {
-                    panic!("Field {} not found in type {:?}", field_name, concrete_type);
-                }
+        [static System.Runtime.InteropServices.Marshal::SizeOf(System.Type)]
+        | [static System.Runtime.InteropServices.Marshal::SizeOf<1>()] => {
+            let concrete_type = if method.method.signature.parameters.is_empty() {
+                generics.method_generics[0].clone()
             } else {
-                panic!("Type {:?} does not have field layout", concrete_type);
-            }
+                let type_obj = match pop!() {
+                    StackValue::ObjectRef(o) => o,
+                    rest => panic!("Marshal.SizeOf(Type) called on non-object: {:?}", rest),
+                };
+                stack.resolve_runtime_type(type_obj).to_concrete(stack.assemblies)
+            };
+            let layout = type_layout(concrete_type, &ctx);
+            push!(StackValue::Int32(layout.size() as i32));
         },
-        [static System.Runtime.InteropServices.Marshal::OffsetOf<1>(string)] => {
+        [static System.Runtime.InteropServices.Marshal::OffsetOf(System.Type, string)]
+        | [static System.Runtime.InteropServices.Marshal::OffsetOf<1>(string)] => {
             let field_name_val = pop!();
             let field_name = with_string!(stack, gc, field_name_val, |s| s.as_string());
-            let concrete_type = generics.method_generics[0].clone();
-            let layout = type_layout(concrete_type.clone(), ctx!());
+            let concrete_type = if method.method.signature.parameters.len() == 1 {
+                generics.method_generics[0].clone()
+            } else {
+                let type_obj = match pop!() {
+                    StackValue::ObjectRef(o) => o,
+                    rest => panic!("Marshal.OffsetOf(Type, string) called on non-object: {:?}", rest),
+                };
+                stack.resolve_runtime_type(type_obj).to_concrete(stack.assemblies)
+            };
+            let layout = type_layout(concrete_type.clone(), &ctx);
 
             if let LayoutManager::FieldLayoutManager(flm) = layout {
                 if let Some(field) = flm.fields.get(&field_name) {
@@ -541,11 +540,11 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             }
             let span_layout = FieldLayoutManager::instance_fields(
                 m.inner_type,
-                ctx!()
+                &ctx
             );
 
             let value_type = &generics.type_generics[0];
-            let value_layout = type_layout(value_type.clone(), ctx!());
+            let value_layout = type_layout(value_type.clone(), &ctx);
 
             let ptr = unsafe {
                 m.value
@@ -563,7 +562,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             }
             let layout = FieldLayoutManager::instance_fields(
                 m.inner_type,
-                ctx!()
+                &ctx
             );
             let value = unsafe {
                 let target = m.value.add(layout.fields["_length"].position) as *const i32;
@@ -631,8 +630,8 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let (ptr, len) = with_string!(stack, gc, pop!(), |s| (s.as_ptr(), s.len()));
 
             let span_type = stack.assemblies.corlib_type("System.ReadOnlySpan`1");
-            let new_lookup = GenericLookup::new(vec![ctx!().make_concrete(&BaseType::Char)]);
-            let ctx = ctx!().with_generics(&new_lookup);
+            let new_lookup = GenericLookup::new(vec![ctx.make_concrete(&BaseType::Char)]);
+            let ctx = ctx.with_generics(&new_lookup);
 
             let mut span = Object::new(span_type, &ctx);
 
@@ -641,17 +640,9 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             push!(StackValue::ValueType(Box::new(span)));
         },
-        [static System.Type::GetTypeFromHandle(System.RuntimeTypeHandle)] => {
-            vm_expect_stack!(let ValueType(handle) = pop!());
-            let target = ObjectRef::read(handle.instance_storage.get_field("_value"));
-            push!(StackValue::ObjectRef(target));
-        },
-        [static System.Reflection.MethodBase::GetMethodFromHandle(System.RuntimeMethodHandle)] => {
-            vm_expect_stack!(let ValueType(handle) = pop!());
-            let target = ObjectRef::read(handle.instance_storage.get_field("_value"));
-            push!(StackValue::ObjectRef(target));
-        },
-        [static System.Reflection.FieldInfo::GetFieldFromHandle(System.RuntimeFieldHandle)] => {
+        [static System.Type::GetTypeFromHandle(System.RuntimeTypeHandle)]
+        | [static System.Reflection.MethodBase::GetMethodFromHandle(System.RuntimeMethodHandle)]
+        | [static System.Reflection.FieldInfo::GetFieldFromHandle(System.RuntimeFieldHandle)] => {
             vm_expect_stack!(let ValueType(handle) = pop!());
             let target = ObjectRef::read(handle.instance_storage.get_field("_value"));
             push!(StackValue::ObjectRef(target));
@@ -674,7 +665,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let target = stack.resolve_runtime_type(o);
             let target_ct = target.to_concrete(stack.assemblies);
             let target_desc = stack.assemblies.find_concrete_type(target_ct);
-            let value = target_desc.is_value_type(ctx!());
+            let value = target_desc.is_value_type(&ctx);
             push!(StackValue::Int32(value as i32));
         },
         [static System.Type::op_Equality(any, any)] => {
@@ -686,7 +677,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             vm_expect_stack!(let ObjectRef(obj) = pop!());
 
             let rth = stack.assemblies.corlib_type("System.RuntimeTypeHandle");
-            let mut instance = Object::new(rth, ctx!());
+            let mut instance = Object::new(rth, &ctx);
             obj.write(instance.instance_storage.get_field_mut("_value"));
 
             push!(StackValue::ValueType(Box::new(instance)));
