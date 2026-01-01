@@ -86,7 +86,7 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
             let b = string_op!(pop!(), |b| b.to_vec());
             let a = string_op!(pop!(), |a| a.to_vec());
 
-            push!(StackValue::Int32(if a == b { 1 } else { 0 }));
+            push!(Int32(if a == b { 1 } else { 0 }));
             Some(StepResult::InstructionStepped)
         },
         [static System.String::FastAllocateString(int)] => {
@@ -95,7 +95,7 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
                 rest => panic!("invalid length for FastAllocateString: {:?}", rest),
             };
             let value = CLRString::new(vec![0u16; len]);
-            push!(StackValue::string(gc, value));
+            push!(string(gc, value));
             Some(StepResult::InstructionStepped)
         },
         [static System.String::FastAllocateString(
@@ -108,13 +108,13 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
             };
             pop!(); // pop method table pointer
             let value = CLRString::new(vec![0u16; len]);
-            push!(StackValue::string(gc, value));
+            push!(string(gc, value));
             Some(StepResult::InstructionStepped)
         },
         [System.String::get_Chars(int)] => {
             vm_expect_stack!(let Int32(index) = pop!());
             let value = string_op!(pop!(), |s| s[index as usize]);
-            push!(StackValue::Int32(value as i32));
+            push!(Int32(value as i32));
             Some(StepResult::InstructionStepped)
         },
         [static System.String::Concat(ReadOnlySpan<char>, ReadOnlySpan<char>, ReadOnlySpan<char>)] => {
@@ -134,7 +134,7 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
             let data2 = char_span_into_str(*span2);
 
             let value = CLRString::new(data0.into_iter().chain(data1).chain(data2).collect());
-            push!(StackValue::string(gc, value));
+            push!(string(gc, value));
             Some(StepResult::InstructionStepped)
         },
         [System.String::GetHashCodeOrdinalIgnoreCase()] => {
@@ -147,7 +147,7 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
             value.hash(&mut h);
             let code = h.finish();
 
-            push!(StackValue::Int32(code as i32));
+            push!(Int32(code as i32));
             Some(StepResult::InstructionStepped)
         },
         [System.String::GetPinnableReference()]
@@ -159,7 +159,7 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
         },
         [System.String::get_Length()] => {
             let len = string_op!(pop!(), |s| s.len());
-            push!(StackValue::Int32(len as i32));
+            push!(Int32(len as i32));
             Some(StepResult::InstructionStepped)
         },
         [System.String::IndexOf(char)] => {
@@ -167,7 +167,7 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
             let c = c as u16;
             let index = string_op!(pop!(), |s| s.iter().position(|x| *x == c));
 
-            push!(StackValue::Int32(match index {
+            push!(Int32(match index {
                 None => -1,
                 Some(i) => i as i32,
             }));
@@ -182,7 +182,7 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
                 .skip(start_at as usize)
                 .position(|x| *x == c));
 
-            push!(StackValue::Int32(match index {
+            push!(Int32(match index {
                 None => -1,
                 Some(i) => i as i32,
             }));
@@ -191,7 +191,7 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
         [System.String::Substring(int)] => {
             vm_expect_stack!(let Int32(start_at) = pop!());
             let value = string_op!(pop!(), |s| s.split_at(start_at as usize).0.to_vec());
-            push!(StackValue::string(gc, CLRString::new(value)));
+            push!(string(gc, CLRString::new(value)));
             Some(StepResult::InstructionStepped)
         },
     }).expect("unsupported intrinsic call to String");

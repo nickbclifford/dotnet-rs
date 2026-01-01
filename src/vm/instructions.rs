@@ -812,7 +812,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadConstantFloat64(f) => push!(NativeFloat(*f)),
             LoadMethodPointer(source) => {
                 let (method, lookup) = self.find_generic_method(source);
-                let idx = self.get_runtime_method_index(gc, method, lookup);
+                let idx = self.get_runtime_method_index(method, lookup);
                 push!(NativeInt(idx as isize));
             }
             LoadIndirect { param0: t, .. } => {
@@ -1496,7 +1496,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let object_type = self.current_context().get_heap_description(o);
                 let method = self.resolve_virtual_method(base_method, object_type);
 
-                let idx = self.get_runtime_method_index(gc, method, lookup);
+                let idx = self.get_runtime_method_index(method, lookup);
                 push!(NativeInt(idx as isize));
             }
             MakeTypedReference(_) => todo!("mkrefany"),

@@ -325,7 +325,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn get_runtime_method_index(
         &mut self,
-        _gc: GCHandle<'gc>,
         method: MethodDescription,
         lookup: GenericLookup,
     ) -> u16 {
@@ -345,7 +344,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn get_runtime_field_index(
         &mut self,
-        _gc: GCHandle<'gc>,
         field: FieldDescription,
         lookup: GenericLookup,
     ) -> u16 {
@@ -385,7 +383,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
         self.register_new_object(&obj_ref);
 
-        let index = self.get_runtime_method_index(gc, method, lookup.clone());
+        let index = self.get_runtime_method_index(method, lookup.clone());
 
         obj_ref.as_object_mut(gc, |instance| {
             instance
@@ -413,7 +411,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
         self.register_new_object(&obj_ref);
 
-        let index = self.get_runtime_field_index(gc, field, lookup.clone());
+        let index = self.get_runtime_field_index(field, lookup.clone());
 
         obj_ref.as_object_mut(gc, |instance| {
             instance
@@ -470,7 +468,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                     v
                 }
             };
-            push!(StackValue::ObjectRef(value));
+            push!(ObjectRef(value));
             Some(StepResult::InstructionStepped)
         },
         [DotnetRs.RuntimeType::GetNamespace()] => {
@@ -479,25 +477,25 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             match target_type {
                 RuntimeType::Type(td) | RuntimeType::Generic(td, _) => {
                     match td.definition.namespace.as_ref() {
-                        None => push!(StackValue::null()),
-                        Some(n) => push!(StackValue::string(gc, CLRString::from(n))),
+                        None => push!(null()),
+                        Some(n) => push!(string(gc, CLRString::from(n))),
                     }
                 }
-                _ => push!(StackValue::string(gc, CLRString::from("System"))),
+                _ => push!(string(gc, CLRString::from("System"))),
             }
             Some(StepResult::InstructionStepped)
         },
         [DotnetRs.RuntimeType::GetName()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
-            push!(StackValue::string(gc, CLRString::from(target_type.get_name())));
+            push!(string(gc, CLRString::from(target_type.get_name())));
             Some(StepResult::InstructionStepped)
         },
         [DotnetRs.RuntimeType::GetIsGenericType()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             let is_generic = matches!(target_type, RuntimeType::Generic(_, _));
-            push!(StackValue::Int32(if is_generic { 1 } else { 0 }));
+            push!(Int32(if is_generic { 1 } else { 0 }));
             Some(StepResult::InstructionStepped)
         },
         [DotnetRs.RuntimeType::GetGenericTypeDefinition()] => {
@@ -515,7 +513,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                     }
                     let def_rt = RuntimeType::Generic(*td, params);
                     let rt_obj = stack.get_runtime_type(gc, def_rt);
-                    push!(StackValue::ObjectRef(rt_obj));
+                    push!(ObjectRef(rt_obj));
                 }
                 _ => todo!("InvalidOperationException: not a generic type")
             }
@@ -536,7 +534,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 let arg_obj = stack.get_runtime_type(gc, arg);
                 arg_obj.write(&mut vector.get_mut()[(i * ObjectRef::SIZE)..]);
             }
-            push!(StackValue::ObjectRef(ObjectRef::new(gc, HeapStorage::Vec(vector))));
+            push!(ObjectRef(ObjectRef::new(gc, HeapStorage::Vec(vector))));
             Some(StepResult::InstructionStepped)
         },
         [DotnetRs.RuntimeType::GetTypeHandle()] => {
@@ -546,7 +544,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             let mut instance = Object::new(rth, &stack.current_context());
             obj.write(instance.instance_storage.get_field_mut("_value"));
 
-            push!(StackValue::ValueType(Box::new(instance)));
+            push!(ValueType(Box::new(instance)));
             Some(StepResult::InstructionStepped)
         },
         [DotnetRs.RuntimeType::MakeGenericType(object[])] => {
@@ -569,7 +567,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                  let new_rt = RuntimeType::Generic(*td, new_generics);
 
                  let rt_obj = stack.get_runtime_type(gc, new_rt);
-                 push!(StackValue::ObjectRef(rt_obj));
+                 push!(ObjectRef(rt_obj));
             } else {
                 todo!("MakeGenericType on non-type")
             }
@@ -603,7 +601,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
         | [DotnetRs.ConstructorInfo::GetName()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (method, _) = stack.resolve_runtime_method(obj);
-            push!(StackValue::string(gc, CLRString::from(&method.method.name)));
+            push!(string(gc, CLRString::from(&method.method.name)));
             Some(StepResult::InstructionStepped)
         },
         [DotnetRs.MethodInfo::GetDeclaringType()]
@@ -611,7 +609,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (method, _) = stack.resolve_runtime_method(obj);
             let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(method.parent));
-            push!(StackValue::ObjectRef(rt_obj));
+            push!(ObjectRef(rt_obj));
             Some(StepResult::InstructionStepped)
         },
         [DotnetRs.MethodInfo::GetMethodHandle()]
@@ -622,7 +620,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
             let mut instance = Object::new(rmh, &stack.current_context());
             obj.write(instance.instance_storage.get_field_mut("_value"));
 
-            push!(StackValue::ValueType(Box::new(instance)));
+            push!(ValueType(Box::new(instance)));
             Some(StepResult::InstructionStepped)
         },
     })
@@ -653,14 +651,14 @@ pub fn runtime_field_info_intrinsic_call<'gc, 'm: 'gc>(
         [DotnetRs.FieldInfo::GetName()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (field, _) = stack.resolve_runtime_field(obj);
-            push!(StackValue::string(gc, CLRString::from(&field.field.name)));
+            push!(string(gc, CLRString::from(&field.field.name)));
             Some(StepResult::InstructionStepped)
         },
         [DotnetRs.FieldInfo::GetDeclaringType()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (field, _) = stack.resolve_runtime_field(obj);
             let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(field.parent));
-            push!(StackValue::ObjectRef(rt_obj));
+            push!(ObjectRef(rt_obj));
             Some(StepResult::InstructionStepped)
         },
         [DotnetRs.FieldInfo::GetFieldHandle()] => {
@@ -670,7 +668,7 @@ pub fn runtime_field_info_intrinsic_call<'gc, 'm: 'gc>(
             let mut instance = Object::new(rfh, &stack.current_context());
             obj.write(instance.instance_storage.get_field_mut("_value"));
 
-            push!(StackValue::ValueType(Box::new(instance)));
+            push!(ValueType(Box::new(instance)));
             Some(StepResult::InstructionStepped)
         },
     })
