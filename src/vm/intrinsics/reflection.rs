@@ -4,7 +4,7 @@ use crate::{
         string::CLRString, ConcreteType, GenericLookup, HeapStorage, MethodDescription, Object,
         ObjectRef, ResolutionContext, StackValue, TypeDescription, Vector,
     },
-    vm::{intrinsics::expect_stack, CallStack, GCHandle},
+    vm::{CallStack, GCHandle},
 };
 use dotnetdll::prelude::{BaseType, MethodType, TypeSource};
 use std::{fmt::Debug, hash::Hash};
@@ -124,19 +124,19 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
 ) {
     macro_rules! pop {
         () => {
-            stack.pop_stack()
+            vm_pop!(stack)
         };
     }
     macro_rules! push {
-        ($value:expr) => {
-            stack.push_stack(gc, $value)
+        ($($args:tt)*) => {
+            vm_push!(stack, gc, $($args)*)
         };
     }
 
     // TODO: real signature checking
     match format!("{:?}", method).as_str() {
         "DotnetRs.Assembly DotnetRs.RuntimeType::GetAssembly()" => {
-            expect_stack!(let ObjectRef(obj) = pop!());
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
 
             let target_type = stack.resolve_runtime_type(obj);
             let resolution = target_type.resolution();
@@ -163,7 +163,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             push!(StackValue::ObjectRef(value));
         }
         "string DotnetRs.RuntimeType::GetNamespace()" => {
-            expect_stack!(let ObjectRef(obj) = pop!());
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             match target_type {
                 RuntimeType::Structure(_, base) => {
@@ -182,7 +182,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             }
         }
         "string DotnetRs.RuntimeType::GetName()" => {
-            expect_stack!(let ObjectRef(obj) = pop!());
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             let name = match target_type {
                 RuntimeType::Structure(_, base) => {
@@ -205,7 +205,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             push!(StackValue::string(gc, CLRString::from(name)));
         }
         "bool DotnetRs.RuntimeType::GetIsGenericType()" => {
-            expect_stack!(let ObjectRef(obj) = pop!());
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             let is_generic = match target_type {
                 RuntimeType::Structure(_, BaseType::Type { source, .. }) => {
@@ -217,7 +217,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             push!(StackValue::Int32(if is_generic { 1 } else { 0 }));
         }
         "System.Type DotnetRs.RuntimeType::GetGenericTypeDefinition()" => {
-            expect_stack!(let ObjectRef(obj) = pop!());
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             match target_type {
                 RuntimeType::Structure(res, base) => {
@@ -249,7 +249,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             }
         }
         "System.Type[] DotnetRs.RuntimeType::GetGenericArguments()" => {
-            expect_stack!(let ObjectRef(obj) = pop!());
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             let args = match target_type {
                 RuntimeType::Structure(_, base) => {
@@ -274,7 +274,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             push!(StackValue::ObjectRef(ObjectRef::new(gc, HeapStorage::Vec(vector))));
         }
         "valuetype [System.Runtime]System.RuntimeTypeHandle DotnetRs.RuntimeType::GetTypeHandle()" => {
-            expect_stack!(let ObjectRef(obj) = pop!());
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
 
             let rth = stack.assemblies.corlib_type("System.RuntimeTypeHandle");
             let mut instance = Object::new(rth, &stack.current_context());
@@ -283,8 +283,8 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             push!(StackValue::ValueType(Box::new(instance)));
         }
         "[System.Runtime]System.Type DotnetRs.RuntimeType::MakeGenericType([System.Runtime]System.Type[])" => {
-            expect_stack!(let ObjectRef(parameters) = pop!());
-            expect_stack!(let ObjectRef(target) = pop!());
+            vm_expect_stack!(let ObjectRef(parameters) = pop!());
+            vm_expect_stack!(let ObjectRef(target) = pop!());
             let target_rt = stack.resolve_runtime_type(target);
 
             if let RuntimeType::Structure(res, base) = target_rt {

@@ -8,10 +8,11 @@ use clap::Parser;
 use dotnetdll::prelude::*;
 use std::process::ExitCode;
 
+#[macro_use]
+pub mod vm;
 pub mod resolve;
 pub mod utils;
 pub mod value;
-pub mod vm;
 
 #[derive(Parser, Debug)]
 #[command(

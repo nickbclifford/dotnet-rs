@@ -2,7 +2,7 @@ use crate::{
     resolve::{Ancestor, Assemblies},
     utils::{decompose_type_source, DebugStr, ResolutionS},
     value::string::CLRString,
-    vm::{intrinsics::expect_stack, GCHandle},
+    vm::GCHandle,
 };
 
 use dotnetdll::prelude::*;
@@ -131,6 +131,53 @@ impl<'a> ResolutionContext<'a> {
         self.assemblies
             .find_concrete_type(self.get_field_type(field))
     }
+
+    pub fn normalize_type(&self, mut t: ConcreteType) -> ConcreteType {
+        let (ut, res) = match t.get() {
+            BaseType::Type { source, .. } => (decompose_type_source(source).0, t.resolution()),
+            _ => return t,
+        };
+
+        let name = ut.type_name(res.0);
+        let base = match name.as_ref() {
+            "System.Boolean" => Some(BaseType::Boolean),
+            "System.Char" => Some(BaseType::Char),
+            "System.Byte" => Some(BaseType::UInt8),
+            "System.SByte" => Some(BaseType::Int8),
+            "System.Int16" => Some(BaseType::Int16),
+            "System.UInt16" => Some(BaseType::UInt16),
+            "System.Int32" => Some(BaseType::Int32),
+            "System.UInt32" => Some(BaseType::UInt32),
+            "System.Int64" => Some(BaseType::Int64),
+            "System.UInt64" => Some(BaseType::UInt64),
+            "System.Single" => Some(BaseType::Float32),
+            "System.Double" => Some(BaseType::Float64),
+            "System.IntPtr" => Some(BaseType::IntPtr),
+            "System.UIntPtr" => Some(BaseType::UIntPtr),
+            "System.Object" => Some(BaseType::Object),
+            "System.String" => Some(BaseType::String),
+            _ => None,
+        };
+
+        if let Some(base) = base {
+            ConcreteType::new(res, base)
+        } else {
+            if let BaseType::Type {
+                source,
+                value_kind,
+            } = t.get_mut()
+            {
+                if value_kind.is_none() {
+                    let (ut, _) = decompose_type_source(source);
+                    let td = self.locate_type(ut);
+                    if td.is_value_type(self) {
+                        *value_kind = Some(ValueKind::ValueType);
+                    }
+                }
+            }
+            t
+        }
+    }
 }
 
 #[derive(Clone, Debug, Collect, PartialEq)]
@@ -196,6 +243,15 @@ impl<'gc> StackValue<'gc> {
             Self::ValueType(o) => o.description,
         }
     }
+
+    pub fn as_ptr(&self) -> *mut u8 {
+        match self {
+            Self::NativeInt(i) => *i as *mut u8,
+            Self::UnmanagedPtr(UnmanagedPtr(p)) => *p,
+            Self::ManagedPtr(m) => m.value,
+            v => panic!("expected pointer on stack, received {:?}", v),
+        }
+    }
 }
 impl Default for StackValue<'_> {
     fn default() -> Self {
@@ -213,6 +269,7 @@ impl PartialOrd for StackValue<'_> {
             (NativeInt(l), NativeInt(r)) => l.partial_cmp(r),
             (NativeFloat(l), NativeFloat(r)) => l.partial_cmp(r),
             (ManagedPtr(l), ManagedPtr(r)) => l.partial_cmp(r),
+            (ObjectRef(l), ObjectRef(r)) => l.partial_cmp(r),
             _ => None,
         }
     }
@@ -272,6 +329,16 @@ impl PartialEq for ObjectRef<'_> {
             (Some(l), Some(r)) => Gc::ptr_eq(l, r),
             (None, None) => true,
             _ => false,
+        }
+    }
+}
+impl PartialOrd for ObjectRef<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self.0, other.0) {
+            (Some(l), Some(r)) => Gc::as_ptr(l).partial_cmp(&Gc::as_ptr(r)),
+            (None, None) => Some(Ordering::Equal),
+            (None, _) => Some(Ordering::Less),
+            (_, None) => Some(Ordering::Greater),
         }
     }
 }
@@ -484,67 +551,8 @@ pub enum CTSValue<'gc> {
 impl<'gc> CTSValue<'gc> {
     pub fn new(t: &ConcreteType, context: &ResolutionContext, data: StackValue<'gc>) -> Self {
         use ValueType::*;
+        let t = context.normalize_type(t.clone());
         match t.get() {
-            BaseType::Type {
-                value_kind: None | Some(ValueKind::ValueType),
-                source,
-            } => {
-                let (ut, type_generics) = decompose_type_source(source);
-                let new_lookup = GenericLookup::new(type_generics);
-                let new_ctx = context.with_generics(&new_lookup);
-                let td = new_ctx.locate_type(ut);
-
-                if let Some(e) = td.is_enum() {
-                    let enum_type = new_ctx.make_concrete(e);
-                    return CTSValue::new(&enum_type, context, data);
-                }
-
-                let v = match td.type_name().as_str() {
-                    "System.Boolean" => Bool(convert_num::<u8>(data) != 0),
-                    "System.Char" => Char(convert_num(data)),
-                    "System.Single" => Float32({
-                        expect_stack!(let NativeFloat(f) = data);
-                        f as f32
-                    }),
-                    "System.Double" => Float64({
-                        expect_stack!(let NativeFloat(f) = data);
-                        f
-                    }),
-                    "System.SByte" => Int8(convert_num(data)),
-                    "System.Int16" => Int16(convert_num(data)),
-                    "System.Int32" => Int32(convert_num(data)),
-                    "System.Int64" => Int64(convert_i64(data)),
-                    "System.IntPtr" => NativeInt(convert_num(data)),
-                    "System.TypedReference" => TypedRef,
-                    "System.Byte" => UInt8(convert_num(data)),
-                    "System.UInt16" => UInt16(convert_num(data)),
-                    "System.UInt32" => UInt32(convert_num(data)),
-                    "System.UInt64" => UInt64(convert_i64(data)),
-                    "System.UIntPtr" => NativeUInt(convert_num(data)),
-                    _ => {
-                        expect_stack!(let ValueType(o) = data);
-                        if !new_ctx.is_a(o.description, td) {
-                            panic!(
-                                "type mismatch: expected {:?}, found {:?}",
-                                td, o.description
-                            );
-                        }
-                        Struct(*o)
-                    }
-                };
-
-                Self::Value(v)
-            }
-            BaseType::Type {
-                value_kind: Some(ValueKind::Class),
-                ..
-            }
-            | BaseType::Object
-            | BaseType::Vector(_, _)
-            | BaseType::String => {
-                expect_stack!(let ObjectRef(o) = data);
-                Self::Ref(o)
-            }
             BaseType::Boolean => Self::Value(Bool(convert_num::<u8>(data) != 0)),
             BaseType::Char => Self::Value(Char(convert_num(data))),
             BaseType::Int8 => Self::Value(Int8(convert_num(data))),
@@ -567,13 +575,17 @@ impl<'gc> CTSValue<'gc> {
             BaseType::UIntPtr | BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
                 Self::Value(NativeUInt(convert_num(data)))
             }
-            rest => todo!("tried to deserialize StackValue {:?}", rest),
-        }
-    }
-
-    pub fn read(t: &ConcreteType, context: &ResolutionContext, data: &[u8]) -> Self {
-        use ValueType::*;
-        match t.get() {
+            BaseType::Object | BaseType::String | BaseType::Vector(_, _) => {
+                vm_expect_stack!(let ObjectRef(o) = data);
+                Self::Ref(o)
+            }
+            BaseType::Type {
+                value_kind: Some(ValueKind::Class),
+                ..
+            } => {
+                vm_expect_stack!(let ObjectRef(o) = data);
+                Self::Ref(o)
+            }
             BaseType::Type {
                 value_kind: None | Some(ValueKind::ValueType),
                 source,
@@ -585,42 +597,30 @@ impl<'gc> CTSValue<'gc> {
 
                 if let Some(e) = td.is_enum() {
                     let enum_type = new_ctx.make_concrete(e);
-                    return CTSValue::read(&enum_type, context, data);
+                    return CTSValue::new(&enum_type, context, data);
                 }
 
-                let v = match td.type_name().as_str() {
-                    "System.Boolean" => Bool(data[0] != 0),
-                    "System.Char" => Char(from_bytes!(u16, data)),
-                    "System.Single" => Float32(from_bytes!(f32, data)),
-                    "System.Double" => Float64(from_bytes!(f64, data)),
-                    "System.SByte" => Int8(data[0] as i8),
-                    "System.Int16" => Int16(from_bytes!(i16, data)),
-                    "System.Int32" => Int32(from_bytes!(i32, data)),
-                    "System.Int64" => Int64(from_bytes!(i64, data)),
-                    "System.IntPtr" => NativeInt(from_bytes!(isize, data)),
-                    "System.TypedReference" => TypedRef,
-                    "System.Byte" => UInt8(data[0]),
-                    "System.UInt16" => UInt16(from_bytes!(u16, data)),
-                    "System.UInt32" => UInt32(from_bytes!(u32, data)),
-                    "System.UInt64" => UInt64(from_bytes!(u64, data)),
-                    "System.UIntPtr" => NativeUInt(from_bytes!(usize, data)),
-                    _ => {
-                        let mut instance = Object::new(td, &new_ctx);
-                        instance.instance_storage.get_mut().copy_from_slice(data);
-                        Struct(instance)
-                    }
-                };
+                if td.type_name() == "System.TypedReference" {
+                    return Self::Value(TypedRef);
+                }
 
-                Self::Value(v)
+                vm_expect_stack!(let ValueType(o) = data);
+                if !new_ctx.is_a(o.description, td) {
+                    panic!(
+                        "type mismatch: expected {:?}, found {:?}",
+                        td, o.description
+                    );
+                }
+                Self::Value(Struct(*o))
             }
-            BaseType::Type {
-                value_kind: Some(ValueKind::Class),
-                ..
-            }
-            | BaseType::Array(_, _)
-            | BaseType::String
-            | BaseType::Object
-            | BaseType::Vector(_, _) => Self::Ref(ObjectRef::read(data)),
+            rest => todo!("tried to deserialize StackValue {:?}", rest),
+        }
+    }
+
+    pub fn read(t: &ConcreteType, context: &ResolutionContext, data: &[u8]) -> Self {
+        use ValueType::*;
+        let t = context.normalize_type(t.clone());
+        match t.get() {
             BaseType::Boolean => Self::Value(Bool(data[0] != 0)),
             BaseType::Char => Self::Value(Char(from_bytes!(u16, data))),
             BaseType::Int8 => Self::Value(Int8(data[0] as i8)),
@@ -636,6 +636,35 @@ impl<'gc> CTSValue<'gc> {
             BaseType::IntPtr => Self::Value(NativeInt(from_bytes!(isize, data))),
             BaseType::UIntPtr | BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
                 Self::Value(NativeUInt(from_bytes!(usize, data)))
+            }
+            BaseType::Object | BaseType::String | BaseType::Vector(_, _) | BaseType::Array(_, _) => {
+                Self::Ref(ObjectRef::read(data))
+            }
+            BaseType::Type {
+                value_kind: Some(ValueKind::Class),
+                ..
+            } => Self::Ref(ObjectRef::read(data)),
+            BaseType::Type {
+                value_kind: None | Some(ValueKind::ValueType),
+                source,
+            } => {
+                let (ut, type_generics) = decompose_type_source(source);
+                let new_lookup = GenericLookup::new(type_generics);
+                let new_ctx = context.with_generics(&new_lookup);
+                let td = new_ctx.locate_type(ut);
+
+                if let Some(e) = td.is_enum() {
+                    let enum_type = new_ctx.make_concrete(e);
+                    return CTSValue::read(&enum_type, context, data);
+                }
+
+                if td.type_name() == "System.TypedReference" {
+                    return Self::Value(TypedRef);
+                }
+
+                let mut instance = Object::new(td, &new_ctx);
+                instance.instance_storage.get_mut().copy_from_slice(data);
+                Self::Value(Struct(instance))
             }
         }
     }

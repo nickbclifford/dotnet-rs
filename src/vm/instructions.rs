@@ -67,7 +67,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             statics.init(description, &ctx)
         };
         if let Some(m) = value {
-            super::msg!(
+            vm_msg!(
                 self,
                 "-- calling static constructor (will return to ip {}) --",
                 self.current_frame().state.ip
@@ -92,16 +92,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
 
         macro_rules! push {
-            ($variant:ident ( $($args:expr),* )) => {
-                push!(StackValue::$variant($($args),*))
-            };
-            ($val:expr) => {
-                self.push_stack(gc, $val)
+            ($($args:tt)*) => {
+                vm_push!(self, gc, $($args)*)
             };
         }
         macro_rules! pop {
             () => {
-                self.pop_stack()
+                vm_pop!(self)
             };
         }
 
@@ -486,7 +483,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
         }
 
-        super::msg!(
+        vm_msg!(
             self,
             "[#{} | ip @ {}] {}",
             self.frames.len() - 1,
@@ -611,7 +608,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         .locate_method(o.implementation, &lookup);
                     let declaration = self.current_context().locate_method(o.declaration, &lookup);
                     if method == declaration {
-                        super::msg!(self, "-- dispatching to {:?} --", target);
+                        vm_msg!(self, "-- dispatching to {:?} --", target);
                         self.call_frame(
                             gc,
                             MethodInfo::new(target, &lookup, self.assemblies),
@@ -636,7 +633,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 push!(Int32(val))
             }
             CheckFinite => {
-                expect_stack!(let NativeFloat(f) = pop!());
+                vm_expect_stack!(let NativeFloat(f) = pop!());
                 if f.is_infinite() || f.is_nan() {
                     todo!("ArithmeticException in ckfinite");
                 }
@@ -841,15 +838,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 push!(NativeInt(idx as isize));
             }
             LoadIndirect { param0: t, .. } => {
-                let ptr = match pop!() {
-                    StackValue::NativeInt(i) => i as *mut u8,
-                    StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p,
-                    StackValue::ManagedPtr(m) => m.value,
-                    v => todo!(
-                        "invalid type on stack ({:?}) for ldind operation, expected pointer",
-                        v
-                    ),
-                };
+                let ptr = pop!().as_ptr();
 
                 macro_rules! load_as_i32 {
                     ($t:ty) => {{
@@ -1014,19 +1003,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 param0: store_type, ..
             } => {
                 let val = pop!();
-                let ptr = match pop!() {
-                    StackValue::NativeInt(i) => i as *mut u8,
-                    StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p,
-                    StackValue::ManagedPtr(m) => m.value,
-                    v => todo!(
-                        "invalid type on stack ({:?}) for stind operation, expected pointer",
-                        v
-                    ),
-                };
+                let ptr = pop!().as_ptr();
 
                 macro_rules! store_from_i32 {
                     ($t:ty) => {{
-                        expect_stack!(let Int32(v) = val);
+                        vm_expect_stack!(let Int32(v) = val);
                         let p = ptr as *mut $t;
                         unsafe {
                             *p = v as $t;
@@ -1039,35 +1020,35 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StoreType::Int16 => store_from_i32!(i16),
                     StoreType::Int32 => store_from_i32!(i32),
                     StoreType::Int64 => {
-                        expect_stack!(let Int64(v) = val);
+                        vm_expect_stack!(let Int64(v) = val);
                         let p = ptr as *mut i64;
                         unsafe {
                             *p = v;
                         }
                     }
                     StoreType::Float32 => {
-                        expect_stack!(let NativeFloat(v) = val);
+                        vm_expect_stack!(let NativeFloat(v) = val);
                         let p = ptr as *mut f32;
                         unsafe {
                             *p = v as f32;
                         }
                     }
                     StoreType::Float64 => {
-                        expect_stack!(let NativeFloat(v) = val);
+                        vm_expect_stack!(let NativeFloat(v) = val);
                         let p = ptr as *mut f64;
                         unsafe {
                             *p = v;
                         }
                     }
                     StoreType::IntPtr => {
-                        expect_stack!(let NativeInt(v) = val);
+                        vm_expect_stack!(let NativeInt(v) = val);
                         let p = ptr as *mut isize;
                         unsafe {
                             *p = v;
                         }
                     }
                     StoreType::Object => {
-                        expect_stack!(let ObjectRef(o) = val);
+                        vm_expect_stack!(let ObjectRef(o) = val);
                         let p = ptr as *mut ObjectRef;
                         unsafe {
                             *p = o;
@@ -1094,7 +1075,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 // TODO: pointer stuff
             }),
             Switch(targets) => {
-                expect_stack!(let Int32(value as usize) = pop!());
+                vm_expect_stack!(let Int32(value as usize) = pop!());
                 conditional_branch!(value < targets.len(), &targets[value]);
             }
             Xor => binary_int_op!(^),
@@ -1153,36 +1134,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 // TODO: check explicit overrides
 
-                let mut found = None;
-                for (parent, _) in self.current_context().get_ancestors(this_type) {
-                    if let Some(method) = self.assemblies.find_method_in_type(
-                        parent,
-                        &base_method.method.name,
-                        &base_method.method.signature,
-                        base_method.resolution(),
-                    ) {
-                        found = Some(method);
-                        break;
-                    }
-                }
+                let method = self.resolve_virtual_method(base_method, this_type);
 
-                if let Some(method) = found {
-                    for a in args {
-                        push!(a);
-                    }
-                    if method.method.internal_call {
-                        intrinsic_call(gc, self, method, lookup);
-                        return StepResult::InstructionStepped;
-                    }
-                    self.call_frame(
-                        gc,
-                        MethodInfo::new(method, &lookup, self.assemblies),
-                        lookup,
-                    );
-                    moved_ip = true;
-                } else {
-                    panic!("could not resolve virtual call");
+                for a in args {
+                    push!(a);
                 }
+                if method.method.internal_call {
+                    intrinsic_call(gc, self, method, lookup);
+                    return StepResult::InstructionStepped;
+                }
+                self.call_frame(
+                    gc,
+                    MethodInfo::new(method, &lookup, self.assemblies),
+                    lookup,
+                );
+                moved_ip = true;
             }
             CallVirtualConstrained(_, _) => todo!("constrained.callvirt"),
             CallVirtualTail(_) => todo!("tail.callvirt"),
@@ -1191,18 +1157,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             InitializeForObject(t) => {
                 let ctx = self.current_context();
                 let layout = type_layout(ctx.make_concrete(t), &ctx);
-
-                let target = match pop!() {
-                    StackValue::ManagedPtr(m) => m.value,
-                    StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p,
-                    err => todo!("invalid type on stack ({:?}) for initobj", err),
-                };
+                let target = pop!().as_ptr();
 
                 let s = unsafe { std::slice::from_raw_parts_mut(target, layout.size()) };
                 s.fill(0);
             }
             IsInstance(target) => {
-                expect_stack!(let ObjectRef(target_obj) = pop!());
+                vm_expect_stack!(let ObjectRef(target_obj) = pop!());
                 if let ObjectRef(Some(o)) = target_obj {
                     let ctx = self.current_context();
                     let obj_type = ctx.get_heap_description(o);
@@ -1223,8 +1184,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadElement {
                 param0: load_type, ..
             } => {
-                expect_stack!(let Int32(index as usize) = pop!());
-                expect_stack!(let ObjectRef(obj) = pop!());
+                vm_expect_stack!(let Int32(index as usize) = pop!());
+                vm_expect_stack!(let ObjectRef(obj) = pop!());
 
                 let ctx = self.current_context();
                 let load_type = ctx.make_concrete(load_type);
@@ -1250,7 +1211,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 };
                 let array = pop!();
 
-                expect_stack!(let ObjectRef(obj) = array);
+                vm_expect_stack!(let ObjectRef(obj) = array);
 
                 let elem_size: usize = match load_type {
                     Int8 | UInt8 => 1,
@@ -1406,19 +1367,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             LoadFieldSkipNullCheck(_) => todo!("no.nullcheck ldfld"),
             LoadLength => {
-                expect_stack!(let ObjectRef(obj) = pop!());
+                vm_expect_stack!(let ObjectRef(obj) = pop!());
                 let len = obj.as_vector(|a| a.layout.length as isize);
                 push!(NativeInt(len));
             }
             LoadObject {
                 param0: load_type, ..
             } => {
-                let source_ptr = match pop!() {
-                    StackValue::NativeInt(i) => i as *mut u8,
-                    StackValue::UnmanagedPtr(p) => p.0,
-                    StackValue::ManagedPtr(p) => p.value,
-                    rest => panic!("invalid type on stack ({:?}) for ldobj", rest),
-                };
+                let source_ptr = pop!().as_ptr();
 
                 let ctx = self.current_context();
                 let load_type = ctx.make_concrete(load_type);
@@ -1512,25 +1468,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             LoadVirtualMethodPointer { param0: source, .. } => {
                 let (base_method, lookup) = self.find_generic_method(source);
-                expect_stack!(let ObjectRef(obj) = pop!());
+                vm_expect_stack!(let ObjectRef(obj) = pop!());
                 let ObjectRef(Some(o)) = obj else {
                     todo!("null pointer exception in ldvirtftn")
                 };
                 let object_type = self.current_context().get_heap_description(o);
-                
-                let mut method = None;
-                for (parent, _) in self.current_context().get_ancestors(object_type) {
-                    if let Some(m) = self.assemblies.find_method_in_type(
-                        parent,
-                        &base_method.method.name,
-                        &base_method.method.signature,
-                        base_method.resolution(),
-                    ) {
-                        method = Some(m);
-                        break;
-                    }
-                }
-                let method = method.expect("could not find virtual method implementation");
+                let method = self.resolve_virtual_method(base_method, object_type);
 
                 let idx = self.get_runtime_method_index(gc, method, lookup);
                 push!(NativeInt(idx as isize));
@@ -1546,45 +1489,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     ),
                 };
                 let ctx = self.current_context();
-                let mut elem_type = ctx.make_concrete(elem_type);
-                macro_rules! normalize_primitives {
-                    ($($name:literal => $t:ident),+) => {{
-                        let repr = format!("{:?}", elem_type);
-                        $(
-                            if repr.as_str() == $name || repr.as_str() == format!("[System.Runtime]{}", $name) {
-                                elem_type = ctx.make_concrete(&BaseType::$t);
-                            }
-                        )+
-                    }}
-                }
-
-                normalize_primitives! {
-                    "System.Boolean" => Boolean,
-                    "System.Char" => Char,
-                    "System.Byte" => UInt8,
-                    "System.SByte" => Int8,
-                    "System.Int16" => Int16,
-                    "System.UInt16" => UInt16,
-                    "System.Int32" => Int32,
-                    "System.UInt32" => UInt32,
-                    "System.Int64" => Int64,
-                    "System.UInt64" => UInt64,
-                    "System.Single" => Float32,
-                    "System.Double" => Float64,
-                    "System.IntPtr" => IntPtr,
-                    "System.UIntPtr" => UIntPtr,
-                    "System.Object" => Object,
-                    "System.String" => String
-                }
-
-                if let BaseType::Type { source, value_kind } = elem_type.get_mut() {
-                    // generic context doesn't really matter here since we're just doing pure ancestry lookups
-                    let (ut, _) = decompose_type_source(source);
-                    let td = ctx.locate_type(ut);
-                    if td.is_value_type(&ctx) {
-                        *value_kind = Some(ValueKind::ValueType);
-                    }
-                }
+                let elem_type = ctx.normalize_type(ctx.make_concrete(elem_type));
 
                 let v = Vector::new(elem_type, length, &ctx);
                 let o = ObjectRef::new(gc, HeapStorage::Vec(v));
@@ -1620,7 +1525,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 // TODO: proper signature checking
                 match format!("{:?}", method).as_str() {
                     "void System.IntPtr::.ctor(int)" => {
-                        expect_stack!(let Int32(i) = pop!());
+                        vm_expect_stack!(let Int32(i) = pop!());
                         push!(NativeInt(i as isize));
                     }
                     _ => {
@@ -1647,8 +1552,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             StoreElement { param0: source, .. } => {
                 let value = pop!();
-                expect_stack!(let Int32(index as usize) = pop!());
-                expect_stack!(let ObjectRef(obj) = pop!());
+                vm_expect_stack!(let Int32(index as usize) = pop!());
+                vm_expect_stack!(let ObjectRef(obj) = pop!());
                 let ObjectRef(Some(heap)) = obj else {
                     todo!("NullPointerException")
                 };
@@ -1700,7 +1605,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                 };
 
-                expect_stack!(let ObjectRef(obj) = array);
+                vm_expect_stack!(let ObjectRef(obj) = array);
                 let ObjectRef(Some(heap)) = obj else {
                     todo!("NullPointerException")
                 };

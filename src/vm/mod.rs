@@ -7,6 +7,8 @@ use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
 use std::rc::Rc;
 
+#[macro_use]
+mod macros;
 mod exceptions;
 mod executor;
 mod instructions;
@@ -16,13 +18,6 @@ mod stack;
 
 pub use executor::*;
 pub use stack::*;
-
-macro_rules! msg {
-    ($src:expr, $($format:tt)*) => {
-        $src.msg(format_args!($($format)*))
-    }
-}
-pub(crate) use msg;
 
 // I.12.3.2
 #[derive(Clone)]

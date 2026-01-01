@@ -17,33 +17,7 @@ use crate::{
 
 use dotnetdll::prelude::*;
 
-macro_rules! expect_stack {
-    (let $variant:ident ( $inner:ident $(as $t:ty)? ) = $v:expr) => {
-        let $inner = match $v {
-            StackValue::$variant($inner) => $inner,
-            err => panic!(
-                "invalid type on stack ({:?}), expected {}",
-                err,
-                stringify!($variant)
-            ),
-        };
-        $(
-            let $inner = $inner as $t;
-        )?
-    };
-}
-pub(crate) use expect_stack;
 
-fn ref_as_ptr(v: StackValue) -> *mut u8 {
-    match v {
-        StackValue::ManagedPtr(m) => m.value,
-        StackValue::NativeInt(i) => i as *mut u8,
-        err => todo!(
-            "invalid type on stack ({:?}), expected managed pointer for ref parameter",
-            err
-        ),
-    }
-}
 
 pub fn span_to_slice<'gc, 'a>(span: Object<'gc>) -> &'a [u8] {
     let mut ptr_data = [0u8; ObjectRef::SIZE];
@@ -68,13 +42,18 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 ) {
     macro_rules! pop {
         () => {
-            stack.pop_stack()
+            vm_pop!(stack)
         };
     }
     macro_rules! push {
-        ($value:expr) => {
-            stack.push_stack(gc, $value)
+        ($($args:tt)*) => {
+            vm_push!(stack, gc, $($args)*)
         };
+    }
+    macro_rules! msg {
+        ($($args:tt)*) => {
+            vm_msg!($($args)*)
+        }
     }
     macro_rules! ctx {
         () => {
@@ -82,7 +61,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         };
     }
 
-    super::msg!(stack, "-- method marked as runtime intrinsic --");
+    msg!(stack, "-- method marked as runtime intrinsic --");
 
     if method.parent.definition.type_name() == "DotnetRs.RuntimeType" {
         return runtime_type_intrinsic_call(gc, stack, method, generics);
@@ -125,7 +104,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     && m.signature.instance
                     && m.signature.parameters.is_empty()
                 {
-                    super::msg!(
+                    msg!(
                         stack,
                         "-- invoking parameterless constructor for {} --",
                         td.type_name()
@@ -156,9 +135,9 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             }
         }
         "[Generic(1)] static void System.Buffer::Memmove(ref M0, ref M0, nuint)" => {
-            expect_stack!(let NativeInt(len) = pop!());
-            let src = ref_as_ptr(pop!());
-            let dst = ref_as_ptr(pop!());
+            vm_expect_stack!(let NativeInt(len) = pop!());
+            let src = pop!().as_ptr();
+            let dst = pop!().as_ptr();
 
             let target = &generics.method_generics[0];
             let layout = type_layout(target.clone(), ctx!());
@@ -240,9 +219,9 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let _obj = pop!();
         }
         "static bool System.MemoryExtensions::Equals(valuetype System.ReadOnlySpan`1<char>, valuetype System.ReadOnlySpan`1<char>, valuetype System.StringComparison)" => {
-            expect_stack!(let Int32(_culture_comparison) = pop!()); // TODO(i18n): respect StringComparison rules
-            expect_stack!(let ValueType(b) = pop!());
-            expect_stack!(let ValueType(a) = pop!());
+            vm_expect_stack!(let Int32(_culture_comparison) = pop!()); // TODO(i18n): respect StringComparison rules
+            vm_expect_stack!(let ValueType(b) = pop!());
+            vm_expect_stack!(let ValueType(a) = pop!());
 
             let a = span_to_slice(*a);
             let b = span_to_slice(*b);
@@ -251,7 +230,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         }
         "static void System.Runtime.CompilerServices.RuntimeHelpers::RunClassConstructor(valuetype System.RuntimeTypeHandle)" => {
             // https://github.com/dotnet/runtime/blob/main/src/libraries/System.Private.CoreLib/src/System/SR.cs#L78
-            expect_stack!(let ValueType(handle) = pop!());
+            vm_expect_stack!(let ValueType(handle) = pop!());
             let rt = ObjectRef::read(handle.instance_storage.get_field("_value"));
             let target = stack.resolve_runtime_type(rt.expect_object_ref());
             let target: ConcreteType = target.clone().into();
@@ -261,14 +240,14 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 let ip = &mut stack.frames[second_to_last].state.ip;
                 *ip += 1;
                 let i = *ip;
-                super::msg!(stack, "-- explicit initialization! setting return ip to {} --", i);
+                msg!(stack, "-- explicit initialization! setting return ip to {} --", i);
                 return;
             }
         }
         "[Generic(1)] static valuetype System.ReadOnlySpan`1<M0> System.Runtime.CompilerServices.RuntimeHelpers::CreateSpan(valuetype System.RuntimeFieldHandle)" => {
             let target = &generics.method_generics[0];
             let target_size = type_layout(target.clone(), ctx!()).size();
-            expect_stack!(let ValueType(field_handle) = pop!());
+            vm_expect_stack!(let ValueType(field_handle) = pop!());
 
             let mut idx_buf = [0u8; ObjectRef::SIZE];
             idx_buf.copy_from_slice(field_handle.instance_storage.get_field("_value"));
@@ -317,31 +296,31 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         }
         "[Generic(1)] static ref M0 System.Runtime.CompilerServices.Unsafe::Add(ref M0, nint)" => {
             let target_type = stack.assemblies.find_concrete_type(generics.method_generics[0].clone());
-            expect_stack!(let NativeInt(offset) = pop!());
-            let m = ref_as_ptr(pop!());
+            vm_expect_stack!(let NativeInt(offset) = pop!());
+            let m = pop!().as_ptr();
             push!(StackValue::managed_ptr(unsafe { m.offset(offset) }, target_type));
         }
         "[Generic(1)] static bool System.Runtime.CompilerServices.Unsafe::AreSame(ref M0, ref M0)" => {
-            let m1 = ref_as_ptr(pop!());
-            let m2 = ref_as_ptr(pop!());
+            let m1 = pop!().as_ptr();
+            let m2 = pop!().as_ptr();
             push!(StackValue::Int32((m1 == m2) as i32));
         }
         "[Generic(2)] static ref M1 System.Runtime.CompilerServices.Unsafe::As(ref M0)" => {
             let target_type = stack.assemblies.find_concrete_type(generics.method_generics[1].clone());
-            let m = ref_as_ptr(pop!());
+            let m = pop!().as_ptr();
             push!(StackValue::managed_ptr(m, target_type));
         }
         "[Generic(1)] static ref M0 System.Runtime.CompilerServices.Unsafe::AsRef(ref M0)" => {
             // I think this is a noop since none of the types or locations are actually changing
         }
         "[Generic(1)] static nint System.Runtime.CompilerServices.Unsafe::ByteOffset(ref M0, ref M0)" => {
-            let r = ref_as_ptr(pop!());
-            let l = ref_as_ptr(pop!());
+            let r = pop!().as_ptr();
+            let l = pop!().as_ptr();
             let offset = (l as isize) - (r as isize);
             push!(StackValue::NativeInt(offset));
         }
         "[Generic(1)] static M0 System.Runtime.CompilerServices.Unsafe::ReadUnaligned(void*)" => {
-            expect_stack!(let NativeInt(ptr) = pop!());
+            vm_expect_stack!(let NativeInt(ptr) = pop!());
             let target = &generics.method_generics[0];
             let layout = type_layout(target.clone(), ctx!());
 
@@ -373,11 +352,11 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let target = &generics.method_generics[0];
             let layout = type_layout(target.clone(), ctx!());
             let value = pop!();
-            expect_stack!(let NativeInt(ptr) = pop!());
+            vm_expect_stack!(let NativeInt(ptr) = pop!());
 
             macro_rules! write_ua {
                 ($variant:ident, $t:ty) => {{
-                    expect_stack!(let $variant(v) = value);
+                    vm_expect_stack!(let $variant(v) = value);
                     unsafe {
                         std::ptr::write_unaligned(ptr as *mut _, v as $t);
                     }
@@ -404,7 +383,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             push!(StackValue::Int32(value));
         }
         "static void System.Runtime.InteropServices.Marshal::SetLastPInvokeError(int)" => {
-            expect_stack!(let Int32(value) = pop!());
+            vm_expect_stack!(let Int32(value) = pop!());
 
             unsafe {
                 super::pinvoke::LAST_ERROR = value;
@@ -417,8 +396,8 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             push!(StackValue::Int32(0));
         }
         "<req System.Runtime.InteropServices.InAttribute> ref T0 System.ReadOnlySpan`1::get_Item(int)" => {
-            expect_stack!(let Int32(index) = pop!());
-            expect_stack!(let ManagedPtr(m) = pop!());
+            vm_expect_stack!(let Int32(index) = pop!());
+            vm_expect_stack!(let ManagedPtr(m) = pop!());
             if !m.inner_type.type_name().contains("Span") {
                 todo!("invalid type on stack");
             }
@@ -441,7 +420,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         }
         "int System.Span`1::get_Length()" |
         "int System.ReadOnlySpan`1::get_Length()" => {
-            expect_stack!(let ManagedPtr(m) = pop!());
+            vm_expect_stack!(let ManagedPtr(m) = pop!());
             if !m.inner_type.type_name().contains("Span") {
                 todo!("invalid type on stack");
             }
@@ -458,9 +437,9 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         "static int System.Threading.Interlocked::CompareExchange(ref int, int, int)" => {
             use std::sync::atomic::{AtomicI32, Ordering};
 
-            expect_stack!(let Int32(comparand) = pop!());
-            expect_stack!(let Int32(value) = pop!());
-            let target = ref_as_ptr(pop!()) as *mut i32;
+            vm_expect_stack!(let Int32(comparand) = pop!());
+            vm_expect_stack!(let Int32(value) = pop!());
+            let target = pop!().as_ptr() as *mut i32;
 
             let atomic_view = unsafe { AtomicI32::from_ptr(target) };
             let Ok(prev) = atomic_view.compare_exchange(
@@ -479,7 +458,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let _tag_object = pop!();
         }
         "static void System.Threading.Monitor::ReliableEnter(object, ref bool)" => {
-            let success_flag = ref_as_ptr(pop!());
+            let success_flag = pop!().as_ptr();
 
             // TODO(threading): actually acquire mutex
             let _tag_object = pop!();
@@ -496,17 +475,17 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         }
         "[Generic(1)] static M0 System.Threading.Volatile::Read(ref M0)" => {
             // note that this method's signature restricts the generic to only reference types
-            let ptr = ref_as_ptr(pop!()) as *const ObjectRef<'gc>;
+            let ptr = pop!().as_ptr() as *const ObjectRef<'gc>;
 
             let value = unsafe { std::ptr::read_volatile(ptr) };
 
             push!(StackValue::ObjectRef(value));
         }
         "static void System.Threading.Volatile::Write(ref bool, bool)" => {
-            expect_stack!(let Int32(value) = pop!());
+            vm_expect_stack!(let Int32(value) = pop!());
             let as_bool = value as u8;
 
-            let src = ref_as_ptr(pop!());
+            let src = pop!().as_ptr();
 
             unsafe { std::ptr::write_volatile(src, as_bool) };
         }
@@ -526,18 +505,18 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             push!(StackValue::ValueType(Box::new(span)));
         }
         "static System.Type System.Type::GetTypeFromHandle(valuetype System.RuntimeTypeHandle)" => {
-            expect_stack!(let ValueType(handle) = pop!());
+            vm_expect_stack!(let ValueType(handle) = pop!());
             let target = ObjectRef::read(handle.instance_storage.get_field("_value"));
             push!(StackValue::ObjectRef(target));
         }
         "static nint System.RuntimeTypeHandle::ToIntPtr(valuetype System.RuntimeTypeHandle)" => {
-            expect_stack!(let ValueType(handle) = pop!());
+            vm_expect_stack!(let ValueType(handle) = pop!());
             let target = handle.instance_storage.get_field("_value");
             let val = usize::from_ne_bytes(target.try_into().unwrap());
             push!(StackValue::NativeInt(val as isize));
         }
         "bool System.Type::get_IsValueType()" => {
-            expect_stack!(let ObjectRef(o) = pop!());
+            vm_expect_stack!(let ObjectRef(o) = pop!());
             let target = stack.resolve_runtime_type(o);
             match target {
                 RuntimeType::Structure(_, _) => {
@@ -553,8 +532,8 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             }
         }
         "static bool System.Type::op_Equality(System.Type, System.Type)" => {
-            expect_stack!(let ObjectRef(o2) = pop!());
-            expect_stack!(let ObjectRef(o1) = pop!());
+            vm_expect_stack!(let ObjectRef(o2) = pop!());
+            vm_expect_stack!(let ObjectRef(o1) = pop!());
             push!(StackValue::Int32((o1 == o2) as i32));
         }
         x => panic!("unsupported intrinsic call to {}", x),

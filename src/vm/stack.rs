@@ -499,6 +499,27 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     pub fn msg(&self, fmt: std::fmt::Arguments) {
         println!("{}{}", "\t".repeat((self.frames.len() - 1) % 10), fmt);
     }
+
+    pub fn resolve_virtual_method(
+        &self,
+        base_method: MethodDescription,
+        this_type: TypeDescription,
+    ) -> MethodDescription {
+        for (parent, _) in self.current_context().get_ancestors(this_type) {
+            if let Some(method) = self.assemblies.find_method_in_type(
+                parent,
+                &base_method.method.name,
+                &base_method.method.signature,
+                base_method.resolution(),
+            ) {
+                return method;
+            }
+        }
+        panic!(
+            "could not find virtual method implementation of {:?} in {:?}",
+            base_method, this_type
+        );
+    }
 }
 
 // this block is all for runtime debug methods
