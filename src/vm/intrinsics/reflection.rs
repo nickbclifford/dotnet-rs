@@ -8,6 +8,7 @@ use crate::{
     vm::{CallStack, GCHandle, StepResult},
     resolve::Assemblies,
 };
+use crate::match_method;
 use dotnetdll::prelude::{BaseType, MethodType, TypeSource};
 use std::{fmt::Debug, hash::Hash};
 
@@ -416,9 +417,8 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
         };
     }
 
-    // TODO: real signature checking
-    match format!("{:?}", method).as_str() {
-        "DotnetRs.Assembly DotnetRs.RuntimeType::GetAssembly()" => {
+    match_method!(method, {
+        ["DotnetRs.RuntimeType"::GetAssembly()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
 
             let target_type = stack.resolve_runtime_type(obj);
@@ -431,7 +431,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                     let definition = support_res.0.type_definitions
                         .iter()
                         .find(|a| a.type_name() == "DotnetRs.Assembly")
-                        .expect("could not find DotnetRs.Assembly in support library");
+                        .expect("could find DotnetRs.Assembly in support library");
                     let mut asm_handle = Object::new(
                         TypeDescription { resolution: support_res, definition },
                         &ResolutionContext::new(&generics, stack.assemblies, support_res),
@@ -444,8 +444,9 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 }
             };
             push!(StackValue::ObjectRef(value));
-        }
-        "string DotnetRs.RuntimeType::GetNamespace()" => {
+            Some(StepResult::InstructionStepped)
+        },
+        ["DotnetRs.RuntimeType"::GetNamespace()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             match target_type {
@@ -457,19 +458,22 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 }
                 _ => push!(StackValue::string(gc, CLRString::from("System"))),
             }
-        }
-        "string DotnetRs.RuntimeType::GetName()" => {
+            Some(StepResult::InstructionStepped)
+        },
+        ["DotnetRs.RuntimeType"::GetName()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             push!(StackValue::string(gc, CLRString::from(target_type.get_name())));
-        }
-        "bool DotnetRs.RuntimeType::GetIsGenericType()" => {
+            Some(StepResult::InstructionStepped)
+        },
+        ["DotnetRs.RuntimeType"::GetIsGenericType()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             let is_generic = matches!(target_type, RuntimeType::Generic(_, _));
             push!(StackValue::Int32(if is_generic { 1 } else { 0 }));
-        }
-        "System.Type DotnetRs.RuntimeType::GetGenericTypeDefinition()" => {
+            Some(StepResult::InstructionStepped)
+        },
+        ["DotnetRs.RuntimeType"::GetGenericTypeDefinition()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             match target_type {
@@ -488,8 +492,9 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 }
                 _ => todo!("InvalidOperationException: not a generic type")
             }
-        }
-        "System.Type[] DotnetRs.RuntimeType::GetGenericArguments()" => {
+            Some(StepResult::InstructionStepped)
+        },
+        ["DotnetRs.RuntimeType"::GetGenericArguments()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             let args = match target_type {
@@ -505,8 +510,9 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 arg_obj.write(&mut vector.get_mut()[(i * ObjectRef::SIZE)..]);
             }
             push!(StackValue::ObjectRef(ObjectRef::new(gc, HeapStorage::Vec(vector))));
-        }
-        "valuetype [System.Runtime]System.RuntimeTypeHandle DotnetRs.RuntimeType::GetTypeHandle()" => {
+            Some(StepResult::InstructionStepped)
+        },
+        ["DotnetRs.RuntimeType"::GetTypeHandle()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
 
             let rth = stack.assemblies.corlib_type("System.RuntimeTypeHandle");
@@ -514,8 +520,9 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             obj.write(instance.instance_storage.get_field_mut("_value"));
 
             push!(StackValue::ValueType(Box::new(instance)));
-        }
-        "[System.Runtime]System.Type DotnetRs.RuntimeType::MakeGenericType([System.Runtime]System.Type[])" => {
+            Some(StepResult::InstructionStepped)
+        },
+        ["DotnetRs.RuntimeType"::MakeGenericType(object[])] => {
             vm_expect_stack!(let ObjectRef(parameters) = pop!());
             vm_expect_stack!(let ObjectRef(target) = pop!());
             let target_rt = stack.resolve_runtime_type(target);
@@ -539,9 +546,10 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             } else {
                 todo!("MakeGenericType on non-type")
             }
-        }
-        rest => todo!("reflection intrinsic {rest}"),
-    }
+            Some(StepResult::InstructionStepped)
+        },
+    }).expect("unsupported reflection intrinsic call to RuntimeType");
+
     stack.increment_ip();
     StepResult::InstructionStepped
 }
@@ -563,19 +571,34 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
         };
     }
 
-    match format!("{:?}", method).as_str() {
-        "string DotnetRs.MethodInfo::GetName()" | "string DotnetRs.ConstructorInfo::GetName()" => {
+    match_method!(method, {
+        ["DotnetRs.MethodInfo"::GetName()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (method, _) = stack.resolve_runtime_method(obj);
             push!(StackValue::string(gc, CLRString::from(&method.method.name)));
-        }
-        "System.Type DotnetRs.MethodInfo::GetDeclaringType()" | "System.Type DotnetRs.ConstructorInfo::GetDeclaringType()" => {
+            Some(StepResult::InstructionStepped)
+        },
+        ["DotnetRs.ConstructorInfo"::GetName()] => {
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
+            let (method, _) = stack.resolve_runtime_method(obj);
+            push!(StackValue::string(gc, CLRString::from(&method.method.name)));
+            Some(StepResult::InstructionStepped)
+        },
+        ["DotnetRs.MethodInfo"::GetDeclaringType()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (method, _) = stack.resolve_runtime_method(obj);
             let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(method.parent));
             push!(StackValue::ObjectRef(rt_obj));
-        }
-        "System.RuntimeMethodHandle DotnetRs.MethodInfo::GetMethodHandle()" | "System.RuntimeMethodHandle DotnetRs.ConstructorInfo::GetMethodHandle()" => {
+            Some(StepResult::InstructionStepped)
+        },
+        ["DotnetRs.ConstructorInfo"::GetDeclaringType()] => {
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
+            let (method, _) = stack.resolve_runtime_method(obj);
+            let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(method.parent));
+            push!(StackValue::ObjectRef(rt_obj));
+            Some(StepResult::InstructionStepped)
+        },
+        ["DotnetRs.MethodInfo"::GetMethodHandle()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             
             let rmh = stack.assemblies.corlib_type("System.RuntimeMethodHandle");
@@ -583,9 +606,19 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
             obj.write(instance.instance_storage.get_field_mut("_value"));
             
             push!(StackValue::ValueType(Box::new(instance)));
-        }
-        x => todo!("unimplemented method info intrinsic: {x}"),
-    }
+            Some(StepResult::InstructionStepped)
+        },
+        ["DotnetRs.ConstructorInfo"::GetMethodHandle()] => {
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
+            
+            let rmh = stack.assemblies.corlib_type("System.RuntimeMethodHandle");
+            let mut instance = Object::new(rmh, &stack.current_context());
+            obj.write(instance.instance_storage.get_field_mut("_value"));
+            
+            push!(StackValue::ValueType(Box::new(instance)));
+            Some(StepResult::InstructionStepped)
+        },
+    }).expect("unimplemented method info intrinsic");
 
     stack.increment_ip();
     StepResult::InstructionStepped
@@ -608,19 +641,21 @@ pub fn runtime_field_info_intrinsic_call<'gc, 'm: 'gc>(
         };
     }
 
-    match format!("{:?}", method).as_str() {
-        "string DotnetRs.FieldInfo::GetName()" => {
+    match_method!(method, {
+        ["DotnetRs.FieldInfo"::GetName()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (field, _) = stack.resolve_runtime_field(obj);
             push!(StackValue::string(gc, CLRString::from(&field.field.name)));
-        }
-        "System.Type DotnetRs.FieldInfo::GetDeclaringType()" => {
+            Some(StepResult::InstructionStepped)
+        },
+        ["DotnetRs.FieldInfo"::GetDeclaringType()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (field, _) = stack.resolve_runtime_field(obj);
             let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(field.parent));
             push!(StackValue::ObjectRef(rt_obj));
-        }
-        "System.RuntimeFieldHandle DotnetRs.FieldInfo::GetFieldHandle()" => {
+            Some(StepResult::InstructionStepped)
+        },
+        ["DotnetRs.FieldInfo"::GetFieldHandle()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             
             let rfh = stack.assemblies.corlib_type("System.RuntimeFieldHandle");
@@ -628,9 +663,9 @@ pub fn runtime_field_info_intrinsic_call<'gc, 'm: 'gc>(
             obj.write(instance.instance_storage.get_field_mut("_value"));
             
             push!(StackValue::ValueType(Box::new(instance)));
-        }
-        x => todo!("unimplemented field info intrinsic: {x}"),
-    }
+            Some(StepResult::InstructionStepped)
+        },
+    }).expect("unimplemented field info intrinsic");
 
     stack.increment_ip();
     StepResult::InstructionStepped

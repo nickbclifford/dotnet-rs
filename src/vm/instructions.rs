@@ -11,12 +11,12 @@ use crate::{
         intrinsics::*,
         CallStack, GCHandle, MethodInfo, StepResult,
     },
+    match_method,
 };
 
 use dotnetdll::prelude::*;
 use std::{cmp::Ordering, rc::Rc};
 
-const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttribute";
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     fn find_generic_method(&self, source: &MethodSource) -> (MethodDescription, GenericLookup) {
@@ -432,19 +432,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         c
                     );
                 }
-                for a in &$field.field.attributes {
-                    let ctor = self
-                        .assemblies
-                        .locate_attribute($field.parent.resolution, a);
-                    if ctor.parent.type_name() == INTRINSIC_ATTR {
-                        intrinsic_field(
-                            gc,
-                            self,
-                            $field,
-                            self.current_context().generics.type_generics.clone(),
-                        );
-                        return StepResult::InstructionStepped;
-                    }
+                if is_intrinsic_field($field, self.assemblies) {
+                    intrinsic_field(
+                        gc,
+                        self,
+                        $field,
+                        self.current_context().generics.type_generics.clone(),
+                    );
+                    return StepResult::InstructionStepped;
                 }
             };
         }
@@ -545,39 +540,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 macro_rules! intrinsic {
                     () => {
                         return intrinsic_call(gc, self, method, lookup);
-                        return StepResult::InstructionStepped;
                     };
                 }
 
-                // TODO: more centralized location for which methods are explicitly handled in this manner
-                if method.method.internal_call
-                    || (method.parent.type_name() == "System.Environment"
-                        && method.method.name == "GetEnvironmentVariableCore")
-                    || (method.parent.type_name() == "System.String"
-                        && matches!(
-                            method.method.name.as_ref(),
-                            "GetPinnableReference"
-                                | "get_Length"
-                                | "get_Chars"
-                                | "GetRawStringData"
-                                | "IndexOf"
-                                | "Substring"
-                                | "Concat"
-                        ))
-                    || (method.parent.type_name()
-                        == "System.Runtime.CompilerServices.RuntimeHelpers"
-                        && method.method.name == "RunClassConstructor")
-                {
+                if is_intrinsic(method, self.assemblies) {
                     intrinsic!();
-                }
-
-                let res = method.resolution();
-
-                for a in &method.method.attributes {
-                    let ctor = self.assemblies.locate_attribute(res, a);
-                    if ctor.parent.type_name() == INTRINSIC_ATTR {
-                        intrinsic!();
-                    }
                 }
 
                 if method.method.pinvoke.is_some() {
@@ -1121,19 +1088,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             CallVirtual { param0: source, .. } => {
                 let (base_method, lookup) = self.find_generic_method(source);
 
-                // see note in Call
-                if base_method.parent.type_name() == "System.String"
-                    && matches!(
-                        base_method.method.name.as_ref(),
-                        "GetPinnableReference"
-                            | "get_Length"
-                            | "get_Chars"
-                            | "GetRawStringData"
-                            | "IndexOf"
-                            | "Substring"
-                            | "GetHashCodeOrdinalIgnoreCase"
-                    )
-                {
+                if is_intrinsic(base_method, self.assemblies) {
                     intrinsic_call(gc, self, base_method, lookup);
                     return StepResult::InstructionStepped;
                 }
@@ -1581,23 +1536,19 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                 }
 
-                // TODO: proper signature checking
-                match format!("{:?}", method).as_str() {
-                    "void System.IntPtr::.ctor(int)" => {
-                        vm_expect_stack!(let Int32(i) = pop!());
-                        push!(NativeInt(i as isize));
-                    }
-                    _ => {
-                        let instance = Object::new(parent, &new_ctx);
+                if match_method!(method, "System.IntPtr"::".ctor"(int)) {
+                    vm_expect_stack!(let Int32(i) = pop!());
+                    push!(NativeInt(i as isize));
+                } else {
+                    let instance = Object::new(parent, &new_ctx);
 
-                        self.constructor_frame(
-                            gc,
-                            instance,
-                            MethodInfo::new(method, &lookup, self.assemblies),
-                            lookup,
-                        );
-                        moved_ip = true;
-                    }
+                    self.constructor_frame(
+                        gc,
+                        instance,
+                        MethodInfo::new(method, &lookup, self.assemblies),
+                        lookup,
+                    );
+                    moved_ip = true;
                 }
             }
             ReadTypedReferenceType => todo!("refanytype"),
