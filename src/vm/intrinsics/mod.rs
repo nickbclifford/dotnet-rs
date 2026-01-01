@@ -10,7 +10,10 @@ use crate::{
         ObjectRef, ResolutionContext, StackValue,
     },
     vm::{
-        intrinsics::reflection::runtime_type_intrinsic_call,
+        intrinsics::reflection::{
+            runtime_field_info_intrinsic_call, runtime_method_info_intrinsic_call,
+            runtime_type_intrinsic_call,
+        },
         CallStack, GCHandle, MethodInfo,
     },
 };
@@ -66,6 +69,16 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
     if method.parent.definition.type_name() == "DotnetRs.RuntimeType" {
         return runtime_type_intrinsic_call(gc, stack, method, generics);
+    }
+
+    if method.parent.definition.type_name() == "DotnetRs.MethodInfo"
+        || method.parent.definition.type_name() == "DotnetRs.ConstructorInfo"
+    {
+        return runtime_method_info_intrinsic_call(gc, stack, method, generics);
+    }
+
+    if method.parent.definition.type_name() == "DotnetRs.FieldInfo" {
+        return runtime_field_info_intrinsic_call(gc, stack, method, generics);
     }
 
     if method.parent.definition.type_name() == "System.String"
@@ -510,11 +523,28 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let target = ObjectRef::read(handle.instance_storage.get_field("_value"));
             push!(StackValue::ObjectRef(target));
         }
+        "static System.Reflection.MethodBase System.Reflection.MethodBase::GetMethodFromHandle(valuetype System.RuntimeMethodHandle)" => {
+            vm_expect_stack!(let ValueType(handle) = pop!());
+            let target = ObjectRef::read(handle.instance_storage.get_field("_value"));
+            push!(StackValue::ObjectRef(target));
+        }
+        "static System.Reflection.FieldInfo System.Reflection.FieldInfo::GetFieldFromHandle(valuetype System.RuntimeFieldHandle)" => {
+            vm_expect_stack!(let ValueType(handle) = pop!());
+            let target = ObjectRef::read(handle.instance_storage.get_field("_value"));
+            push!(StackValue::ObjectRef(target));
+        }
         "static nint System.RuntimeTypeHandle::ToIntPtr(valuetype System.RuntimeTypeHandle)" => {
             vm_expect_stack!(let ValueType(handle) = pop!());
             let target = handle.instance_storage.get_field("_value");
             let val = usize::from_ne_bytes(target.try_into().unwrap());
             push!(StackValue::NativeInt(val as isize));
+        }
+        "nint System.RuntimeMethodHandle::GetFunctionPointer()" => {
+            vm_expect_stack!(let ValueType(handle) = pop!());
+            let method_obj = ObjectRef::read(handle.instance_storage.get_field("_value"));
+            let (method, lookup) = stack.resolve_runtime_method(method_obj);
+            let index = stack.get_runtime_method_index(gc, *method, lookup.clone());
+            push!(StackValue::NativeInt(index as isize));
         }
         "bool System.Type::get_IsValueType()" => {
             vm_expect_stack!(let ObjectRef(o) = pop!());

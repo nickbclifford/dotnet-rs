@@ -44,7 +44,9 @@ pub struct CallStack<'gc, 'm> {
     pub runtime_types: HashMap<RuntimeType, ObjectRef<'gc>>,
     pub runtime_types_list: Vec<RuntimeType>,
     pub runtime_methods: Vec<(MethodDescription, GenericLookup)>,
+    pub runtime_method_objs: HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>,
     pub runtime_fields: Vec<(FieldDescription, GenericLookup)>,
+    pub runtime_field_objs: HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>,
     pub method_tables: RefCell<HashMap<TypeDescription, Box<[u8]>>>,
     // secretly ObjectHandles, not traced for GCing because these are for runtime debugging
     _all_objs: Vec<usize>,
@@ -55,6 +57,12 @@ unsafe impl<'gc, 'm> Collect for CallStack<'gc, 'm> {
         self.roots.trace(cc);
         self.statics.borrow_mut().trace(cc);
         for o in self.runtime_types.values() {
+            o.trace(cc);
+        }
+        for o in self.runtime_method_objs.values() {
+            o.trace(cc);
+        }
+        for o in self.runtime_field_objs.values() {
             o.trace(cc);
         }
     }
@@ -116,7 +124,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             runtime_types: HashMap::new(),
             runtime_types_list: vec![],
             runtime_methods: vec![],
+            runtime_method_objs: HashMap::new(),
             runtime_fields: vec![],
+            runtime_field_objs: HashMap::new(),
             method_tables: RefCell::new(HashMap::new()),
             _all_objs: vec![],
         }

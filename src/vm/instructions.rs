@@ -1424,37 +1424,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             LoadTokenField(source) => {
                 let (field, lookup) = self.current_context().locate_field(*source);
-                let idx = match self
-                    .runtime_fields
-                    .iter()
-                    .position(|(f, g)| *f == field && *g == lookup)
-                {
-                    Some(i) => i,
-                    None => {
-                        self.runtime_fields.push((field, lookup));
-                        self.runtime_fields.len() - 1
-                    }
-                };
+                let field_obj = self.get_runtime_field_obj(gc, field, lookup);
 
                 let rfh = self.assemblies.corlib_type("System.RuntimeFieldHandle");
                 let mut instance = Object::new(rfh, &self.current_context());
-                instance
-                    .instance_storage
-                    .get_field_mut("_value")
-                    .copy_from_slice(&idx.to_ne_bytes());
+                field_obj.write(instance.instance_storage.get_field_mut("_value"));
 
                 push!(ValueType(Box::new(instance)));
             }
             LoadTokenMethod(source) => {
                 let (method, lookup) = self.find_generic_method(source);
-                let idx = self.get_runtime_method_index(gc, method, lookup);
+                let method_obj = self.get_runtime_method_obj(gc, method, lookup);
 
                 let rmh = self.assemblies.corlib_type("System.RuntimeMethodHandle");
                 let mut instance = Object::new(rmh, &self.current_context());
-                instance
-                    .instance_storage
-                    .get_field_mut("_value")
-                    .copy_from_slice(&idx.to_ne_bytes());
+                method_obj.write(instance.instance_storage.get_field_mut("_value"));
 
                 push!(ValueType(Box::new(instance)));
             }

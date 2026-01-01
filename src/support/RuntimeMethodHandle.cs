@@ -31,7 +31,8 @@ public struct RuntimeMethodHandle : IEquatable<RuntimeMethodHandle>, ISerializab
     
     public static RuntimeMethodHandle FromIntPtr(IntPtr value) => new (value);
     
-    public IntPtr GetFunctionPointer() => _value;
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    public extern IntPtr GetFunctionPointer();
     
     public override int GetHashCode() => _value.GetHashCode();
     

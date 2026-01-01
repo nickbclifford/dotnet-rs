@@ -1,8 +1,9 @@
 use crate::{
     utils::decompose_type_source,
     value::{
-        string::CLRString, ConcreteType, GenericLookup, HeapStorage, MethodDescription, Object,
-        ObjectRef, ResolutionContext, StackValue, TypeDescription, Vector,
+        string::CLRString, ConcreteType, FieldDescription, GenericLookup, HeapStorage,
+        MethodDescription, Object, ObjectRef, ResolutionContext, StackValue, TypeDescription,
+        Vector,
     },
     vm::{CallStack, GCHandle},
     resolve::Assemblies,
@@ -227,10 +228,25 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> &RuntimeType {
         obj.as_object(|instance| {
-            let mut ct = [0u8; ObjectRef::SIZE];
-            ct.copy_from_slice(instance.instance_storage.get_field("index"));
-            let index = usize::from_ne_bytes(ct);
+            let ct = instance.instance_storage.get_field("index");
+            let index = usize::from_ne_bytes(ct.try_into().unwrap());
             &self.runtime_types_list[index]
+        })
+    }
+
+    pub fn resolve_runtime_method(&self, obj: ObjectRef<'gc>) -> &(MethodDescription, GenericLookup) {
+        obj.as_object(|instance| {
+            let data = instance.instance_storage.get_field("index");
+            let index = usize::from_ne_bytes(data.try_into().unwrap());
+            &self.runtime_methods[index]
+        })
+    }
+
+    pub fn resolve_runtime_field(&self, obj: ObjectRef<'gc>) -> &(FieldDescription, GenericLookup) {
+        obj.as_object(|instance| {
+            let data = instance.instance_storage.get_field("index");
+            let index = usize::from_ne_bytes(data.try_into().unwrap());
+            &self.runtime_fields[index]
         })
     }
 
@@ -316,6 +332,70 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
         };
         idx as u16
+    }
+
+    pub fn get_runtime_field_index(&mut self, _gc: GCHandle<'gc>, field: FieldDescription, lookup: GenericLookup) -> u16 {
+        let idx = match self
+            .runtime_fields
+            .iter()
+            .position(|(f, g)| *f == field && *g == lookup)
+        {
+            Some(i) => i,
+            None => {
+                self.runtime_fields.push((field, lookup));
+                self.runtime_fields.len() - 1
+            }
+        };
+        idx as u16
+    }
+
+    pub fn get_runtime_method_obj(&mut self, gc: GCHandle<'gc>, method: MethodDescription, lookup: GenericLookup) -> ObjectRef<'gc> {
+        if let Some(obj) = self.runtime_method_objs.get(&(method, lookup.clone())) {
+            return *obj;
+        }
+
+        let is_ctor = method.method.name == ".ctor" || method.method.name == ".cctor";
+        let class_name = if is_ctor { "DotnetRs.ConstructorInfo" } else { "DotnetRs.MethodInfo" };
+        
+        let rt = self.assemblies.corlib_type(class_name);
+        let rt_obj = Object::new(rt, &self.current_context());
+        let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
+        self.register_new_object(&obj_ref);
+
+        let index = self.get_runtime_method_index(gc, method, lookup.clone());
+        
+        obj_ref.as_object_mut(gc, |instance| {
+            instance
+                .instance_storage
+                .get_field_mut("index")
+                .copy_from_slice(&(index as usize).to_ne_bytes());
+        });
+
+        self.runtime_method_objs.insert((method, lookup), obj_ref);
+        obj_ref
+    }
+
+    pub fn get_runtime_field_obj(&mut self, gc: GCHandle<'gc>, field: FieldDescription, lookup: GenericLookup) -> ObjectRef<'gc> {
+        if let Some(obj) = self.runtime_field_objs.get(&(field, lookup.clone())) {
+            return *obj;
+        }
+
+        let rt = self.assemblies.corlib_type("DotnetRs.FieldInfo");
+        let rt_obj = Object::new(rt, &self.current_context());
+        let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
+        self.register_new_object(&obj_ref);
+
+        let index = self.get_runtime_field_index(gc, field, lookup.clone());
+        
+        obj_ref.as_object_mut(gc, |instance| {
+            instance
+                .instance_storage
+                .get_field_mut("index")
+                .copy_from_slice(&(index as usize).to_ne_bytes());
+        });
+
+        self.runtime_field_objs.insert((field, lookup), obj_ref);
+        obj_ref
     }
 }
 
@@ -462,5 +542,93 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
         }
         rest => todo!("reflection intrinsic {rest}"),
     }
+    stack.increment_ip();
+}
+
+pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    method: MethodDescription,
+    _generics: GenericLookup,
+) {
+    macro_rules! pop {
+        () => {
+            vm_pop!(stack)
+        };
+    }
+    macro_rules! push {
+        ($($args:tt)*) => {
+            vm_push!(stack, gc, $($args)*)
+        };
+    }
+
+    match format!("{:?}", method).as_str() {
+        "string DotnetRs.MethodInfo::GetName()" | "string DotnetRs.ConstructorInfo::GetName()" => {
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
+            let (method, _) = stack.resolve_runtime_method(obj);
+            push!(StackValue::string(gc, CLRString::from(&method.method.name)));
+        }
+        "System.Type DotnetRs.MethodInfo::GetDeclaringType()" | "System.Type DotnetRs.ConstructorInfo::GetDeclaringType()" => {
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
+            let (method, _) = stack.resolve_runtime_method(obj);
+            let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(method.parent));
+            push!(StackValue::ObjectRef(rt_obj));
+        }
+        "System.RuntimeMethodHandle DotnetRs.MethodInfo::GetMethodHandle()" | "System.RuntimeMethodHandle DotnetRs.ConstructorInfo::GetMethodHandle()" => {
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
+            
+            let rmh = stack.assemblies.corlib_type("System.RuntimeMethodHandle");
+            let mut instance = Object::new(rmh, &stack.current_context());
+            obj.write(instance.instance_storage.get_field_mut("_value"));
+            
+            push!(StackValue::ValueType(Box::new(instance)));
+        }
+        x => todo!("unimplemented method info intrinsic: {x}"),
+    }
+
+    stack.increment_ip();
+}
+
+pub fn runtime_field_info_intrinsic_call<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    method: MethodDescription,
+    _generics: GenericLookup,
+) {
+    macro_rules! pop {
+        () => {
+            vm_pop!(stack)
+        };
+    }
+    macro_rules! push {
+        ($($args:tt)*) => {
+            vm_push!(stack, gc, $($args)*)
+        };
+    }
+
+    match format!("{:?}", method).as_str() {
+        "string DotnetRs.FieldInfo::GetName()" => {
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
+            let (field, _) = stack.resolve_runtime_field(obj);
+            push!(StackValue::string(gc, CLRString::from(&field.field.name)));
+        }
+        "System.Type DotnetRs.FieldInfo::GetDeclaringType()" => {
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
+            let (field, _) = stack.resolve_runtime_field(obj);
+            let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(field.parent));
+            push!(StackValue::ObjectRef(rt_obj));
+        }
+        "System.RuntimeFieldHandle DotnetRs.FieldInfo::GetFieldHandle()" => {
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
+            
+            let rfh = stack.assemblies.corlib_type("System.RuntimeFieldHandle");
+            let mut instance = Object::new(rfh, &stack.current_context());
+            obj.write(instance.instance_storage.get_field_mut("_value"));
+            
+            push!(StackValue::ValueType(Box::new(instance)));
+        }
+        x => todo!("unimplemented field info intrinsic: {x}"),
+    }
+
     stack.increment_ip();
 }

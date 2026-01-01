@@ -970,6 +970,11 @@ impl PartialEq for FieldDescription {
     }
 }
 impl Eq for FieldDescription {}
+impl Hash for FieldDescription {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (self.field as *const Field).hash(state);
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ConcreteType {

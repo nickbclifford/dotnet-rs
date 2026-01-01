@@ -13,3 +13,4 @@ obj/
 
 # Junie
 .junie/
+.output.txt
