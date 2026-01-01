@@ -5,7 +5,7 @@ use crate::{
         MethodDescription, Object, ObjectRef, ResolutionContext, StackValue, TypeDescription,
         Vector,
     },
-    vm::{CallStack, GCHandle},
+    vm::{CallStack, GCHandle, StepResult},
     resolve::Assemblies,
 };
 use dotnetdll::prelude::{BaseType, MethodType, TypeSource};
@@ -404,7 +404,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
     stack: &mut CallStack<'gc, 'm>,
     method: MethodDescription,
     generics: GenericLookup,
-) {
+) -> StepResult {
     macro_rules! pop {
         () => {
             vm_pop!(stack)
@@ -543,6 +543,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
         rest => todo!("reflection intrinsic {rest}"),
     }
     stack.increment_ip();
+    StepResult::InstructionStepped
 }
 
 pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
@@ -550,7 +551,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
     stack: &mut CallStack<'gc, 'm>,
     method: MethodDescription,
     _generics: GenericLookup,
-) {
+) -> StepResult {
     macro_rules! pop {
         () => {
             vm_pop!(stack)
@@ -587,6 +588,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
     }
 
     stack.increment_ip();
+    StepResult::InstructionStepped
 }
 
 pub fn runtime_field_info_intrinsic_call<'gc, 'm: 'gc>(
@@ -594,7 +596,7 @@ pub fn runtime_field_info_intrinsic_call<'gc, 'm: 'gc>(
     stack: &mut CallStack<'gc, 'm>,
     method: MethodDescription,
     _generics: GenericLookup,
-) {
+) -> StepResult {
     macro_rules! pop {
         () => {
             vm_pop!(stack)
@@ -631,4 +633,5 @@ pub fn runtime_field_info_intrinsic_call<'gc, 'm: 'gc>(
     }
 
     stack.increment_ip();
+    StepResult::InstructionStepped
 }

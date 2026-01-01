@@ -239,46 +239,46 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let value1 = pop!();
                 match (value1, value2, $sign) {
                     (Int32(i1), Int32(i2), Signed) => {
-                        let Some(val) = i1.$method(i2) else { todo!("OverflowException in {}", stringify!($method)) };
+                        let Some(val) = i1.$method(i2) else { return self.throw_by_name(gc, "System.OverflowException") };
                         push!(Int32(val))
                     }
                     (Int32(i1), NativeInt(i2), Signed) => {
-                        let Some(val) = (i1 as isize).$method(i2) else { todo!("OverflowException in {}", stringify!($method)) };
+                        let Some(val) = (i1 as isize).$method(i2) else { return self.throw_by_name(gc, "System.OverflowException") };
                         push!(NativeInt(val))
                     }
                     (Int64(i1), Int64(i2), Signed) => {
-                        let Some(val) = i1.$method(i2) else { todo!("OverflowException in {}", stringify!($method)) };
+                        let Some(val) = i1.$method(i2) else { return self.throw_by_name(gc, "System.OverflowException") };
                         push!(Int64(val));
                     }
                     (NativeInt(i1), Int32(i2), Signed) => {
-                        let Some(val) = i1.$method(i2 as isize) else { todo!("OverflowException in {}", stringify!($method)) };
+                        let Some(val) = i1.$method(i2 as isize) else { return self.throw_by_name(gc, "System.OverflowException") };
                         push!(NativeInt(val));
                     }
                     (NativeInt(i1), NativeInt(i2), Signed) => {
-                        let Some(val) = i1.$method(i2) else { todo!("OverflowException in {}", stringify!($method)) };
+                        let Some(val) = i1.$method(i2) else { return self.throw_by_name(gc, "System.OverflowException") };
                         push!(NativeInt(val));
                     }
                     (NativeFloat(f1), NativeFloat(f2), Signed) => {
                         push!(NativeFloat(f1 $op f2));
                     }
                     (Int32(i1), Int32(i2), Unsigned) => {
-                        let Some(val) = (i1 as u32).$method(i2 as u32) else { todo!("OverflowException in {}", stringify!($method)) };
+                        let Some(val) = (i1 as u32).$method(i2 as u32) else { return self.throw_by_name(gc, "System.OverflowException") };
                         push!(Int32(val as i32))
                     }
                     (Int32(i1), NativeInt(i2), Unsigned) => {
-                        let Some(val) = (i1 as usize).$method(i2 as usize) else { todo!("OverflowException in {}", stringify!($method)) };
+                        let Some(val) = (i1 as usize).$method(i2 as usize) else { return self.throw_by_name(gc, "System.OverflowException") };
                         push!(NativeInt(val as isize))
                     }
                     (Int64(i1), Int64(i2), Unsigned) => {
-                        let Some(val) = (i1 as u64).$method(i2 as u64) else { todo!("OverflowException in {}", stringify!($method)) };
+                        let Some(val) = (i1 as u64).$method(i2 as u64) else { return self.throw_by_name(gc, "System.OverflowException") };
                         push!(Int64(val as i64));
                     }
                     (NativeInt(i1), Int32(i2), Unsigned) => {
-                        let Some(val) = i1.$method(i2 as isize) else { todo!("OverflowException in {}", stringify!($method)) };
+                        let Some(val) = i1.$method(i2 as isize) else { return self.throw_by_name(gc, "System.OverflowException") };
                         push!(NativeInt(val as isize));
                     }
                     (NativeInt(i1), NativeInt(i2), Unsigned) => {
-                        let Some(val) = i1.$method(i2) else { todo!("OverflowException in {}", stringify!($method)) };
+                        let Some(val) = i1.$method(i2) else { return self.throw_by_name(gc, "System.OverflowException") };
                         push!(NativeInt(val as isize));
                     }
                     $($($pat => $arm,)*)?
@@ -544,7 +544,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let (method, lookup) = self.find_generic_method(source);
                 macro_rules! intrinsic {
                     () => {
-                        intrinsic_call(gc, self, method, lookup);
+                        return intrinsic_call(gc, self, method, lookup);
                         return StepResult::InstructionStepped;
                     };
                 }
@@ -635,7 +635,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             CheckFinite => {
                 vm_expect_stack!(let NativeFloat(f) = pop!());
                 if f.is_infinite() || f.is_nan() {
-                    todo!("ArithmeticException in ckfinite");
+                    return self.throw_by_name(gc, "System.ArithmeticException");
                 }
                 push!(NativeFloat(f));
             }
@@ -775,10 +775,22 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     std::ptr::copy_nonoverlapping(src, dest, size);
                 }
             }
-            Divide(sgn) => match sgn {
-                Signed => binary_arith_op!(/),
-                Unsigned => binary_int_op!(/ as unsigned),
-            },
+            Divide(sgn) => {
+                let v2 = pop!();
+                let v1 = pop!();
+                match &v2 {
+                    StackValue::Int32(0) | StackValue::Int64(0) | StackValue::NativeInt(0) => {
+                        return self.throw_by_name(gc, "System.DivideByZeroException");
+                    }
+                    _ => {}
+                }
+                push!(v1);
+                push!(v2);
+                match sgn {
+                    Signed => binary_arith_op!(/),
+                    Unsigned => binary_int_op!(/ as unsigned),
+                }
+            }
             Duplicate => {
                 let val = pop!();
                 push!(val.clone());
@@ -981,10 +993,22 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             Pop => {
                 pop!();
             }
-            Remainder(sgn) => match sgn {
-                Signed => binary_arith_op!(%),
-                Unsigned => binary_int_op!(% as unsigned),
-            },
+            Remainder(sgn) => {
+                let v2 = pop!();
+                let v1 = pop!();
+                match &v2 {
+                    StackValue::Int32(0) | StackValue::Int64(0) | StackValue::NativeInt(0) => {
+                        return self.throw_by_name(gc, "System.DivideByZeroException");
+                    }
+                    _ => {}
+                }
+                push!(v1);
+                push!(v2);
+                match sgn {
+                    Signed => binary_arith_op!(%),
+                    Unsigned => binary_int_op!(% as unsigned),
+                }
+            }
             Return => {
                 // expects a single value on stack for non-void methods
                 // call stack manager will put this in the right spot for the caller
@@ -1124,7 +1148,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 // value types are passed as managed pointers (I.8.9.7)
                 let this_value = args[0].clone();
                 let this_type = match this_value {
-                    StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
+                    StackValue::ObjectRef(ObjectRef(None)) => {
+                        return self.throw_by_name(gc, "System.NullReferenceException")
+                    }
                     StackValue::ObjectRef(ObjectRef(Some(o))) => {
                         self.current_context().get_heap_description(o)
                     },
@@ -1152,7 +1178,25 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             CallVirtualConstrained(_, _) => todo!("constrained.callvirt"),
             CallVirtualTail(_) => todo!("tail.callvirt"),
-            CastClass { .. } => todo!("castclass"),
+            CastClass { param0: target, .. } => {
+                vm_expect_stack!(let ObjectRef(target_obj) = pop!());
+                if let ObjectRef(Some(o)) = target_obj {
+                    let ctx = self.current_context();
+                    let obj_type = ctx.get_heap_description(o);
+                    let target_type = self
+                        .assemblies
+                        .find_concrete_type(ctx.make_concrete(target));
+
+                    if ctx.is_a(obj_type, target_type) {
+                        push!(ObjectRef(target_obj));
+                    } else {
+                        return self.throw_by_name(gc, "System.InvalidCastException");
+                    }
+                } else {
+                    // castclass returns null for null (III.4.3)
+                    push!(null());
+                }
+            }
             CopyObject(_) => todo!("cpobj"),
             InitializeForObject(t) => {
                 let ctx = self.current_context();
@@ -1184,17 +1228,32 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadElement {
                 param0: load_type, ..
             } => {
-                vm_expect_stack!(let Int32(index as usize) = pop!());
+                let index_val = pop!();
+                let index = match index_val {
+                    StackValue::Int32(i) => i as usize,
+                    StackValue::NativeInt(i) => i as usize,
+                    rest => panic!("invalid index for ldelem: {:?}", rest),
+                };
                 vm_expect_stack!(let ObjectRef(obj) = pop!());
+
+                if obj.0.is_none() {
+                    return self.throw_by_name(gc, "System.NullReferenceException");
+                }
 
                 let ctx = self.current_context();
                 let load_type = ctx.make_concrete(load_type);
                 let value = obj.as_vector(|array| {
+                    if index >= array.layout.length {
+                        return Err(());
+                    }
                     let elem_size = array.layout.element_layout.size();
                     let target = &array.get()[(elem_size * index)..(elem_size * (index + 1))];
-                    CTSValue::read(&load_type, &ctx, target).into_stack()
+                    Ok(CTSValue::read(&load_type, &ctx, target).into_stack())
                 });
-                push!(value);
+                match value {
+                    Ok(v) => push!(v),
+                    Err(_) => return self.throw_by_name(gc, "System.IndexOutOfRangeException"),
+                }
             }
             LoadElementPrimitive {
                 param0: load_type, ..
@@ -1204,14 +1263,18 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let index = match pop!() {
                     StackValue::Int32(i) => i as usize,
                     StackValue::NativeInt(i) => i as usize,
-                    rest => todo!(
-                        "invalid index for stelem (expected int32 or native int, received {:?})",
+                    rest => panic!(
+                        "invalid index for ldelem (expected int32 or native int, received {:?})",
                         rest
                     ),
                 };
                 let array = pop!();
 
                 vm_expect_stack!(let ObjectRef(obj) = array);
+
+                if obj.0.is_none() {
+                    return self.throw_by_name(gc, "System.NullReferenceException");
+                }
 
                 let elem_size: usize = match load_type {
                     Int8 | UInt8 => 1,
@@ -1224,6 +1287,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 };
 
                 let value = obj.as_vector(|array| {
+                    if index >= array.layout.length {
+                        return Err(());
+                    }
                     let target = &array.get()[(elem_size * index)..(elem_size * (index + 1))];
                     macro_rules! from_bytes {
                         ($t:ty) => {
@@ -1233,7 +1299,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         };
                     }
 
-                    match load_type {
+                    Ok(match load_type {
                         Int8 => StackValue::Int32(from_bytes!(i8) as i32),
                         UInt8 => StackValue::Int32(from_bytes!(u8) as i32),
                         Int16 => StackValue::Int32(from_bytes!(i16) as i32),
@@ -1245,9 +1311,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         Float64 => StackValue::NativeFloat(from_bytes!(f64)),
                         IntPtr => StackValue::NativeInt(from_bytes!(usize) as isize),
                         Object => StackValue::ObjectRef(ObjectRef::read(target)),
-                    }
+                    })
                 });
-                push!(value);
+                match value {
+                    Ok(v) => push!(v),
+                    Err(_) => return self.throw_by_name(gc, "System.IndexOutOfRangeException"),
+                }
             }
             LoadElementAddress { .. } | LoadElementAddressReadonly(_) => todo!("ldelema"),
             LoadField {
@@ -1278,7 +1347,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 };
 
                 let value = match parent {
-                    StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
+                    StackValue::ObjectRef(ObjectRef(None)) => {
+                        return self.throw_by_name(gc, "System.NullReferenceException")
+                    }
                     StackValue::ObjectRef(ObjectRef(Some(h))) => {
                         let object_type = self.current_context().get_heap_description(h);
                         if !self.current_context().is_a(object_type, field.parent) {
@@ -1326,7 +1397,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let ctx = self.current_context().for_type_with_generics(field.parent, &lookup);
 
                 let source_ptr = match parent {
-                    StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
+                    StackValue::ObjectRef(ObjectRef(None)) => {
+                        return self.throw_by_name(gc, "System.NullReferenceException")
+                    }
                     StackValue::ObjectRef(ObjectRef(Some(h))) => {
                         let object_type = ctx.get_heap_description(h);
                         if !ctx.is_a(object_type, field.parent) {
@@ -1368,6 +1441,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadFieldSkipNullCheck(_) => todo!("no.nullcheck ldfld"),
             LoadLength => {
                 vm_expect_stack!(let ObjectRef(obj) = pop!());
+                if obj.0.is_none() {
+                    return self.throw_by_name(gc, "System.NullReferenceException");
+                }
                 let len = obj.as_vector(|a| a.layout.length as isize);
                 push!(NativeInt(len));
             }
@@ -1453,7 +1529,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let (base_method, lookup) = self.find_generic_method(source);
                 vm_expect_stack!(let ObjectRef(obj) = pop!());
                 let ObjectRef(Some(o)) = obj else {
-                    todo!("null pointer exception in ldvirtftn")
+                    return self.throw_by_name(gc, "System.NullReferenceException");
                 };
                 let object_type = self.current_context().get_heap_description(o);
                 let method = self.resolve_virtual_method(base_method, object_type);
@@ -1535,15 +1611,24 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             StoreElement { param0: source, .. } => {
                 let value = pop!();
-                vm_expect_stack!(let Int32(index as usize) = pop!());
+                let index_val = pop!();
+                let index = match index_val {
+                    StackValue::Int32(i) => i as usize,
+                    StackValue::NativeInt(i) => i as usize,
+                    rest => panic!("invalid index for stelem: {:?}", rest),
+                };
                 vm_expect_stack!(let ObjectRef(obj) = pop!());
                 let ObjectRef(Some(heap)) = obj else {
-                    todo!("NullPointerException")
+                    return self.throw_by_name(gc, "System.NullReferenceException");
                 };
                 let mut heap = heap.borrow_mut(gc);
                 let HeapStorage::Vec(array) = &mut *heap else {
                     todo!("expected array for stelem, received {:?}", heap)
                 };
+
+                if index >= array.layout.length {
+                    return self.throw_by_name(gc, "System.IndexOutOfRangeException");
+                }
 
                 let ctx = self.current_context();
                 let store_type = ctx.make_concrete(source);
@@ -1590,12 +1675,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 vm_expect_stack!(let ObjectRef(obj) = array);
                 let ObjectRef(Some(heap)) = obj else {
-                    todo!("NullPointerException")
+                    return self.throw_by_name(gc, "System.NullReferenceException");
                 };
                 let mut heap = heap.borrow_mut(gc);
                 let HeapStorage::Vec(array) = &mut *heap else {
                     todo!("expected array for stelem, received {:?}", heap)
                 };
+
+                if index >= array.layout.length {
+                    return self.throw_by_name(gc, "System.IndexOutOfRangeException");
+                }
 
                 let elem_size: usize = match store_type {
                     Int8 => 1,
@@ -1638,7 +1727,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 };
 
                 match parent {
-                    StackValue::ObjectRef(ObjectRef(None)) => todo!("null pointer exception"),
+                    StackValue::ObjectRef(ObjectRef(None)) => {
+                        return self.throw_by_name(gc, "System.NullReferenceException")
+                    }
                     StackValue::ObjectRef(ObjectRef(Some(h))) => {
                         let object_type = ctx.get_heap_description(h);
                         if !ctx.is_a(object_type, field.parent) {
@@ -1690,8 +1781,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 });
             }
             Throw => {
-                // expects single value on stack
-                // TODO: how will we propagate exceptions up the call stack?
+                let exc = pop!();
+                let StackValue::ObjectRef(exc) = exc else {
+                    panic!("Throw expects an object reference on the stack, received {:?}", exc)
+                };
+                if exc.0.is_none() {
+                    return self.throw_by_name(gc, "System.NullReferenceException");
+                }
+                self.pending_exception = Some(exc);
                 return StepResult::MethodThrew;
             }
             UnboxIntoAddress { .. } => todo!("unbox"),

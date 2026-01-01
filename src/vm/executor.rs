@@ -54,8 +54,7 @@ impl Executor {
                     }
                 }
                 StepResult::MethodThrew => {
-                    // TODO: where do we keep track of exceptions?
-                    todo!()
+                    return ExecutorResult::Threw;
                 }
                 StepResult::InstructionStepped => {}
             }

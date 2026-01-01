@@ -14,7 +14,7 @@ use crate::{
             runtime_field_info_intrinsic_call, runtime_method_info_intrinsic_call,
             runtime_type_intrinsic_call,
         },
-        CallStack, GCHandle, MethodInfo,
+        CallStack, GCHandle, MethodInfo, StepResult,
     },
 };
 
@@ -42,7 +42,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
     stack: &mut CallStack<'gc, 'm>,
     method: MethodDescription,
     generics: GenericLookup,
-) {
+) -> StepResult {
     macro_rules! pop {
         () => {
             vm_pop!(stack)
@@ -135,7 +135,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                         MethodInfo::new(desc, &new_lookup, stack.assemblies),
                         new_lookup,
                     );
-                    return;
+                    return StepResult::InstructionStepped;
                 }
             }
 
@@ -145,7 +145,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let _param_name = pop!();
             let target = pop!();
             if let StackValue::ObjectRef(ObjectRef(None)) = target {
-                todo!("ArgumentNullException({:?})", target);
+                return stack.throw_by_name(gc, "System.ArgumentNullException");
             }
         }
         "[Generic(1)] static void System.Buffer::Memmove(ref M0, ref M0, nuint)" => {
@@ -203,7 +203,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             }
         }
         "static string System.Environment::GetEnvironmentVariableCore(string)" => {
-            let value = with_string!(pop!(), |s| {
+            let value = with_string!(stack, gc, pop!(), |s| {
                 std::env::var(s.as_string())
             });
             match value.ok() {
@@ -226,7 +226,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 MethodInfo::new(MethodDescription { parent, method }, &GenericLookup::default(), stack.assemblies),
                 GenericLookup::default()
             );
-            return;
+            return StepResult::InstructionStepped;
         }
         "static void System.GC::_SuppressFinalize(object)" | "static void System.GC::SuppressFinalizeInternal(object)" => {
             // TODO(gc): this object's finalizer should not be called
@@ -255,7 +255,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 *ip += 1;
                 let i = *ip;
                 msg!(stack, "-- explicit initialization! setting return ip to {} --", i);
-                return;
+                return StepResult::InstructionStepped;
             }
         }
         "[Generic(1)] static valuetype System.ReadOnlySpan`1<M0> System.Runtime.CompilerServices.RuntimeHelpers::CreateSpan(valuetype System.RuntimeFieldHandle)" => {
@@ -270,7 +270,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let field_type = ctx!().with_generics(lookup).make_concrete(&field.return_type);
             let field_desc = stack.assemblies.find_concrete_type(field_type.clone());
 
-            let Some(data) = &field.initial_value else { todo!("ArgumentException: field has no initial value") };
+            let Some(data) = &field.initial_value else { return stack.throw_by_name(gc, "System.ArgumentException") };
 
             if field_desc.definition.name.starts_with(STATIC_ARRAY_TYPE_PREFIX) {
                 let size_str = field_desc.definition.name.split_at(STATIC_ARRAY_TYPE_PREFIX.len()).1;
@@ -505,7 +505,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         }
         "static valuetype System.ReadOnlySpan`1<char> System.String::op_Implicit(string)" |
         "static valuetype System.ReadOnlySpan`1<char> System.MemoryExtensions::AsSpan(string)" => {
-            let (ptr, len) = with_string!(pop!(), |s| (s.as_ptr(), s.len()));
+            let (ptr, len) = with_string!(stack, gc, pop!(), |s| (s.as_ptr(), s.len()));
 
             let span_type = stack.assemblies.corlib_type("System.ReadOnlySpan`1");
             let new_lookup = GenericLookup::new(vec![ctx!().make_concrete(&BaseType::Char)]);
@@ -563,6 +563,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
     }
 
     stack.increment_ip();
+    StepResult::InstructionStepped
 }
 
 pub fn intrinsic_field<'gc, 'm: 'gc>(

@@ -10,7 +10,7 @@ use crate::{
         exceptions::{Handler, ProtectedSection},
         intrinsics::reflection::RuntimeType,
         pinvoke::NativeLibraries,
-        MethodInfo, MethodState,
+        MethodInfo, MethodState, StepResult,
     },
 };
 
@@ -48,6 +48,7 @@ pub struct CallStack<'gc, 'm> {
     pub runtime_fields: Vec<(FieldDescription, GenericLookup)>,
     pub runtime_field_objs: HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>,
     pub method_tables: RefCell<HashMap<TypeDescription, Box<[u8]>>>,
+    pub pending_exception: Option<ObjectRef<'gc>>,
     // secretly ObjectHandles, not traced for GCing because these are for runtime debugging
     _all_objs: Vec<usize>,
 }
@@ -65,6 +66,7 @@ unsafe impl<'gc, 'm> Collect for CallStack<'gc, 'm> {
         for o in self.runtime_field_objs.values() {
             o.trace(cc);
         }
+        self.pending_exception.trace(cc);
     }
 }
 
@@ -128,6 +130,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             runtime_fields: vec![],
             runtime_field_objs: HashMap::new(),
             method_tables: RefCell::new(HashMap::new()),
+            pending_exception: None,
             _all_objs: vec![],
         }
     }
@@ -508,6 +511,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn msg(&self, fmt: std::fmt::Arguments) {
         println!("{}{}", "\t".repeat((self.frames.len() - 1) % 10), fmt);
+    }
+
+    pub fn throw_by_name(&mut self, gc: GCHandle<'gc>, name: &str) -> StepResult {
+        let rt = self.assemblies.corlib_type(name);
+        let rt_obj = ObjectInstance::new(rt, &self.current_context());
+        let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
+        self.register_new_object(&obj_ref);
+
+        self.pending_exception = Some(obj_ref);
+        StepResult::MethodThrew
     }
 
     pub fn resolve_virtual_method(
