@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use gc_arena::{Collect, unsafe_empty_collect};
+use gc_arena::{unsafe_empty_collect, Collect};
 
 #[derive(Clone, Copy)]
 pub struct ResolutionS(pub &'static Resolution<'static>);

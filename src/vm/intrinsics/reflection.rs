@@ -315,7 +315,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn get_handle_for_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> Object<'gc> {
-        let rth = self.runtime.assemblies.corlib_type("System.RuntimeTypeHandle");
+        let rth = self
+            .runtime
+            .assemblies
+            .corlib_type("System.RuntimeTypeHandle");
         let mut instance = Object::new(rth, &self.current_context());
         let handle_location = instance.instance_storage.get_field_mut("_value");
         self.get_runtime_type(gc, target).write(handle_location);
@@ -368,7 +371,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         method: MethodDescription,
         lookup: GenericLookup,
     ) -> ObjectRef<'gc> {
-        if let Some(obj) = self.runtime.runtime_method_objs.get(&(method, lookup.clone())) {
+        if let Some(obj) = self
+            .runtime
+            .runtime_method_objs
+            .get(&(method, lookup.clone()))
+        {
             return *obj;
         }
 
@@ -393,7 +400,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 .copy_from_slice(&(index as usize).to_ne_bytes());
         });
 
-        self.runtime.runtime_method_objs.insert((method, lookup), obj_ref);
+        self.runtime
+            .runtime_method_objs
+            .insert((method, lookup), obj_ref);
         obj_ref
     }
 
@@ -403,7 +412,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         field: FieldDescription,
         lookup: GenericLookup,
     ) -> ObjectRef<'gc> {
-        if let Some(obj) = self.runtime.runtime_field_objs.get(&(field, lookup.clone())) {
+        if let Some(obj) = self
+            .runtime
+            .runtime_field_objs
+            .get(&(field, lookup.clone()))
+        {
             return *obj;
         }
 
@@ -421,7 +434,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 .copy_from_slice(&(index as usize).to_ne_bytes());
         });
 
-        self.runtime.runtime_field_objs.insert((field, lookup), obj_ref);
+        self.runtime
+            .runtime_field_objs
+            .insert((field, lookup), obj_ref);
         obj_ref
     }
 }

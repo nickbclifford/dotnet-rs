@@ -396,7 +396,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
             self.entrypoint_frame(
                 gc,
-                MethodInfo::new(target_method, &self.runtime.empty_generics, self.runtime.assemblies),
+                MethodInfo::new(
+                    target_method,
+                    &self.runtime.empty_generics,
+                    self.runtime.assemblies,
+                ),
                 self.runtime.empty_generics.clone(),
                 vec![StackValue::ObjectRef(obj_ref)],
             );
@@ -527,9 +531,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let signature = frame.state.info_handle.signature;
 
         // only return value to caller if the method actually declares a return type
-        let return_value = if let (ReturnType(_, Some(_)), Some(handle)) =
-            (&signature.return_type, self.execution.stack.get(frame.base.stack))
-        {
+        let return_value = if let (ReturnType(_, Some(_)), Some(handle)) = (
+            &signature.return_type,
+            self.execution.stack.get(frame.base.stack),
+        ) {
             Some(self.get_slot(handle))
         } else {
             None
@@ -583,7 +588,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             ResolutionContext {
                 generics: &self.runtime.empty_generics,
                 assemblies: self.runtime.assemblies,
-                resolution: self.runtime.assemblies.corlib_type("System.Object").resolution,
+                resolution: self
+                    .runtime
+                    .assemblies
+                    .corlib_type("System.Object")
+                    .resolution,
                 type_owner: None,
                 method_owner: None,
             }
@@ -615,23 +624,22 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let mut handles = self.gc.gchandles.borrow_mut();
         let mut resurrected = HashSet::new();
 
-        let mut zero_out_handles =
-            |for_type: GCHandleType, resurrected: &HashSet<usize>| {
-                for entry in handles.iter_mut().flatten() {
-                    if entry.1 == for_type {
-                        if let ObjectRef(Some(ptr)) = entry.0 {
-                            if Gc::is_dead(fc, ptr) {
-                                if for_type == GCHandleType::WeakTrackResurrection
-                                    && resurrected.contains(&(Gc::as_ptr(ptr) as usize))
-                                {
-                                    continue;
-                                }
-                                entry.0 = ObjectRef(None);
+        let mut zero_out_handles = |for_type: GCHandleType, resurrected: &HashSet<usize>| {
+            for entry in handles.iter_mut().flatten() {
+                if entry.1 == for_type {
+                    if let ObjectRef(Some(ptr)) = entry.0 {
+                        if Gc::is_dead(fc, ptr) {
+                            if for_type == GCHandleType::WeakTrackResurrection
+                                && resurrected.contains(&(Gc::as_ptr(ptr) as usize))
+                            {
+                                continue;
                             }
+                            entry.0 = ObjectRef(None);
                         }
                     }
                 }
-            };
+            }
+        };
 
         if !queue.is_empty() {
             let mut to_finalize = Vec::new();
@@ -675,15 +683,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         // 2. Zero out WeakTrackResurrection handles
         zero_out_handles(GCHandleType::WeakTrackResurrection, &resurrected);
-        
+
         // 3. Prune dead objects from the debugging harness
-        self.gc._all_objs.borrow_mut().retain(|obj| {
-            match obj {
-                ObjectRef(Some(ptr)) => {
-                    !Gc::is_dead(fc, *ptr) || resurrected.contains(&(Gc::as_ptr(*ptr) as usize))
-                }
-                ObjectRef(None) => false,
+        self.gc._all_objs.borrow_mut().retain(|obj| match obj {
+            ObjectRef(Some(ptr)) => {
+                !Gc::is_dead(fc, *ptr) || resurrected.contains(&(Gc::as_ptr(*ptr) as usize))
             }
+            ObjectRef(None) => false,
         });
     }
 
@@ -781,7 +787,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn msg(&self, fmt: std::fmt::Arguments) {
-        println!("{}{}", "\t".repeat((self.execution.frames.len() - 1) % 10), fmt);
+        println!(
+            "{}{}",
+            "\t".repeat((self.execution.frames.len() - 1) % 10),
+            fmt
+        );
     }
 
     pub fn throw_by_name(&mut self, gc: GCHandle<'gc>, name: &str) -> StepResult {

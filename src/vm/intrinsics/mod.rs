@@ -248,7 +248,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 .method_tables
                 .borrow()
                 .get(&object_type)
-                .map(|p: &Box<[u8]>| p.as_ref().as_ptr() as isize);
+                .map(|p| p.as_ref().as_ptr() as isize);
             if let Some(ptr) = mt_ptr {
                 push!(NativeInt(ptr));
             } else {

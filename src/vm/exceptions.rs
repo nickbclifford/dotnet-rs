@@ -191,7 +191,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     fn begin_throwing(&mut self, exception: ObjectRef<'gc>, gc: GCHandle<'gc>) -> StepResult {
         let frame = self.execution.frames.last().unwrap();
-        println!("Throwing exception: {:?} in {:?} at IP {}", exception, frame.state.info_handle.source, frame.state.ip);
+        println!(
+            "Throwing exception: {:?} in {:?} at IP {}",
+            exception, frame.state.info_handle.source, frame.state.ip
+        );
         // Preempt any existing exception handling state (nested exceptions)
         self.execution.suspended_stack.clear();
         self.execution.suspended_frames.clear();
@@ -280,8 +283,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                             // To run the filter, we must suspend the frames and stack above it.
                             let stack_base = self.execution.frames[frame_index].base.stack;
-                            self.execution.suspended_stack = self.execution.stack.split_off(stack_base);
-                            self.execution.suspended_frames = self.execution.frames.split_off(frame_index + 1);
+                            self.execution.suspended_stack =
+                                self.execution.stack.split_off(stack_base);
+                            self.execution.suspended_frames =
+                                self.execution.frames.split_off(frame_index + 1);
 
                             let frame = &mut self.execution.frames[frame_index];
                             self.execution.original_ip = frame.state.ip;

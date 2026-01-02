@@ -79,11 +79,18 @@ impl TestHarness {
                 &format!("-p:TestFile={}", absolute_file.display()),
                 "-o",
                 output_dir.to_str().unwrap(),
-                &format!("-p:IntermediateOutputPath={}/", output_dir.join("obj").display()),
+                &format!(
+                    "-p:IntermediateOutputPath={}/",
+                    output_dir.join("obj").display()
+                ),
             ])
             .status()
             .expect("failed to run dotnet build");
-        assert!(status.success(), "dotnet build failed for {:?}", fixture_path);
+        assert!(
+            status.success(),
+            "dotnet build failed for {:?}",
+            fixture_path
+        );
 
         dll_path
     }
@@ -97,7 +104,9 @@ impl TestHarness {
             _ => panic!("Expected method entry point in {:?}", dll_path),
         };
 
-        let arena = Box::new(vm::GCArena::new(|gc| vm::CallStack::new(gc, self.assemblies)));
+        let arena = Box::new(vm::GCArena::new(|gc| {
+            vm::CallStack::new(gc, self.assemblies)
+        }));
         let mut executor = vm::Executor::new(Box::leak(arena));
 
         let entrypoint = MethodDescription {
@@ -111,7 +120,9 @@ impl TestHarness {
 
         match executor.run() {
             vm::ExecutorResult::Exited(i) => i,
-            vm::ExecutorResult::Threw => panic!("VM threw an exception while running {:?}", dll_path),
+            vm::ExecutorResult::Threw => {
+                panic!("VM threw an exception while running {:?}", dll_path)
+            }
         }
     }
 }
@@ -125,7 +136,8 @@ macro_rules! fixture_test {
             let dll_path = harness.build(Path::new($path));
             let exit_code = harness.run(&dll_path);
             assert_eq!(
-                exit_code, $expected,
+                exit_code,
+                $expected,
                 "Test {} failed: expected exit code {}, got {}",
                 stringify!($name),
                 $expected,

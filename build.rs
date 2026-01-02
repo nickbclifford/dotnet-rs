@@ -38,8 +38,15 @@ fn main() {
                 .unwrap()
                 .parse()
                 .expect("fixture file name must end with _<exit_code>.cs");
-            
-            writeln!(f, "fixture_test!({}, {:?}, {});", file_name, path.to_str().unwrap(), expected_exit_code).unwrap();
+
+            writeln!(
+                f,
+                "fixture_test!({}, {:?}, {});",
+                file_name,
+                path.to_str().unwrap(),
+                expected_exit_code
+            )
+            .unwrap();
             println!("cargo:rerun-if-changed={}", path.display());
         }
     }

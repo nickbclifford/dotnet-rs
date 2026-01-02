@@ -71,7 +71,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 "-- calling static constructor (will return to ip {}) --",
                 self.current_frame().state.ip
             );
-            self.call_frame(gc, MethodInfo::new(m, &generics, self.runtime.assemblies), generics);
+            self.call_frame(
+                gc,
+                MethodInfo::new(m, &generics, self.runtime.assemblies),
+                generics,
+            );
             true
         } else {
             false
@@ -562,7 +566,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let constraint_type = self.current_context().make_concrete(constraint);
                 let (method, lookup) = self.find_generic_method(source);
 
-                let td = self.runtime.assemblies.find_concrete_type(constraint_type.clone());
+                let td = self
+                    .runtime
+                    .assemblies
+                    .find_concrete_type(constraint_type.clone());
 
                 for o in td.definition.overrides.iter() {
                     let target = self
@@ -787,10 +794,15 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 // Restore suspended state
                 // Note: we use handler.frame_index because the filter ran in that frame.
                 // It might have called other methods, but those should have returned by now.
-                self.execution.stack
+                self.execution
+                    .stack
                     .truncate(self.execution.frames[handler.frame_index].base.stack);
-                self.execution.stack.append(&mut self.execution.suspended_stack);
-                self.execution.frames.append(&mut self.execution.suspended_frames);
+                self.execution
+                    .stack
+                    .append(&mut self.execution.suspended_stack);
+                self.execution
+                    .frames
+                    .append(&mut self.execution.suspended_frames);
 
                 let frame = &mut self.execution.frames[handler.frame_index];
                 frame.exception_stack.pop();
@@ -1546,7 +1558,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let (field, lookup) = self.current_context().locate_field(*source);
                 let field_obj = self.get_runtime_field_obj(gc, field, lookup);
 
-                let rfh = self.runtime.assemblies.corlib_type("System.RuntimeFieldHandle");
+                let rfh = self
+                    .runtime
+                    .assemblies
+                    .corlib_type("System.RuntimeFieldHandle");
                 let mut instance = Object::new(rfh, &self.current_context());
                 field_obj.write(instance.instance_storage.get_field_mut("_value"));
 
@@ -1556,7 +1571,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let (method, lookup) = self.find_generic_method(source);
                 let method_obj = self.get_runtime_method_obj(gc, method, lookup);
 
-                let rmh = self.runtime.assemblies.corlib_type("System.RuntimeMethodHandle");
+                let rmh = self
+                    .runtime
+                    .assemblies
+                    .corlib_type("System.RuntimeMethodHandle");
                 let mut instance = Object::new(rmh, &self.current_context());
                 method_obj.write(instance.instance_storage.get_field_mut("_value"));
 
