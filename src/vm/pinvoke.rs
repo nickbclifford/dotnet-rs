@@ -251,7 +251,5 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 self.push_stack(gc, v);
             }
         }
-
-        self.increment_ip();
     }
 }

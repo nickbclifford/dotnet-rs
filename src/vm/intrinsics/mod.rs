@@ -854,7 +854,6 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         },
     });
 
-    stack.increment_ip();
     StepResult::InstructionStepped
 }
 
@@ -873,6 +872,4 @@ pub fn intrinsic_field<'gc, 'm: 'gc>(
         },
     })
     .expect("unsupported load from intrinsic field");
-
-    stack.increment_ip();
 }

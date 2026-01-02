@@ -203,6 +203,5 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
         },
     }).expect("unsupported intrinsic call to String");
 
-    stack.increment_ip();
     StepResult::InstructionStepped
 }

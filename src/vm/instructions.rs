@@ -118,6 +118,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }};
         }
 
+        let initial_frame_count = self.execution.frames.len();
         let mut moved_ip = false;
 
         macro_rules! branch {
@@ -447,6 +448,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         $field,
                         self.current_context().generics.type_generics.clone(),
                     );
+                    self.increment_ip();
                     return StepResult::InstructionStepped;
                 }
             };
@@ -529,27 +531,28 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             Call { param0: source, .. } => {
                 let (method, lookup) = self.find_generic_method(source);
-                macro_rules! intrinsic {
-                    () => {
-                        return intrinsic_call(gc, self, method, lookup);
-                    };
-                }
 
                 if is_intrinsic(method, self.runtime.assemblies) {
-                    intrinsic!();
-                }
-
-                if method.method.pinvoke.is_some() {
+                    let result = intrinsic_call(gc, self, method, lookup);
+                    if let StepResult::InstructionStepped = result {
+                        // If intrinsic created a new frame, prevent auto-increment (executor will handle it on return)
+                        // If intrinsic completed inline, allow auto-increment at end of step()
+                        if initial_frame_count != self.execution.frames.len() {
+                            moved_ip = true;
+                        }
+                    } else {
+                        return result;
+                    }
+                } else if method.method.pinvoke.is_some() {
                     self.external_call(method, gc);
-                    return StepResult::InstructionStepped;
+                } else {
+                    self.call_frame(
+                        gc,
+                        MethodInfo::new(method, &lookup, self.runtime.assemblies),
+                        lookup,
+                    );
+                    moved_ip = true;
                 }
-
-                self.call_frame(
-                    gc,
-                    MethodInfo::new(method, &lookup, self.runtime.assemblies),
-                    lookup,
-                );
-                moved_ip = true;
             }
             CallConstrained(constraint, source) => {
                 // according to the standard, this doesn't really make sense
@@ -568,12 +571,26 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let declaration = self.current_context().locate_method(o.declaration, &lookup);
                     if method == declaration {
                         vm_msg!(self, "-- dispatching to {:?} --", target);
-                        self.call_frame(
-                            gc,
-                            MethodInfo::new(target, &lookup, self.runtime.assemblies),
-                            lookup,
-                        );
-                        return StepResult::InstructionStepped;
+                        if is_intrinsic(target, self.runtime.assemblies) {
+                            let result = intrinsic_call(gc, self, target, lookup);
+                            if let StepResult::InstructionStepped = result {
+                                if initial_frame_count == self.execution.frames.len() {
+                                    self.increment_ip();
+                                }
+                            }
+                            return result;
+                        } else if target.method.pinvoke.is_some() {
+                            self.external_call(target, gc);
+                            self.increment_ip();
+                            return StepResult::InstructionStepped;
+                        } else {
+                            self.call_frame(
+                                gc,
+                                MethodInfo::new(target, &lookup, self.runtime.assemblies),
+                                lookup,
+                            );
+                            return StepResult::InstructionStepped;
+                        }
                     }
                 }
 
@@ -1139,14 +1156,26 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     push!(a);
                 }
                 if is_intrinsic(method, self.runtime.assemblies) {
-                    return intrinsic_call(gc, self, method, lookup);
+                    let result = intrinsic_call(gc, self, method, lookup);
+                    if let StepResult::InstructionStepped = result {
+                        // If intrinsic created a new frame, prevent auto-increment (executor will handle it on return)
+                        // If intrinsic completed inline, allow auto-increment at end of step()
+                        if initial_frame_count != self.execution.frames.len() {
+                            moved_ip = true;
+                        }
+                    } else {
+                        return result;
+                    }
+                } else if method.method.pinvoke.is_some() {
+                    self.external_call(method, gc);
+                } else {
+                    self.call_frame(
+                        gc,
+                        MethodInfo::new(method, &lookup, self.runtime.assemblies),
+                        lookup,
+                    );
+                    moved_ip = true;
                 }
-                self.call_frame(
-                    gc,
-                    MethodInfo::new(method, &lookup, self.runtime.assemblies),
-                    lookup,
-                );
-                moved_ip = true;
             }
             CallVirtualConstrained(_, _) => todo!("constrained.callvirt"),
             CallVirtualTail(_) => todo!("tail.callvirt"),
@@ -1826,7 +1855,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             UnboxIntoAddress { .. } => todo!("unbox"),
             UnboxIntoValue(_) => todo!("unbox.any"),
         }
-        if !moved_ip {
+        if !moved_ip && initial_frame_count == self.execution.frames.len() {
             self.increment_ip();
         }
         StepResult::InstructionStepped

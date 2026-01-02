@@ -9,7 +9,7 @@ use dotnetdll::prelude::*;
 use gc_arena::{lock::RefLock, unsafe_empty_collect, Collect, Collection, Gc};
 use std::{
     cmp::Ordering,
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     fmt::{Debug, Formatter},
     hash::{Hash, Hasher},
     marker::PhantomData,
@@ -130,7 +130,31 @@ impl<'a> ResolutionContext<'a> {
     }
 
     pub fn is_a(&self, value: TypeDescription, ancestor: TypeDescription) -> bool {
-        self.get_ancestors(value).any(|(a, _)| a == ancestor)
+        let mut seen = HashSet::new();
+        let mut queue = VecDeque::new();
+
+        for (a, _) in self.get_ancestors(value) {
+            queue.push_back(a);
+        }
+
+        while let Some(current) = queue.pop_front() {
+            if current == ancestor {
+                return true;
+            }
+            if !seen.insert(current) {
+                continue;
+            }
+
+            for (_, interface_source) in &current.definition.implements {
+                let handle = match interface_source {
+                    TypeSource::User(h) | TypeSource::Generic { base: h, .. } => *h,
+                };
+                let interface = self.assemblies.locate_type(current.resolution, handle);
+                queue.push_back(interface);
+            }
+        }
+
+        false
     }
 
     pub fn get_heap_description(&self, object: ObjectHandle) -> TypeDescription {

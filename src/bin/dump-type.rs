@@ -136,13 +136,7 @@ fn print_type_info(
     _resolution: dotnet_rs::utils::ResolutionS,
     type_def: &dotnetdll::prelude::TypeDefinition,
 ) {
-    println!(
-        "Type: {}.{}",
-        type_def.namespace.as_deref().unwrap_or(""),
-        type_def.name
-    );
-    println!("Base type: {:?}", type_def.extends);
-
+    dbg!(type_def);
     println!("\nFields:");
     for field in &type_def.fields {
         println!(

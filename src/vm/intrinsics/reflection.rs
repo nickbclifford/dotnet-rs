@@ -623,8 +623,6 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             panic!("could not find a parameterless constructor in {:?}", td)
         },
     }).expect("unimplemented runtime type intrinsic");
-
-    stack.increment_ip();
     StepResult::InstructionStepped
 }
 
@@ -675,7 +673,6 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
     })
     .expect("unimplemented method info intrinsic");
 
-    stack.increment_ip();
     StepResult::InstructionStepped
 }
 
@@ -723,6 +720,5 @@ pub fn runtime_field_info_intrinsic_call<'gc, 'm: 'gc>(
     })
     .expect("unimplemented field info intrinsic");
 
-    stack.increment_ip();
     StepResult::InstructionStepped
 }
