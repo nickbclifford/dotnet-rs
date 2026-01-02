@@ -8,8 +8,8 @@ use crate::{
     value::{
         layout::*,
         string::{string_intrinsic_call, with_string, CLRString},
-        ConcreteType, FieldDescription, GenericLookup, HeapStorage, MethodDescription, Object,
-        ObjectRef, ResolutionContext, StackValue,
+        ConcreteType, FieldDescription, GCHandleType, GenericLookup, HeapStorage, ManagedPtr,
+        MethodDescription, Object, ObjectRef, ResolutionContext, StackValue,
     },
     vm::{
         intrinsics::reflection::{
@@ -36,7 +36,7 @@ pub fn is_intrinsic(method: MethodDescription, assemblies: &crate::resolve::Asse
         }
     }
 
-    if any_match_method!(method,
+    any_match_method!(method,
         [static System.Environment::GetEnvironmentVariableCore(string)],
         [System.String::GetPinnableReference()],
         [System.String::get_Length()],
@@ -52,24 +52,12 @@ pub fn is_intrinsic(method: MethodDescription, assemblies: &crate::resolve::Asse
         [static System.Runtime.InteropServices.Marshal::SizeOf(System.Type)],
         [static System.Runtime.InteropServices.Marshal::SizeOf<1>()],
         [static System.Runtime.InteropServices.Marshal::OffsetOf(System.Type, string)],
-        [static System.Runtime.InteropServices.Marshal::OffsetOf<1>(string)]
-    ) {
-        return true;
-    }
-
-    if method.parent.type_name() == "DotnetRs.RuntimeType" {
-        return true;
-    }
-    if method.parent.type_name() == "DotnetRs.MethodInfo"
-        || method.parent.type_name() == "DotnetRs.ConstructorInfo"
-    {
-        return true;
-    }
-    if method.parent.type_name() == "DotnetRs.FieldInfo" {
-        return true;
-    }
-
-    false
+        [static System.Runtime.InteropServices.Marshal::OffsetOf<1>(string)],
+        [static System.GC::Collect()],
+        [static System.GC::Collect(int)],
+        [static System.GC::Collect(int, System.GCCollectionMode)],
+        [static System.GC::WaitForPendingFinalizers()]
+    )
 }
 
 pub fn is_intrinsic_field(
@@ -94,13 +82,12 @@ pub fn is_intrinsic_field(
 }
 
 pub fn span_to_slice<'gc, 'a>(span: Object<'gc>) -> &'a [u8] {
-    let mut ptr_data = [0u8; ObjectRef::SIZE];
+    let ptr_data = span.instance_storage.get_field("_reference");
     let mut len_data = [0u8; size_of::<i32>()];
 
-    ptr_data.copy_from_slice(span.instance_storage.get_field("_reference"));
+    let ptr = ManagedPtr::read(ptr_data).value;
     len_data.copy_from_slice(span.instance_storage.get_field("_length"));
 
-    let ptr = usize::from_ne_bytes(ptr_data);
     let len = i32::from_ne_bytes(len_data) as usize;
 
     unsafe { std::slice::from_raw_parts(ptr as *const u8, len) }
@@ -151,6 +138,24 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         && method.method.name != "op_Implicit"
     {
         return string_intrinsic_call(gc, stack, method, generics);
+    }
+
+    macro_rules! pop_native {
+        () => {{
+            let val = pop!();
+            match val {
+                StackValue::NativeInt(i) => i,
+                StackValue::ValueType(v)
+                    if v.description.type_name() == "System.IntPtr"
+                        || v.description.type_name() == "System.UIntPtr" =>
+                {
+                    let mut buf = [0u8; size_of::<isize>()];
+                    buf.copy_from_slice(v.instance_storage.get_field("_value"));
+                    isize::from_ne_bytes(buf)
+                }
+                _ => panic!("expected native int or IntPtr, got {:?}", val),
+            }
+        }};
     }
 
     match_method!(method, {
@@ -293,10 +298,48 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             );
             return StepResult::InstructionStepped;
         },
-        [static System.GC::_SuppressFinalize(object)]
+        [static System.GC::SuppressFinalize(object)]
+        | [static System.GC::_SuppressFinalize(object)]
         | [static System.GC::SuppressFinalizeInternal(object)] => {
-            // TODO(gc): this object's finalizer should not be called
-            let _obj = pop!();
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
+            if let Some(handle) = obj.0 {
+                if let Some(o) = handle.borrow_mut(gc).as_obj_mut() {
+                    o.finalizer_suppressed = true;
+                }
+            }
+        },
+        [static System.GC::ReRegisterForFinalize(object)] => {
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
+            if let Some(handle) = obj.0 {
+                let is_obj = handle.borrow_mut(gc).as_obj_mut().map(|o| {
+                    o.finalizer_suppressed = false;
+                    true
+                }).unwrap_or(false);
+                if is_obj {
+                    stack.register_new_object(&obj);
+                }
+            }
+        },
+        [static System.GC::Collect()] => {
+            stack.needs_full_collect.set(true);
+        },
+        [static System.GC::Collect(int)] => {
+            pop!();
+            stack.needs_full_collect.set(true);
+        },
+        [static System.GC::Collect(int, System.GCCollectionMode)] => {
+            pop!();
+            pop!();
+            stack.needs_full_collect.set(true);
+        },
+        [static System.GC::WaitForPendingFinalizers()] => {
+            if !stack.pending_finalization.borrow().is_empty() || stack.processing_finalizer {
+                stack.current_frame_mut().state.ip -= 1;
+                return StepResult::InstructionStepped;
+            }
+        },
+        [static System.GC::KeepAlive(object)] => {
+            pop!();
         },
         [static System.MemoryExtensions::Equals(ReadOnlySpan<char>, ReadOnlySpan<char>, System.StringComparison)] => {
             vm_expect_stack!(let Int32(_culture_comparison) = pop!()); // TODO(i18n): respect StringComparison rules
@@ -379,10 +422,18 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let target_type = stack.assemblies.find_concrete_type(target.clone());
             let layout = type_layout(target.clone(), &ctx);
             vm_expect_stack!(let NativeInt(offset) = pop!());
-            let m = pop!().as_ptr();
+            let m_val = pop!();
+            let (owner, pinned) = if let StackValue::ManagedPtr(m) = &m_val {
+                (m.owner, m.pinned)
+            } else {
+                (None, false)
+            };
+            let m = m_val.as_ptr();
             push!(managed_ptr(
                 unsafe { m.offset(offset * layout.size() as isize) },
-                target_type
+                target_type,
+                owner,
+                pinned
             ));
         },
         [static System.Runtime.CompilerServices.Unsafe::AreSame<1>(ref !!0, ref !!0)] => {
@@ -397,13 +448,19 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         },
         [static System.Runtime.CompilerServices.Unsafe::As<2>(ref !!0)] => {
             let target_type = stack.assemblies.find_concrete_type(generics.method_generics[1].clone());
-            let m = pop!().as_ptr();
-            push!(managed_ptr(m, target_type));
+            let m_val = pop!();
+            let (owner, pinned) = match &m_val {
+                StackValue::ManagedPtr(m) => (m.owner, m.pinned),
+                StackValue::ObjectRef(ObjectRef(Some(h))) => (Some(*h), false),
+                _ => (None, false)
+            };
+            let m = m_val.as_ptr();
+            push!(managed_ptr(m, target_type, owner, pinned));
         },
         [static System.Runtime.CompilerServices.Unsafe::AsRef<1>(* void)] => {
             let target_type = stack.assemblies.find_concrete_type(generics.method_generics[0].clone());
             vm_expect_stack!(let NativeInt(ptr) = pop!());
-            push!(managed_ptr(ptr as *mut u8, target_type));
+            push!(managed_ptr(ptr as *mut u8, target_type, None, false));
         },
         [static System.Runtime.CompilerServices.Unsafe::SizeOf<1>()] => {
             let target = &generics.method_generics[0];
@@ -440,6 +497,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     Scalar::NativeInt => StackValue::NativeInt(read_ua!(isize)),
                     Scalar::Float32 => StackValue::NativeFloat(read_ua!(f32) as f64),
                     Scalar::Float64 => StackValue::NativeFloat(read_ua!(f64)),
+                    Scalar::ManagedPtr => StackValue::ManagedPtr(read_ua!(ManagedPtr<'gc>)),
                 },
                 _ => panic!("unsupported layout for read unaligned"),
             };
@@ -471,6 +529,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     Scalar::NativeInt => write_ua!(NativeInt, isize),
                     Scalar::Float32 => write_ua!(NativeFloat, f32),
                     Scalar::Float64 => write_ua!(NativeFloat, f64),
+                    Scalar::ManagedPtr => write_ua!(ManagedPtr, ManagedPtr<'gc>),
                 }
                 _ => panic!("unsupported layout for write unaligned"),
             }
@@ -553,7 +612,12 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     // navigate to the specified index
                     .add(value_layout.size() * index as usize)
             };
-            push!(managed_ptr(ptr, stack.assemblies.find_concrete_type(value_type.clone())));
+            push!(managed_ptr(
+                ptr,
+                stack.assemblies.find_concrete_type(value_type.clone()),
+                m.owner,
+                m.pinned
+            ));
         },
         ["System.Span`1"::get_Length()] | ["System.ReadOnlySpan`1"::get_Length()] => {
             vm_expect_stack!(let ManagedPtr(m) = pop!());
@@ -635,7 +699,9 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             let mut span = Object::new(span_type, &ctx);
 
-            span.instance_storage.get_field_mut("_reference").copy_from_slice(&(ptr as usize).to_ne_bytes());
+            let char_type = stack.assemblies.find_concrete_type(ctx.make_concrete(&BaseType::Char));
+            let managed = ManagedPtr::new(ptr as *mut u8, char_type, None, false);
+            managed.write(span.instance_storage.get_field_mut("_reference"));
             span.instance_storage.get_field_mut("_length").copy_from_slice(&(len as i32).to_ne_bytes());
 
             push!(ValueType(Box::new(span)));
@@ -682,6 +748,107 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             push!(ValueType(Box::new(instance)));
         },
+        [static System.Runtime.InteropServices.GCHandle::InternalAlloc(object, System.Runtime.InteropServices.GCHandleType)] => {
+            vm_expect_stack!(let Int32(handle_type) = pop!());
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
+
+            let handle_type = GCHandleType::from(handle_type);
+            let index = {
+                let mut handles = stack.gchandles.borrow_mut();
+                if let Some(i) = handles.iter().position(|h| h.is_none()) {
+                    handles[i] = Some((obj, handle_type));
+                    i
+                } else {
+                    handles.push(Some((obj, handle_type)));
+                    handles.len() - 1
+                }
+            };
+
+            if handle_type == GCHandleType::Pinned {
+                stack.pinned_objects.borrow_mut().insert(obj);
+            }
+
+            push!(NativeInt((index + 1) as isize));
+        },
+        [static System.Runtime.InteropServices.GCHandle::InternalFree(nint)] => {
+            let handle = pop_native!();
+            if handle != 0 {
+                let index = (handle - 1) as usize;
+                let mut handles = stack.gchandles.borrow_mut();
+                if index < handles.len() {
+                    if let Some((obj, handle_type)) = handles[index] {
+                        if handle_type == GCHandleType::Pinned {
+                            stack.pinned_objects.borrow_mut().remove(&obj);
+                        }
+                    }
+                    handles[index] = None;
+                }
+            }
+        },
+        [static System.Runtime.InteropServices.GCHandle::InternalGet(nint)] => {
+            let handle = pop_native!();
+            let result = if handle == 0 {
+                ObjectRef(None)
+            } else {
+                let index = (handle - 1) as usize;
+                let handles = stack.gchandles.borrow();
+                match handles.get(index) {
+                    Some(Some((obj, _))) => *obj,
+                    _ => ObjectRef(None),
+                }
+            };
+            push!(ObjectRef(result));
+        },
+        [static System.Runtime.InteropServices.GCHandle::InternalSet(nint, object)] => {
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
+            let handle = pop_native!();
+            if handle != 0 {
+                let index = (handle - 1) as usize;
+                let mut handles = stack.gchandles.borrow_mut();
+                if index < handles.len() {
+                    if let Some(entry) = &mut handles[index] {
+                        if entry.1 == GCHandleType::Pinned {
+                            let mut pinned = stack.pinned_objects.borrow_mut();
+                            pinned.remove(&entry.0);
+                            pinned.insert(obj);
+                        }
+                        entry.0 = obj;
+                    }
+                }
+            }
+        },
+        [static System.Runtime.InteropServices.GCHandle::InternalAddrOfPinnedObject(nint)] => {
+            let handle = pop_native!();
+            let addr = if handle == 0 {
+                0
+            } else {
+                let index = (handle - 1) as usize;
+                let handles = stack.gchandles.borrow();
+                if index < handles.len() {
+                    if let Some(entry) = &handles[index] {
+                        if entry.1 == GCHandleType::Pinned {
+                            if let Some(ptr) = entry.0.0 {
+                                match &*ptr.borrow() {
+                                    HeapStorage::Obj(_) => ptr.as_ptr() as isize,
+                                    HeapStorage::Vec(v) => v.get().as_ptr() as isize,
+                                    HeapStorage::Str(s) => s.as_ptr() as isize,
+                                    _ => 0,
+                                }
+                            } else {
+                                0
+                            }
+                        } else {
+                            0
+                        }
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            };
+            push!(NativeInt(addr));
+        },
     });
 
     stack.increment_ip();
@@ -699,7 +866,7 @@ pub fn intrinsic_field<'gc, 'm: 'gc>(
             stack.push_stack(gc, StackValue::NativeInt(0));
         },
         [static System.String::Empty] => {
-            stack.push_stack(gc, StackValue::string(gc, CLRString::new(vec![])));
+            vm_push!(stack, gc, string(gc, CLRString::new(vec![])));
         },
     })
     .expect("unsupported load from intrinsic field");

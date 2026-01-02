@@ -1,10 +1,12 @@
 use super::{
-    ConcreteType, FieldDescription, GenericLookup, ObjectRef, ResolutionContext, TypeDescription,
+    ConcreteType, FieldDescription, GenericLookup, ManagedPtr, ObjectRef, ResolutionContext,
+    TypeDescription,
 };
 
 use dotnetdll::prelude::*;
 use enum_dispatch::enum_dispatch;
-use std::{collections::HashMap, ops::Range};
+use gc_arena::{Collect, Collection};
+use std::{collections::HashMap, collections::HashSet, mem::size_of, ops::Range};
 
 #[enum_dispatch]
 pub trait HasLayout {
@@ -20,7 +22,10 @@ pub enum LayoutManager {
 }
 impl LayoutManager {
     pub fn is_gc_ptr(&self) -> bool {
-        matches!(self, LayoutManager::Scalar(Scalar::ObjectRef))
+        matches!(
+            self,
+            LayoutManager::Scalar(Scalar::ObjectRef) | LayoutManager::Scalar(Scalar::ManagedPtr)
+        )
     }
 
     pub fn is_or_contains_refs(&self) -> bool {
@@ -29,7 +34,9 @@ impl LayoutManager {
                 f.fields.values().any(|f| f.layout.is_or_contains_refs())
             }
             LayoutManager::ArrayLayoutManager(a) => a.element_layout.is_or_contains_refs(),
-            LayoutManager::Scalar(Scalar::ObjectRef) => true,
+            LayoutManager::Scalar(Scalar::ObjectRef) | LayoutManager::Scalar(Scalar::ManagedPtr) => {
+                true
+            }
             _ => false,
         }
     }
@@ -40,6 +47,7 @@ impl LayoutManager {
             LayoutManager::ArrayLayoutManager(_) => "arr",
             LayoutManager::Scalar(s) => match s {
                 Scalar::ObjectRef => "obj",
+                Scalar::ManagedPtr => "ptr",
                 Scalar::Int8 => "i8",
                 Scalar::Int16 => "i16",
                 Scalar::Int32 => "i32",
@@ -56,6 +64,58 @@ impl LayoutManager {
             LayoutManager::FieldLayoutManager(f) => f.alignment,
             LayoutManager::ArrayLayoutManager(a) => a.element_layout.alignment(),
             LayoutManager::Scalar(s) => s.alignment(),
+        }
+    }
+
+    pub fn trace(&self, storage: &[u8], cc: &Collection) {
+        match self {
+            LayoutManager::Scalar(Scalar::ObjectRef) => {
+                ObjectRef::read(storage).trace(cc);
+            }
+            LayoutManager::Scalar(Scalar::ManagedPtr) => {
+                // Skip tracing ManagedPtr for now to avoid unsafe transmute issues
+                // ManagedPtr values should generally not be stored in object fields anyway
+                // TODO: properly handle ManagedPtr tracing or remove Scalar::ManagedPtr entirely
+            }
+            LayoutManager::FieldLayoutManager(f) => {
+                for field in f.fields.values() {
+                    field.layout.trace(&storage[field.position..], cc);
+                }
+            }
+            LayoutManager::ArrayLayoutManager(a) => {
+                let elem_size = a.element_layout.size();
+                for i in 0..a.length {
+                    a.element_layout
+                        .trace(&storage[i * elem_size..], cc);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn resurrect<'gc>(&self, storage: &[u8], fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+        match self {
+            LayoutManager::Scalar(Scalar::ObjectRef) => {
+                ObjectRef::read(storage).resurrect(fc, visited);
+            }
+            LayoutManager::Scalar(Scalar::ManagedPtr) => {
+                // Skip resurrecting ManagedPtr for now to avoid unsafe transmute issues
+                // ManagedPtr values should generally not be stored in object fields anyway
+                // TODO: properly handle ManagedPtr resurrection or remove Scalar::ManagedPtr entirely
+            }
+            LayoutManager::FieldLayoutManager(f) => {
+                for field in f.fields.values() {
+                    field.layout.resurrect(&storage[field.position..], fc, visited);
+                }
+            }
+            LayoutManager::ArrayLayoutManager(a) => {
+                let elem_size = a.element_layout.size();
+                for i in 0..a.length {
+                    a.element_layout
+                        .resurrect(&storage[i * elem_size..], fc, visited);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -92,6 +152,18 @@ impl HasLayout for FieldLayoutManager {
     }
 }
 impl FieldLayoutManager {
+    pub fn trace(&self, storage: &[u8], cc: &Collection) {
+        for field in self.fields.values() {
+            field.layout.trace(&storage[field.position..], cc);
+        }
+    }
+
+    pub fn resurrect<'gc>(&self, storage: &[u8], fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+        for field in self.fields.values() {
+            field.layout.resurrect(&storage[field.position..], fc, visited);
+        }
+    }
+
     fn new<'a>(
         fields: impl IntoIterator<Item = (&'a str, Option<usize>, LayoutManager)>,
         layout: Layout,
@@ -279,6 +351,12 @@ impl HasLayout for ArrayLayoutManager {
     }
 }
 impl ArrayLayoutManager {
+    pub fn resurrect<'gc>(&self, storage: &[u8], fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+        let elem_size = self.element_layout.size();
+        for i in 0..self.length {
+            self.element_layout.resurrect(&storage[i * elem_size..], fc, visited);
+        }
+    }
     pub fn new(element: ConcreteType, length: usize, context: &ResolutionContext) -> Self {
         Self {
             element_layout: Box::new(type_layout(element, context)),
@@ -290,6 +368,7 @@ impl ArrayLayoutManager {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Scalar {
     ObjectRef,
+    ManagedPtr,
     Int8,
     Int16,
     Int32,
@@ -306,6 +385,7 @@ impl HasLayout for Scalar {
             Scalar::Int32 => 4,
             Scalar::Int64 => 8,
             Scalar::ObjectRef | Scalar::NativeInt => ObjectRef::SIZE,
+            Scalar::ManagedPtr => size_of::<ManagedPtr>(),
             Scalar::Float32 => 4,
             Scalar::Float64 => 8,
         }
@@ -327,10 +407,10 @@ pub fn type_layout(t: ConcreteType, context: &ResolutionContext) -> LayoutManage
         BaseType::Char | BaseType::Int16 | BaseType::UInt16 => Scalar::Int16.into(),
         BaseType::Int32 | BaseType::UInt32 => Scalar::Int32.into(),
         BaseType::Int64 | BaseType::UInt64 => Scalar::Int64.into(),
-        BaseType::IntPtr
-        | BaseType::UIntPtr
-        | BaseType::ValuePointer(_, _)
-        | BaseType::FunctionPointer(_) => Scalar::NativeInt.into(),
+        BaseType::IntPtr | BaseType::UIntPtr | BaseType::FunctionPointer(_) => {
+            Scalar::NativeInt.into()
+        }
+        BaseType::ValuePointer(_, _) => Scalar::ManagedPtr.into(),
         BaseType::Float32 => Scalar::Float32.into(),
         BaseType::Float64 => Scalar::Float64.into(),
         BaseType::Type {

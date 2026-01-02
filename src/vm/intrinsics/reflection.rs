@@ -194,6 +194,9 @@ impl RuntimeType {
                     BaseType::ValuePointer(vec![], Some(t.to_concrete(assemblies))),
                 )
             }
+            RuntimeType::TypeParameter { .. } | RuntimeType::MethodParameter { .. } => {
+                ConcreteType::new(corlib_res, BaseType::Object)
+            }
             rest => todo!("convert {rest:?} to ConcreteType"),
         }
     }
@@ -460,6 +463,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                     let data = (resolution.as_raw() as usize).to_ne_bytes();
                     asm_handle.instance_storage.get_field_mut("resolution").copy_from_slice(&data);
                     let v = ObjectRef::new(gc, HeapStorage::Obj(asm_handle));
+                    stack.register_new_object(&v);
                     stack.runtime_asms.insert(resolution, v);
                     v
                 }
@@ -530,7 +534,9 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 let arg_obj = stack.get_runtime_type(gc, arg);
                 arg_obj.write(&mut vector.get_mut()[(i * ObjectRef::SIZE)..]);
             }
-            push!(ObjectRef(ObjectRef::new(gc, HeapStorage::Vec(vector))));
+            let obj = ObjectRef::new(gc, HeapStorage::Vec(vector));
+            stack.register_new_object(&obj);
+            push!(ObjectRef(obj));
             Some(StepResult::InstructionStepped)
         },
         [DotnetRs.RuntimeType::GetTypeHandle()] => {
@@ -543,7 +549,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             push!(ValueType(Box::new(instance)));
             Some(StepResult::InstructionStepped)
         },
-        [DotnetRs.RuntimeType::MakeGenericType(object[])] => {
+        [DotnetRs.RuntimeType::MakeGenericType(any)] => {
             vm_expect_stack!(let ObjectRef(parameters) = pop!());
             vm_expect_stack!(let ObjectRef(target) = pop!());
             let target_rt = stack.resolve_runtime_type(target);
@@ -569,7 +575,52 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             }
             Some(StepResult::InstructionStepped)
         },
-    }).expect("unsupported reflection intrinsic call to RuntimeType");
+        [DotnetRs.RuntimeType::CreateInstanceDefaultCtor(any, any)] => {
+            pop!(); // skipCheck
+            pop!(); // publicOnly
+            vm_expect_stack!(let ObjectRef(target_obj) = pop!());
+
+            let target_rt = stack.resolve_runtime_type(target_obj);
+
+            let (td, type_generics) = match target_rt {
+                RuntimeType::Type(td) => (*td, vec![]),
+                RuntimeType::Generic(td, args) => (*td, args.clone()),
+                _ => panic!("cannot create instance of {:?}", target_rt),
+            };
+
+            let type_generics_concrete = type_generics
+                .iter()
+                .map(|a| a.to_concrete(stack.assemblies))
+                .collect();
+            let new_lookup = GenericLookup::new(type_generics_concrete);
+            let new_ctx = stack.current_context().with_generics(&new_lookup);
+
+            let instance = Object::new(td, &new_ctx);
+
+            for m in &td.definition.methods {
+                if m.runtime_special_name
+                    && m.name == ".ctor"
+                    && m.signature.instance
+                    && m.signature.parameters.is_empty()
+                {
+                    let desc = MethodDescription {
+                        parent: td,
+                        method: m
+                    };
+
+                    stack.constructor_frame(
+                        gc,
+                        instance,
+                        crate::vm::MethodInfo::new(desc, &new_lookup, stack.assemblies),
+                        new_lookup,
+                    );
+                    return StepResult::InstructionStepped;
+                }
+            }
+
+            panic!("could not find a parameterless constructor in {:?}", td)
+        },
+    }).expect("unimplemented runtime type intrinsic");
 
     stack.increment_ip();
     StepResult::InstructionStepped

@@ -74,6 +74,11 @@ impl TypeMatcher {
                     false
                 }
             }
+            (TypeMatcher::Array(inner), MethodType::Base(b)) => match &**b {
+                BaseType::Vector(_, t) => inner.matches_type(t),
+                BaseType::Array(t, _) => inner.matches_type(t),
+                _ => false,
+            },
             _ => false,
         }
     }
@@ -325,13 +330,15 @@ macro_rules! __munch_types {
 #[macro_export]
 macro_rules! match_method {
     ($method:expr, { $( [ $($rule:tt)+ ] $(| [ $($rule_or:tt)+ ] )* => $body:expr ),* $(,)? }) => {
-        #[allow(unreachable_code)]
-        $(
-            if $crate::match_method!($method, $($rule)+) $( || $crate::match_method!($method, $($rule_or)+) )* {
-                Some({ $body })
-            } else
-        )* {
-            None
+        {
+            #[allow(unreachable_code)]
+            $(
+                if $crate::match_method!($method, $($rule)+) $( || $crate::match_method!($method, $($rule_or)+) )* {
+                    Some({ $body })
+                } else
+            )* {
+                None
+            }
         }
     };
     ($method:expr, static $($type:ident).+ :: $name:ident < $generic_params:tt > ( $($param:tt)* )) => {

@@ -849,6 +849,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             Jump(_) => todo!("jmp"),
             LoadArgument(i) => {
                 let arg = self.get_argument(*i as usize);
+                vm_msg!(self, "LoadArgument({}) => {:?}", i, arg);
                 push!(arg);
             }
             LoadArgumentAddress(i) => {
@@ -856,7 +857,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let live_type = arg.contains_type(&self.current_context());
                 push!(managed_ptr(
                     self.get_argument_address(*i as usize) as *mut _,
-                    live_type
+                    live_type,
+                    None,
+                    true
                 ));
             }
             LoadConstantInt32(i) => push!(Int32(*i)),
@@ -914,9 +917,15 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadLocalAddress(i) => {
                 let local = self.get_local(*i as usize);
                 let live_type = local.contains_type(&self.current_context());
+                let pinned = match state!(|s| &s.info_handle.locals[*i as usize]) {
+                    LocalVariable::Variable { pinned, .. } => *pinned,
+                    _ => false,
+                };
                 push!(managed_ptr(
                     self.get_local_address(*i as usize) as *mut _,
-                    live_type
+                    live_type,
+                    None,
+                    pinned
                 ));
             }
             LoadNull => push!(null()),
@@ -1092,19 +1101,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     // boxing is a noop for all reference types
                     push!(value);
                 } else {
-                    push!(ObjectRef(ObjectRef::new(
+                    let obj = ObjectRef::new(
                         gc,
-                        HeapStorage::Boxed(ValueType::new(&t, &self.current_context(), value))
-                    )));
+                        HeapStorage::Boxed(ValueType::new(&t, &self.current_context(), value)),
+                    );
+                    self.register_new_object(&obj);
+                    push!(ObjectRef(obj));
                 }
             }
             CallVirtual { param0: source, .. } => {
                 let (base_method, lookup) = self.find_generic_method(source);
-
-                if is_intrinsic(base_method, self.assemblies) {
-                    intrinsic_call(gc, self, base_method, lookup);
-                    return StepResult::InstructionStepped;
-                }
 
                 let num_args = 1 + base_method.method.signature.parameters.len();
                 let mut args = Vec::new();
@@ -1128,14 +1134,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 // TODO: check explicit overrides
 
-                let method = self.resolve_virtual_method(base_method, this_type);
+                let method = self.resolve_virtual_method(base_method, this_type, None);
 
                 for a in args {
                     push!(a);
                 }
-                if method.method.internal_call {
-                    intrinsic_call(gc, self, method, lookup);
-                    return StepResult::InstructionStepped;
+                if is_intrinsic(method, self.assemblies) {
+                    return intrinsic_call(gc, self, method, lookup);
                 }
                 self.call_frame(
                     gc,
@@ -1286,7 +1291,33 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     Err(_) => return self.throw_by_name(gc, "System.IndexOutOfRangeException"),
                 }
             }
-            LoadElementAddress { .. } | LoadElementAddressReadonly(_) => todo!("ldelema"),
+            LoadElementAddress { param0: t, .. } | LoadElementAddressReadonly(t) => {
+                let index = match pop!() {
+                    StackValue::Int32(i) => i as usize,
+                    StackValue::NativeInt(i) => i as usize,
+                    rest => panic!("invalid index for ldelema: {:?}", rest),
+                };
+                vm_expect_stack!(let ObjectRef(obj) = pop!());
+                let Some(h) = obj.0 else {
+                    return self.throw_by_name(gc, "System.NullReferenceException");
+                };
+                let ctx = self.current_context();
+                let concrete_t = ctx.make_concrete(t);
+                let element_layout = type_layout(concrete_t.clone(), &ctx);
+
+                let data = h.borrow();
+                let ptr = match &*data {
+                    HeapStorage::Vec(v) => {
+                        if index >= v.layout.length {
+                            panic!("IndexOutOfRangeException");
+                        }
+                        unsafe { v.get().as_ptr().add(index * element_layout.size()) as *mut u8 }
+                    }
+                    _ => panic!("ldelema on non-vector"),
+                };
+                let target_type = self.assemblies.find_concrete_type(concrete_t);
+                push!(managed_ptr(ptr, target_type, Some(h), false));
+            }
             LoadField {
                 param0: source,
                 volatile: _, // TODO
@@ -1368,7 +1399,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     .current_context()
                     .for_type_with_generics(field.parent, &lookup);
 
-                let source_ptr = match parent {
+                let (source_ptr, owner, pinned) = match parent {
                     StackValue::ObjectRef(ObjectRef(None)) => {
                         return self.throw_by_name(gc, "System.NullReferenceException")
                     }
@@ -1384,16 +1415,22 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         }
 
                         let data = h.borrow();
-                        match &*data {
+                        let ptr = match &*data {
                             HeapStorage::Vec(_) => todo!("field on array"),
                             HeapStorage::Obj(o) => o.instance_storage.get().as_ptr() as *mut u8,
                             HeapStorage::Str(_) => todo!("field on string"),
                             HeapStorage::Boxed(_) => todo!("field on boxed value type"),
-                        }
+                        };
+                        (ptr, Some(h), false)
                     }
-                    StackValue::NativeInt(i) => i as *mut u8,
-                    StackValue::UnmanagedPtr(UnmanagedPtr(ptr))
-                    | StackValue::ManagedPtr(ManagedPtr { value: ptr, .. }) => ptr,
+                    StackValue::NativeInt(i) => (i as *mut u8, None, false),
+                    StackValue::UnmanagedPtr(UnmanagedPtr(ptr)) => (ptr, None, false),
+                    StackValue::ManagedPtr(ManagedPtr {
+                        value: ptr,
+                        owner,
+                        pinned,
+                        ..
+                    }) => (ptr, owner, pinned),
                     rest => panic!("cannot load field address from stack value {:?}", rest),
                 };
 
@@ -1407,7 +1444,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 if let StackValue::UnmanagedPtr(_) | StackValue::NativeInt(_) = parent {
                     push!(unmanaged_ptr(ptr))
                 } else {
-                    push!(managed_ptr(ptr, target_type))
+                    push!(managed_ptr(ptr, target_type, owner, pinned))
                 }
             }
             LoadFieldSkipNullCheck(_) => todo!("no.nullcheck ldfld"),
@@ -1465,14 +1502,15 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let field_type = ctx.get_field_desc(field);
                 let value = statics!(|s| {
                     let field_data = s.get(field.parent).get_field(name);
-                    StackValue::managed_ptr(field_data.as_ptr() as *mut _, field_type)
+                    StackValue::managed_ptr(field_data.as_ptr() as *mut _, field_type, None, true)
                 });
 
                 push!(value)
             }
             LoadString(cs) => {
-                let val = StackValue::string(gc, CLRString::new(cs.clone()));
-                push!(val)
+                let obj = ObjectRef::new(gc, HeapStorage::Str(CLRString::new(cs.clone())));
+                self.register_new_object(&obj);
+                push!(ObjectRef(obj))
             }
             LoadTokenField(source) => {
                 let (field, lookup) = self.current_context().locate_field(*source);
@@ -1508,7 +1546,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     return self.throw_by_name(gc, "System.NullReferenceException");
                 };
                 let object_type = self.current_context().get_heap_description(o);
-                let method = self.resolve_virtual_method(base_method, object_type);
+                let method = self.resolve_virtual_method(base_method, object_type, None);
 
                 let idx = self.get_runtime_method_index(method, lookup);
                 push!(NativeInt(idx as isize));
@@ -1534,10 +1572,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             NewObject(ctor) => {
                 let (mut method, lookup) = self.find_generic_method(&MethodSource::User(*ctor));
                 let parent = method.parent;
-                let new_ctx = self
-                    .current_context()
-                    .for_type_with_generics(parent, &lookup);
-
                 if let (None, Some(ts)) = (&method.method.body, &parent.definition.extends) {
                     let (ut, _) = decompose_type_source(ts);
                     let type_name = ut.type_name(parent.resolution.0);
@@ -1563,6 +1597,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     vm_expect_stack!(let Int32(i) = pop!());
                     push!(NativeInt(i as isize));
                 } else {
+                    if self.initialize_static_storage(gc, parent, lookup.clone()) {
+                        return StepResult::InstructionStepped;
+                    }
+
+                    let new_ctx = self
+                        .current_context()
+                        .for_type_with_generics(parent, &lookup);
                     let instance = Object::new(parent, &new_ctx);
 
                     self.constructor_frame(

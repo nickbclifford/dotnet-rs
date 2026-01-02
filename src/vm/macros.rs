@@ -7,6 +7,13 @@ macro_rules! vm_pop {
 
 #[macro_export]
 macro_rules! vm_push {
+    ($stack:expr, $gc:expr, string($gc_ignore:expr, $val:expr)) => {
+        {
+            let obj = $crate::value::ObjectRef::new($gc, $crate::value::HeapStorage::Str($val));
+            $stack.register_new_object(&obj);
+            $stack.push_stack($gc, $crate::value::StackValue::ObjectRef(obj))
+        }
+    };
     ($stack:expr, $gc:expr, $variant:ident ( $($args:expr),* )) => {
         $stack.push_stack($gc, $crate::value::StackValue::$variant($($args),*))
     };

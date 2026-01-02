@@ -25,7 +25,7 @@ macro_rules! with_string {
 }
 pub(crate) use with_string;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct CLRString(Vec<u16>);
 unsafe_empty_collect!(CLRString);
 
@@ -152,8 +152,15 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
         },
         [System.String::GetPinnableReference()]
         | [System.String::GetRawStringData()] => {
-            let ptr = string_op!(pop!(), |s| s.as_ptr() as *mut u8);
-            let value = StackValue::managed_ptr(ptr, stack.assemblies.corlib_type("System.Char"));
+            let val = pop!();
+            let obj_h = if let StackValue::ObjectRef(ObjectRef(Some(h))) = &val {
+                Some(*h)
+            } else {
+                None
+            };
+            let ptr = with_string!(stack, gc, val, |s| s.as_ptr() as *mut u8);
+            let value =
+                StackValue::managed_ptr(ptr, stack.assemblies.corlib_type("System.Char"), obj_h, false);
             push!(value);
             Some(StepResult::InstructionStepped)
         },

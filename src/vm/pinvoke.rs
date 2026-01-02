@@ -76,6 +76,7 @@ fn layout_to_ffi(l: LayoutManager) -> Type {
                 NativeInt => Type::isize(),
                 Float32 => Type::f32(),
                 Float64 => Type::f64(),
+                ManagedPtr => Type::pointer()
             }
         }
     }

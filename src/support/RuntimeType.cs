@@ -105,6 +105,9 @@ internal class RuntimeType : Type
     public override extern Type[] GetGenericArguments();
 
     [MethodImpl(MethodImplOptions.InternalCall)]
+    internal extern object CreateInstanceDefaultCtor(bool publicOnly, bool skipCheck);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
     private extern System.RuntimeTypeHandle GetTypeHandle();
     public override System.RuntimeTypeHandle TypeHandle => GetTypeHandle();
 

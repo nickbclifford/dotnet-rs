@@ -11,10 +11,11 @@ use crate::{
     vm::{CallStack, GCHandle, StepResult},
 };
 use dotnetdll::prelude::*;
-use gc_arena::{unsafe_empty_collect, Collect};
+use gc_arena::Collect;
 
 /// Represents the location of an exception handler within the call stack.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Collect)]
+#[collect(require_static)]
 pub struct HandlerAddress {
     /// Index into the `CallStack::frames` vector.
     pub frame_index: usize,
@@ -23,7 +24,6 @@ pub struct HandlerAddress {
     /// Index into the `ProtectedSection::handlers` vector for that section.
     pub handler_index: usize,
 }
-unsafe_empty_collect!(HandlerAddress);
 
 /// The current state of the exception handling mechanism.
 ///
@@ -31,7 +31,7 @@ unsafe_empty_collect!(HandlerAddress);
 /// 1. **Search Phase**: The runtime searches for a matching `catch` block or a `filter` that returns true.
 /// 2. **Unwind Phase**: The runtime executes `finally` and `fault` blocks from the throw point
 ///    up to the found handler (or the target of a `leave` instruction).
-#[derive(Collect)]
+#[derive(Collect, Debug)]
 #[collect(no_drop)]
 pub enum ExceptionState<'gc> {
     /// No exception is currently being processed.
@@ -241,8 +241,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 {
                     match &handler.kind {
                         HandlerKind::Catch(t) => {
-                            let exc_type =
-                                self.get_heap_description(exception.0.expect("throwing null"));
+                            let exc_type = self
+                                .current_context()
+                                .get_heap_description(exception.0.expect("throwing null"));
                             let catch_type = self.assemblies.find_concrete_type(t.clone());
 
                             if self.is_a(exc_type, catch_type) {

@@ -33,6 +33,33 @@ impl Executor {
     // assumes args are already on stack
     pub fn run(&mut self) -> ExecutorResult {
         loop {
+            if let Some(marked) = self.arena.mark_all() {
+                marked.finalize(|fc, c| c.finalize_check(fc));
+            }
+
+            let full_collect = self.arena.mutate(|_, c| {
+                if c.needs_full_collect.get() {
+                    c.needs_full_collect.set(false);
+                    true
+                } else {
+                    false
+                }
+            });
+
+            if full_collect {
+                println!("GC: Manual collection triggered");
+                let mut marked = None;
+                while marked.is_none() {
+                    marked = self.arena.mark_all();
+                }
+                if let Some(marked) = marked {
+                     marked.finalize(|fc, c| c.finalize_check(fc));
+                }
+                self.arena.collect_all(); // Now it's safe to sweep resurrected objects are kept.
+            }
+
+            self.arena.mutate_root(|gc, c| c.process_pending_finalizers(gc));
+
             match self.arena.mutate_root(|gc, c| c.step(gc)) {
                 StepResult::MethodReturned => {
                     let was_cctor = self.arena.mutate_root(|gc, c| {
@@ -44,7 +71,7 @@ impl Executor {
                     if self.arena.mutate(|_, c| c.frames.is_empty()) {
                         let exit_code = self.arena.mutate(|_, c| match c.bottom_of_stack() {
                             Some(StackValue::Int32(i)) => i as u8,
-                            Some(_) => panic!("invalid value for entrypoint return"),
+                            Some(v) => panic!("invalid value for entrypoint return: {:?}", v),
                             None => 0,
                         });
                         return ExecutorResult::Exited(exit_code);
@@ -54,6 +81,9 @@ impl Executor {
                     }
                 }
                 StepResult::MethodThrew => {
+                    self.arena.mutate(|_, c| {
+                        println!("Exception thrown: {:?}", c.exception_mode);
+                    });
                     if self.arena.mutate(|_, c| c.frames.is_empty()) {
                         return ExecutorResult::Threw;
                     }

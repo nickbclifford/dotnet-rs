@@ -8,6 +8,7 @@ use crate::{
 use dotnetdll::prelude::*;
 use gc_arena::{lock::RefLock, unsafe_empty_collect, Collect, Collection, Gc};
 use std::{
+    collections::HashSet,
     cmp::Ordering,
     fmt::{Debug, Formatter},
     hash::{Hash, Hasher},
@@ -22,6 +23,27 @@ pub mod storage;
 use storage::FieldStorage;
 
 pub mod string;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Collect)]
+#[collect(require_static)]
+pub enum GCHandleType {
+    Weak = 0,
+    WeakTrackResurrection = 1,
+    Normal = 2,
+    Pinned = 3,
+}
+
+impl From<i32> for GCHandleType {
+    fn from(i: i32) -> Self {
+        match i {
+            0 => GCHandleType::Weak,
+            1 => GCHandleType::WeakTrackResurrection,
+            2 => GCHandleType::Normal,
+            3 => GCHandleType::Pinned,
+            _ => panic!("invalid GCHandleType: {}", i),
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct ResolutionContext<'a> {
@@ -147,6 +169,7 @@ impl<'a> ResolutionContext<'a> {
         };
 
         let name = ut.type_name(res.0);
+        println!("NORMALIZE: {}", name);
         let base = match name.as_ref() {
             "System.Boolean" => Some(BaseType::Boolean),
             "System.Char" => Some(BaseType::Char),
@@ -184,8 +207,7 @@ impl<'a> ResolutionContext<'a> {
     }
 }
 
-#[derive(Clone, Debug, Collect, PartialEq)]
-#[collect(no_drop)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum StackValue<'gc> {
     Int32(i32),
     Int64(i64),
@@ -193,17 +215,34 @@ pub enum StackValue<'gc> {
     NativeFloat(f64),
     ObjectRef(ObjectRef<'gc>),
     UnmanagedPtr(UnmanagedPtr),
-    ManagedPtr(ManagedPtr),
+    ManagedPtr(ManagedPtr<'gc>),
     ValueType(Box<Object<'gc>>),
+}
+unsafe impl<'gc> Collect for StackValue<'gc> {
+    fn trace(&self, cc: &Collection) {
+        match self {
+            Self::ObjectRef(o) => o.trace(cc),
+            Self::ManagedPtr(m) => m.trace(cc),
+            Self::ValueType(v) => v.as_ref().trace(cc),
+            _ => {}
+        }
+    }
 }
 impl<'gc> StackValue<'gc> {
     pub fn unmanaged_ptr(ptr: *mut u8) -> Self {
         Self::UnmanagedPtr(UnmanagedPtr(ptr))
     }
-    pub fn managed_ptr(ptr: *mut u8, target_type: TypeDescription) -> Self {
+    pub fn managed_ptr(
+        ptr: *mut u8,
+        target_type: TypeDescription,
+        owner: Option<ObjectHandle<'gc>>,
+        pinned: bool,
+    ) -> Self {
         Self::ManagedPtr(ManagedPtr {
             value: ptr,
             inner_type: target_type,
+            owner,
+            pinned,
         })
     }
     pub fn null() -> Self {
@@ -282,45 +321,150 @@ impl PartialOrd for StackValue<'_> {
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 pub struct UnmanagedPtr(pub *mut u8);
 #[derive(Copy, Clone)]
-pub struct ManagedPtr {
+pub struct ManagedPtr<'gc> {
     pub value: *mut u8,
     pub inner_type: TypeDescription,
+    pub owner: Option<ObjectHandle<'gc>>,
+    pub pinned: bool,
 }
-impl Debug for ManagedPtr {
+impl Debug for ManagedPtr<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}] {:#?}", self.inner_type.type_name(), self.value)
+        write!(
+            f,
+            "[{}] {:#?} (owner: {:?}, pinned: {})",
+            self.inner_type.type_name(),
+            self.value,
+            self.owner.map(Gc::as_ptr),
+            self.pinned
+        )
     }
 }
-impl PartialEq for ManagedPtr {
+impl PartialEq for ManagedPtr<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.value == other.value
     }
 }
-impl PartialOrd for ManagedPtr {
+impl PartialOrd for ManagedPtr<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.value.partial_cmp(&other.value)
     }
 }
-impl ManagedPtr {
+impl<'gc> ManagedPtr<'gc> {
+    // Storage format: pointer (8) + TypeDescription (16) + ObjectRef (8) + pinned (1) = 33 bytes
+    // But we need to account for actual sizes, not hardcoded values
+    pub const SIZE: usize = size_of::<*mut u8>() + size_of::<TypeDescription>() + ObjectRef::SIZE + 1;
+
+    pub fn new(
+        value: *mut u8,
+        inner_type: TypeDescription,
+        owner: Option<ObjectHandle<'gc>>,
+        pinned: bool,
+    ) -> Self {
+        Self {
+            value,
+            inner_type,
+            owner,
+            pinned,
+        }
+    }
+
+    pub fn read(source: &[u8]) -> Self {
+        // SAFETY: ManagedPtr should not actually be stored in object fields in most cases.
+        // This function exists for completeness but reading a ManagedPtr from storage
+        // that wasn't properly initialized will cause UB. The proper solution is to
+        // avoid storing ManagedPtr values entirely, as they should be stack-only.
+        //
+        // For now, we panic if we try to read from what looks like uninitialized storage.
+
+        // Check if the entire ManagedPtr storage appears to be zero-initialized
+        let expected_size = size_of::<*mut u8>() + size_of::<TypeDescription>() + ObjectRef::SIZE + 1;
+        if source.len() < expected_size {
+            panic!("Attempted to read ManagedPtr from insufficiently sized storage");
+        }
+
+        // If all bytes are zero, this is likely uninitialized storage
+        if source[..expected_size].iter().all(|&b| b == 0) {
+            // This should never happen in correct code, so we panic rather than
+            // trying to create a "safe" dummy value
+            panic!("Attempted to read ManagedPtr from zero-initialized storage");
+        }
+
+        let mut value_bytes = [0u8; size_of::<*mut u8>()];
+        value_bytes.copy_from_slice(&source[0..size_of::<*mut u8>()]);
+        let value = usize::from_ne_bytes(value_bytes) as *mut u8;
+
+        let mut type_bytes = [0u8; size_of::<TypeDescription>()];
+        type_bytes.copy_from_slice(&source[size_of::<*mut u8>()..(size_of::<*mut u8>() + size_of::<TypeDescription>())]);
+        let inner_type: TypeDescription = unsafe { std::mem::transmute(type_bytes) };
+
+        let owner = ObjectRef::read(&source[(size_of::<*mut u8>() + size_of::<TypeDescription>())..]).0;
+
+        let pinned = source[size_of::<*mut u8>() + size_of::<TypeDescription>() + ObjectRef::SIZE] != 0;
+
+        Self {
+            value,
+            inner_type,
+            owner,
+            pinned,
+        }
+    }
+
+    pub fn write(&self, dest: &mut [u8]) {
+        let value_bytes = (self.value as usize).to_ne_bytes();
+        dest[0..size_of::<*mut u8>()].copy_from_slice(&value_bytes);
+
+        let type_bytes: [u8; size_of::<TypeDescription>()] = unsafe { std::mem::transmute(self.inner_type) };
+        dest[size_of::<*mut u8>()..(size_of::<*mut u8>() + size_of::<TypeDescription>())].copy_from_slice(&type_bytes);
+
+        ObjectRef(self.owner).write(&mut dest[(size_of::<*mut u8>() + size_of::<TypeDescription>())..]);
+
+        dest[size_of::<*mut u8>() + size_of::<TypeDescription>() + ObjectRef::SIZE] = if self.pinned { 1 } else { 0 };
+    }
+
     pub fn map_value(self, transform: impl FnOnce(*mut u8) -> *mut u8) -> Self {
         ManagedPtr {
             value: transform(self.value),
             inner_type: self.inner_type,
+            owner: self.owner,
+            pinned: self.pinned,
         }
     }
 }
 
 unsafe_empty_collect!(UnmanagedPtr);
-unsafe_empty_collect!(ManagedPtr);
+unsafe impl<'gc> Collect for ManagedPtr<'gc> {
+    fn trace(&self, cc: &Collection) {
+        if let Some(o) = self.owner {
+            o.trace(cc);
+        }
+    }
+}
+impl<'gc> ManagedPtr<'gc> {
+    pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+        if let Some(owner) = self.owner {
+            let ptr = Gc::as_ptr(owner) as usize;
+            if visited.insert(ptr) {
+                Gc::resurrect(fc, owner);
+                owner.borrow().resurrect(fc, visited);
+            }
+        }
+    }
+}
 
 type ObjectInner<'gc> = RefLock<HeapStorage<'gc>>;
 pub type ObjectPtr = *const ObjectInner<'static>;
 pub type ObjectHandle<'gc> = Gc<'gc, ObjectInner<'gc>>;
 
-#[derive(Copy, Clone, Collect)]
-#[collect(no_drop)]
+#[derive(Copy, Clone)]
 #[repr(transparent)]
 pub struct ObjectRef<'gc>(pub Option<ObjectHandle<'gc>>);
+unsafe impl<'gc> Collect for ObjectRef<'gc> {
+    fn trace(&self, cc: &Collection) {
+        if let Some(h) = self.0 {
+            h.trace(cc);
+        }
+    }
+}
 
 //noinspection RsAssertEqual
 // we assume this type is pointer-sized basically everywhere
@@ -346,8 +490,27 @@ impl PartialOrd for ObjectRef<'_> {
         }
     }
 }
+impl Eq for ObjectRef<'_> {}
+impl Hash for ObjectRef<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self.0 {
+            Some(g) => Gc::as_ptr(g).hash(state),
+            None => 0usize.hash(state),
+        }
+    }
+}
 impl<'gc> ObjectRef<'gc> {
     pub const SIZE: usize = size_of::<ObjectRef>();
+
+    pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+        if let Some(handle) = self.0 {
+            let ptr = Gc::as_ptr(handle) as usize;
+            if visited.insert(ptr) {
+                Gc::resurrect(fc, handle);
+                handle.borrow().resurrect(fc, visited);
+            }
+        }
+    }
 
     pub fn new(gc: GCHandle<'gc>, value: HeapStorage<'gc>) -> Self {
         Self(Some(Gc::new(gc, RefLock::new(value))))
@@ -373,7 +536,7 @@ impl<'gc> ObjectRef<'gc> {
             Some(s) => Gc::as_ptr(s),
         };
         let ptr_bytes = (ptr as usize).to_ne_bytes();
-        dest.copy_from_slice(&ptr_bytes);
+        dest[..ptr_bytes.len()].copy_from_slice(&ptr_bytes);
     }
 
     pub fn expect_object_ref(self) -> Self {
@@ -439,17 +602,47 @@ impl Debug for ObjectRef<'_> {
     }
 }
 
-#[derive(Clone, Debug, Collect)]
-#[collect(no_drop)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum HeapStorage<'gc> {
     Vec(Vector<'gc>),
     Obj(Object<'gc>),
     Str(CLRString),
     Boxed(ValueType<'gc>),
 }
+unsafe impl<'gc> Collect for HeapStorage<'gc> {
+    fn trace(&self, cc: &Collection) {
+        match self {
+            Self::Vec(v) => v.trace(cc),
+            Self::Obj(o) => o.trace(cc),
+            Self::Boxed(v) => v.trace(cc),
+            Self::Str(_) => {}
+        }
+    }
+}
+impl<'gc> HeapStorage<'gc> {
+    pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+        match self {
+            HeapStorage::Vec(v) => v.resurrect(fc, visited),
+            HeapStorage::Obj(o) => o.resurrect(fc, visited),
+            HeapStorage::Boxed(v) => v.resurrect(fc, visited),
+            HeapStorage::Str(_) => {}
+        }
+    }
+    pub fn as_obj(&self) -> Option<&Object<'gc>> {
+        match self {
+            HeapStorage::Obj(o) => Some(o),
+            _ => None,
+        }
+    }
+    pub fn as_obj_mut(&mut self) -> Option<&mut Object<'gc>> {
+        match self {
+            HeapStorage::Obj(o) => Some(o),
+            _ => None,
+        }
+    }
+}
 
-#[derive(Clone, Debug, Collect)]
-#[collect(no_drop)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ValueType<'gc> {
     Bool(bool),
     Char(u16),
@@ -463,10 +656,20 @@ pub enum ValueType<'gc> {
     UInt64(u64),
     NativeInt(isize),
     NativeUInt(usize),
+    Pointer(ManagedPtr<'gc>),
     Float32(f32),
     Float64(f64),
     TypedRef, // TODO
     Struct(Object<'gc>),
+}
+unsafe impl<'gc> Collect for ValueType<'gc> {
+    fn trace(&self, cc: &Collection) {
+        match self {
+            Self::Pointer(p) => p.trace(cc),
+            Self::Struct(o) => o.trace(cc),
+            _ => {}
+        }
+    }
 }
 
 fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(data: StackValue) -> T {
@@ -505,6 +708,13 @@ where
 }
 
 impl<'gc> ValueType<'gc> {
+    pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+        match self {
+            ValueType::Pointer(p) => p.resurrect(fc, visited),
+            ValueType::Struct(o) => o.resurrect(fc, visited),
+            _ => {}
+        }
+    }
     pub fn new(t: &ConcreteType, context: &ResolutionContext, data: StackValue<'gc>) -> Self {
         match CTSValue::new(t, context, data) {
             CTSValue::Value(v) => v,
@@ -532,6 +742,7 @@ impl<'gc> ValueType<'gc> {
             ValueType::UInt64(_) => asms.corlib_type("System.UInt64"),
             ValueType::NativeInt(_) => asms.corlib_type("System.IntPtr"),
             ValueType::NativeUInt(_) => asms.corlib_type("System.UIntPtr"),
+            ValueType::Pointer(_) => asms.corlib_type("System.IntPtr"),
             ValueType::Float32(_) => asms.corlib_type("System.Single"),
             ValueType::Float64(_) => asms.corlib_type("System.Double"),
             ValueType::TypedRef => asms.corlib_type("System.TypedReference"),
@@ -575,8 +786,12 @@ impl<'gc> CTSValue<'gc> {
                 other => panic!("invalid stack value {:?} for float conversion", other),
             })),
             BaseType::IntPtr => Self::Value(NativeInt(convert_num(data))),
-            BaseType::UIntPtr | BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
+            BaseType::UIntPtr | BaseType::FunctionPointer(_) => {
                 Self::Value(NativeUInt(convert_num(data)))
+            }
+            BaseType::ValuePointer(_, _) => {
+                vm_expect_stack!(let ManagedPtr(p) = data);
+                Self::Value(Pointer(p))
             }
             BaseType::Object | BaseType::String | BaseType::Vector(_, _) => {
                 vm_expect_stack!(let ObjectRef(o) = data);
@@ -637,9 +852,10 @@ impl<'gc> CTSValue<'gc> {
             BaseType::Float32 => Self::Value(Float32(from_bytes!(f32, data))),
             BaseType::Float64 => Self::Value(Float64(from_bytes!(f64, data))),
             BaseType::IntPtr => Self::Value(NativeInt(from_bytes!(isize, data))),
-            BaseType::UIntPtr | BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
+            BaseType::UIntPtr | BaseType::FunctionPointer(_) => {
                 Self::Value(NativeUInt(from_bytes!(usize, data)))
             }
+            BaseType::ValuePointer(_, _) => Self::Value(Pointer(ManagedPtr::read(data))),
             BaseType::Object
             | BaseType::String
             | BaseType::Vector(_, _)
@@ -689,6 +905,7 @@ impl<'gc> CTSValue<'gc> {
             Value(UInt64(i)) => StackValue::Int64(i as i64),
             Value(NativeInt(i)) => StackValue::NativeInt(i),
             Value(NativeUInt(i)) => StackValue::NativeInt(i as isize),
+            Value(Pointer(p)) => StackValue::ManagedPtr(p),
             Value(Float32(f)) => StackValue::NativeFloat(f as f64),
             Value(Float64(f)) => StackValue::NativeFloat(f),
             Value(TypedRef) => todo!(),
@@ -713,6 +930,7 @@ impl<'gc> CTSValue<'gc> {
                 UInt64(i) => dest.copy_from_slice(&i.to_ne_bytes()),
                 NativeInt(i) => dest.copy_from_slice(&i.to_ne_bytes()),
                 NativeUInt(i) => dest.copy_from_slice(&i.to_ne_bytes()),
+                Pointer(p) => p.write(dest),
                 Float32(f) => dest.copy_from_slice(&f.to_ne_bytes()),
                 Float64(f) => dest.copy_from_slice(&f.to_ne_bytes()),
                 TypedRef => todo!("typedref implementation"),
@@ -723,7 +941,7 @@ impl<'gc> CTSValue<'gc> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Vector<'gc> {
     pub element: ConcreteType,
     pub layout: ArrayLayoutManager,
@@ -734,14 +952,32 @@ unsafe impl Collect for Vector<'_> {
     #[inline]
     fn trace(&self, cc: &Collection) {
         let element = &self.layout.element_layout;
-        if element.is_gc_ptr() {
-            for i in 0..self.layout.length {
-                ObjectRef::read(&self.storage[(i * element.size())..]).trace(cc);
+        match element.as_ref() {
+            LayoutManager::Scalar(Scalar::ObjectRef) => {
+                for i in 0..self.layout.length {
+                    ObjectRef::read(&self.storage[(i * element.size())..]).trace(cc);
+                }
+            }
+            LayoutManager::Scalar(Scalar::ManagedPtr) => {
+                // Skip tracing ManagedPtr arrays to avoid unsafe transmute issues
+                // ManagedPtr values should not be stored in arrays
+            }
+            _ => {
+                for i in 0..self.layout.length {
+                    LayoutManager::trace(
+                        element,
+                        &self.storage[(i * element.size())..],
+                        cc,
+                    );
+                }
             }
         }
     }
 }
 impl<'gc> Vector<'gc> {
+    pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+        self.layout.resurrect(&self.storage, fc, visited);
+    }
     pub fn new(element: ConcreteType, size: usize, context: &ResolutionContext) -> Self {
         let layout = ArrayLayoutManager::new(element.clone(), size, context);
         Self {
@@ -769,14 +1005,23 @@ impl Debug for Vector<'_> {
                     self.element, self.layout.length
                 ))
                 .chain(self.storage.chunks(self.layout.element_layout.size()).map(
-                    if self.layout.element_layout.is_gc_ptr() {
-                        |chunk: &[u8]| format!("{:?}", ObjectRef::read(chunk))
-                    } else {
-                        |chunk: &[u8]| {
+                    match self.layout.element_layout.as_ref() {
+                        LayoutManager::Scalar(Scalar::ObjectRef) => {
+                            |chunk: &[u8]| format!("{:?}", ObjectRef::read(chunk))
+                        }
+                        LayoutManager::Scalar(Scalar::ManagedPtr) => {
+                            |chunk: &[u8]| {
+                                // Skip reading ManagedPtr to avoid transmute issues
+                                let bytes: Vec<_> =
+                                    chunk.iter().map(|b| format!("{:02x}", b)).collect();
+                                format!("ptr({})", bytes.join(" "))
+                            }
+                        }
+                        _ => |chunk: &[u8]| {
                             let bytes: Vec<_> =
                                 chunk.iter().map(|b| format!("{:02x}", b)).collect();
                             bytes.join(" ")
-                        }
+                        },
                     },
                 ))
                 .map(DebugStr),
@@ -785,17 +1030,26 @@ impl Debug for Vector<'_> {
     }
 }
 
-#[derive(Clone, Collect, PartialEq)]
-#[collect(no_drop)]
+#[derive(Clone, PartialEq)]
 pub struct Object<'gc> {
     pub description: TypeDescription,
     pub instance_storage: FieldStorage<'gc>,
+    pub finalizer_suppressed: bool,
+}
+unsafe impl<'gc> Collect for Object<'gc> {
+    fn trace(&self, cc: &Collection) {
+        self.instance_storage.trace(cc);
+    }
 }
 impl<'gc> Object<'gc> {
+    pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+        self.instance_storage.resurrect(fc, visited);
+    }
     pub fn new(description: TypeDescription, context: &ResolutionContext) -> Self {
         Self {
             description,
             instance_storage: FieldStorage::instance_fields(description, context),
+            finalizer_suppressed: false,
         }
     }
 }
@@ -977,6 +1231,9 @@ pub struct ConcreteType {
     source: ResolutionS,
     base: Box<BaseType<Self>>,
 }
+unsafe impl Collect for ConcreteType {
+    fn trace(&self, _cc: &Collection) {}
+}
 impl From<TypeDescription> for ConcreteType {
     fn from(td: TypeDescription) -> Self {
         let index = td
@@ -1033,6 +1290,12 @@ impl ResolvedDebug for ConcreteType {
 pub struct GenericLookup {
     pub type_generics: Vec<ConcreteType>,
     pub method_generics: Vec<ConcreteType>,
+}
+unsafe impl Collect for GenericLookup {
+    fn trace(&self, cc: &Collection) {
+        self.type_generics.trace(cc);
+        self.method_generics.trace(cc);
+    }
 }
 impl GenericLookup {
     pub fn new(type_generics: Vec<ConcreteType>) -> Self {

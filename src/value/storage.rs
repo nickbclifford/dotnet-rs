@@ -1,8 +1,7 @@
 use crate::{
     utils::DebugStr,
     value::{
-        layout::{FieldLayoutManager, HasLayout},
-        MethodDescription, ObjectRef, ResolutionContext, TypeDescription,
+        layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar}, MethodDescription, ObjectRef, ResolutionContext, TypeDescription,
     },
 };
 
@@ -29,11 +28,19 @@ impl Debug for FieldStorage<'_> {
             .iter()
             .map(|(k, v)| {
                 let data = &self.storage[v.as_range()];
-                let data_rep = if v.layout.is_gc_ptr() {
-                    format!("{:?}", ObjectRef::read(data))
-                } else {
-                    let bytes: Vec<_> = data.iter().map(|b| format!("{:02x}", b)).collect();
-                    bytes.join(" ")
+                let data_rep = match &v.layout {
+                    LayoutManager::Scalar(Scalar::ObjectRef) => {
+                        format!("{:?}", ObjectRef::read(data))
+                    }
+                    LayoutManager::Scalar(Scalar::ManagedPtr) => {
+                        // Skip reading ManagedPtr to avoid transmute issues
+                        let bytes: Vec<_> = data.iter().map(|b| format!("{:02x}", b)).collect();
+                        format!("ptr({})", bytes.join(" "))
+                    }
+                    _ => {
+                        let bytes: Vec<_> = data.iter().map(|b| format!("{:02x}", b)).collect();
+                        bytes.join(" ")
+                    }
                 };
 
                 (
@@ -54,11 +61,7 @@ impl Debug for FieldStorage<'_> {
 unsafe impl Collect for FieldStorage<'_> {
     #[inline]
     fn trace(&self, cc: &Collection) {
-        for field in self.layout.fields.values() {
-            if field.layout.is_gc_ptr() {
-                ObjectRef::read(&self.storage[field.position..]).trace(cc);
-            }
-        }
+        self.layout.trace(&self.storage, cc);
     }
 }
 
@@ -73,6 +76,10 @@ impl FieldStorage<'_> {
 
     pub fn instance_fields(description: TypeDescription, context: &ResolutionContext) -> Self {
         Self::new(FieldLayoutManager::instance_fields(description, context))
+    }
+
+    pub fn resurrect<'gc>(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut std::collections::HashSet<usize>) {
+        self.layout.resurrect(&self.storage, fc, visited);
     }
 
     pub fn static_fields(description: TypeDescription, context: &ResolutionContext) -> Self {
@@ -104,11 +111,16 @@ impl FieldStorage<'_> {
     }
 }
 
-#[derive(Clone, Collect)]
-#[collect(no_drop)]
+#[derive(Clone)]
 pub struct StaticStorage<'gc> {
     initialized: bool,
     storage: FieldStorage<'gc>,
+}
+
+unsafe impl Collect for StaticStorage<'_> {
+    fn trace(&self, cc: &Collection) {
+        self.storage.trace(cc);
+    }
 }
 impl Debug for StaticStorage<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -120,10 +132,17 @@ impl Debug for StaticStorage<'_> {
     }
 }
 
-#[derive(Clone, Collect)]
-#[collect(no_drop)]
+#[derive(Clone)]
 pub struct StaticStorageManager<'gc> {
     types: HashMap<TypeDescription, StaticStorage<'gc>>,
+}
+
+unsafe impl Collect for StaticStorageManager<'_> {
+    fn trace(&self, cc: &Collection) {
+        for v in self.types.values() {
+            v.trace(cc);
+        }
+    }
 }
 impl Debug for StaticStorageManager<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
