@@ -323,12 +323,19 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let ObjectRef(Some(ptr)) = instance else {
             return;
         };
-        self._all_objs.push(Gc::as_ptr(*ptr) as usize);
+        let ptr_val = Gc::as_ptr(*ptr) as usize;
+        if !self._all_objs.contains(&ptr_val) {
+            self._all_objs.push(ptr_val);
+        }
+
         let ctx = self.current_context();
 
         if let HeapStorage::Obj(o) = &*ptr.borrow() {
             if o.description.has_finalizer(&ctx) {
-                self.finalization_queue.borrow_mut().push(*instance);
+                let mut queue = self.finalization_queue.borrow_mut();
+                if !queue.contains(instance) {
+                    queue.push(*instance);
+                }
             }
         }
     }

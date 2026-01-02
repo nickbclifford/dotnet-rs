@@ -849,7 +849,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             Jump(_) => todo!("jmp"),
             LoadArgument(i) => {
                 let arg = self.get_argument(*i as usize);
-                vm_msg!(self, "LoadArgument({}) => {:?}", i, arg);
                 push!(arg);
             }
             LoadArgumentAddress(i) => {

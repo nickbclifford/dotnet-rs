@@ -63,8 +63,9 @@ impl Executor {
 
             match self.arena.mutate_root(|gc, c| c.step(gc)) {
                 StepResult::MethodReturned => {
-                    let was_cctor = self.arena.mutate_root(|gc, c| {
-                        let val = c.frames.last().unwrap().state.info_handle.is_cctor;
+                    let was_auto_invoked = self.arena.mutate_root(|gc, c| {
+                        let frame = c.frames.last().unwrap();
+                        let val = frame.state.info_handle.is_cctor || frame.is_finalizer;
                         c.return_frame(gc);
                         val
                     });
@@ -76,7 +77,7 @@ impl Executor {
                             None => 0,
                         });
                         return ExecutorResult::Exited(exit_code);
-                    } else if !was_cctor {
+                    } else if !was_auto_invoked {
                         // step the caller past the call instruction
                         self.arena.mutate_root(|_, c| c.increment_ip());
                     }
