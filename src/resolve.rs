@@ -4,6 +4,7 @@ use crate::{
 };
 
 use dotnetdll::prelude::*;
+use gc_arena::{Collect, unsafe_empty_collect};
 use std::{cell::RefCell, collections::HashMap, error::Error, path::PathBuf};
 
 pub struct Assemblies {
@@ -11,6 +12,7 @@ pub struct Assemblies {
     external: RefCell<HashMap<String, Option<ResolutionS>>>,
     stubs: HashMap<String, TypeDescription>,
 }
+unsafe_empty_collect!(Assemblies);
 
 const SUPPORT_LIBRARY: &[u8] = include_bytes!("support/bin/Debug/net10.0/support.dll");
 pub const SUPPORT_ASSEMBLY: &str = "__dotnetrs_support";

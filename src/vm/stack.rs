@@ -46,7 +46,7 @@ pub struct CallStack<'gc, 'm> {
     pub original_ip: usize,
     pub original_stack_height: usize,
     // secretly ObjectHandles, not traced for GCing because these are for runtime debugging
-    _all_objs: Vec<usize>,
+    _all_objs: RefCell<HashSet<ObjectRef<'gc>>>,
 
     pub finalization_queue: RefCell<Vec<ObjectRef<'gc>>>,
     pub pending_finalization: RefCell<Vec<ObjectRef<'gc>>>,
@@ -59,13 +59,19 @@ pub struct CallStack<'gc, 'm> {
 // this is sound, I think?
 unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
     fn trace(&self, cc: &Collection) {
+        // --- 1. Core Stack and Frames ---
+        self.stack.trace(cc);
+        self.frames.trace(cc);
+        self.suspended_stack.trace(cc);
+        self.suspended_frames.trace(cc);
+
+        // --- 2. Global / Static State ---
         self.statics.borrow().trace(cc);
-        for f in &self.frames {
-            f.trace(cc);
-        }
-        for f in &self.suspended_frames {
-            f.trace(cc);
-        }
+        self.exception_mode.trace(cc);
+        self.empty_generics.trace(cc);
+
+        // --- 3. Runtime Metadata Objects ---
+        // (Caching objects that represent types, methods, fields, etc.)
         for o in self.runtime_asms.values() {
             o.trace(cc);
         }
@@ -78,19 +84,10 @@ unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
         for o in self.runtime_field_objs.values() {
             o.trace(cc);
         }
-        self.exception_mode.trace(cc);
-        self.pending_finalization.borrow().trace(cc);
 
-        for h in &self.stack {
-            h.trace(cc);
-        }
-        for h in &self.suspended_stack {
-            h.trace(cc);
-        }
-
-        for obj in self.pinned_objects.borrow().iter() {
-            obj.trace(cc);
-        }
+        // --- 4. Special GC Handles ---
+        // Normal and Pinned handles keep objects alive.
+        // Weak handles DO NOT trace.
         for entry in self.gchandles.borrow().iter().flatten() {
             match entry.1 {
                 GCHandleType::Normal | GCHandleType::Pinned => {
@@ -101,11 +98,18 @@ unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
                 }
             }
         }
-        self.empty_generics.trace(cc);
 
-        // Objects in finalization_queue are NOT traced here.
-        // They will be traced by finalize_check if they are found to be dead (resurrection),
-        // or they are already traced if they are reachable from other roots.
+        // --- 5. GC Pinned and Pending ---
+        for obj in self.pinned_objects.borrow().iter() {
+            obj.trace(cc);
+        }
+        self.pending_finalization.borrow().trace(cc);
+
+        // --- 6. Specifically NOT Traced ---
+        // - self.assemblies: Read-only metadata reference (unsafe_empty_collect).
+        // - self.finalization_queue: Traced by finalize_check (resurrection).
+        // - self.method_tables: Byte arrays, no GC pointers.
+        // - self._all_objs: Debugging handles (untraced).
     }
 }
 
@@ -179,7 +183,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             suspended_stack: vec![],
             original_ip: 0,
             original_stack_height: 0,
-            _all_objs: vec![],
+            _all_objs: RefCell::new(HashSet::new()),
             finalization_queue: RefCell::new(vec![]),
             pending_finalization: RefCell::new(vec![]),
             pinned_objects: RefCell::new(HashSet::new()),
@@ -319,23 +323,18 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         ));
     }
 
-    pub fn register_new_object(&mut self, instance: &ObjectRef<'gc>) {
+    pub fn register_new_object(&self, instance: &ObjectRef<'gc>) {
         let ObjectRef(Some(ptr)) = instance else {
             return;
         };
-        let ptr_val = Gc::as_ptr(*ptr) as usize;
-        if !self._all_objs.contains(&ptr_val) {
-            self._all_objs.push(ptr_val);
-        }
+        self._all_objs.borrow_mut().insert(*instance);
 
         let ctx = self.current_context();
 
         if let HeapStorage::Obj(o) = &*ptr.borrow() {
             if o.description.has_finalizer(&ctx) {
                 let mut queue = self.finalization_queue.borrow_mut();
-                if !queue.contains(instance) {
-                    queue.push(*instance);
-                }
+                queue.push(*instance);
             }
         }
     }
@@ -597,65 +596,78 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     pub fn finalize_check(&self, fc: &gc_arena::Finalization<'gc>) {
         let mut queue = self.finalization_queue.borrow_mut();
         let mut handles = self.gchandles.borrow_mut();
+        let mut resurrected = HashSet::new();
 
-        let mut zero_out_handles = |for_type: GCHandleType| {
-            for entry in handles.iter_mut().flatten() {
-                if entry.1 == for_type {
-                    if let ObjectRef(Some(ptr)) = entry.0 {
-                        if Gc::is_dead(fc, ptr) {
-                            entry.0 = ObjectRef(None);
+        let mut zero_out_handles =
+            |for_type: GCHandleType, resurrected: &HashSet<usize>| {
+                for entry in handles.iter_mut().flatten() {
+                    if entry.1 == for_type {
+                        if let ObjectRef(Some(ptr)) = entry.0 {
+                            if Gc::is_dead(fc, ptr) {
+                                if for_type == GCHandleType::WeakTrackResurrection
+                                    && resurrected.contains(&(Gc::as_ptr(ptr) as usize))
+                                {
+                                    continue;
+                                }
+                                entry.0 = ObjectRef(None);
+                            }
                         }
                     }
                 }
-            }
-        };
-
-        // 1. Zero out Weak handles for dead objects
-        zero_out_handles(GCHandleType::Weak);
-
-        if queue.is_empty() {
-            zero_out_handles(GCHandleType::WeakTrackResurrection);
-            return;
-        }
-
-        let mut to_finalize = Vec::new();
-        let mut i = 0;
-        while i < queue.len() {
-            let obj = queue[i];
-            let ptr = obj.0.expect("object in finalization queue is null");
-
-            let is_suppressed = match &*ptr.borrow() {
-                HeapStorage::Obj(o) => o.finalizer_suppressed,
-                _ => false,
             };
 
-            if is_suppressed {
-                queue.swap_remove(i);
-                continue;
+        if !queue.is_empty() {
+            let mut to_finalize = Vec::new();
+            let mut i = 0;
+            while i < queue.len() {
+                let obj = queue[i];
+                let ptr = obj.0.expect("object in finalization queue is null");
+
+                let is_suppressed = match &*ptr.borrow() {
+                    HeapStorage::Obj(o) => o.finalizer_suppressed,
+                    _ => false,
+                };
+
+                if is_suppressed {
+                    queue.swap_remove(i);
+                    continue;
+                }
+
+                if Gc::is_dead(fc, ptr) {
+                    to_finalize.push(queue.swap_remove(i));
+                } else {
+                    i += 1;
+                }
             }
 
-            if Gc::is_dead(fc, ptr) {
-                to_finalize.push(queue.swap_remove(i));
-            } else {
-                i += 1;
-            }
-        }
-
-        if !to_finalize.is_empty() {
-            let mut pending = self.pending_finalization.borrow_mut();
-            let mut visited = std::collections::HashSet::new();
-            for obj in to_finalize {
-                let ptr = obj.0.unwrap();
-                pending.push(obj);
-                if visited.insert(Gc::as_ptr(ptr) as usize) {
-                    Gc::resurrect(fc, ptr);
-                    ptr.borrow().resurrect(fc, &mut visited);
+            if !to_finalize.is_empty() {
+                let mut pending = self.pending_finalization.borrow_mut();
+                for obj in to_finalize {
+                    let ptr = obj.0.unwrap();
+                    pending.push(obj);
+                    if resurrected.insert(Gc::as_ptr(ptr) as usize) {
+                        Gc::resurrect(fc, ptr);
+                        ptr.borrow().resurrect(fc, &mut resurrected);
+                    }
                 }
             }
         }
 
+        // 1. Zero out Weak handles for dead objects
+        zero_out_handles(GCHandleType::Weak, &resurrected);
+
         // 2. Zero out WeakTrackResurrection handles
-        zero_out_handles(GCHandleType::WeakTrackResurrection);
+        zero_out_handles(GCHandleType::WeakTrackResurrection, &resurrected);
+        
+        // 3. Prune dead objects from the debugging harness
+        self._all_objs.borrow_mut().retain(|obj| {
+            match obj {
+                ObjectRef(Some(ptr)) => {
+                    !Gc::is_dead(fc, *ptr) || resurrected.contains(&(Gc::as_ptr(*ptr) as usize))
+                }
+                ObjectRef(None) => false,
+            }
+        });
     }
 
     pub fn top_of_stack(&self) -> usize {
@@ -892,30 +904,23 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             .open("heap.txt")
             .unwrap();
 
-        for &obj in &self._all_objs {
-            let ptr = obj as ObjectPtr;
-            // DANGER: this is only safe if we know the object hasn't been collected!
-            // In a real VM we'd have a way to check this.
-            // For now, let's just skip it if it's dead, but we can't easily check that here
-            // without a Finalization handle.
-            // As a hack, we'll just ignore this for now to avoid SIGSEGV in tests.
-            /*
-            let gc = unsafe { Gc::from_ptr(ptr) };
-            let handle = gc.borrow();
-            match &*handle {
+        for obj in self._all_objs.borrow().iter() {
+            let Some(ptr) = obj.0 else {
+                continue;
+            };
+            let raw_ptr = Gc::as_ptr(ptr) as ObjectPtr;
+            match &*ptr.borrow() {
                 HeapStorage::Obj(o) => {
-                    writeln!(f, "{:#?} => {:#?}", ptr, o)
+                    writeln!(f, "{:#?} => {:#?}", raw_ptr, o)
                 }
                 HeapStorage::Vec(v) => {
-                    writeln!(f, "{:#?} => {:#?}", ptr, v)
+                    writeln!(f, "{:#?} => {:#?}", raw_ptr, v)
                 }
                 _ => {
-                    writeln!(f, "{:#?} => TODO other heap objects", ptr)
+                    writeln!(f, "{:#?} => TODO other heap objects", raw_ptr)
                 }
             }
             .unwrap();
-            */
-            writeln!(f, "{:#?} => (content hidden to avoid SIGSEGV)", ptr).unwrap();
         }
 
         f.flush().unwrap();

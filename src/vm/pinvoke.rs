@@ -8,6 +8,7 @@ use crate::{
 };
 
 use dotnetdll::prelude::*;
+use gc_arena::{Collect, unsafe_empty_collect};
 use libffi::middle::*;
 use libloading::{Library, Symbol};
 use std::{collections::HashMap, ffi::c_void, path::PathBuf};
@@ -18,6 +19,7 @@ pub struct NativeLibraries {
     root: PathBuf,
     libraries: HashMap<String, Library>,
 }
+unsafe_empty_collect!(NativeLibraries);
 impl NativeLibraries {
     pub fn new(root: impl AsRef<str>) -> Self {
         Self {

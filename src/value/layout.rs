@@ -102,9 +102,7 @@ impl LayoutManager {
                 ObjectRef::read(storage).resurrect(fc, visited);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                // Skip resurrecting ManagedPtr for now to avoid unsafe transmute issues
-                // ManagedPtr values should generally not be stored in object fields anyway
-                // TODO: properly handle ManagedPtr resurrection or remove Scalar::ManagedPtr entirely
+                ManagedPtr::read(storage).resurrect(fc, visited);
             }
             LayoutManager::FieldLayoutManager(f) => {
                 for field in f.fields.values() {

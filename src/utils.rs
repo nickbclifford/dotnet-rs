@@ -7,8 +7,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use gc_arena::{Collect, unsafe_empty_collect};
+
 #[derive(Clone, Copy)]
 pub struct ResolutionS(pub &'static Resolution<'static>);
+unsafe_empty_collect!(ResolutionS);
 impl ResolutionS {
     pub fn as_raw(self) -> *const Resolution<'static> {
         self.0 as *const _
