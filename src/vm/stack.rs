@@ -7,9 +7,7 @@ use crate::{
         ResolutionContext, StackValue, TypeDescription,
     },
     vm::{
-        exceptions::ExceptionState,
-        intrinsics::reflection::RuntimeType,
-        pinvoke::NativeLibraries,
+        exceptions::ExceptionState, intrinsics::reflection::RuntimeType, pinvoke::NativeLibraries,
         MethodInfo, MethodState, StepResult,
     },
 };
@@ -18,13 +16,7 @@ use dotnetdll::prelude::*;
 use gc_arena::{
     lock::RefLock, Arena, Collect, Collection, DynamicRoot, DynamicRootSet, Gc, Mutation, Rootable,
 };
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    fmt::Debug,
-    fs::OpenOptions,
-    io::Write,
-};
+use std::{cell::RefCell, collections::HashMap, fmt::Debug, fs::OpenOptions, io::Write};
 
 type StackSlot = Rootable![Gc<'_, RefLock<StackValue<'_>>>];
 
@@ -237,7 +229,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         };
     }
 
-
     pub fn entrypoint_frame(
         &mut self,
         gc: GCHandle<'gc>,
@@ -402,7 +393,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn unwind_frame(&mut self, _gc: GCHandle<'gc>) {
-        let frame = self.frames.pop().expect("unwind_frame called with empty stack");
+        let frame = self
+            .frames
+            .pop()
+            .expect("unwind_frame called with empty stack");
         self.stack.truncate(frame.base.arguments);
     }
 

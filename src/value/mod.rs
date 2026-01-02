@@ -397,7 +397,9 @@ impl<'gc> ObjectRef<'gc> {
 
     pub fn as_object_mut<T>(&self, gc: GCHandle<'gc>, op: impl FnOnce(&mut Object<'gc>) -> T) -> T {
         let ObjectRef(Some(o)) = &self else {
-            panic!("NullReferenceException: called ObjectRef::as_object_mut on NULL object reference")
+            panic!(
+                "NullReferenceException: called ObjectRef::as_object_mut on NULL object reference"
+            )
         };
         let mut heap = o.borrow_mut(gc);
         let HeapStorage::Obj(instance) = &mut *heap else {

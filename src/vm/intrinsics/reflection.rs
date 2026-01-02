@@ -4,8 +4,7 @@ use crate::{
     utils::decompose_type_source,
     value::{
         string::CLRString, ConcreteType, FieldDescription, GenericLookup, HeapStorage,
-        MethodDescription, Object, ObjectRef, ResolutionContext, TypeDescription,
-        Vector,
+        MethodDescription, Object, ObjectRef, ResolutionContext, TypeDescription, Vector,
     },
     vm::{CallStack, GCHandle, StepResult},
 };
