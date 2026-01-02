@@ -1,7 +1,8 @@
 use crate::{
     utils::DebugStr,
     value::{
-        layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar}, MethodDescription, ObjectRef, ResolutionContext, TypeDescription,
+        layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
+        MethodDescription, ObjectRef, ResolutionContext, TypeDescription,
     },
 };
 
@@ -78,7 +79,11 @@ impl FieldStorage<'_> {
         Self::new(FieldLayoutManager::instance_fields(description, context))
     }
 
-    pub fn resurrect<'gc>(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut std::collections::HashSet<usize>) {
+    pub fn resurrect<'gc>(
+        &self,
+        fc: &gc_arena::Finalization<'gc>,
+        visited: &mut std::collections::HashSet<usize>,
+    ) {
         self.layout.resurrect(&self.storage, fc, visited);
     }
 

@@ -53,12 +53,13 @@ impl Executor {
                     marked = self.arena.mark_all();
                 }
                 if let Some(marked) = marked {
-                     marked.finalize(|fc, c| c.finalize_check(fc));
+                    marked.finalize(|fc, c| c.finalize_check(fc));
                 }
                 self.arena.collect_all(); // Now it's safe to sweep resurrected objects are kept.
             }
 
-            self.arena.mutate_root(|gc, c| c.process_pending_finalizers(gc));
+            self.arena
+                .mutate_root(|gc, c| c.process_pending_finalizers(gc));
 
             match self.arena.mutate_root(|gc, c| c.step(gc)) {
                 StepResult::MethodReturned => {

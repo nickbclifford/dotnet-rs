@@ -3,6 +3,7 @@ use crate::value::{FieldDescription, MethodDescription};
 use dotnetdll::prelude::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum TypeMatcher {
     String,
     Int32,

@@ -8,8 +8,8 @@ use crate::{
 use dotnetdll::prelude::*;
 use gc_arena::{lock::RefLock, unsafe_empty_collect, Collect, Collection, Gc};
 use std::{
-    collections::HashSet,
     cmp::Ordering,
+    collections::HashSet,
     fmt::{Debug, Formatter},
     hash::{Hash, Hasher},
     marker::PhantomData,
@@ -169,7 +169,6 @@ impl<'a> ResolutionContext<'a> {
         };
 
         let name = ut.type_name(res.0);
-        println!("NORMALIZE: {}", name);
         let base = match name.as_ref() {
             "System.Boolean" => Some(BaseType::Boolean),
             "System.Char" => Some(BaseType::Char),
@@ -352,7 +351,8 @@ impl PartialOrd for ManagedPtr<'_> {
 impl<'gc> ManagedPtr<'gc> {
     // Storage format: pointer (8) + TypeDescription (16) + ObjectRef (8) + pinned (1) = 33 bytes
     // But we need to account for actual sizes, not hardcoded values
-    pub const SIZE: usize = size_of::<*mut u8>() + size_of::<TypeDescription>() + ObjectRef::SIZE + 1;
+    pub const SIZE: usize =
+        size_of::<*mut u8>() + size_of::<TypeDescription>() + ObjectRef::SIZE + 1;
 
     pub fn new(
         value: *mut u8,
@@ -377,7 +377,8 @@ impl<'gc> ManagedPtr<'gc> {
         // For now, we panic if we try to read from what looks like uninitialized storage.
 
         // Check if the entire ManagedPtr storage appears to be zero-initialized
-        let expected_size = size_of::<*mut u8>() + size_of::<TypeDescription>() + ObjectRef::SIZE + 1;
+        let expected_size =
+            size_of::<*mut u8>() + size_of::<TypeDescription>() + ObjectRef::SIZE + 1;
         if source.len() < expected_size {
             panic!("Attempted to read ManagedPtr from insufficiently sized storage");
         }
@@ -394,12 +395,16 @@ impl<'gc> ManagedPtr<'gc> {
         let value = usize::from_ne_bytes(value_bytes) as *mut u8;
 
         let mut type_bytes = [0u8; size_of::<TypeDescription>()];
-        type_bytes.copy_from_slice(&source[size_of::<*mut u8>()..(size_of::<*mut u8>() + size_of::<TypeDescription>())]);
+        type_bytes.copy_from_slice(
+            &source[size_of::<*mut u8>()..(size_of::<*mut u8>() + size_of::<TypeDescription>())],
+        );
         let inner_type: TypeDescription = unsafe { std::mem::transmute(type_bytes) };
 
-        let owner = ObjectRef::read(&source[(size_of::<*mut u8>() + size_of::<TypeDescription>())..]).0;
+        let owner =
+            ObjectRef::read(&source[(size_of::<*mut u8>() + size_of::<TypeDescription>())..]).0;
 
-        let pinned = source[size_of::<*mut u8>() + size_of::<TypeDescription>() + ObjectRef::SIZE] != 0;
+        let pinned =
+            source[size_of::<*mut u8>() + size_of::<TypeDescription>() + ObjectRef::SIZE] != 0;
 
         Self {
             value,
@@ -413,12 +418,16 @@ impl<'gc> ManagedPtr<'gc> {
         let value_bytes = (self.value as usize).to_ne_bytes();
         dest[0..size_of::<*mut u8>()].copy_from_slice(&value_bytes);
 
-        let type_bytes: [u8; size_of::<TypeDescription>()] = unsafe { std::mem::transmute(self.inner_type) };
-        dest[size_of::<*mut u8>()..(size_of::<*mut u8>() + size_of::<TypeDescription>())].copy_from_slice(&type_bytes);
+        let type_bytes: [u8; size_of::<TypeDescription>()] =
+            unsafe { std::mem::transmute(self.inner_type) };
+        dest[size_of::<*mut u8>()..(size_of::<*mut u8>() + size_of::<TypeDescription>())]
+            .copy_from_slice(&type_bytes);
 
-        ObjectRef(self.owner).write(&mut dest[(size_of::<*mut u8>() + size_of::<TypeDescription>())..]);
+        ObjectRef(self.owner)
+            .write(&mut dest[(size_of::<*mut u8>() + size_of::<TypeDescription>())..]);
 
-        dest[size_of::<*mut u8>() + size_of::<TypeDescription>() + ObjectRef::SIZE] = if self.pinned { 1 } else { 0 };
+        dest[size_of::<*mut u8>() + size_of::<TypeDescription>() + ObjectRef::SIZE] =
+            if self.pinned { 1 } else { 0 };
     }
 
     pub fn map_value(self, transform: impl FnOnce(*mut u8) -> *mut u8) -> Self {
@@ -964,11 +973,7 @@ unsafe impl Collect for Vector<'_> {
             }
             _ => {
                 for i in 0..self.layout.length {
-                    LayoutManager::trace(
-                        element,
-                        &self.storage[(i * element.size())..],
-                        cc,
-                    );
+                    LayoutManager::trace(element, &self.storage[(i * element.size())..], cc);
                 }
             }
         }

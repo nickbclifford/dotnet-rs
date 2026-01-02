@@ -34,9 +34,8 @@ impl LayoutManager {
                 f.fields.values().any(|f| f.layout.is_or_contains_refs())
             }
             LayoutManager::ArrayLayoutManager(a) => a.element_layout.is_or_contains_refs(),
-            LayoutManager::Scalar(Scalar::ObjectRef) | LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                true
-            }
+            LayoutManager::Scalar(Scalar::ObjectRef)
+            | LayoutManager::Scalar(Scalar::ManagedPtr) => true,
             _ => false,
         }
     }
@@ -85,15 +84,19 @@ impl LayoutManager {
             LayoutManager::ArrayLayoutManager(a) => {
                 let elem_size = a.element_layout.size();
                 for i in 0..a.length {
-                    a.element_layout
-                        .trace(&storage[i * elem_size..], cc);
+                    a.element_layout.trace(&storage[i * elem_size..], cc);
                 }
             }
             _ => {}
         }
     }
 
-    pub fn resurrect<'gc>(&self, storage: &[u8], fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+    pub fn resurrect<'gc>(
+        &self,
+        storage: &[u8],
+        fc: &gc_arena::Finalization<'gc>,
+        visited: &mut HashSet<usize>,
+    ) {
         match self {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
                 ObjectRef::read(storage).resurrect(fc, visited);
@@ -105,7 +108,9 @@ impl LayoutManager {
             }
             LayoutManager::FieldLayoutManager(f) => {
                 for field in f.fields.values() {
-                    field.layout.resurrect(&storage[field.position..], fc, visited);
+                    field
+                        .layout
+                        .resurrect(&storage[field.position..], fc, visited);
                 }
             }
             LayoutManager::ArrayLayoutManager(a) => {
@@ -158,9 +163,16 @@ impl FieldLayoutManager {
         }
     }
 
-    pub fn resurrect<'gc>(&self, storage: &[u8], fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+    pub fn resurrect<'gc>(
+        &self,
+        storage: &[u8],
+        fc: &gc_arena::Finalization<'gc>,
+        visited: &mut HashSet<usize>,
+    ) {
         for field in self.fields.values() {
-            field.layout.resurrect(&storage[field.position..], fc, visited);
+            field
+                .layout
+                .resurrect(&storage[field.position..], fc, visited);
         }
     }
 
@@ -351,10 +363,16 @@ impl HasLayout for ArrayLayoutManager {
     }
 }
 impl ArrayLayoutManager {
-    pub fn resurrect<'gc>(&self, storage: &[u8], fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+    pub fn resurrect<'gc>(
+        &self,
+        storage: &[u8],
+        fc: &gc_arena::Finalization<'gc>,
+        visited: &mut HashSet<usize>,
+    ) {
         let elem_size = self.element_layout.size();
         for i in 0..self.length {
-            self.element_layout.resurrect(&storage[i * elem_size..], fc, visited);
+            self.element_layout
+                .resurrect(&storage[i * elem_size..], fc, visited);
         }
     }
     pub fn new(element: ConcreteType, length: usize, context: &ResolutionContext) -> Self {

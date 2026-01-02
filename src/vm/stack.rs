@@ -361,7 +361,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 })
                 .expect("could not find System.Object::Finalize");
 
-            // We need a context to resolve the virtual method, but if the stack is empty, 
+            // We need a context to resolve the virtual method, but if the stack is empty,
             // we can use a temporary one from the object's own resolution.
             let ctx = ResolutionContext {
                 generics: &self.empty_generics,
@@ -416,19 +416,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 StackValue::managed_ptr(self.top_of_stack_address() as *mut _, desc, None, false),
             );
         } else {
-            println!("DEBUG: pushing return value, stack_height before={}", self.current_frame().stack_height);
             self.push_stack(gc, value.clone());
 
-            println!("DEBUG: pushing 'this', stack_height before={}", self.current_frame().stack_height);
             self.push_stack(gc, value);
         }
 
-        println!("DEBUG: pushing args, stack_height before={}", self.current_frame().stack_height);
         for _ in 0..method.signature.parameters.len() {
             self.push_stack(gc, args.pop().unwrap());
         }
-
-        println!("DEBUG: calling call_frame, stack_height={}", self.current_frame().stack_height);
         self.call_frame(gc, method, generic_inst);
     }
 
@@ -475,9 +470,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             local_index += 1;
         }
         let stack_base = locals_base + local_index;
-        
+
         if self.current_frame().stack_height < num_args {
-            panic!("stack overflow in constructor_frame: stack_height={}, num_args={}", self.current_frame().stack_height, num_args);
+            panic!(
+                "stack overflow in constructor_frame: stack_height={}, num_args={}",
+                self.current_frame().stack_height,
+                num_args
+            );
         }
 
         self.current_frame_mut().stack_height -= num_args;
@@ -665,7 +664,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let bp = &self.current_frame().base;
         let idx = bp.arguments + index;
         if idx >= self.stack.len() {
-             panic!("get_arg_handle out of bounds: idx={} len={} bp.arguments={} stack.len={}", idx, self.stack.len(), bp.arguments, self.stack.len());
+            panic!(
+                "get_arg_handle out of bounds: idx={} len={} bp.arguments={} stack.len={}",
+                idx,
+                self.stack.len(),
+                bp.arguments,
+                self.stack.len()
+            );
         }
         &self.stack[idx]
     }
@@ -682,7 +687,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.set_slot(gc, self.get_arg_handle(index), value);
     }
 
-    fn get_local_handle_at(&self, frame: &StackFrame<'gc, 'm>, index: usize) -> &StackSlotHandle<'gc> {
+    fn get_local_handle_at(
+        &self,
+        frame: &StackFrame<'gc, 'm>,
+        index: usize,
+    ) -> &StackSlotHandle<'gc> {
         &self.stack[frame.base.locals + index]
     }
 
