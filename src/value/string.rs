@@ -160,7 +160,7 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
             };
             let ptr = with_string!(stack, gc, val, |s| s.as_ptr() as *mut u8);
             let value =
-                StackValue::managed_ptr(ptr, stack.assemblies.corlib_type("System.Char"), obj_h, false);
+                StackValue::managed_ptr(ptr, stack.runtime.assemblies.corlib_type("System.Char"), obj_h, false);
             push!(value);
             Some(StepResult::InstructionStepped)
         },

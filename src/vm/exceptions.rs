@@ -172,7 +172,7 @@ pub fn parse<'a>(
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     pub fn handle_exception(&mut self, gc: GCHandle<'gc>) -> StepResult {
-        match self.exception_mode {
+        match self.execution.exception_mode {
             ExceptionState::None => StepResult::InstructionStepped,
             ExceptionState::Throwing(exception) => self.begin_throwing(exception, gc),
             ExceptionState::Searching { exception, cursor } => {
@@ -191,13 +191,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     fn begin_throwing(&mut self, exception: ObjectRef<'gc>, gc: GCHandle<'gc>) -> StepResult {
         // Preempt any existing exception handling state (nested exceptions)
-        self.suspended_stack.clear();
-        self.suspended_frames.clear();
+        self.execution.suspended_stack.clear();
+        self.execution.suspended_frames.clear();
 
-        self.exception_mode = ExceptionState::Searching {
+        self.execution.exception_mode = ExceptionState::Searching {
             exception,
             cursor: HandlerAddress {
-                frame_index: self.frames.len() - 1,
+                frame_index: self.execution.frames.len() - 1,
                 section_index: 0,
                 handler_index: 0,
             },
@@ -213,7 +213,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     ) -> StepResult {
         // Search from the cursor's frame down to the bottom of the stack
         for frame_index in (0..=cursor.frame_index).rev() {
-            let frame = &self.frames[frame_index];
+            let frame = &self.execution.frames[frame_index];
             let ip = frame.state.ip;
             let exceptions = frame.state.info_handle.exceptions.clone();
 
@@ -244,11 +244,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             let exc_type = self
                                 .current_context()
                                 .get_heap_description(exception.0.expect("throwing null"));
-                            let catch_type = self.assemblies.find_concrete_type(t.clone());
+                            let catch_type = self.runtime.assemblies.find_concrete_type(t.clone());
 
                             if self.is_a(exc_type, catch_type) {
                                 // Match found! Start the unwind phase towards this handler.
-                                self.exception_mode = ExceptionState::Unwinding {
+                                self.execution.exception_mode = ExceptionState::Unwinding {
                                     exception: Some(exception),
                                     target: UnwindTarget::Handler(HandlerAddress {
                                         frame_index,
@@ -256,7 +256,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                         handler_index,
                                     }),
                                     cursor: HandlerAddress {
-                                        frame_index: self.frames.len() - 1,
+                                        frame_index: self.execution.frames.len() - 1,
                                         section_index: 0,
                                         handler_index: 0,
                                     },
@@ -271,19 +271,19 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                 section_index,
                                 handler_index,
                             };
-                            self.exception_mode = ExceptionState::Filtering {
+                            self.execution.exception_mode = ExceptionState::Filtering {
                                 exception,
                                 handler: handler_addr,
                             };
 
                             // To run the filter, we must suspend the frames and stack above it.
-                            let stack_base = self.frames[frame_index].base.stack;
-                            self.suspended_stack = self.stack.split_off(stack_base);
-                            self.suspended_frames = self.frames.split_off(frame_index + 1);
+                            let stack_base = self.execution.frames[frame_index].base.stack;
+                            self.execution.suspended_stack = self.execution.stack.split_off(stack_base);
+                            self.execution.suspended_frames = self.execution.frames.split_off(frame_index + 1);
 
-                            let frame = &mut self.frames[frame_index];
-                            self.original_ip = frame.state.ip;
-                            self.original_stack_height = frame.stack_height;
+                            let frame = &mut self.execution.frames[frame_index];
+                            self.execution.original_ip = frame.state.ip;
+                            self.execution.original_stack_height = frame.stack_height;
 
                             frame.state.ip = *clause_offset;
                             frame.stack_height = 0;
@@ -301,9 +301,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         // No handler found - the exception is unhandled.
         // In a real VM this might trigger a debugger or a default handler.
         // Here we just clear the stack and return MethodThrew to signal process exit.
-        self.exception_mode = ExceptionState::None;
-        self.frames.clear();
-        self.stack.clear();
+        self.execution.exception_mode = ExceptionState::None;
+        self.execution.frames.clear();
+        self.execution.stack.clear();
         StepResult::MethodThrew
     }
 
@@ -322,7 +322,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         // Unwind from the cursor's frame down to the target frame
         for frame_index in (target_frame..=cursor.frame_index).rev() {
             let (ip, exceptions) = {
-                let frame = &self.frames[frame_index];
+                let frame = &self.execution.frames[frame_index];
                 (frame.state.ip, frame.state.info_handle.exceptions.clone())
             };
 
@@ -385,7 +385,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             handler_kind,
                             HandlerKind::Catch(_) | HandlerKind::Filter { .. }
                         ) {
-                            self.frames[frame_index].exception_stack.pop();
+                            self.execution.frames[frame_index].exception_stack.pop();
                         }
                         continue;
                     }
@@ -416,13 +416,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             }
                         };
 
-                        self.exception_mode = ExceptionState::ExecutingHandler {
+                        self.execution.exception_mode = ExceptionState::ExecutingHandler {
                             exception,
                             target,
                             cursor: next_cursor,
                         };
 
-                        let frame = &mut self.frames[frame_index];
+                        let frame = &mut self.execution.frames[frame_index];
                         frame.state.ip = handler_start_ip;
                         frame.stack_height = 0;
 
@@ -439,11 +439,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
 
         // We have successfully unwound to the target!
-        self.exception_mode = ExceptionState::None;
+        self.execution.exception_mode = ExceptionState::None;
         match target {
             UnwindTarget::Handler(target_h) => {
                 let handler_start_ip = {
-                    let section = &self.frames[target_h.frame_index]
+                    let section = &self.execution.frames[target_h.frame_index]
                         .state
                         .info_handle
                         .exceptions[target_h.section_index];
@@ -451,7 +451,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     handler.instructions.start
                 };
 
-                let frame = &mut self.frames[target_h.frame_index];
+                let frame = &mut self.execution.frames[target_h.frame_index];
                 frame.state.ip = handler_start_ip;
                 frame.stack_height = 0;
 
@@ -461,7 +461,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 vm_push!(self, gc, ObjectRef(exception));
             }
             UnwindTarget::Instruction(target_ip) => {
-                let frame = &mut self.frames[target_frame];
+                let frame = &mut self.execution.frames[target_frame];
                 frame.state.ip = target_ip;
                 frame.stack_height = 0;
             }

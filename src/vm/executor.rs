@@ -23,7 +23,7 @@ impl Executor {
         self.arena.mutate_root(|gc, c| {
             c.entrypoint_frame(
                 gc,
-                MethodInfo::new(method, &Default::default(), c.assemblies),
+                MethodInfo::new(method, &Default::default(), c.runtime.assemblies),
                 Default::default(),
                 vec![],
             )
@@ -38,8 +38,8 @@ impl Executor {
             }
 
             let full_collect = self.arena.mutate(|_, c| {
-                if c.needs_full_collect.get() {
-                    c.needs_full_collect.set(false);
+                if c.gc.needs_full_collect.get() {
+                    c.gc.needs_full_collect.set(false);
                     true
                 } else {
                     false
@@ -64,13 +64,13 @@ impl Executor {
             match self.arena.mutate_root(|gc, c| c.step(gc)) {
                 StepResult::MethodReturned => {
                     let was_auto_invoked = self.arena.mutate_root(|gc, c| {
-                        let frame = c.frames.last().unwrap();
+                        let frame = c.execution.frames.last().unwrap();
                         let val = frame.state.info_handle.is_cctor || frame.is_finalizer;
                         c.return_frame(gc);
                         val
                     });
 
-                    if self.arena.mutate(|_, c| c.frames.is_empty()) {
+                    if self.arena.mutate(|_, c| c.execution.frames.is_empty()) {
                         let exit_code = self.arena.mutate(|_, c| match c.bottom_of_stack() {
                             Some(StackValue::Int32(i)) => i as u8,
                             Some(v) => panic!("invalid value for entrypoint return: {:?}", v),
@@ -84,9 +84,9 @@ impl Executor {
                 }
                 StepResult::MethodThrew => {
                     self.arena.mutate(|_, c| {
-                        println!("Exception thrown: {:?}", c.exception_mode);
+                        println!("Exception thrown: {:?}", c.execution.exception_mode);
                     });
-                    if self.arena.mutate(|_, c| c.frames.is_empty()) {
+                    if self.arena.mutate(|_, c| c.execution.frames.is_empty()) {
                         return ExecutorResult::Threw;
                     }
                 }

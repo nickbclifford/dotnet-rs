@@ -57,12 +57,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let ctx = ResolutionContext {
             resolution: description.resolution,
             generics: &generics,
-            assemblies: self.assemblies,
+            assemblies: self.runtime.assemblies,
             type_owner: Some(description),
             method_owner: None,
         };
         let value = {
-            let mut statics = self.statics.borrow_mut();
+            let mut statics = self.runtime.statics.borrow_mut();
             statics.init(description, &ctx)
         };
         if let Some(m) = value {
@@ -71,7 +71,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 "-- calling static constructor (will return to ip {}) --",
                 self.current_frame().state.ip
             );
-            self.call_frame(gc, MethodInfo::new(m, &generics, self.assemblies), generics);
+            self.call_frame(gc, MethodInfo::new(m, &generics, self.runtime.assemblies), generics);
             true
         } else {
             false
@@ -80,7 +80,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn step(&mut self, gc: GCHandle<'gc>) -> StepResult {
         if matches!(
-            self.exception_mode,
+            self.execution.exception_mode,
             ExceptionState::Throwing(_)
                 | ExceptionState::Searching { .. }
                 | ExceptionState::Unwinding { .. }
@@ -94,7 +94,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         macro_rules! statics {
             (|$s:ident| $body:expr) => {{
                 #[allow(unused_mut)]
-                let mut $s = self.statics.borrow_mut();
+                let mut $s = self.runtime.statics.borrow_mut();
                 $body
             }};
         }
@@ -440,7 +440,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         c
                     );
                 }
-                if is_intrinsic_field($field, self.assemblies) {
+                if is_intrinsic_field($field, self.runtime.assemblies) {
                     intrinsic_field(
                         gc,
                         self,
@@ -473,7 +473,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         vm_msg!(
             self,
             "[#{} | ip @ {}] {}",
-            self.frames.len() - 1,
+            self.execution.frames.len() - 1,
             ip,
             i.show(i_res.0)
         );
@@ -535,7 +535,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     };
                 }
 
-                if is_intrinsic(method, self.assemblies) {
+                if is_intrinsic(method, self.runtime.assemblies) {
                     intrinsic!();
                 }
 
@@ -546,7 +546,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 self.call_frame(
                     gc,
-                    MethodInfo::new(method, &lookup, self.assemblies),
+                    MethodInfo::new(method, &lookup, self.runtime.assemblies),
                     lookup,
                 );
                 moved_ip = true;
@@ -559,7 +559,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let constraint_type = self.current_context().make_concrete(constraint);
                 let (method, lookup) = self.find_generic_method(source);
 
-                let td = self.assemblies.find_concrete_type(constraint_type.clone());
+                let td = self.runtime.assemblies.find_concrete_type(constraint_type.clone());
 
                 for o in td.definition.overrides.iter() {
                     let target = self
@@ -570,7 +570,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         vm_msg!(self, "-- dispatching to {:?} --", target);
                         self.call_frame(
                             gc,
-                            MethodInfo::new(target, &lookup, self.assemblies),
+                            MethodInfo::new(target, &lookup, self.runtime.assemblies),
                             lookup,
                         );
                         return StepResult::InstructionStepped;
@@ -762,7 +762,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     _ => panic!("EndFilter expected Int32, found {:?}", result),
                 };
 
-                let (exception, handler) = match self.exception_mode {
+                let (exception, handler) = match self.execution.exception_mode {
                     ExceptionState::Filtering { exception, handler } => (exception, handler),
                     _ => panic!("EndFilter called but not in Filtering mode"),
                 };
@@ -770,23 +770,23 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 // Restore suspended state
                 // Note: we use handler.frame_index because the filter ran in that frame.
                 // It might have called other methods, but those should have returned by now.
-                self.stack
-                    .truncate(self.frames[handler.frame_index].base.stack);
-                self.stack.append(&mut self.suspended_stack);
-                self.frames.append(&mut self.suspended_frames);
+                self.execution.stack
+                    .truncate(self.execution.frames[handler.frame_index].base.stack);
+                self.execution.stack.append(&mut self.execution.suspended_stack);
+                self.execution.frames.append(&mut self.execution.suspended_frames);
 
-                let frame = &mut self.frames[handler.frame_index];
+                let frame = &mut self.execution.frames[handler.frame_index];
                 frame.exception_stack.pop();
-                frame.state.ip = self.original_ip;
-                frame.stack_height = self.original_stack_height;
+                frame.state.ip = self.execution.original_ip;
+                frame.stack_height = self.execution.original_stack_height;
 
                 if result_val != 0 {
                     // Filter matched!
-                    self.exception_mode = ExceptionState::Unwinding {
+                    self.execution.exception_mode = ExceptionState::Unwinding {
                         exception: Some(exception),
                         target: UnwindTarget::Handler(handler),
                         cursor: HandlerAddress {
-                            frame_index: self.frames.len() - 1,
+                            frame_index: self.execution.frames.len() - 1,
                             section_index: 0,
                             handler_index: 0,
                         },
@@ -795,20 +795,20 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     // Filter did not match, continue searching
                     let mut next_cursor = handler;
                     next_cursor.handler_index += 1;
-                    self.exception_mode = ExceptionState::Searching {
+                    self.execution.exception_mode = ExceptionState::Searching {
                         exception,
                         cursor: next_cursor,
                     };
                 }
                 return self.handle_exception(gc);
             }
-            EndFinally => match self.exception_mode {
+            EndFinally => match self.execution.exception_mode {
                 ExceptionState::ExecutingHandler {
                     exception,
                     target,
                     cursor,
                 } => {
-                    self.exception_mode = ExceptionState::Unwinding {
+                    self.execution.exception_mode = ExceptionState::Unwinding {
                         exception,
                         target,
                         cursor,
@@ -929,11 +929,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             LoadNull => push!(null()),
             Leave(jump_target) => {
-                self.exception_mode = ExceptionState::Unwinding {
+                self.execution.exception_mode = ExceptionState::Unwinding {
                     exception: None,
                     target: UnwindTarget::Instruction(*jump_target),
                     cursor: HandlerAddress {
-                        frame_index: self.frames.len() - 1,
+                        frame_index: self.execution.frames.len() - 1,
                         section_index: 0,
                         handler_index: 0,
                     },
@@ -1138,12 +1138,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 for a in args {
                     push!(a);
                 }
-                if is_intrinsic(method, self.assemblies) {
+                if is_intrinsic(method, self.runtime.assemblies) {
                     return intrinsic_call(gc, self, method, lookup);
                 }
                 self.call_frame(
                     gc,
-                    MethodInfo::new(method, &lookup, self.assemblies),
+                    MethodInfo::new(method, &lookup, self.runtime.assemblies),
                     lookup,
                 );
                 moved_ip = true;
@@ -1156,6 +1156,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let ctx = self.current_context();
                     let obj_type = ctx.get_heap_description(o);
                     let target_type = self
+                        .runtime
                         .assemblies
                         .find_concrete_type(ctx.make_concrete(target));
 
@@ -1184,6 +1185,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let ctx = self.current_context();
                     let obj_type = ctx.get_heap_description(o);
                     let target_type = self
+                        .runtime
                         .assemblies
                         .find_concrete_type(ctx.make_concrete(target));
 
@@ -1314,7 +1316,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     _ => panic!("ldelema on non-vector"),
                 };
-                let target_type = self.assemblies.find_concrete_type(concrete_t);
+                let target_type = self.runtime.assemblies.find_concrete_type(concrete_t);
                 push!(managed_ptr(ptr, target_type, Some(h), false));
             }
             LoadField {
@@ -1515,7 +1517,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let (field, lookup) = self.current_context().locate_field(*source);
                 let field_obj = self.get_runtime_field_obj(gc, field, lookup);
 
-                let rfh = self.assemblies.corlib_type("System.RuntimeFieldHandle");
+                let rfh = self.runtime.assemblies.corlib_type("System.RuntimeFieldHandle");
                 let mut instance = Object::new(rfh, &self.current_context());
                 field_obj.write(instance.instance_storage.get_field_mut("_value"));
 
@@ -1525,7 +1527,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let (method, lookup) = self.find_generic_method(source);
                 let method_obj = self.get_runtime_method_obj(gc, method, lookup);
 
-                let rmh = self.assemblies.corlib_type("System.RuntimeMethodHandle");
+                let rmh = self.runtime.assemblies.corlib_type("System.RuntimeMethodHandle");
                 let mut instance = Object::new(rmh, &self.current_context());
                 method_obj.write(instance.instance_storage.get_field_mut("_value"));
 
@@ -1579,7 +1581,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         type_name.as_ref(),
                         "System.Delegate" | "System.MulticastDelegate"
                     ) {
-                        let base = self.assemblies.corlib_type(&type_name);
+                        let base = self.runtime.assemblies.corlib_type(&type_name);
                         method = MethodDescription {
                             parent: base,
                             method: base
@@ -1608,7 +1610,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     self.constructor_frame(
                         gc,
                         instance,
-                        MethodInfo::new(method, &lookup, self.assemblies),
+                        MethodInfo::new(method, &lookup, self.runtime.assemblies),
                         lookup,
                     );
                     moved_ip = true;
@@ -1623,7 +1625,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     .last()
                     .cloned()
                     .expect("rethrow without active exception");
-                self.exception_mode = ExceptionState::Throwing(exception);
+                self.execution.exception_mode = ExceptionState::Throwing(exception);
                 return self.handle_exception(gc);
             }
             Sizeof(t) => {
@@ -1818,7 +1820,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 if exc.0.is_none() {
                     return self.throw_by_name(gc, "System.NullReferenceException");
                 }
-                self.exception_mode = ExceptionState::Throwing(exc);
+                self.execution.exception_mode = ExceptionState::Throwing(exc);
                 return self.handle_exception(gc);
             }
             UnboxIntoAddress { .. } => todo!("unbox"),

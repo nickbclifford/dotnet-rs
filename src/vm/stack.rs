@@ -26,9 +26,19 @@ use std::{
 #[collect(no_drop)]
 pub struct StackSlotHandle<'gc>(Gc<'gc, RefLock<StackValue<'gc>>>);
 
-pub struct CallStack<'gc, 'm> {
+#[derive(Collect)]
+#[collect(no_drop)]
+pub struct ExecutionStack<'gc, 'm> {
     pub stack: Vec<StackSlotHandle<'gc>>,
     pub frames: Vec<StackFrame<'gc, 'm>>,
+    pub exception_mode: ExceptionState<'gc>,
+    pub suspended_frames: Vec<StackFrame<'gc, 'm>>,
+    pub suspended_stack: Vec<StackSlotHandle<'gc>>,
+    pub original_ip: usize,
+    pub original_stack_height: usize,
+}
+
+pub struct RuntimeEnvironment<'gc, 'm> {
     pub assemblies: &'m Assemblies,
     pub statics: RefCell<StaticStorageManager<'gc>>,
     pub pinvoke: NativeLibraries,
@@ -40,38 +50,14 @@ pub struct CallStack<'gc, 'm> {
     pub runtime_fields: Vec<(FieldDescription, GenericLookup)>,
     pub runtime_field_objs: HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>,
     pub method_tables: RefCell<HashMap<TypeDescription, Box<[u8]>>>,
-    pub exception_mode: ExceptionState<'gc>,
-    pub suspended_frames: Vec<StackFrame<'gc, 'm>>,
-    pub suspended_stack: Vec<StackSlotHandle<'gc>>,
-    pub original_ip: usize,
-    pub original_stack_height: usize,
-    // secretly ObjectHandles, not traced for GCing because these are for runtime debugging
-    _all_objs: RefCell<HashSet<ObjectRef<'gc>>>,
-
-    pub finalization_queue: RefCell<Vec<ObjectRef<'gc>>>,
-    pub pending_finalization: RefCell<Vec<ObjectRef<'gc>>>,
-    pub pinned_objects: RefCell<HashSet<ObjectRef<'gc>>>,
-    pub gchandles: RefCell<Vec<Option<(ObjectRef<'gc>, GCHandleType)>>>,
-    pub processing_finalizer: bool,
-    pub needs_full_collect: Cell<bool>,
     pub empty_generics: GenericLookup,
 }
-// this is sound, I think?
-unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
-    fn trace(&self, cc: &Collection) {
-        // --- 1. Core Stack and Frames ---
-        self.stack.trace(cc);
-        self.frames.trace(cc);
-        self.suspended_stack.trace(cc);
-        self.suspended_frames.trace(cc);
 
-        // --- 2. Global / Static State ---
+unsafe impl<'gc, 'm: 'gc> Collect for RuntimeEnvironment<'gc, 'm> {
+    fn trace(&self, cc: &Collection) {
         self.statics.borrow().trace(cc);
-        self.exception_mode.trace(cc);
         self.empty_generics.trace(cc);
 
-        // --- 3. Runtime Metadata Objects ---
-        // (Caching objects that represent types, methods, fields, etc.)
         for o in self.runtime_asms.values() {
             o.trace(cc);
         }
@@ -84,8 +70,22 @@ unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
         for o in self.runtime_field_objs.values() {
             o.trace(cc);
         }
+    }
+}
 
-        // --- 4. Special GC Handles ---
+pub struct HeapManager<'gc> {
+    pub finalization_queue: RefCell<Vec<ObjectRef<'gc>>>,
+    pub pending_finalization: RefCell<Vec<ObjectRef<'gc>>>,
+    pub pinned_objects: RefCell<HashSet<ObjectRef<'gc>>>,
+    pub gchandles: RefCell<Vec<Option<(ObjectRef<'gc>, GCHandleType)>>>,
+    pub processing_finalizer: bool,
+    pub needs_full_collect: Cell<bool>,
+    // secretly ObjectHandles, not traced for GCing because these are for runtime debugging
+    _all_objs: RefCell<HashSet<ObjectRef<'gc>>>,
+}
+
+unsafe impl<'gc> Collect for HeapManager<'gc> {
+    fn trace(&self, cc: &Collection) {
         // Normal and Pinned handles keep objects alive.
         // Weak handles DO NOT trace.
         for entry in self.gchandles.borrow().iter().flatten() {
@@ -99,17 +99,27 @@ unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
             }
         }
 
-        // --- 5. GC Pinned and Pending ---
         for obj in self.pinned_objects.borrow().iter() {
             obj.trace(cc);
         }
         self.pending_finalization.borrow().trace(cc);
 
-        // --- 6. Specifically NOT Traced ---
-        // - self.assemblies: Read-only metadata reference (unsafe_empty_collect).
         // - self.finalization_queue: Traced by finalize_check (resurrection).
-        // - self.method_tables: Byte arrays, no GC pointers.
         // - self._all_objs: Debugging handles (untraced).
+    }
+}
+
+pub struct CallStack<'gc, 'm> {
+    pub execution: ExecutionStack<'gc, 'm>,
+    pub runtime: RuntimeEnvironment<'gc, 'm>,
+    pub gc: HeapManager<'gc>,
+}
+
+unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
+    fn trace(&self, cc: &Collection) {
+        self.execution.trace(cc);
+        self.runtime.trace(cc);
+        self.gc.trace(cc);
     }
 }
 
@@ -165,39 +175,45 @@ pub type GCHandle<'gc> = &'gc Mutation<'gc>;
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     pub fn new(_gc: GCHandle<'gc>, assemblies: &'m Assemblies) -> Self {
         Self {
-            stack: vec![],
-            frames: vec![],
-            assemblies,
-            pinvoke: NativeLibraries::new(assemblies.get_root()),
-            statics: RefCell::new(StaticStorageManager::new()),
-            runtime_asms: HashMap::new(),
-            runtime_types: HashMap::new(),
-            runtime_types_list: vec![],
-            runtime_methods: vec![],
-            runtime_method_objs: HashMap::new(),
-            runtime_fields: vec![],
-            runtime_field_objs: HashMap::new(),
-            method_tables: RefCell::new(HashMap::new()),
-            exception_mode: ExceptionState::None,
-            suspended_frames: vec![],
-            suspended_stack: vec![],
-            original_ip: 0,
-            original_stack_height: 0,
-            _all_objs: RefCell::new(HashSet::new()),
-            finalization_queue: RefCell::new(vec![]),
-            pending_finalization: RefCell::new(vec![]),
-            pinned_objects: RefCell::new(HashSet::new()),
-            gchandles: RefCell::new(vec![]),
-            processing_finalizer: false,
-            needs_full_collect: Cell::new(false),
-            empty_generics: GenericLookup::default(),
+            execution: ExecutionStack {
+                stack: vec![],
+                frames: vec![],
+                exception_mode: ExceptionState::None,
+                suspended_frames: vec![],
+                suspended_stack: vec![],
+                original_ip: 0,
+                original_stack_height: 0,
+            },
+            runtime: RuntimeEnvironment {
+                assemblies,
+                pinvoke: NativeLibraries::new(assemblies.get_root()),
+                statics: RefCell::new(StaticStorageManager::new()),
+                runtime_asms: HashMap::new(),
+                runtime_types: HashMap::new(),
+                runtime_types_list: vec![],
+                runtime_methods: vec![],
+                runtime_method_objs: HashMap::new(),
+                runtime_fields: vec![],
+                runtime_field_objs: HashMap::new(),
+                method_tables: RefCell::new(HashMap::new()),
+                empty_generics: GenericLookup::default(),
+            },
+            gc: HeapManager {
+                _all_objs: RefCell::new(HashSet::new()),
+                finalization_queue: RefCell::new(vec![]),
+                pending_finalization: RefCell::new(vec![]),
+                pinned_objects: RefCell::new(HashSet::new()),
+                gchandles: RefCell::new(vec![]),
+                processing_finalizer: false,
+                needs_full_collect: Cell::new(false),
+            },
         }
     }
 
     // careful with this, it always allocates a new slot
     fn insert_value(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {
         let handle = Gc::new(gc, RefLock::new(value));
-        self.stack.push(StackSlotHandle(handle));
+        self.execution.stack.push(StackSlotHandle(handle));
     }
 
     fn init_locals(
@@ -230,7 +246,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     let ctx = ResolutionContext {
                         generics,
-                        assemblies: self.assemblies,
+                        assemblies: self.runtime.assemblies,
                         resolution: method.resolution(),
                         type_owner: Some(method.parent),
                         method_owner: Some(method),
@@ -279,7 +295,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     fn set_slot_at(&mut self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
-        match self.stack.get(index) {
+        match self.execution.stack.get(index) {
             Some(h) => {
                 self.set_slot(gc, h, value);
             }
@@ -299,19 +315,19 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         generic_inst: GenericLookup,
         args: Vec<StackValue<'gc>>,
     ) {
-        let argument_base = self.stack.len();
+        let argument_base = self.execution.stack.len();
         for a in args {
             self.insert_value(gc, a);
         }
-        let locals_base = self.stack.len();
+        let locals_base = self.execution.stack.len();
         let (local_values, pinned_locals) =
             self.init_locals(method.source, method.locals, &generic_inst);
         for v in local_values {
             self.insert_value(gc, v);
         }
-        let stack_base = self.stack.len();
+        let stack_base = self.execution.stack.len();
 
-        self.frames.push(StackFrame::new(
+        self.execution.frames.push(StackFrame::new(
             BasePointer {
                 arguments: argument_base,
                 locals: locals_base,
@@ -327,33 +343,33 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let ObjectRef(Some(ptr)) = instance else {
             return;
         };
-        self._all_objs.borrow_mut().insert(*instance);
+        self.gc._all_objs.borrow_mut().insert(*instance);
 
         let ctx = self.current_context();
 
         if let HeapStorage::Obj(o) = &*ptr.borrow() {
             if o.description.has_finalizer(&ctx) {
-                let mut queue = self.finalization_queue.borrow_mut();
+                let mut queue = self.gc.finalization_queue.borrow_mut();
                 queue.push(*instance);
             }
         }
     }
 
     pub fn process_pending_finalizers(&mut self, gc: GCHandle<'gc>) -> StepResult {
-        if self.processing_finalizer {
+        if self.gc.processing_finalizer {
             return StepResult::MethodReturned;
         }
 
-        let obj_ref = self.pending_finalization.borrow_mut().pop();
+        let obj_ref = self.gc.pending_finalization.borrow_mut().pop();
         if let Some(obj_ref) = obj_ref {
-            self.processing_finalizer = true;
+            self.gc.processing_finalizer = true;
             let ptr = obj_ref.0.unwrap();
             let obj_type = match &*ptr.borrow() {
                 HeapStorage::Obj(o) => o.description,
                 _ => unreachable!(),
             };
 
-            let object_type = self.assemblies.corlib_type("System.Object");
+            let object_type = self.runtime.assemblies.corlib_type("System.Object");
             let base_finalize = object_type
                 .definition
                 .methods
@@ -370,8 +386,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             // We need a context to resolve the virtual method, but if the stack is empty,
             // we can use a temporary one from the object's own resolution.
             let ctx = ResolutionContext {
-                generics: &self.empty_generics,
-                assemblies: self.assemblies,
+                generics: &self.runtime.empty_generics,
+                assemblies: self.runtime.assemblies,
                 resolution: obj_type.resolution,
                 type_owner: Some(obj_type),
                 method_owner: None,
@@ -380,11 +396,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
             self.entrypoint_frame(
                 gc,
-                MethodInfo::new(target_method, &self.empty_generics, self.assemblies),
-                self.empty_generics.clone(),
+                MethodInfo::new(target_method, &self.runtime.empty_generics, self.runtime.assemblies),
+                self.runtime.empty_generics.clone(),
                 vec![StackValue::ObjectRef(obj_ref)],
             );
-            self.frames.last_mut().unwrap().is_finalizer = true;
+            self.execution.frames.last_mut().unwrap().is_finalizer = true;
             return StepResult::InstructionStepped;
         }
         StepResult::MethodReturned
@@ -464,7 +480,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             panic!(
                 "not enough values on stack! expected {} arguments, found {}",
                 num_args,
-                self.stack.len()
+                self.execution.stack.len()
             )
         };
         let locals_base = self.top_of_stack();
@@ -486,7 +502,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
 
         self.current_frame_mut().stack_height -= num_args;
-        self.frames.push(StackFrame::new(
+        self.execution.frames.push(StackFrame::new(
             BasePointer {
                 arguments: argument_base,
                 locals: locals_base,
@@ -502,28 +518,28 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         // since arguments are consumed by the caller and the return value is put on the top of the stack
         // for similar reasons as above, we can just "delete" the whole frame's slots (reclaimable)
         // and put the return value on the first slot (now open)
-        let frame = self.frames.pop().unwrap();
+        let frame = self.execution.frames.pop().unwrap();
 
         if frame.is_finalizer {
-            self.processing_finalizer = false;
+            self.gc.processing_finalizer = false;
         }
 
         let signature = frame.state.info_handle.signature;
 
         // only return value to caller if the method actually declares a return type
         let return_value = if let (ReturnType(_, Some(_)), Some(handle)) =
-            (&signature.return_type, self.stack.get(frame.base.stack))
+            (&signature.return_type, self.execution.stack.get(frame.base.stack))
         {
             Some(self.get_slot(handle))
         } else {
             None
         };
 
-        self.stack.truncate(frame.base.arguments);
+        self.execution.stack.truncate(frame.base.arguments);
 
         if let Some(return_value) = return_value {
             // since we popped the returning frame off, this now refers to the caller frame
-            if !self.frames.is_empty() {
+            if !self.execution.frames.is_empty() {
                 self.push_stack(gc, return_value);
             } else {
                 self.insert_value(gc, return_value);
@@ -533,20 +549,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn unwind_frame(&mut self, _gc: GCHandle<'gc>) {
         let frame = self
+            .execution
             .frames
             .pop()
             .expect("unwind_frame called with empty stack");
         if frame.is_finalizer {
-            self.processing_finalizer = false;
+            self.gc.processing_finalizer = false;
         }
-        self.stack.truncate(frame.base.arguments);
+        self.execution.stack.truncate(frame.base.arguments);
     }
 
     pub fn current_frame(&self) -> &StackFrame<'gc, 'm> {
-        self.frames.last().unwrap()
+        self.execution.frames.last().unwrap()
     }
     pub fn current_frame_mut(&mut self) -> &mut StackFrame<'gc, 'm> {
-        self.frames.last_mut().unwrap()
+        self.execution.frames.last_mut().unwrap()
     }
 
     pub fn increment_ip(&mut self) {
@@ -554,19 +571,19 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn current_context(&self) -> ResolutionContext<'_> {
-        if let Some(f) = self.frames.last() {
+        if let Some(f) = self.execution.frames.last() {
             ResolutionContext {
                 generics: &f.generic_inst,
-                assemblies: self.assemblies,
+                assemblies: self.runtime.assemblies,
                 resolution: f.source_resolution,
                 type_owner: Some(f.state.info_handle.source.parent),
                 method_owner: Some(f.state.info_handle.source),
             }
         } else {
             ResolutionContext {
-                generics: &self.empty_generics,
-                assemblies: self.assemblies,
-                resolution: self.assemblies.corlib_type("System.Object").resolution,
+                generics: &self.runtime.empty_generics,
+                assemblies: self.runtime.assemblies,
+                resolution: self.runtime.assemblies.corlib_type("System.Object").resolution,
                 type_owner: None,
                 method_owner: None,
             }
@@ -594,8 +611,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn finalize_check(&self, fc: &gc_arena::Finalization<'gc>) {
-        let mut queue = self.finalization_queue.borrow_mut();
-        let mut handles = self.gchandles.borrow_mut();
+        let mut queue = self.gc.finalization_queue.borrow_mut();
+        let mut handles = self.gc.gchandles.borrow_mut();
         let mut resurrected = HashSet::new();
 
         let mut zero_out_handles =
@@ -641,7 +658,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
 
             if !to_finalize.is_empty() {
-                let mut pending = self.pending_finalization.borrow_mut();
+                let mut pending = self.gc.pending_finalization.borrow_mut();
                 for obj in to_finalize {
                     let ptr = obj.0.unwrap();
                     pending.push(obj);
@@ -660,7 +677,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         zero_out_handles(GCHandleType::WeakTrackResurrection, &resurrected);
         
         // 3. Prune dead objects from the debugging harness
-        self._all_objs.borrow_mut().retain(|obj| {
+        self.gc._all_objs.borrow_mut().retain(|obj| {
             match obj {
                 ObjectRef(Some(ptr)) => {
                     !Gc::is_dead(fc, *ptr) || resurrected.contains(&(Gc::as_ptr(*ptr) as usize))
@@ -682,16 +699,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     fn get_arg_handle(&self, index: usize) -> &StackSlotHandle<'gc> {
         let bp = &self.current_frame().base;
         let idx = bp.arguments + index;
-        if idx >= self.stack.len() {
+        if idx >= self.execution.stack.len() {
             panic!(
                 "get_arg_handle out of bounds: idx={} len={} bp.arguments={} stack.len={}",
                 idx,
-                self.stack.len(),
+                self.execution.stack.len(),
                 bp.arguments,
-                self.stack.len()
+                self.execution.stack.len()
             );
         }
-        &self.stack[idx]
+        &self.execution.stack[idx]
     }
 
     pub fn get_argument(&self, index: usize) -> StackValue<'gc> {
@@ -711,7 +728,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         frame: &StackFrame<'gc, 'm>,
         index: usize,
     ) -> &StackSlotHandle<'gc> {
-        &self.stack[frame.base.locals + index]
+        &self.execution.stack[frame.base.locals + index]
     }
 
     pub fn get_local(&self, index: usize) -> StackValue<'gc> {
@@ -727,7 +744,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         if index < frame.pinned_locals.len() && frame.pinned_locals[index] {
             if let StackValue::ObjectRef(obj) = value {
                 if obj.0.is_some() {
-                    self.pinned_objects.borrow_mut().insert(obj);
+                    self.gc.pinned_objects.borrow_mut().insert(obj);
                 }
             }
         }
@@ -744,17 +761,17 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         if top == 0 {
             panic!("empty call stack");
         }
-        let value = self.get_slot(&self.stack[top - 1]);
+        let value = self.get_slot(&self.execution.stack[top - 1]);
         self.current_frame_mut().stack_height -= 1;
         value
     }
 
     pub fn top_of_stack_address(&self) -> *const u8 {
-        self.get_handle_location(&self.stack[self.top_of_stack() - 1])
+        self.get_handle_location(&self.execution.stack[self.top_of_stack() - 1])
     }
 
     pub fn bottom_of_stack(&self) -> Option<StackValue<'gc>> {
-        match self.stack.first() {
+        match self.execution.stack.first() {
             Some(h) => {
                 let value = self.get_slot(h);
                 Some(value)
@@ -764,16 +781,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn msg(&self, fmt: std::fmt::Arguments) {
-        println!("{}{}", "\t".repeat((self.frames.len() - 1) % 10), fmt);
+        println!("{}{}", "\t".repeat((self.execution.frames.len() - 1) % 10), fmt);
     }
 
     pub fn throw_by_name(&mut self, gc: GCHandle<'gc>, name: &str) -> StepResult {
-        let rt = self.assemblies.corlib_type(name);
+        let rt = self.runtime.assemblies.corlib_type(name);
         let rt_obj = ObjectInstance::new(rt, &self.current_context());
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
         self.register_new_object(&obj_ref);
 
-        self.exception_mode = ExceptionState::Throwing(obj_ref);
+        self.execution.exception_mode = ExceptionState::Throwing(obj_ref);
         self.handle_exception(gc)
     }
 
@@ -792,7 +809,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         };
 
         for (parent, _) in ctx.get_ancestors(this_type) {
-            if let Some(method) = self.assemblies.find_method_in_type(
+            if let Some(method) = self.runtime.assemblies.find_method_in_type(
                 parent,
                 &base_method.method.name,
                 &base_method.method.signature,
@@ -828,7 +845,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             };
         }
 
-        let mut contents: Vec<_> = self.stack[..self.top_of_stack()]
+        let mut contents: Vec<_> = self.execution.stack[..self.top_of_stack()]
             .iter()
             .map(|h| format!("{:?}", self.get_slot(h)))
             .collect();
@@ -838,7 +855,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let mut insert = |i, value| {
             positions.entry(i).or_default().push(value);
         };
-        for (i, frame) in self.frames.iter().enumerate().rev() {
+        for (i, frame) in self.execution.frames.iter().enumerate().rev() {
             let base = &frame.base;
             insert(base.stack, format!("stack base of frame #{}", i));
             if base.locals != base.stack {
@@ -890,7 +907,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             .open("statics.txt")
             .unwrap();
 
-        let s = self.statics.borrow();
+        let s = self.runtime.statics.borrow();
         write!(f, "{:#?}", &s).unwrap();
 
         f.flush().unwrap();
@@ -904,7 +921,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             .open("heap.txt")
             .unwrap();
 
-        for obj in self._all_objs.borrow().iter() {
+        for obj in self.gc._all_objs.borrow().iter() {
             let Some(ptr) = obj.0 else {
                 continue;
             };
