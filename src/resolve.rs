@@ -5,11 +5,11 @@ use crate::{
 
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, unsafe_empty_collect};
-use std::{cell::RefCell, collections::HashMap, error::Error, path::PathBuf};
+use std::{collections::HashMap, error::Error, path::PathBuf, sync::RwLock};
 
 pub struct Assemblies {
     assembly_root: String,
-    external: RefCell<HashMap<String, Option<ResolutionS>>>,
+    external: RwLock<HashMap<String, Option<ResolutionS>>>,
     stubs: HashMap<String, TypeDescription>,
 }
 unsafe_empty_collect!(Assemblies);
@@ -40,7 +40,7 @@ impl Assemblies {
         resolutions.insert(SUPPORT_ASSEMBLY.to_string(), Some(ResolutionS(support_res)));
         let mut this = Self {
             assembly_root,
-            external: RefCell::new(resolutions),
+            external: RwLock::new(resolutions),
             stubs: HashMap::new(),
         };
 
@@ -86,7 +86,8 @@ impl Assemblies {
     pub fn get_assembly(&self, name: &str) -> ResolutionS {
         let res = {
             self.external
-                .borrow()
+                .read()
+                .unwrap()
                 .get(name)
                 .copied()
                 .unwrap_or_else(|| panic!("could not find assembly {name}"))
@@ -100,7 +101,8 @@ impl Assemblies {
                     None => panic!("no assembly present in external module"),
                     Some(a) => {
                         self.external
-                            .borrow_mut()
+                            .write()
+                            .unwrap()
                             .insert(a.name.to_string(), Some(resolution));
                     }
                 }
@@ -152,7 +154,7 @@ impl Assemblies {
         }
 
         let mut tried_mscorlib = false;
-        if self.external.borrow().contains_key("mscorlib") {
+        if self.external.read().unwrap().contains_key("mscorlib") {
             let res = self.get_assembly("mscorlib");
             if let Some(t) = self.try_find_in_assembly(res, name) {
                 return t;
@@ -162,7 +164,8 @@ impl Assemblies {
 
         if self
             .external
-            .borrow()
+            .read()
+            .unwrap()
             .contains_key("System.Private.CoreLib")
         {
             let res = self.get_assembly("System.Private.CoreLib");
@@ -171,7 +174,7 @@ impl Assemblies {
             }
         }
 
-        if self.external.borrow().contains_key(SUPPORT_ASSEMBLY) {
+        if self.external.read().unwrap().contains_key(SUPPORT_ASSEMBLY) {
             let res = self.get_assembly(SUPPORT_ASSEMBLY);
             if let Some(t) = self.try_find_in_assembly(res, name) {
                 return t;
