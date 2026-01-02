@@ -56,7 +56,10 @@ pub fn is_intrinsic(method: MethodDescription, assemblies: &crate::resolve::Asse
         [static System.GC::Collect()],
         [static System.GC::Collect(int)],
         [static System.GC::Collect(int, System.GCCollectionMode)],
-        [static System.GC::WaitForPendingFinalizers()]
+        [static System.GC::KeepAlive(object)],
+        [static System.GC::WaitForPendingFinalizers()],
+        [static System.GC::SuppressFinalize(object)],
+        [static System.GC::ReRegisterForFinalize(object)],
     )
 }
 
@@ -298,9 +301,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             );
             return StepResult::InstructionStepped;
         },
-        [static System.GC::SuppressFinalize(object)]
-        | [static System.GC::_SuppressFinalize(object)]
-        | [static System.GC::SuppressFinalizeInternal(object)] => {
+        [static System.GC::SuppressFinalize(object)] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             if let Some(handle) = obj.0 {
                 if let Some(o) = handle.borrow_mut(gc).as_obj_mut() {
