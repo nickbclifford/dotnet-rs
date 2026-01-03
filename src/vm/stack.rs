@@ -531,11 +531,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let signature = frame.state.info_handle.signature;
 
         // only return value to caller if the method actually declares a return type
-        let return_value = if let (ReturnType(_, Some(_)), Some(handle)) = (
-            &signature.return_type,
-            self.execution.stack.get(frame.base.stack),
-        ) {
-            Some(self.get_slot(handle))
+        let return_value = if let ReturnType(_, Some(_)) = &signature.return_type {
+            // The return value is at the top of the evaluation stack, not at the base
+            let return_slot_index = frame.base.stack + frame.stack_height - 1;
+            self.execution
+                .stack
+                .get(return_slot_index)
+                .map(|handle| self.get_slot(handle))
         } else {
             None
         };

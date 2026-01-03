@@ -5,12 +5,12 @@ use dotnetdll::prelude::*;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-struct TestHarness {
-    assemblies: &'static resolve::Assemblies,
+pub struct TestHarness {
+    pub assemblies: &'static resolve::Assemblies,
 }
 
 impl TestHarness {
-    fn get() -> &'static Self {
+    pub fn get() -> &'static Self {
         thread_local! {
             static INSTANCE: &'static TestHarness = Box::leak(Box::new(TestHarness::new()));
         }
@@ -57,7 +57,7 @@ impl TestHarness {
             .path()
     }
 
-    fn build(&self, fixture_path: &Path) -> PathBuf {
+    pub fn build(&self, fixture_path: &Path) -> PathBuf {
         let file_name = fixture_path.file_stem().unwrap().to_str().unwrap();
         let output_dir = Path::new("tests/bin").join(file_name);
 
@@ -95,7 +95,7 @@ impl TestHarness {
         dll_path
     }
 
-    fn run(&self, dll_path: &Path) -> u8 {
+    pub fn run(&self, dll_path: &Path) -> u8 {
         let dll_path_str = dll_path.to_str().unwrap().to_string();
         let resolution = static_res_from_file(&dll_path_str);
 
