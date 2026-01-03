@@ -297,6 +297,7 @@ impl Assemblies {
         &self,
         res1: ResolutionS,
         a: &[MethodType],
+        generics1: Option<&GenericLookup>,
         res2: ResolutionS,
         b: &[MethodType],
     ) -> bool {
@@ -304,7 +305,7 @@ impl Assemblies {
             return false;
         }
         for (a, b) in a.iter().zip(b.iter()) {
-            if !self.types_equal(res1, a, res2, b) {
+            if !self.types_equal(res1, a, generics1, res2, b) {
                 return false;
             }
         }
@@ -315,18 +316,41 @@ impl Assemblies {
         &self,
         res1: ResolutionS,
         a: &MethodType,
+        generics1: Option<&GenericLookup>,
         res2: ResolutionS,
         b: &MethodType,
     ) -> bool {
+        if let Some(generics) = generics1 {
+            match a {
+                MethodType::TypeGeneric(idx) => {
+                    if let Some(concrete) = generics.type_generics.get(*idx as usize) {
+                        return self.concrete_equals_method_type(concrete, res2, b);
+                    }
+                }
+                MethodType::MethodGeneric(idx) => {
+                    if let Some(concrete) = generics.method_generics.get(*idx as usize) {
+                        return self.concrete_equals_method_type(concrete, res2, b);
+                    }
+                }
+                _ => {}
+            }
+        }
+
         match (a, b) {
             (MethodType::Base(l), MethodType::Base(r)) => match (l.as_ref(), r.as_ref()) {
                 (BaseType::Type { source: ts1, .. }, BaseType::Type { source: ts2, .. }) => {
-                    let (ut1, generics1) = decompose_type_source(ts1);
-                    let (ut2, generics2) = decompose_type_source(ts2);
+                    let (ut1, generics1_list) = decompose_type_source(ts1);
+                    let (ut2, generics2_list) = decompose_type_source(ts2);
                     let td1 = self.locate_type(res1, ut1);
                     let td2 = self.locate_type(res2, ut2);
                     td1.type_name() == td2.type_name()
-                        && self.type_slices_equal(res1, &generics1, res2, &generics2)
+                        && self.type_slices_equal(
+                            res1,
+                            &generics1_list,
+                            generics1,
+                            res2,
+                            &generics2_list,
+                        )
                 }
                 (BaseType::Boolean, BaseType::Boolean) => true,
                 (BaseType::Char, BaseType::Char) => true,
@@ -346,17 +370,17 @@ impl Assemblies {
                 (BaseType::String, BaseType::String) => true,
                 (BaseType::Vector(_, l), BaseType::Vector(_, r)) => {
                     // TODO: CustomTypeModifiers
-                    self.types_equal(res1, l, res2, r)
+                    self.types_equal(res1, l, generics1, res2, r)
                 }
                 (BaseType::Array(l, _), BaseType::Array(r, _)) => {
                     // TODO: ArrayShapes
-                    self.types_equal(res1, l, res2, r)
+                    self.types_equal(res1, l, generics1, res2, r)
                 }
                 (BaseType::ValuePointer(_, l), BaseType::ValuePointer(_, r)) => {
                     // TODO: CustomTypeModifiers
                     match (l.as_ref(), r.as_ref()) {
                         (None, None) => true,
-                        (Some(t1), Some(t2)) => self.types_equal(res1, t1, res2, t2),
+                        (Some(t1), Some(t2)) => self.types_equal(res1, t1, generics1, res2, t2),
                         _ => false,
                     }
                 }
@@ -373,12 +397,15 @@ impl Assemblies {
         &self,
         res1: ResolutionS,
         a: &ParameterType<MethodType>,
+        generics1: Option<&GenericLookup>,
         res2: ResolutionS,
         b: &ParameterType<MethodType>,
     ) -> bool {
         match (a, b) {
             (ParameterType::Value(l), ParameterType::Value(r))
-            | (ParameterType::Ref(l), ParameterType::Ref(r)) => self.types_equal(res1, l, res2, r),
+            | (ParameterType::Ref(l), ParameterType::Ref(r)) => {
+                self.types_equal(res1, l, generics1, res2, r)
+            }
             (ParameterType::TypedReference, ParameterType::TypedReference) => true,
             _ => false,
         }
@@ -388,6 +415,7 @@ impl Assemblies {
         &self,
         res1: ResolutionS,
         a: &[Parameter<MethodType>],
+        generics1: Option<&GenericLookup>,
         res2: ResolutionS,
         b: &[Parameter<MethodType>],
     ) -> bool {
@@ -396,7 +424,7 @@ impl Assemblies {
         }
         for (Parameter(_, a), Parameter(_, b)) in a.iter().zip(b.iter()) {
             // TODO: CustomTypeModifiers
-            if !self.param_types_equal(res1, a, res2, b) {
+            if !self.param_types_equal(res1, a, generics1, res2, b) {
                 return false;
             }
         }
@@ -407,6 +435,7 @@ impl Assemblies {
         &self,
         res1: ResolutionS,
         a: &ManagedMethod<MethodType>,
+        generics1: Option<&GenericLookup>,
         res2: ResolutionS,
         b: &ManagedMethod<MethodType>,
     ) -> bool {
@@ -415,31 +444,117 @@ impl Assemblies {
         }
         match (&a.return_type, &b.return_type) {
             (ReturnType(_, None), ReturnType(_, None)) => {
-                self.params_equal(res1, &a.parameters, res2, &b.parameters)
+                self.params_equal(res1, &a.parameters, generics1, res2, &b.parameters)
             }
             (ReturnType(_, Some(l)), ReturnType(_, Some(r)))
-                if self.param_types_equal(res1, l, res2, r) =>
+                if self.param_types_equal(res1, l, generics1, res2, r) =>
             {
-                self.params_equal(res1, &a.parameters, res2, &b.parameters)
+                self.params_equal(res1, &a.parameters, generics1, res2, &b.parameters)
             }
             _ => false,
         }
     }
 
-    pub fn find_method_in_type(
-        &self,
-        desc: TypeDescription,
-        name: &str,
-        signature: &ManagedMethod<MethodType>,
-        sig_res: ResolutionS,
-    ) -> Option<MethodDescription> {
-        let mut methods_to_search: Vec<_> = vec![];
-        let def = &desc.definition;
 
+    // Compare a ConcreteType with a MethodType
+    fn concrete_equals_method_type(
+        &self,
+        concrete: &ConcreteType,
+        res2: ResolutionS,
+        b: &MethodType,
+    ) -> bool {
+        match b {
+            MethodType::Base(b_base) => {
+                // Compare concrete type with a base type
+                self.concrete_equals_base_type(concrete, res2, b_base)
+            }
+            _ => false,
+        }
+    }
+
+    // Compare a ConcreteType with a BaseType<MethodType>
+    fn concrete_equals_base_type(
+        &self,
+        concrete: &ConcreteType,
+        res2: ResolutionS,
+        b: &BaseType<MethodType>,
+    ) -> bool {
+        let res1 = concrete.resolution();
+        let a = concrete.get();
+
+        match (a, b) {
+            (BaseType::Type { source: ts1, .. }, BaseType::Type { source: ts2, .. }) => {
+                let (ut1, generics1) = decompose_type_source(ts1);
+                let (ut2, generics2) = decompose_type_source(ts2);
+                let td1 = self.locate_type(res1, ut1);
+                let td2 = self.locate_type(res2, ut2);
+
+                if td1.type_name() != td2.type_name() {
+                    return false;
+                }
+
+                // Check that generic parameters match (ConcreteTypes on left, MethodTypes on right)
+                if generics1.len() != generics2.len() {
+                    return false;
+                }
+
+                for (g1, g2) in generics1.iter().zip(generics2.iter()) {
+                    // g1 is ConcreteType, g2 is MethodType
+                    // Compare the ConcreteType with the MethodType
+                    if !self.concrete_equals_method_type(g1, res2, g2) {
+                        return false;
+                    }
+                }
+                true
+            }
+            (BaseType::Boolean, BaseType::Boolean) => true,
+            (BaseType::Char, BaseType::Char) => true,
+            (BaseType::Int8, BaseType::Int8) => true,
+            (BaseType::UInt8, BaseType::UInt8) => true,
+            (BaseType::Int16, BaseType::Int16) => true,
+            (BaseType::UInt16, BaseType::UInt16) => true,
+            (BaseType::Int32, BaseType::Int32) => true,
+            (BaseType::UInt32, BaseType::UInt32) => true,
+            (BaseType::Int64, BaseType::Int64) => true,
+            (BaseType::UInt64, BaseType::UInt64) => true,
+            (BaseType::Float32, BaseType::Float32) => true,
+            (BaseType::Float64, BaseType::Float64) => true,
+            (BaseType::IntPtr, BaseType::IntPtr) => true,
+            (BaseType::UIntPtr, BaseType::UIntPtr) => true,
+            (BaseType::Object, BaseType::Object) => true,
+            (BaseType::String, BaseType::String) => true,
+            (BaseType::Vector(_, l), BaseType::Vector(_, r)) => {
+                self.concrete_equals_method_type(l, res2, r)
+            }
+            (BaseType::Array(l, _), BaseType::Array(r, _)) => {
+                self.concrete_equals_method_type(l, res2, r)
+            }
+            (BaseType::ValuePointer(_, l), BaseType::ValuePointer(_, r)) => {
+                match (l.as_ref(), r.as_ref()) {
+                    (None, None) => true,
+                    (Some(l_concrete), Some(r_method)) => {
+                        self.concrete_equals_method_type(l_concrete, res2, r_method)
+                    }
+                    _ => false,
+                }
+            }
+            (BaseType::FunctionPointer(_l), BaseType::FunctionPointer(_r)) => todo!(),
+            _ => false,
+        }
+    }
+
+
+    fn get_methods_to_search<'a>(
+        &self,
+        def: &'a TypeDefinition<'static>,
+        name: &str,
+    ) -> Vec<&'a Method<'static>> {
+        let mut methods_to_search: Vec<_> = vec![];
         let filter = |n: &str| n.contains('_');
 
         let (has_underscore, rest): (Vec<_>, _) =
             def.methods.iter().partition(|m| filter(m.name.as_ref()));
+
         // prefixes required by the standard for properties and events:
         // get_, set_, add_, remove_, raise_
         if filter(name) {
@@ -463,10 +578,47 @@ impl Assemblies {
             methods_to_search.extend(rest);
         }
         methods_to_search.extend(def.events.iter().flat_map(|e| &e.other));
+        methods_to_search
+    }
 
-        for method in &methods_to_search {
+    pub fn find_method_in_type_with_substitution(
+        &self,
+        desc: TypeDescription,
+        name: &str,
+        signature: &ManagedMethod<MethodType>,
+        sig_res: ResolutionS,
+        generics: &GenericLookup,
+    ) -> Option<MethodDescription> {
+        self.find_method_in_type_internal(desc, name, signature, sig_res, Some(generics))
+    }
+
+    pub fn find_method_in_type(
+        &self,
+        desc: TypeDescription,
+        name: &str,
+        signature: &ManagedMethod<MethodType>,
+        sig_res: ResolutionS,
+    ) -> Option<MethodDescription> {
+        self.find_method_in_type_internal(desc, name, signature, sig_res, None)
+    }
+
+    fn find_method_in_type_internal(
+        &self,
+        desc: TypeDescription,
+        name: &str,
+        signature: &ManagedMethod<MethodType>,
+        sig_res: ResolutionS,
+        generics: Option<&GenericLookup>,
+    ) -> Option<MethodDescription> {
+        for method in self.get_methods_to_search(desc.definition, name) {
             if method.name == name
-                && self.signatures_equal(sig_res, signature, desc.resolution, &method.signature)
+                && self.signatures_equal(
+                    sig_res,
+                    signature,
+                    generics,
+                    desc.resolution,
+                    &method.signature,
+                )
             {
                 return Some(MethodDescription {
                     parent: desc,

@@ -819,44 +819,47 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let ctx = self.current_context();
 
                 let constraint_type_source = ctx.make_concrete(constraint);
-                let constraint_type = self.runtime.assemblies.find_concrete_type(constraint_type_source.clone());
+                let constraint_type =
+                    self.runtime
+                        .assemblies
+                        .find_concrete_type(constraint_type_source.clone());
 
                 // Determine dispatch strategy based on constraint type
-                let result = if constraint_type.is_value_type(&ctx) {
+                let method = if constraint_type.is_value_type(&ctx) {
                     // Value type: check for direct override first
-                    if let Some(overriding_method) = self.runtime.assemblies.find_method_in_type(
-                        constraint_type,
-                        &base_method.method.name,
-                        &base_method.method.signature,
-                        base_method.resolution(),
-                    ) {
+                    if let Some(overriding_method) = self
+                        .runtime
+                        .assemblies
+                        .find_method_in_type_with_substitution(
+                            constraint_type,
+                            &base_method.method.name,
+                            &base_method.method.signature,
+                            base_method.resolution(),
+                            &lookup,
+                        )
+                    {
                         // Value type has its own implementation
-                        for arg in args {
-                            push!(arg);
-                        }
-                        self.dispatch_method(gc, overriding_method, lookup)
+                        overriding_method
                     } else {
                         // No override: box the value and use base implementation
                         let value_size = type_layout(constraint_type_source.clone(), &ctx).size();
-                        let value_data = unsafe {
-                            std::slice::from_raw_parts(args[0].as_ptr(), value_size)
-                        };
+                        let value_data =
+                            unsafe { std::slice::from_raw_parts(args[0].as_ptr(), value_size) };
                         let value = CTSValue::read(&constraint_type_source, &ctx, value_data);
 
                         let boxed = ObjectRef::new(
                             gc,
-                            HeapStorage::Boxed(ValueType::new(&constraint_type_source, &ctx, value.into_stack())),
+                            HeapStorage::Boxed(ValueType::new(
+                                &constraint_type_source,
+                                &ctx,
+                                value.into_stack(),
+                            )),
                         );
                         self.register_new_object(&boxed);
 
                         args[0] = StackValue::ObjectRef(boxed);
                         let this_type = ctx.get_heap_description(boxed.0.unwrap());
-                        let method = self.resolve_virtual_method(base_method, this_type, Some(&ctx));
-
-                        for arg in args {
-                            push!(arg);
-                        }
-                        self.dispatch_method(gc, method, lookup)
+                        self.resolve_virtual_method(base_method, this_type, Some(&ctx))
                     }
                 } else {
                     // Reference type: dereference the managed pointer
@@ -868,14 +871,32 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
 
                     args[0] = StackValue::ObjectRef(obj_ref);
-                    let this_type = ctx.get_heap_description(obj_ref.0.unwrap());
-                    let method = self.resolve_virtual_method(base_method, this_type, Some(&ctx));
 
-                    for arg in args {
-                        push!(arg);
+                    // For reference types with constrained callvirt, try to find the method
+                    // implementation directly in the constraint type first
+                    if let Some(impl_method) = self
+                        .runtime
+                        .assemblies
+                        .find_method_in_type_with_substitution(
+                            constraint_type,
+                            &base_method.method.name,
+                            &base_method.method.signature,
+                            base_method.resolution(),
+                            &lookup,
+                        )
+                    {
+                        impl_method
+                    } else {
+                        // Fall back to normal virtual dispatch
+                        let this_type = ctx.get_heap_description(obj_ref.0.unwrap());
+                        self.resolve_virtual_method(base_method, this_type, Some(&ctx))
                     }
-                    self.dispatch_method(gc, method, lookup)
                 };
+
+                for arg in args {
+                    push!(arg);
+                }
+                let result = self.dispatch_method(gc, method, lookup);
 
                 if let StepResult::InstructionStepped = result {
                     if initial_frame_count != self.execution.frames.len() {
