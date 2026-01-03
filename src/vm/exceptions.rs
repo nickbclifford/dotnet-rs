@@ -188,10 +188,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     fn begin_throwing(&mut self, exception: ObjectRef<'gc>, gc: GCHandle<'gc>) -> StepResult {
         let frame = self.execution.frames.last().unwrap();
-        println!(
-            "Throwing exception: {:?} in {:?} at IP {}",
-            exception, frame.state.info_handle.source, frame.state.ip
-        );
+        if self.tracer_enabled() {
+            self.runtime.tracer.trace_exception(
+                self.indent(),
+                &format!("{:?}", exception),
+                &format!("{:?} at IP {}", frame.state.info_handle.source, frame.state.ip),
+            );
+        }
         // Preempt any existing exception handling state (nested exceptions)
         self.execution.suspended_stack.clear();
         self.execution.suspended_frames.clear();

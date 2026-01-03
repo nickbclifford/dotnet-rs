@@ -1,6 +1,7 @@
 use crate::{
     types::members::MethodDescription, value::StackValue,
     vm::{MethodInfo, StepResult, stack::GCArena},
+    vm_msg,
 };
 
 pub struct Executor {
@@ -32,7 +33,7 @@ impl Executor {
 
     // assumes args are already on stack
     pub fn run(&mut self) -> ExecutorResult {
-        loop {
+        let result = loop {
             if let Some(marked) = self.arena.mark_all() {
                 marked.finalize(|fc, c| c.finalize_check(fc));
             }
@@ -47,7 +48,9 @@ impl Executor {
             });
 
             if full_collect {
-                println!("GC: Manual collection triggered");
+                self.arena.mutate(|_, c| {
+                    vm_msg!(c, "GC: Manual collection triggered");
+                });
                 let mut marked = None;
                 while marked.is_none() {
                     marked = self.arena.mark_all();
@@ -76,7 +79,7 @@ impl Executor {
                             Some(v) => panic!("invalid value for entrypoint return: {:?}", v),
                             None => 0,
                         });
-                        return ExecutorResult::Exited(exit_code);
+                        break ExecutorResult::Exited(exit_code);
                     } else if !was_auto_invoked {
                         // step the caller past the call instruction
                         self.arena.mutate_root(|_, c| c.increment_ip());
@@ -84,15 +87,18 @@ impl Executor {
                 }
                 StepResult::MethodThrew => {
                     self.arena.mutate(|_, c| {
-                        println!("Exception thrown: {:?}", c.execution.exception_mode);
+                        vm_msg!(c, "Exception thrown: {:?}", c.execution.exception_mode);
                     });
                     if self.arena.mutate(|_, c| c.execution.frames.is_empty()) {
-                        return ExecutorResult::Threw;
+                        break ExecutorResult::Threw;
                     }
                 }
                 StepResult::InstructionStepped => {}
             }
             // TODO(gc): poll arena for stats
-        }
+        };
+
+        self.arena.mutate(|_, c| c.runtime.tracer.flush());
+        result
     }
 }

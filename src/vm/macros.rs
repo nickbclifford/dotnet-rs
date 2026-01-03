@@ -42,6 +42,100 @@ macro_rules! vm_expect_stack {
 #[macro_export]
 macro_rules! vm_msg {
     ($src:expr, $($format:tt)*) => {
-        $src.msg(format_args!($($format)*))
+        if $src.tracer_enabled() {
+            $src.msg(format_args!($($format)*))
+        }
+    }
+}
+
+// Specialized tracing macros for better performance and readability
+#[macro_export]
+macro_rules! vm_trace_instruction {
+    ($src:expr, $ip:expr, $instr:expr) => {
+        if $src.tracer_enabled() {
+            $src.runtime.tracer.trace_instruction($src.indent(), $ip, $instr);
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! vm_trace_method_entry {
+    ($src:expr, $name:expr, $sig:expr) => {
+        if $src.tracer_enabled() {
+            $src.runtime.tracer.trace_method_entry($src.indent(), $name, $sig);
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! vm_trace_method_exit {
+    ($src:expr, $name:expr) => {
+        if $src.tracer_enabled() {
+            $src.runtime.tracer.trace_method_exit($src.indent(), $name);
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! vm_trace_stack {
+    ($src:expr, $op:expr, $val:expr) => {
+        if $src.tracer_enabled() {
+            $src.runtime.tracer.trace_stack_op($src.indent(), $op, &format!("{:?}", $val));
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! vm_trace_gc {
+    ($src:expr, $event:expr, $details:expr) => {
+        if $src.tracer_enabled() {
+            $src.runtime.tracer.trace_gc_event($src.indent(), $event, $details);
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! vm_trace_branch {
+    ($src:expr, $type:expr, $target:expr, $taken:expr) => {
+        if $src.tracer_enabled() {
+            $src.runtime.tracer.trace_branch($src.indent(), $type, $target, $taken);
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! vm_trace_field {
+    ($src:expr, $op:expr, $field:expr, $val:expr) => {
+        if $src.tracer_enabled() {
+            $src.runtime.tracer.trace_field_access($src.indent(), $op, $field, &format!("{:?}", $val));
+        }
+    }
+}
+
+// Comprehensive state snapshot macros
+#[macro_export]
+macro_rules! vm_trace_full_state {
+    ($src:expr) => {
+        if $src.tracer_enabled() {
+            $src.trace_full_state();
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! vm_trace_stack_snapshot {
+    ($src:expr) => {
+        if $src.tracer_enabled() {
+            $src.trace_dump_stack();
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! vm_trace_heap_snapshot {
+    ($src:expr) => {
+        if $src.tracer_enabled() {
+            $src.trace_dump_heap();
+        }
     }
 }

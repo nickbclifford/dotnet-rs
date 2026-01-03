@@ -1,27 +1,28 @@
 use crate::{
     resolve::Assemblies,
     types::{
-        TypeDescription, generics::{ConcreteType, GenericLookup},
+        generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
+        TypeDescription,
     },
-    utils::{ResolutionS, decompose_type_source},
+    utils::{decompose_type_source, ResolutionS},
     value::{
-        StackValue,
         object::{HeapStorage, Object as ObjectInstance, ObjectPtr, ObjectRef},
         storage::StaticStorageManager,
+        StackValue,
     },
     vm::{
-        GCHandleType, MethodInfo, MethodState, StepResult, context::ResolutionContext,
-        exceptions::ExceptionState, intrinsics::reflection::RuntimeType,
-        pinvoke::NativeLibraries,
+        context::ResolutionContext, exceptions::ExceptionState,
+        intrinsics::reflection::RuntimeType, pinvoke::NativeLibraries, GCHandleType, MethodInfo,
+        MethodState, StepResult,
     },
 };
 use dotnetdll::prelude::*;
-use gc_arena::{Arena, Collect, Collection, Gc, Mutation, Rootable, lock::RefLock};
+use gc_arena::{lock::RefLock, Arena, Collect, Collection, Gc, Mutation, Rootable};
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
-    fmt::Debug, fs::OpenOptions, io::Write,
+    fmt::Debug,
 };
 
 #[derive(Collect)]
@@ -53,6 +54,7 @@ pub struct RuntimeEnvironment<'gc, 'm> {
     pub runtime_field_objs: HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>,
     pub method_tables: RefCell<HashMap<TypeDescription, Box<[u8]>>>,
     pub empty_generics: GenericLookup,
+    pub tracer: crate::vm::tracer::Tracer,
 }
 
 unsafe impl<'gc, 'm: 'gc> Collect for RuntimeEnvironment<'gc, 'm> {
@@ -199,6 +201,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 runtime_field_objs: HashMap::new(),
                 method_tables: RefCell::new(HashMap::new()),
                 empty_generics: GenericLookup::default(),
+                tracer: crate::vm::tracer::Tracer::new(),
             },
             gc: HeapManager {
                 _all_objs: RefCell::new(HashSet::new()),
@@ -461,6 +464,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         method: MethodInfo<'m>,
         generic_inst: GenericLookup,
     ) {
+        if self.tracer_enabled() {
+            let method_desc = format!("{:?}", method.source);
+            self.runtime.tracer.trace_method_entry(self.indent(), &method_desc, "");
+        }
+
         // TODO: varargs?
         // since arguments are set up on the stack in order for a call and consumed for the caller
         // we can take advantage of the existing stack space and just move our base pointer back
@@ -525,6 +533,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         // for similar reasons as above, we can just "delete" the whole frame's slots (reclaimable)
         // and put the return value on the first slot (now open)
         let frame = self.execution.frames.pop().unwrap();
+
+        if self.tracer_enabled() {
+            let method_name = format!("{:?}", frame.state.info_handle.source);
+            self.runtime.tracer.trace_method_exit(self.indent(), &method_name);
+        }
 
         if frame.is_finalizer {
             self.gc.processing_finalizer = false;
@@ -762,6 +775,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn push_stack(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {
+        if self.tracer_enabled() {
+            self.runtime.tracer.trace_stack_op(self.indent(), "PUSH", &format!("{:?}", value));
+        }
         self.set_slot_at(gc, self.top_of_stack(), value);
         self.current_frame_mut().stack_height += 1;
     }
@@ -772,6 +788,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             panic!("empty call stack");
         }
         let value = self.get_slot(&self.execution.stack[top - 1]);
+        if self.tracer_enabled() {
+            self.runtime.tracer.trace_stack_op(self.indent(), "POP", &format!("{:?}", value));
+        }
         self.current_frame_mut().stack_height -= 1;
         value
     }
@@ -790,17 +809,20 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
     }
 
-    pub fn msg(&self, fmt: std::fmt::Arguments) {
-        let indent = if self.execution.frames.len() > 0 {
-            (self.execution.frames.len() - 1) % 10
-        } else {
+    pub fn tracer_enabled(&self) -> bool {
+        self.runtime.tracer.is_enabled()
+    }
+
+    pub fn indent(&self) -> usize {
+        if self.execution.frames.is_empty() {
             0
-        };
-        println!(
-            "{}{}",
-            "\t".repeat(indent),
-            fmt
-        );
+        } else {
+            (self.execution.frames.len() - 1) % 10
+        }
+    }
+
+    pub fn msg(&self, fmt: std::fmt::Arguments) {
+        self.runtime.tracer.msg(self.indent(), fmt);
     }
 
     pub fn throw_by_name(&mut self, gc: GCHandle<'gc>, name: &str) -> StepResult {
@@ -847,127 +869,129 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 // this block is all for runtime debug methods
 #[allow(dead_code)]
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
-    pub fn dump_stack(&self) {
-        use std::fs::OpenOptions;
-        use std::io::Write;
-
-        let mut f = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open("stack.txt")
-            .unwrap();
-
-        macro_rules! dumpln {
-            ($($fmt:tt)*) => {
-                writeln!(f, $($fmt)*).unwrap();
-            };
+    // Tracer-integrated dump methods for comprehensive state capture
+    pub fn trace_dump_stack(&self) {
+        if !self.tracer_enabled() {
+            return;
         }
 
-        let mut contents: Vec<_> = self.execution.stack[..self.top_of_stack()]
+        let contents: Vec<_> = self.execution.stack[..self.top_of_stack()]
             .iter()
             .map(|h| format!("{:?}", self.get_slot(h)))
             .collect();
-        contents.reverse();
 
-        let mut positions: HashMap<usize, Vec<String>> = HashMap::new();
-        let mut insert = |i, value| {
-            positions.entry(i).or_default().push(value);
-        };
-        for (i, frame) in self.execution.frames.iter().enumerate().rev() {
+        let mut markers = Vec::new();
+        for (i, frame) in self.execution.frames.iter().enumerate() {
             let base = &frame.base;
-            insert(base.stack, format!("stack base of frame #{}", i));
+            markers.push((base.stack, format!("Stack base of frame #{}", i)));
             if base.locals != base.stack {
-                insert(base.locals, format!("locals base of frame #{}", i));
+                markers.push((base.locals, format!("Locals base of frame #{}", i)));
             }
-            insert(base.arguments, format!("arguments base of frame #{}", i))
+            markers.push((base.arguments, format!("Arguments base of frame #{}", i)));
         }
 
-        let longest = match contents.iter().map(|s| s.len()).max() {
-            Some(longest) => {
-                dumpln!("│ {} │", " ".repeat(longest));
-
-                let last_idx = contents.len() - 1;
-
-                if let Some(bases) = positions.get(&(last_idx + 1)) {
-                    for b in bases {
-                        let padding = " ".repeat(longest - b.len());
-                        dumpln!("├─ {}{} │", b, padding);
-                    }
-                    dumpln!("├─{}─┤", "─".repeat(longest));
-                }
-
-                for (i, entry) in contents.into_iter().enumerate() {
-                    let padding = " ".repeat(longest - entry.len());
-                    dumpln!("│ {}{} │", entry, padding);
-                    if let Some(bases) = positions.get(&(last_idx - i)) {
-                        for b in bases {
-                            let padding = " ".repeat(longest - b.len());
-                            dumpln!("├─ {}{}│", b, padding);
-                        }
-                    }
-                    if i != last_idx {
-                        dumpln!("├─{}─┤", "─".repeat(longest));
-                    }
-                }
-
-                longest
-            }
-            None => 0,
-        };
-
-        dumpln!("└─{}─┘", "─".repeat(longest));
-
-        f.flush().unwrap();
+        self.runtime.tracer.dump_stack_state(&contents, &markers);
     }
 
-    pub fn dump_statics(&self) {
-        let mut f = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open("statics.txt")
-            .unwrap();
+    pub fn trace_dump_frames(&self) {
+        if !self.tracer_enabled() {
+            return;
+        }
 
-        let s = self.runtime.statics.borrow();
-        write!(f, "{:#?}", &s).unwrap();
-
-        f.flush().unwrap();
+        for (idx, frame) in self.execution.frames.iter().enumerate() {
+            let method_name = format!("{:?}", frame.state.info_handle.source);
+            self.runtime.tracer.dump_frame_state(
+                idx,
+                &method_name,
+                frame.state.ip,
+                frame.base.arguments,
+                frame.base.locals,
+                frame.base.stack,
+                frame.stack_height,
+            );
+        }
     }
 
-    pub fn dump_heap(&self) {
-        let mut f = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open("heap.txt")
-            .unwrap();
+    pub fn trace_dump_heap(&self) {
+        if !self.tracer_enabled() {
+            return;
+        }
 
-        for obj in self.gc._all_objs.borrow().iter() {
+        let objects: Vec<_> = self.gc._all_objs.borrow().iter().copied().collect();
+        self.runtime.tracer.dump_heap_snapshot_start(objects.len());
+
+        for obj in objects {
             let Some(ptr) = obj.0 else {
                 continue;
             };
-            let raw_ptr = Gc::as_ptr(ptr) as ObjectPtr;
+            let raw_ptr = Gc::as_ptr(ptr) as ObjectPtr as usize;
             match &*ptr.borrow() {
                 HeapStorage::Obj(o) => {
-                    writeln!(f, "{:#?} => {:#?}", raw_ptr, o)
+                    let details = format!("{:?}", o);
+                    self.runtime
+                        .tracer
+                        .dump_heap_object(raw_ptr, "Object", &details);
                 }
                 HeapStorage::Vec(v) => {
-                    writeln!(f, "{:#?} => {:#?}", raw_ptr, v)
+                    let details = format!("{:?}", v);
+                    self.runtime
+                        .tracer
+                        .dump_heap_object(raw_ptr, "Vector", &details);
                 }
-                _ => {
-                    writeln!(f, "{:#?} => TODO other heap objects", raw_ptr)
+                HeapStorage::Str(s) => {
+                    let details = format!("{:?}", s);
+                    self.runtime
+                        .tracer
+                        .dump_heap_object(raw_ptr, "String", &details);
+                }
+                HeapStorage::Boxed(b) => {
+                    let details = format!("{:?}", b);
+                    self.runtime
+                        .tracer
+                        .dump_heap_object(raw_ptr, "Boxed", &details);
                 }
             }
-            .unwrap();
         }
 
-        f.flush().unwrap();
+        self.runtime.tracer.dump_heap_snapshot_end();
     }
 
-    pub fn debug_dump(&self) {
-        self.dump_stack();
-        self.dump_statics();
-        self.dump_heap();
+    pub fn trace_dump_statics(&self) {
+        if !self.tracer_enabled() {
+            return;
+        }
+
+        let s = self.runtime.statics.borrow();
+        let debug_str = format!("{:#?}", &*s);
+        self.runtime.tracer.dump_statics_snapshot(&debug_str);
+    }
+
+    pub fn trace_dump_gc_stats(&self) {
+        if !self.tracer_enabled() {
+            return;
+        }
+
+        self.runtime.tracer.dump_gc_stats(
+            self.gc.finalization_queue.borrow().len(),
+            self.gc.pending_finalization.borrow().len(),
+            self.gc.pinned_objects.borrow().len(),
+            self.gc.gchandles.borrow().len(),
+            self.gc._all_objs.borrow().len(),
+        );
+    }
+
+    /// Captures a complete snapshot of all runtime state to the tracer
+    pub fn trace_full_state(&self) {
+        if !self.tracer_enabled() {
+            return;
+        }
+
+        self.runtime.tracer.dump_full_state_header();
+        self.trace_dump_frames();
+        self.trace_dump_stack();
+        self.trace_dump_heap();
+        self.trace_dump_statics();
+        self.trace_dump_gc_stats();
+        self.runtime.tracer.flush();
     }
 }

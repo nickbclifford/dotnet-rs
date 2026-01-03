@@ -13,7 +13,7 @@ use crate::{
         exceptions::{ExceptionState, HandlerAddress, UnwindTarget},
         intrinsics::*,
     },
-    vm_expect_stack, vm_msg, vm_pop, vm_push,
+    vm_expect_stack, vm_msg, vm_pop, vm_push, vm_trace_branch, vm_trace_field, vm_trace_instruction,
 };
 use dotnetdll::prelude::*;
 use std::cmp::Ordering;
@@ -148,14 +148,20 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         macro_rules! branch {
             ($ip:expr) => {{
-                state!(|s| s.ip = *$ip);
+                let target = *$ip;
+                vm_trace_branch!(self, "BR", target as usize, true);
+                state!(|s| s.ip = target);
                 moved_ip = true;
             }};
         }
         macro_rules! conditional_branch {
             ($condition:expr, $ip:expr) => {{
-                if $condition {
-                    branch!($ip);
+                let cond = $condition;
+                let target = *$ip;
+                vm_trace_branch!(self, "BR_COND", target as usize, cond);
+                if cond {
+                    state!(|s| s.ip = target);
+                    moved_ip = true;
                 }
             }};
         }
@@ -224,13 +230,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let ip = state!(|s| s.ip);
         let i_res = state!(|s| s.info_handle.source.resolution());
 
-        vm_msg!(
-            self,
-            "[#{} | ip @ {}] {}",
-            self.execution.frames.len() - 1,
-            ip,
-            i.show(i_res.0)
-        );
+        vm_trace_instruction!(self, ip, &i.show(i_res.0));
 
         // self.debug_dump();
 
@@ -1147,6 +1147,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     rest => panic!("stack value {:?} has no fields", rest),
                 };
 
+                vm_trace_field!(self, "LOAD", name, &value);
                 push!(value.into_stack())
             }
             LoadFieldAddress(source) => {
@@ -1244,6 +1245,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let t = ctx.make_concrete(&field.field.return_type);
                     CTSValue::read(&t, &ctx, field_data).into_stack()
                 });
+                vm_trace_field!(self, "LOAD_STATIC", name, &value);
                 push!(value)
             }
             LoadStaticFieldAddress(source) => {
@@ -1504,6 +1506,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let t = ctx.get_field_type(field);
                 let name = &field.field.name;
 
+                vm_trace_field!(self, "STORE", name, &value);
+
                 let write_data = |dest: &mut [u8]| CTSValue::new(&t, &ctx, value).write(dest);
                 let slice_from_pointer = |dest: *mut u8| {
                     let layout = FieldLayoutManager::instance_fields(field.parent, &ctx);
@@ -1569,6 +1573,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 statics!(|s| {
                     let field_data = s.get_mut(field.parent).get_field_mut(name);
                     let t = ctx.make_concrete(&field.field.return_type);
+                    vm_trace_field!(self, "STORE_STATIC", name, &value);
                     CTSValue::new(&t, &ctx, value).write(field_data);
                 });
             }

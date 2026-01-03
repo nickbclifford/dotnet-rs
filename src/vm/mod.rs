@@ -14,6 +14,7 @@ pub(crate) mod intrinsics;
 mod macros;
 mod pinvoke;
 mod stack;
+pub mod tracer;
 
 pub use executor::*;
 pub use stack::*;
