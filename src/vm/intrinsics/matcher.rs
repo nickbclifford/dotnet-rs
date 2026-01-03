@@ -155,6 +155,7 @@ macro_rules! parse_type {
     (char) => { $crate::vm::intrinsics::matcher::TypeMatcher::Char };
     (void) => { $crate::vm::intrinsics::matcher::TypeMatcher::Void };
     (any) => { $crate::vm::intrinsics::matcher::TypeMatcher::Any };
+    (! ! $n:literal [ ]) => { $crate::vm::intrinsics::matcher::TypeMatcher::Array(Box::new($crate::vm::intrinsics::matcher::TypeMatcher::MethodGeneric($n))) };
     (! ! $n:literal) => { $crate::vm::intrinsics::matcher::TypeMatcher::MethodGeneric($n) };
     ($t:ident [ ]) => { $crate::vm::intrinsics::matcher::TypeMatcher::Array(Box::new($crate::parse_type!($t))) };
     ($($t:ident).+ [ ]) => { $crate::vm::intrinsics::matcher::TypeMatcher::Array(Box::new($crate::parse_type!($($t).+))) };
@@ -258,6 +259,12 @@ macro_rules! __munch_types {
     };
 
     // !!N
+    ([ $($acc:expr,)* ] ! ! $n:literal [ ] , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(! ! $n [ ]), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] ! ! $n:literal [ ]) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(! ! $n [ ]), ])
+    };
     ([ $($acc:expr,)* ] ! ! $n:literal $($rest:tt)*) => {
         $crate::__munch_types!([ $($acc,)* $crate::parse_type!(! ! $n), ] $($rest)*)
     };

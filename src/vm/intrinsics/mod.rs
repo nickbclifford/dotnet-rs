@@ -237,6 +237,20 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 std::ptr::copy(src, dst, total_count);
             }
         },
+        [static System.Runtime.InteropServices.MemoryMarshal::GetArrayDataReference<1>(!!0[])] => {
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
+            let Some(array_handle) = obj.0 else {
+                return stack.throw_by_name(gc, "System.NullReferenceException");
+            };
+
+            let data_ptr = match &*array_handle.borrow() {
+                HeapStorage::Vec(v) => v.get().as_ptr() as *mut u8,
+                _ => panic!("GetArrayDataReference called on non-array"),
+            };
+
+            let element_type = stack.runtime.assemblies.find_concrete_type(generics.method_generics[0].clone());
+            push!(StackValue::managed_ptr(data_ptr, element_type, Some(array_handle), false));
+        },
         [static System.Runtime.CompilerServices.RuntimeHelpers::GetMethodTable(object)] => {
             let obj = pop!();
             let object_type = match obj {
@@ -374,36 +388,59 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             }
         },
         [static System.Runtime.CompilerServices.RuntimeHelpers::CreateSpan<1>(System.RuntimeFieldHandle)] => {
-            let target = &generics.method_generics[0];
-            let target_size = type_layout(target.clone(), &ctx).size();
+            let element_type = &generics.method_generics[0];
+            let element_size = type_layout(element_type.clone(), &ctx).size();
             vm_expect_stack!(let ValueType(field_handle) = pop!());
 
-            let mut idx_buf = [0u8; ObjectRef::SIZE];
-            idx_buf.copy_from_slice(field_handle.instance_storage.get_field("_value"));
-            let idx = usize::from_ne_bytes(idx_buf);
-            let (FieldDescription { field, .. }, lookup) = &stack.runtime.runtime_fields[idx];
+            // Extract the field index from RuntimeFieldHandle
+            let field_index = {
+                let mut ptr_buf = [0u8; ObjectRef::SIZE];
+                ptr_buf.copy_from_slice(field_handle.instance_storage.get_field("_value"));
+                let obj_ref = ObjectRef::read(&ptr_buf);
+                let handle_obj = obj_ref.0.expect("Null pointer in RuntimeFieldHandle");
+
+                match &*handle_obj.borrow() {
+                    HeapStorage::Obj(o) => {
+                        let mut idx_buf = [0u8; size_of::<usize>()];
+                        idx_buf.copy_from_slice(o.instance_storage.get_field("index"));
+                        usize::from_ne_bytes(idx_buf)
+                    }
+                    _ => panic!("RuntimeFieldHandle._value does not point to an object"),
+                }
+            };
+
+            let (FieldDescription { field, .. }, lookup) = &stack.runtime.runtime_fields[field_index];
             let field_type = ctx.with_generics(lookup).make_concrete(&field.return_type);
             let field_desc = stack.runtime.assemblies.find_concrete_type(field_type.clone());
 
-            let Some(data) = &field.initial_value else { return stack.throw_by_name(gc, "System.ArgumentException") };
+            let Some(initial_data) = &field.initial_value else {
+                return stack.throw_by_name(gc, "System.ArgumentException");
+            };
 
             if field_desc.definition.name.starts_with(STATIC_ARRAY_TYPE_PREFIX) {
-                let size_str = field_desc.definition.name.split_at(STATIC_ARRAY_TYPE_PREFIX.len()).1;
-                let end_idx = match size_str.find('_') {
-                    None => size_str.len(),
-                    Some(i) => i
-                };
-                let size_txt = &size_str[..end_idx];
-                let size = size_txt.parse::<usize>().unwrap();
-                let data = &data[0..size];
+                // Parse the size from the type name (e.g., "__StaticArrayInitTypeSize=123")
+                let size_str = &field_desc.definition.name[STATIC_ARRAY_TYPE_PREFIX.len()..];
+                let size_end = size_str.find('_').unwrap_or(size_str.len());
+                let array_size = size_str[..size_end].parse::<usize>().unwrap();
+                let data_slice = &initial_data[..array_size];
 
-                let span = stack.runtime.assemblies.corlib_type("System.ReadOnlySpan`1");
+                // Create a ReadOnlySpan<T> pointing to the static data
+                let span_type = stack.runtime.assemblies.corlib_type("System.ReadOnlySpan`1");
                 let span_lookup = GenericLookup::new(vec![field_type]);
-                let mut instance = Object::new(span, &ctx.with_generics(&span_lookup));
-                instance.instance_storage.get_field_mut("_reference").copy_from_slice(&(data.as_ptr() as usize).to_ne_bytes());
-                instance.instance_storage.get_field_mut("_length").copy_from_slice(&((size / target_size) as i32).to_ne_bytes());
+                let mut span_instance = Object::new(span_type, &ctx.with_generics(&span_lookup));
 
-                push!(ValueType(Box::new(instance)));
+                // Set the _reference field to point to the data
+                let element_desc = stack.runtime.assemblies.find_concrete_type(element_type.clone());
+                let data_ptr = StackValue::managed_ptr(data_slice.as_ptr() as *mut u8, element_desc, None, false);
+                vm_expect_stack!(let ManagedPtr(m) = data_ptr);
+                m.write(span_instance.instance_storage.get_field_mut("_reference"));
+
+                // Set the _length field
+                let element_count = (array_size / element_size) as i32;
+                span_instance.instance_storage.get_field_mut("_length")
+                    .copy_from_slice(&element_count.to_ne_bytes());
+
+                push!(ValueType(Box::new(span_instance)));
             } else {
                 todo!("initial field data for {:?}", field_desc);
             }

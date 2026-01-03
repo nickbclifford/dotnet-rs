@@ -232,7 +232,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             i.show(i_res.0)
         );
 
-        self.debug_dump();
+        // self.debug_dump();
 
         match i {
             Add => {
@@ -808,7 +808,83 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     return result;
                 }
             }
-            CallVirtualConstrained(_, _) => todo!("constrained.callvirt"),
+            CallVirtualConstrained(constraint, source) => {
+                let (base_method, lookup) = self.find_generic_method(source);
+
+                // Pop all arguments (this + parameters)
+                let num_args = 1 + base_method.method.signature.parameters.len();
+                let mut args: Vec<_> = (0..num_args).map(|_| pop!()).collect();
+                args.reverse();
+
+                let ctx = self.current_context();
+
+                let constraint_type_source = ctx.make_concrete(constraint);
+                let constraint_type = self.runtime.assemblies.find_concrete_type(constraint_type_source.clone());
+
+                // Determine dispatch strategy based on constraint type
+                let result = if constraint_type.is_value_type(&ctx) {
+                    // Value type: check for direct override first
+                    if let Some(overriding_method) = self.runtime.assemblies.find_method_in_type(
+                        constraint_type,
+                        &base_method.method.name,
+                        &base_method.method.signature,
+                        base_method.resolution(),
+                    ) {
+                        // Value type has its own implementation
+                        for arg in args {
+                            push!(arg);
+                        }
+                        self.dispatch_method(gc, overriding_method, lookup)
+                    } else {
+                        // No override: box the value and use base implementation
+                        let value_size = type_layout(constraint_type_source.clone(), &ctx).size();
+                        let value_data = unsafe {
+                            std::slice::from_raw_parts(args[0].as_ptr(), value_size)
+                        };
+                        let value = CTSValue::read(&constraint_type_source, &ctx, value_data);
+
+                        let boxed = ObjectRef::new(
+                            gc,
+                            HeapStorage::Boxed(ValueType::new(&constraint_type_source, &ctx, value.into_stack())),
+                        );
+                        self.register_new_object(&boxed);
+
+                        args[0] = StackValue::ObjectRef(boxed);
+                        let this_type = ctx.get_heap_description(boxed.0.unwrap());
+                        let method = self.resolve_virtual_method(base_method, this_type, Some(&ctx));
+
+                        for arg in args {
+                            push!(arg);
+                        }
+                        self.dispatch_method(gc, method, lookup)
+                    }
+                } else {
+                    // Reference type: dereference the managed pointer
+                    vm_expect_stack!(let ManagedPtr(m) = args[0].clone());
+                    let obj_ref = unsafe { *(m.value as *const ObjectRef) };
+
+                    if obj_ref.0.is_none() {
+                        return self.throw_by_name(gc, "System.NullReferenceException");
+                    }
+
+                    args[0] = StackValue::ObjectRef(obj_ref);
+                    let this_type = ctx.get_heap_description(obj_ref.0.unwrap());
+                    let method = self.resolve_virtual_method(base_method, this_type, Some(&ctx));
+
+                    for arg in args {
+                        push!(arg);
+                    }
+                    self.dispatch_method(gc, method, lookup)
+                };
+
+                if let StepResult::InstructionStepped = result {
+                    if initial_frame_count != self.execution.frames.len() {
+                        moved_ip = true;
+                    }
+                } else {
+                    return result;
+                }
+            }
             CallVirtualTail(_) => todo!("tail.callvirt"),
             CastClass { param0: target, .. } => {
                 vm_expect_stack!(let ObjectRef(target_obj) = pop!());

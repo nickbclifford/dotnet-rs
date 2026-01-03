@@ -791,9 +791,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn msg(&self, fmt: std::fmt::Arguments) {
+        let indent = if self.execution.frames.len() > 0 {
+            (self.execution.frames.len() - 1) % 10
+        } else {
+            0
+        };
         println!(
             "{}{}",
-            "\t".repeat((self.execution.frames.len() - 1) % 10),
+            "\t".repeat(indent),
             fmt
         );
     }
@@ -886,16 +891,19 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 if let Some(bases) = positions.get(&(last_idx + 1)) {
                     for b in bases {
-                        dumpln!("├─ {:width$} │", b, width = longest);
+                        let padding = " ".repeat(longest - b.len());
+                        dumpln!("├─ {}{} │", b, padding);
                     }
                     dumpln!("├─{}─┤", "─".repeat(longest));
                 }
 
                 for (i, entry) in contents.into_iter().enumerate() {
-                    dumpln!("│ {:width$} │", entry, width = longest);
+                    let padding = " ".repeat(longest - entry.len());
+                    dumpln!("│ {}{} │", entry, padding);
                     if let Some(bases) = positions.get(&(last_idx - i)) {
                         for b in bases {
-                            dumpln!("├─ {:width$}│", b, width = longest);
+                            let padding = " ".repeat(longest - b.len());
+                            dumpln!("├─ {}{}│", b, padding);
                         }
                     }
                     if i != last_idx {
