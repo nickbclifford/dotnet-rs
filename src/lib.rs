@@ -1,21 +1,16 @@
-use crate::{
-    utils::static_res_from_file
-    ,
-    vm::ExecutorResult,
-};
-
 use clap::Parser;
+use crate::{utils::static_res_from_file, vm::ExecutorResult};
 use dotnetdll::prelude::*;
 use std::process::ExitCode;
-use types::members::MethodDescription;
-use types::TypeDescription;
 
-#[macro_use]
-pub mod vm;
 pub mod resolve;
 pub mod types;
 pub mod utils;
 pub mod value;
+#[macro_use]
+pub mod vm;
+
+use types::{TypeDescription, members::MethodDescription};
 
 #[derive(Parser, Debug)]
 #[command(

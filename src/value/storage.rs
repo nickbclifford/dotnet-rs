@@ -1,19 +1,17 @@
 use crate::{
+    types::{TypeDescription, members::MethodDescription},
     utils::DebugStr,
-    value::layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
+    value::{
+        layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
+        object::ObjectRef,
+    },
+    vm::context::ResolutionContext,
 };
-
 use gc_arena::{Collect, Collection};
 use std::{
-    collections::HashMap,
-    fmt::{Debug, Formatter},
-    marker::PhantomData,
-    ops::Range,
+    collections::HashMap, fmt::{Debug, Formatter},
+    marker::PhantomData, ops::Range,
 };
-use crate::types::members::MethodDescription;
-use crate::types::TypeDescription;
-use crate::value::object::ObjectRef;
-use crate::vm::context::ResolutionContext;
 
 #[derive(Clone, PartialEq)]
 pub struct FieldStorage<'gc> {

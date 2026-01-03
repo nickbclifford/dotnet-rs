@@ -1,17 +1,19 @@
 use crate::{
-    match_method,
-    resolve::Assemblies,
+    match_method, resolve::Assemblies,
+    types::{
+        TypeDescription, generics::{ConcreteType, GenericLookup},
+        members::{FieldDescription, MethodDescription},
+    },
     utils::decompose_type_source,
-    value::string::CLRString,
-    vm::{CallStack, GCHandle, StepResult},
+    value::{
+        object::{HeapStorage, Object, ObjectRef, Vector},
+        string::CLRString,
+    },
+    vm::{CallStack, GCHandle, StepResult, context::ResolutionContext},
+    vm_expect_stack, vm_pop, vm_push,
 };
 use dotnetdll::prelude::{BaseType, MethodType, TypeSource};
 use std::{fmt::Debug, hash::Hash};
-use crate::types::members::{FieldDescription, MethodDescription};
-use crate::types::generics::{ConcreteType, GenericLookup};
-use crate::types::TypeDescription;
-use crate::value::object::{HeapStorage, Object, ObjectRef, Vector};
-use crate::vm::context::ResolutionContext;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct RuntimeMethodSignature; // TODO

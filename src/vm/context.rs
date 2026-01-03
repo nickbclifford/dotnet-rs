@@ -1,11 +1,17 @@
+use crate::{
+    resolve::{Ancestor, Assemblies},
+    types::{
+        TypeDescription, generics::{ConcreteType, GenericLookup},
+        members::{FieldDescription, MethodDescription},
+    },
+    utils::{ResolutionS, decompose_type_source},
+    value::object::ObjectHandle,
+};
+use dotnetdll::prelude::{
+    BaseType, FieldSource, MemberType, MethodType, TypeSource, UserMethod, UserType,
+    ValueKind,
+};
 use std::collections::{HashSet, VecDeque};
-use dotnetdll::prelude::{BaseType, FieldSource, MemberType, MethodType, TypeSource, UserMethod, UserType, ValueKind};
-use crate::resolve::{Ancestor, Assemblies};
-use crate::utils::{decompose_type_source, ResolutionS};
-use crate::types::members::{FieldDescription, MethodDescription};
-use crate::types::generics::{ConcreteType, GenericLookup};
-use crate::types::TypeDescription;
-use crate::value::object::ObjectHandle;
 
 #[derive(Clone, Copy)]
 pub struct ResolutionContext<'a> {

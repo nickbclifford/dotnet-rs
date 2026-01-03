@@ -1,26 +1,22 @@
 use crate::{
     match_method,
+    types::{TypeDescription, generics::GenericLookup, members::MethodDescription},
     utils::decompose_type_source,
     value::{
-        layout::{type_layout, FieldLayoutManager, HasLayout},
+        StackValue, layout::{FieldLayoutManager, HasLayout, type_layout},
+        object::{CTSValue, HeapStorage, Object, ObjectRef, ValueType, Vector},
+        pointer::{ManagedPtr, UnmanagedPtr},
         string::CLRString,
-        StackValue,
     },
     vm::{
+        CallStack, GCHandle, MethodInfo, StepResult, context::ResolutionContext,
         exceptions::{ExceptionState, HandlerAddress, UnwindTarget},
         intrinsics::*,
-        CallStack, GCHandle, MethodInfo, StepResult,
     },
+    vm_expect_stack, vm_msg, vm_pop, vm_push,
 };
-
 use dotnetdll::prelude::*;
 use std::cmp::Ordering;
-use crate::types::members::MethodDescription;
-use crate::types::generics::GenericLookup;
-use crate::types::TypeDescription;
-use crate::value::object::{CTSValue, HeapStorage, Object, ObjectRef, ValueType, Vector};
-use crate::value::pointer::{ManagedPtr, UnmanagedPtr};
-use crate::vm::context::ResolutionContext;
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     fn find_generic_method(&self, source: &MethodSource) -> (MethodDescription, GenericLookup) {

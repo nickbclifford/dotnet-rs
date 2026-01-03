@@ -1,19 +1,14 @@
-use std::{
-    cmp::Reverse,
-    collections::HashMap,
-    fmt::{Debug, Formatter},
-    ops::Range,
-};
-
 use crate::{
-    utils::DebugStr,
-    vm::{CallStack, GCHandle, StepResult},
+    types::generics::ConcreteType, utils::DebugStr, value::object::ObjectRef,
+    vm::{CallStack, GCHandle, StepResult, context::ResolutionContext},
+    vm_push,
 };
 use dotnetdll::prelude::*;
 use gc_arena::Collect;
-use crate::types::generics::ConcreteType;
-use crate::value::object::ObjectRef;
-use crate::vm::context::ResolutionContext;
+use std::{
+    cmp::Reverse, collections::HashMap, fmt::{Debug, Formatter},
+    ops::Range,
+};
 
 /// Represents the location of an exception handler within the call stack.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Collect)]

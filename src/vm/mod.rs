@@ -1,24 +1,24 @@
-use crate::resolve::Assemblies;
-
+use crate::{
+    resolve::Assemblies, types::{generics::GenericLookup, members::MethodDescription},
+};
 use dotnetdll::prelude::*;
-use gc_arena::{unsafe_empty_collect, Collect};
+use gc_arena::{Collect, unsafe_empty_collect};
 use std::rc::Rc;
-use context::ResolutionContext;
 
-#[macro_use]
-mod macros;
+pub mod context;
 mod exceptions;
 mod executor;
 mod instructions;
 pub(crate) mod intrinsics;
+#[macro_use]
+mod macros;
 mod pinvoke;
 mod stack;
-pub mod context;
 
 pub use executor::*;
 pub use stack::*;
-use crate::types::members::MethodDescription;
-use crate::types::generics::GenericLookup;
+
+use context::ResolutionContext;
 
 // I.12.3.2
 #[derive(Clone)]

@@ -1,31 +1,28 @@
 use crate::{
     resolve::Assemblies,
-    utils::{decompose_type_source, ResolutionS},
+    types::{
+        TypeDescription, generics::{ConcreteType, GenericLookup},
+        members::{FieldDescription, MethodDescription},
+    },
+    utils::{ResolutionS, decompose_type_source},
     value::{
-        storage::StaticStorageManager,
         StackValue,
+        object::{HeapStorage, Object as ObjectInstance, ObjectPtr, ObjectRef},
+        storage::StaticStorageManager,
     },
     vm::{
-        exceptions::ExceptionState, intrinsics::reflection::RuntimeType, pinvoke::NativeLibraries,
-        MethodInfo, MethodState, StepResult,
+        GCHandleType, MethodInfo, MethodState, StepResult, context::ResolutionContext,
+        exceptions::ExceptionState, intrinsics::reflection::RuntimeType,
+        pinvoke::NativeLibraries,
     },
 };
-
 use dotnetdll::prelude::*;
-use gc_arena::{lock::RefLock, Arena, Collect, Collection, Gc, Mutation, Rootable};
+use gc_arena::{Arena, Collect, Collection, Gc, Mutation, Rootable, lock::RefLock};
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
-    fmt::Debug,
-    fs::OpenOptions,
-    io::Write,
+    fmt::Debug, fs::OpenOptions, io::Write,
 };
-use crate::types::members::{FieldDescription, MethodDescription};
-use crate::types::generics::{ConcreteType, GenericLookup};
-use crate::types::TypeDescription;
-use crate::value::object::{HeapStorage, Object as ObjectInstance, ObjectPtr, ObjectRef};
-use crate::vm::context::ResolutionContext;
-use crate::vm::GCHandleType;
 
 #[derive(Collect)]
 #[collect(no_drop)]

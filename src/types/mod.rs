@@ -1,13 +1,15 @@
-use std::fmt::{Debug, Formatter};
-use std::hash::{Hash, Hasher};
+use crate::{
+    types::members::MethodDescription, utils::ResolutionS, vm::context::ResolutionContext,
+};
 use dotnetdll::prelude::{MemberType, ResolvedDebug, TypeDefinition, TypeSource};
 use gc_arena::{Collect, unsafe_empty_collect};
-use crate::types::members::MethodDescription;
-use crate::utils::ResolutionS;
-use crate::vm::context::ResolutionContext;
+use std::{
+    fmt::{Debug, Formatter},
+    hash::{Hash, Hasher},
+};
 
-pub mod members;
 pub mod generics;
+pub mod members;
 
 #[derive(Clone, Copy)]
 pub struct TypeDescription {

@@ -1,10 +1,12 @@
-use dotnet_rs::utils::static_res_from_file;
-use dotnet_rs::{resolve, vm};
+use dotnet_rs::{
+    resolve, types::{TypeDescription, members::MethodDescription},
+    utils::static_res_from_file, vm,
+};
 use dotnetdll::prelude::*;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use dotnet_rs::types::members::MethodDescription;
-use dotnet_rs::types::TypeDescription;
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 pub struct TestHarness {
     pub assemblies: &'static resolve::Assemblies,

@@ -1,12 +1,8 @@
-use crate::vm::GCHandle;
-
-use crate::types::TypeDescription;
+use crate::{types::TypeDescription, vm::{GCHandle, context::ResolutionContext}};
 use dotnetdll::prelude::*;
-use gc_arena::{lock::RefLock, Collect, Collection, Gc};
+use gc_arena::{Collect, Collection, Gc, lock::RefLock};
 use std::{
-    cmp::Ordering,
-    fmt::Debug,
-    ops::{Add, BitAnd, BitOr, BitXor, Mul, Neg, Not, Shl, Sub},
+    cmp::Ordering, fmt::Debug, ops::{Add, BitAnd, BitOr, BitXor, Mul, Neg, Not, Shl, Sub},
 };
 
 pub mod layout;
@@ -15,7 +11,6 @@ pub mod pointer;
 pub mod storage;
 pub mod string;
 
-use crate::vm::context::ResolutionContext;
 use object::{HeapStorage, Object, ObjectHandle, ObjectRef};
 use pointer::{ManagedPtr, UnmanagedPtr};
 use string::CLRString;

@@ -1,13 +1,9 @@
 use dotnetdll::prelude::*;
+use gc_arena::{Collect, unsafe_empty_collect};
 use std::{
     fmt::{Debug, Formatter},
-    hash::Hash,
-    io::Read,
-    ops::Deref,
-    path::{Path, PathBuf},
+    hash::Hash, io::Read, ops::Deref, path::{Path, PathBuf},
 };
-
-use gc_arena::{unsafe_empty_collect, Collect};
 
 #[derive(Clone, Copy)]
 pub struct ResolutionS(pub &'static Resolution<'static>);

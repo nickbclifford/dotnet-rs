@@ -1,19 +1,20 @@
 use crate::{
+    types::{
+        generics::{ConcreteType, GenericLookup},
+        members::MethodDescription,
+    },
     utils::decompose_type_source,
     value::{
-        layout::{FieldLayoutManager, LayoutManager, Scalar},
+        StackValue, layout::{FieldLayoutManager, LayoutManager, Scalar},
         object::Object,
-        StackValue,
     },
-    vm::{context::ResolutionContext, CallStack, GCHandle},
+    vm::{CallStack, GCHandle, context::ResolutionContext},
 };
 use dotnetdll::prelude::*;
-use gc_arena::{unsafe_empty_collect, Collect};
+use gc_arena::{Collect, unsafe_empty_collect};
 use libffi::middle::*;
 use libloading::{Library, Symbol};
 use std::{collections::HashMap, ffi::c_void, path::PathBuf};
-use crate::types::members::MethodDescription;
-use crate::types::generics::{ConcreteType, GenericLookup};
 
 pub static mut LAST_ERROR: i32 = 0;
 
@@ -70,17 +71,16 @@ fn layout_to_ffi(l: LayoutManager) -> Type {
         }
         LayoutManager::ArrayLayoutManager(_) => todo!("marshalling not yet supported for arrays"),
         LayoutManager::Scalar(s) => {
-            use Scalar::*;
             match s {
-                Int8 => Type::i8(),
-                Int16 => Type::i16(),
-                Int32 => Type::i32(),
-                Int64 => Type::i64(),
-                ObjectRef => todo!("marshalling not yet supported for native object refs"),
-                NativeInt => Type::isize(),
-                Float32 => Type::f32(),
-                Float64 => Type::f64(),
-                ManagedPtr => Type::pointer(),
+                Scalar::Int8 => Type::i8(),
+                Scalar::Int16 => Type::i16(),
+                Scalar::Int32 => Type::i32(),
+                Scalar::Int64 => Type::i64(),
+                Scalar::ObjectRef => todo!("marshalling not yet supported for native object refs"),
+                Scalar::NativeInt => Type::isize(),
+                Scalar::Float32 => Type::f32(),
+                Scalar::Float64 => Type::f64(),
+                Scalar::ManagedPtr => Type::pointer(),
             }
         }
     }

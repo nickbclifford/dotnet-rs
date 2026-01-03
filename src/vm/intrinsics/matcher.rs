@@ -1,6 +1,8 @@
-use crate::utils::decompose_type_source;
+use crate::{
+    types::members::{FieldDescription, MethodDescription},
+    utils::decompose_type_source,
+};
 use dotnetdll::prelude::*;
-use crate::types::members::{FieldDescription, MethodDescription};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)]

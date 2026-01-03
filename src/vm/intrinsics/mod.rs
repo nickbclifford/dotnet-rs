@@ -1,31 +1,29 @@
-pub mod matcher;
-pub mod reflection;
-
 use crate::{
     any_match_field, any_match_method, match_field, match_method,
     resolve::SUPPORT_ASSEMBLY,
+    types::{
+        generics::{ConcreteType, GenericLookup},
+        members::{FieldDescription, MethodDescription},
+    },
     utils::decompose_type_source,
     value::{
-        layout::*,
-        string::{string_intrinsic_call, with_string, CLRString},
-        StackValue,
+        StackValue, layout::*, object::{HeapStorage, Object, ObjectRef},
+        pointer::ManagedPtr, string::{CLRString, string_intrinsic_call, with_string},
     },
     vm::{
+        CallStack, GCHandle, GCHandleType, MethodInfo, StepResult,
+        context::ResolutionContext,
         intrinsics::reflection::{
             runtime_field_info_intrinsic_call, runtime_method_info_intrinsic_call,
             runtime_type_intrinsic_call,
         },
-        CallStack, GCHandle, MethodInfo, StepResult,
     },
+    vm_expect_stack, vm_msg, vm_pop, vm_push,
 };
-
 use dotnetdll::prelude::*;
-use crate::types::members::{FieldDescription, MethodDescription};
-use crate::types::generics::{ConcreteType, GenericLookup};
-use crate::value::object::{HeapStorage, Object, ObjectRef};
-use crate::value::pointer::ManagedPtr;
-use crate::vm::context::ResolutionContext;
-use crate::vm::GCHandleType;
+
+pub mod matcher;
+pub mod reflection;
 
 pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttribute";
 

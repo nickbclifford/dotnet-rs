@@ -1,8 +1,9 @@
-use std::fmt::{Debug, Formatter};
-use std::hash::{Hash, Hasher};
+use crate::{types::TypeDescription, utils::ResolutionS};
 use dotnetdll::prelude::{Field, Method, ResolvedDebug};
-use crate::types::TypeDescription;
-use crate::utils::ResolutionS;
+use std::{
+    fmt::{Debug, Formatter},
+    hash::{Hash, Hasher},
+};
 
 #[derive(Clone, Copy)]
 pub struct MethodDescription {

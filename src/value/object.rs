@@ -1,20 +1,20 @@
-use std::cmp::Ordering;
-use std::collections::HashSet;
-use std::fmt::{Debug, Formatter};
-use std::hash::{Hash, Hasher};
-use std::marker::PhantomData;
-use gc_arena::lock::RefLock;
-use gc_arena::{Collect, Collection, Gc};
-use crate::utils::DebugStr;
-use crate::value::StackValue;
-use crate::types::TypeDescription;
-use crate::types::generics::ConcreteType;
-use crate::value::layout::{ArrayLayoutManager, HasLayout, LayoutManager, Scalar};
-use crate::value::pointer::{ManagedPtr, UnmanagedPtr};
-use crate::value::storage::FieldStorage;
-use crate::value::string::CLRString;
-use crate::vm::context::ResolutionContext;
-use crate::vm::GCHandle;
+use crate::{
+    types::{TypeDescription, generics::ConcreteType},
+    utils::DebugStr,
+    value::{
+        StackValue, layout::{ArrayLayoutManager, HasLayout, LayoutManager, Scalar},
+        pointer::{ManagedPtr, UnmanagedPtr},
+        storage::FieldStorage, string::CLRString,
+    },
+    vm::{GCHandle, context::ResolutionContext},
+    vm_expect_stack,
+};
+use gc_arena::{Collect, Collection, Gc, lock::RefLock};
+use std::{
+    cmp::Ordering, collections::HashSet, fmt::{Debug, Formatter},
+    hash::{Hash, Hasher},
+    marker::PhantomData,
+};
 
 type ObjectInner<'gc> = RefLock<HeapStorage<'gc>>;
 pub type ObjectPtr = *const ObjectInner<'static>;

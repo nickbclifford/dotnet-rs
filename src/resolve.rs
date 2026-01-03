@@ -1,11 +1,13 @@
-use crate::utils::{decompose_type_source, static_res_from_file, ResolutionS};
-
+use crate::{
+    types::{
+        TypeDescription, generics::{ConcreteType, GenericLookup},
+        members::{FieldDescription, MethodDescription},
+    },
+    utils::{ResolutionS, decompose_type_source, static_res_from_file},
+};
 use dotnetdll::prelude::*;
-use gc_arena::{unsafe_empty_collect, Collect};
+use gc_arena::{Collect, unsafe_empty_collect};
 use std::{collections::HashMap, error::Error, path::PathBuf, sync::RwLock};
-use crate::types::members::{FieldDescription, MethodDescription};
-use crate::types::generics::{ConcreteType, GenericLookup};
-use crate::types::TypeDescription;
 
 pub struct Assemblies {
     assembly_root: String,

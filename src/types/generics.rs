@@ -1,8 +1,9 @@
-use std::fmt::{Debug, Formatter};
+use crate::{types::TypeDescription, utils::ResolutionS};
+use dotnetdll::prelude::{
+    BaseType, MethodType, Resolution, ResolvedDebug, TypeSource, UserType,
+};
 use gc_arena::{Collect, Collection};
-use dotnetdll::prelude::{BaseType, MethodType, Resolution, ResolvedDebug, TypeSource, UserType};
-use crate::types::TypeDescription;
-use crate::utils::ResolutionS;
+use std::fmt::{Debug, Formatter};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ConcreteType {

@@ -1,10 +1,9 @@
 use crate::{
-    match_method,
-    value::StackValue,
-    vm::{intrinsics::span_to_slice, CallStack, GCHandle, StepResult},
+    match_method, value::StackValue,
+    vm::{CallStack, GCHandle, StepResult, intrinsics::span_to_slice},
+    vm_expect_stack, vm_pop, vm_push,
 };
-
-use gc_arena::{unsafe_empty_collect, Collect};
+use gc_arena::{Collect, unsafe_empty_collect};
 use std::{
     fmt::{Debug, Formatter},
     ops::Deref,

@@ -1,9 +1,6 @@
-use std::cmp::Ordering;
-use std::collections::HashSet;
-use std::fmt::{Debug, Formatter};
-use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};
-use crate::types::TypeDescription;
-use crate::value::object::{ObjectHandle, ObjectRef};
+use crate::{types::TypeDescription, value::object::{ObjectHandle, ObjectRef}};
+use gc_arena::{Collect, Collection, Gc, unsafe_empty_collect};
+use std::{cmp::Ordering, collections::HashSet, fmt::{Debug, Formatter}};
 
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 pub struct UnmanagedPtr(pub *mut u8);
