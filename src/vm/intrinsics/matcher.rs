@@ -6,7 +6,14 @@ use dotnetdll::prelude::*;
 #[allow(dead_code)]
 pub enum TypeMatcher {
     String,
+    Int8,
+    UInt8,
+    Int16,
+    UInt16,
     Int32,
+    UInt32,
+    Int64,
+    UInt64,
     NativeInt,
     Object,
     Bool,
@@ -36,7 +43,14 @@ impl TypeMatcher {
         match (self, t) {
             (TypeMatcher::Any, _) => true,
             (TypeMatcher::String, MethodType::Base(b)) => matches!(**b, BaseType::String),
+            (TypeMatcher::Int8, MethodType::Base(b)) => matches!(**b, BaseType::Int8),
+            (TypeMatcher::UInt8, MethodType::Base(b)) => matches!(**b, BaseType::UInt8),
+            (TypeMatcher::Int16, MethodType::Base(b)) => matches!(**b, BaseType::Int16),
+            (TypeMatcher::UInt16, MethodType::Base(b)) => matches!(**b, BaseType::UInt16),
             (TypeMatcher::Int32, MethodType::Base(b)) => matches!(**b, BaseType::Int32),
+            (TypeMatcher::UInt32, MethodType::Base(b)) => matches!(**b, BaseType::UInt32),
+            (TypeMatcher::Int64, MethodType::Base(b)) => matches!(**b, BaseType::Int64),
+            (TypeMatcher::UInt64, MethodType::Base(b)) => matches!(**b, BaseType::UInt64),
             (TypeMatcher::NativeInt, MethodType::Base(b)) => {
                 matches!(**b, BaseType::IntPtr | BaseType::UIntPtr)
             }
@@ -125,7 +139,14 @@ pub fn matches_field(
 #[macro_export]
 macro_rules! parse_type {
     (string) => { $crate::vm::intrinsics::matcher::TypeMatcher::String };
+    (sbyte) => { $crate::vm::intrinsics::matcher::TypeMatcher::Int8 };
+    (byte) => { $crate::vm::intrinsics::matcher::TypeMatcher::UInt8 };
+    (short) => { $crate::vm::intrinsics::matcher::TypeMatcher::Int16 };
+    (ushort) => { $crate::vm::intrinsics::matcher::TypeMatcher::UInt16 };
     (int) => { $crate::vm::intrinsics::matcher::TypeMatcher::Int32 };
+    (uint) => { $crate::vm::intrinsics::matcher::TypeMatcher::UInt32 };
+    (long) => { $crate::vm::intrinsics::matcher::TypeMatcher::Int64 };
+    (ulong) => { $crate::vm::intrinsics::matcher::TypeMatcher::UInt64 };
     (nint) => { $crate::vm::intrinsics::matcher::TypeMatcher::NativeInt };
     (object) => { $crate::vm::intrinsics::matcher::TypeMatcher::Object };
     (bool) => { $crate::vm::intrinsics::matcher::TypeMatcher::Bool };
@@ -260,11 +281,53 @@ macro_rules! __munch_types {
     ([ $($acc:expr,)* ] string) => {
         $crate::__munch_types!([ $($acc,)* $crate::parse_type!(string), ])
     };
+    ([ $($acc:expr,)* ] sbyte , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(sbyte), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] sbyte) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(sbyte), ])
+    };
+    ([ $($acc:expr,)* ] byte , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(byte), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] byte) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(byte), ])
+    };
+    ([ $($acc:expr,)* ] short , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(short), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] short) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(short), ])
+    };
+    ([ $($acc:expr,)* ] ushort , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(ushort), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] ushort) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(ushort), ])
+    };
     ([ $($acc:expr,)* ] int , $($rest:tt)*) => {
         $crate::__munch_types!([ $($acc,)* $crate::parse_type!(int), ] $($rest)*)
     };
     ([ $($acc:expr,)* ] int) => {
         $crate::__munch_types!([ $($acc,)* $crate::parse_type!(int), ])
+    };
+    ([ $($acc:expr,)* ] uint , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(uint), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] uint) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(uint), ])
+    };
+    ([ $($acc:expr,)* ] long , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(long), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] long) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(long), ])
+    };
+    ([ $($acc:expr,)* ] ulong , $($rest:tt)*) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(ulong), ] $($rest)*)
+    };
+    ([ $($acc:expr,)* ] ulong) => {
+        $crate::__munch_types!([ $($acc,)* $crate::parse_type!(ulong), ])
     };
     ([ $($acc:expr,)* ] nint , $($rest:tt)*) => {
         $crate::__munch_types!([ $($acc,)* $crate::parse_type!(nint), ] $($rest)*)
