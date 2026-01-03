@@ -1,12 +1,14 @@
 use super::{
-    ConcreteType, FieldDescription, GenericLookup, ManagedPtr, ObjectRef, ResolutionContext,
-    TypeDescription,
+    ConcreteType, GenericLookup, ResolutionContext,
 };
 
 use dotnetdll::prelude::*;
 use enum_dispatch::enum_dispatch;
 use gc_arena::{Collect, Collection};
 use std::{collections::HashMap, collections::HashSet, mem::size_of, ops::Range};
+use crate::value::description::{FieldDescription, TypeDescription};
+use crate::value::object::ObjectRef;
+use crate::value::pointer::ManagedPtr;
 
 #[enum_dispatch]
 pub trait HasLayout {

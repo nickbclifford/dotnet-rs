@@ -2,9 +2,8 @@ use crate::{
     resolve::Assemblies,
     utils::{decompose_type_source, ResolutionS},
     value::{
-        storage::StaticStorageManager, ConcreteType, FieldDescription, GCHandleType, GenericLookup,
-        HeapStorage, MethodDescription, Object as ObjectInstance, ObjectPtr, ObjectRef,
-        ResolutionContext, StackValue, TypeDescription,
+        storage::StaticStorageManager, ConcreteType, GCHandleType, GenericLookup,
+        ResolutionContext, StackValue,
     },
     vm::{
         exceptions::ExceptionState, intrinsics::reflection::RuntimeType, pinvoke::NativeLibraries,
@@ -21,6 +20,8 @@ use std::{
     fs::OpenOptions,
     io::Write,
 };
+use crate::value::description::{FieldDescription, MethodDescription, TypeDescription};
+use crate::value::object::{HeapStorage, Object as ObjectInstance, ObjectPtr, ObjectRef};
 
 #[derive(Collect)]
 #[collect(no_drop)]

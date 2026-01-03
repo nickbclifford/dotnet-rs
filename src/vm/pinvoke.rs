@@ -2,7 +2,7 @@ use crate::{
     utils::decompose_type_source,
     value::{
         layout::{FieldLayoutManager, LayoutManager, Scalar},
-        ConcreteType, GenericLookup, MethodDescription, Object, ResolutionContext, StackValue,
+        ConcreteType, GenericLookup, ResolutionContext, StackValue,
     },
     vm::{CallStack, GCHandle},
 };
@@ -12,6 +12,8 @@ use gc_arena::{unsafe_empty_collect, Collect};
 use libffi::middle::*;
 use libloading::{Library, Symbol};
 use std::{collections::HashMap, ffi::c_void, path::PathBuf};
+use crate::value::description::MethodDescription;
+use crate::value::object::Object;
 
 pub static mut LAST_ERROR: i32 = 0;
 

@@ -1,28 +1,30 @@
 use crate::{
     resolve::{Ancestor, Assemblies},
-    utils::{decompose_type_source, DebugStr, ResolutionS},
-    value::string::CLRString,
+    utils::{decompose_type_source, ResolutionS},
     vm::GCHandle,
 };
 
+use description::{FieldDescription, MethodDescription, TypeDescription};
 use dotnetdll::prelude::*;
-use gc_arena::{lock::RefLock, unsafe_empty_collect, Collect, Collection, Gc};
+use gc_arena::{lock::RefLock, Collect, Collection, Gc};
 use std::{
     cmp::Ordering,
     collections::{HashSet, VecDeque},
     fmt::{Debug, Formatter},
-    hash::{Hash, Hasher},
-    marker::PhantomData,
-    mem::size_of,
+    hash::Hash,
+    ops::{Add, BitAnd, BitOr, BitXor, Mul, Neg, Not, Shl, Sub},
 };
 
+pub mod description;
 pub mod layout;
-use layout::*;
-
+pub mod object;
+pub mod pointer;
 pub mod storage;
-use storage::FieldStorage;
-
 pub mod string;
+
+use object::{HeapStorage, Object, ObjectHandle, ObjectRef};
+use pointer::{ManagedPtr, UnmanagedPtr};
+use string::CLRString;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Collect)]
 #[collect(require_static)]
@@ -158,7 +160,7 @@ impl<'a> ResolutionContext<'a> {
     }
 
     pub fn get_heap_description(&self, object: ObjectHandle) -> TypeDescription {
-        use HeapStorage::*;
+        use object::HeapStorage::*;
         match &*object.as_ref().borrow() {
             Obj(o) => o.description,
             Vec(_) => self.assemblies.corlib_type("System.Array"),
@@ -230,7 +232,7 @@ impl<'a> ResolutionContext<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum StackValue<'gc> {
     Int32(i32),
     Int64(i64),
@@ -318,12 +320,268 @@ impl<'gc> StackValue<'gc> {
             v => panic!("expected pointer on stack, received {:?}", v),
         }
     }
+
+    pub fn as_i32(&self) -> i32 {
+        match self {
+            Self::Int32(i) => *i,
+            v => panic!("expected Int32, received {:?}", v),
+        }
+    }
+
+    pub fn as_i64(&self) -> i64 {
+        match self {
+            Self::Int64(i) => *i,
+            v => panic!("expected Int64, received {:?}", v),
+        }
+    }
+
+    pub fn as_f64(&self) -> f64 {
+        match self {
+            Self::NativeFloat(f) => *f,
+            v => panic!("expected NativeFloat, received {:?}", v),
+        }
+    }
+
+    pub fn as_isize(&self) -> isize {
+        match self {
+            Self::NativeInt(i) => *i,
+            v => panic!("expected NativeInt, received {:?}", v),
+        }
+    }
+
+    pub fn as_object_ref(&self) -> ObjectRef<'gc> {
+        match self {
+            Self::ObjectRef(o) => *o,
+            v => panic!("expected ObjectRef, received {:?}", v),
+        }
+    }
+
+    pub fn is_zero(&self) -> bool {
+        matches!(self, Self::Int32(0) | Self::Int64(0) | Self::NativeInt(0))
+    }
+
+    pub fn shr(self, other: Self, sgn: NumberSign) -> Self {
+        use NumberSign::*;
+        use StackValue::*;
+        let amount = match other {
+            Int32(i) => i as u32,
+            NativeInt(i) => i as u32,
+            _ => panic!("invalid shift amount"),
+        };
+        match (self, sgn) {
+            (Int32(i), Signed) => Int32(i >> amount),
+            (Int32(i), Unsigned) => Int32(((i as u32) >> amount) as i32),
+            (Int64(i), Signed) => Int64(i >> amount),
+            (Int64(i), Unsigned) => Int64(((i as u64) >> amount) as i64),
+            (NativeInt(i), Signed) => NativeInt(i >> amount),
+            (NativeInt(i), Unsigned) => NativeInt(((i as usize) >> amount) as isize),
+            (v, _) => panic!("invalid shift target: {:?}", v),
+        }
+    }
+
+    pub fn div(self, other: Self, sgn: NumberSign) -> Result<Self, &'static str> {
+        use NumberSign::*;
+        use StackValue::*;
+        if other.is_zero() {
+            return Err("System.DivideByZeroException");
+        }
+        match (self, other, sgn) {
+            (Int32(l), Int32(r), Signed) => Ok(Int32(l / r)),
+            (Int32(l), Int32(r), Unsigned) => Ok(Int32(((l as u32) / (r as u32)) as i32)),
+            (Int64(l), Int64(r), Signed) => Ok(Int64(l / r)),
+            (Int64(l), Int64(r), Unsigned) => Ok(Int64(((l as u64) / (r as u64)) as i64)),
+            (NativeInt(l), NativeInt(r), Signed) => Ok(NativeInt(l / r)),
+            (NativeInt(l), NativeInt(r), Unsigned) => {
+                Ok(NativeInt(((l as usize) / (r as usize)) as isize))
+            }
+            (NativeFloat(l), NativeFloat(r), _) => Ok(NativeFloat(l / r)),
+            (l, r, _) => panic!("invalid types for div: {:?}, {:?}", l, r),
+        }
+    }
+
+    pub fn rem(self, other: Self, sgn: NumberSign) -> Result<Self, &'static str> {
+        use NumberSign::*;
+        use StackValue::*;
+        if other.is_zero() {
+            return Err("System.DivideByZeroException");
+        }
+        match (self, other, sgn) {
+            (Int32(l), Int32(r), Signed) => Ok(Int32(l % r)),
+            (Int32(l), Int32(r), Unsigned) => Ok(Int32(((l as u32) % (r as u32)) as i32)),
+            (Int64(l), Int64(r), Signed) => Ok(Int64(l % r)),
+            (Int64(l), Int64(r), Unsigned) => Ok(Int64(((l as u64) % (r as u64)) as i64)),
+            (NativeInt(l), NativeInt(r), Signed) => Ok(NativeInt(l % r)),
+            (NativeInt(l), NativeInt(r), Unsigned) => {
+                Ok(NativeInt(((l as usize) % (r as usize)) as isize))
+            }
+            (NativeFloat(l), NativeFloat(r), _) => Ok(NativeFloat(l % r)),
+            (l, r, _) => panic!("invalid types for rem: {:?}, {:?}", l, r),
+        }
+    }
+
+    pub fn compare(&self, other: &Self, sgn: NumberSign) -> Option<Ordering> {
+        use NumberSign::*;
+        use StackValue::*;
+        match (self, other, sgn) {
+            (Int32(l), Int32(r), Unsigned) => (*l as u32).partial_cmp(&(*r as u32)),
+            (Int32(l), NativeInt(r), Unsigned) => (*l as u32 as usize).partial_cmp(&(*r as usize)),
+            (NativeInt(l), Int32(r), Unsigned) => (*l as usize).partial_cmp(&(*r as u32 as usize)),
+            (NativeInt(l), NativeInt(r), Unsigned) => (*l as usize).partial_cmp(&(*r as usize)),
+            (Int64(l), Int64(r), Unsigned) => (*l as u64).partial_cmp(&(*r as u64)),
+            _ => self.partial_cmp(other),
+        }
+    }
+
+    pub fn checked_add(self, other: Self, sgn: NumberSign) -> Result<Self, &'static str> {
+        use NumberSign::*;
+        use StackValue::*;
+        match (self, other, sgn) {
+            (Int32(l), Int32(r), Signed) => l
+                .checked_add(r)
+                .map(Int32)
+                .ok_or("System.OverflowException"),
+            (Int32(l), Int32(r), Unsigned) => (l as u32)
+                .checked_add(r as u32)
+                .map(|v| Int32(v as i32))
+                .ok_or("System.OverflowException"),
+            (Int64(l), Int64(r), Signed) => l
+                .checked_add(r)
+                .map(Int64)
+                .ok_or("System.OverflowException"),
+            (Int64(l), Int64(r), Unsigned) => (l as u64)
+                .checked_add(r as u64)
+                .map(|v| Int64(v as i64))
+                .ok_or("System.OverflowException"),
+            (NativeInt(l), NativeInt(r), Signed) => l
+                .checked_add(r)
+                .map(NativeInt)
+                .ok_or("System.OverflowException"),
+            (NativeInt(l), NativeInt(r), Unsigned) => (l as usize)
+                .checked_add(r as usize)
+                .map(|v| NativeInt(v as isize))
+                .ok_or("System.OverflowException"),
+            (l, r, _) => panic!("invalid types for checked_add: {:?}, {:?}", l, r),
+        }
+    }
+
+    pub fn checked_sub(self, other: Self, sgn: NumberSign) -> Result<Self, &'static str> {
+        use NumberSign::*;
+        use StackValue::*;
+        match (self, other, sgn) {
+            (Int32(l), Int32(r), Signed) => l
+                .checked_sub(r)
+                .map(Int32)
+                .ok_or("System.OverflowException"),
+            (Int32(l), Int32(r), Unsigned) => (l as u32)
+                .checked_sub(r as u32)
+                .map(|v| Int32(v as i32))
+                .ok_or("System.OverflowException"),
+            (Int64(l), Int64(r), Signed) => l
+                .checked_sub(r)
+                .map(Int64)
+                .ok_or("System.OverflowException"),
+            (Int64(l), Int64(r), Unsigned) => (l as u64)
+                .checked_sub(r as u64)
+                .map(|v| Int64(v as i64))
+                .ok_or("System.OverflowException"),
+            (NativeInt(l), NativeInt(r), Signed) => l
+                .checked_sub(r)
+                .map(NativeInt)
+                .ok_or("System.OverflowException"),
+            (NativeInt(l), NativeInt(r), Unsigned) => (l as usize)
+                .checked_sub(r as usize)
+                .map(|v| NativeInt(v as isize))
+                .ok_or("System.OverflowException"),
+            (l, r, _) => panic!("invalid types for checked_sub: {:?}, {:?}", l, r),
+        }
+    }
+
+    pub fn checked_mul(self, other: Self, sgn: NumberSign) -> Result<Self, &'static str> {
+        use NumberSign::*;
+        use StackValue::*;
+        match (self, other, sgn) {
+            (Int32(l), Int32(r), Signed) => l
+                .checked_mul(r)
+                .map(Int32)
+                .ok_or("System.OverflowException"),
+            (Int32(l), Int32(r), Unsigned) => (l as u32)
+                .checked_mul(r as u32)
+                .map(|v| Int32(v as i32))
+                .ok_or("System.OverflowException"),
+            (Int64(l), Int64(r), Signed) => l
+                .checked_mul(r)
+                .map(Int64)
+                .ok_or("System.OverflowException"),
+            (Int64(l), Int64(r), Unsigned) => (l as u64)
+                .checked_mul(r as u64)
+                .map(|v| Int64(v as i64))
+                .ok_or("System.OverflowException"),
+            (NativeInt(l), NativeInt(r), Signed) => l
+                .checked_mul(r)
+                .map(NativeInt)
+                .ok_or("System.OverflowException"),
+            (NativeInt(l), NativeInt(r), Unsigned) => (l as usize)
+                .checked_mul(r as usize)
+                .map(|v| NativeInt(v as isize))
+                .ok_or("System.OverflowException"),
+            (l, r, _) => panic!("invalid types for checked_mul: {:?}, {:?}", l, r),
+        }
+    }
+
+    pub unsafe fn load(ptr: *const u8, t: LoadType) -> Self {
+        match t {
+            LoadType::Int8 => Self::Int32(*(ptr as *const i8) as i32),
+            LoadType::UInt8 => Self::Int32(*ptr as i32),
+            LoadType::Int16 => Self::Int32(*(ptr as *const i16) as i32),
+            LoadType::UInt16 => Self::Int32(*(ptr as *const u16) as i32),
+            LoadType::Int32 => Self::Int32(*(ptr as *const i32)),
+            LoadType::UInt32 => Self::Int32(*(ptr as *const u32) as i32),
+            LoadType::Int64 => Self::Int64(*(ptr as *const i64)),
+            LoadType::Float32 => Self::NativeFloat(*(ptr as *const f32) as f64),
+            LoadType::Float64 => Self::NativeFloat(*(ptr as *const f64)),
+            LoadType::IntPtr => Self::NativeInt(*(ptr as *const isize)),
+            LoadType::Object => Self::ObjectRef(*(ptr as *const ObjectRef)),
+        }
+    }
+
+    pub unsafe fn store(self, ptr: *mut u8, t: StoreType) {
+        match t {
+            StoreType::Int8 => *(ptr as *mut i8) = self.as_i32() as i8,
+            StoreType::Int16 => *(ptr as *mut i16) = self.as_i32() as i16,
+            StoreType::Int32 => *(ptr as *mut i32) = self.as_i32(),
+            StoreType::Int64 => *(ptr as *mut i64) = self.as_i64(),
+            StoreType::Float32 => *(ptr as *mut f32) = self.as_f64() as f32,
+            StoreType::Float64 => *(ptr as *mut f64) = self.as_f64(),
+            StoreType::IntPtr => *(ptr as *mut isize) = self.as_isize(),
+            StoreType::Object => *(ptr as *mut ObjectRef) = self.as_object_ref(),
+        }
+    }
 }
 impl Default for StackValue<'_> {
     fn default() -> Self {
         Self::null()
     }
 }
+impl<'gc> PartialEq for StackValue<'gc> {
+    fn eq(&self, other: &Self) -> bool {
+        use StackValue::*;
+        match (self, other) {
+            (Int32(l), Int32(r)) => l == r,
+            (Int32(l), NativeInt(r)) => (*l as isize) == *r,
+            (Int64(l), Int64(r)) => l == r,
+            (NativeInt(l), Int32(r)) => *l == (*r as isize),
+            (NativeInt(l), NativeInt(r)) => l == r,
+            (NativeFloat(l), NativeFloat(r)) => l == r,
+            (ManagedPtr(l), ManagedPtr(r)) => l == r,
+            (ManagedPtr(l), NativeInt(r)) => (l.value as isize) == *r,
+            (NativeInt(l), ManagedPtr(r)) => *l == (r.value as isize),
+            (ObjectRef(l), ObjectRef(r)) => l == r,
+            (ValueType(l), ValueType(r)) => l == r,
+            _ => false,
+        }
+    }
+}
+
 impl PartialOrd for StackValue<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         use StackValue::*;
@@ -335,923 +593,162 @@ impl PartialOrd for StackValue<'_> {
             (NativeInt(l), NativeInt(r)) => l.partial_cmp(r),
             (NativeFloat(l), NativeFloat(r)) => l.partial_cmp(r),
             (ManagedPtr(l), ManagedPtr(r)) => l.partial_cmp(r),
+            (ManagedPtr(l), NativeInt(r)) => (l.value as isize).partial_cmp(r),
+            (NativeInt(l), ManagedPtr(r)) => l.partial_cmp(&(r.value as isize)),
             (ObjectRef(l), ObjectRef(r)) => l.partial_cmp(r),
             _ => None,
         }
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
-pub struct UnmanagedPtr(pub *mut u8);
-#[derive(Copy, Clone)]
-pub struct ManagedPtr<'gc> {
-    pub value: *mut u8,
-    pub inner_type: TypeDescription,
-    pub owner: Option<ObjectHandle<'gc>>,
-    pub pinned: bool,
-}
-impl Debug for ManagedPtr<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "[{}] {:#?} (owner: {:?}, pinned: {})",
-            self.inner_type.type_name(),
-            self.value,
-            self.owner.map(Gc::as_ptr),
-            self.pinned
-        )
-    }
-}
-impl PartialEq for ManagedPtr<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
-    }
-}
-impl PartialOrd for ManagedPtr<'_> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.value.partial_cmp(&other.value)
-    }
-}
-impl<'gc> ManagedPtr<'gc> {
-    // Storage format: pointer (8) + TypeDescription (16) + ObjectRef (8) + pinned (1) = 33 bytes
-    // But we need to account for actual sizes, not hardcoded values
-    pub const SIZE: usize =
-        size_of::<*mut u8>() + size_of::<TypeDescription>() + ObjectRef::SIZE + 1;
-
-    pub fn new(
-        value: *mut u8,
-        inner_type: TypeDescription,
-        owner: Option<ObjectHandle<'gc>>,
-        pinned: bool,
-    ) -> Self {
-        Self {
-            value,
-            inner_type,
-            owner,
-            pinned,
-        }
-    }
-
-    pub fn read(source: &[u8]) -> Self {
-        // SAFETY: ManagedPtr should not actually be stored in object fields in most cases.
-        // This function exists for completeness but reading a ManagedPtr from storage
-        // that wasn't properly initialized will cause UB. The proper solution is to
-        // avoid storing ManagedPtr values entirely, as they should be stack-only.
-        //
-        // For now, we panic if we try to read from what looks like uninitialized storage.
-
-        // Check if the entire ManagedPtr storage appears to be zero-initialized
-        let expected_size =
-            size_of::<*mut u8>() + size_of::<TypeDescription>() + ObjectRef::SIZE + 1;
-        if source.len() < expected_size {
-            panic!("Attempted to read ManagedPtr from insufficiently sized storage");
-        }
-
-        // If all bytes are zero, this is likely uninitialized storage
-        if source[..expected_size].iter().all(|&b| b == 0) {
-            // This should never happen in correct code, so we panic rather than
-            // trying to create a "safe" dummy value
-            panic!("Attempted to read ManagedPtr from zero-initialized storage");
-        }
-
-        let mut value_bytes = [0u8; size_of::<*mut u8>()];
-        value_bytes.copy_from_slice(&source[0..size_of::<*mut u8>()]);
-        let value = usize::from_ne_bytes(value_bytes) as *mut u8;
-
-        let mut type_bytes = [0u8; size_of::<TypeDescription>()];
-        type_bytes.copy_from_slice(
-            &source[size_of::<*mut u8>()..(size_of::<*mut u8>() + size_of::<TypeDescription>())],
-        );
-        let inner_type: TypeDescription = unsafe { std::mem::transmute(type_bytes) };
-
-        let owner =
-            ObjectRef::read(&source[(size_of::<*mut u8>() + size_of::<TypeDescription>())..]).0;
-
-        let pinned =
-            source[size_of::<*mut u8>() + size_of::<TypeDescription>() + ObjectRef::SIZE] != 0;
-
-        Self {
-            value,
-            inner_type,
-            owner,
-            pinned,
-        }
-    }
-
-    pub fn write(&self, dest: &mut [u8]) {
-        let value_bytes = (self.value as usize).to_ne_bytes();
-        dest[0..size_of::<*mut u8>()].copy_from_slice(&value_bytes);
-
-        let type_bytes: [u8; size_of::<TypeDescription>()] =
-            unsafe { std::mem::transmute(self.inner_type) };
-        dest[size_of::<*mut u8>()..(size_of::<*mut u8>() + size_of::<TypeDescription>())]
-            .copy_from_slice(&type_bytes);
-
-        ObjectRef(self.owner)
-            .write(&mut dest[(size_of::<*mut u8>() + size_of::<TypeDescription>())..]);
-
-        dest[size_of::<*mut u8>() + size_of::<TypeDescription>() + ObjectRef::SIZE] =
-            if self.pinned { 1 } else { 0 };
-    }
-
-    pub fn map_value(self, transform: impl FnOnce(*mut u8) -> *mut u8) -> Self {
-        ManagedPtr {
-            value: transform(self.value),
-            inner_type: self.inner_type,
-            owner: self.owner,
-            pinned: self.pinned,
-        }
-    }
-}
-
-unsafe_empty_collect!(UnmanagedPtr);
-unsafe impl<'gc> Collect for ManagedPtr<'gc> {
-    fn trace(&self, cc: &Collection) {
-        if let Some(o) = self.owner {
-            o.trace(cc);
-        }
-    }
-}
-impl<'gc> ManagedPtr<'gc> {
-    pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
-        if let Some(owner) = self.owner {
-            let ptr = Gc::as_ptr(owner) as usize;
-            if visited.insert(ptr) {
-                Gc::resurrect(fc, owner);
-                owner.borrow().resurrect(fc, visited);
-            }
-        }
-    }
-}
-
-type ObjectInner<'gc> = RefLock<HeapStorage<'gc>>;
-pub type ObjectPtr = *const ObjectInner<'static>;
-pub type ObjectHandle<'gc> = Gc<'gc, ObjectInner<'gc>>;
-
-#[derive(Copy, Clone)]
-#[repr(transparent)]
-pub struct ObjectRef<'gc>(pub Option<ObjectHandle<'gc>>);
-unsafe impl<'gc> Collect for ObjectRef<'gc> {
-    fn trace(&self, cc: &Collection) {
-        if let Some(h) = self.0 {
-            h.trace(cc);
-        }
-    }
-}
-
-//noinspection RsAssertEqual
-// we assume this type is pointer-sized basically everywhere
-// dependency-wise everything guarantees it; this is just a sanity check for the implementation
-const _: () = assert!(ObjectRef::SIZE == size_of::<usize>());
-
-impl PartialEq for ObjectRef<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        match (self.0, other.0) {
-            (Some(l), Some(r)) => Gc::ptr_eq(l, r),
-            (None, None) => true,
-            _ => false,
-        }
-    }
-}
-impl PartialOrd for ObjectRef<'_> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match (self.0, other.0) {
-            (Some(l), Some(r)) => Gc::as_ptr(l).partial_cmp(&Gc::as_ptr(r)),
-            (None, None) => Some(Ordering::Equal),
-            (None, _) => Some(Ordering::Less),
-            (_, None) => Some(Ordering::Greater),
-        }
-    }
-}
-impl Eq for ObjectRef<'_> {}
-impl Hash for ObjectRef<'_> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        match self.0 {
-            Some(g) => Gc::as_ptr(g).hash(state),
-            None => 0usize.hash(state),
-        }
-    }
-}
-impl<'gc> ObjectRef<'gc> {
-    pub const SIZE: usize = size_of::<ObjectRef>();
-
-    pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
-        if let Some(handle) = self.0 {
-            let ptr = Gc::as_ptr(handle) as usize;
-            if visited.insert(ptr) {
-                Gc::resurrect(fc, handle);
-                handle.borrow().resurrect(fc, visited);
-            }
-        }
-    }
-
-    pub fn new(gc: GCHandle<'gc>, value: HeapStorage<'gc>) -> Self {
-        Self(Some(Gc::new(gc, RefLock::new(value))))
-    }
-
-    pub fn read(source: &[u8]) -> Self {
-        let mut ptr_bytes = [0u8; Self::SIZE];
-        ptr_bytes.copy_from_slice(&source[0..Self::SIZE]);
-        let ptr = usize::from_ne_bytes(ptr_bytes) as *const ObjectInner<'gc>;
-
-        if ptr.is_null() {
-            ObjectRef(None)
-        } else {
-            // SAFETY: since this came from Gc::as_ptr, we know it's valid
-            // also, this will only ever be called inside the context of a GC mutation, so it's okay for 'gc to be unbounded
-            ObjectRef(Some(unsafe { Gc::from_ptr(ptr) }))
-        }
-    }
-
-    pub fn write(&self, dest: &mut [u8]) {
-        let ptr: *const RefLock<_> = match self.0 {
-            None => std::ptr::null(),
-            Some(s) => Gc::as_ptr(s),
-        };
-        let ptr_bytes = (ptr as usize).to_ne_bytes();
-        dest[..ptr_bytes.len()].copy_from_slice(&ptr_bytes);
-    }
-
-    pub fn expect_object_ref(self) -> Self {
-        if self.0.is_none() {
-            panic!("NullReferenceException");
-        }
-        self
-    }
-
-    pub fn as_object<T>(&self, op: impl FnOnce(&Object<'gc>) -> T) -> T {
-        let ObjectRef(Some(o)) = &self else {
-            panic!("NullReferenceException: called ObjectRef::as_object on NULL object reference")
-        };
-        let heap = o.borrow();
-        let HeapStorage::Obj(instance) = &*heap else {
-            panic!("called ObjectRef::as_object on non-object heap reference")
-        };
-
-        op(instance)
-    }
-
-    pub fn as_object_mut<T>(&self, gc: GCHandle<'gc>, op: impl FnOnce(&mut Object<'gc>) -> T) -> T {
-        let ObjectRef(Some(o)) = &self else {
-            panic!(
-                "NullReferenceException: called ObjectRef::as_object_mut on NULL object reference"
-            )
-        };
-        let mut heap = o.borrow_mut(gc);
-        let HeapStorage::Obj(instance) = &mut *heap else {
-            panic!("called ObjectRef::as_object_mut on non-object heap reference")
-        };
-
-        op(instance)
-    }
-
-    pub fn as_vector<T>(&self, op: impl FnOnce(&Vector<'gc>) -> T) -> T {
-        let ObjectRef(Some(o)) = &self else {
-            panic!("NullReferenceException: called ObjectRef::as_vector on NULL object reference")
-        };
-        let heap = o.borrow();
-        let HeapStorage::Vec(instance) = &*heap else {
-            panic!("called ObjectRef::as_vector on non-vector heap reference")
-        };
-
-        op(instance)
-    }
-}
-impl Debug for ObjectRef<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            None => f.write_str("NULL"),
-            Some(gc) => {
-                let handle = gc.borrow();
-                let desc = match &*handle {
-                    HeapStorage::Obj(o) => o.description.type_name(),
-                    HeapStorage::Vec(v) => format!("{:?}[{}]", v.element, v.layout.length),
-                    HeapStorage::Str(s) => format!("{:?}", s),
-                    HeapStorage::Boxed(v) => format!("boxed {:?}", v),
-                };
-                write!(f, "{} @ {:#?}", desc, Gc::as_ptr(gc))
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum HeapStorage<'gc> {
-    Vec(Vector<'gc>),
-    Obj(Object<'gc>),
-    Str(CLRString),
-    Boxed(ValueType<'gc>),
-}
-unsafe impl<'gc> Collect for HeapStorage<'gc> {
-    fn trace(&self, cc: &Collection) {
-        match self {
-            Self::Vec(v) => v.trace(cc),
-            Self::Obj(o) => o.trace(cc),
-            Self::Boxed(v) => v.trace(cc),
-            Self::Str(_) => {}
-        }
-    }
-}
-impl<'gc> HeapStorage<'gc> {
-    pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
-        match self {
-            HeapStorage::Vec(v) => v.resurrect(fc, visited),
-            HeapStorage::Obj(o) => o.resurrect(fc, visited),
-            HeapStorage::Boxed(v) => v.resurrect(fc, visited),
-            HeapStorage::Str(_) => {}
-        }
-    }
-    pub fn as_obj(&self) -> Option<&Object<'gc>> {
-        match self {
-            HeapStorage::Obj(o) => Some(o),
-            _ => None,
-        }
-    }
-    pub fn as_obj_mut(&mut self) -> Option<&mut Object<'gc>> {
-        match self {
-            HeapStorage::Obj(o) => Some(o),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum ValueType<'gc> {
-    Bool(bool),
-    Char(u16),
-    Int8(i8),
-    UInt8(u8),
-    Int16(i16),
-    UInt16(u16),
-    Int32(i32),
-    UInt32(u32),
-    Int64(i64),
-    UInt64(u64),
-    NativeInt(isize),
-    NativeUInt(usize),
-    Pointer(ManagedPtr<'gc>),
-    Float32(f32),
-    Float64(f64),
-    TypedRef, // TODO
-    Struct(Object<'gc>),
-}
-unsafe impl<'gc> Collect for ValueType<'gc> {
-    fn trace(&self, cc: &Collection) {
-        match self {
-            Self::Pointer(p) => p.trace(cc),
-            Self::Struct(o) => o.trace(cc),
-            _ => {}
-        }
-    }
-}
-
-fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(data: StackValue) -> T {
-    match data {
-        StackValue::Int32(i) => i
-            .try_into()
-            .unwrap_or_else(|_| panic!("failed to convert from i32")),
-        StackValue::NativeInt(i) => i
-            .try_into()
-            .unwrap_or_else(|_| panic!("failed to convert from isize")),
-        StackValue::UnmanagedPtr(UnmanagedPtr(p))
-        | StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => (p as usize)
-            .try_into()
-            .unwrap_or_else(|_| panic!("failed to convert from pointer")),
-        other => panic!(
-            "invalid stack value {:?} for conversion into {}",
-            other,
-            std::any::type_name::<T>()
-        ),
-    }
-}
-fn convert_i64<T: TryFrom<i64>>(data: StackValue) -> T
-where
-    T::Error: std::error::Error,
-{
-    match data {
-        StackValue::Int64(i) => i.try_into().unwrap_or_else(|e| {
-            panic!(
-                "failed to convert from i64 to {} ({})",
-                std::any::type_name::<T>(),
-                e
-            )
-        }),
-        other => panic!("invalid stack value {:?} for integer conversion", other),
-    }
-}
-
-impl<'gc> ValueType<'gc> {
-    pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
-        match self {
-            ValueType::Pointer(p) => p.resurrect(fc, visited),
-            ValueType::Struct(o) => o.resurrect(fc, visited),
-            _ => {}
-        }
-    }
-    pub fn new(t: &ConcreteType, context: &ResolutionContext, data: StackValue<'gc>) -> Self {
-        match CTSValue::new(t, context, data) {
-            CTSValue::Value(v) => v,
-            CTSValue::Ref(r) => {
-                panic!(
-                    "tried to instantiate value type, received object reference ({:?})",
-                    r
-                )
-            }
-        }
-    }
-
-    pub fn description(&self, context: &ResolutionContext) -> TypeDescription {
-        let asms = &context.assemblies;
-        match self {
-            ValueType::Bool(_) => asms.corlib_type("System.Boolean"),
-            ValueType::Char(_) => asms.corlib_type("System.Char"),
-            ValueType::Int8(_) => asms.corlib_type("System.SByte"),
-            ValueType::UInt8(_) => asms.corlib_type("System.Byte"),
-            ValueType::Int16(_) => asms.corlib_type("System.Int16"),
-            ValueType::UInt16(_) => asms.corlib_type("System.UInt16"),
-            ValueType::Int32(_) => asms.corlib_type("System.Int32"),
-            ValueType::UInt32(_) => asms.corlib_type("System.UInt32"),
-            ValueType::Int64(_) => asms.corlib_type("System.Int64"),
-            ValueType::UInt64(_) => asms.corlib_type("System.UInt64"),
-            ValueType::NativeInt(_) => asms.corlib_type("System.IntPtr"),
-            ValueType::NativeUInt(_) => asms.corlib_type("System.UIntPtr"),
-            ValueType::Pointer(_) => asms.corlib_type("System.IntPtr"),
-            ValueType::Float32(_) => asms.corlib_type("System.Single"),
-            ValueType::Float64(_) => asms.corlib_type("System.Double"),
-            ValueType::TypedRef => asms.corlib_type("System.TypedReference"),
-            ValueType::Struct(s) => s.description,
-        }
-    }
-}
-
-macro_rules! from_bytes {
-    ($t:ty, $data:expr) => {
-        <$t>::from_ne_bytes($data.try_into().expect("source data was too small"))
-    };
-}
-
-#[derive(Debug)]
-pub enum CTSValue<'gc> {
-    Value(ValueType<'gc>),
-    Ref(ObjectRef<'gc>),
-}
-impl<'gc> CTSValue<'gc> {
-    pub fn new(t: &ConcreteType, context: &ResolutionContext, data: StackValue<'gc>) -> Self {
-        use ValueType::*;
-        let t = context.normalize_type(t.clone());
-        match t.get() {
-            BaseType::Boolean => Self::Value(Bool(convert_num::<u8>(data) != 0)),
-            BaseType::Char => Self::Value(Char(convert_num(data))),
-            BaseType::Int8 => Self::Value(Int8(convert_num(data))),
-            BaseType::UInt8 => Self::Value(UInt8(convert_num(data))),
-            BaseType::Int16 => Self::Value(Int16(convert_num(data))),
-            BaseType::UInt16 => Self::Value(UInt16(convert_num(data))),
-            BaseType::Int32 => Self::Value(Int32(convert_num(data))),
-            BaseType::UInt32 => Self::Value(UInt32(convert_num(data))),
-            BaseType::Int64 => Self::Value(Int64(convert_i64(data))),
-            BaseType::UInt64 => Self::Value(UInt64(convert_i64(data))),
-            BaseType::Float32 => Self::Value(Float32(match data {
-                StackValue::NativeFloat(f) => f as f32,
-                other => panic!("invalid stack value {:?} for float conversion", other),
-            })),
-            BaseType::Float64 => Self::Value(Float64(match data {
-                StackValue::NativeFloat(f) => f,
-                other => panic!("invalid stack value {:?} for float conversion", other),
-            })),
-            BaseType::IntPtr => Self::Value(NativeInt(convert_num(data))),
-            BaseType::UIntPtr | BaseType::FunctionPointer(_) => {
-                Self::Value(NativeUInt(convert_num(data)))
-            }
-            BaseType::ValuePointer(_, _) => {
-                vm_expect_stack!(let ManagedPtr(p) = data);
-                Self::Value(Pointer(p))
-            }
-            BaseType::Object | BaseType::String | BaseType::Vector(_, _) => {
-                vm_expect_stack!(let ObjectRef(o) = data);
-                Self::Ref(o)
-            }
-            BaseType::Type {
-                value_kind: Some(ValueKind::Class),
-                ..
-            } => {
-                vm_expect_stack!(let ObjectRef(o) = data);
-                Self::Ref(o)
-            }
-            BaseType::Type {
-                value_kind: None | Some(ValueKind::ValueType),
-                source,
-            } => {
-                let (ut, type_generics) = decompose_type_source(source);
-                let new_lookup = GenericLookup::new(type_generics);
-                let new_ctx = context.with_generics(&new_lookup);
-                let td = new_ctx.locate_type(ut);
-
-                if let Some(e) = td.is_enum() {
-                    let enum_type = new_ctx.make_concrete(e);
-                    return CTSValue::new(&enum_type, context, data);
-                }
-
-                if td.type_name() == "System.TypedReference" {
-                    return Self::Value(TypedRef);
-                }
-
-                vm_expect_stack!(let ValueType(o) = data);
-                if !new_ctx.is_a(o.description, td) {
-                    panic!(
-                        "type mismatch: expected {:?}, found {:?}",
-                        td, o.description
-                    );
-                }
-                Self::Value(Struct(*o))
-            }
-            rest => panic!("tried to deserialize StackValue {:?}", rest),
-        }
-    }
-
-    pub fn read(t: &ConcreteType, context: &ResolutionContext, data: &[u8]) -> Self {
-        use ValueType::*;
-        let t = context.normalize_type(t.clone());
-        match t.get() {
-            BaseType::Boolean => Self::Value(Bool(data[0] != 0)),
-            BaseType::Char => Self::Value(Char(from_bytes!(u16, data))),
-            BaseType::Int8 => Self::Value(Int8(data[0] as i8)),
-            BaseType::UInt8 => Self::Value(UInt8(data[0])),
-            BaseType::Int16 => Self::Value(Int16(from_bytes!(i16, data))),
-            BaseType::UInt16 => Self::Value(UInt16(from_bytes!(u16, data))),
-            BaseType::Int32 => Self::Value(Int32(from_bytes!(i32, data))),
-            BaseType::UInt32 => Self::Value(UInt32(from_bytes!(u32, data))),
-            BaseType::Int64 => Self::Value(Int64(from_bytes!(i64, data))),
-            BaseType::UInt64 => Self::Value(UInt64(from_bytes!(u64, data))),
-            BaseType::Float32 => Self::Value(Float32(from_bytes!(f32, data))),
-            BaseType::Float64 => Self::Value(Float64(from_bytes!(f64, data))),
-            BaseType::IntPtr => Self::Value(NativeInt(from_bytes!(isize, data))),
-            BaseType::UIntPtr | BaseType::FunctionPointer(_) => {
-                Self::Value(NativeUInt(from_bytes!(usize, data)))
-            }
-            BaseType::ValuePointer(_, _) => Self::Value(Pointer(ManagedPtr::read(data))),
-            BaseType::Object
-            | BaseType::String
-            | BaseType::Vector(_, _)
-            | BaseType::Array(_, _) => Self::Ref(ObjectRef::read(data)),
-            BaseType::Type {
-                value_kind: Some(ValueKind::Class),
-                ..
-            } => Self::Ref(ObjectRef::read(data)),
-            BaseType::Type {
-                value_kind: None | Some(ValueKind::ValueType),
-                source,
-            } => {
-                let (ut, type_generics) = decompose_type_source(source);
-                let new_lookup = GenericLookup::new(type_generics);
-                let new_ctx = context.with_generics(&new_lookup);
-                let td = new_ctx.locate_type(ut);
-
-                if let Some(e) = td.is_enum() {
-                    let enum_type = new_ctx.make_concrete(e);
-                    return CTSValue::read(&enum_type, context, data);
-                }
-
-                if td.type_name() == "System.TypedReference" {
-                    return Self::Value(TypedRef);
-                }
-
-                let mut instance = Object::new(td, &new_ctx);
-                instance.instance_storage.get_mut().copy_from_slice(data);
-                Self::Value(Struct(instance))
-            }
-        }
-    }
-
-    pub fn into_stack(self) -> StackValue<'gc> {
-        use CTSValue::*;
-        use ValueType::*;
-        match self {
-            Value(Bool(b)) => StackValue::Int32(b as i32),
-            Value(Char(c)) => StackValue::Int32(c as i32),
-            Value(Int8(i)) => StackValue::Int32(i as i32),
-            Value(UInt8(i)) => StackValue::Int32(i as i32),
-            Value(Int16(i)) => StackValue::Int32(i as i32),
-            Value(UInt16(i)) => StackValue::Int32(i as i32),
-            Value(Int32(i)) => StackValue::Int32(i),
-            Value(UInt32(i)) => StackValue::Int32(i as i32),
-            Value(Int64(i)) => StackValue::Int64(i),
-            Value(UInt64(i)) => StackValue::Int64(i as i64),
-            Value(NativeInt(i)) => StackValue::NativeInt(i),
-            Value(NativeUInt(i)) => StackValue::NativeInt(i as isize),
-            Value(Pointer(p)) => StackValue::ManagedPtr(p),
-            Value(Float32(f)) => StackValue::NativeFloat(f as f64),
-            Value(Float64(f)) => StackValue::NativeFloat(f),
-            Value(TypedRef) => todo!(),
-            Value(Struct(s)) => StackValue::ValueType(Box::new(s)),
-            Ref(o) => StackValue::ObjectRef(o),
-        }
-    }
-
-    pub fn write(&self, dest: &mut [u8]) {
-        use ValueType::*;
-        match self {
-            CTSValue::Value(v) => match v {
-                Bool(b) => dest.copy_from_slice(&[*b as u8]),
-                Char(c) => dest.copy_from_slice(&c.to_ne_bytes()),
-                Int8(i) => dest.copy_from_slice(&i.to_ne_bytes()),
-                UInt8(i) => dest.copy_from_slice(&i.to_ne_bytes()),
-                Int16(i) => dest.copy_from_slice(&i.to_ne_bytes()),
-                UInt16(i) => dest.copy_from_slice(&i.to_ne_bytes()),
-                Int32(i) => dest.copy_from_slice(&i.to_ne_bytes()),
-                UInt32(i) => dest.copy_from_slice(&i.to_ne_bytes()),
-                Int64(i) => dest.copy_from_slice(&i.to_ne_bytes()),
-                UInt64(i) => dest.copy_from_slice(&i.to_ne_bytes()),
-                NativeInt(i) => dest.copy_from_slice(&i.to_ne_bytes()),
-                NativeUInt(i) => dest.copy_from_slice(&i.to_ne_bytes()),
-                Pointer(p) => p.write(dest),
-                Float32(f) => dest.copy_from_slice(&f.to_ne_bytes()),
-                Float64(f) => dest.copy_from_slice(&f.to_ne_bytes()),
-                TypedRef => todo!("typedref implementation"),
-                Struct(o) => dest.copy_from_slice(o.instance_storage.get()),
+impl<'gc> Add for StackValue<'gc> {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self::Output {
+        use StackValue::*;
+        match (self, rhs) {
+            (Int32(l), Int32(r)) => Int32(l.wrapping_add(r)),
+            (Int32(l), NativeInt(r)) => NativeInt((l as isize).wrapping_add(r)),
+            (Int64(l), Int64(r)) => Int64(l.wrapping_add(r)),
+            (NativeInt(l), Int32(r)) => NativeInt(l.wrapping_add(r as isize)),
+            (NativeInt(l), NativeInt(r)) => NativeInt(l.wrapping_add(r)),
+            (NativeFloat(l), NativeFloat(r)) => NativeFloat(l + r),
+            (Int32(i), ManagedPtr(m)) | (ManagedPtr(m), Int32(i)) => unsafe {
+                ManagedPtr(m.map_value(|p| p.offset(i as isize)))
             },
-            CTSValue::Ref(o) => o.write(dest),
+            (NativeInt(i), ManagedPtr(m)) | (ManagedPtr(m), NativeInt(i)) => unsafe {
+                ManagedPtr(m.map_value(|p| p.offset(i)))
+            },
+            (l, r) => panic!("invalid types for add: {:?}, {:?}", l, r),
         }
     }
 }
 
-#[derive(Clone, PartialEq)]
-pub struct Vector<'gc> {
-    pub element: ConcreteType,
-    pub layout: ArrayLayoutManager,
-    storage: Vec<u8>,
-    _contains_gc: PhantomData<&'gc ()>, // TODO: variance rules?
-}
-unsafe impl Collect for Vector<'_> {
-    #[inline]
-    fn trace(&self, cc: &Collection) {
-        let element = &self.layout.element_layout;
-        match element.as_ref() {
-            LayoutManager::Scalar(Scalar::ObjectRef) => {
-                for i in 0..self.layout.length {
-                    ObjectRef::read(&self.storage[(i * element.size())..]).trace(cc);
-                }
+impl<'gc> Sub for StackValue<'gc> {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self::Output {
+        use StackValue::*;
+        match (self, rhs) {
+            (Int32(l), Int32(r)) => Int32(l.wrapping_sub(r)),
+            (Int32(l), NativeInt(r)) => NativeInt((l as isize).wrapping_sub(r)),
+            (Int64(l), Int64(r)) => Int64(l.wrapping_sub(r)),
+            (NativeInt(l), Int32(r)) => NativeInt(l.wrapping_sub(r as isize)),
+            (NativeInt(l), NativeInt(r)) => NativeInt(l.wrapping_sub(r)),
+            (NativeFloat(l), NativeFloat(r)) => NativeFloat(l - r),
+            (ManagedPtr(m), Int32(i)) => unsafe {
+                ManagedPtr(m.map_value(|p| p.offset(-(i as isize))))
+            },
+            (ManagedPtr(m), NativeInt(i)) => unsafe { ManagedPtr(m.map_value(|p| p.offset(-i))) },
+            (ManagedPtr(m1), ManagedPtr(m2)) => {
+                NativeInt((m1.value as isize) - (m2.value as isize))
             }
-            LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                // Skip tracing ManagedPtr arrays to avoid unsafe transmute issues
-                // ManagedPtr values should not be stored in arrays
-            }
-            _ => {
-                for i in 0..self.layout.length {
-                    LayoutManager::trace(element, &self.storage[(i * element.size())..], cc);
-                }
-            }
+            (l, r) => panic!("invalid types for sub: {:?}, {:?}", l, r),
         }
     }
 }
-impl<'gc> Vector<'gc> {
-    pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
-        self.layout.resurrect(&self.storage, fc, visited);
-    }
-    pub fn new(element: ConcreteType, size: usize, context: &ResolutionContext) -> Self {
-        let layout = ArrayLayoutManager::new(element.clone(), size, context);
-        Self {
-            storage: vec![0; layout.size()], // TODO: initialize properly
-            layout,
-            element,
-            _contains_gc: PhantomData,
-        }
-    }
 
-    pub fn get(&self) -> &[u8] {
-        &self.storage
-    }
-
-    pub fn get_mut(&mut self) -> &mut [u8] {
-        &mut self.storage
-    }
-}
-impl Debug for Vector<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_list()
-            .entries(
-                std::iter::once(format!(
-                    "vector of {:?} (length {})",
-                    self.element, self.layout.length
-                ))
-                .chain(self.storage.chunks(self.layout.element_layout.size()).map(
-                    match self.layout.element_layout.as_ref() {
-                        LayoutManager::Scalar(Scalar::ObjectRef) => {
-                            |chunk: &[u8]| format!("{:?}", ObjectRef::read(chunk))
-                        }
-                        LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                            |chunk: &[u8]| {
-                                // Skip reading ManagedPtr to avoid transmute issues
-                                let bytes: Vec<_> =
-                                    chunk.iter().map(|b| format!("{:02x}", b)).collect();
-                                format!("ptr({})", bytes.join(" "))
-                            }
-                        }
-                        _ => |chunk: &[u8]| {
-                            let bytes: Vec<_> =
-                                chunk.iter().map(|b| format!("{:02x}", b)).collect();
-                            bytes.join(" ")
-                        },
-                    },
-                ))
-                .map(DebugStr),
-            )
-            .finish()
-    }
-}
-
-#[derive(Clone, PartialEq)]
-pub struct Object<'gc> {
-    pub description: TypeDescription,
-    pub instance_storage: FieldStorage<'gc>,
-    pub finalizer_suppressed: bool,
-}
-unsafe impl<'gc> Collect for Object<'gc> {
-    fn trace(&self, cc: &Collection) {
-        self.instance_storage.trace(cc);
-    }
-}
-impl<'gc> Object<'gc> {
-    pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
-        self.instance_storage.resurrect(fc, visited);
-    }
-    pub fn new(description: TypeDescription, context: &ResolutionContext) -> Self {
-        Self {
-            description,
-            instance_storage: FieldStorage::instance_fields(description, context),
-            finalizer_suppressed: false,
+impl<'gc> Mul for StackValue<'gc> {
+    type Output = Self;
+    fn mul(self, rhs: Self) -> Self::Output {
+        use StackValue::*;
+        match (self, rhs) {
+            (Int32(l), Int32(r)) => Int32(l.wrapping_mul(r)),
+            (Int32(l), NativeInt(r)) => NativeInt((l as isize).wrapping_mul(r)),
+            (Int64(l), Int64(r)) => Int64(l.wrapping_mul(r)),
+            (NativeInt(l), Int32(r)) => NativeInt(l.wrapping_mul(r as isize)),
+            (NativeInt(l), NativeInt(r)) => NativeInt(l.wrapping_mul(r)),
+            (NativeFloat(l), NativeFloat(r)) => NativeFloat(l * r),
+            (l, r) => panic!("invalid types for mul: {:?}, {:?}", l, r),
         }
     }
 }
-impl Debug for Object<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple(&self.description.type_name())
-            .field(&self.instance_storage)
-            .field(&DebugStr(format!(
-                "stored at {:#?}",
-                self.instance_storage.get().as_ptr()
-            )))
-            .finish()
-    }
-}
 
-#[derive(Clone, Copy)]
-pub struct TypeDescription {
-    pub resolution: ResolutionS,
-    pub definition: &'static TypeDefinition<'static>,
-}
-impl Debug for TypeDescription {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.definition.show(self.resolution.0))
-    }
-}
-unsafe_empty_collect!(TypeDescription);
-impl PartialEq for TypeDescription {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.definition, other.definition)
-    }
-}
-impl Eq for TypeDescription {}
-impl Hash for TypeDescription {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        (self.definition as *const TypeDefinition).hash(state);
-    }
-}
-impl TypeDescription {
-    pub fn static_initializer(&self) -> Option<MethodDescription> {
-        self.definition.methods.iter().find_map(|m| {
-            if m.runtime_special_name
-                && m.name == ".cctor"
-                && !m.signature.instance
-                && m.signature.parameters.is_empty()
-            {
-                Some(MethodDescription {
-                    parent: *self,
-                    method: m,
-                })
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn type_name(&self) -> String {
-        self.definition.nested_type_name(self.resolution.0)
-    }
-
-    pub fn is_enum(&self) -> Option<&MemberType> {
-        match &self.definition.extends {
-            Some(TypeSource::User(u))
-                if matches!(u.type_name(self.resolution.0).as_str(), "System.Enum") =>
-            {
-                let inner = self.definition.fields.first()?;
-                if inner.runtime_special_name && inner.name == "value__" {
-                    Some(&inner.return_type)
-                } else {
-                    None
-                }
-            }
-            _ => None,
+impl<'gc> BitAnd for StackValue<'gc> {
+    type Output = Self;
+    fn bitand(self, rhs: Self) -> Self::Output {
+        use StackValue::*;
+        match (self, rhs) {
+            (Int32(l), Int32(r)) => Int32(l & r),
+            (Int32(l), NativeInt(r)) => NativeInt((l as isize) & r),
+            (Int64(l), Int64(r)) => Int64(l & r),
+            (NativeInt(l), Int32(r)) => NativeInt(l & (r as isize)),
+            (NativeInt(l), NativeInt(r)) => NativeInt(l & r),
+            (l, r) => panic!("invalid types for and: {:?}, {:?}", l, r),
         }
     }
+}
 
-    pub fn is_value_type(&self, ctx: &ResolutionContext) -> bool {
-        for (a, _) in ctx.get_ancestors(*self) {
-            if matches!(a.type_name().as_str(), "System.Enum" | "System.ValueType") {
-                return true;
-            }
+impl<'gc> BitOr for StackValue<'gc> {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self::Output {
+        use StackValue::*;
+        match (self, rhs) {
+            (Int32(l), Int32(r)) => Int32(l | r),
+            (Int32(l), NativeInt(r)) => NativeInt((l as isize) | r),
+            (Int64(l), Int64(r)) => Int64(l | r),
+            (NativeInt(l), Int32(r)) => NativeInt(l | (r as isize)),
+            (NativeInt(l), NativeInt(r)) => NativeInt(l | r),
+            (l, r) => panic!("invalid types for or: {:?}, {:?}", l, r),
         }
-        false
     }
+}
 
-    pub fn has_finalizer(&self, ctx: &ResolutionContext) -> bool {
-        for (ancestor, _) in ctx.get_ancestors(*self) {
-            let ns = ancestor.definition.namespace.as_deref().unwrap_or("");
-            let name = &ancestor.definition.name;
-            if ns == "System" && name == "Object" {
-                continue;
-            }
-            if ns == "System" && name == "ValueType" {
-                continue;
-            }
-            if ns == "System" && name == "Enum" {
-                continue;
-            }
-
-            if ancestor.definition.methods.iter().any(|m| {
-                m.name == "Finalize" && m.virtual_member && m.signature.parameters.is_empty()
-            }) {
-                return true;
-            }
+impl<'gc> BitXor for StackValue<'gc> {
+    type Output = Self;
+    fn bitxor(self, rhs: Self) -> Self::Output {
+        use StackValue::*;
+        match (self, rhs) {
+            (Int32(l), Int32(r)) => Int32(l ^ r),
+            (Int32(l), NativeInt(r)) => NativeInt((l as isize) ^ r),
+            (Int64(l), Int64(r)) => Int64(l ^ r),
+            (NativeInt(l), Int32(r)) => NativeInt(l ^ (r as isize)),
+            (NativeInt(l), NativeInt(r)) => NativeInt(l ^ r),
+            (l, r) => panic!("invalid types for xor: {:?}, {:?}", l, r),
         }
-        false
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct MethodDescription {
-    pub parent: TypeDescription,
-    pub method: &'static Method<'static>,
-}
-impl MethodDescription {
-    pub fn resolution(&self) -> ResolutionS {
-        self.parent.resolution
-    }
-}
-impl Debug for MethodDescription {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            self.method.signature.show_with_name(
-                self.resolution().0,
-                format!("{}::{}", self.parent.type_name(), self.method.name)
-            )
-        )
-    }
-}
-impl PartialEq for MethodDescription {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.method, other.method)
-    }
-}
-impl Eq for MethodDescription {}
-impl Hash for MethodDescription {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        (self.method as *const Method).hash(state);
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct FieldDescription {
-    pub parent: TypeDescription,
-    pub field: &'static Field<'static>,
-}
-impl Debug for FieldDescription {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if self.field.static_member {
-            write!(f, "static ")?;
+impl<'gc> Shl for StackValue<'gc> {
+    type Output = Self;
+    fn shl(self, rhs: Self) -> Self::Output {
+        use StackValue::*;
+        let amount = match rhs {
+            Int32(i) => i as u32,
+            NativeInt(i) => i as u32,
+            _ => panic!("invalid shift amount"),
+        };
+        match self {
+            Int32(i) => Int32(i << amount),
+            Int64(i) => Int64(i << amount),
+            NativeInt(i) => NativeInt(i << amount),
+            _ => panic!("invalid shift target"),
         }
-
-        write!(
-            f,
-            "{} {}::{}",
-            self.field.return_type.show(self.parent.resolution.0),
-            self.parent.type_name(),
-            self.field.name
-        )?;
-
-        Ok(())
     }
 }
-impl PartialEq for FieldDescription {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.field, other.field)
+
+impl<'gc> Not for StackValue<'gc> {
+    type Output = Self;
+    fn not(self) -> Self::Output {
+        use StackValue::*;
+        match self {
+            Int32(i) => Int32(!i),
+            Int64(i) => Int64(!i),
+            NativeInt(i) => NativeInt(!i),
+            _ => panic!("invalid type for not"),
+        }
     }
 }
-impl Eq for FieldDescription {}
-impl Hash for FieldDescription {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        (self.field as *const Field).hash(state);
+
+impl<'gc> Neg for StackValue<'gc> {
+    type Output = Self;
+    fn neg(self) -> Self::Output {
+        use StackValue::*;
+        match self {
+            Int32(i) => Int32(-i),
+            Int64(i) => Int64(-i),
+            NativeInt(i) => NativeInt(-i),
+            NativeFloat(f) => NativeFloat(-f),
+            _ => panic!("invalid type for neg"),
+        }
     }
 }
 

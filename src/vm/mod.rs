@@ -1,6 +1,6 @@
 use crate::{
     resolve::Assemblies,
-    value::{GenericLookup, MethodDescription, ResolutionContext},
+    value::{GenericLookup, ResolutionContext},
 };
 
 use dotnetdll::prelude::*;
@@ -15,9 +15,11 @@ mod instructions;
 pub(crate) mod intrinsics;
 mod pinvoke;
 mod stack;
+pub mod context;
 
 pub use executor::*;
 pub use stack::*;
+use crate::value::description::MethodDescription;
 
 // I.12.3.2
 #[derive(Clone)]

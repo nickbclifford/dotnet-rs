@@ -1,6 +1,6 @@
 use crate::{
     match_method,
-    value::{GenericLookup, HeapStorage, MethodDescription, Object, ObjectRef, StackValue},
+    value::{GenericLookup, StackValue},
     vm::{intrinsics::span_to_slice, CallStack, GCHandle, StepResult},
 };
 
@@ -24,6 +24,8 @@ macro_rules! with_string {
     }};
 }
 pub(crate) use with_string;
+use crate::value::description::MethodDescription;
+use crate::value::object::{HeapStorage, Object, ObjectRef};
 
 #[derive(Clone, PartialEq)]
 pub struct CLRString(Vec<u16>);

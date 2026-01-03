@@ -2,7 +2,7 @@ use crate::{
     utils::DebugStr,
     value::{
         layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
-        MethodDescription, ObjectRef, ResolutionContext, TypeDescription,
+        ResolutionContext,
     },
 };
 
@@ -13,6 +13,8 @@ use std::{
     marker::PhantomData,
     ops::Range,
 };
+use crate::value::description::{MethodDescription, TypeDescription};
+use crate::value::object::ObjectRef;
 
 #[derive(Clone, PartialEq)]
 pub struct FieldStorage<'gc> {

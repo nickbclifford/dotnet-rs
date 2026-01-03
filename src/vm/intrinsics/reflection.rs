@@ -3,13 +3,15 @@ use crate::{
     resolve::Assemblies,
     utils::decompose_type_source,
     value::{
-        string::CLRString, ConcreteType, FieldDescription, GenericLookup, HeapStorage,
-        MethodDescription, Object, ObjectRef, ResolutionContext, TypeDescription, Vector,
+        string::CLRString, ConcreteType, GenericLookup,
+        ResolutionContext,
     },
     vm::{CallStack, GCHandle, StepResult},
 };
 use dotnetdll::prelude::{BaseType, MethodType, TypeSource};
 use std::{fmt::Debug, hash::Hash};
+use crate::value::description::{FieldDescription, MethodDescription, TypeDescription};
+use crate::value::object::{HeapStorage, Object, ObjectRef, Vector};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct RuntimeMethodSignature; // TODO

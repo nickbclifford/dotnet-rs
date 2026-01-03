@@ -1,11 +1,12 @@
 use crate::{
     utils::{decompose_type_source, static_res_from_file, ResolutionS},
-    value::{ConcreteType, FieldDescription, GenericLookup, MethodDescription, TypeDescription},
+    value::{ConcreteType, GenericLookup},
 };
 
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
 use std::{collections::HashMap, error::Error, path::PathBuf, sync::RwLock};
+use crate::value::description::{FieldDescription, MethodDescription, TypeDescription};
 
 pub struct Assemblies {
     assembly_root: String,

@@ -1,12 +1,13 @@
 use crate::{
-    utils::static_res_from_file,
-    value::{MethodDescription, TypeDescription},
+    utils::static_res_from_file
+    ,
     vm::ExecutorResult,
 };
 
 use clap::Parser;
 use dotnetdll::prelude::*;
 use std::process::ExitCode;
+use value::description::{MethodDescription, TypeDescription};
 
 #[macro_use]
 pub mod vm;
