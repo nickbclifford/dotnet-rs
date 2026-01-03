@@ -6,12 +6,14 @@ use std::marker::PhantomData;
 use gc_arena::lock::RefLock;
 use gc_arena::{Collect, Collection, Gc};
 use crate::utils::DebugStr;
-use crate::value::{ConcreteType, ResolutionContext, StackValue};
-use crate::value::description::TypeDescription;
+use crate::value::StackValue;
+use crate::types::TypeDescription;
+use crate::types::generics::ConcreteType;
 use crate::value::layout::{ArrayLayoutManager, HasLayout, LayoutManager, Scalar};
 use crate::value::pointer::{ManagedPtr, UnmanagedPtr};
 use crate::value::storage::FieldStorage;
 use crate::value::string::CLRString;
+use crate::vm::context::ResolutionContext;
 use crate::vm::GCHandle;
 
 type ObjectInner<'gc> = RefLock<HeapStorage<'gc>>;
@@ -341,7 +343,7 @@ impl<'gc> CTSValue<'gc> {
         use dotnetdll::prelude::{BaseType, ValueKind};
         use ValueType::*;
         use crate::utils::decompose_type_source;
-        use crate::value::GenericLookup;
+        use crate::types::generics::GenericLookup;
         let t = context.normalize_type(t.clone());
         match t.get() {
             BaseType::Boolean => Self::Value(Bool(convert_num::<u8>(data) != 0)),
@@ -416,7 +418,7 @@ impl<'gc> CTSValue<'gc> {
         use dotnetdll::prelude::{BaseType, ValueKind};
         use ValueType::*;
         use crate::utils::decompose_type_source;
-        use crate::value::GenericLookup;
+        use crate::types::generics::GenericLookup;
         let t = context.normalize_type(t.clone());
         match t.get() {
             BaseType::Boolean => Self::Value(Bool(data[0] != 0)),

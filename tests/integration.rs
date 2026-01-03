@@ -3,7 +3,8 @@ use dotnet_rs::{resolve, vm};
 use dotnetdll::prelude::*;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use dotnet_rs::value::description::{MethodDescription, TypeDescription};
+use dotnet_rs::types::members::MethodDescription;
+use dotnet_rs::types::TypeDescription;
 
 pub struct TestHarness {
     pub assemblies: &'static resolve::Assemblies,

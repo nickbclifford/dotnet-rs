@@ -2,7 +2,7 @@ use crate::{
     value::StackValue,
     vm::{stack::GCArena, MethodInfo, StepResult},
 };
-use crate::value::description::MethodDescription;
+use crate::types::members::MethodDescription;
 
 pub struct Executor {
     arena: &'static mut GCArena,

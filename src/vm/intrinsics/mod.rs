@@ -8,8 +8,7 @@ use crate::{
     value::{
         layout::*,
         string::{string_intrinsic_call, with_string, CLRString},
-        ConcreteType, GCHandleType, GenericLookup,
-        ResolutionContext, StackValue,
+        StackValue,
     },
     vm::{
         intrinsics::reflection::{
@@ -21,9 +20,12 @@ use crate::{
 };
 
 use dotnetdll::prelude::*;
-use crate::value::description::{FieldDescription, MethodDescription};
+use crate::types::members::{FieldDescription, MethodDescription};
+use crate::types::generics::{ConcreteType, GenericLookup};
 use crate::value::object::{HeapStorage, Object, ObjectRef};
 use crate::value::pointer::ManagedPtr;
+use crate::vm::context::ResolutionContext;
+use crate::vm::GCHandleType;
 
 pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttribute";
 

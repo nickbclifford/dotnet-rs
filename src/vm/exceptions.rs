@@ -7,12 +7,13 @@ use std::{
 
 use crate::{
     utils::DebugStr,
-    value::{ConcreteType, ResolutionContext},
     vm::{CallStack, GCHandle, StepResult},
 };
 use dotnetdll::prelude::*;
 use gc_arena::Collect;
+use crate::types::generics::ConcreteType;
 use crate::value::object::ObjectRef;
+use crate::vm::context::ResolutionContext;
 
 /// Represents the location of an exception handler within the call stack.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Collect)]

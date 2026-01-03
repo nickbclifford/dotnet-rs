@@ -7,11 +7,13 @@ use crate::{
 use clap::Parser;
 use dotnetdll::prelude::*;
 use std::process::ExitCode;
-use value::description::{MethodDescription, TypeDescription};
+use types::members::MethodDescription;
+use types::TypeDescription;
 
 #[macro_use]
 pub mod vm;
 pub mod resolve;
+pub mod types;
 pub mod utils;
 pub mod value;
 

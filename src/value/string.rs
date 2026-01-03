@@ -1,6 +1,6 @@
 use crate::{
     match_method,
-    value::{GenericLookup, StackValue},
+    value::StackValue,
     vm::{intrinsics::span_to_slice, CallStack, GCHandle, StepResult},
 };
 
@@ -24,7 +24,8 @@ macro_rules! with_string {
     }};
 }
 pub(crate) use with_string;
-use crate::value::description::MethodDescription;
+use crate::types::members::MethodDescription;
+use crate::types::generics::GenericLookup;
 use crate::value::object::{HeapStorage, Object, ObjectRef};
 
 #[derive(Clone, PartialEq)]

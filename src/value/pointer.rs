@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};
-use crate::value::description::TypeDescription;
+use crate::types::TypeDescription;
 use crate::value::object::{ObjectHandle, ObjectRef};
 
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]

@@ -2,18 +2,18 @@ use crate::{
     utils::decompose_type_source,
     value::{
         layout::{FieldLayoutManager, LayoutManager, Scalar},
-        ConcreteType, GenericLookup, ResolutionContext, StackValue,
+        object::Object,
+        StackValue,
     },
-    vm::{CallStack, GCHandle},
+    vm::{context::ResolutionContext, CallStack, GCHandle},
 };
-
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
 use libffi::middle::*;
 use libloading::{Library, Symbol};
 use std::{collections::HashMap, ffi::c_void, path::PathBuf};
-use crate::value::description::MethodDescription;
-use crate::value::object::Object;
+use crate::types::members::MethodDescription;
+use crate::types::generics::{ConcreteType, GenericLookup};
 
 pub static mut LAST_ERROR: i32 = 0;
 

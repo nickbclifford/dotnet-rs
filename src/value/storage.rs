@@ -1,9 +1,6 @@
 use crate::{
     utils::DebugStr,
-    value::{
-        layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
-        ResolutionContext,
-    },
+    value::layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
 };
 
 use gc_arena::{Collect, Collection};
@@ -13,8 +10,10 @@ use std::{
     marker::PhantomData,
     ops::Range,
 };
-use crate::value::description::{MethodDescription, TypeDescription};
+use crate::types::members::MethodDescription;
+use crate::types::TypeDescription;
 use crate::value::object::ObjectRef;
+use crate::vm::context::ResolutionContext;
 
 #[derive(Clone, PartialEq)]
 pub struct FieldStorage<'gc> {

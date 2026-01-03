@@ -1,11 +1,9 @@
-use crate::{
-    resolve::Assemblies,
-    value::{GenericLookup, ResolutionContext},
-};
+use crate::resolve::Assemblies;
 
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
 use std::rc::Rc;
+use context::ResolutionContext;
 
 #[macro_use]
 mod macros;
@@ -19,7 +17,8 @@ pub mod context;
 
 pub use executor::*;
 pub use stack::*;
-use crate::value::description::MethodDescription;
+use crate::types::members::MethodDescription;
+use crate::types::generics::GenericLookup;
 
 // I.12.3.2
 #[derive(Clone)]
@@ -99,4 +98,25 @@ pub enum StepResult {
     MethodReturned,
     MethodThrew,
     InstructionStepped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Collect)]
+#[collect(require_static)]
+pub enum GCHandleType {
+    Weak = 0,
+    WeakTrackResurrection = 1,
+    Normal = 2,
+    Pinned = 3,
+}
+
+impl From<i32> for GCHandleType {
+    fn from(i: i32) -> Self {
+        match i {
+            0 => GCHandleType::Weak,
+            1 => GCHandleType::WeakTrackResurrection,
+            2 => GCHandleType::Normal,
+            3 => GCHandleType::Pinned,
+            _ => panic!("invalid GCHandleType: {}", i),
+        }
+    }
 }

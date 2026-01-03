@@ -4,8 +4,7 @@ use crate::{
     value::{
         layout::{type_layout, FieldLayoutManager, HasLayout},
         string::CLRString,
-        GenericLookup,
-        ResolutionContext, StackValue,
+        StackValue,
     },
     vm::{
         exceptions::{ExceptionState, HandlerAddress, UnwindTarget},
@@ -16,9 +15,12 @@ use crate::{
 
 use dotnetdll::prelude::*;
 use std::cmp::Ordering;
-use crate::value::description::{MethodDescription, TypeDescription};
+use crate::types::members::MethodDescription;
+use crate::types::generics::GenericLookup;
+use crate::types::TypeDescription;
 use crate::value::object::{CTSValue, HeapStorage, Object, ObjectRef, ValueType, Vector};
 use crate::value::pointer::{ManagedPtr, UnmanagedPtr};
+use crate::vm::context::ResolutionContext;
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     fn find_generic_method(&self, source: &MethodSource) -> (MethodDescription, GenericLookup) {
