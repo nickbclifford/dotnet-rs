@@ -49,6 +49,27 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         (ctx.locate_method(method, &new_lookup), new_lookup)
     }
 
+    fn dispatch_method(
+        &mut self,
+        gc: GCHandle<'gc>,
+        method: MethodDescription,
+        lookup: GenericLookup,
+    ) -> StepResult {
+        if is_intrinsic(method, self.runtime.assemblies) {
+            intrinsic_call(gc, self, method, lookup)
+        } else if method.method.pinvoke.is_some() {
+            self.external_call(method, gc);
+            StepResult::InstructionStepped
+        } else {
+            self.call_frame(
+                gc,
+                MethodInfo::new(method, &lookup, self.runtime.assemblies),
+                lookup,
+            );
+            StepResult::InstructionStepped
+        }
+    }
+
     pub fn initialize_static_storage(
         &mut self,
         gc: GCHandle<'gc>,
@@ -259,27 +280,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             Call { param0: source, .. } => {
                 let (method, lookup) = self.find_generic_method(source);
+                let result = self.dispatch_method(gc, method, lookup);
 
-                if is_intrinsic(method, self.runtime.assemblies) {
-                    let result = intrinsic_call(gc, self, method, lookup);
-                    if let StepResult::InstructionStepped = result {
-                        // If intrinsic created a new frame, prevent auto-increment (executor will handle it on return)
-                        // If intrinsic completed inline, allow auto-increment at end of step()
-                        if initial_frame_count != self.execution.frames.len() {
-                            moved_ip = true;
-                        }
-                    } else {
-                        return result;
+                if let StepResult::InstructionStepped = result {
+                    if initial_frame_count != self.execution.frames.len() {
+                        moved_ip = true;
                     }
-                } else if method.method.pinvoke.is_some() {
-                    self.external_call(method, gc);
                 } else {
-                    self.call_frame(
-                        gc,
-                        MethodInfo::new(method, &lookup, self.runtime.assemblies),
-                        lookup,
-                    );
-                    moved_ip = true;
+                    return result;
                 }
             }
             CallConstrained(constraint, source) => {
@@ -302,26 +310,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let declaration = self.current_context().locate_method(o.declaration, &lookup);
                     if method == declaration {
                         vm_msg!(self, "-- dispatching to {:?} --", target);
-                        return if is_intrinsic(target, self.runtime.assemblies) {
-                            let result = intrinsic_call(gc, self, target, lookup);
-                            if let StepResult::InstructionStepped = result {
-                                if initial_frame_count == self.execution.frames.len() {
-                                    self.increment_ip();
-                                }
+                        let result = self.dispatch_method(gc, target, lookup);
+                        if let StepResult::InstructionStepped = result {
+                            if initial_frame_count == self.execution.frames.len() {
+                                self.increment_ip();
                             }
-                            result
-                        } else if target.method.pinvoke.is_some() {
-                            self.external_call(target, gc);
-                            self.increment_ip();
-                            StepResult::InstructionStepped
-                        } else {
-                            self.call_frame(
-                                gc,
-                                MethodInfo::new(target, &lookup, self.runtime.assemblies),
-                                lookup,
-                            );
-                            StepResult::InstructionStepped
                         }
+                        return result;
                     }
                 }
 
@@ -803,26 +798,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 for a in args {
                     push!(a);
                 }
-                if is_intrinsic(method, self.runtime.assemblies) {
-                    let result = intrinsic_call(gc, self, method, lookup);
-                    if let StepResult::InstructionStepped = result {
-                        // If intrinsic created a new frame, prevent auto-increment (executor will handle it on return)
-                        // If intrinsic completed inline, allow auto-increment at end of step()
-                        if initial_frame_count != self.execution.frames.len() {
-                            moved_ip = true;
-                        }
-                    } else {
-                        return result;
+                let result = self.dispatch_method(gc, method, lookup);
+
+                if let StepResult::InstructionStepped = result {
+                    if initial_frame_count != self.execution.frames.len() {
+                        moved_ip = true;
                     }
-                } else if method.method.pinvoke.is_some() {
-                    self.external_call(method, gc);
                 } else {
-                    self.call_frame(
-                        gc,
-                        MethodInfo::new(method, &lookup, self.runtime.assemblies),
-                        lookup,
-                    );
-                    moved_ip = true;
+                    return result;
                 }
             }
             CallVirtualConstrained(_, _) => todo!("constrained.callvirt"),
