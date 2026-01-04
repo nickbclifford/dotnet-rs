@@ -299,7 +299,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 std::env::var(s.as_string())
             });
             match value.ok() {
-                Some(s) => push!(string(gc, CLRString::from(s))),
+                Some(s) => push!(string(s)),
                 None => push!(null()),
             }
         },
@@ -908,7 +908,7 @@ pub fn intrinsic_field<'gc, 'm: 'gc>(
             stack.push_stack(gc, StackValue::NativeInt(0));
         },
         [static System.String::Empty] => {
-            vm_push!(stack, gc, string(gc, CLRString::new(vec![])));
+            vm_push!(stack, gc, string(CLRString::new(vec![])));
         },
     })
     .expect("unsupported load from intrinsic field");

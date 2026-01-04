@@ -6,10 +6,7 @@ use crate::{
         members::{FieldDescription, MethodDescription},
     },
     utils::{ResolutionS, decompose_type_source},
-    value::{
-        object::{HeapStorage, Object, ObjectRef, Vector},
-        string::CLRString,
-    },
+    value::object::{HeapStorage, Object, ObjectRef, Vector},
     vm::{CallStack, GCHandle, MethodInfo, StepResult, context::ResolutionContext},
     vm_expect_stack, vm_pop, vm_push,
 };
@@ -496,17 +493,17 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 RuntimeType::Type(td) | RuntimeType::Generic(td, _) => {
                     match td.definition.namespace.as_ref() {
                         None => push!(null()),
-                        Some(n) => push!(string(gc, CLRString::from(n))),
+                        Some(n) => push!(string(n)),
                     }
                 }
-                _ => push!(string(gc, CLRString::from("System"))),
+                _ => push!(string("System")),
             }
             Some(StepResult::InstructionStepped)
         },
         [DotnetRs.RuntimeType::GetName()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
-            push!(string(gc, CLRString::from(target_type.get_name())));
+            push!(string(target_type.get_name()));
             Some(StepResult::InstructionStepped)
         },
         [DotnetRs.RuntimeType::GetIsGenericType()] => {
@@ -664,7 +661,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
         | [DotnetRs.ConstructorInfo::GetName()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (method, _) = stack.resolve_runtime_method(obj);
-            push!(string(gc, CLRString::from(&method.method.name)));
+            push!(string(&method.method.name));
             Some(StepResult::InstructionStepped)
         },
         [DotnetRs.MethodInfo::GetDeclaringType()]
@@ -713,7 +710,7 @@ pub fn runtime_field_info_intrinsic_call<'gc, 'm: 'gc>(
         [DotnetRs.FieldInfo::GetName()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (field, _) = stack.resolve_runtime_field(obj);
-            push!(string(gc, CLRString::from(&field.field.name)));
+            push!(string(&field.field.name));
             Some(StepResult::InstructionStepped)
         },
         [DotnetRs.FieldInfo::GetDeclaringType()] => {
