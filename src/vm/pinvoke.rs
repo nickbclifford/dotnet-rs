@@ -150,7 +150,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 .show_with_name(res.definition(), format!("{module}::{function}"))
         );
 
-        let target = self.runtime.pinvoke.get_function(module, function);
+        let target = self.pinvoke_write().get_function(module, function);
 
         let ctx = self.current_context();
         let mut args: Vec<Type> = vec![];

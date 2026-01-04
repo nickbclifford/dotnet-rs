@@ -58,8 +58,7 @@ macro_rules! vm_msg {
 macro_rules! vm_trace_instruction {
     ($src:expr, $ip:expr, $instr:expr) => {
         if $src.tracer_enabled() {
-            $src.runtime
-                .tracer
+            $src.tracer()
                 .trace_instruction($src.indent(), $ip, $instr);
         }
     };
@@ -69,8 +68,7 @@ macro_rules! vm_trace_instruction {
 macro_rules! vm_trace_method_entry {
     ($src:expr, $name:expr, $sig:expr) => {
         if $src.tracer_enabled() {
-            $src.runtime
-                .tracer
+            $src.tracer()
                 .trace_method_entry($src.indent(), $name, $sig);
         }
     };
@@ -80,7 +78,7 @@ macro_rules! vm_trace_method_entry {
 macro_rules! vm_trace_method_exit {
     ($src:expr, $name:expr) => {
         if $src.tracer_enabled() {
-            $src.runtime.tracer.trace_method_exit($src.indent(), $name);
+            $src.tracer().trace_method_exit($src.indent(), $name);
         }
     };
 }
@@ -89,8 +87,7 @@ macro_rules! vm_trace_method_exit {
 macro_rules! vm_trace_stack {
     ($src:expr, $op:expr, $val:expr) => {
         if $src.tracer_enabled() {
-            $src.runtime
-                .tracer
+            $src.tracer()
                 .trace_stack_op($src.indent(), $op, &format!("{:?}", $val));
         }
     };
@@ -100,8 +97,7 @@ macro_rules! vm_trace_stack {
 macro_rules! vm_trace_gc {
     ($src:expr, $event:expr, $details:expr) => {
         if $src.tracer_enabled() {
-            $src.runtime
-                .tracer
+            $src.tracer()
                 .trace_gc_event($src.indent(), $event, $details);
         }
     };
@@ -111,8 +107,7 @@ macro_rules! vm_trace_gc {
 macro_rules! vm_trace_branch {
     ($src:expr, $type:expr, $target:expr, $taken:expr) => {
         if $src.tracer_enabled() {
-            $src.runtime
-                .tracer
+            $src.tracer()
                 .trace_branch($src.indent(), $type, $target, $taken);
         }
     };
@@ -122,7 +117,7 @@ macro_rules! vm_trace_branch {
 macro_rules! vm_trace_field {
     ($src:expr, $op:expr, $field:expr, $val:expr) => {
         if $src.tracer_enabled() {
-            $src.runtime.tracer.trace_field_access(
+            $src.tracer().trace_field_access(
                 $src.indent(),
                 $op,
                 $field,

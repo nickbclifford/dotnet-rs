@@ -22,6 +22,18 @@ use dotnetdll::prelude::*;
 use std::cmp::Ordering;
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
+    /// Check if a GC safe point should be reached.
+    /// This should be called before large allocations or long-running operations.
+    #[inline]
+    pub fn check_gc_safe_point(&self) {
+        let thread_manager = &self.global.thread_manager;
+        if thread_manager.is_gc_stop_requested() {
+            if let Some(managed_id) = thread_manager.current_thread_id() {
+                thread_manager.safe_point(managed_id);
+            }
+        }
+    }
+
     fn find_generic_method(&self, source: &MethodSource) -> (MethodDescription, GenericLookup) {
         let ctx = self.current_context();
 
@@ -58,7 +70,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         method: MethodDescription,
         lookup: GenericLookup,
     ) -> StepResult {
-        if is_intrinsic(method, self.runtime.loader) {
+        if is_intrinsic(method, self.loader()) {
             intrinsic_call(gc, self, method, lookup)
         } else if method.method.pinvoke.is_some() {
             self.external_call(method, gc);
@@ -66,45 +78,76 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         } else {
             self.call_frame(
                 gc,
-                MethodInfo::new(method, &lookup, self.runtime.loader),
+                MethodInfo::new(method, &lookup, self.loader()),
                 lookup,
             );
             StepResult::InstructionStepped
         }
     }
 
+    /// Initialize static storage for a type and invoke its .cctor if needed.
+    /// This method is thread-safe when using the new_with_global architecture.
+    ///
+    /// Returns `true` if a .cctor was invoked (caller should return early),
+    /// or `false` if initialization is complete or not needed.
     pub fn initialize_static_storage(
         &mut self,
         gc: GCHandle<'gc>,
         description: TypeDescription,
         generics: GenericLookup,
     ) -> bool {
+        // Check GC safe point before potentially running static constructors
+        // which may allocate many objects
+        self.check_gc_safe_point();
+
         let ctx = ResolutionContext {
             resolution: description.resolution,
             generics: &generics,
-            loader: self.runtime.loader,
+            loader: self.loader(),
             type_owner: Some(description),
             method_owner: None,
         };
-        let value = {
-            let mut statics = self.runtime.statics.borrow_mut();
-            statics.init(description, &ctx)
-        };
-        if let Some(m) = value {
-            vm_msg!(
-                self,
-                "-- calling static constructor (will return to ip {}) --",
-                self.current_frame().state.ip
-            );
-            self.call_frame(
-                gc,
-                MethodInfo::new(m, &generics, self.runtime.loader),
-                generics,
-            );
-            true
-        } else {
-            false
+
+        loop {
+            let tid = self.thread_id.get();
+            let init_result = {
+                // Thread-safe path: use RwLock-protected StaticStorageManager
+                let mut statics = self.global.statics.write();
+                statics.init(description, &ctx, tid)
+            };
+
+            match init_result {
+                crate::value::storage::StaticInitResult::Execute(m) => {
+                    vm_msg!(
+                        self,
+                        "-- calling static constructor (will return to ip {}) --",
+                        self.current_frame().state.ip
+                    );
+                    self.call_frame(
+                        gc,
+                        MethodInfo::new(m, &generics, self.loader()),
+                        generics,
+                    );
+                    return true;
+                }
+                crate::value::storage::StaticInitResult::Initialized
+                | crate::value::storage::StaticInitResult::Recursive => {
+                    return false;
+                }
+                crate::value::storage::StaticInitResult::Waiting => {
+                    // If INITIALIZING on another thread, we wait.
+                    // We use yield_now() to avoid deadlocking with the statics lock.
+                    std::thread::yield_now();
+                }
+            }
         }
+    }
+
+    /// Mark a type's static initialization as complete after its .cctor returns.
+    /// This should be called when a .cctor method returns normally.
+    pub fn mark_type_initialized(&mut self, description: TypeDescription) {
+        let mut statics = self.global.statics.write();
+        statics.mark_initialized(description);
     }
 
     pub fn step(&mut self, gc: GCHandle<'gc>) -> StepResult {
@@ -122,7 +165,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         macro_rules! statics {
             (|$s:ident| $body:expr) => {{
                 #[allow(unused_mut)]
-                let mut $s = self.runtime.statics.borrow_mut();
+                let mut $s = self.statics_write();
                 $body
             }};
         }
@@ -201,7 +244,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         c
                     );
                 }
-                if is_intrinsic_field($field, self.runtime.loader) {
+                if is_intrinsic_field($field, self.loader()) {
                     intrinsic_field(
                         gc,
                         self,
@@ -300,8 +343,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let (method, lookup) = self.find_generic_method(source);
 
                 let td = self
-                    .runtime
-                    .loader
+                    .loader()
                     .find_concrete_type(constraint_type.clone());
 
                 for o in td.definition().overrides.iter() {
@@ -474,6 +516,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         rest
                     ),
                 };
+
+                // Check GC safe point before large memory block copy operations
+                // Threshold: copying more than 4KB of data
+                const LARGE_COPY_THRESHOLD: usize = 4096;
+                if size > LARGE_COPY_THRESHOLD {
+                    self.check_gc_safe_point();
+                }
+
                 unsafe {
                     std::ptr::copy_nonoverlapping(src, dest, size);
                 }
@@ -821,15 +871,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 let constraint_type_source = ctx.make_concrete(constraint);
                 let constraint_type = self
-                    .runtime
-                    .loader
+                    .loader()
                     .find_concrete_type(constraint_type_source.clone());
 
                 // Determine dispatch strategy based on constraint type
                 let method = if constraint_type.is_value_type(&ctx) {
                     // Value type: check for direct override first
                     if let Some(overriding_method) =
-                        self.runtime.loader.find_method_in_type_with_substitution(
+                        self.loader().find_method_in_type_with_substitution(
                             constraint_type,
                             &base_method.method.name,
                             &base_method.method.signature,
@@ -879,7 +928,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     // For reference types with constrained callvirt, try to find the method
                     // implementation directly in the constraint type first
                     if let Some(impl_method) =
-                        self.runtime.loader.find_method_in_type_with_substitution(
+                        self.loader().find_method_in_type_with_substitution(
                             constraint_type,
                             &base_method.method.name,
                             &base_method.method.signature,
@@ -915,8 +964,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let ctx = self.current_context();
                     let obj_type = ctx.get_heap_description(o);
                     let target_type = self
-                        .runtime
-                        .loader
+                        .loader()
                         .find_concrete_type(ctx.make_concrete(target));
 
                     if ctx.is_a(obj_type, target_type) {
@@ -945,8 +993,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let ctx = self.current_context();
                     let obj_type = ctx.get_heap_description(o);
                     let target_type = self
-                        .runtime
-                        .loader
+                        .loader()
                         .find_concrete_type(ctx.make_concrete(target));
 
                     if ctx.is_a(obj_type, target_type) {
@@ -1079,7 +1126,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     _ => panic!("ldelema on non-vector"),
                 };
-                let target_type = self.runtime.loader.find_concrete_type(concrete_t);
+                let target_type = self.loader().find_concrete_type(concrete_t);
                 push!(managed_ptr(ptr, target_type, Some(h), false));
             }
             LoadField {
@@ -1258,11 +1305,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let ctx = self
                     .current_context()
                     .for_type_with_generics(field.parent, &lookup);
-                let value = statics!(|s| {
-                    let field_data = s.get(field.parent).get_field(name);
+
+                // Thread-safe path: use GlobalState
+                let value = {
+                    let global = &self.global;
+                    let statics = global.statics.read();
+                    let field_data = statics.get(field.parent).get_field(name);
                     let t = ctx.make_concrete(&field.field.return_type);
                     CTSValue::read(&t, &ctx, field_data).into_stack()
-                });
+                };
+
                 vm_trace_field!(self, "LOAD_STATIC", name, &value);
                 push!(value)
             }
@@ -1294,7 +1346,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let (field, lookup) = self.current_context().locate_field(*source);
                 let field_obj = self.get_runtime_field_obj(gc, field, lookup);
 
-                let rfh = self.runtime.loader.corlib_type("System.RuntimeFieldHandle");
+                let rfh = self.loader().corlib_type("System.RuntimeFieldHandle");
                 let mut instance = Object::new(rfh, &self.current_context());
                 field_obj.write(instance.instance_storage.get_field_mut("_value"));
 
@@ -1305,8 +1357,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let method_obj = self.get_runtime_method_obj(gc, method, lookup);
 
                 let rmh = self
-                    .runtime
-                    .loader
+                    .loader()
                     .corlib_type("System.RuntimeMethodHandle");
                 let mut instance = Object::new(rmh, &self.current_context());
                 method_obj.write(instance.instance_storage.get_field_mut("_value"));
@@ -1342,6 +1393,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         rest
                     ),
                 };
+
+                // Check for GC safe point before large allocations
+                // Threshold: arrays with > 1024 elements
+                const LARGE_ARRAY_THRESHOLD: usize = 1024;
+                if length > LARGE_ARRAY_THRESHOLD {
+                    self.check_gc_safe_point();
+                }
+
                 let ctx = self.current_context();
                 let elem_type = ctx.normalize_type(ctx.make_concrete(elem_type));
 
@@ -1361,7 +1420,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         type_name.as_ref(),
                         "System.Delegate" | "System.MulticastDelegate"
                     ) {
-                        let base = self.runtime.loader.corlib_type(&type_name);
+                        let base = self.loader().corlib_type(&type_name);
                         method = MethodDescription {
                             parent: base,
                             method: base
@@ -1390,7 +1449,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     self.constructor_frame(
                         gc,
                         instance,
-                        MethodInfo::new(method, &lookup, self.runtime.loader),
+                        MethodInfo::new(method, &lookup, self.loader()),
                         lookup,
                     );
                     moved_ip = true;
@@ -1585,12 +1644,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let ctx = self
                     .current_context()
                     .for_type_with_generics(field.parent, &lookup);
-                statics!(|s| {
-                    let field_data = s.get_mut(field.parent).get_field_mut(name);
+
+                // Thread-safe path: use GlobalState
+                {
+                    let global = &self.global;
+                    let mut statics = global.statics.write();
+                    let field_data = statics.get_mut(field.parent).get_field_mut(name);
                     let t = ctx.make_concrete(&field.field.return_type);
                     vm_trace_field!(self, "STORE_STATIC", name, &value);
                     CTSValue::new(&t, &ctx, value).write(field_data);
-                });
+                }
             }
             Throw => {
                 let exc = pop!();

@@ -585,7 +585,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             markers.push((base.arguments, format!("Arguments base of frame #{}", i)));
         }
 
-        self.runtime.tracer.dump_stack_state(&contents, &markers);
+        self.tracer().dump_stack_state(&contents, &markers);
     }
 
     pub fn trace_dump_frames(&self) {
@@ -593,9 +593,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             return;
         }
 
+        let tracer = self.tracer();
         for (idx, frame) in self.execution.frames.iter().enumerate() {
             let method_name = format!("{:?}", frame.state.info_handle.source);
-            self.runtime.tracer.dump_frame_state(
+            tracer.dump_frame_state(
                 idx,
                 &method_name,
                 frame.state.ip,
@@ -612,8 +613,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             return;
         }
 
-        let objects: Vec<_> = self.gc._all_objs.borrow().iter().copied().collect();
-        self.runtime.tracer.dump_heap_snapshot_start(objects.len());
+        let objects: Vec<_> = self.heap()._all_objs.borrow().iter().copied().collect();
+        let tracer = self.tracer();
+        tracer.dump_heap_snapshot_start(objects.len());
 
         for obj in objects {
             let Some(ptr) = obj.0 else {
@@ -623,32 +625,24 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             match &*ptr.borrow() {
                 HeapStorage::Obj(o) => {
                     let details = format!("{:?}", o);
-                    self.runtime
-                        .tracer
-                        .dump_heap_object(raw_ptr, "Object", &details);
+                    tracer.dump_heap_object(raw_ptr, "Object", &details);
                 }
                 HeapStorage::Vec(v) => {
                     let details = format!("{:?}", v);
-                    self.runtime
-                        .tracer
-                        .dump_heap_object(raw_ptr, "Vector", &details);
+                    tracer.dump_heap_object(raw_ptr, "Vector", &details);
                 }
                 HeapStorage::Str(s) => {
                     let details = format!("{:?}", s);
-                    self.runtime
-                        .tracer
-                        .dump_heap_object(raw_ptr, "String", &details);
+                    tracer.dump_heap_object(raw_ptr, "String", &details);
                 }
                 HeapStorage::Boxed(b) => {
                     let details = format!("{:?}", b);
-                    self.runtime
-                        .tracer
-                        .dump_heap_object(raw_ptr, "Boxed", &details);
+                    tracer.dump_heap_object(raw_ptr, "Boxed", &details);
                 }
             }
         }
 
-        self.runtime.tracer.dump_heap_snapshot_end();
+        tracer.dump_heap_snapshot_end();
     }
 
     pub fn trace_dump_statics(&self) {
@@ -656,9 +650,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             return;
         }
 
-        let s = self.runtime.statics.borrow();
+        let s = self.statics_read();
         let debug_str = format!("{:#?}", &*s);
-        self.runtime.tracer.dump_statics_snapshot(&debug_str);
+        self.tracer().dump_statics_snapshot(&debug_str);
     }
 
     pub fn trace_dump_gc_stats(&self) {
@@ -666,12 +660,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             return;
         }
 
-        self.runtime.tracer.dump_gc_stats(
-            self.gc.finalization_queue.borrow().len(),
-            self.gc.pending_finalization.borrow().len(),
-            self.gc.pinned_objects.borrow().len(),
-            self.gc.gchandles.borrow().len(),
-            self.gc._all_objs.borrow().len(),
+        self.tracer().dump_gc_stats(
+            self.heap().finalization_queue.borrow().len(),
+            self.heap().pending_finalization.borrow().len(),
+            self.heap().pinned_objects.borrow().len(),
+            self.heap().gchandles.borrow().len(),
+            self.heap()._all_objs.borrow().len(),
         );
     }
 
@@ -681,12 +675,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             return;
         }
 
-        self.runtime.tracer.dump_full_state_header();
+        self.tracer().dump_full_state_header();
         self.trace_dump_frames();
         self.trace_dump_stack();
         self.trace_dump_heap();
         self.trace_dump_statics();
         self.trace_dump_gc_stats();
-        self.runtime.tracer.flush();
+        self.tracer().flush();
     }
 }

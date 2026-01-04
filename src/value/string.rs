@@ -99,6 +99,14 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
                 StackValue::Int32(i) => i as usize,
                 rest => panic!("invalid length for FastAllocateString: {:?}", rest),
             };
+
+            // Check GC safe point before allocating large strings
+            // Threshold: strings with > 1024 characters
+            const LARGE_STRING_THRESHOLD: usize = 1024;
+            if len > LARGE_STRING_THRESHOLD {
+                stack.check_gc_safe_point();
+            }
+
             let value = CLRString::new(vec![0u16; len]);
             push!(string(gc, value));
             Some(StepResult::InstructionStepped)
@@ -112,6 +120,14 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
                 rest => panic!("invalid length for FastAllocateString: {:?}", rest),
             };
             pop!(); // pop method table pointer
+
+            // Check GC safe point before allocating large strings
+            // Threshold: strings with > 1024 characters
+            const LARGE_STRING_THRESHOLD: usize = 1024;
+            if len > LARGE_STRING_THRESHOLD {
+                stack.check_gc_safe_point();
+            }
+
             let value = CLRString::new(vec![0u16; len]);
             push!(string(gc, value));
             Some(StepResult::InstructionStepped)
@@ -137,6 +153,14 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
             let data0 = char_span_into_str(*span0);
             let data1 = char_span_into_str(*span1);
             let data2 = char_span_into_str(*span2);
+
+            // Check GC safe point before concatenating potentially large strings
+            // Threshold: concatenating strings with total length > 1024 characters
+            let total_length = data0.len() + data1.len() + data2.len();
+            const LARGE_STRING_CONCAT_THRESHOLD: usize = 1024;
+            if total_length > LARGE_STRING_CONCAT_THRESHOLD {
+                stack.check_gc_safe_point();
+            }
 
             let value = CLRString::new(data0.into_iter().chain(data1).chain(data2).collect());
             push!(string(gc, value));
@@ -165,7 +189,7 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
             };
             let ptr = with_string!(stack, gc, val, |s| s.as_ptr() as *mut u8);
             let value =
-                StackValue::managed_ptr(ptr, stack.runtime.loader.corlib_type("System.Char"), obj_h, false);
+                StackValue::managed_ptr(ptr, stack.loader().corlib_type("System.Char"), obj_h, false);
             push!(value);
             Some(StepResult::InstructionStepped)
         },

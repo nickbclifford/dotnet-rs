@@ -11,10 +11,13 @@ mod exceptions;
 mod executor;
 mod instructions;
 pub(crate) mod intrinsics;
+pub mod metrics;
 #[macro_use]
 mod macros;
 mod pinvoke;
 mod stack;
+pub mod sync;
+pub mod threading;
 pub mod tracer;
 
 pub use executor::*;

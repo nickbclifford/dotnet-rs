@@ -19,17 +19,34 @@ use crate::{
 };
 use dotnetdll::prelude::*;
 use gc_arena::{lock::RefLock, Arena, Collect, Collection, Gc, Mutation, Rootable};
+use parking_lot::{Mutex, RwLock};
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     fmt::Debug,
     ptr::NonNull,
+    sync::Arc,
 };
 
 #[derive(Collect)]
 #[collect(no_drop)]
 pub struct StackSlotHandle<'gc>(Gc<'gc, RefLock<StackValue<'gc>>>);
 
+/// Thread-local execution state for a single .NET thread.
+/// Contains the evaluation stack, call frames, and exception state.
+#[derive(Collect)]
+#[collect(no_drop)]
+pub struct ThreadContext<'gc, 'm> {
+    pub stack: Vec<StackSlotHandle<'gc>>,
+    pub frames: Vec<StackFrame<'gc, 'm>>,
+    pub exception_mode: ExceptionState<'gc>,
+    pub suspended_frames: Vec<StackFrame<'gc, 'm>>,
+    pub suspended_stack: Vec<StackSlotHandle<'gc>>,
+    pub original_ip: usize,
+    pub original_stack_height: usize,
+}
+
+/// Legacy alias for backward compatibility during refactoring.
 #[derive(Collect)]
 #[collect(no_drop)]
 pub struct ExecutionStack<'gc, 'm> {
@@ -42,48 +59,13 @@ pub struct ExecutionStack<'gc, 'm> {
     pub original_stack_height: usize,
 }
 
-pub struct RuntimeEnvironment<'gc, 'm> {
-    pub loader: &'m AssemblyLoader,
-    pub statics: RefCell<StaticStorageManager<'gc>>,
-    pub pinvoke: NativeLibraries,
-    pub runtime_asms: HashMap<ResolutionS, ObjectRef<'gc>>,
-    pub runtime_types: HashMap<RuntimeType, ObjectRef<'gc>>,
-    pub runtime_types_list: Vec<RuntimeType>,
-    pub runtime_methods: Vec<(MethodDescription, GenericLookup)>,
-    pub runtime_method_objs: HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>,
-    pub runtime_fields: Vec<(FieldDescription, GenericLookup)>,
-    pub runtime_field_objs: HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>,
-    pub method_tables: RefCell<HashMap<TypeDescription, Box<[u8]>>>,
-    pub empty_generics: GenericLookup,
-    pub tracer: Tracer,
-}
-
-unsafe impl<'gc, 'm: 'gc> Collect for RuntimeEnvironment<'gc, 'm> {
-    fn trace(&self, cc: &Collection) {
-        self.statics.borrow().trace(cc);
-        self.empty_generics.trace(cc);
-
-        for o in self.runtime_asms.values() {
-            o.trace(cc);
-        }
-        for o in self.runtime_types.values() {
-            o.trace(cc);
-        }
-        for o in self.runtime_method_objs.values() {
-            o.trace(cc);
-        }
-        for o in self.runtime_field_objs.values() {
-            o.trace(cc);
-        }
-    }
-}
 
 pub struct HeapManager<'gc> {
     pub finalization_queue: RefCell<Vec<ObjectRef<'gc>>>,
     pub pending_finalization: RefCell<Vec<ObjectRef<'gc>>>,
     pub pinned_objects: RefCell<HashSet<ObjectRef<'gc>>>,
     pub gchandles: RefCell<Vec<Option<(ObjectRef<'gc>, GCHandleType)>>>,
-    pub processing_finalizer: bool,
+    pub processing_finalizer: Cell<bool>,
     pub needs_full_collect: Cell<bool>,
     // untraced handles to every heap object, used only by the tracer during debugging
     pub(super) _all_objs: RefCell<HashSet<ObjectRef<'gc>>>,
@@ -114,17 +96,126 @@ unsafe impl<'gc> Collect for HeapManager<'gc> {
     }
 }
 
+/// Global shared state accessible by all .NET threads.
+/// Contains heap, statics, assembly metadata, and reflection caches.
+/// Uses thread-safe synchronization primitives for concurrent access.
+///
+/// # Architecture
+///
+/// This structure represents the "Phase 1" multithreading architecture, where global
+/// state is separated from per-thread state (ThreadContext/ExecutionStack). It is
+/// designed to be shared via `Arc` across multiple executor threads.
+///
+/// # ⚠️ IMPORTANT: GC IS STILL SINGLE-THREADED ⚠️
+///
+/// **The `HeapManager` still uses `RefCell` internally because `gc-arena` v0.5 requires
+/// single-threaded mutation.** This means that while the threading infrastructure is in place,
+/// **true parallel execution is not yet supported.** The current implementation prepares the
+/// architecture for multithreading but all GC operations must be serialized.
+///
+/// True parallel execution requires either:
+/// - Upgrading to a thread-safe GC library
+/// - Implementing per-thread arenas with cross-arena coordination
+///
+/// # Synchronization Strategy
+///
+/// - `RwLock` for read-heavy data (statics, reflection caches, method tables)
+/// - `Mutex` for write-heavy or complex operations (tracer, sync blocks)
+/// - Atomic operations within HeapManager for GC coordination
+pub struct GlobalState<'gc, 'm> {
+    pub loader: &'m AssemblyLoader,
+    // GC and heap state (requires synchronization for thread safety)
+    pub heap: HeapManager<'gc>,
+    // Static fields (synchronized)
+    pub statics: RwLock<StaticStorageManager<'gc>>,
+    // P/Invoke libraries (thread-safe via internal synchronization)
+    pub pinvoke: RwLock<NativeLibraries>,
+    // Reflection object caches (synchronized for concurrent access)
+    pub runtime_asms: RwLock<HashMap<ResolutionS, ObjectRef<'gc>>>,
+    pub runtime_types: RwLock<HashMap<RuntimeType, ObjectRef<'gc>>>,
+    pub runtime_types_list: RwLock<Vec<RuntimeType>>,
+    pub runtime_methods: RwLock<Vec<(MethodDescription, GenericLookup)>>,
+    pub runtime_method_objs: RwLock<HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>>,
+    pub runtime_fields: RwLock<Vec<(FieldDescription, GenericLookup)>>,
+    pub runtime_field_objs: RwLock<HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>>,
+    // Method tables (synchronized)
+    pub method_tables: RwLock<HashMap<TypeDescription, Box<[u8]>>>,
+    // Shared empty generics instance
+    pub empty_generics: GenericLookup,
+    // Tracer (requires synchronization for concurrent output)
+    pub tracer: Mutex<Tracer>,
+    // Sync blocks for Monitor operations (synchronized)
+    pub sync_blocks: crate::vm::sync::SyncBlockManager,
+    // Thread manager for .NET thread lifecycle and GC coordination
+    pub thread_manager: Arc<crate::vm::threading::ThreadManager>,
+    // Runtime performance metrics
+    pub metrics: crate::vm::metrics::RuntimeMetrics,
+}
+
+unsafe impl<'gc, 'm: 'gc> Collect for GlobalState<'gc, 'm> {
+    fn trace(&self, cc: &Collection) {
+        self.heap.trace(cc);
+        self.statics.read().trace(cc);
+        self.empty_generics.trace(cc);
+
+        for o in self.runtime_asms.read().values() {
+            o.trace(cc);
+        }
+        for o in self.runtime_types.read().values() {
+            o.trace(cc);
+        }
+        for o in self.runtime_method_objs.read().values() {
+            o.trace(cc);
+        }
+        for o in self.runtime_field_objs.read().values() {
+            o.trace(cc);
+        }
+    }
+}
+
+impl<'gc, 'm> GlobalState<'gc, 'm> {
+    pub fn new(_gc: GCHandle<'gc>, loader: &'m AssemblyLoader) -> Self {
+        Self {
+            loader,
+            heap: HeapManager {
+                _all_objs: RefCell::new(HashSet::new()),
+                finalization_queue: RefCell::new(vec![]),
+                pending_finalization: RefCell::new(vec![]),
+                pinned_objects: RefCell::new(HashSet::new()),
+                gchandles: RefCell::new(vec![]),
+                processing_finalizer: Cell::new(false),
+                needs_full_collect: Cell::new(false),
+            },
+            statics: RwLock::new(StaticStorageManager::new()),
+            pinvoke: RwLock::new(NativeLibraries::new(loader.get_root())),
+            runtime_asms: RwLock::new(HashMap::new()),
+            runtime_types: RwLock::new(HashMap::new()),
+            runtime_types_list: RwLock::new(vec![]),
+            runtime_methods: RwLock::new(vec![]),
+            runtime_method_objs: RwLock::new(HashMap::new()),
+            runtime_fields: RwLock::new(vec![]),
+            runtime_field_objs: RwLock::new(HashMap::new()),
+            method_tables: RwLock::new(HashMap::new()),
+            empty_generics: GenericLookup::default(),
+            tracer: Mutex::new(Tracer::new()),
+            sync_blocks: crate::vm::sync::SyncBlockManager::new(),
+            thread_manager: Arc::new(crate::vm::threading::ThreadManager::new()),
+            metrics: crate::vm::metrics::RuntimeMetrics::new(),
+        }
+    }
+}
+
 pub struct CallStack<'gc, 'm> {
     pub execution: ExecutionStack<'gc, 'm>,
-    pub runtime: RuntimeEnvironment<'gc, 'm>,
-    pub gc: HeapManager<'gc>,
+    pub global: Arc<GlobalState<'gc, 'm>>,
+    /// Thread ID for this call stack (if registered)
+    pub thread_id: Cell<u64>,
 }
 
 unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
     fn trace(&self, cc: &Collection) {
         self.execution.trace(cc);
-        self.runtime.trace(cc);
-        self.gc.trace(cc);
+        self.global.trace(cc);
     }
 }
 
@@ -178,7 +269,9 @@ pub type GCArena = Arena<Rootable!['gc => CallStack<'gc, 'static>]>;
 pub type GCHandle<'gc> = &'gc Mutation<'gc>;
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
-    pub fn new(_gc: GCHandle<'gc>, loader: &'m AssemblyLoader) -> Self {
+    /// Create a new CallStack with separated global state (Phase 1 architecture).
+    /// This is now the primary and only constructor for CallStack.
+    pub fn new(_gc: GCHandle<'gc>, global: Arc<GlobalState<'gc, 'm>>) -> Self {
         Self {
             execution: ExecutionStack {
                 stack: vec![],
@@ -189,30 +282,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 original_ip: 0,
                 original_stack_height: 0,
             },
-            runtime: RuntimeEnvironment {
-                loader,
-                pinvoke: NativeLibraries::new(loader.get_root()),
-                statics: RefCell::new(StaticStorageManager::new()),
-                runtime_asms: HashMap::new(),
-                runtime_types: HashMap::new(),
-                runtime_types_list: vec![],
-                runtime_methods: vec![],
-                runtime_method_objs: HashMap::new(),
-                runtime_fields: vec![],
-                runtime_field_objs: HashMap::new(),
-                method_tables: RefCell::new(HashMap::new()),
-                empty_generics: GenericLookup::default(),
-                tracer: Tracer::new(),
-            },
-            gc: HeapManager {
-                _all_objs: RefCell::new(HashSet::new()),
-                finalization_queue: RefCell::new(vec![]),
-                pending_finalization: RefCell::new(vec![]),
-                pinned_objects: RefCell::new(HashSet::new()),
-                gchandles: RefCell::new(vec![]),
-                processing_finalizer: false,
-                needs_full_collect: Cell::new(false),
-            },
+            global,
+            thread_id: Cell::new(0),
         }
     }
 
@@ -252,7 +323,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     let ctx = ResolutionContext {
                         generics,
-                        loader: self.runtime.loader,
+                        loader: self.global.loader,
                         resolution: method.resolution(),
                         type_owner: Some(method.parent),
                         method_owner: Some(method),
@@ -349,33 +420,36 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let ObjectRef(Some(ptr)) = instance else {
             return;
         };
-        self.gc._all_objs.borrow_mut().insert(*instance);
+
+        let heap = &self.global.heap;
+
+        heap._all_objs.borrow_mut().insert(*instance);
 
         let ctx = self.current_context();
 
         if let HeapStorage::Obj(o) = &*ptr.borrow() {
             if o.description.has_finalizer(&ctx) {
-                let mut queue = self.gc.finalization_queue.borrow_mut();
+                let mut queue = heap.finalization_queue.borrow_mut();
                 queue.push(*instance);
             }
         }
     }
 
     pub fn process_pending_finalizers(&mut self, gc: GCHandle<'gc>) -> StepResult {
-        if self.gc.processing_finalizer {
+        if self.global.heap.processing_finalizer.get() {
             return StepResult::MethodReturned;
         }
 
-        let obj_ref = self.gc.pending_finalization.borrow_mut().pop();
+        let obj_ref = self.global.heap.pending_finalization.borrow_mut().pop();
         if let Some(obj_ref) = obj_ref {
-            self.gc.processing_finalizer = true;
+            self.global.heap.processing_finalizer.set(true);
             let ptr = obj_ref.0.unwrap();
             let obj_type = match &*ptr.borrow() {
                 HeapStorage::Obj(o) => o.description,
                 _ => unreachable!(),
             };
 
-            let object_type = self.runtime.loader.corlib_type("System.Object");
+            let object_type = self.global.loader.corlib_type("System.Object");
             let base_finalize = object_type
                 .definition()
                 .methods
@@ -392,8 +466,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             // We need a context to resolve the virtual method, but if the stack is empty,
             // we can use a temporary one from the object's own resolution.
             let ctx = ResolutionContext {
-                generics: &self.runtime.empty_generics,
-                loader: self.runtime.loader,
+                generics: &self.global.empty_generics,
+                loader: self.global.loader,
                 resolution: obj_type.resolution,
                 type_owner: Some(obj_type),
                 method_owner: None,
@@ -404,10 +478,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 gc,
                 MethodInfo::new(
                     target_method,
-                    &self.runtime.empty_generics,
-                    self.runtime.loader,
+                    &self.global.empty_generics,
+                    self.global.loader,
                 ),
-                self.runtime.empty_generics.clone(),
+                self.global.empty_generics.clone(),
                 vec![StackValue::ObjectRef(obj_ref)],
             );
             self.execution.frames.last_mut().unwrap().is_finalizer = true;
@@ -472,8 +546,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     ) {
         if self.tracer_enabled() {
             let method_desc = format!("{:?}", method.source);
-            self.runtime
-                .tracer
+            self.global.tracer.lock()
                 .trace_method_entry(self.indent(), &method_desc, "");
         }
 
@@ -544,13 +617,18 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         if self.tracer_enabled() {
             let method_name = format!("{:?}", frame.state.info_handle.source);
-            self.runtime
-                .tracer
+            self.global.tracer.lock()
                 .trace_method_exit(self.indent(), &method_name);
         }
 
+        // If this was a static constructor (.cctor), mark the type as initialized
+        if frame.state.info_handle.is_cctor {
+            let type_desc = frame.state.info_handle.source.parent;
+            self.global.statics.write().mark_initialized(type_desc);
+        }
+
         if frame.is_finalizer {
-            self.gc.processing_finalizer = false;
+            self.global.heap.processing_finalizer.set(false);
         }
 
         let signature = frame.state.info_handle.signature;
@@ -586,7 +664,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             .pop()
             .expect("unwind_frame called with empty stack");
         if frame.is_finalizer {
-            self.gc.processing_finalizer = false;
+            self.global.heap.processing_finalizer.set(false);
         }
         self.execution.stack.truncate(frame.base.arguments);
     }
@@ -606,16 +684,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         if let Some(f) = self.execution.frames.last() {
             ResolutionContext {
                 generics: &f.generic_inst,
-                loader: self.runtime.loader,
+                loader: self.global.loader,
                 resolution: f.source_resolution,
                 type_owner: Some(f.state.info_handle.source.parent),
                 method_owner: Some(f.state.info_handle.source),
             }
         } else {
             ResolutionContext {
-                generics: &self.runtime.empty_generics,
-                loader: self.runtime.loader,
-                resolution: self.runtime.loader.corlib_type("System.Object").resolution,
+                generics: &self.global.empty_generics,
+                loader: self.global.loader,
+                resolution: self.global.loader.corlib_type("System.Object").resolution,
                 type_owner: None,
                 method_owner: None,
             }
@@ -643,8 +721,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn finalize_check(&self, fc: &gc_arena::Finalization<'gc>) {
-        let mut queue = self.gc.finalization_queue.borrow_mut();
-        let mut handles = self.gc.gchandles.borrow_mut();
+        let heap = &self.global.heap;
+        let mut queue = heap.finalization_queue.borrow_mut();
+        let mut handles = heap.gchandles.borrow_mut();
         let mut resurrected = HashSet::new();
 
         let mut zero_out_handles = |for_type: GCHandleType, resurrected: &HashSet<usize>| {
@@ -689,7 +768,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
 
             if !to_finalize.is_empty() {
-                let mut pending = self.gc.pending_finalization.borrow_mut();
+                let mut pending = heap.pending_finalization.borrow_mut();
                 for obj in to_finalize {
                     let ptr = obj.0.unwrap();
                     pending.push(obj);
@@ -708,7 +787,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         zero_out_handles(GCHandleType::WeakTrackResurrection, &resurrected);
 
         // 3. Prune dead objects from the debugging harness
-        self.gc._all_objs.borrow_mut().retain(|obj| match obj {
+        heap._all_objs.borrow_mut().retain(|obj| match obj {
             ObjectRef(Some(ptr)) => {
                 !Gc::is_dead(fc, *ptr) || resurrected.contains(&(Gc::as_ptr(*ptr) as usize))
             }
@@ -773,7 +852,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         if index < frame.pinned_locals.len() && frame.pinned_locals[index] {
             if let StackValue::ObjectRef(obj) = value {
                 if obj.0.is_some() {
-                    self.gc.pinned_objects.borrow_mut().insert(obj);
+                    self.global.heap.pinned_objects.borrow_mut().insert(obj);
                 }
             }
         }
@@ -782,8 +861,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn push_stack(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {
         if self.tracer_enabled() {
-            self.runtime
-                .tracer
+            self.global.tracer.lock()
                 .trace_stack_op(self.indent(), "PUSH", &format!("{:?}", value));
         }
         self.set_slot_at(gc, self.top_of_stack(), value);
@@ -797,8 +875,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
         let value = self.get_slot(&self.execution.stack[top - 1]);
         if self.tracer_enabled() {
-            self.runtime
-                .tracer
+            self.global.tracer.lock()
                 .trace_stack_op(self.indent(), "POP", &format!("{:?}", value));
         }
         self.current_frame_mut().stack_height -= 1;
@@ -820,7 +897,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn tracer_enabled(&self) -> bool {
-        self.runtime.tracer.is_enabled()
+        self.global.tracer.lock().is_enabled()
     }
 
     pub fn indent(&self) -> usize {
@@ -832,11 +909,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn msg(&self, fmt: std::fmt::Arguments) {
-        self.runtime.tracer.msg(self.indent(), fmt);
+        self.global.tracer.lock().msg(self.indent(), fmt);
     }
 
     pub fn throw_by_name(&mut self, gc: GCHandle<'gc>, name: &str) -> StepResult {
-        let rt = self.runtime.loader.corlib_type(name);
+        let rt = self.global.loader.corlib_type(name);
         let rt_obj = ObjectInstance::new(rt, &self.current_context());
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
         self.register_new_object(&obj_ref);
@@ -860,7 +937,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         };
 
         for (parent, _) in ctx.get_ancestors(this_type) {
-            if let Some(method) = self.runtime.loader.find_method_in_type(
+            if let Some(method) = self.global.loader.find_method_in_type(
                 parent,
                 &base_method.method.name,
                 &base_method.method.signature,
@@ -873,5 +950,161 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             "could not find virtual method implementation of {:?} in {:?}",
             base_method, this_type
         );
+    }
+
+    // ========================================================================
+    // Compatibility Layer Methods
+    // These methods provide a unified interface that delegates to global state
+    // when available, falling back to legacy fields during migration.
+    // ========================================================================
+
+    /// Get the heap manager.
+    #[inline]
+    pub fn heap(&self) -> &HeapManager<'gc> {
+        &self.global.heap
+    }
+
+    /// Get the assembly loader.
+    #[inline]
+    pub fn loader(&self) -> &'m AssemblyLoader {
+        self.global.loader
+    }
+
+    /// Get access to statics storage (read-only).
+    /// Returns a guard that must be held for the duration of access.
+    #[inline]
+    pub fn statics_read(&self) -> parking_lot::RwLockReadGuard<'_, StaticStorageManager<'gc>> {
+        self.global.statics.read()
+    }
+
+    /// Get access to statics storage (mutable).
+    /// Returns a guard that must be held for the duration of access.
+    #[inline]
+    pub fn statics_write(&self) -> parking_lot::RwLockWriteGuard<'_, StaticStorageManager<'gc>> {
+        self.global.statics.write()
+    }
+
+    /// Get access to the P/Invoke libraries manager (read-only).
+    #[inline]
+    pub fn pinvoke_read(&self) -> parking_lot::RwLockReadGuard<'_, NativeLibraries> {
+        self.global.pinvoke.read()
+    }
+
+    /// Get access to the P/Invoke libraries manager (mutable).
+    #[inline]
+    pub fn pinvoke_write(&self) -> parking_lot::RwLockWriteGuard<'_, NativeLibraries> {
+        self.global.pinvoke.write()
+    }
+
+    /// Get the tracer for debugging output.
+    #[inline]
+    pub fn tracer(&self) -> parking_lot::MutexGuard<'_, Tracer> {
+        self.global.tracer.lock()
+    }
+
+    /// Get the empty generics instance.
+    #[inline]
+    pub fn empty_generics(&self) -> &GenericLookup {
+        &self.global.empty_generics
+    }
+
+    // ========================================================================
+    // Reflection Cache Compatibility Methods
+    // ========================================================================
+
+    /// Get access to runtime_asms cache (read-only).
+    #[inline]
+    pub fn runtime_asms_read(&self) -> parking_lot::RwLockReadGuard<'_, HashMap<ResolutionS, ObjectRef<'gc>>> {
+        self.global.runtime_asms.read()
+    }
+
+    /// Get access to runtime_asms cache (mutable).
+    #[inline]
+    pub fn runtime_asms_write(&self) -> parking_lot::RwLockWriteGuard<'_, HashMap<ResolutionS, ObjectRef<'gc>>> {
+        self.global.runtime_asms.write()
+    }
+
+    /// Get access to runtime_types cache (read-only).
+    #[inline]
+    pub fn runtime_types_read(&self) -> parking_lot::RwLockReadGuard<'_, HashMap<RuntimeType, ObjectRef<'gc>>> {
+        self.global.runtime_types.read()
+    }
+
+    /// Get access to runtime_types cache (mutable).
+    #[inline]
+    pub fn runtime_types_write(&self) -> parking_lot::RwLockWriteGuard<'_, HashMap<RuntimeType, ObjectRef<'gc>>> {
+        self.global.runtime_types.write()
+    }
+
+    /// Get access to runtime_types_list (read-only).
+    #[inline]
+    pub fn runtime_types_list_read(&self) -> parking_lot::RwLockReadGuard<'_, Vec<RuntimeType>> {
+        self.global.runtime_types_list.read()
+    }
+
+    /// Get access to runtime_types_list (mutable).
+    #[inline]
+    pub fn runtime_types_list_write(&self) -> parking_lot::RwLockWriteGuard<'_, Vec<RuntimeType>> {
+        self.global.runtime_types_list.write()
+    }
+
+    /// Get access to runtime_methods list (read-only).
+    #[inline]
+    pub fn runtime_methods_read(&self) -> parking_lot::RwLockReadGuard<'_, Vec<(MethodDescription, GenericLookup)>> {
+        self.global.runtime_methods.read()
+    }
+
+    /// Get access to runtime_methods list (mutable).
+    #[inline]
+    pub fn runtime_methods_write(&self) -> parking_lot::RwLockWriteGuard<'_, Vec<(MethodDescription, GenericLookup)>> {
+        self.global.runtime_methods.write()
+    }
+
+    /// Get access to runtime_method_objs cache (read-only).
+    #[inline]
+    pub fn runtime_method_objs_read(&self) -> parking_lot::RwLockReadGuard<'_, HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>> {
+        self.global.runtime_method_objs.read()
+    }
+
+    /// Get access to runtime_method_objs cache (mutable).
+    #[inline]
+    pub fn runtime_method_objs_write(&self) -> parking_lot::RwLockWriteGuard<'_, HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>> {
+        self.global.runtime_method_objs.write()
+    }
+
+    /// Get access to runtime_fields list (read-only).
+    #[inline]
+    pub fn runtime_fields_read(&self) -> parking_lot::RwLockReadGuard<'_, Vec<(FieldDescription, GenericLookup)>> {
+        self.global.runtime_fields.read()
+    }
+
+    /// Get access to runtime_fields list (mutable).
+    #[inline]
+    pub fn runtime_fields_write(&self) -> parking_lot::RwLockWriteGuard<'_, Vec<(FieldDescription, GenericLookup)>> {
+        self.global.runtime_fields.write()
+    }
+
+    /// Get access to runtime_field_objs cache (read-only).
+    #[inline]
+    pub fn runtime_field_objs_read(&self) -> parking_lot::RwLockReadGuard<'_, HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>> {
+        self.global.runtime_field_objs.read()
+    }
+
+    /// Get access to runtime_field_objs cache (mutable).
+    #[inline]
+    pub fn runtime_field_objs_write(&self) -> parking_lot::RwLockWriteGuard<'_, HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>> {
+        self.global.runtime_field_objs.write()
+    }
+
+    /// Get access to method_tables cache (read-only).
+    #[inline]
+    pub fn method_tables_read(&self) -> parking_lot::RwLockReadGuard<'_, HashMap<TypeDescription, Box<[u8]>>> {
+        self.global.method_tables.read()
+    }
+
+    /// Get access to method_tables cache (mutable).
+    #[inline]
+    pub fn method_tables_write(&self) -> parking_lot::RwLockWriteGuard<'_, HashMap<TypeDescription, Box<[u8]>>> {
+        self.global.method_tables.write()
     }
 }

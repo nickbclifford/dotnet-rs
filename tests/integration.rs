@@ -113,9 +113,10 @@ impl TestHarness {
         };
 
         let arena = Box::new(vm::GCArena::new(|gc| {
-            vm::CallStack::new(gc, self.assemblies)
+            let global = std::sync::Arc::new(vm::GlobalState::new(gc, self.assemblies));
+            vm::CallStack::new(gc, global)
         }));
-        let mut executor = vm::Executor::new(Box::leak(arena));
+        let mut executor = vm::Executor::new_with_thread_manager(Box::leak(arena));
 
         let entrypoint = MethodDescription {
             parent: TypeDescription::new(

@@ -653,6 +653,9 @@ pub struct Object<'gc> {
     pub description: TypeDescription,
     pub instance_storage: FieldStorage<'gc>,
     pub finalizer_suppressed: bool,
+    /// Sync block index for System.Threading.Monitor support.
+    /// None means no sync block allocated yet (lazy allocation).
+    pub sync_block_index: Option<usize>,
 }
 
 unsafe impl<'gc> Collect for Object<'gc> {
@@ -670,6 +673,7 @@ impl<'gc> Object<'gc> {
             description,
             instance_storage: FieldStorage::instance_fields(description, context),
             finalizer_suppressed: false,
+            sync_block_index: None,
         }
     }
 }

@@ -193,7 +193,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     fn begin_throwing(&mut self, exception: ObjectRef<'gc>, gc: GCHandle<'gc>) -> StepResult {
         let frame = self.execution.frames.last().unwrap();
         if self.tracer_enabled() {
-            self.runtime.tracer.trace_exception(
+            self.tracer().trace_exception(
                 self.indent(),
                 &format!("{:?}", exception),
                 &format!(
@@ -256,7 +256,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             let exc_type = self
                                 .current_context()
                                 .get_heap_description(exception.0.expect("throwing null"));
-                            let catch_type = self.runtime.loader.find_concrete_type(t.clone());
+                            let catch_type = self.loader().find_concrete_type(t.clone());
 
                             if self.is_a(exc_type, catch_type) {
                                 // Match found! Start the unwind phase towards this handler.
