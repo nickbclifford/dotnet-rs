@@ -16,7 +16,7 @@ pub struct AssemblyLoader {
 }
 unsafe_empty_collect!(AssemblyLoader);
 
-const SUPPORT_LIBRARY: &[u8] = include_bytes!("support/bin/Debug/net10.0/support.dll");
+const SUPPORT_LIBRARY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/support.dll"));
 pub const SUPPORT_ASSEMBLY: &str = "__dotnetrs_support";
 
 impl AssemblyLoader {

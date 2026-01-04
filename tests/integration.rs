@@ -62,7 +62,10 @@ impl TestHarness {
 
     pub fn build(&self, fixture_path: &Path) -> PathBuf {
         let file_name = fixture_path.file_stem().unwrap().to_str().unwrap();
-        let output_dir = Path::new("tests/bin").join(file_name);
+        let output_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("dotnet-fixtures")
+            .join(file_name);
 
         let absolute_file = std::fs::canonicalize(fixture_path).unwrap();
         let dll_path = output_dir.join("SingleFile.dll");

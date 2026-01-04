@@ -1,4 +1,4 @@
-use std::{path::Path, process::Command};
+use std::{fs::File, io::Write, path::Path, process::Command};
 
 fn main() {
     println!("cargo:rerun-if-changed=src/support/support.csproj");
@@ -22,8 +22,7 @@ fn main() {
 
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let destination = Path::new(&out_dir).join("tests.rs");
-    let mut f = std::fs::File::create(&destination).unwrap();
-    use std::io::Write;
+    let mut f = File::create(&destination).unwrap();
 
     let fixtures_dir = Path::new("tests/fixtures");
     for entry in std::fs::read_dir(fixtures_dir).unwrap() {
@@ -51,7 +50,15 @@ fn main() {
     }
 
     let status = Command::new("dotnet")
-        .args(["build", "src/support/support.csproj", "-c", "Debug"])
+        .args([
+            "build",
+            "src/support/support.csproj",
+            "-c",
+            "Debug",
+            "-o",
+            &out_dir,
+            &format!("-p:IntermediateOutputPath={}/support-obj/", out_dir),
+        ])
         .status()
         .expect("failed to run dotnet build");
 
