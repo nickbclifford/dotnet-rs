@@ -1,15 +1,16 @@
 use crate::{
-    assemblies::AssemblyLoader, match_method,
+    assemblies::{AssemblyLoader, SUPPORT_ASSEMBLY},
+    match_method,
     types::{
         TypeDescription, generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
     },
-    utils::decompose_type_source,
+    utils::{ResolutionS, decompose_type_source},
     value::{
         object::{HeapStorage, Object, ObjectRef, Vector},
         string::CLRString,
     },
-    vm::{CallStack, GCHandle, StepResult, context::ResolutionContext},
+    vm::{CallStack, GCHandle, MethodInfo, StepResult, context::ResolutionContext},
     vm_expect_stack, vm_pop, vm_push,
 };
 use dotnetdll::prelude::{BaseType, MethodType, TypeSource};
@@ -56,7 +57,7 @@ pub enum RuntimeType {
 }
 
 impl RuntimeType {
-    pub fn resolution(&self, loader: &AssemblyLoader) -> crate::utils::ResolutionS {
+    pub fn resolution(&self, loader: &AssemblyLoader) -> ResolutionS {
         match self {
             RuntimeType::Void
             | RuntimeType::Boolean
@@ -468,7 +469,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             let value = match stack.runtime.runtime_asms.get(&resolution) {
                 Some(o) => *o,
                 None => {
-                    let support_res = stack.runtime.loader.get_assembly(crate::assemblies::SUPPORT_ASSEMBLY);
+                    let support_res = stack.runtime.loader.get_assembly(SUPPORT_ASSEMBLY);
                     let definition = support_res.0.type_definitions
                         .iter()
                         .find(|a| a.type_name() == "DotnetRs.Assembly")
@@ -628,7 +629,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                     stack.constructor_frame(
                         gc,
                         instance,
-                        crate::vm::MethodInfo::new(desc, &new_lookup, stack.runtime.loader),
+                        MethodInfo::new(desc, &new_lookup, stack.runtime.loader),
                         new_lookup,
                     );
                     return StepResult::InstructionStepped;

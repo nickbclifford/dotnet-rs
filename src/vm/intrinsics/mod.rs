@@ -1,6 +1,6 @@
 use crate::{
-    any_match_field, any_match_method, assemblies::SUPPORT_ASSEMBLY, match_field,
-    match_method,
+    any_match_field, any_match_method, assemblies::{AssemblyLoader, SUPPORT_ASSEMBLY},
+    match_field, match_method,
     types::{
         generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
@@ -27,7 +27,7 @@ pub mod reflection;
 
 pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttribute";
 
-pub fn is_intrinsic(method: MethodDescription, loader: &crate::assemblies::AssemblyLoader) -> bool {
+pub fn is_intrinsic(method: MethodDescription, loader: &AssemblyLoader) -> bool {
     if method.method.internal_call {
         return true;
     }
@@ -68,7 +68,7 @@ pub fn is_intrinsic(method: MethodDescription, loader: &crate::assemblies::Assem
 
 pub fn is_intrinsic_field(
     field: FieldDescription,
-    loader: &crate::assemblies::AssemblyLoader,
+    loader: &AssemblyLoader,
 ) -> bool {
     for a in &field.field.attributes {
         let ctor = loader.locate_attribute(field.parent.resolution, a);

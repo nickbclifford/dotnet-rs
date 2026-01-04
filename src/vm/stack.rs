@@ -13,7 +13,7 @@ use crate::{
     vm::{
         GCHandleType, MethodInfo, MethodState, StepResult, context::ResolutionContext,
         exceptions::ExceptionState, intrinsics::reflection::RuntimeType,
-        pinvoke::NativeLibraries,
+        pinvoke::NativeLibraries, tracer::Tracer,
     },
 };
 use dotnetdll::prelude::*;
@@ -53,7 +53,7 @@ pub struct RuntimeEnvironment<'gc, 'm> {
     pub runtime_field_objs: HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>,
     pub method_tables: RefCell<HashMap<TypeDescription, Box<[u8]>>>,
     pub empty_generics: GenericLookup,
-    pub tracer: crate::vm::tracer::Tracer,
+    pub tracer: Tracer,
 }
 
 unsafe impl<'gc, 'm: 'gc> Collect for RuntimeEnvironment<'gc, 'm> {
@@ -200,7 +200,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 runtime_field_objs: HashMap::new(),
                 method_tables: RefCell::new(HashMap::new()),
                 empty_generics: GenericLookup::default(),
-                tracer: crate::vm::tracer::Tracer::new(),
+                tracer: Tracer::new(),
             },
             gc: HeapManager {
                 _all_objs: RefCell::new(HashSet::new()),
