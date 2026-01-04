@@ -1,24 +1,23 @@
 use crate::{
     resolve::Assemblies,
     types::{
-        generics::{ConcreteType, GenericLookup},
+        TypeDescription, generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
-        TypeDescription,
     },
-    utils::{decompose_type_source, ResolutionS},
+    utils::{ResolutionS, decompose_type_source},
     value::{
+        StackValue,
         object::{HeapStorage, Object as ObjectInstance, ObjectPtr, ObjectRef},
         storage::StaticStorageManager,
-        StackValue,
     },
     vm::{
-        context::ResolutionContext, exceptions::ExceptionState,
-        intrinsics::reflection::RuntimeType, pinvoke::NativeLibraries, GCHandleType, MethodInfo,
-        MethodState, StepResult,
+        GCHandleType, MethodInfo, MethodState, StepResult, context::ResolutionContext,
+        exceptions::ExceptionState, intrinsics::reflection::RuntimeType,
+        pinvoke::NativeLibraries,
     },
 };
 use dotnetdll::prelude::*;
-use gc_arena::{lock::RefLock, Arena, Collect, Collection, Gc, Mutation, Rootable};
+use gc_arena::{Arena, Collect, Collection, Gc, Mutation, Rootable, lock::RefLock};
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},

@@ -65,11 +65,10 @@
 //! vm_trace_stack_snapshot!(ctx);        // Just the stack
 //! vm_trace_heap_snapshot!(ctx);         // Just the heap
 //! ```
-
-use std::io::{BufWriter, Write, stdout, stderr};
-use std::cell::{Cell, RefCell};
-use std::env;
-use std::fs::File;
+use std::{
+    cell::{Cell, RefCell},
+    env, fs::File, io::{BufWriter, Write, stderr, stdout},
+};
 
 const BUFFER_SIZE: usize = 256 * 1024; // 256KB buffer for better IO performance
 const AUTO_FLUSH_INTERVAL: usize = 10_000; // Auto-flush every N messages

@@ -13,7 +13,8 @@ use crate::{
         exceptions::{ExceptionState, HandlerAddress, UnwindTarget},
         intrinsics::*,
     },
-    vm_expect_stack, vm_msg, vm_pop, vm_push, vm_trace_branch, vm_trace_field, vm_trace_instruction,
+    vm_expect_stack, vm_msg, vm_pop, vm_push, vm_trace_branch, vm_trace_field,
+    vm_trace_instruction,
 };
 use dotnetdll::prelude::*;
 use std::cmp::Ordering;
