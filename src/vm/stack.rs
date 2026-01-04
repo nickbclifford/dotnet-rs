@@ -21,6 +21,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     fmt::Debug,
+    ptr::NonNull,
 };
 
 #[derive(Collect)]
@@ -82,7 +83,7 @@ pub struct HeapManager<'gc> {
     pub gchandles: RefCell<Vec<Option<(ObjectRef<'gc>, GCHandleType)>>>,
     pub processing_finalizer: bool,
     pub needs_full_collect: Cell<bool>,
-    // secretly ObjectHandles, not traced for GCing because these are for runtime debugging
+    // untraced handles to every heap object, used only by the tracer during debugging
     pub(super) _all_objs: RefCell<HashSet<ObjectRef<'gc>>>,
 }
 
@@ -374,7 +375,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
             let object_type = self.runtime.loader.corlib_type("System.Object");
             let base_finalize = object_type
-                .definition
+                .definition()
                 .methods
                 .iter()
                 .find(|m| {
@@ -442,7 +443,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
             self.push_stack(
                 gc,
-                StackValue::managed_ptr(self.top_of_stack_address() as *mut _, desc, None, false),
+                StackValue::managed_ptr(self.top_of_stack_address().as_ptr() as *mut _, desc, None, false),
             );
         } else {
             self.push_stack(gc, value.clone());
@@ -713,7 +714,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         f.base.stack + f.stack_height
     }
 
-    fn get_handle_location(&self, handle: &StackSlotHandle<'gc>) -> *const u8 {
+    fn get_handle_location(&self, handle: &StackSlotHandle<'gc>) -> NonNull<u8> {
         handle.0.borrow().data_location()
     }
 
@@ -736,7 +737,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.get_slot(self.get_arg_handle(index))
     }
 
-    pub fn get_argument_address(&self, index: usize) -> *const u8 {
+    pub fn get_argument_address(&self, index: usize) -> NonNull<u8> {
         self.get_handle_location(self.get_arg_handle(index))
     }
 
@@ -756,7 +757,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.get_slot(self.get_local_handle_at(self.current_frame(), index))
     }
 
-    pub fn get_local_address(&self, index: usize) -> *const u8 {
+    pub fn get_local_address(&self, index: usize) -> NonNull<u8> {
         self.get_handle_location(self.get_local_handle_at(self.current_frame(), index))
     }
 
@@ -797,7 +798,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         value
     }
 
-    pub fn top_of_stack_address(&self) -> *const u8 {
+    pub fn top_of_stack_address(&self) -> NonNull<u8> {
         self.get_handle_location(&self.execution.stack[self.top_of_stack() - 1])
     }
 

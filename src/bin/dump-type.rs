@@ -62,13 +62,13 @@ fn main() {
         eprintln!(
             "Assembly: {}, Types: {}, MethodRefs: {}",
             current_assembly,
-            resolution.0.type_definitions.len(),
-            resolution.0.method_references.len()
+            resolution.definition().type_definitions.len(),
+            resolution.definition().method_references.len()
         );
 
         // Find the type
         let mut found_type = None;
-        for (i, type_def) in resolution.0.type_definitions.iter().enumerate() {
+        for (i, type_def) in resolution.definition().type_definitions.iter().enumerate() {
             let namespace = type_def.namespace.as_deref().unwrap_or("");
             let name = &type_def.name;
             let full_name = if namespace.is_empty() {
@@ -90,7 +90,7 @@ fn main() {
 
         // Check exported types
         let mut forwarded_to = None;
-        for e in &resolution.0.exported_types {
+        for e in &resolution.definition().exported_types {
             let namespace = e.namespace.as_deref().unwrap_or("");
             let name = &e.name;
             let full_name = if namespace.is_empty() {
@@ -102,7 +102,7 @@ fn main() {
             if full_name == args.type_name {
                 use dotnetdll::prelude::TypeImplementation;
                 if let TypeImplementation::TypeForwarder(a) = e.implementation {
-                    let forward_to = &resolution.0[a];
+                    let forward_to = &resolution.definition()[a];
                     forwarded_to = Some(forward_to.name.to_string());
                 }
                 break;
@@ -120,7 +120,7 @@ fn main() {
 
         eprintln!("Type '{}' not found in assembly", args.type_name);
         println!("\nAvailable types:");
-        for t in &resolution.0.type_definitions {
+        for t in &resolution.definition().type_definitions {
             let ns = t.namespace.as_deref().unwrap_or("");
             if ns.is_empty() {
                 println!("  {}", t.name);

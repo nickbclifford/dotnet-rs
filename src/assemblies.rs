@@ -39,7 +39,7 @@ impl AssemblyLoader {
         let support_res = Box::leak(Box::new(
             Resolution::parse(SUPPORT_LIBRARY, ReadOptions::default()).unwrap(),
         ));
-        resolutions.insert(SUPPORT_ASSEMBLY.to_string(), Some(ResolutionS(support_res)));
+        resolutions.insert(SUPPORT_ASSEMBLY.to_string(), Some(ResolutionS::new(support_res)));
         let mut this = Self {
             assembly_root,
             external: RwLock::new(resolutions),
@@ -65,10 +65,7 @@ impl AssemblyLoader {
                             {
                                 this.stubs.insert(
                                     target.to_string(),
-                                    TypeDescription {
-                                        resolution: ResolutionS(support_res),
-                                        definition: t,
-                                    },
+                                    TypeDescription::new(ResolutionS::new(support_res), t),
                                 );
                             }
                             _ => {}
@@ -133,20 +130,17 @@ impl AssemblyLoader {
             return *t;
         }
 
-        let ResolutionS(res) = self.get_assembly(assembly.name.as_ref());
-        match res.type_definitions.iter().find(|t| t.type_name() == name) {
+        let res = self.get_assembly(assembly.name.as_ref());
+        match res.definition().type_definitions.iter().find(|t| t.type_name() == name) {
             None => {
-                for e in &res.exported_types {
+                for e in &res.definition().exported_types {
                     if e.type_name() == name {
-                        return self.find_exported_type(ResolutionS(res), e);
+                        return self.find_exported_type(res, e);
                     }
                 }
                 panic!("could not find type {} in assembly {}", name, assembly.name)
             }
-            Some(t) => TypeDescription {
-                resolution: ResolutionS(res),
-                definition: t,
-            },
+            Some(t) => TypeDescription::new(res, t),
         }
     }
 
@@ -192,15 +186,16 @@ impl AssemblyLoader {
     }
 
     fn try_find_in_assembly(&self, resolution: ResolutionS, name: &str) -> Option<TypeDescription> {
-        let res = resolution.0;
-        if let Some(t) = res.type_definitions.iter().find(|t| t.type_name() == name) {
-            return Some(TypeDescription {
-                resolution,
-                definition: t,
-            });
+        if let Some(t) = resolution
+            .definition()
+            .type_definitions
+            .iter()
+            .find(|t| t.type_name() == name)
+        {
+            return Some(TypeDescription::new(resolution, t));
         }
 
-        for e in &res.exported_types {
+        for e in &resolution.definition().exported_types {
             if e.type_name() == name {
                 return Some(self.find_exported_type(resolution, e));
             }
@@ -213,15 +208,12 @@ impl AssemblyLoader {
     pub fn locate_type(&self, resolution: ResolutionS, handle: UserType) -> TypeDescription {
         match handle {
             UserType::Definition(d) => {
-                let definition = &resolution.0[d];
+                let definition = &resolution.definition()[d];
                 if let Some(t) = self.stubs.get(&definition.type_name()) {
                     return *t;
                 }
 
-                TypeDescription {
-                    resolution,
-                    definition,
-                }
+                TypeDescription::new(resolution, definition)
             }
             UserType::Reference(r) => self.locate_type_ref(resolution, r),
         }
@@ -237,18 +229,14 @@ impl AssemblyLoader {
             Assembly(a) => self.find_in_assembly(&resolution[*a], &type_ref.type_name()),
             Exported => todo!(),
             Nested(o) => {
-                let TypeDescription {
-                    resolution: res,
-                    definition: owner,
-                } = self.locate_type_ref(resolution, *o);
+                let td = self.locate_type_ref(resolution, *o);
+                let res = td.resolution;
+                let owner = td.definition();
 
-                for t in &res.0.type_definitions {
+                for t in &res.definition().type_definitions {
                     if let Some(enc) = t.encloser {
                         if t.type_name() == type_ref.type_name() && std::ptr::eq(&res[enc], owner) {
-                            return TypeDescription {
-                                resolution: res,
-                                definition: t,
-                            };
+                            return TypeDescription::new(res, t);
                         }
                     }
                 }
@@ -323,12 +311,12 @@ impl AssemblyLoader {
         if let Some(generics) = generics1 {
             match a {
                 MethodType::TypeGeneric(idx) => {
-                    if let Some(concrete) = generics.type_generics.get(*idx as usize) {
+                    if let Some(concrete) = generics.type_generics.get(*idx) {
                         return self.concrete_equals_method_type(concrete, res2, b);
                     }
                 }
                 MethodType::MethodGeneric(idx) => {
-                    if let Some(concrete) = generics.method_generics.get(*idx as usize) {
+                    if let Some(concrete) = generics.method_generics.get(*idx) {
                         return self.concrete_equals_method_type(concrete, res2, b);
                     }
                 }
@@ -608,7 +596,7 @@ impl AssemblyLoader {
         sig_res: ResolutionS,
         generics: Option<&GenericLookup>,
     ) -> Option<MethodDescription> {
-        for method in self.get_methods_to_search(desc.definition, name) {
+        for method in self.get_methods_to_search(desc.definition(), name) {
             if method.name == name
                 && self.signatures_equal(
                     sig_res,
@@ -637,14 +625,11 @@ impl AssemblyLoader {
     ) -> MethodDescription {
         match handle {
             UserMethod::Definition(d) => MethodDescription {
-                parent: TypeDescription {
-                    resolution,
-                    definition: &resolution.0[d.parent_type()],
-                },
-                method: &resolution.0[d],
+                parent: TypeDescription::new(resolution, &resolution.definition()[d.parent_type()]),
+                method: &resolution.definition()[d],
             },
             UserMethod::Reference(r) => {
-                let method_ref = &resolution.0[r];
+                let method_ref = &resolution.definition()[r];
 
                 use MethodReferenceParent::*;
                 match &method_ref.parent {
@@ -661,7 +646,7 @@ impl AssemblyLoader {
                                 "could not find {}",
                                 method_ref
                                     .signature
-                                    .show_with_name(resolution.0, &method_ref.name)
+                                    .show_with_name(resolution.definition(), &method_ref.name)
                             ),
                             Some(method) => method,
                         }
@@ -690,16 +675,13 @@ impl AssemblyLoader {
         match field {
             FieldSource::Definition(d) => (
                 FieldDescription {
-                    parent: TypeDescription {
-                        resolution,
-                        definition: &resolution.0[d.parent_type()],
-                    },
-                    field: &resolution.0[d],
+                    parent: TypeDescription::new(resolution, &resolution.definition()[d.parent_type()]),
+                    field: &resolution.definition()[d],
                 },
                 generic_inst.clone(),
             ),
             FieldSource::Reference(r) => {
-                let field_ref = &resolution.0[r];
+                let field_ref = &resolution.definition()[r];
 
                 use FieldReferenceParent::*;
                 match &field_ref.parent {
@@ -707,7 +689,7 @@ impl AssemblyLoader {
                         let t = generic_inst.make_concrete(resolution, t.clone());
                         let parent_type = self.find_concrete_type(t.clone());
 
-                        for field in &parent_type.definition.fields {
+                        for field in &parent_type.definition().fields {
                             if field.name == field_ref.name {
                                 let type_generics = if let BaseType::Type {
                                     source: TypeSource::Generic { parameters, .. },
@@ -761,14 +743,14 @@ impl<'a> Iterator for AncestorsImpl<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         let child = self.child?;
 
-        self.child = match &child.definition.extends {
+        self.child = match &child.definition().extends {
             None => None,
             Some(TypeSource::User(parent) | TypeSource::Generic { base: parent, .. }) => {
                 Some(self.assemblies.locate_type(child.resolution, *parent))
             }
         };
 
-        let generics = match &child.definition.extends {
+        let generics = match &child.definition().extends {
             Some(TypeSource::Generic { parameters, .. }) => parameters.iter().collect(),
             _ => vec![],
         };
@@ -797,6 +779,6 @@ impl Resolver<'static> for AssemblyLoader {
             todo!("fully qualified name {}", _name)
         }
         let td = self.corlib_type(_name);
-        Ok((td.definition, td.resolution.0))
+        Ok((td.definition(), td.resolution.definition()))
     }
 }

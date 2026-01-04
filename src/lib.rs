@@ -43,11 +43,8 @@ pub fn run_cli() -> ExitCode {
     let mut executor = vm::Executor::new(Box::leak(arena));
 
     let entrypoint = MethodDescription {
-        parent: TypeDescription {
-            resolution,
-            definition: &resolution.0[entry_method.parent_type()],
-        },
-        method: &resolution.0[entry_method],
+        parent: TypeDescription::new(resolution, &resolution.definition()[entry_method.parent_type()]),
+        method: &resolution.definition()[entry_method],
     };
     executor.entrypoint(entrypoint);
 

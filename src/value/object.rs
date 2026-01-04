@@ -14,10 +14,28 @@ use std::{
     cmp::Ordering, collections::HashSet, fmt::{Debug, Formatter},
     hash::{Hash, Hasher},
     marker::PhantomData,
+    ptr::NonNull,
 };
 
 type ObjectInner<'gc> = RefLock<HeapStorage<'gc>>;
-pub type ObjectPtr = *const ObjectInner<'static>;
+
+#[repr(transparent)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ObjectPtr(pub NonNull<ObjectInner<'static>>);
+
+impl ObjectPtr {
+    /// # Safety
+    ///
+    /// The pointer must be valid for the program lifetime and properly aligned.
+    pub unsafe fn from_raw(ptr: *const ObjectInner<'static>) -> Option<Self> {
+        NonNull::new(ptr as *mut _).map(ObjectPtr)
+    }
+
+    pub fn as_ptr(&self) -> *const ObjectInner<'static> {
+        self.0.as_ptr()
+    }
+}
+
 pub type ObjectHandle<'gc> = Gc<'gc, ObjectInner<'gc>>;
 
 #[derive(Copy, Clone)]
@@ -94,8 +112,15 @@ impl<'gc> ObjectRef<'gc> {
         if ptr.is_null() {
             ObjectRef(None)
         } else {
-            // SAFETY: since this came from Gc::as_ptr, we know it's valid
-            // also, this will only ever be called inside the context of a GC mutation, so it's okay for 'gc to be unbounded
+            // SAFETY: The pointer was originally obtained via Gc::as_ptr and stored as bytes.
+            // Since this is only called during VM execution where 'gc is valid and 
+            // the object is guaranteed to be alive (as it is traced by the caller),
+            // it is safe to reconstruct the Gc pointer.
+            debug_assert!(
+                ptr as usize % std::mem::align_of::<RefLock<HeapStorage<'gc>>>() == 0,
+                "Attempted to reconstruct unaligned Gc pointer: {:?}",
+                ptr
+            );
             ObjectRef(Some(unsafe { Gc::from_ptr(ptr) }))
         }
     }
@@ -255,7 +280,7 @@ fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(data: StackVal
             .try_into()
             .unwrap_or_else(|_| panic!("failed to convert from isize")),
         StackValue::UnmanagedPtr(UnmanagedPtr(p))
-        | StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => (p as usize)
+        | StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => (p.as_ptr() as usize)
             .try_into()
             .unwrap_or_else(|_| panic!("failed to convert from pointer")),
         other => panic!(
@@ -528,7 +553,7 @@ pub struct Vector<'gc> {
     pub element: ConcreteType,
     pub layout: ArrayLayoutManager,
     storage: Vec<u8>,
-    _contains_gc: PhantomData<&'gc ()>, // TODO: variance rules?
+    _contains_gc: PhantomData<fn(&'gc ()) -> &'gc ()>,
 }
 
 unsafe impl Collect for Vector<'_> {
@@ -542,8 +567,16 @@ unsafe impl Collect for Vector<'_> {
                 }
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                // Skip tracing ManagedPtr arrays to avoid unsafe transmute issues
-                // ManagedPtr values should not be stored in arrays
+                // SAFETY: For arrays of ManagedPtr, check each element for zero-initialization
+                // before tracing. This prevents tracing uninitialized array elements that may
+                // exist in partially-filled or default-constructed arrays.
+                let elem_size = self.layout.element_layout.size();
+                for i in 0..self.layout.length {
+                    let storage = &self.storage[(i * elem_size)..];
+                    if !storage.iter().take(ManagedPtr::SIZE).all(|&b| b == 0) {
+                        ManagedPtr::read(storage).trace(cc);
+                    }
+                }
             }
             _ => {
                 for i in 0..self.layout.length {

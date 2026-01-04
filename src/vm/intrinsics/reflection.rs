@@ -105,7 +105,7 @@ impl RuntimeType {
             RuntimeType::UIntPtr => "UIntPtr".to_string(),
             RuntimeType::Object => "Object".to_string(),
             RuntimeType::String => "String".to_string(),
-            RuntimeType::Type(td) | RuntimeType::Generic(td, _) => td.definition.name.to_string(),
+            RuntimeType::Type(td) | RuntimeType::Generic(td, _) => td.definition().name.to_string(),
             RuntimeType::Vector(t) => format!("{}[]", t.get_name()),
             RuntimeType::Array(t, rank) => {
                 let commas = if *rank > 1 {
@@ -119,7 +119,7 @@ impl RuntimeType {
             RuntimeType::ByRef(t) => format!("{}&", t.get_name()),
             RuntimeType::ValuePointer(t, _) => format!("{}*", t.get_name()),
             RuntimeType::TypeParameter { owner, index } => owner
-                .definition
+                .definition()
                 .generic_parameters
                 .get(*index as usize)
                 .map(|p| p.name.to_string())
@@ -153,15 +153,15 @@ impl RuntimeType {
             RuntimeType::Generic(td, args) => {
                 let index = td
                     .resolution
-                    .0
+                    .definition()
                     .type_definitions
                     .iter()
-                    .position(|t| std::ptr::eq(t, td.definition))
+                    .position(|t| std::ptr::eq(t, td.definition()))
                     .unwrap();
                 let source = TypeSource::Generic {
                     base: dotnetdll::prelude::UserType::Definition(
                         td.resolution
-                            .0
+                            .definition()
                             .type_definition_index(index)
                             .expect("invalid type definition"),
                     ),
@@ -467,12 +467,12 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 Some(o) => *o,
                 None => {
                     let support_res = stack.runtime.loader.get_assembly(SUPPORT_ASSEMBLY);
-                    let definition = support_res.0.type_definitions
+                    let definition = support_res.definition().type_definitions
                         .iter()
                         .find(|a| a.type_name() == "DotnetRs.Assembly")
                         .expect("could find DotnetRs.Assembly in support library");
                     let mut asm_handle = Object::new(
-                        TypeDescription { resolution: support_res, definition },
+                        TypeDescription::new(support_res, definition),
                         &ResolutionContext::new(&generics, stack.runtime.loader, support_res),
                     );
                     let data = (resolution.as_raw() as usize).to_ne_bytes();
@@ -491,7 +491,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             let target_type = stack.resolve_runtime_type(obj);
             match target_type {
                 RuntimeType::Type(td) | RuntimeType::Generic(td, _) => {
-                    match td.definition.namespace.as_ref() {
+                    match td.definition().namespace.as_ref() {
                         None => push!(null()),
                         Some(n) => push!(string(n)),
                     }
@@ -518,7 +518,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             let target_type = stack.resolve_runtime_type(obj);
             match target_type {
                 RuntimeType::Generic(td, _) => {
-                    let n_params = td.definition.generic_parameters.len();
+                    let n_params = td.definition().generic_parameters.len();
                     let mut params = Vec::with_capacity(n_params);
                     for i in 0..n_params {
                         params.push(RuntimeType::TypeParameter {
@@ -612,7 +612,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
 
             let instance = Object::new(td, &new_ctx);
 
-            for m in &td.definition.methods {
+            for m in &td.definition().methods {
                 if m.runtime_special_name
                     && m.name == ".ctor"
                     && m.signature.instance

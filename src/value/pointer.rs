@@ -1,14 +1,18 @@
-use crate::{types::TypeDescription, value::object::{ObjectHandle, ObjectRef}};
+use crate::{
+    types::TypeDescription,
+    utils::ResolutionS,
+    value::object::{ObjectHandle, ObjectRef},
+};
 use gc_arena::{Collect, Collection, Gc, unsafe_empty_collect};
-use std::{cmp::Ordering, collections::HashSet, fmt::{Debug, Formatter}};
+use std::{cmp::Ordering, collections::HashSet, fmt::{Debug, Formatter}, ptr::NonNull};
 
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
-pub struct UnmanagedPtr(pub *mut u8);
+pub struct UnmanagedPtr(pub NonNull<u8>);
 unsafe_empty_collect!(UnmanagedPtr);
 
 #[derive(Copy, Clone)]
 pub struct ManagedPtr<'gc> {
-    pub value: *mut u8,
+    pub value: NonNull<u8>,
     pub inner_type: TypeDescription,
     pub owner: Option<ObjectHandle<'gc>>,
     pub pinned: bool,
@@ -43,10 +47,10 @@ impl<'gc> ManagedPtr<'gc> {
     // Storage format: pointer (8) + TypeDescription (16) + ObjectRef (8) + pinned (1) = 33 bytes
     // But we need to account for actual sizes, not hardcoded values
     pub const SIZE: usize =
-        size_of::<*mut u8>() + size_of::<TypeDescription>() + ObjectRef::SIZE + 1;
+        size_of::<NonNull<u8>>() + size_of::<TypeDescription>() + ObjectRef::SIZE + 1;
 
     pub fn new(
-        value: *mut u8,
+        value: NonNull<u8>,
         inner_type: TypeDescription,
         owner: Option<ObjectHandle<'gc>>,
         pinned: bool,
@@ -60,42 +64,41 @@ impl<'gc> ManagedPtr<'gc> {
     }
 
     pub fn read(source: &[u8]) -> Self {
-        // SAFETY: ManagedPtr should not actually be stored in object fields in most cases.
-        // This function exists for completeness but reading a ManagedPtr from storage
-        // that wasn't properly initialized will cause UB. The proper solution is to
-        // avoid storing ManagedPtr values entirely, as they should be stack-only.
-        //
-        // For now, we panic if we try to read from what looks like uninitialized storage.
-
-        // Check if the entire ManagedPtr storage appears to be zero-initialized
         let expected_size =
-            size_of::<*mut u8>() + size_of::<TypeDescription>() + ObjectRef::SIZE + 1;
+            size_of::<NonNull<u8>>() + size_of::<TypeDescription>() + ObjectRef::SIZE + 1;
         if source.len() < expected_size {
             panic!("Attempted to read ManagedPtr from insufficiently sized storage");
         }
 
-        // If all bytes are zero, this is likely uninitialized storage
-        if source[..expected_size].iter().all(|&b| b == 0) {
-            // This should never happen in correct code, so we panic rather than
-            // trying to create a "safe" dummy value
-            panic!("Attempted to read ManagedPtr from zero-initialized storage");
-        }
+        let mut value_bytes = [0u8; size_of::<NonNull<u8>>()];
+        value_bytes.copy_from_slice(&source[0..size_of::<NonNull<u8>>()]);
+        let value_ptr = usize::from_ne_bytes(value_bytes) as *mut u8;
+        let value = NonNull::new(value_ptr).expect("ManagedPtr value should not be null");
 
-        let mut value_bytes = [0u8; size_of::<*mut u8>()];
-        value_bytes.copy_from_slice(&source[0..size_of::<*mut u8>()]);
-        let value = usize::from_ne_bytes(value_bytes) as *mut u8;
+        let resolution = unsafe {
+            ResolutionS::from_raw(
+                &source[size_of::<NonNull<u8>>()..(size_of::<NonNull<u8>>() + size_of::<usize>())],
+            )
+        };
 
-        let mut type_bytes = [0u8; size_of::<TypeDescription>()];
-        type_bytes.copy_from_slice(
-            &source[size_of::<*mut u8>()..(size_of::<*mut u8>() + size_of::<TypeDescription>())],
+        let mut def_bytes = [0u8; size_of::<usize>()];
+        def_bytes.copy_from_slice(
+            &source[(size_of::<NonNull<u8>>() + size_of::<usize>())
+                ..(size_of::<NonNull<u8>>() + 2 * size_of::<usize>())],
         );
-        let inner_type: TypeDescription = unsafe { std::mem::transmute(type_bytes) };
+        let definition_ptr = NonNull::new(usize::from_ne_bytes(def_bytes) as *mut _);
+        let inner_type = TypeDescription::from_raw(resolution, definition_ptr);
+
+        debug_assert!(
+            inner_type.is_null() || !inner_type.resolution.is_null(),
+            "ManagedPtr has invalid TypeDescription (null resolution but non-null definition)"
+        );
 
         let owner =
-            ObjectRef::read(&source[(size_of::<*mut u8>() + size_of::<TypeDescription>())..]).0;
+            ObjectRef::read(&source[(size_of::<NonNull<u8>>() + size_of::<TypeDescription>())..]).0;
 
         let pinned =
-            source[size_of::<*mut u8>() + size_of::<TypeDescription>() + ObjectRef::SIZE] != 0;
+            source[size_of::<NonNull<u8>>() + size_of::<TypeDescription>() + ObjectRef::SIZE] != 0;
 
         Self {
             value,
@@ -106,28 +109,45 @@ impl<'gc> ManagedPtr<'gc> {
     }
 
     pub fn write(&self, dest: &mut [u8]) {
-        let value_bytes = (self.value as usize).to_ne_bytes();
-        dest[0..size_of::<*mut u8>()].copy_from_slice(&value_bytes);
+        let value_bytes = (self.value.as_ptr() as usize).to_ne_bytes();
+        dest[0..size_of::<NonNull<u8>>()].copy_from_slice(&value_bytes);
 
-        let type_bytes: [u8; size_of::<TypeDescription>()] =
-            unsafe { std::mem::transmute(self.inner_type) };
-        dest[size_of::<*mut u8>()..(size_of::<*mut u8>() + size_of::<TypeDescription>())]
-            .copy_from_slice(&type_bytes);
+        let res_bytes = (self.inner_type.resolution.as_raw() as usize).to_ne_bytes();
+        dest[size_of::<NonNull<u8>>()..(size_of::<NonNull<u8>>() + size_of::<usize>())]
+            .copy_from_slice(&res_bytes);
+
+        let def_bytes = self
+            .inner_type
+            .definition_ptr()
+            .map(|p| p.as_ptr() as usize)
+            .unwrap_or(0)
+            .to_ne_bytes();
+        dest[(size_of::<NonNull<u8>>() + size_of::<usize>())
+            ..(size_of::<NonNull<u8>>() + 2 * size_of::<usize>())]
+            .copy_from_slice(&def_bytes);
 
         ObjectRef(self.owner)
-            .write(&mut dest[(size_of::<*mut u8>() + size_of::<TypeDescription>())..]);
+            .write(&mut dest[(size_of::<NonNull<u8>>() + size_of::<TypeDescription>())..]);
 
-        dest[size_of::<*mut u8>() + size_of::<TypeDescription>() + ObjectRef::SIZE] =
+        dest[size_of::<NonNull<u8>>() + size_of::<TypeDescription>() + ObjectRef::SIZE] =
             if self.pinned { 1 } else { 0 };
     }
 
-    pub fn map_value(self, transform: impl FnOnce(*mut u8) -> *mut u8) -> Self {
+    pub fn map_value(self, transform: impl FnOnce(NonNull<u8>) -> NonNull<u8>) -> Self {
         ManagedPtr {
             value: transform(self.value),
             inner_type: self.inner_type,
             owner: self.owner,
             pinned: self.pinned,
         }
+    }
+
+    /// # Safety
+    ///
+    /// The caller must ensure that the resulting pointer is within the bounds of the same 
+    /// allocated object as the original pointer.
+    pub unsafe fn offset(self, bytes: isize) -> Self {
+        self.map_value(|p| NonNull::new_unchecked(p.as_ptr().offset(bytes)))
     }
 }
 

@@ -17,7 +17,7 @@ use std::{
 pub struct FieldStorage<'gc> {
     layout: FieldLayoutManager,
     storage: Vec<u8>,
-    _contains_gc: PhantomData<&'gc ()>,
+    _contains_gc: PhantomData<fn(&'gc ()) -> &'gc ()>,
 }
 
 impl Debug for FieldStorage<'_> {

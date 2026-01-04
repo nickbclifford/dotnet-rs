@@ -78,9 +78,13 @@ impl LayoutManager {
                 ObjectRef::read(storage).trace(cc);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                // Skip tracing ManagedPtr for now to avoid unsafe transmute issues
-                // ManagedPtr values should generally not be stored in object fields anyway
-                // TODO: properly handle ManagedPtr tracing or remove Scalar::ManagedPtr entirely
+                // SAFETY: We only trace if the storage is not zero-initialized.
+                // Zero-initialized storage represents a null/default ManagedPtr which
+                // doesn't need tracing. This prevents attempting to trace uninitialized
+                // or default-constructed values that may not have valid GC pointers yet.
+                if !storage.iter().take(ManagedPtr::SIZE).all(|&b| b == 0) {
+                    ManagedPtr::read(storage).trace(cc);
+                }
             }
             LayoutManager::FieldLayoutManager(f) => {
                 for field in f.fields.values() {
@@ -108,7 +112,11 @@ impl LayoutManager {
                 ObjectRef::read(storage).resurrect(fc, visited);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                ManagedPtr::read(storage).resurrect(fc, visited);
+                // SAFETY: Same zero-initialization check as in trace(). Avoid resurrecting
+                // objects referenced by uninitialized ManagedPtr values.
+                if !storage.iter().take(ManagedPtr::SIZE).all(|&b| b == 0) {
+                    ManagedPtr::read(storage).resurrect(fc, visited);
+                }
             }
             LayoutManager::FieldLayoutManager(f) => {
                 for field in f.fields.values() {
@@ -289,13 +297,10 @@ impl FieldLayoutManager {
         };
 
         for i in (1..ancestors.len()).rev() {
-            let (
-                td @ TypeDescription {
-                    resolution: res,
-                    definition: a,
-                },
-                _,
-            ) = &ancestors[i];
+            let (td, _) = &ancestors[i];
+            let res = td.resolution;
+            let a = td.definition();
+
             let (_, generic_params) = &ancestors[i - 1];
 
             let new_lookup = GenericLookup::new(
@@ -306,7 +311,7 @@ impl FieldLayoutManager {
             );
             let new_ctx = ResolutionContext {
                 generics: &new_lookup,
-                resolution: *res,
+                resolution: res,
                 loader: context.loader,
                 type_owner: Some(*td),
                 method_owner: None,
@@ -327,7 +332,7 @@ impl FieldLayoutManager {
         }
 
         // now for the type's actually declared fields
-        for f in &td.definition.fields {
+        for f in &td.definition().fields {
             if !predicate(f) {
                 continue;
             }
@@ -341,7 +346,7 @@ impl FieldLayoutManager {
             );
         }
 
-        Self::new(total_fields, td.definition.flags.layout)
+        Self::new(total_fields, td.definition().flags.layout)
     }
 
     pub fn instance_fields(td: TypeDescription, context: &ResolutionContext) -> Self {

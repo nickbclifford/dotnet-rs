@@ -21,6 +21,7 @@ use crate::{
     vm_expect_stack, vm_msg, vm_pop, vm_push,
 };
 use dotnetdll::prelude::*;
+use std::ptr::NonNull;
 
 pub mod matcher;
 pub mod reflection;
@@ -96,7 +97,7 @@ pub fn span_to_slice<'gc, 'a>(span: Object<'gc>) -> &'a [u8] {
 
     let len = i32::from_ne_bytes(len_data) as usize;
 
-    unsafe { std::slice::from_raw_parts(ptr as *const u8, len) }
+    unsafe { std::slice::from_raw_parts(ptr.as_ptr() as *const u8, len) }
 }
 
 const STATIC_ARRAY_TYPE_PREFIX: &str = "__StaticArrayInitTypeSize=";
@@ -119,28 +120,28 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
     }
     macro_rules! msg {
         ($($args:tt)*) => {
-            vm_msg!($($args)*)
+            vm_msg!(stack, $($args)*)
         }
     }
     let ctx = ResolutionContext::for_method(method, stack.runtime.loader, &generics);
 
-    msg!(stack, "-- method marked as runtime intrinsic --");
+    msg!("-- method marked as runtime intrinsic --");
 
-    if method.parent.definition.type_name() == "DotnetRs.RuntimeType" {
+    if method.parent.definition().type_name() == "DotnetRs.RuntimeType" {
         return runtime_type_intrinsic_call(gc, stack, method, generics);
     }
 
-    if method.parent.definition.type_name() == "DotnetRs.MethodInfo"
-        || method.parent.definition.type_name() == "DotnetRs.ConstructorInfo"
+    if method.parent.definition().type_name() == "DotnetRs.MethodInfo"
+        || method.parent.definition().type_name() == "DotnetRs.ConstructorInfo"
     {
         return runtime_method_info_intrinsic_call(gc, stack, method, generics);
     }
 
-    if method.parent.definition.type_name() == "DotnetRs.FieldInfo" {
+    if method.parent.definition().type_name() == "DotnetRs.FieldInfo" {
         return runtime_field_info_intrinsic_call(gc, stack, method, generics);
     }
 
-    if method.parent.definition.type_name() == "System.String"
+    if method.parent.definition().type_name() == "System.String"
         && method.method.name != "op_Implicit"
     {
         return string_intrinsic_call(gc, stack, method, generics);
@@ -188,14 +189,13 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             let instance = Object::new(td, &new_ctx);
 
-            for m in &td.definition.methods {
+            for m in &td.definition().methods {
                 if m.runtime_special_name
                     && m.name == ".ctor"
                     && m.signature.instance
                     && m.signature.parameters.is_empty()
                 {
                     msg!(
-                        stack,
                         "-- invoking parameterless constructor for {} --",
                         td.type_name()
                     );
@@ -312,7 +312,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 &ExternalAssemblyReference::new(SUPPORT_ASSEMBLY),
                 "DotnetRs.Comparers.Equality"
             );
-            let method = parent.definition.methods.iter().find(|m| m.name == "GetDefault").unwrap();
+            let method = parent.definition().methods.iter().find(|m| m.name == "GetDefault").unwrap();
             stack.call_frame(
                 gc,
                 MethodInfo::new(MethodDescription { parent, method }, &GenericLookup::default(), stack.runtime.loader),
@@ -383,7 +383,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 let ip = &mut stack.execution.frames[second_to_last].state.ip;
                 *ip += 1;
                 let i = *ip;
-                msg!(stack, "-- explicit initialization! setting return ip to {} --", i);
+                msg!("-- explicit initialization! setting return ip to {} --", i);
                 return StepResult::InstructionStepped;
             }
         },
@@ -417,9 +417,9 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 return stack.throw_by_name(gc, "System.ArgumentException");
             };
 
-            if field_desc.definition.name.starts_with(STATIC_ARRAY_TYPE_PREFIX) {
+            if field_desc.definition().name.starts_with(STATIC_ARRAY_TYPE_PREFIX) {
                 // Parse the size from the type name (e.g., "__StaticArrayInitTypeSize=123")
-                let size_str = &field_desc.definition.name[STATIC_ARRAY_TYPE_PREFIX.len()..];
+                let size_str = &field_desc.definition().name[STATIC_ARRAY_TYPE_PREFIX.len()..];
                 let size_end = size_str.find('_').unwrap_or(size_str.len());
                 let array_size = size_str[..size_end].parse::<usize>().unwrap();
                 let data_slice = &initial_data[..array_size];
@@ -656,7 +656,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     .add(value_layout.size() * index as usize)
             };
             push!(managed_ptr(
-                ptr,
+                ptr.as_ptr(),
                 stack.runtime.loader.find_concrete_type(value_type.clone()),
                 m.owner,
                 m.pinned
@@ -672,7 +672,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 &ctx
             );
             let value = unsafe {
-                let target = m.value.add(layout.fields["_length"].position) as *const i32;
+                let target = m.value.as_ptr().add(layout.fields["_length"].position) as *const i32;
                 *target
             };
             push!(Int32(value));
@@ -743,7 +743,12 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let mut span = Object::new(span_type, &ctx);
 
             let char_type = stack.runtime.loader.find_concrete_type(ctx.make_concrete(&BaseType::Char));
-            let managed = ManagedPtr::new(ptr as *mut u8, char_type, None, false);
+            let managed = ManagedPtr::new(
+                NonNull::new(ptr as *mut u8).expect("String pointer should not be null"),
+                char_type,
+                None,
+                false,
+            );
             managed.write(span.instance_storage.get_field_mut("_reference"));
             span.instance_storage.get_field_mut("_length").copy_from_slice(&(len as i32).to_ne_bytes());
 

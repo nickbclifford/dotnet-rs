@@ -114,7 +114,7 @@ impl<'a> ResolutionContext<'a> {
                 continue;
             }
 
-            for (_, interface_source) in &current.definition.implements {
+            for (_, interface_source) in &current.definition().implements {
                 let handle = match interface_source {
                     TypeSource::User(h) | TypeSource::Generic { base: h, .. } => *h,
                 };
@@ -160,7 +160,7 @@ impl<'a> ResolutionContext<'a> {
             _ => return t,
         };
 
-        let name = ut.type_name(res.0);
+        let name = ut.type_name(res.definition());
         let base = match name.as_ref() {
             "System.Boolean" => Some(BaseType::Boolean),
             "System.Char" => Some(BaseType::Char),

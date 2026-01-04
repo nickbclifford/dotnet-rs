@@ -23,7 +23,7 @@ impl Debug for MethodDescription {
             f,
             "{}",
             self.method.signature.show_with_name(
-                self.resolution().0,
+                self.resolution().definition(),
                 format!("{}::{}", self.parent.type_name(), self.method.name)
             )
         )
@@ -59,7 +59,7 @@ impl Debug for FieldDescription {
         write!(
             f,
             "{} {}::{}",
-            self.field.return_type.show(self.parent.resolution.0),
+            self.field.return_type.show(self.parent.resolution.definition()),
             self.parent.type_name(),
             self.field.name
         )?;

@@ -3,6 +3,7 @@ use dotnetdll::prelude::*;
 use gc_arena::{Collect, Collection, Gc, lock::RefLock};
 use std::{
     cmp::Ordering, fmt::Debug, ops::{Add, BitAnd, BitOr, BitXor, Mul, Neg, Not, Shl, Sub},
+    ptr::NonNull,
 };
 
 pub mod layout;
@@ -38,7 +39,11 @@ unsafe impl<'gc> Collect for StackValue<'gc> {
 }
 impl<'gc> StackValue<'gc> {
     pub fn unmanaged_ptr(ptr: *mut u8) -> Self {
-        Self::UnmanagedPtr(UnmanagedPtr(ptr))
+        if ptr.is_null() {
+            Self::NativeInt(0)
+        } else {
+            Self::UnmanagedPtr(UnmanagedPtr(NonNull::new(ptr).unwrap()))
+        }
     }
     pub fn managed_ptr(
         ptr: *mut u8,
@@ -47,7 +52,7 @@ impl<'gc> StackValue<'gc> {
         pinned: bool,
     ) -> Self {
         Self::ManagedPtr(ManagedPtr {
-            value: ptr,
+            value: NonNull::new(ptr).expect("ManagedPtr should not be null"),
             inner_type: target_type,
             owner,
             pinned,
@@ -63,9 +68,9 @@ impl<'gc> StackValue<'gc> {
         ))))
     }
 
-    pub fn data_location(&self) -> *const u8 {
-        fn ref_to_ptr<T>(r: &T) -> *const u8 {
-            (r as *const T) as *const u8
+    pub fn data_location(&self) -> NonNull<u8> {
+        fn ref_to_ptr<T>(r: &T) -> NonNull<u8> {
+            NonNull::from(r).cast()
         }
 
         match self {
@@ -74,9 +79,11 @@ impl<'gc> StackValue<'gc> {
             Self::NativeInt(i) => ref_to_ptr(i),
             Self::NativeFloat(f) => ref_to_ptr(f),
             Self::ObjectRef(ObjectRef(o)) => ref_to_ptr(o),
-            Self::UnmanagedPtr(UnmanagedPtr(u)) => ref_to_ptr(u),
-            Self::ManagedPtr(m) => ref_to_ptr(&m.value),
-            Self::ValueType(o) => o.instance_storage.get().as_ptr(),
+            Self::UnmanagedPtr(UnmanagedPtr(u)) => *u,
+            Self::ManagedPtr(m) => m.value,
+            Self::ValueType(o) => {
+                NonNull::new(o.instance_storage.get().as_ptr() as *mut u8).unwrap()
+            }
         }
     }
 
@@ -96,8 +103,8 @@ impl<'gc> StackValue<'gc> {
     pub fn as_ptr(&self) -> *mut u8 {
         match self {
             Self::NativeInt(i) => *i as *mut u8,
-            Self::UnmanagedPtr(UnmanagedPtr(p)) => *p,
-            Self::ManagedPtr(m) => m.value,
+            Self::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
+            Self::ManagedPtr(m) => m.value.as_ptr(),
             v => panic!("expected pointer on stack, received {:?}", v),
         }
     }
@@ -309,7 +316,27 @@ impl<'gc> StackValue<'gc> {
         }
     }
 
+    /// # Safety
+    /// `ptr` must be a valid, aligned pointer to a value of the type specified by `t`.
     pub unsafe fn load(ptr: *const u8, t: LoadType) -> Self {
+        debug_assert!(!ptr.is_null(), "Attempted to load from a null pointer");
+        let alignment = match t {
+            LoadType::Int8 | LoadType::UInt8 => 1,
+            LoadType::Int16 | LoadType::UInt16 => std::mem::align_of::<i16>(),
+            LoadType::Int32 | LoadType::UInt32 => std::mem::align_of::<i32>(),
+            LoadType::Int64 => std::mem::align_of::<i64>(),
+            LoadType::Float32 => std::mem::align_of::<f32>(),
+            LoadType::Float64 => std::mem::align_of::<f64>(),
+            LoadType::IntPtr => std::mem::align_of::<isize>(),
+            LoadType::Object => std::mem::align_of::<ObjectRef>(),
+        };
+        debug_assert!(
+            ptr as usize % alignment == 0,
+            "Attempted to load from an unaligned pointer {:?} for type {:?}",
+            ptr,
+            t
+        );
+
         match t {
             LoadType::Int8 => Self::Int32(*(ptr as *const i8) as i32),
             LoadType::UInt8 => Self::Int32(*ptr as i32),
@@ -325,7 +352,27 @@ impl<'gc> StackValue<'gc> {
         }
     }
 
+    /// # Safety
+    /// `ptr` must be a valid, aligned pointer to a location with sufficient space for the type specified by `t`.
     pub unsafe fn store(self, ptr: *mut u8, t: StoreType) {
+        debug_assert!(!ptr.is_null(), "Attempted to store to a null pointer");
+        let alignment = match t {
+            StoreType::Int8 => 1,
+            StoreType::Int16 => std::mem::align_of::<i16>(),
+            StoreType::Int32 => std::mem::align_of::<i32>(),
+            StoreType::Int64 => std::mem::align_of::<i64>(),
+            StoreType::Float32 => std::mem::align_of::<f32>(),
+            StoreType::Float64 => std::mem::align_of::<f64>(),
+            StoreType::IntPtr => std::mem::align_of::<isize>(),
+            StoreType::Object => std::mem::align_of::<ObjectRef>(),
+        };
+        debug_assert!(
+            ptr as usize % alignment == 0,
+            "Attempted to store to an unaligned pointer {:?} for type {:?}",
+            ptr,
+            t
+        );
+
         match t {
             StoreType::Int8 => *(ptr as *mut i8) = self.as_i32() as i8,
             StoreType::Int16 => *(ptr as *mut i16) = self.as_i32() as i16,
@@ -354,8 +401,8 @@ impl<'gc> PartialEq for StackValue<'gc> {
             (NativeInt(l), NativeInt(r)) => l == r,
             (NativeFloat(l), NativeFloat(r)) => l == r,
             (ManagedPtr(l), ManagedPtr(r)) => l == r,
-            (ManagedPtr(l), NativeInt(r)) => (l.value as isize) == *r,
-            (NativeInt(l), ManagedPtr(r)) => *l == (r.value as isize),
+            (ManagedPtr(l), NativeInt(r)) => (l.value.as_ptr() as isize) == *r,
+            (NativeInt(l), ManagedPtr(r)) => *l == (r.value.as_ptr() as isize),
             (ObjectRef(l), ObjectRef(r)) => l == r,
             (ValueType(l), ValueType(r)) => l == r,
             _ => false,
@@ -374,8 +421,8 @@ impl PartialOrd for StackValue<'_> {
             (NativeInt(l), NativeInt(r)) => l.partial_cmp(r),
             (NativeFloat(l), NativeFloat(r)) => l.partial_cmp(r),
             (ManagedPtr(l), ManagedPtr(r)) => l.partial_cmp(r),
-            (ManagedPtr(l), NativeInt(r)) => (l.value as isize).partial_cmp(r),
-            (NativeInt(l), ManagedPtr(r)) => l.partial_cmp(&(r.value as isize)),
+            (ManagedPtr(l), NativeInt(r)) => (l.value.as_ptr() as isize).partial_cmp(r),
+            (NativeInt(l), ManagedPtr(r)) => l.partial_cmp(&(r.value.as_ptr() as isize)),
             (ObjectRef(l), ObjectRef(r)) => l.partial_cmp(r),
             _ => None,
         }
@@ -393,12 +440,15 @@ impl<'gc> Add for StackValue<'gc> {
             (NativeInt(l), Int32(r)) => NativeInt(l.wrapping_add(r as isize)),
             (NativeInt(l), NativeInt(r)) => NativeInt(l.wrapping_add(r)),
             (NativeFloat(l), NativeFloat(r)) => NativeFloat(l + r),
-            (Int32(i), ManagedPtr(m)) | (ManagedPtr(m), Int32(i)) => unsafe {
-                ManagedPtr(m.map_value(|p| p.offset(i as isize)))
-            },
-            (NativeInt(i), ManagedPtr(m)) | (ManagedPtr(m), NativeInt(i)) => unsafe {
-                ManagedPtr(m.map_value(|p| p.offset(i)))
-            },
+            (Int32(i), ManagedPtr(m)) | (ManagedPtr(m), Int32(i)) => {
+                // SAFETY: Pointer arithmetic is performed within the bounds of the managed object
+                // or stack slot it points to. The VM ensures that pointers stay within allocated regions.
+                unsafe { ManagedPtr(m.offset(i as isize)) }
+            }
+            (NativeInt(i), ManagedPtr(m)) | (ManagedPtr(m), NativeInt(i)) => {
+                // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
+                unsafe { ManagedPtr(m.offset(i)) }
+            }
             (l, r) => panic!("invalid types for add: {:?}, {:?}", l, r),
         }
     }
@@ -415,12 +465,16 @@ impl<'gc> Sub for StackValue<'gc> {
             (NativeInt(l), Int32(r)) => NativeInt(l.wrapping_sub(r as isize)),
             (NativeInt(l), NativeInt(r)) => NativeInt(l.wrapping_sub(r)),
             (NativeFloat(l), NativeFloat(r)) => NativeFloat(l - r),
-            (ManagedPtr(m), Int32(i)) => unsafe {
-                ManagedPtr(m.map_value(|p| p.offset(-(i as isize))))
-            },
-            (ManagedPtr(m), NativeInt(i)) => unsafe { ManagedPtr(m.map_value(|p| p.offset(-i))) },
+            (ManagedPtr(m), Int32(i)) => {
+                // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
+                unsafe { ManagedPtr(m.offset(-(i as isize))) }
+            }
+            (ManagedPtr(m), NativeInt(i)) => {
+                // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
+                unsafe { ManagedPtr(m.offset(-i)) }
+            }
             (ManagedPtr(m1), ManagedPtr(m2)) => {
-                NativeInt((m1.value as isize) - (m2.value as isize))
+                NativeInt((m1.value.as_ptr() as isize) - (m2.value.as_ptr() as isize))
             }
             (l, r) => panic!("invalid types for sub: {:?}, {:?}", l, r),
         }

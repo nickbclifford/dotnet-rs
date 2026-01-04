@@ -19,16 +19,19 @@ impl From<TypeDescription> for ConcreteType {
     fn from(td: TypeDescription) -> Self {
         let index = td
             .resolution
-            .0
+            .definition()
             .type_definitions
             .iter()
-            .position(|t| std::ptr::eq(t, td.definition))
+            .position(|t| std::ptr::eq(t, td.definition()))
             .expect("TypeDescription has invalid definition pointer");
         Self::new(
             td.resolution,
             BaseType::Type {
                 source: TypeSource::User(UserType::Definition(
-                    td.resolution.0.type_definition_index(index).unwrap(),
+                    td.resolution
+                        .definition()
+                        .type_definition_index(index)
+                        .unwrap(),
                 )),
                 value_kind: None,
             },
@@ -59,7 +62,7 @@ impl ConcreteType {
 
 impl Debug for ConcreteType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.get().show(self.source.0))
+        write!(f, "{}", self.get().show(self.source.definition()))
     }
 }
 

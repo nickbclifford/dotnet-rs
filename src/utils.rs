@@ -3,14 +3,20 @@ use gc_arena::{Collect, unsafe_empty_collect};
 use std::{
     fmt::{Debug, Formatter},
     hash::Hash, io::Read, ops::Deref, path::{Path, PathBuf},
+    ptr::NonNull,
 };
 
+#[repr(transparent)]
 #[derive(Clone, Copy)]
-pub struct ResolutionS(pub &'static Resolution<'static>);
+pub struct ResolutionS(Option<NonNull<Resolution<'static>>>);
 unsafe_empty_collect!(ResolutionS);
 impl ResolutionS {
+    pub fn new(ptr: *const Resolution<'static>) -> Self {
+        Self(NonNull::new(ptr as *mut _))
+    }
+
     pub fn as_raw(self) -> *const Resolution<'static> {
-        self.0 as *const _
+        self.0.map(|p| p.as_ptr() as *const _).unwrap_or(std::ptr::null())
     }
 
     /// # Safety
@@ -19,35 +25,49 @@ impl ResolutionS {
     pub unsafe fn from_raw(data: &[u8]) -> Self {
         let mut res_data = [0u8; size_of::<usize>()];
         res_data.copy_from_slice(data);
-        let res = &*(usize::from_ne_bytes(res_data) as *const _);
-        Self(res)
+        let res = usize::from_ne_bytes(res_data) as *const _;
+        Self::new(res)
+    }
+
+    pub fn is_null(&self) -> bool {
+        self.0.is_none()
+    }
+
+    pub fn definition(&self) -> &'static Resolution<'static> {
+        match self.0 {
+            Some(p) => unsafe { &*p.as_ptr() },
+            None => panic!("Attempted to access resolution of a null or uninitialized ResolutionS"),
+        }
     }
 }
 impl Deref for ResolutionS {
     type Target = Resolution<'static>;
     fn deref(&self) -> &'static Self::Target {
-        self.0
+        self.definition()
     }
 }
 impl Debug for ResolutionS {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "ResolutionS({} @ {:#?})",
-            self.0.assembly.as_ref().unwrap().name,
-            self.as_raw()
-        )
+        match self.0 {
+            None => write!(f, "ResolutionS(NULL)"),
+            Some(_) => write!(
+                f,
+                "ResolutionS({} @ {:#?})",
+                self.definition().assembly.as_ref().unwrap().name,
+                self.as_raw()
+            ),
+        }
     }
 }
 impl PartialEq for ResolutionS {
     fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.0, other.0)
+        self.0 == other.0
     }
 }
 impl Eq for ResolutionS {}
 impl Hash for ResolutionS {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        std::ptr::hash(self.0, state);
+        self.0.hash(state);
     }
 }
 
@@ -58,7 +78,7 @@ pub fn static_res_from_file(path: impl AsRef<Path>) -> ResolutionS {
     file.read_to_end(&mut buf).expect("failed to read file");
     let resolution = Resolution::parse(Box::leak(buf.into_boxed_slice()), ReadOptions::default())
         .expect("failed to parse file as .NET metadata");
-    ResolutionS(Box::leak(Box::new(resolution)))
+    ResolutionS::new(Box::leak(Box::new(resolution)) as *const _)
 }
 
 pub fn find_dotnet_sdk_path() -> Option<PathBuf> {

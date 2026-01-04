@@ -66,7 +66,7 @@
 //! vm_trace_heap_snapshot!(ctx);         // Just the heap
 //! ```
 use crate::{
-    value::object::{HeapStorage, ObjectPtr},
+    value::object::HeapStorage,
     vm::CallStack,
 };
 use gc_arena::Gc;
@@ -621,7 +621,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             let Some(ptr) = obj.0 else {
                 continue;
             };
-            let raw_ptr = Gc::as_ptr(ptr) as ObjectPtr as usize;
+            let raw_ptr = Gc::as_ptr(ptr) as *const _ as usize;
             match &*ptr.borrow() {
                 HeapStorage::Obj(o) => {
                     let details = format!("{:?}", o);

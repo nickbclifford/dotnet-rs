@@ -136,8 +136,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
         stack_values.reverse();
 
-        let res = method.resolution().0;
-        let module = res[p.import_scope].name.as_ref();
+        let res = method.resolution();
+        let module = res.definition()[p.import_scope].name.as_ref();
         let function = p.import_name.as_ref();
 
         vm_msg!(
@@ -146,7 +146,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             method
                 .method
                 .signature
-                .show_with_name(res, format!("{module}::{function}"))
+                .show_with_name(res.definition(), format!("{module}::{function}"))
         );
 
         let target = self.runtime.pinvoke.get_function(module, function);
@@ -169,9 +169,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 StackValue::Int64(i) => Arg::new(i),
                 StackValue::NativeInt(i) => Arg::new(i),
                 StackValue::NativeFloat(f) => Arg::new(f),
-                StackValue::UnmanagedPtr(p) => Arg::new(p),
-                StackValue::ManagedPtr(p) => Arg::new(p),
+                StackValue::UnmanagedPtr(p) => Arg::new(&p.0),
+                StackValue::ManagedPtr(p) => Arg::new(&p.value),
                 StackValue::ValueType(o) => unsafe {
+                    // SAFETY: Arg is a transparent wrapper around a *mut c_void in libffi-rs.
+                    // We are passing a pointer to the start of the value type's storage.
                     std::mem::transmute::<*mut c_void, Arg>(o.instance_storage.get().as_ptr() as _)
                 },
                 rest => todo!("marshalling not yet supported for {:?}", rest),
@@ -224,22 +226,24 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                         let mut instance = Object::new(td, &new_ctx);
 
-                        // Arg is just a wrapper around a *mut c_void
-                        let mut args: Vec<*mut c_void> = unsafe {
-                            let mut v_clone = std::mem::ManuallyDrop::new(arg_values);
-                            Vec::from_raw_parts(
-                                v_clone.as_mut_ptr() as *mut _,
-                                v_clone.len(),
-                                v_clone.capacity(),
-                            )
-                        };
+                        // We need an array of pointers to the arguments for ffi_call.
+                        // Since arg_values: Vec<Arg> already contains these pointers,
+                        // we can just collect them into a new Vec.
+                        let mut arg_ptrs: Vec<*mut c_void> = arg_values
+                            .iter()
+                            .map(|arg| unsafe {
+                                // SAFETY: libffi::middle::Arg is a wrapper around a raw pointer.
+                                // We cast it to a raw pointer to pass to the raw ffi_call.
+                                *(arg as *const _ as *const *mut c_void)
+                            })
+                            .collect();
 
                         unsafe {
                             libffi::raw::ffi_call(
                                 cif.as_raw_ptr(),
                                 Some(*target.as_fun()),
                                 instance.instance_storage.get_mut().as_mut_ptr() as *mut c_void,
-                                args.as_mut_ptr(),
+                                arg_ptrs.as_mut_ptr(),
                             );
                         }
 

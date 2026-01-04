@@ -219,8 +219,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::Int64(i) => i == 0,
                     StackValue::NativeInt(i) => i == 0,
                     StackValue::ObjectRef(ObjectRef(o)) => o.is_none(),
-                    StackValue::UnmanagedPtr(UnmanagedPtr(p))
-                    | StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => p.is_null(),
+                    StackValue::UnmanagedPtr(_) | StackValue::ManagedPtr(_) => false,
                     v => panic!("invalid type on stack ({:?}) for truthiness check", v),
                 }
             };
@@ -230,7 +229,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let ip = state!(|s| s.ip);
         let i_res = state!(|s| s.info_handle.source.resolution());
 
-        vm_trace_instruction!(self, ip, &i.show(i_res.0));
+        vm_trace_instruction!(self, ip, &i.show(i_res.definition()));
 
         // self.debug_dump();
 
@@ -303,7 +302,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     .loader
                     .find_concrete_type(constraint_type.clone());
 
-                for o in td.definition.overrides.iter() {
+                for o in td.definition().overrides.iter() {
                     let target = self
                         .current_context()
                         .locate_method(o.implementation, &lookup);
@@ -384,7 +383,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             StackValue::Int64(i) => (i as u64) as $t,
                             StackValue::NativeInt(i) => (i as usize) as $t,
                             StackValue::UnmanagedPtr(UnmanagedPtr(p)) |
-                            StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => (p as usize) as $t,
+                            StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => (p.as_ptr() as usize) as $t,
                             StackValue::NativeFloat(f) => {
                                 todo!("truncate {} towards zero for conversion to {}", f, stringify!($t))
                             }
@@ -457,8 +456,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 };
                 let src = match pop!() {
                     StackValue::NativeInt(i) => i as *const u8,
-                    StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p as *const u8,
-                    StackValue::ManagedPtr(m) => m.value as *const u8,
+                    StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr() as *const u8,
+                    StackValue::ManagedPtr(m) => m.value.as_ptr() as *const u8,
                     rest => panic!(
                         "invalid type for src in cpblk (expected pointer, received {:?})",
                         rest
@@ -466,8 +465,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 };
                 let dest = match pop!() {
                     StackValue::NativeInt(i) => i as *mut u8,
-                    StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p,
-                    StackValue::ManagedPtr(m) => m.value,
+                    StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
+                    StackValue::ManagedPtr(m) => m.value.as_ptr(),
                     rest => panic!(
                         "invalid type for dest in cpblk (expected pointer, received {:?})",
                         rest
@@ -575,8 +574,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 };
                 let addr = match pop!() {
                     StackValue::NativeInt(i) => i as *mut u8,
-                    StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p,
-                    StackValue::ManagedPtr(m) => m.value,
+                    StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
+                    StackValue::ManagedPtr(m) => m.value.as_ptr(),
                     rest => panic!(
                         "invalid type for address in initblk (expected pointer, received {:?})",
                         rest
@@ -595,7 +594,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let arg = self.get_argument(*i as usize);
                 let live_type = arg.contains_type(&self.current_context());
                 push!(managed_ptr(
-                    self.get_argument_address(*i as usize) as *mut _,
+                    self.get_argument_address(*i as usize).as_ptr() as *mut _,
                     live_type,
                     None,
                     true
@@ -626,7 +625,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     _ => false,
                 };
                 push!(managed_ptr(
-                    self.get_local_address(*i as usize) as *mut _,
+                    self.get_local_address(*i as usize).as_ptr() as *mut _,
                     live_type,
                     None,
                     pinned
@@ -862,7 +861,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 } else {
                     // Reference type: dereference the managed pointer
                     vm_expect_stack!(let ManagedPtr(m) = args[0].clone());
-                    let obj_ref = unsafe { *(m.value as *const ObjectRef) };
+                    debug_assert!(
+                        m.value.as_ptr() as usize % std::mem::align_of::<ObjectRef>() == 0,
+                        "ManagedPtr value is not aligned for ObjectRef"
+                    );
+                    let obj_ref = unsafe { *(m.value.as_ptr() as *const ObjectRef) };
 
                     if obj_ref.0.is_none() {
                         return self.throw_by_name(gc, "System.NullReferenceException");
@@ -929,6 +932,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let layout = type_layout(ctx.make_concrete(t), &ctx);
                 let target = pop!().as_ptr();
 
+                debug_assert!(!target.is_null(), "initobj target address is null");
                 let s = unsafe { std::slice::from_raw_parts_mut(target, layout.size()) };
                 s.fill(0);
             }
@@ -1065,6 +1069,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         if index >= v.layout.length {
                             panic!("IndexOutOfRangeException");
                         }
+                        // SAFETY: v.get() returns a slice of the array's storage. index is checked against 
+                        // the array length. The pointer arithmetic is safe as it stays within the allocated 
+                        // storage for the array.
                         unsafe { v.get().as_ptr().add(index * element_layout.size()) as *mut u8 }
                     }
                     _ => panic!("ldelema on non-vector"),
@@ -1090,8 +1097,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 let read_data = |d| CTSValue::read(&t, &ctx, d);
                 let read_from_pointer = |ptr: *mut u8| {
+                    debug_assert!(!ptr.is_null(), "Attempted to read field from null pointer");
                     let layout = FieldLayoutManager::instance_fields(field.parent, &ctx);
                     let field_layout = layout.fields.get(name.as_ref()).unwrap();
+                    // SAFETY: ptr is a raw pointer to either heap storage, a stack slot, or unmanaged memory.
+                    // The offset is calculated based on the type's field layout, and the size matches the field's type.
                     let slice = unsafe {
                         std::slice::from_raw_parts(
                             ptr.add(field_layout.position),
@@ -1138,7 +1148,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::NativeInt(i) => read_from_pointer(i as *mut u8),
                     StackValue::UnmanagedPtr(UnmanagedPtr(ptr))
                     | StackValue::ManagedPtr(ManagedPtr { value: ptr, .. }) => {
-                        read_from_pointer(ptr)
+                        read_from_pointer(ptr.as_ptr())
                     }
                     rest => panic!("stack value {:?} has no fields", rest),
                 };
@@ -1179,18 +1189,25 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         (ptr, Some(h), false)
                     }
                     StackValue::NativeInt(i) => (i as *mut u8, None, false),
-                    StackValue::UnmanagedPtr(UnmanagedPtr(ptr)) => (ptr, None, false),
+                    StackValue::UnmanagedPtr(UnmanagedPtr(ptr)) => (ptr.as_ptr(), None, false),
                     StackValue::ManagedPtr(ManagedPtr {
                         value: ptr,
                         owner,
                         pinned,
                         ..
-                    }) => (ptr, owner, pinned),
+                    }) => (ptr.as_ptr(), owner, pinned),
                     rest => panic!("cannot load field address from stack value {:?}", rest),
                 };
+                debug_assert!(
+                    !source_ptr.is_null(),
+                    "Attempted to load field address from null pointer"
+                );
 
                 let layout =
                     FieldLayoutManager::instance_fields(field.parent, &self.current_context());
+                // SAFETY: source_ptr is a valid pointer to the start of an object or value type's storage.
+                // The offset is obtained from the field layout, which is guaranteed to be within bounds
+                // for the given type.
                 let ptr =
                     unsafe { source_ptr.add(layout.fields.get(name.as_ref()).unwrap().position) };
 
@@ -1219,6 +1236,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let ctx = self.current_context();
                 let load_type = ctx.make_concrete(load_type);
                 let layout = type_layout(load_type.clone(), &ctx);
+                // SAFETY: source_ptr is a valid pointer to memory containing a value of the given type,
+                // and layout.size() correctly represents the size of that type.
                 let source = unsafe { std::slice::from_raw_parts(source_ptr, layout.size()) };
                 let value =
                     CTSValue::read(&load_type, &self.current_context(), source).into_stack();
@@ -1331,9 +1350,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             NewObject(ctor) => {
                 let (mut method, lookup) = self.find_generic_method(&MethodSource::User(*ctor));
                 let parent = method.parent;
-                if let (None, Some(ts)) = (&method.method.body, &parent.definition.extends) {
+                if let (None, Some(ts)) = (&method.method.body, &parent.definition().extends) {
                     let (ut, _) = decompose_type_source(ts);
-                    let type_name = ut.type_name(parent.resolution.0);
+                    let type_name = ut.type_name(parent.resolution.definition());
                     // delegate types are only allowed to have these base types
                     if matches!(
                         type_name.as_ref(),
@@ -1343,7 +1362,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         method = MethodDescription {
                             parent: base,
                             method: base
-                                .definition
+                                .definition()
                                 .methods
                                 .iter()
                                 .find(|m| m.name == ".ctor")
@@ -1448,9 +1467,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         vec
                     }
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => {
-                        (p as usize).to_ne_bytes().to_vec()
+                        (p.as_ptr() as usize).to_ne_bytes().to_vec()
                     }
-                    StackValue::ManagedPtr(m) => (m.value as usize).to_ne_bytes().to_vec(),
+                    StackValue::ManagedPtr(m) => (m.value.as_ptr() as usize).to_ne_bytes().to_vec(),
                     StackValue::ValueType(_) => {
                         panic!("received valuetype for StoreElementPrimitive")
                     }
@@ -1541,7 +1560,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::NativeInt(i) => write_data(slice_from_pointer(i as *mut u8)),
                     StackValue::UnmanagedPtr(UnmanagedPtr(ptr))
                     | StackValue::ManagedPtr(ManagedPtr { value: ptr, .. }) => {
-                        write_data(slice_from_pointer(ptr))
+                        write_data(slice_from_pointer(ptr.as_ptr()))
                     }
                     rest => panic!(
                         "invalid type on stack (expected object or pointer, received {:?})",
