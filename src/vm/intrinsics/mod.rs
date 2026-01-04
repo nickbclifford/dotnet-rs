@@ -1,5 +1,6 @@
 use crate::{
-    any_match_field, any_match_method, assemblies::{AssemblyLoader, SUPPORT_ASSEMBLY},
+    any_match_field, any_match_method,
+    assemblies::{AssemblyLoader, SUPPORT_ASSEMBLY},
     match_field, match_method,
     types::{
         generics::{ConcreteType, GenericLookup},
@@ -7,16 +8,19 @@ use crate::{
     },
     utils::decompose_type_source,
     value::{
-        StackValue, layout::*, object::{HeapStorage, Object, ObjectRef},
-        pointer::ManagedPtr, string::{CLRString, string_intrinsic_call, with_string},
+        layout::*,
+        object::{HeapStorage, Object, ObjectRef},
+        pointer::ManagedPtr,
+        string::{string_intrinsic_call, with_string, CLRString},
+        StackValue,
     },
     vm::{
-        CallStack, GCHandle, GCHandleType, MethodInfo, StepResult,
         context::ResolutionContext,
         intrinsics::reflection::{
             runtime_field_info_intrinsic_call, runtime_method_info_intrinsic_call,
             runtime_type_intrinsic_call,
         },
+        CallStack, GCHandle, GCHandleType, MethodInfo, StepResult,
     },
     vm_expect_stack, vm_msg, vm_pop, vm_push,
 };
@@ -67,10 +71,7 @@ pub fn is_intrinsic(method: MethodDescription, loader: &AssemblyLoader) -> bool 
     )
 }
 
-pub fn is_intrinsic_field(
-    field: FieldDescription,
-    loader: &AssemblyLoader,
-) -> bool {
+pub fn is_intrinsic_field(field: FieldDescription, loader: &AssemblyLoader) -> bool {
     for a in &field.field.attributes {
         let ctor = loader.locate_attribute(field.parent.resolution, a);
         if ctor.parent.type_name() == INTRINSIC_ATTR {

@@ -1,12 +1,16 @@
 use crate::{
-    types::generics::ConcreteType, utils::DebugStr, value::object::ObjectRef,
-    vm::{CallStack, GCHandle, StepResult, context::ResolutionContext},
+    types::generics::ConcreteType,
+    utils::DebugStr,
+    value::object::ObjectRef,
+    vm::{context::ResolutionContext, CallStack, GCHandle, StepResult},
     vm_push,
 };
 use dotnetdll::prelude::*;
 use gc_arena::Collect;
 use std::{
-    cmp::Reverse, collections::HashMap, fmt::{Debug, Formatter},
+    cmp::Reverse,
+    collections::HashMap,
+    fmt::{Debug, Formatter},
     ops::Range,
 };
 

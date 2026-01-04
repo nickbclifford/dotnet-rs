@@ -1,8 +1,11 @@
 use dotnetdll::prelude::*;
-use gc_arena::{Collect, unsafe_empty_collect};
+use gc_arena::{unsafe_empty_collect, Collect};
 use std::{
     fmt::{Debug, Formatter},
-    hash::Hash, io::Read, ops::Deref, path::{Path, PathBuf},
+    hash::Hash,
+    io::Read,
+    ops::Deref,
+    path::{Path, PathBuf},
     ptr::NonNull,
 };
 
@@ -16,7 +19,9 @@ impl ResolutionS {
     }
 
     pub fn as_raw(self) -> *const Resolution<'static> {
-        self.0.map(|p| p.as_ptr() as *const _).unwrap_or(std::ptr::null())
+        self.0
+            .map(|p| p.as_ptr() as *const _)
+            .unwrap_or(std::ptr::null())
     }
 
     /// # Safety

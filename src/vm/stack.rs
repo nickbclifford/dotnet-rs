@@ -1,22 +1,24 @@
 use crate::{
     assemblies::AssemblyLoader,
     types::{
-        TypeDescription, generics::{ConcreteType, GenericLookup},
+        generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
+        TypeDescription,
     },
-    utils::{ResolutionS, decompose_type_source},
+    utils::{decompose_type_source, ResolutionS},
     value::{
-        StackValue, object::{HeapStorage, Object as ObjectInstance, ObjectRef},
+        object::{HeapStorage, Object as ObjectInstance, ObjectRef},
         storage::StaticStorageManager,
+        StackValue,
     },
     vm::{
-        GCHandleType, MethodInfo, MethodState, StepResult, context::ResolutionContext,
-        exceptions::ExceptionState, intrinsics::reflection::RuntimeType,
-        pinvoke::NativeLibraries, tracer::Tracer,
+        context::ResolutionContext, exceptions::ExceptionState,
+        intrinsics::reflection::RuntimeType, pinvoke::NativeLibraries, tracer::Tracer,
+        GCHandleType, MethodInfo, MethodState, StepResult,
     },
 };
 use dotnetdll::prelude::*;
-use gc_arena::{Arena, Collect, Collection, Gc, Mutation, Rootable, lock::RefLock};
+use gc_arena::{lock::RefLock, Arena, Collect, Collection, Gc, Mutation, Rootable};
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
@@ -443,7 +445,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
             self.push_stack(
                 gc,
-                StackValue::managed_ptr(self.top_of_stack_address().as_ptr() as *mut _, desc, None, false),
+                StackValue::managed_ptr(
+                    self.top_of_stack_address().as_ptr() as *mut _,
+                    desc,
+                    None,
+                    false,
+                ),
             );
         } else {
             self.push_stack(gc, value.clone());

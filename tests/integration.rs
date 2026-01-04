@@ -1,6 +1,8 @@
 use dotnet_rs::{
-    assemblies, types::{TypeDescription, members::MethodDescription},
-    utils::static_res_from_file, vm,
+    assemblies,
+    types::{members::MethodDescription, TypeDescription},
+    utils::static_res_from_file,
+    vm,
 };
 use dotnetdll::prelude::*;
 use std::{
@@ -116,7 +118,10 @@ impl TestHarness {
         let mut executor = vm::Executor::new(Box::leak(arena));
 
         let entrypoint = MethodDescription {
-            parent: TypeDescription::new(resolution, &resolution.definition()[entry_method.parent_type()]),
+            parent: TypeDescription::new(
+                resolution,
+                &resolution.definition()[entry_method.parent_type()],
+            ),
             method: &resolution.definition()[entry_method],
         };
         executor.entrypoint(entrypoint);

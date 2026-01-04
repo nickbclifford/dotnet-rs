@@ -1,8 +1,13 @@
-use crate::{types::TypeDescription, vm::{GCHandle, context::ResolutionContext}};
+use crate::{
+    types::TypeDescription,
+    vm::{context::ResolutionContext, GCHandle},
+};
 use dotnetdll::prelude::*;
-use gc_arena::{Collect, Collection, Gc, lock::RefLock};
+use gc_arena::{lock::RefLock, Collect, Collection, Gc};
 use std::{
-    cmp::Ordering, fmt::Debug, ops::{Add, BitAnd, BitOr, BitXor, Mul, Neg, Not, Shl, Sub},
+    cmp::Ordering,
+    fmt::Debug,
+    ops::{Add, BitAnd, BitOr, BitXor, Mul, Neg, Not, Shl, Sub},
     ptr::NonNull,
 };
 
@@ -331,7 +336,7 @@ impl<'gc> StackValue<'gc> {
             LoadType::Object => std::mem::align_of::<ObjectRef>(),
         };
         debug_assert!(
-            ptr as usize % alignment == 0,
+            (ptr as usize).is_multiple_of(alignment),
             "Attempted to load from an unaligned pointer {:?} for type {:?}",
             ptr,
             t
@@ -367,7 +372,7 @@ impl<'gc> StackValue<'gc> {
             StoreType::Object => std::mem::align_of::<ObjectRef>(),
         };
         debug_assert!(
-            ptr as usize % alignment == 0,
+            (ptr as usize).is_multiple_of(alignment),
             "Attempted to store to an unaligned pointer {:?} for type {:?}",
             ptr,
             t

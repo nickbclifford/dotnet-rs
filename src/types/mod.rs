@@ -2,7 +2,7 @@ use crate::{
     types::members::MethodDescription, utils::ResolutionS, vm::context::ResolutionContext,
 };
 use dotnetdll::prelude::{MemberType, ResolvedDebug, TypeDefinition, TypeSource};
-use gc_arena::{Collect, unsafe_empty_collect};
+use gc_arena::{unsafe_empty_collect, Collect};
 use std::{
     fmt::{Debug, Formatter},
     hash::{Hash, Hasher},
@@ -29,7 +29,10 @@ impl TypeDescription {
         }
     }
 
-    pub fn from_raw(resolution: ResolutionS, definition_ptr: Option<NonNull<TypeDefinition<'static>>>) -> Self {
+    pub fn from_raw(
+        resolution: ResolutionS,
+        definition_ptr: Option<NonNull<TypeDefinition<'static>>>,
+    ) -> Self {
         Self {
             resolution,
             definition_ptr,
@@ -43,7 +46,9 @@ impl TypeDescription {
     pub fn definition(&self) -> &'static TypeDefinition<'static> {
         match self.definition_ptr {
             Some(p) => unsafe { &*p.as_ptr() },
-            None => panic!("Attempted to access definition of a null or uninitialized TypeDescription"),
+            None => {
+                panic!("Attempted to access definition of a null or uninitialized TypeDescription")
+            }
         }
     }
 
@@ -56,7 +61,11 @@ impl Debug for TypeDescription {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self.definition_ptr {
             None => write!(f, "NULL"),
-            Some(_) => write!(f, "{}", self.definition().show(self.resolution.definition())),
+            Some(_) => write!(
+                f,
+                "{}",
+                self.definition().show(self.resolution.definition())
+            ),
         }
     }
 }
@@ -94,13 +103,17 @@ impl TypeDescription {
     }
 
     pub fn type_name(&self) -> String {
-        self.definition().nested_type_name(self.resolution.definition())
+        self.definition()
+            .nested_type_name(self.resolution.definition())
     }
 
     pub fn is_enum(&self) -> Option<&MemberType> {
         match &self.definition().extends {
             Some(TypeSource::User(u))
-                if matches!(u.type_name(self.resolution.definition()).as_str(), "System.Enum") =>
+                if matches!(
+                    u.type_name(self.resolution.definition()).as_str(),
+                    "System.Enum"
+                ) =>
             {
                 let inner = self.definition().fields.first()?;
                 if inner.runtime_special_name && inner.name == "value__" {

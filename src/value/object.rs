@@ -1,17 +1,21 @@
 use crate::{
-    types::{TypeDescription, generics::ConcreteType},
+    types::{generics::ConcreteType, TypeDescription},
     utils::DebugStr,
     value::{
-        StackValue, layout::{ArrayLayoutManager, HasLayout, LayoutManager, Scalar},
+        layout::{ArrayLayoutManager, HasLayout, LayoutManager, Scalar},
         pointer::{ManagedPtr, UnmanagedPtr},
-        storage::FieldStorage, string::CLRString,
+        storage::FieldStorage,
+        string::CLRString,
+        StackValue,
     },
-    vm::{GCHandle, context::ResolutionContext},
+    vm::{context::ResolutionContext, GCHandle},
     vm_expect_stack,
 };
-use gc_arena::{Collect, Collection, Gc, lock::RefLock};
+use gc_arena::{lock::RefLock, Collect, Collection, Gc};
 use std::{
-    cmp::Ordering, collections::HashSet, fmt::{Debug, Formatter},
+    cmp::Ordering,
+    collections::HashSet,
+    fmt::{Debug, Formatter},
     hash::{Hash, Hasher},
     marker::PhantomData,
     ptr::NonNull,
@@ -113,11 +117,11 @@ impl<'gc> ObjectRef<'gc> {
             ObjectRef(None)
         } else {
             // SAFETY: The pointer was originally obtained via Gc::as_ptr and stored as bytes.
-            // Since this is only called during VM execution where 'gc is valid and 
+            // Since this is only called during VM execution where 'gc is valid and
             // the object is guaranteed to be alive (as it is traced by the caller),
             // it is safe to reconstruct the Gc pointer.
             debug_assert!(
-                ptr as usize % std::mem::align_of::<RefLock<HeapStorage<'gc>>>() == 0,
+                (ptr as usize).is_multiple_of(std::mem::align_of::<RefLock<HeapStorage<'gc>>>()),
                 "Attempted to reconstruct unaligned Gc pointer: {:?}",
                 ptr
             );

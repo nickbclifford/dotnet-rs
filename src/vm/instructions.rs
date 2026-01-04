@@ -1,17 +1,19 @@
 use crate::{
     match_method,
-    types::{TypeDescription, generics::GenericLookup, members::MethodDescription},
+    types::{generics::GenericLookup, members::MethodDescription, TypeDescription},
     utils::decompose_type_source,
     value::{
-        StackValue, layout::{FieldLayoutManager, HasLayout, type_layout},
+        layout::{type_layout, FieldLayoutManager, HasLayout},
         object::{CTSValue, HeapStorage, Object, ObjectRef, ValueType, Vector},
         pointer::{ManagedPtr, UnmanagedPtr},
         string::CLRString,
+        StackValue,
     },
     vm::{
-        CallStack, GCHandle, MethodInfo, StepResult, context::ResolutionContext,
+        context::ResolutionContext,
         exceptions::{ExceptionState, HandlerAddress, UnwindTarget},
         intrinsics::*,
+        CallStack, GCHandle, MethodInfo, StepResult,
     },
     vm_expect_stack, vm_msg, vm_pop, vm_push, vm_trace_branch, vm_trace_field,
     vm_trace_instruction,
@@ -862,7 +864,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     // Reference type: dereference the managed pointer
                     vm_expect_stack!(let ManagedPtr(m) = args[0].clone());
                     debug_assert!(
-                        m.value.as_ptr() as usize % std::mem::align_of::<ObjectRef>() == 0,
+                        (m.value.as_ptr() as usize)
+                            .is_multiple_of(std::mem::align_of::<ObjectRef>()),
                         "ManagedPtr value is not aligned for ObjectRef"
                     );
                     let obj_ref = unsafe { *(m.value.as_ptr() as *const ObjectRef) };
@@ -1069,8 +1072,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         if index >= v.layout.length {
                             panic!("IndexOutOfRangeException");
                         }
-                        // SAFETY: v.get() returns a slice of the array's storage. index is checked against 
-                        // the array length. The pointer arithmetic is safe as it stays within the allocated 
+                        // SAFETY: v.get() returns a slice of the array's storage. index is checked against
+                        // the array length. The pointer arithmetic is safe as it stays within the allocated
                         // storage for the array.
                         unsafe { v.get().as_ptr().add(index * element_layout.size()) as *mut u8 }
                     }

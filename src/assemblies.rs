@@ -1,12 +1,13 @@
 use crate::{
     types::{
-        TypeDescription, generics::{ConcreteType, GenericLookup},
+        generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
+        TypeDescription,
     },
-    utils::{ResolutionS, decompose_type_source, static_res_from_file},
+    utils::{decompose_type_source, static_res_from_file, ResolutionS},
 };
 use dotnetdll::prelude::*;
-use gc_arena::{Collect, unsafe_empty_collect};
+use gc_arena::{unsafe_empty_collect, Collect};
 use std::{collections::HashMap, error::Error, path::PathBuf, sync::RwLock};
 
 pub struct AssemblyLoader {
@@ -39,7 +40,10 @@ impl AssemblyLoader {
         let support_res = Box::leak(Box::new(
             Resolution::parse(SUPPORT_LIBRARY, ReadOptions::default()).unwrap(),
         ));
-        resolutions.insert(SUPPORT_ASSEMBLY.to_string(), Some(ResolutionS::new(support_res)));
+        resolutions.insert(
+            SUPPORT_ASSEMBLY.to_string(),
+            Some(ResolutionS::new(support_res)),
+        );
         let mut this = Self {
             assembly_root,
             external: RwLock::new(resolutions),
@@ -131,7 +135,12 @@ impl AssemblyLoader {
         }
 
         let res = self.get_assembly(assembly.name.as_ref());
-        match res.definition().type_definitions.iter().find(|t| t.type_name() == name) {
+        match res
+            .definition()
+            .type_definitions
+            .iter()
+            .find(|t| t.type_name() == name)
+        {
             None => {
                 for e in &res.definition().exported_types {
                     if e.type_name() == name {
@@ -675,7 +684,10 @@ impl AssemblyLoader {
         match field {
             FieldSource::Definition(d) => (
                 FieldDescription {
-                    parent: TypeDescription::new(resolution, &resolution.definition()[d.parent_type()]),
+                    parent: TypeDescription::new(
+                        resolution,
+                        &resolution.definition()[d.parent_type()],
+                    ),
                     field: &resolution.definition()[d],
                 },
                 generic_inst.clone(),

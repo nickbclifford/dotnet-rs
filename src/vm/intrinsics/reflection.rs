@@ -2,12 +2,13 @@ use crate::{
     assemblies::{AssemblyLoader, SUPPORT_ASSEMBLY},
     match_method,
     types::{
-        TypeDescription, generics::{ConcreteType, GenericLookup},
+        generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
+        TypeDescription,
     },
-    utils::{ResolutionS, decompose_type_source},
+    utils::{decompose_type_source, ResolutionS},
     value::object::{HeapStorage, Object, ObjectRef, Vector},
-    vm::{CallStack, GCHandle, MethodInfo, StepResult, context::ResolutionContext},
+    vm::{context::ResolutionContext, CallStack, GCHandle, MethodInfo, StepResult},
     vm_expect_stack, vm_pop, vm_push,
 };
 use dotnetdll::prelude::{BaseType, MethodType, TypeSource};
@@ -635,7 +636,8 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
 
             panic!("could not find a parameterless constructor in {:?}", td)
         },
-    }).expect("unimplemented runtime type intrinsic");
+    })
+    .expect("unimplemented runtime type intrinsic");
     StepResult::InstructionStepped
 }
 

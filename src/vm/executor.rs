@@ -1,6 +1,7 @@
 use crate::{
-    types::members::MethodDescription, value::StackValue,
-    vm::{MethodInfo, StepResult, stack::GCArena},
+    types::members::MethodDescription,
+    value::StackValue,
+    vm::{stack::GCArena, MethodInfo, StepResult},
     vm_msg,
 };
 

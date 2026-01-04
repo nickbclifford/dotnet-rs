@@ -65,14 +65,13 @@
 //! vm_trace_stack_snapshot!(ctx);        // Just the stack
 //! vm_trace_heap_snapshot!(ctx);         // Just the heap
 //! ```
-use crate::{
-    value::object::HeapStorage,
-    vm::CallStack,
-};
+use crate::{value::object::HeapStorage, vm::CallStack};
 use gc_arena::Gc;
 use std::{
     cell::{Cell, RefCell},
-    env, fs::File, io::{BufWriter, Write, stderr, stdout},
+    env,
+    fs::File,
+    io::{stderr, stdout, BufWriter, Write},
 };
 
 const BUFFER_SIZE: usize = 256 * 1024; // 256KB buffer for better IO performance
@@ -392,6 +391,7 @@ impl Tracer {
     }
 
     /// Writes frame information to the trace output
+    #[allow(clippy::too_many_arguments)]
     pub fn dump_frame_state(
         &self,
         frame_idx: usize,
@@ -560,8 +560,6 @@ impl Tracer {
         );
     }
 }
-
-
 
 // this block is all for runtime debug methods
 #[allow(dead_code)]

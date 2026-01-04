@@ -3,8 +3,13 @@ use crate::{
     utils::ResolutionS,
     value::object::{ObjectHandle, ObjectRef},
 };
-use gc_arena::{Collect, Collection, Gc, unsafe_empty_collect};
-use std::{cmp::Ordering, collections::HashSet, fmt::{Debug, Formatter}, ptr::NonNull};
+use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};
+use std::{
+    cmp::Ordering,
+    collections::HashSet,
+    fmt::{Debug, Formatter},
+    ptr::NonNull,
+};
 
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 pub struct UnmanagedPtr(pub NonNull<u8>);
@@ -144,7 +149,7 @@ impl<'gc> ManagedPtr<'gc> {
 
     /// # Safety
     ///
-    /// The caller must ensure that the resulting pointer is within the bounds of the same 
+    /// The caller must ensure that the resulting pointer is within the bounds of the same
     /// allocated object as the original pointer.
     pub unsafe fn offset(self, bytes: isize) -> Self {
         self.map_value(|p| NonNull::new_unchecked(p.as_ptr().offset(bytes)))

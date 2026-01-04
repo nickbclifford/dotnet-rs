@@ -5,13 +5,14 @@ use crate::{
     },
     utils::decompose_type_source,
     value::{
-        StackValue, layout::{FieldLayoutManager, LayoutManager, Scalar},
+        layout::{FieldLayoutManager, LayoutManager, Scalar},
         object::Object,
+        StackValue,
     },
-    vm::{CallStack, GCHandle, context::ResolutionContext},
+    vm::{context::ResolutionContext, CallStack, GCHandle},
 };
 use dotnetdll::prelude::*;
-use gc_arena::{Collect, unsafe_empty_collect};
+use gc_arena::{unsafe_empty_collect, Collect};
 use libffi::middle::*;
 use libloading::{Library, Symbol};
 use std::{collections::HashMap, ffi::c_void, path::PathBuf};

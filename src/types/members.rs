@@ -59,7 +59,9 @@ impl Debug for FieldDescription {
         write!(
             f,
             "{} {}::{}",
-            self.field.return_type.show(self.parent.resolution.definition()),
+            self.field
+                .return_type
+                .show(self.parent.resolution.definition()),
             self.parent.type_name(),
             self.field.name
         )?;

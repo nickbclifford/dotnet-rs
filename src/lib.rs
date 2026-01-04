@@ -1,5 +1,5 @@
-use clap::Parser;
 use crate::{utils::static_res_from_file, vm::ExecutorResult};
+use clap::Parser;
 use dotnetdll::prelude::*;
 use std::process::ExitCode;
 
@@ -10,7 +10,7 @@ pub mod value;
 #[macro_use]
 pub mod vm;
 
-use types::{TypeDescription, members::MethodDescription};
+use types::{members::MethodDescription, TypeDescription};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -43,7 +43,10 @@ pub fn run_cli() -> ExitCode {
     let mut executor = vm::Executor::new(Box::leak(arena));
 
     let entrypoint = MethodDescription {
-        parent: TypeDescription::new(resolution, &resolution.definition()[entry_method.parent_type()]),
+        parent: TypeDescription::new(
+            resolution,
+            &resolution.definition()[entry_method.parent_type()],
+        ),
         method: &resolution.definition()[entry_method],
     };
     executor.entrypoint(entrypoint);

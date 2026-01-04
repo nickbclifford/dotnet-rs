@@ -1,5 +1,5 @@
 use crate::{
-    types::{TypeDescription, members::MethodDescription},
+    types::{members::MethodDescription, TypeDescription},
     utils::DebugStr,
     value::{
         layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
@@ -9,8 +9,10 @@ use crate::{
 };
 use gc_arena::{Collect, Collection};
 use std::{
-    collections::HashMap, fmt::{Debug, Formatter},
-    marker::PhantomData, ops::Range,
+    collections::HashMap,
+    fmt::{Debug, Formatter},
+    marker::PhantomData,
+    ops::Range,
 };
 
 #[derive(Clone, PartialEq)]

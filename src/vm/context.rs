@@ -1,15 +1,15 @@
 use crate::{
     assemblies::{Ancestor, AssemblyLoader},
     types::{
-        TypeDescription, generics::{ConcreteType, GenericLookup},
+        generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
+        TypeDescription,
     },
-    utils::{ResolutionS, decompose_type_source},
+    utils::{decompose_type_source, ResolutionS},
     value::object::ObjectHandle,
 };
 use dotnetdll::prelude::{
-    BaseType, FieldSource, MemberType, MethodType, TypeSource, UserMethod, UserType,
-    ValueKind,
+    BaseType, FieldSource, MemberType, MethodType, TypeSource, UserMethod, UserType, ValueKind,
 };
 use std::collections::{HashSet, VecDeque};
 
