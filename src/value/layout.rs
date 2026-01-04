@@ -279,10 +279,7 @@ impl FieldLayoutManager {
         mut predicate: impl FnMut(&Field) -> bool,
     ) -> Self {
         // TODO: check for layout flags all the way down the chain? (II.22.8)
-        let mut ancestors: Vec<_> = context.get_ancestors(td).collect();
-        ancestors.reverse();
-        // remove current type, since it gets special treatment
-        ancestors.pop();
+        let ancestors: Vec<_> = context.get_ancestors(td).collect();
 
         let mut total_fields = vec![];
         let mut add_field_layout = |f: FieldDescription, ctx: &ResolutionContext| {
@@ -291,25 +288,27 @@ impl FieldLayoutManager {
             total_fields.push((f.field.name.as_ref(), f.field.offset, layout));
         };
 
-        for (
-            td @ TypeDescription {
-                resolution: res,
-                definition: a,
-            },
-            generic_params,
-        ) in ancestors
-        {
+        for i in (1..ancestors.len()).rev() {
+            let (
+                td @ TypeDescription {
+                    resolution: res,
+                    definition: a,
+                },
+                _,
+            ) = &ancestors[i];
+            let (_, generic_params) = &ancestors[i - 1];
+
             let new_lookup = GenericLookup::new(
                 generic_params
-                    .into_iter()
-                    .map(|t| context.make_concrete(t))
+                    .iter()
+                    .map(|t| context.make_concrete(*t))
                     .collect(),
             );
             let new_ctx = ResolutionContext {
                 generics: &new_lookup,
-                resolution: res,
+                resolution: *res,
                 assemblies: context.assemblies,
-                type_owner: Some(td),
+                type_owner: Some(*td),
                 method_owner: None,
             };
             for f in &a.fields {
@@ -319,7 +318,7 @@ impl FieldLayoutManager {
 
                 add_field_layout(
                     FieldDescription {
-                        parent: td,
+                        parent: *td,
                         field: f,
                     },
                     &new_ctx,

@@ -1,9 +1,10 @@
 use crate::{
-    match_method, value::StackValue,
-    vm::{CallStack, GCHandle, StepResult, intrinsics::span_to_slice},
+    match_method,
+    value::StackValue,
+    vm::{intrinsics::span_to_slice, CallStack, GCHandle, StepResult},
     vm_expect_stack, vm_pop, vm_push,
 };
-use gc_arena::{Collect, unsafe_empty_collect};
+use gc_arena::{unsafe_empty_collect, Collect};
 use std::{
     fmt::{Debug, Formatter},
     ops::Deref,
@@ -22,10 +23,10 @@ macro_rules! with_string {
         $code
     }};
 }
-pub(crate) use with_string;
-use crate::types::members::MethodDescription;
 use crate::types::generics::GenericLookup;
+use crate::types::members::MethodDescription;
 use crate::value::object::{HeapStorage, Object, ObjectRef};
+pub(crate) use with_string;
 
 #[derive(Clone, PartialEq)]
 pub struct CLRString(Vec<u16>);
@@ -84,7 +85,8 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
     }
 
     match_method!(method, {
-        [static System.String::Equals(string, string)] => {
+        [static System.String::Equals(string, string)]
+        | [System.String::Equals(string)] => {
             let b = string_op!(pop!(), |b| b.to_vec());
             let a = string_op!(pop!(), |a| a.to_vec());
 
@@ -203,7 +205,7 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
             push!(string(gc, CLRString::new(value)));
             Some(StepResult::InstructionStepped)
         },
-    }).expect("unsupported intrinsic call to String");
+    }).unwrap_or_else(|| panic!("unsupported intrinsic call to String: {:?}", method));
 
     StepResult::InstructionStepped
 }
