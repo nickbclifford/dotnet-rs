@@ -1,5 +1,5 @@
 use dotnet_rs::{
-    resolve, types::{TypeDescription, members::MethodDescription},
+    assemblies, types::{TypeDescription, members::MethodDescription},
     utils::static_res_from_file, vm,
 };
 use dotnetdll::prelude::*;
@@ -9,7 +9,7 @@ use std::{
 };
 
 pub struct TestHarness {
-    pub assemblies: &'static resolve::Assemblies,
+    pub assemblies: &'static assemblies::AssemblyLoader,
 }
 
 impl TestHarness {
@@ -22,7 +22,7 @@ impl TestHarness {
 
     fn new() -> Self {
         let assemblies_path = Self::find_dotnet_app_path().to_str().unwrap().to_string();
-        let assemblies = resolve::Assemblies::new(assemblies_path);
+        let assemblies = assemblies::AssemblyLoader::new(assemblies_path);
         let assemblies = Box::leak(Box::new(assemblies));
         Self { assemblies }
     }

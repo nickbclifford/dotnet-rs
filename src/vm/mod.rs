@@ -1,5 +1,6 @@
 use crate::{
-    resolve::Assemblies, types::{generics::GenericLookup, members::MethodDescription},
+    assemblies::AssemblyLoader,
+    types::{generics::GenericLookup, members::MethodDescription},
 };
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, unsafe_empty_collect};
@@ -53,7 +54,7 @@ impl MethodInfo<'static> {
     pub fn new<'c>(
         method: MethodDescription,
         generics: &'c GenericLookup,
-        assemblies: &'c Assemblies,
+        loader: &'c AssemblyLoader,
     ) -> Self {
         let body = match &method.method.body {
             Some(b) => b,
@@ -75,7 +76,7 @@ impl MethodInfo<'static> {
             None => panic!("cannot call method with empty body"),
         };
 
-        let ctx = ResolutionContext::for_method(method, assemblies, generics);
+        let ctx = ResolutionContext::for_method(method, loader, generics);
 
         Self {
             is_cctor: method.method.runtime_special_name

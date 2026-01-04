@@ -303,7 +303,7 @@ impl<'gc> ValueType<'gc> {
     }
 
     pub fn description(&self, context: &ResolutionContext) -> TypeDescription {
-        let asms = &context.assemblies;
+        let asms = &context.loader;
         match self {
             ValueType::Bool(_) => asms.corlib_type("System.Boolean"),
             ValueType::Char(_) => asms.corlib_type("System.Char"),
@@ -340,10 +340,10 @@ pub enum CTSValue<'gc> {
 
 impl<'gc> CTSValue<'gc> {
     pub fn new(t: &ConcreteType, context: &ResolutionContext, data: StackValue<'gc>) -> Self {
+        use crate::types::generics::GenericLookup;
+        use crate::utils::decompose_type_source;
         use dotnetdll::prelude::{BaseType, ValueKind};
         use ValueType::*;
-        use crate::utils::decompose_type_source;
-        use crate::types::generics::GenericLookup;
         let t = context.normalize_type(t.clone());
         match t.get() {
             BaseType::Boolean => Self::Value(Bool(convert_num::<u8>(data) != 0)),
@@ -415,10 +415,10 @@ impl<'gc> CTSValue<'gc> {
     }
 
     pub fn read(t: &ConcreteType, context: &ResolutionContext, data: &[u8]) -> Self {
+        use crate::types::generics::GenericLookup;
+        use crate::utils::decompose_type_source;
         use dotnetdll::prelude::{BaseType, ValueKind};
         use ValueType::*;
-        use crate::utils::decompose_type_source;
-        use crate::types::generics::GenericLookup;
         let t = context.normalize_type(t.clone());
         match t.get() {
             BaseType::Boolean => Self::Value(Bool(data[0] != 0)),

@@ -9,17 +9,17 @@ use dotnetdll::prelude::*;
 use gc_arena::{Collect, unsafe_empty_collect};
 use std::{collections::HashMap, error::Error, path::PathBuf, sync::RwLock};
 
-pub struct Assemblies {
+pub struct AssemblyLoader {
     assembly_root: String,
     external: RwLock<HashMap<String, Option<ResolutionS>>>,
     stubs: HashMap<String, TypeDescription>,
 }
-unsafe_empty_collect!(Assemblies);
+unsafe_empty_collect!(AssemblyLoader);
 
 const SUPPORT_LIBRARY: &[u8] = include_bytes!("support/bin/Debug/net10.0/support.dll");
 pub const SUPPORT_ASSEMBLY: &str = "__dotnetrs_support";
 
-impl Assemblies {
+impl AssemblyLoader {
     pub fn new(assembly_root: String) -> Self {
         let mut resolutions: HashMap<_, _> = std::fs::read_dir(&assembly_root)
             .unwrap()
@@ -455,7 +455,6 @@ impl Assemblies {
         }
     }
 
-
     // Compare a ConcreteType with a MethodType
     fn concrete_equals_method_type(
         &self,
@@ -542,7 +541,6 @@ impl Assemblies {
             _ => false,
         }
     }
-
 
     fn get_methods_to_search<'a>(
         &self,
@@ -754,7 +752,7 @@ impl Assemblies {
 pub type Ancestor<'a> = (TypeDescription, Vec<&'a MemberType>);
 
 struct AncestorsImpl<'a> {
-    assemblies: &'a Assemblies,
+    assemblies: &'a AssemblyLoader,
     child: Option<TypeDescription>,
 }
 impl<'a> Iterator for AncestorsImpl<'a> {
@@ -788,7 +786,7 @@ impl std::fmt::Display for AttrResolveError {
     }
 }
 
-impl Resolver<'static> for Assemblies {
+impl Resolver<'static> for AssemblyLoader {
     type Error = AttrResolveError; // TODO: error handling
 
     fn find_type(

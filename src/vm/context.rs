@@ -1,5 +1,5 @@
 use crate::{
-    resolve::{Ancestor, Assemblies},
+    assemblies::{Ancestor, AssemblyLoader},
     types::{
         TypeDescription, generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
@@ -16,7 +16,7 @@ use std::collections::{HashSet, VecDeque};
 #[derive(Clone, Copy)]
 pub struct ResolutionContext<'a> {
     pub generics: &'a GenericLookup,
-    pub assemblies: &'a Assemblies,
+    pub loader: &'a AssemblyLoader,
     pub resolution: ResolutionS,
     pub type_owner: Option<TypeDescription>,
     pub method_owner: Option<MethodDescription>,
@@ -25,12 +25,12 @@ pub struct ResolutionContext<'a> {
 impl<'a> ResolutionContext<'a> {
     pub fn new(
         generics: &'a GenericLookup,
-        assemblies: &'a Assemblies,
+        loader: &'a AssemblyLoader,
         resolution: ResolutionS,
     ) -> Self {
         Self {
             generics,
-            assemblies,
+            loader,
             resolution,
             type_owner: None,
             method_owner: None,
@@ -39,12 +39,12 @@ impl<'a> ResolutionContext<'a> {
 
     pub fn for_method(
         method: MethodDescription,
-        assemblies: &'a Assemblies,
+        loader: &'a AssemblyLoader,
         generics: &'a GenericLookup,
     ) -> Self {
         Self {
             generics,
-            assemblies,
+            loader,
             resolution: method.resolution(),
             type_owner: Some(method.parent),
             method_owner: Some(method),
@@ -67,14 +67,14 @@ impl<'a> ResolutionContext<'a> {
         ResolutionContext {
             resolution: td.resolution,
             generics,
-            assemblies: self.assemblies,
+            loader: self.loader,
             type_owner: Some(td),
             method_owner: None,
         }
     }
 
     pub fn locate_type(&self, handle: UserType) -> TypeDescription {
-        self.assemblies.locate_type(self.resolution, handle)
+        self.loader.locate_type(self.resolution, handle)
     }
 
     pub fn locate_method(
@@ -82,12 +82,12 @@ impl<'a> ResolutionContext<'a> {
         handle: UserMethod,
         generic_inst: &GenericLookup,
     ) -> MethodDescription {
-        self.assemblies
+        self.loader
             .locate_method(self.resolution, handle, generic_inst)
     }
 
     pub fn locate_field(&self, field: FieldSource) -> (FieldDescription, GenericLookup) {
-        self.assemblies
+        self.loader
             .locate_field(self.resolution, field, self.generics)
     }
 
@@ -95,7 +95,7 @@ impl<'a> ResolutionContext<'a> {
         &self,
         child_type: TypeDescription,
     ) -> impl Iterator<Item = Ancestor<'a>> + 'a {
-        self.assemblies.ancestors(child_type)
+        self.loader.ancestors(child_type)
     }
 
     pub fn is_a(&self, value: TypeDescription, ancestor: TypeDescription) -> bool {
@@ -118,7 +118,7 @@ impl<'a> ResolutionContext<'a> {
                 let handle = match interface_source {
                     TypeSource::User(h) | TypeSource::Generic { base: h, .. } => *h,
                 };
-                let interface = self.assemblies.locate_type(current.resolution, handle);
+                let interface = self.loader.locate_type(current.resolution, handle);
                 queue.push_back(interface);
             }
         }
@@ -130,8 +130,8 @@ impl<'a> ResolutionContext<'a> {
         use crate::value::object::HeapStorage::*;
         match &*object.as_ref().borrow() {
             Obj(o) => o.description,
-            Vec(_) => self.assemblies.corlib_type("System.Array"),
-            Str(_) => self.assemblies.corlib_type("System.String"),
+            Vec(_) => self.loader.corlib_type("System.Array"),
+            Str(_) => self.loader.corlib_type("System.String"),
             Boxed(v) => v.description(self),
         }
     }
@@ -151,8 +151,7 @@ impl<'a> ResolutionContext<'a> {
     }
 
     pub fn get_field_desc(&self, field: FieldDescription) -> TypeDescription {
-        self.assemblies
-            .find_concrete_type(self.get_field_type(field))
+        self.loader.find_concrete_type(self.get_field_type(field))
     }
 
     pub fn normalize_type(&self, mut t: ConcreteType) -> ConcreteType {

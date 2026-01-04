@@ -24,7 +24,7 @@ impl Executor {
         self.arena.mutate_root(|gc, c| {
             c.entrypoint_frame(
                 gc,
-                MethodInfo::new(method, &Default::default(), c.runtime.assemblies),
+                MethodInfo::new(method, &Default::default(), c.runtime.loader),
                 Default::default(),
                 vec![],
             )

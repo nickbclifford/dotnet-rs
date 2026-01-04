@@ -307,7 +307,7 @@ impl FieldLayoutManager {
             let new_ctx = ResolutionContext {
                 generics: &new_lookup,
                 resolution: *res,
-                assemblies: context.assemblies,
+                loader: context.loader,
                 type_owner: Some(*td),
                 method_owner: None,
             };

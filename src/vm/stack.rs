@@ -1,5 +1,5 @@
 use crate::{
-    resolve::Assemblies,
+    assemblies::AssemblyLoader,
     types::{
         TypeDescription, generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
@@ -41,7 +41,7 @@ pub struct ExecutionStack<'gc, 'm> {
 }
 
 pub struct RuntimeEnvironment<'gc, 'm> {
-    pub assemblies: &'m Assemblies,
+    pub loader: &'m AssemblyLoader,
     pub statics: RefCell<StaticStorageManager<'gc>>,
     pub pinvoke: NativeLibraries,
     pub runtime_asms: HashMap<ResolutionS, ObjectRef<'gc>>,
@@ -176,7 +176,7 @@ pub type GCArena = Arena<Rootable!['gc => CallStack<'gc, 'static>]>;
 pub type GCHandle<'gc> = &'gc Mutation<'gc>;
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
-    pub fn new(_gc: GCHandle<'gc>, assemblies: &'m Assemblies) -> Self {
+    pub fn new(_gc: GCHandle<'gc>, loader: &'m AssemblyLoader) -> Self {
         Self {
             execution: ExecutionStack {
                 stack: vec![],
@@ -188,8 +188,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 original_stack_height: 0,
             },
             runtime: RuntimeEnvironment {
-                assemblies,
-                pinvoke: NativeLibraries::new(assemblies.get_root()),
+                loader,
+                pinvoke: NativeLibraries::new(loader.get_root()),
                 statics: RefCell::new(StaticStorageManager::new()),
                 runtime_asms: HashMap::new(),
                 runtime_types: HashMap::new(),
@@ -250,7 +250,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     let ctx = ResolutionContext {
                         generics,
-                        assemblies: self.runtime.assemblies,
+                        loader: self.runtime.loader,
                         resolution: method.resolution(),
                         type_owner: Some(method.parent),
                         method_owner: Some(method),
@@ -373,7 +373,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 _ => unreachable!(),
             };
 
-            let object_type = self.runtime.assemblies.corlib_type("System.Object");
+            let object_type = self.runtime.loader.corlib_type("System.Object");
             let base_finalize = object_type
                 .definition
                 .methods
@@ -391,7 +391,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             // we can use a temporary one from the object's own resolution.
             let ctx = ResolutionContext {
                 generics: &self.runtime.empty_generics,
-                assemblies: self.runtime.assemblies,
+                loader: self.runtime.loader,
                 resolution: obj_type.resolution,
                 type_owner: Some(obj_type),
                 method_owner: None,
@@ -403,7 +403,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 MethodInfo::new(
                     target_method,
                     &self.runtime.empty_generics,
-                    self.runtime.assemblies,
+                    self.runtime.loader,
                 ),
                 self.runtime.empty_generics.clone(),
                 vec![StackValue::ObjectRef(obj_ref)],
@@ -465,7 +465,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     ) {
         if self.tracer_enabled() {
             let method_desc = format!("{:?}", method.source);
-            self.runtime.tracer.trace_method_entry(self.indent(), &method_desc, "");
+            self.runtime
+                .tracer
+                .trace_method_entry(self.indent(), &method_desc, "");
         }
 
         // TODO: varargs?
@@ -535,7 +537,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         if self.tracer_enabled() {
             let method_name = format!("{:?}", frame.state.info_handle.source);
-            self.runtime.tracer.trace_method_exit(self.indent(), &method_name);
+            self.runtime
+                .tracer
+                .trace_method_exit(self.indent(), &method_name);
         }
 
         if frame.is_finalizer {
@@ -595,7 +599,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         if let Some(f) = self.execution.frames.last() {
             ResolutionContext {
                 generics: &f.generic_inst,
-                assemblies: self.runtime.assemblies,
+                loader: self.runtime.loader,
                 resolution: f.source_resolution,
                 type_owner: Some(f.state.info_handle.source.parent),
                 method_owner: Some(f.state.info_handle.source),
@@ -603,12 +607,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         } else {
             ResolutionContext {
                 generics: &self.runtime.empty_generics,
-                assemblies: self.runtime.assemblies,
-                resolution: self
-                    .runtime
-                    .assemblies
-                    .corlib_type("System.Object")
-                    .resolution,
+                loader: self.runtime.loader,
+                resolution: self.runtime.loader.corlib_type("System.Object").resolution,
                 type_owner: None,
                 method_owner: None,
             }
@@ -775,7 +775,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn push_stack(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {
         if self.tracer_enabled() {
-            self.runtime.tracer.trace_stack_op(self.indent(), "PUSH", &format!("{:?}", value));
+            self.runtime
+                .tracer
+                .trace_stack_op(self.indent(), "PUSH", &format!("{:?}", value));
         }
         self.set_slot_at(gc, self.top_of_stack(), value);
         self.current_frame_mut().stack_height += 1;
@@ -788,7 +790,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
         let value = self.get_slot(&self.execution.stack[top - 1]);
         if self.tracer_enabled() {
-            self.runtime.tracer.trace_stack_op(self.indent(), "POP", &format!("{:?}", value));
+            self.runtime
+                .tracer
+                .trace_stack_op(self.indent(), "POP", &format!("{:?}", value));
         }
         self.current_frame_mut().stack_height -= 1;
         value
@@ -825,7 +829,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn throw_by_name(&mut self, gc: GCHandle<'gc>, name: &str) -> StepResult {
-        let rt = self.runtime.assemblies.corlib_type(name);
+        let rt = self.runtime.loader.corlib_type(name);
         let rt_obj = ObjectInstance::new(rt, &self.current_context());
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
         self.register_new_object(&obj_ref);
@@ -849,7 +853,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         };
 
         for (parent, _) in ctx.get_ancestors(this_type) {
-            if let Some(method) = self.runtime.assemblies.find_method_in_type(
+            if let Some(method) = self.runtime.loader.find_method_in_type(
                 parent,
                 &base_method.method.name,
                 &base_method.method.signature,

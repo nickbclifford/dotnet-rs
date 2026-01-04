@@ -107,7 +107,9 @@ impl Tracer {
     pub fn new() -> Self {
         let trace_env = env::var("DOTNET_RS_TRACE");
         let (enabled, writer): (bool, Option<Box<dyn Write + Send>>) = match trace_env {
-            Ok(val) if val == "1" || val == "true" || val == "stdout" => (true, Some(Box::new(stdout()))),
+            Ok(val) if val == "1" || val == "true" || val == "stdout" => {
+                (true, Some(Box::new(stdout())))
+            }
             Ok(val) if val == "stderr" => (true, Some(Box::new(stderr()))),
             Ok(val) if !val.is_empty() => {
                 // assume it's a file path
@@ -272,7 +274,10 @@ impl Tracer {
             self.stats.borrow_mut().branches += 1;
         }
         let status = if taken { "TAKEN" } else { "NOT TAKEN" };
-        self.write_msg(indent, format_args!("↷ {} to {:04} ({})", branch_type, target, status));
+        self.write_msg(
+            indent,
+            format_args!("↷ {} to {:04} ({})", branch_type, target, status),
+        );
     }
 
     pub fn trace_type_info(&self, indent: usize, operation: &str, type_name: &str) {
@@ -344,16 +349,23 @@ impl Tracer {
         }
 
         self.msg(0, format_args!(""));
-        self.msg(0, format_args!("╔════════════════════════════════════════════════════════════"));
+        self.msg(
+            0,
+            format_args!("╔════════════════════════════════════════════════════════════"),
+        );
         self.msg(0, format_args!("║ STACK SNAPSHOT"));
-        self.msg(0, format_args!("╠════════════════════════════════════════════════════════════"));
+        self.msg(
+            0,
+            format_args!("╠════════════════════════════════════════════════════════════"),
+        );
 
         if stack_contents.is_empty() {
             self.msg(0, format_args!("║ (empty stack)"));
         } else {
             for (idx, content) in stack_contents.iter().enumerate().rev() {
                 // Check for frame markers at this position
-                let markers: Vec<_> = frame_markers.iter()
+                let markers: Vec<_> = frame_markers
+                    .iter()
                     .filter(|(pos, _)| *pos == idx)
                     .map(|(_, label)| label.as_str())
                     .collect();
@@ -368,27 +380,46 @@ impl Tracer {
             }
         }
 
-        self.msg(0, format_args!("╚════════════════════════════════════════════════════════════"));
+        self.msg(
+            0,
+            format_args!("╚════════════════════════════════════════════════════════════"),
+        );
     }
 
     /// Writes frame information to the trace output
-    pub fn dump_frame_state(&self, frame_idx: usize, method_name: &str, ip: usize,
-                           args_base: usize, locals_base: usize, stack_base: usize,
-                           stack_height: usize) {
+    pub fn dump_frame_state(
+        &self,
+        frame_idx: usize,
+        method_name: &str,
+        ip: usize,
+        args_base: usize,
+        locals_base: usize,
+        stack_base: usize,
+        stack_height: usize,
+    ) {
         if !self.enabled {
             return;
         }
 
         self.msg(0, format_args!(""));
-        self.msg(0, format_args!("╔════════════════════════════════════════════════════════════"));
+        self.msg(
+            0,
+            format_args!("╔════════════════════════════════════════════════════════════"),
+        );
         self.msg(0, format_args!("║ FRAME #{} - {}", frame_idx, method_name));
-        self.msg(0, format_args!("╠════════════════════════════════════════════════════════════"));
+        self.msg(
+            0,
+            format_args!("╠════════════════════════════════════════════════════════════"),
+        );
         self.msg(0, format_args!("║ IP:           {:04}", ip));
         self.msg(0, format_args!("║ Args base:    {}", args_base));
         self.msg(0, format_args!("║ Locals base:  {}", locals_base));
         self.msg(0, format_args!("║ Stack base:   {}", stack_base));
         self.msg(0, format_args!("║ Stack height: {}", stack_height));
-        self.msg(0, format_args!("╚════════════════════════════════════════════════════════════"));
+        self.msg(
+            0,
+            format_args!("╚════════════════════════════════════════════════════════════"),
+        );
     }
 
     /// Writes heap object information to the trace output
@@ -397,7 +428,10 @@ impl Tracer {
             return;
         }
 
-        self.msg(0, format_args!("HEAP[{:#x}] {} => {}", ptr_addr, obj_type, details));
+        self.msg(
+            0,
+            format_args!("HEAP[{:#x}] {} => {}", ptr_addr, obj_type, details),
+        );
     }
 
     /// Writes a heap snapshot header
@@ -407,9 +441,18 @@ impl Tracer {
         }
 
         self.msg(0, format_args!(""));
-        self.msg(0, format_args!("╔════════════════════════════════════════════════════════════"));
-        self.msg(0, format_args!("║ HEAP SNAPSHOT ({} objects)", object_count));
-        self.msg(0, format_args!("╠════════════════════════════════════════════════════════════"));
+        self.msg(
+            0,
+            format_args!("╔════════════════════════════════════════════════════════════"),
+        );
+        self.msg(
+            0,
+            format_args!("║ HEAP SNAPSHOT ({} objects)", object_count),
+        );
+        self.msg(
+            0,
+            format_args!("╠════════════════════════════════════════════════════════════"),
+        );
     }
 
     /// Writes a heap snapshot footer
@@ -418,7 +461,10 @@ impl Tracer {
             return;
         }
 
-        self.msg(0, format_args!("╚════════════════════════════════════════════════════════════"));
+        self.msg(
+            0,
+            format_args!("╚════════════════════════════════════════════════════════════"),
+        );
     }
 
     /// Writes static storage information
@@ -428,15 +474,24 @@ impl Tracer {
         }
 
         self.msg(0, format_args!(""));
-        self.msg(0, format_args!("╔════════════════════════════════════════════════════════════"));
+        self.msg(
+            0,
+            format_args!("╔════════════════════════════════════════════════════════════"),
+        );
         self.msg(0, format_args!("║ STATIC STORAGE SNAPSHOT"));
-        self.msg(0, format_args!("╠════════════════════════════════════════════════════════════"));
+        self.msg(
+            0,
+            format_args!("╠════════════════════════════════════════════════════════════"),
+        );
 
         for line in statics_debug.lines() {
             self.msg(0, format_args!("║ {}", line));
         }
 
-        self.msg(0, format_args!("╚════════════════════════════════════════════════════════════"));
+        self.msg(
+            0,
+            format_args!("╚════════════════════════════════════════════════════════════"),
+        );
     }
 
     /// Writes a complete runtime state snapshot
@@ -446,27 +501,57 @@ impl Tracer {
         }
 
         self.msg(0, format_args!(""));
-        self.msg(0, format_args!("╔════════════════════════════════════════════════════════════"));
+        self.msg(
+            0,
+            format_args!("╔════════════════════════════════════════════════════════════"),
+        );
         self.msg(0, format_args!("║ FULL RUNTIME STATE SNAPSHOT"));
-        self.msg(0, format_args!("╚════════════════════════════════════════════════════════════"));
+        self.msg(
+            0,
+            format_args!("╚════════════════════════════════════════════════════════════"),
+        );
     }
 
     /// Writes GC statistics
-    pub fn dump_gc_stats(&self, finalization_queue: usize, pending_finalization: usize,
-                        pinned_objects: usize, gc_handles: usize, all_objects: usize) {
+    pub fn dump_gc_stats(
+        &self,
+        finalization_queue: usize,
+        pending_finalization: usize,
+        pinned_objects: usize,
+        gc_handles: usize,
+        all_objects: usize,
+    ) {
         if !self.enabled {
             return;
         }
 
         self.msg(0, format_args!(""));
-        self.msg(0, format_args!("╔════════════════════════════════════════════════════════════"));
+        self.msg(
+            0,
+            format_args!("╔════════════════════════════════════════════════════════════"),
+        );
         self.msg(0, format_args!("║ GC STATISTICS"));
-        self.msg(0, format_args!("╠════════════════════════════════════════════════════════════"));
+        self.msg(
+            0,
+            format_args!("╠════════════════════════════════════════════════════════════"),
+        );
         self.msg(0, format_args!("║ All objects:          {}", all_objects));
-        self.msg(0, format_args!("║ Finalization queue:   {}", finalization_queue));
-        self.msg(0, format_args!("║ Pending finalization: {}", pending_finalization));
-        self.msg(0, format_args!("║ Pinned objects:       {}", pinned_objects));
+        self.msg(
+            0,
+            format_args!("║ Finalization queue:   {}", finalization_queue),
+        );
+        self.msg(
+            0,
+            format_args!("║ Pending finalization: {}", pending_finalization),
+        );
+        self.msg(
+            0,
+            format_args!("║ Pinned objects:       {}", pinned_objects),
+        );
         self.msg(0, format_args!("║ GC handles:           {}", gc_handles));
-        self.msg(0, format_args!("╚════════════════════════════════════════════════════════════"));
+        self.msg(
+            0,
+            format_args!("╚════════════════════════════════════════════════════════════"),
+        );
     }
 }

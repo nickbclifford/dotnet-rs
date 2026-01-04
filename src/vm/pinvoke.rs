@@ -70,19 +70,17 @@ fn layout_to_ffi(l: LayoutManager) -> Type {
             Type::structure(fields.into_iter().map(|f| layout_to_ffi(f.layout)))
         }
         LayoutManager::ArrayLayoutManager(_) => todo!("marshalling not yet supported for arrays"),
-        LayoutManager::Scalar(s) => {
-            match s {
-                Scalar::Int8 => Type::i8(),
-                Scalar::Int16 => Type::i16(),
-                Scalar::Int32 => Type::i32(),
-                Scalar::Int64 => Type::i64(),
-                Scalar::ObjectRef => todo!("marshalling not yet supported for native object refs"),
-                Scalar::NativeInt => Type::isize(),
-                Scalar::Float32 => Type::f32(),
-                Scalar::Float64 => Type::f64(),
-                Scalar::ManagedPtr => Type::pointer(),
-            }
-        }
+        LayoutManager::Scalar(s) => match s {
+            Scalar::Int8 => Type::i8(),
+            Scalar::Int16 => Type::i16(),
+            Scalar::Int32 => Type::i32(),
+            Scalar::Int64 => Type::i64(),
+            Scalar::ObjectRef => todo!("marshalling not yet supported for native object refs"),
+            Scalar::NativeInt => Type::isize(),
+            Scalar::Float32 => Type::f32(),
+            Scalar::Float64 => Type::f64(),
+            Scalar::ManagedPtr => Type::pointer(),
+        },
     }
 }
 

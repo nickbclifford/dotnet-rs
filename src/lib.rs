@@ -3,7 +3,7 @@ use crate::{utils::static_res_from_file, vm::ExecutorResult};
 use dotnetdll::prelude::*;
 use std::process::ExitCode;
 
-pub mod resolve;
+pub mod assemblies;
 pub mod types;
 pub mod utils;
 pub mod value;
@@ -36,7 +36,7 @@ pub fn run_cli() -> ExitCode {
         None => panic!("expected input module to have an entry point, received one without"),
     };
 
-    let assemblies = resolve::Assemblies::new(args.assemblies);
+    let assemblies = assemblies::AssemblyLoader::new(args.assemblies);
     let assemblies = Box::leak(Box::new(assemblies));
 
     let arena = Box::new(vm::GCArena::new(|gc| vm::CallStack::new(gc, assemblies)));

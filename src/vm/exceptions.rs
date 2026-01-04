@@ -192,7 +192,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             self.runtime.tracer.trace_exception(
                 self.indent(),
                 &format!("{:?}", exception),
-                &format!("{:?} at IP {}", frame.state.info_handle.source, frame.state.ip),
+                &format!(
+                    "{:?} at IP {}",
+                    frame.state.info_handle.source, frame.state.ip
+                ),
             );
         }
         // Preempt any existing exception handling state (nested exceptions)
@@ -249,7 +252,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             let exc_type = self
                                 .current_context()
                                 .get_heap_description(exception.0.expect("throwing null"));
-                            let catch_type = self.runtime.assemblies.find_concrete_type(t.clone());
+                            let catch_type = self.runtime.loader.find_concrete_type(t.clone());
 
                             if self.is_a(exc_type, catch_type) {
                                 // Match found! Start the unwind phase towards this handler.

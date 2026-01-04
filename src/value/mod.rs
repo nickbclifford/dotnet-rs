@@ -82,14 +82,12 @@ impl<'gc> StackValue<'gc> {
 
     pub fn contains_type(&self, ctx: &ResolutionContext) -> TypeDescription {
         match self {
-            Self::Int32(_) => ctx.assemblies.corlib_type("System.Int32"),
-            Self::Int64(_) => ctx.assemblies.corlib_type("System.Int64"),
-            Self::NativeInt(_) | Self::UnmanagedPtr(_) => {
-                ctx.assemblies.corlib_type("System.IntPtr")
-            }
-            Self::NativeFloat(_) => ctx.assemblies.corlib_type("System.Double"),
+            Self::Int32(_) => ctx.loader.corlib_type("System.Int32"),
+            Self::Int64(_) => ctx.loader.corlib_type("System.Int64"),
+            Self::NativeInt(_) | Self::UnmanagedPtr(_) => ctx.loader.corlib_type("System.IntPtr"),
+            Self::NativeFloat(_) => ctx.loader.corlib_type("System.Double"),
             Self::ObjectRef(ObjectRef(Some(o))) => ctx.get_heap_description(*o),
-            Self::ObjectRef(ObjectRef(None)) => ctx.assemblies.corlib_type("System.Object"),
+            Self::ObjectRef(ObjectRef(None)) => ctx.loader.corlib_type("System.Object"),
             Self::ManagedPtr(m) => m.inner_type,
             Self::ValueType(o) => o.description,
         }

@@ -56,7 +56,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         method: MethodDescription,
         lookup: GenericLookup,
     ) -> StepResult {
-        if is_intrinsic(method, self.runtime.assemblies) {
+        if is_intrinsic(method, self.runtime.loader) {
             intrinsic_call(gc, self, method, lookup)
         } else if method.method.pinvoke.is_some() {
             self.external_call(method, gc);
@@ -64,7 +64,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         } else {
             self.call_frame(
                 gc,
-                MethodInfo::new(method, &lookup, self.runtime.assemblies),
+                MethodInfo::new(method, &lookup, self.runtime.loader),
                 lookup,
             );
             StepResult::InstructionStepped
@@ -80,7 +80,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let ctx = ResolutionContext {
             resolution: description.resolution,
             generics: &generics,
-            assemblies: self.runtime.assemblies,
+            loader: self.runtime.loader,
             type_owner: Some(description),
             method_owner: None,
         };
@@ -96,7 +96,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             );
             self.call_frame(
                 gc,
-                MethodInfo::new(m, &generics, self.runtime.assemblies),
+                MethodInfo::new(m, &generics, self.runtime.loader),
                 generics,
             );
             true
@@ -171,7 +171,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let value2 = pop!();
                 let value1 = pop!();
                 value1 == value2
-            }}
+            }};
         }
 
         macro_rules! compare {
@@ -179,9 +179,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let value2 = pop!();
                 let value1 = pop!();
                 matches!(value1.compare(&value2, *$sgn), Some($order))
-            }}
+            }};
         }
-
 
         macro_rules! check_special_fields {
             ($field:ident) => {
@@ -200,7 +199,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         c
                     );
                 }
-                if is_intrinsic_field($field, self.runtime.assemblies) {
+                if is_intrinsic_field($field, self.runtime.loader) {
                     intrinsic_field(
                         gc,
                         self,
@@ -301,7 +300,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 let td = self
                     .runtime
-                    .assemblies
+                    .loader
                     .find_concrete_type(constraint_type.clone());
 
                 for o in td.definition.overrides.iter() {
@@ -820,18 +819,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let ctx = self.current_context();
 
                 let constraint_type_source = ctx.make_concrete(constraint);
-                let constraint_type =
-                    self.runtime
-                        .assemblies
-                        .find_concrete_type(constraint_type_source.clone());
+                let constraint_type = self
+                    .runtime
+                    .loader
+                    .find_concrete_type(constraint_type_source.clone());
 
                 // Determine dispatch strategy based on constraint type
                 let method = if constraint_type.is_value_type(&ctx) {
                     // Value type: check for direct override first
-                    if let Some(overriding_method) = self
-                        .runtime
-                        .assemblies
-                        .find_method_in_type_with_substitution(
+                    if let Some(overriding_method) =
+                        self.runtime.loader.find_method_in_type_with_substitution(
                             constraint_type,
                             &base_method.method.name,
                             &base_method.method.signature,
@@ -875,10 +872,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                     // For reference types with constrained callvirt, try to find the method
                     // implementation directly in the constraint type first
-                    if let Some(impl_method) = self
-                        .runtime
-                        .assemblies
-                        .find_method_in_type_with_substitution(
+                    if let Some(impl_method) =
+                        self.runtime.loader.find_method_in_type_with_substitution(
                             constraint_type,
                             &base_method.method.name,
                             &base_method.method.signature,
@@ -915,7 +910,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let obj_type = ctx.get_heap_description(o);
                     let target_type = self
                         .runtime
-                        .assemblies
+                        .loader
                         .find_concrete_type(ctx.make_concrete(target));
 
                     if ctx.is_a(obj_type, target_type) {
@@ -944,7 +939,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let obj_type = ctx.get_heap_description(o);
                     let target_type = self
                         .runtime
-                        .assemblies
+                        .loader
                         .find_concrete_type(ctx.make_concrete(target));
 
                     if ctx.is_a(obj_type, target_type) {
@@ -1074,7 +1069,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     _ => panic!("ldelema on non-vector"),
                 };
-                let target_type = self.runtime.assemblies.find_concrete_type(concrete_t);
+                let target_type = self.runtime.loader.find_concrete_type(concrete_t);
                 push!(managed_ptr(ptr, target_type, Some(h), false));
             }
             LoadField {
@@ -1277,10 +1272,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let (field, lookup) = self.current_context().locate_field(*source);
                 let field_obj = self.get_runtime_field_obj(gc, field, lookup);
 
-                let rfh = self
-                    .runtime
-                    .assemblies
-                    .corlib_type("System.RuntimeFieldHandle");
+                let rfh = self.runtime.loader.corlib_type("System.RuntimeFieldHandle");
                 let mut instance = Object::new(rfh, &self.current_context());
                 field_obj.write(instance.instance_storage.get_field_mut("_value"));
 
@@ -1292,7 +1284,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 let rmh = self
                     .runtime
-                    .assemblies
+                    .loader
                     .corlib_type("System.RuntimeMethodHandle");
                 let mut instance = Object::new(rmh, &self.current_context());
                 method_obj.write(instance.instance_storage.get_field_mut("_value"));
@@ -1347,7 +1339,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         type_name.as_ref(),
                         "System.Delegate" | "System.MulticastDelegate"
                     ) {
-                        let base = self.runtime.assemblies.corlib_type(&type_name);
+                        let base = self.runtime.loader.corlib_type(&type_name);
                         method = MethodDescription {
                             parent: base,
                             method: base
@@ -1376,7 +1368,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     self.constructor_frame(
                         gc,
                         instance,
-                        MethodInfo::new(method, &lookup, self.runtime.assemblies),
+                        MethodInfo::new(method, &lookup, self.runtime.loader),
                         lookup,
                     );
                     moved_ip = true;

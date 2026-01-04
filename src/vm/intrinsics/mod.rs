@@ -1,6 +1,6 @@
 use crate::{
-    any_match_field, any_match_method, match_field, match_method,
-    resolve::SUPPORT_ASSEMBLY,
+    any_match_field, any_match_method, assemblies::SUPPORT_ASSEMBLY, match_field,
+    match_method,
     types::{
         generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
@@ -27,13 +27,13 @@ pub mod reflection;
 
 pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttribute";
 
-pub fn is_intrinsic(method: MethodDescription, assemblies: &crate::resolve::Assemblies) -> bool {
+pub fn is_intrinsic(method: MethodDescription, loader: &crate::assemblies::AssemblyLoader) -> bool {
     if method.method.internal_call {
         return true;
     }
 
     for a in &method.method.attributes {
-        let ctor = assemblies.locate_attribute(method.resolution(), a);
+        let ctor = loader.locate_attribute(method.resolution(), a);
         if ctor.parent.type_name() == INTRINSIC_ATTR {
             return true;
         }
@@ -68,10 +68,10 @@ pub fn is_intrinsic(method: MethodDescription, assemblies: &crate::resolve::Asse
 
 pub fn is_intrinsic_field(
     field: FieldDescription,
-    assemblies: &crate::resolve::Assemblies,
+    loader: &crate::assemblies::AssemblyLoader,
 ) -> bool {
     for a in &field.field.attributes {
-        let ctor = assemblies.locate_attribute(field.parent.resolution, a);
+        let ctor = loader.locate_attribute(field.parent.resolution, a);
         if ctor.parent.type_name() == INTRINSIC_ATTR {
             return true;
         }
@@ -122,7 +122,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             vm_msg!($($args)*)
         }
     }
-    let ctx = ResolutionContext::for_method(method, stack.runtime.assemblies, &generics);
+    let ctx = ResolutionContext::for_method(method, stack.runtime.loader, &generics);
 
     msg!(stack, "-- method marked as runtime intrinsic --");
 
@@ -171,11 +171,11 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let mut type_generics = vec![];
 
             let td = match target.get() {
-                BaseType::Object => stack.runtime.assemblies.corlib_type("System.Object"),
+                BaseType::Object => stack.runtime.loader.corlib_type("System.Object"),
                 BaseType::Type { source, .. } => {
                     let (ut, generics) = decompose_type_source(source);
                     type_generics = generics;
-                    stack.runtime.assemblies.locate_type(target.resolution(), ut)
+                    stack.runtime.loader.locate_type(target.resolution(), ut)
                 }
                 err => panic!(
                     "cannot call parameterless constructor on primitive type {:?}",
@@ -208,7 +208,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     stack.constructor_frame(
                         gc,
                         instance,
-                        MethodInfo::new(desc, &new_lookup, stack.runtime.assemblies),
+                        MethodInfo::new(desc, &new_lookup, stack.runtime.loader),
                         new_lookup,
                     );
                     return StepResult::InstructionStepped;
@@ -248,7 +248,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 _ => panic!("GetArrayDataReference called on non-array"),
             };
 
-            let element_type = stack.runtime.assemblies.find_concrete_type(generics.method_generics[0].clone());
+            let element_type = stack.runtime.loader.find_concrete_type(generics.method_generics[0].clone());
             push!(StackValue::managed_ptr(data_ptr, element_type, Some(array_handle), false));
         },
         [static System.Runtime.CompilerServices.RuntimeHelpers::GetMethodTable(object)] => {
@@ -272,7 +272,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 // Otherwise create it
                 let mt_type = stack
                     .runtime
-                    .assemblies
+                    .loader
                     .corlib_type("System.Runtime.CompilerServices.MethodTable");
                 let mt_ctx = stack.current_context().for_type(mt_type);
                 let layout = FieldLayoutManager::instance_fields(mt_type, &mt_ctx);
@@ -308,14 +308,14 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let rt = stack.get_runtime_type(gc, stack.make_runtime_type(&stack.current_context(), &target));
             push!(ObjectRef(rt));
 
-            let parent = stack.runtime.assemblies.find_in_assembly(
+            let parent = stack.runtime.loader.find_in_assembly(
                 &ExternalAssemblyReference::new(SUPPORT_ASSEMBLY),
                 "DotnetRs.Comparers.Equality"
             );
             let method = parent.definition.methods.iter().find(|m| m.name == "GetDefault").unwrap();
             stack.call_frame(
                 gc,
-                MethodInfo::new(MethodDescription { parent, method }, &GenericLookup::default(), stack.runtime.assemblies),
+                MethodInfo::new(MethodDescription { parent, method }, &GenericLookup::default(), stack.runtime.loader),
                 GenericLookup::default()
             );
             return StepResult::InstructionStepped;
@@ -376,8 +376,8 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             vm_expect_stack!(let ValueType(handle) = pop!());
             let rt = ObjectRef::read(handle.instance_storage.get_field("_value"));
             let target = stack.resolve_runtime_type(rt.expect_object_ref());
-            let target: ConcreteType = target.to_concrete(stack.runtime.assemblies);
-            let target = stack.runtime.assemblies.find_concrete_type(target);
+            let target: ConcreteType = target.to_concrete(stack.runtime.loader);
+            let target = stack.runtime.loader.find_concrete_type(target);
             if stack.initialize_static_storage(gc, target, generics) {
                 let second_to_last = stack.execution.frames.len() - 2;
                 let ip = &mut stack.execution.frames[second_to_last].state.ip;
@@ -411,7 +411,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             let (FieldDescription { field, .. }, lookup) = &stack.runtime.runtime_fields[field_index];
             let field_type = ctx.with_generics(lookup).make_concrete(&field.return_type);
-            let field_desc = stack.runtime.assemblies.find_concrete_type(field_type.clone());
+            let field_desc = stack.runtime.loader.find_concrete_type(field_type.clone());
 
             let Some(initial_data) = &field.initial_value else {
                 return stack.throw_by_name(gc, "System.ArgumentException");
@@ -425,12 +425,12 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 let data_slice = &initial_data[..array_size];
 
                 // Create a ReadOnlySpan<T> pointing to the static data
-                let span_type = stack.runtime.assemblies.corlib_type("System.ReadOnlySpan`1");
+                let span_type = stack.runtime.loader.corlib_type("System.ReadOnlySpan`1");
                 let span_lookup = GenericLookup::new(vec![field_type]);
                 let mut span_instance = Object::new(span_type, &ctx.with_generics(&span_lookup));
 
                 // Set the _reference field to point to the data
-                let element_desc = stack.runtime.assemblies.find_concrete_type(element_type.clone());
+                let element_desc = stack.runtime.loader.find_concrete_type(element_type.clone());
                 let data_ptr = StackValue::managed_ptr(data_slice.as_ptr() as *mut u8, element_desc, None, false);
                 vm_expect_stack!(let ManagedPtr(m) = data_ptr);
                 m.write(span_instance.instance_storage.get_field_mut("_reference"));
@@ -462,7 +462,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         },
         [static System.Runtime.CompilerServices.Unsafe::Add<1>(ref !!0, nint)] => {
             let target = &generics.method_generics[0];
-            let target_type = stack.runtime.assemblies.find_concrete_type(target.clone());
+            let target_type = stack.runtime.loader.find_concrete_type(target.clone());
             let layout = type_layout(target.clone(), &ctx);
             vm_expect_stack!(let NativeInt(offset) = pop!());
             let m_val = pop!();
@@ -490,7 +490,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             push!(o);
         },
         [static System.Runtime.CompilerServices.Unsafe::As<2>(ref !!0)] => {
-            let target_type = stack.runtime.assemblies.find_concrete_type(generics.method_generics[1].clone());
+            let target_type = stack.runtime.loader.find_concrete_type(generics.method_generics[1].clone());
             let m_val = pop!();
             let (owner, pinned) = match &m_val {
                 StackValue::ManagedPtr(m) => (m.owner, m.pinned),
@@ -501,7 +501,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             push!(managed_ptr(m, target_type, owner, pinned));
         },
         [static System.Runtime.CompilerServices.Unsafe::AsRef<1>(* void)] => {
-            let target_type = stack.runtime.assemblies.find_concrete_type(generics.method_generics[0].clone());
+            let target_type = stack.runtime.loader.find_concrete_type(generics.method_generics[0].clone());
             vm_expect_stack!(let NativeInt(ptr) = pop!());
             push!(managed_ptr(ptr as *mut u8, target_type, None, false));
         },
@@ -591,7 +591,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     StackValue::ObjectRef(o) => o,
                     rest => panic!("Marshal.SizeOf(Type) called on non-object: {:?}", rest),
                 };
-                stack.resolve_runtime_type(type_obj).to_concrete(stack.runtime.assemblies)
+                stack.resolve_runtime_type(type_obj).to_concrete(stack.runtime.loader)
             };
             let layout = type_layout(concrete_type, &ctx);
             push!(Int32(layout.size() as i32));
@@ -607,7 +607,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     StackValue::ObjectRef(o) => o,
                     rest => panic!("Marshal.OffsetOf(Type, string) called on non-object: {:?}", rest),
                 };
-                stack.resolve_runtime_type(type_obj).to_concrete(stack.runtime.assemblies)
+                stack.resolve_runtime_type(type_obj).to_concrete(stack.runtime.loader)
             };
             let layout = type_layout(concrete_type.clone(), &ctx);
 
@@ -657,7 +657,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             };
             push!(managed_ptr(
                 ptr,
-                stack.runtime.assemblies.find_concrete_type(value_type.clone()),
+                stack.runtime.loader.find_concrete_type(value_type.clone()),
                 m.owner,
                 m.pinned
             ));
@@ -736,13 +736,13 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         | [static System.MemoryExtensions::AsSpan(string)] => {
             let (ptr, len) = with_string!(stack, gc, pop!(), |s| (s.as_ptr(), s.len()));
 
-            let span_type = stack.runtime.assemblies.corlib_type("System.ReadOnlySpan`1");
+            let span_type = stack.runtime.loader.corlib_type("System.ReadOnlySpan`1");
             let new_lookup = GenericLookup::new(vec![ctx.make_concrete(&BaseType::Char)]);
             let ctx = ctx.with_generics(&new_lookup);
 
             let mut span = Object::new(span_type, &ctx);
 
-            let char_type = stack.runtime.assemblies.find_concrete_type(ctx.make_concrete(&BaseType::Char));
+            let char_type = stack.runtime.loader.find_concrete_type(ctx.make_concrete(&BaseType::Char));
             let managed = ManagedPtr::new(ptr as *mut u8, char_type, None, false);
             managed.write(span.instance_storage.get_field_mut("_reference"));
             span.instance_storage.get_field_mut("_length").copy_from_slice(&(len as i32).to_ne_bytes());
@@ -772,8 +772,8 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         [System.Type::get_IsValueType()] => {
             vm_expect_stack!(let ObjectRef(o) = pop!());
             let target = stack.resolve_runtime_type(o);
-            let target_ct = target.to_concrete(stack.runtime.assemblies);
-            let target_desc = stack.runtime.assemblies.find_concrete_type(target_ct);
+            let target_ct = target.to_concrete(stack.runtime.loader);
+            let target_desc = stack.runtime.loader.find_concrete_type(target_ct);
             let value = target_desc.is_value_type(&ctx);
             push!(Int32(value as i32));
         },
@@ -785,7 +785,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         [System.Type::get_TypeHandle()] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
 
-            let rth = stack.runtime.assemblies.corlib_type("System.RuntimeTypeHandle");
+            let rth = stack.runtime.loader.corlib_type("System.RuntimeTypeHandle");
             let mut instance = Object::new(rth, &ctx);
             obj.write(instance.instance_storage.get_field_mut("_value"));
 
