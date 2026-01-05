@@ -5,6 +5,7 @@ use crate::{
         stack::{ArenaLocalState, CallStack, GCArena, SharedGlobalState},
         threading::ThreadManagerOps,
         MethodInfo, StepResult,
+        sync::Arc
     },
     vm_msg,
 };
@@ -15,14 +16,12 @@ use crate::vm::gc::{arena::THREAD_ARENA, coordinator::ArenaHandle};
 #[cfg(feature = "multithreaded-gc")]
 use crate::vm::sync::{AtomicBool, AtomicUsize, Condvar, Mutex};
 
-use crate::vm::sync::Arc;
-
 pub struct Executor {
     shared: Arc<SharedGlobalState<'static>>,
     /// Thread ID for this executor
     thread_id: u64,
     #[cfg(not(feature = "multithreaded-gc"))]
-    arena: Box<crate::vm::stack::GCArena>,
+    arena: Box<GCArena>,
 }
 
 #[derive(Clone, Debug)]
@@ -32,7 +31,7 @@ pub enum ExecutorResult {
 }
 
 impl Executor {
-    fn with_arena<R>(&mut self, f: impl FnOnce(&mut crate::vm::stack::GCArena) -> R) -> R {
+    fn with_arena<R>(&mut self, f: impl FnOnce(&mut GCArena) -> R) -> R {
         #[cfg(feature = "multithreaded-gc")]
         {
             THREAD_ARENA.with(|cell| {
@@ -47,7 +46,7 @@ impl Executor {
         }
     }
 
-    fn with_arena_ref<R>(&self, f: impl FnOnce(&crate::vm::stack::GCArena) -> R) -> R {
+    fn with_arena_ref<R>(&self, f: impl FnOnce(&GCArena) -> R) -> R {
         #[cfg(feature = "multithreaded-gc")]
         {
             THREAD_ARENA.with(|cell| {

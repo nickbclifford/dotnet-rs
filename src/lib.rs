@@ -12,7 +12,7 @@
 use crate::{utils::static_res_from_file, vm::ExecutorResult};
 use clap::Parser;
 use dotnetdll::prelude::*;
-use std::process::ExitCode;
+use std::{process::ExitCode, sync::Arc};
 
 pub mod assemblies;
 pub mod types;
@@ -50,7 +50,7 @@ pub fn run_cli() -> ExitCode {
     let loader = assemblies::AssemblyLoader::new(args.assemblies);
     let loader = Box::leak(Box::new(loader));
 
-    let shared = std::sync::Arc::new(vm::SharedGlobalState::new(loader));
+    let shared = Arc::new(vm::SharedGlobalState::new(loader));
     let mut executor = vm::Executor::new(shared);
 
     let entrypoint = MethodDescription {

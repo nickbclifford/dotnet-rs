@@ -8,7 +8,7 @@ use crate::{
 };
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
-use std::{collections::HashMap, error::Error, path::PathBuf, sync::RwLock};
+use std::{collections::HashMap, error::Error, fmt, fs, path::PathBuf, ptr, sync::RwLock};
 
 pub struct AssemblyLoader {
     assembly_root: String,
@@ -22,7 +22,7 @@ pub const SUPPORT_ASSEMBLY: &str = "__dotnetrs_support";
 
 impl AssemblyLoader {
     pub fn new(assembly_root: String) -> Self {
-        let mut resolutions: HashMap<_, _> = std::fs::read_dir(&assembly_root)
+        let mut resolutions: HashMap<_, _> = fs::read_dir(&assembly_root)
             .unwrap()
             .filter_map(|e| {
                 let path = e.unwrap().path();
@@ -267,7 +267,7 @@ impl AssemblyLoader {
 
                 for t in &res.definition().type_definitions {
                     if let Some(enc) = t.encloser {
-                        if t.type_name() == type_ref.type_name() && std::ptr::eq(&res[enc], owner) {
+                        if t.type_name() == type_ref.type_name() && ptr::eq(&res[enc], owner) {
                             return TypeDescription::new(res, t);
                         }
                     }
@@ -797,8 +797,8 @@ impl<'a> Iterator for AncestorsImpl<'a> {
 #[derive(Debug)]
 pub struct AttrResolveError;
 impl Error for AttrResolveError {}
-impl std::fmt::Display for AttrResolveError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for AttrResolveError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "could not resolve attribute")
     }
 }

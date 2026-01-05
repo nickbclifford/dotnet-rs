@@ -4,9 +4,10 @@ use std::{
     fmt::{Debug, Formatter},
     hash::Hash,
     io::Read,
+    mem::size_of,
     ops::Deref,
     path::{Path, PathBuf},
-    ptr::NonNull,
+    ptr::{self, NonNull},
 };
 
 #[repr(transparent)]
@@ -23,7 +24,7 @@ impl ResolutionS {
     pub fn as_raw(self) -> *const Resolution<'static> {
         self.0
             .map(|p| p.as_ptr() as *const _)
-            .unwrap_or(std::ptr::null())
+            .unwrap_or(ptr::null())
     }
 
     /// # Safety

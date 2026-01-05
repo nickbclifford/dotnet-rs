@@ -11,6 +11,7 @@ use crate::{
 use gc_arena::{unsafe_empty_collect, Collect};
 use std::{
     fmt::{Debug, Formatter},
+    hash::{Hash, Hasher, DefaultHasher},
     ops::Deref,
 };
 
@@ -175,8 +176,6 @@ pub fn string_intrinsic_call<'gc, 'm: 'gc>(
             Some(StepResult::InstructionStepped)
         },
         [System.String::GetHashCodeOrdinalIgnoreCase()] => {
-            use std::hash::*;
-
             let mut h = DefaultHasher::new();
             let value = string_op!(pop!(), |s| String::from_utf16_lossy(s)
                 .to_uppercase()

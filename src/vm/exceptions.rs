@@ -10,7 +10,7 @@ use gc_arena::Collect;
 use std::{
     cmp::Reverse,
     collections::HashMap,
-    fmt::{Debug, Formatter},
+    fmt::{self, Debug, Formatter},
     ops::Range,
 };
 
@@ -83,7 +83,7 @@ pub struct ProtectedSection {
 }
 
 impl Debug for ProtectedSection {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_set()
             .entry(&DebugStr(format!("try {{ {:?} }}", self.instructions)))
             .entries(self.handlers.iter())

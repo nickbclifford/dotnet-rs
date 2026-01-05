@@ -13,12 +13,13 @@ use crate::{
 };
 use gc_arena::{lock::RefLock, Collect, Collection, Gc};
 use std::{
-    cmp::Ordering,
+    any, cmp::Ordering,
     collections::HashSet,
-    fmt::{Debug, Formatter},
+    error::Error,
+    fmt::{self, Debug, Formatter},
     hash::{Hash, Hasher},
-    marker::PhantomData,
-    ptr::NonNull,
+    iter, marker::PhantomData,
+    mem, ptr::{self, NonNull},
 };
 
 #[derive(Collect, Debug)]
@@ -158,7 +159,7 @@ impl<'gc> ObjectRef<'gc> {
             // the object is guaranteed to be alive (as it is traced by the caller),
             // it is safe to reconstruct the Gc pointer.
             debug_assert!(
-                (ptr as usize).is_multiple_of(std::mem::align_of::<RefLock<ObjectInner<'gc>>>()),
+                (ptr as usize).is_multiple_of(mem::align_of::<RefLock<ObjectInner<'gc>>>()),
                 "Attempted to reconstruct unaligned Gc pointer: {:?}",
                 ptr
             );
@@ -168,7 +169,7 @@ impl<'gc> ObjectRef<'gc> {
 
     pub fn write(&self, dest: &mut [u8]) {
         let ptr: *const RefLock<ObjectInner<'_>> = match self.0 {
-            None => std::ptr::null(),
+            None => ptr::null(),
             Some(s) => Gc::as_ptr(s),
         };
         let ptr_bytes = (ptr as usize).to_ne_bytes();
@@ -240,7 +241,7 @@ impl<'gc> ObjectRef<'gc> {
 }
 
 impl Debug for ObjectRef<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
             None => f.write_str("NULL"),
             Some(gc) => {
@@ -354,20 +355,20 @@ fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(data: StackVal
         other => panic!(
             "invalid stack value {:?} for conversion into {}",
             other,
-            std::any::type_name::<T>()
+            any::type_name::<T>()
         ),
     }
 }
 
 fn convert_i64<T: TryFrom<i64>>(data: StackValue) -> T
 where
-    T::Error: std::error::Error,
+    T::Error: Error,
 {
     match data {
         StackValue::Int64(i) => i.try_into().unwrap_or_else(|e| {
             panic!(
                 "failed to convert from i64 to {} ({})",
-                std::any::type_name::<T>(),
+                any::type_name::<T>(),
                 e
             )
         }),
@@ -690,10 +691,10 @@ impl<'gc> Vector<'gc> {
 }
 
 impl Debug for Vector<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_list()
             .entries(
-                std::iter::once(format!(
+                iter::once(format!(
                     "vector of {:?} (length {})",
                     self.element, self.layout.length
                 ))
@@ -760,7 +761,7 @@ impl<'gc> Object<'gc> {
 }
 
 impl Debug for Object<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_tuple(&self.description.type_name())
             .field(&self.instance_storage)
             .field(&DebugStr(format!(

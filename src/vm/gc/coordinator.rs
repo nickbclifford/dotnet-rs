@@ -3,9 +3,11 @@ use crate::value::object::ObjectPtr;
 #[cfg(feature = "multithreaded-gc")]
 use crate::vm::sync::{Arc, AtomicBool, AtomicUsize, Condvar, Mutex, Ordering};
 #[cfg(feature = "multithreaded-gc")]
-use std::collections::{HashMap, HashSet};
-#[cfg(feature = "multithreaded-gc")]
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell},
+    collections::{HashMap, HashSet},
+    mem,
+};
 
 #[cfg(feature = "multithreaded-gc")]
 thread_local! {
@@ -97,7 +99,7 @@ pub fn get_currently_tracing() -> Option<u64> {
 pub fn take_found_cross_arena_refs() -> Vec<(u64, ObjectPtr)> {
     FOUND_CROSS_ARENA_REFS.with(|refs| {
         let mut r = refs.borrow_mut();
-        std::mem::take(&mut *r)
+        mem::take(&mut *r)
     })
 }
 
@@ -371,7 +373,7 @@ pub type MutexGuard<'a, T> = crate::vm::sync::MutexGuard<'a, T>;
 
 #[cfg(not(feature = "multithreaded-gc"))]
 pub mod stubs {
-    use std::collections::HashSet;
+    use std::{collections::HashSet, sync::MutexGuard};
     use crate::value::object::ObjectPtr;
 
     #[derive(Debug, Clone)]
@@ -398,7 +400,7 @@ pub mod stubs {
         pub fn should_collect(&self) -> bool { false }
         pub fn finish_collection(&self) {}
         pub fn record_cross_arena_ref(&self, _target_thread_id: u64, _ptr: ObjectPtr) {}
-        pub fn start_collection(&self) -> Option<std::sync::MutexGuard<'_, ()>> { None }
+        pub fn start_collection(&self) -> Option<MutexGuard<'_, ()>> { None }
     }
 
     pub fn set_current_arena_handle(_handle: ArenaHandle) {}

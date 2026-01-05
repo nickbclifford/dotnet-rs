@@ -19,7 +19,7 @@ use crate::{
     vm_trace_instruction,
 };
 use dotnetdll::prelude::*;
-use std::cmp::Ordering;
+use std::{cmp::Ordering, ptr, slice, thread};
 
 use crate::vm::threading::ThreadManagerOps;
 
@@ -135,7 +135,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 Waiting => {
                     // If INITIALIZING on another thread, we wait.
                     // We use yield_now() to avoid deadlocking with the statics lock.
-                    std::thread::yield_now();
+                    thread::yield_now();
                     self.check_gc_safe_point();
                 }
             }
@@ -522,7 +522,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 }
 
                 unsafe {
-                    std::ptr::copy_nonoverlapping(src, dest, size);
+                    ptr::copy_nonoverlapping(src, dest, size);
                 }
             }
             Divide(sgn) => {
@@ -631,7 +631,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     ),
                 };
                 unsafe {
-                    std::ptr::write_bytes(addr, val, size);
+                    ptr::write_bytes(addr, val, size);
                 }
             }
             Jump(_) => todo!("jmp"),
@@ -889,7 +889,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         // No override: box the value and use base implementation
                         let value_size = type_layout(constraint_type_source.clone(), &ctx).size();
                         let value_data =
-                            unsafe { std::slice::from_raw_parts(args[0].as_ptr(), value_size) };
+                            unsafe { slice::from_raw_parts(args[0].as_ptr(), value_size) };
                         let value = CTSValue::read(&constraint_type_source, &ctx, value_data);
 
                         let boxed = ObjectRef::new(
@@ -977,7 +977,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let target = pop!().as_ptr();
 
                 debug_assert!(!target.is_null(), "initobj target address is null");
-                let s = unsafe { std::slice::from_raw_parts_mut(target, layout.size()) };
+                let s = unsafe { slice::from_raw_parts_mut(target, layout.size()) };
                 s.fill(0);
             }
             IsInstance(target) => {
@@ -1144,7 +1144,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     // SAFETY: ptr is a raw pointer to either heap storage, a stack slot, or unmanaged memory.
                     // The offset is calculated based on the type's field layout, and the size matches the field's type.
                     let slice = unsafe {
-                        std::slice::from_raw_parts(
+                        slice::from_raw_parts(
                             ptr.add(field_layout.position),
                             field_layout.layout.size(),
                         )
@@ -1279,7 +1279,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let layout = type_layout(load_type.clone(), &ctx);
                 // SAFETY: source_ptr is a valid pointer to memory containing a value of the given type,
                 // and layout.size() correctly represents the size of that type.
-                let source = unsafe { std::slice::from_raw_parts(source_ptr, layout.size()) };
+                let source = unsafe { slice::from_raw_parts(source_ptr, layout.size()) };
                 let value =
                     CTSValue::read(&load_type, &self.current_context(), source).into_stack();
                 push!(value);
@@ -1581,7 +1581,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let layout = FieldLayoutManager::instance_fields(field.parent, &ctx);
                     let field_layout = layout.fields.get(name.as_ref()).unwrap();
                     unsafe {
-                        std::slice::from_raw_parts_mut(
+                        slice::from_raw_parts_mut(
                             dest.add(field_layout.position),
                             field_layout.layout.size(),
                         )

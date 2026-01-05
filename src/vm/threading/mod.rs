@@ -1,3 +1,8 @@
+use crate::vm::gc::{
+    coordinator::{GCCommand, GCCoordinator},
+    tracer::Tracer
+};
+
 #[cfg(feature = "multithreading")]
 mod basic;
 #[cfg(not(feature = "multithreading"))]
@@ -7,9 +12,6 @@ mod stub;
 pub use basic::*;
 #[cfg(not(feature = "multithreading"))]
 pub use stub::*;
-
-use crate::vm::gc::coordinator::{GCCommand, GCCoordinator};
-use crate::vm::gc::tracer::Tracer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadState {

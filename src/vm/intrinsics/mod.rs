@@ -26,7 +26,7 @@ use crate::{
     vm_expect_stack, vm_msg, vm_pop, vm_push,
 };
 use dotnetdll::prelude::*;
-use std::ptr::NonNull;
+use std::{env, ptr::{self, NonNull}, slice, sync::atomic, thread};
 
 pub mod matcher;
 pub mod reflection;
@@ -99,7 +99,7 @@ pub fn span_to_slice<'gc, 'a>(span: Object<'gc>) -> &'a [u8] {
 
     let len = i32::from_ne_bytes(len_data) as usize;
 
-    unsafe { std::slice::from_raw_parts(ptr.as_ptr() as *const u8, len) }
+    unsafe { slice::from_raw_parts(ptr.as_ptr() as *const u8, len) }
 }
 
 const STATIC_ARRAY_TYPE_PREFIX: &str = "__StaticArrayInitTypeSize=";
@@ -246,7 +246,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             }
 
             unsafe {
-                std::ptr::copy(src, dst, total_count);
+                ptr::copy(src, dst, total_count);
             }
         },
         [static System.Runtime.InteropServices.MemoryMarshal::GetArrayDataReference<1>(!!0[])] => {
@@ -305,7 +305,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         },
         [static System.Environment::GetEnvironmentVariableCore(string)] => {
             let value = with_string!(stack, gc, pop!(), |s| {
-                std::env::var(s.as_string())
+                env::var(s.as_string())
             });
             match value.ok() {
                 Some(s) => push!(string(s)),
@@ -534,7 +534,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             macro_rules! read_ua {
                 ($t:ty) => {
                     unsafe {
-                        std::ptr::read_unaligned(ptr as *const $t)
+                        ptr::read_unaligned(ptr as *const $t)
                     }
                 };
             }
@@ -566,7 +566,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 ($variant:ident, $t:ty) => {{
                     vm_expect_stack!(let $variant(v) = value);
                     unsafe {
-                        std::ptr::write_unaligned(ptr as *mut _, v as $t);
+                        ptr::write_unaligned(ptr as *mut _, v as $t);
                     }
                 }};
             }
@@ -687,7 +687,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             push!(Int32(value));
         },
         [static System.Threading.Interlocked::CompareExchange(ref int, int, int)] => {
-            use std::sync::atomic::AtomicI32;
+            use atomic::AtomicI32;
             use crate::vm::sync::Ordering;
 
             vm_expect_stack!(let Int32(comparand) = pop!());
@@ -752,7 +752,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 // Enter the monitor
                 while !stack.shared.sync_blocks.try_enter_block(sync_block.clone(), thread_id, &stack.shared.metrics) {
                     stack.check_gc_safe_point();
-                    std::thread::yield_now();
+                    thread::yield_now();
                 }
 
                 // Set success flag
@@ -846,9 +846,9 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             // note that this method's signature restricts the generic to only reference types
             let ptr = pop!().as_ptr() as *const ObjectRef<'gc>;
 
-            let value = unsafe { std::ptr::read_volatile(ptr) };
+            let value = unsafe { ptr::read_volatile(ptr) };
             // Ensure acquire semantics to match .NET memory model
-            std::sync::atomic::fence(crate::vm::sync::Ordering::Acquire);
+            atomic::fence(crate::vm::sync::Ordering::Acquire);
 
             push!(ObjectRef(value));
         },
@@ -859,8 +859,8 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let src = pop!().as_ptr();
 
             // Ensure release semantics to match .NET memory model
-            std::sync::atomic::fence(crate::vm::sync::Ordering::Release);
-            unsafe { std::ptr::write_volatile(src, as_bool) };
+            atomic::fence(crate::vm::sync::Ordering::Release);
+            unsafe { ptr::write_volatile(src, as_bool) };
         },
         [static System.String::op_Implicit(string)]
         | [static System.MemoryExtensions::AsSpan(string)] => {

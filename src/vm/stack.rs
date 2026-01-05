@@ -21,6 +21,9 @@ use crate::{
         MethodInfo,
         MethodState,
         StepResult,
+        sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, SyncBlockManager},
+        metrics::RuntimeMetrics,
+        threading::ThreadManager
     },
 };
 #[cfg(feature = "multithreaded-gc")]
@@ -28,13 +31,14 @@ use crate::{
     value::object::ObjectPtr,
     vm::gc::coordinator::GCCoordinator
 };
+
 use dotnetdll::prelude::*;
 use gc_arena::{lock::RefLock, Arena, Collect, Collection, Gc, Mutation, Rootable};
-use crate::vm::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     collections::{HashMap, HashSet},
-    fmt::Debug,
+    fmt::{self, Debug},
+    marker::PhantomData,
     ptr::NonNull,
     sync::Arc,
 };
@@ -108,9 +112,9 @@ unsafe impl<'gc> Collect for HeapManager<'gc> {
 pub struct SharedGlobalState<'m> {
     pub loader: &'m AssemblyLoader,
     pub pinvoke: RwLock<NativeLibraries>,
-    pub sync_blocks: crate::vm::sync::SyncBlockManager,
-    pub thread_manager: Arc<crate::vm::threading::ThreadManager>,
-    pub metrics: crate::vm::metrics::RuntimeMetrics,
+    pub sync_blocks: SyncBlockManager,
+    pub thread_manager: Arc<ThreadManager>,
+    pub metrics: RuntimeMetrics,
     pub tracer: Mutex<Tracer>,
     pub empty_generics: GenericLookup,
     #[cfg(feature = "multithreaded-gc")]
@@ -131,9 +135,9 @@ impl<'m> SharedGlobalState<'m> {
         Self {
             loader,
             pinvoke: RwLock::new(NativeLibraries::new(loader.get_root())),
-            sync_blocks: crate::vm::sync::SyncBlockManager::new(),
-            thread_manager: crate::vm::threading::ThreadManager::new(),
-            metrics: crate::vm::metrics::RuntimeMetrics::new(),
+            sync_blocks: SyncBlockManager::new(),
+            thread_manager: ThreadManager::new(),
+            metrics: RuntimeMetrics::new(),
             tracer: Mutex::new(Tracer::new()),
             empty_generics: GenericLookup::default(),
             #[cfg(feature = "multithreaded-gc")]
@@ -154,7 +158,7 @@ pub struct ArenaLocalState<'gc, 'm> {
     pub runtime_method_objs: RefCell<HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>>,
     pub runtime_fields: RefCell<Vec<(FieldDescription, GenericLookup)>>,
     pub runtime_field_objs: RefCell<HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>>,
-    pub _phantom: std::marker::PhantomData<&'m ()>,
+    pub _phantom: PhantomData<&'m ()>,
 }
 
 unsafe impl<'gc, 'm> Collect for ArenaLocalState<'gc, 'm> {
@@ -202,7 +206,7 @@ impl<'gc, 'm> ArenaLocalState<'gc, 'm> {
             runtime_method_objs: RefCell::new(HashMap::new()),
             runtime_fields: RefCell::new(vec![]),
             runtime_field_objs: RefCell::new(HashMap::new()),
-            _phantom: std::marker::PhantomData,
+            _phantom: PhantomData,
         }
     }
 }
@@ -462,7 +466,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             // Trace finalization event
             if self.tracer_enabled() {
                 let type_name = format!("{:?}", obj_type);
-                let addr = gc_arena::Gc::as_ptr(ptr) as usize;
+                let addr = Gc::as_ptr(ptr) as usize;
                 self.shared
                     .tracer
                     .lock()
@@ -950,7 +954,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
     }
 
-    pub fn msg(&self, fmt: std::fmt::Arguments) {
+    pub fn msg(&self, fmt: fmt::Arguments) {
         self.shared.tracer.lock().msg(self.indent(), fmt);
     }
 

@@ -15,7 +15,7 @@ use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
 use libffi::middle::*;
 use libloading::{Library, Symbol};
-use std::{collections::HashMap, ffi::c_void, path::PathBuf};
+use std::{collections::HashMap, ffi::c_void, mem, path::PathBuf};
 
 pub static mut LAST_ERROR: i32 = 0;
 
@@ -175,7 +175,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 StackValue::ValueType(o) => unsafe {
                     // SAFETY: Arg is a transparent wrapper around a *mut c_void in libffi-rs.
                     // We are passing a pointer to the start of the value type's storage.
-                    std::mem::transmute::<*mut c_void, Arg>(o.instance_storage.get().as_ptr() as _)
+                    mem::transmute::<*mut c_void, Arg>(o.instance_storage.get().as_ptr() as _)
                 },
                 rest => todo!("marshalling not yet supported for {:?}", rest),
             })

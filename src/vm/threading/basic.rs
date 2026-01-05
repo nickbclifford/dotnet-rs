@@ -1,11 +1,15 @@
-use crate::vm::sync::{Arc, AtomicU64, Mutex, Ordering, MutexGuard};
-use crate::vm::gc::coordinator::{GCCommand, GCCoordinator};
-use crate::vm::gc::tracer::Tracer;
-use crate::vm::threading::{STWGuardOps, ThreadManagerOps, ThreadState};
+use crate::vm::{
+    gc::coordinator::{GCCommand, GCCoordinator},
+    gc::tracer::Tracer,
+    sync::{Arc, AtomicU64, Mutex, MutexGuard, Ordering, AtomicBool, AtomicUsize, Condvar},
+    threading::{STWGuardOps, ThreadManagerOps, ThreadState},
+};
 use std::{
     cell::Cell,
     collections::HashMap,
-    thread::ThreadId,
+    mem, sync,
+    thread::{self, ThreadId},
+    time::{Duration, Instant},
 };
 
 thread_local! {
@@ -57,17 +61,17 @@ pub struct ThreadManager {
     /// Counter for allocating managed thread IDs
     pub(super) next_thread_id: AtomicU64,
     /// Weak reference to self for creating guards
-    pub(super) self_weak: std::sync::OnceLock<std::sync::Weak<ThreadManager>>,
+    pub(super) self_weak: sync::OnceLock<sync::Weak<ThreadManager>>,
 
     #[cfg(feature = "multithreaded-gc")]
     /// Whether a GC stop-the-world is currently requested
-    pub(super) gc_stop_requested: crate::vm::sync::AtomicBool,
+    pub(super) gc_stop_requested: AtomicBool,
     #[cfg(feature = "multithreaded-gc")]
     /// Number of threads that have reached safe point during GC
-    pub(super) threads_at_safepoint: crate::vm::sync::AtomicUsize,
+    pub(super) threads_at_safepoint: AtomicUsize,
     #[cfg(feature = "multithreaded-gc")]
     /// Condvar for notifying when all threads reach safe point
-    pub(super) all_threads_stopped: crate::vm::sync::Condvar,
+    pub(super) all_threads_stopped: Condvar,
     #[cfg(feature = "multithreaded-gc")]
     /// Mutex for GC coordination
     pub(super) gc_coordination: Mutex<()>,
@@ -83,14 +87,14 @@ impl ThreadManager {
         let manager = Arc::new(Self {
             threads: Mutex::new(HashMap::new()),
             next_thread_id: AtomicU64::new(1), // Thread ID 0 is reserved
-            self_weak: std::sync::OnceLock::new(),
+            self_weak: sync::OnceLock::new(),
 
             #[cfg(feature = "multithreaded-gc")]
-            gc_stop_requested: crate::vm::sync::AtomicBool::new(false),
+            gc_stop_requested: AtomicBool::new(false),
             #[cfg(feature = "multithreaded-gc")]
-            threads_at_safepoint: crate::vm::sync::AtomicUsize::new(0),
+            threads_at_safepoint: AtomicUsize::new(0),
             #[cfg(feature = "multithreaded-gc")]
-            all_threads_stopped: crate::vm::sync::Condvar::new(),
+            all_threads_stopped: Condvar::new(),
             #[cfg(feature = "multithreaded-gc")]
             gc_coordination: Mutex::new(()),
         });
@@ -111,7 +115,7 @@ impl ThreadManagerOps for ThreadManager {
     /// Register a new thread with the thread manager.
     /// Returns the managed thread ID assigned to this thread.
     fn register_thread(&self) -> u64 {
-        let native_id = std::thread::current().id();
+        let native_id = thread::current().id();
         let managed_id = self.next_thread_id.fetch_add(1, Ordering::SeqCst);
 
         let thread_info = Arc::new(ManagedThread::new(native_id, managed_id));
@@ -172,7 +176,7 @@ impl ThreadManagerOps for ThreadManager {
         }
 
         // Fallback to linear search
-        let native_id = std::thread::current().id();
+        let native_id = thread::current().id();
         let threads = self.threads.lock();
         let managed_id = threads
             .values()
@@ -282,8 +286,8 @@ impl ThreadManagerOps for ThreadManager {
         #[cfg(feature = "multithreaded-gc")]
         {
             let mut guard = self.gc_coordination.lock();
-            let start_time = std::time::Instant::now();
-            const WARN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+            let start_time = Instant::now();
+            const WARN_TIMEOUT: Duration = Duration::from_secs(1);
             let mut warned = false;
 
             self.gc_stop_requested.store(true, Ordering::Release);
@@ -336,7 +340,9 @@ impl ThreadManagerOps for ThreadManager {
             }
 
             // Upgrade the weak reference to get an Arc
-            let manager_arc = self.self_weak.get()
+            let manager_arc = self
+                .self_weak
+                .get()
                 .expect("ThreadManager::self_weak not initialized")
                 .upgrade()
                 .expect("ThreadManager dropped while request_stop_the_world was called");
@@ -346,12 +352,14 @@ impl ThreadManagerOps for ThreadManager {
             // 2. The guard borrows from the ThreadManager's gc_coordination mutex
             // 3. The StopTheWorldGuard holds both the Arc and the guard, ensuring the mutex
             //    outlives the guard
-            let guard_static: MutexGuard<'static, ()> = unsafe { std::mem::transmute(guard) };
+            let guard_static: MutexGuard<'static, ()> = unsafe { mem::transmute(guard) };
             StopTheWorldGuard::new(manager_arc, guard_static, start_time)
         }
         #[cfg(not(feature = "multithreaded-gc"))]
         {
-            StopTheWorldGuard { _marker: std::marker::PhantomData }
+            StopTheWorldGuard {
+                _marker: PhantomData,
+            }
         }
     }
 
@@ -376,17 +384,17 @@ pub struct StopTheWorldGuard {
     #[cfg(feature = "multithreaded-gc")]
     manager: Arc<ThreadManager>,
     #[cfg(feature = "multithreaded-gc")]
-    _lock: parking_lot::MutexGuard<'static, ()>,
+    _lock: MutexGuard<'static, ()>,
     #[cfg(feature = "multithreaded-gc")]
-    start_time: std::time::Instant,
+    start_time: Instant,
 }
 
 impl StopTheWorldGuard {
     #[cfg(feature = "multithreaded-gc")]
     pub(super) fn new(
         manager: Arc<ThreadManager>,
-        lock: parking_lot::MutexGuard<'static, ()>,
-        start_time: std::time::Instant,
+        lock: MutexGuard<'static, ()>,
+        start_time: Instant,
     ) -> Self {
         IS_PERFORMING_GC.set(true);
         Self {
@@ -420,10 +428,7 @@ impl Drop for StopTheWorldGuard {
     }
 }
 
-pub fn execute_gc_command_for_current_thread(
-    command: GCCommand,
-    coordinator: &GCCoordinator,
-) {
+pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &GCCoordinator) {
     #[cfg(feature = "multithreaded-gc")]
     {
         use crate::vm::gc::arena::THREAD_ARENA;
@@ -498,4 +503,3 @@ pub fn execute_gc_command_for_current_thread(
         let _ = (command, coordinator);
     }
 }
-

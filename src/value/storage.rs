@@ -9,7 +9,7 @@ use crate::{
 };
 use gc_arena::{Collect, Collection};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::{Debug, Formatter},
     ops::Range,
     sync::atomic::{AtomicU8, Ordering},
@@ -81,7 +81,7 @@ impl FieldStorage {
     pub fn resurrect<'gc>(
         &self,
         fc: &gc_arena::Finalization<'gc>,
-        visited: &mut std::collections::HashSet<usize>,
+        visited: &mut HashSet<usize>,
     ) {
         self.layout.resurrect(&self.storage, fc, visited);
     }
