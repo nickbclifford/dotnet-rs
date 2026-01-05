@@ -25,6 +25,7 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
     ptr::NonNull,
+    rc::Rc,
     sync::Arc,
 };
 
@@ -193,7 +194,7 @@ impl<'gc, 'm> GlobalState<'gc, 'm> {
 
 pub struct CallStack<'gc, 'm> {
     pub execution: ThreadContext<'gc, 'm>,
-    pub global: Arc<GlobalState<'gc, 'm>>,
+    pub global: Rc<GlobalState<'gc, 'm>>,
     /// Thread ID for this call stack
     pub thread_id: Cell<u64>,
 }
@@ -257,7 +258,7 @@ pub type GCHandle<'gc> = &'gc Mutation<'gc>;
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     /// Create a new CallStack with separated global state (Phase 1 architecture).
     /// This is now the primary and only constructor for CallStack.
-    pub fn new(_gc: GCHandle<'gc>, global: Arc<GlobalState<'gc, 'm>>) -> Self {
+    pub fn new(_gc: GCHandle<'gc>, global: Rc<GlobalState<'gc, 'm>>) -> Self {
         Self {
             execution: ThreadContext {
                 stack: vec![],

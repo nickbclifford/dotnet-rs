@@ -113,7 +113,7 @@ impl TestHarness {
         };
 
         let arena = Box::new(vm::GCArena::new(|gc| {
-            let global = std::sync::Arc::new(vm::GlobalState::new(gc, self.assemblies));
+            let global = std::rc::Rc::new(vm::GlobalState::new(gc, self.assemblies));
             vm::CallStack::new(gc, global)
         }));
         let mut executor = vm::Executor::new(Box::leak(arena));
