@@ -39,11 +39,8 @@ pub fn run_cli() -> ExitCode {
     let assemblies = assemblies::AssemblyLoader::new(args.assemblies);
     let assemblies = Box::leak(Box::new(assemblies));
 
-    let arena = Box::new(vm::GCArena::new(|gc| {
-        let global = std::rc::Rc::new(vm::GlobalState::new(gc, assemblies));
-        vm::CallStack::new(gc, global)
-    }));
-    let mut executor = vm::Executor::new(Box::leak(arena));
+    let shared = std::sync::Arc::new(vm::SharedGlobalState::new(assemblies));
+    let mut executor = vm::Executor::new(shared);
 
     let entrypoint = MethodDescription {
         parent: TypeDescription::new(

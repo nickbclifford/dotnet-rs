@@ -21,8 +21,8 @@ macro_rules! with_string {
             return $stack.throw_by_name($gc, "System.NullReferenceException");
         };
         let heap = obj.borrow();
-        let HeapStorage::Str($s) = &*heap else {
-            panic!("invalid type on stack, expected string, received {:?}", heap)
+        let HeapStorage::Str($s) = &heap.storage else {
+            panic!("invalid type on stack, expected string, received {:?}", heap.storage)
         };
         $code
     }};
@@ -36,6 +36,14 @@ unsafe_empty_collect!(CLRString);
 impl CLRString {
     pub fn new(chars: Vec<u16>) -> Self {
         Self(chars)
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn size_bytes(&self) -> usize {
+        std::mem::size_of::<CLRString>() + self.0.len() * 2
     }
 
     pub fn as_string(&self) -> String {

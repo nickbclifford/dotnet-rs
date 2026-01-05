@@ -254,7 +254,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 return stack.throw_by_name(gc, "System.NullReferenceException");
             };
 
-            let data_ptr = match &*array_handle.borrow() {
+            let data_ptr = match &array_handle.borrow().storage {
                 HeapStorage::Vec(v) => v.get().as_ptr() as *mut u8,
                 _ => panic!("GetArrayDataReference called on non-array"),
             };
@@ -331,7 +331,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         [static System.GC::SuppressFinalize(object)] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             if let Some(handle) = obj.0 {
-                if let Some(o) = handle.borrow_mut(gc).as_obj_mut() {
+                if let Some(o) = handle.borrow_mut(gc).storage.as_obj_mut() {
                     o.finalizer_suppressed = true;
                 }
             }
@@ -339,7 +339,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         [static System.GC::ReRegisterForFinalize(object)] => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             if let Some(handle) = obj.0 {
-                let is_obj = handle.borrow_mut(gc).as_obj_mut().map(|o| {
+                let is_obj = handle.borrow_mut(gc).storage.as_obj_mut().map(|o| {
                     o.finalizer_suppressed = false;
                     true
                 }).unwrap_or(false);
@@ -407,7 +407,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 let obj_ref = ObjectRef::read(&ptr_buf);
                 let handle_obj = obj_ref.0.expect("Null pointer in RuntimeFieldHandle");
 
-                match &*handle_obj.borrow() {
+                match &handle_obj.borrow().storage {
                     HeapStorage::Obj(o) => {
                         let mut idx_buf = [0u8; size_of::<usize>()];
                         idx_buf.copy_from_slice(o.instance_storage.get_field("index"));
@@ -717,7 +717,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 let sync_block_index = obj_ref.as_object(|o| o.sync_block_index);
 
                 if let Some(index) = sync_block_index {
-                    if let Some(sync_block) = stack.global.sync_blocks.get_sync_block(index) {
+                    if let Some(sync_block) = stack.shared.sync_blocks.get_sync_block(index) {
                         if !sync_block.exit(thread_id) {
                             panic!("SynchronizationLockException: Object synchronization method was called from an unsynchronized block of code.");
                         }
@@ -737,7 +737,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 assert!(thread_id != 0, "Monitor.ReliableEnter called from unregistered thread");
 
                 // Get or create sync block
-                let (_index, sync_block) = stack.global.sync_blocks.get_or_create_sync_block(
+                let (_index, sync_block) = stack.shared.sync_blocks.get_or_create_sync_block(
                     &obj_ref,
                     || obj_ref.as_object(|o| o.sync_block_index),
                     |new_index| {
@@ -748,7 +748,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 );
 
                 // Enter the monitor
-                sync_block.enter(thread_id, &stack.global.metrics);
+                sync_block.enter(thread_id, &stack.shared.metrics);
 
                 // Set success flag
                 unsafe {
@@ -767,7 +767,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 assert!(thread_id != 0, "Monitor.TryEnter_FastPath called from unregistered thread");
 
                 // Get or create sync block
-                let (_index, sync_block) = stack.global.sync_blocks.get_or_create_sync_block(
+                let (_index, sync_block) = stack.shared.sync_blocks.get_or_create_sync_block(
                     &obj_ref,
                     || obj_ref.as_object(|o| o.sync_block_index),
                     |new_index| {
@@ -793,7 +793,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 let thread_id = stack.thread_id.get();
                 assert!(thread_id != 0, "Monitor.TryEnter called from unregistered thread");
 
-                let (_index, sync_block) = stack.global.sync_blocks.get_or_create_sync_block(
+                let (_index, sync_block) = stack.shared.sync_blocks.get_or_create_sync_block(
                     &obj_ref,
                     || obj_ref.as_object(|o| o.sync_block_index),
                     |new_index| {
@@ -803,7 +803,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     },
                 );
 
-                let success = sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &stack.global.metrics);
+                let success = sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &stack.shared.metrics);
 
                 unsafe {
                     *success_flag = if success { 1u8 } else { 0u8 };
@@ -821,7 +821,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 let thread_id = stack.thread_id.get();
                 assert!(thread_id != 0, "Monitor.TryEnter called from unregistered thread");
 
-                let (_index, sync_block) = stack.global.sync_blocks.get_or_create_sync_block(
+                let (_index, sync_block) = stack.shared.sync_blocks.get_or_create_sync_block(
                     &obj_ref,
                     || obj_ref.as_object(|o| o.sync_block_index),
                     |new_index| {
@@ -831,7 +831,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     },
                 );
 
-                let success = sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &stack.global.metrics);
+                let success = sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &stack.shared.metrics);
                 push!(Int32(if success { 1 } else { 0 }));
             } else {
                 return stack.throw_by_name(gc, "System.NullReferenceException");
@@ -943,7 +943,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 // Trace pinning event
                 if stack.tracer_enabled() {
                     let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p) as usize).unwrap_or(0);
-                    stack.global.tracer.lock().trace_gc_pin(stack.indent(), "PINNED", addr);
+                    stack.shared.tracer.lock().trace_gc_pin(stack.indent(), "PINNED", addr);
                 }
             }
 
@@ -951,7 +951,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             if stack.tracer_enabled() {
                 let handle_type_str = format!("{:?}", handle_type);
                 let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p) as usize).unwrap_or(0);
-                stack.global.tracer.lock().trace_gc_handle(stack.indent(), "ALLOC", &handle_type_str, addr);
+                stack.shared.tracer.lock().trace_gc_handle(stack.indent(), "ALLOC", &handle_type_str, addr);
             }
 
             push!(NativeInt((index + 1) as isize));
@@ -969,7 +969,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                             // Trace unpinning event
                             if stack.tracer_enabled() {
                                 let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p) as usize).unwrap_or(0);
-                                stack.global.tracer.lock().trace_gc_pin(stack.indent(), "UNPINNED", addr);
+                                stack.shared.tracer.lock().trace_gc_pin(stack.indent(), "UNPINNED", addr);
                             }
                         }
 
@@ -977,7 +977,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                         if stack.tracer_enabled() {
                             let handle_type_str = format!("{:?}", handle_type);
                             let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p) as usize).unwrap_or(0);
-                            stack.global.tracer.lock().trace_gc_handle(stack.indent(), "FREE", &handle_type_str, addr);
+                            stack.shared.tracer.lock().trace_gc_handle(stack.indent(), "FREE", &handle_type_str, addr);
                         }
                     }
                     handles[index] = None;
@@ -1027,7 +1027,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     if let Some(entry) = &handles[index] {
                         if entry.1 == GCHandleType::Pinned {
                             if let Some(ptr) = entry.0.0 {
-                                match &*ptr.borrow() {
+                                match &ptr.borrow().storage {
                                     HeapStorage::Obj(_) => ptr.as_ptr() as isize,
                                     HeapStorage::Vec(v) => v.get().as_ptr() as isize,
                                     HeapStorage::Str(s) => s.as_ptr() as isize,

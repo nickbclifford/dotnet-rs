@@ -917,7 +917,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 continue;
             };
             let raw_ptr = Gc::as_ptr(ptr) as *const _ as usize;
-            match &*ptr.borrow() {
+            match &ptr.borrow().storage {
                 HeapStorage::Obj(o) => {
                     let details = format!("{:?}", o);
                     tracer.dump_heap_object(raw_ptr, "Object", &details);

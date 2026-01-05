@@ -128,7 +128,7 @@ impl<'a> ResolutionContext<'a> {
 
     pub fn get_heap_description(&self, object: ObjectHandle) -> TypeDescription {
         use crate::value::object::HeapStorage::*;
-        match &*object.as_ref().borrow() {
+        match &object.as_ref().borrow().storage {
             Obj(o) => o.description,
             Vec(_) => self.loader.corlib_type("System.Array"),
             Str(_) => self.loader.corlib_type("System.String"),

@@ -170,7 +170,7 @@ impl<'gc> ManagedPtr<'gc> {
             let ptr = Gc::as_ptr(owner) as usize;
             if visited.insert(ptr) {
                 Gc::resurrect(fc, owner);
-                owner.borrow().resurrect(fc, visited);
+                owner.borrow().storage.resurrect(fc, visited);
             }
         }
     }

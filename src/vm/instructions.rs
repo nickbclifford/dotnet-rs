@@ -26,11 +26,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     /// This should be called before large allocations or long-running operations.
     #[inline]
     pub fn check_gc_safe_point(&self) {
-        let thread_manager = &self.global.thread_manager;
+        let thread_manager = &self.shared.thread_manager;
         if thread_manager.is_gc_stop_requested() {
             let managed_id = self.thread_id.get();
             if managed_id != 0 {
-                thread_manager.safe_point(managed_id);
+                thread_manager.safe_point(managed_id, &self.shared.gc_coordinator);
             }
         }
     }
@@ -109,7 +109,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             let tid = self.thread_id.get();
             let init_result = {
                 // Thread-safe path: use RwLock-protected StaticStorageManager
-                let mut statics = self.global.statics.write();
+                let mut statics = self.shared.statics.write();
                 statics.init(description, &ctx, tid)
             };
 
@@ -139,7 +139,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     /// Mark a type's static initialization as complete after its .cctor returns.
     /// This should be called when a .cctor method returns normally.
     pub fn mark_type_initialized(&mut self, description: TypeDescription) {
-        let mut statics = self.global.statics.write();
+        let mut statics = self.shared.statics.write();
         statics.mark_initialized(description);
     }
 
@@ -1099,7 +1099,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let element_layout = type_layout(concrete_t.clone(), &ctx);
 
                 let data = h.borrow();
-                let ptr = match &*data {
+                let ptr = match &data.storage {
                     HeapStorage::Vec(v) => {
                         if index >= v.layout.length {
                             panic!("IndexOutOfRangeException");
@@ -1162,7 +1162,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         }
 
                         let data = h.borrow();
-                        match &*data {
+                        match &data.storage {
                             HeapStorage::Vec(_) => todo!("field on array"),
                             HeapStorage::Obj(o) => read_data(o.instance_storage.get_field(name)),
                             HeapStorage::Str(_) => todo!("field on string"),
@@ -1215,13 +1215,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         }
 
                         let data = h.borrow();
-                        let ptr = match &*data {
+                        let source_ptr: *mut u8 = match &data.storage {
                             HeapStorage::Vec(_) => todo!("field on array"),
                             HeapStorage::Obj(o) => o.instance_storage.get().as_ptr() as *mut u8,
                             HeapStorage::Str(_) => todo!("field on string"),
                             HeapStorage::Boxed(_) => todo!("field on boxed value type"),
                         };
-                        (ptr, Some(h), false)
+                        (source_ptr, Some(h), false)
                     }
                     StackValue::NativeInt(i) => (i as *mut u8, None, false),
                     StackValue::UnmanagedPtr(UnmanagedPtr(ptr)) => (ptr.as_ptr(), None, false),
@@ -1293,8 +1293,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 // Thread-safe path: use GlobalState
                 let value = {
-                    let global = &self.global;
-                    let statics = global.statics.read();
+                    let statics = self.statics_read();
                     let field_data = statics.get(field.parent).get_field(name);
                     let t = ctx.make_concrete(&field.field.return_type);
                     CTSValue::read(&t, &ctx, field_data).into_stack()
@@ -1468,9 +1467,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let ObjectRef(Some(heap)) = obj else {
                     return self.throw_by_name(gc, "System.NullReferenceException");
                 };
-                let mut heap = heap.borrow_mut(gc);
-                let HeapStorage::Vec(array) = &mut *heap else {
-                    panic!("expected array for stelem, received {:?}", heap)
+                let mut inner = heap.borrow_mut(gc);
+                let HeapStorage::Vec(array) = &mut inner.storage else {
+                    panic!("expected array for stelem, received {:?}", inner.storage)
                 };
 
                 if index >= array.layout.length {
@@ -1518,15 +1517,20 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::ValueType(_) => {
                         panic!("received valuetype for StoreElementPrimitive")
                     }
+                    StackValue::CrossArenaObjectRef(ptr, _) => {
+                        let mut vec = vec![0; ObjectRef::SIZE];
+                        vec.copy_from_slice(&(ptr.as_ptr() as usize).to_ne_bytes());
+                        vec
+                    }
                 };
 
                 vm_expect_stack!(let ObjectRef(obj) = array);
                 let ObjectRef(Some(heap)) = obj else {
                     return self.throw_by_name(gc, "System.NullReferenceException");
                 };
-                let mut heap = heap.borrow_mut(gc);
-                let HeapStorage::Vec(array) = &mut *heap else {
-                    panic!("expected array for stelem, received {:?}", heap)
+                let mut inner = heap.borrow_mut(gc);
+                let HeapStorage::Vec(array) = &mut inner.storage else {
+                    panic!("expected array for stelem, received {:?}", inner.storage)
                 };
 
                 if index >= array.layout.length {
@@ -1593,7 +1597,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         }
 
                         let mut data = h.unlock(gc).borrow_mut();
-                        match &mut *data {
+                        match &mut data.storage {
                             HeapStorage::Vec(_) => todo!("field on array"),
                             HeapStorage::Obj(o) => {
                                 write_data(o.instance_storage.get_field_mut(name))
@@ -1630,8 +1634,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 // Thread-safe path: use GlobalState
                 {
-                    let global = &self.global;
-                    let mut statics = global.statics.write();
+                    let mut statics = self.statics_write();
                     let field_data = statics.get_mut(field.parent).get_field_mut(name);
                     let t = ctx.make_concrete(&field.field.return_type);
                     vm_trace_field!(self, "STORE_STATIC", name, &value);

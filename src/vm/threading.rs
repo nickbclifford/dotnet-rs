@@ -1,3 +1,4 @@
+use crate::vm::gc_coordinator::{GCCommand, GCCoordinator};
 use parking_lot::{Condvar, Mutex, MutexGuard};
 use std::{
     cell::Cell,
@@ -107,6 +108,11 @@ pub struct ThreadManager {
     gc_coordination: Mutex<()>,
 }
 
+/// Get the current thread's managed ID from thread-local storage.
+pub fn get_current_thread_id() -> u64 {
+    MANAGED_THREAD_ID.with(|id| id.get().unwrap_or(0))
+}
+
 impl ThreadManager {
     pub fn new() -> Self {
         Self {
@@ -209,7 +215,7 @@ impl ThreadManager {
 
     /// Mark that the current thread has reached a safe point.
     /// If a GC is requested, this will block until the GC completes.
-    pub fn safe_point(&self, managed_id: u64) {
+    pub fn safe_point(&self, managed_id: u64, coordinator: &GCCoordinator) {
         // Fast path: no GC requested
         if !self.is_gc_stop_requested() {
             return;
@@ -233,23 +239,24 @@ impl ThreadManager {
             thread.set_state(ThreadState::AtSafePoint);
 
             // CRITICAL: Increment safe point counter BEFORE acquiring gc_coordination lock.
-            // This prevents a deadlock where:
-            // 1. GC coordinator holds gc_coordination lock and waits for threads_at_safepoint to reach target
-            // 2. Worker threads try to acquire gc_coordination lock but are blocked
-            // 3. Deadlock: coordinator waits for counter, workers wait for lock
-            // By incrementing before the lock, the coordinator can see us immediately.
             self.threads_at_safepoint.fetch_add(1, Ordering::AcqRel);
 
             // Notify coordinator that we've reached a safe point
             self.all_threads_stopped.notify_all();
 
             // Wait for GC to complete.
-            // We lock the coordination mutex which the coordinator holds during GC.
             {
                 let mut guard = self.gc_coordination.lock();
 
                 // Wait while GC is in progress
                 while self.gc_stop_requested.load(Ordering::Acquire) {
+                    // Check for and execute GC commands from the coordinator
+                    if coordinator.has_command(managed_id) {
+                        if let Some(command) = coordinator.get_command(managed_id) {
+                            self.execute_gc_command(command, coordinator);
+                            coordinator.command_finished(managed_id);
+                        }
+                    }
                     self.all_threads_stopped.wait(&mut guard);
                 }
             }
@@ -262,10 +269,15 @@ impl ThreadManager {
         }
     }
 
+    pub fn execute_gc_command(&self, command: GCCommand, coordinator: &GCCoordinator) {
+        execute_gc_command_for_current_thread(command, coordinator);
+    }
+
     /// Mark that the current thread has reached a safe point (with tracing support).
     pub fn safe_point_traced(
         &self,
         managed_id: u64,
+        coordinator: &GCCoordinator,
         tracer: &crate::vm::tracer::Tracer,
         location: &str,
     ) {
@@ -273,7 +285,7 @@ impl ThreadManager {
         if tracer.is_enabled() && self.is_gc_stop_requested() {
             tracer.trace_thread_safepoint(0, managed_id, location);
         }
-        self.safe_point(managed_id);
+        self.safe_point(managed_id, coordinator);
     }
 
     /// Request a stop-the-world pause and wait for all threads to reach safe points.
@@ -406,6 +418,84 @@ impl<'a> Drop for StopTheWorldGuard<'a> {
     }
 }
 
+/// Execute a GC command for the current thread directly (not via the safe point mechanism).
+/// This is used by the GC initiating thread to avoid deadlock.
+pub fn execute_gc_command_for_current_thread(
+    command: crate::vm::gc_coordinator::GCCommand,
+    coordinator: &crate::vm::gc_coordinator::GCCoordinator,
+) {
+    use crate::vm::arena_storage::THREAD_ARENA;
+    match command {
+        crate::vm::gc_coordinator::GCCommand::CollectAll => {
+            THREAD_ARENA.with(|cell| {
+                if let Ok(mut arena_opt) = cell.try_borrow_mut() {
+                    if let Some(arena) = arena_opt.as_mut() {
+                        let thread_id = get_current_thread_id();
+                        crate::vm::gc_coordinator::set_currently_tracing(Some(thread_id));
+
+                        // Clear old cross-arena roots before new collection
+                        arena.mutate(|_, c| {
+                            c.local.heap.cross_arena_roots.borrow_mut().clear();
+                        });
+
+                        // Mark all objects and finalize
+                        let mut marked = None;
+                        while marked.is_none() {
+                            marked = arena.mark_all();
+                        }
+                        if let Some(marked) = marked {
+                            marked.finalize(|fc, c| c.finalize_check(fc));
+                        }
+                        arena.collect_all();
+                        crate::vm::gc_coordinator::set_currently_tracing(None);
+
+                        // Report found cross-arena refs back to coordinator
+                        for (target_id, ptr) in
+                            crate::vm::gc_coordinator::take_found_cross_arena_refs()
+                        {
+                            coordinator.record_cross_arena_ref(target_id, ptr);
+                        }
+                    }
+                }
+            });
+        }
+        crate::vm::gc_coordinator::GCCommand::MarkObjects(ptrs) => {
+            THREAD_ARENA.with(|cell| {
+                if let Ok(mut arena_opt) = cell.try_borrow_mut() {
+                    if let Some(arena) = arena_opt.as_mut() {
+                        let thread_id = get_current_thread_id();
+                        crate::vm::gc_coordinator::set_currently_tracing(Some(thread_id));
+
+                        arena.mutate(|_, c| {
+                            let mut roots = c.local.heap.cross_arena_roots.borrow_mut();
+                            for ptr in ptrs {
+                                roots.insert(ptr);
+                            }
+                        });
+
+                        // Re-run collection to trace from new roots with finalization
+                        let mut marked = None;
+                        while marked.is_none() {
+                            marked = arena.mark_all();
+                        }
+                        if let Some(marked) = marked {
+                            marked.finalize(|fc, c| c.finalize_check(fc));
+                        }
+                        arena.collect_all();
+
+                        crate::vm::gc_coordinator::set_currently_tracing(None);
+                        for (target_id, ptr) in
+                            crate::vm::gc_coordinator::take_found_cross_arena_refs()
+                        {
+                            coordinator.record_cross_arena_ref(target_id, ptr);
+                        }
+                    }
+                }
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,10 +517,11 @@ mod tests {
     #[test]
     fn test_safe_point_no_gc() {
         let manager = ThreadManager::new();
+        let coordinator = GCCoordinator::new();
         let id = manager.register_thread();
 
         // Safe point should return immediately when no GC requested
-        manager.safe_point(id);
+        manager.safe_point(id, &coordinator);
 
         manager.unregister_thread(id);
     }
@@ -438,7 +529,9 @@ mod tests {
     #[test]
     fn test_stop_the_world() {
         let manager = Arc::new(ThreadManager::new());
+        let coordinator = Arc::new(GCCoordinator::new());
         let manager_clone = manager.clone();
+        let coordinator_clone = coordinator.clone();
 
         // Spawn a worker thread
         let handle = thread::spawn(move || {
@@ -447,7 +540,7 @@ mod tests {
             // Simulate work with safe points
             for _ in 0..10 {
                 thread::sleep(Duration::from_millis(10));
-                manager_clone.safe_point(id);
+                manager_clone.safe_point(id, &coordinator_clone);
             }
 
             manager_clone.unregister_thread(id);
@@ -473,6 +566,7 @@ mod tests {
         // Test for the race condition where a thread arrives at a safe point
         // after GC coordinator has started waiting but before it completes
         let manager = Arc::new(ThreadManager::new());
+        let coordinator = Arc::new(GCCoordinator::new());
 
         // Register two threads
         let id1 = manager.register_thread();
@@ -482,16 +576,18 @@ mod tests {
         let manager_clone2 = manager.clone();
 
         // Thread 1: Quickly reach safe point
+        let coordinator_clone1 = coordinator.clone();
         let handle1 = thread::spawn(move || {
             thread::sleep(Duration::from_millis(5));
-            manager_clone1.safe_point(id1);
+            manager_clone1.safe_point(id1, &coordinator_clone1);
             manager_clone1.unregister_thread(id1);
         });
 
         // Thread 2: Arrive late to safe point
+        let coordinator_clone2 = coordinator.clone();
         let handle2 = thread::spawn(move || {
             thread::sleep(Duration::from_millis(50)); // Delay arrival
-            manager_clone2.safe_point(id2);
+            manager_clone2.safe_point(id2, &coordinator_clone2);
             manager_clone2.unregister_thread(id2);
         });
 
@@ -515,16 +611,18 @@ mod tests {
     fn test_stress_many_threads() {
         // Stress test with many threads registering/unregistering concurrently
         let manager = Arc::new(ThreadManager::new());
+        let coordinator = Arc::new(GCCoordinator::new());
         let mut handles = vec![];
 
         for i in 0..20 {
             let manager_clone = manager.clone();
+            let coordinator_clone = coordinator.clone();
             let handle = thread::spawn(move || {
                 let id = manager_clone.register_thread();
                 // Simulate work
                 for _ in 0..10 {
                     thread::sleep(Duration::from_micros(100 * (i % 5) as u64));
-                    manager_clone.safe_point(id);
+                    manager_clone.safe_point(id, &coordinator_clone);
                 }
                 manager_clone.unregister_thread(id);
             });
@@ -553,7 +651,7 @@ mod tests {
     fn test_stress_thread_creation_during_gc() {
         // Test thread creation/destruction while GC is active
         let manager = Arc::new(ThreadManager::new());
-        let manager_worker = manager.clone();
+        let coordinator = Arc::new(GCCoordinator::new());
         let manager_gc = manager.clone();
 
         // Start GC pause in background
@@ -564,11 +662,13 @@ mod tests {
         });
 
         // Create and destroy threads while GC is paused
+        let manager_worker = manager.clone();
+        let coordinator_worker = coordinator.clone();
         let worker_handle = thread::spawn(move || {
             for _ in 0..10 {
                 let id = manager_worker.register_thread();
                 thread::sleep(Duration::from_millis(5));
-                manager_worker.safe_point(id);
+                manager_worker.safe_point(id, &coordinator_worker);
                 manager_worker.unregister_thread(id);
                 thread::sleep(Duration::from_millis(5));
             }

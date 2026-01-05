@@ -11,19 +11,17 @@ use gc_arena::{Collect, Collection};
 use std::{
     collections::HashMap,
     fmt::{Debug, Formatter},
-    marker::PhantomData,
     ops::Range,
     sync::atomic::{AtomicU8, Ordering},
 };
 
 #[derive(Clone, PartialEq)]
-pub struct FieldStorage<'gc> {
+pub struct FieldStorage {
     layout: FieldLayoutManager,
     storage: Vec<u8>,
-    _contains_gc: PhantomData<fn(&'gc ()) -> &'gc ()>,
 }
 
-impl Debug for FieldStorage<'_> {
+impl Debug for FieldStorage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut fs: Vec<(_, _)> = self
             .layout
@@ -61,19 +59,18 @@ impl Debug for FieldStorage<'_> {
     }
 }
 
-unsafe impl Collect for FieldStorage<'_> {
+unsafe impl Collect for FieldStorage {
     #[inline]
     fn trace(&self, cc: &Collection) {
         self.layout.trace(&self.storage, cc);
     }
 }
 
-impl FieldStorage<'_> {
+impl FieldStorage {
     pub fn new(layout: FieldLayoutManager) -> Self {
         Self {
             storage: vec![0; layout.size()],
             layout,
-            _contains_gc: PhantomData,
         }
     }
 
@@ -124,17 +121,17 @@ pub const INIT_STATE_UNINITIALIZED: u8 = 0;
 pub const INIT_STATE_INITIALIZING: u8 = 1;
 pub const INIT_STATE_INITIALIZED: u8 = 2;
 
-pub struct StaticStorage<'gc> {
+pub struct StaticStorage {
     /// Atomic initialization state for thread-safe .cctor execution.
     /// States: 0=uninitialized, 1=initializing (in progress), 2=initialized (complete)
     init_state: AtomicU8,
     /// The ID of the thread currently initializing this type.
     /// Only valid if init_state is INITIALIZING.
     initializing_thread: u64,
-    storage: FieldStorage<'gc>,
+    storage: FieldStorage,
 }
 
-impl Clone for StaticStorage<'_> {
+impl Clone for StaticStorage {
     fn clone(&self) -> Self {
         Self {
             init_state: AtomicU8::new(self.init_state.load(Ordering::Acquire)),
@@ -144,12 +141,12 @@ impl Clone for StaticStorage<'_> {
     }
 }
 
-unsafe impl Collect for StaticStorage<'_> {
+unsafe impl Collect for StaticStorage {
     fn trace(&self, cc: &Collection) {
         self.storage.trace(cc);
     }
 }
-impl Debug for StaticStorage<'_> {
+impl Debug for StaticStorage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self.init_state.load(Ordering::Acquire) {
             INIT_STATE_INITIALIZED => Debug::fmt(&self.storage, f),
@@ -160,18 +157,18 @@ impl Debug for StaticStorage<'_> {
 }
 
 #[derive(Clone)]
-pub struct StaticStorageManager<'gc> {
-    types: HashMap<TypeDescription, StaticStorage<'gc>>,
+pub struct StaticStorageManager {
+    types: HashMap<TypeDescription, StaticStorage>,
 }
 
-unsafe impl Collect for StaticStorageManager<'_> {
+unsafe impl Collect for StaticStorageManager {
     fn trace(&self, cc: &Collection) {
         for v in self.types.values() {
             v.trace(cc);
         }
     }
 }
-impl Debug for StaticStorageManager<'_> {
+impl Debug for StaticStorageManager {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_map()
             .entries(self.types.iter().map(|(k, v)| (DebugStr(k.type_name()), v)))
@@ -191,7 +188,7 @@ pub enum StaticInitResult {
     Waiting,
 }
 
-impl<'gc> StaticStorageManager<'gc> {
+impl StaticStorageManager {
     pub fn new() -> Self {
         Self {
             types: HashMap::new(),
@@ -199,14 +196,14 @@ impl<'gc> StaticStorageManager<'gc> {
     }
 }
 
-impl<'gc> Default for StaticStorageManager<'gc> {
+impl Default for StaticStorageManager {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<'gc> StaticStorageManager<'gc> {
-    pub fn get(&self, description: TypeDescription) -> &FieldStorage<'gc> {
+impl StaticStorageManager {
+    pub fn get(&self, description: TypeDescription) -> &FieldStorage {
         &self
             .types
             .get(&description)
@@ -214,7 +211,7 @@ impl<'gc> StaticStorageManager<'gc> {
             .storage
     }
 
-    pub fn get_mut(&mut self, description: TypeDescription) -> &mut FieldStorage<'gc> {
+    pub fn get_mut(&mut self, description: TypeDescription) -> &mut FieldStorage {
         &mut self
             .types
             .get_mut(&description)

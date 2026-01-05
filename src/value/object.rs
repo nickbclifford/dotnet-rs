@@ -21,26 +21,34 @@ use std::{
     ptr::NonNull,
 };
 
-type ObjectInner<'gc> = RefLock<HeapStorage<'gc>>;
+#[derive(Collect, Debug)]
+#[collect(no_drop)]
+pub struct ObjectInner<'gc> {
+    pub owner_id: u64,
+    pub storage: HeapStorage<'gc>,
+}
 
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ObjectPtr(pub NonNull<ObjectInner<'static>>);
+pub struct ObjectPtr(pub NonNull<RefLock<ObjectInner<'static>>>);
+
+unsafe impl Send for ObjectPtr {}
+unsafe impl Sync for ObjectPtr {}
 
 impl ObjectPtr {
     /// # Safety
     ///
     /// The pointer must be valid for the program lifetime and properly aligned.
-    pub unsafe fn from_raw(ptr: *const ObjectInner<'static>) -> Option<Self> {
+    pub unsafe fn from_raw(ptr: *const RefLock<ObjectInner<'static>>) -> Option<Self> {
         NonNull::new(ptr as *mut _).map(ObjectPtr)
     }
 
-    pub fn as_ptr(&self) -> *const ObjectInner<'static> {
+    pub fn as_ptr(&self) -> *const RefLock<ObjectInner<'static>> {
         self.0.as_ptr()
     }
 }
 
-pub type ObjectHandle<'gc> = Gc<'gc, ObjectInner<'gc>>;
+pub type ObjectHandle<'gc> = Gc<'gc, RefLock<ObjectInner<'gc>>>;
 
 #[derive(Copy, Clone)]
 #[repr(transparent)]
@@ -49,6 +57,19 @@ pub struct ObjectRef<'gc>(pub Option<ObjectHandle<'gc>>);
 unsafe impl<'gc> Collect for ObjectRef<'gc> {
     fn trace(&self, cc: &Collection) {
         if let Some(h) = self.0 {
+            // Check for cross-arena reference
+            if let Some(tracing_id) = crate::vm::gc_coordinator::get_currently_tracing() {
+                let owner_id = h.borrow().owner_id;
+                if owner_id != tracing_id {
+                    // This is a reference to an object in another arena.
+                    // Do not trace it here; instead, record it for coordinated resurrection.
+                    crate::vm::gc_coordinator::record_cross_arena_ref(
+                        owner_id,
+                        ObjectPtr(NonNull::new(Gc::as_ptr(h) as *mut _).unwrap()),
+                    );
+                    return;
+                }
+            }
             h.trace(cc);
         }
     }
@@ -99,19 +120,29 @@ impl<'gc> ObjectRef<'gc> {
             let ptr = Gc::as_ptr(handle) as usize;
             if visited.insert(ptr) {
                 Gc::resurrect(fc, handle);
-                handle.borrow().resurrect(fc, visited);
+                handle.borrow().storage.resurrect(fc, visited);
             }
         }
     }
 
     pub fn new(gc: GCHandle<'gc>, value: HeapStorage<'gc>) -> Self {
-        Self(Some(Gc::new(gc, RefLock::new(value))))
+        let owner_id = crate::vm::threading::get_current_thread_id();
+        let size = size_of::<ObjectInner>() + value.size_bytes();
+        crate::vm::gc_coordinator::record_allocation(size);
+
+        Self(Some(Gc::new(
+            gc,
+            RefLock::new(ObjectInner {
+                owner_id,
+                storage: value,
+            }),
+        )))
     }
 
     pub fn read(source: &[u8]) -> Self {
         let mut ptr_bytes = [0u8; Self::SIZE];
         ptr_bytes.copy_from_slice(&source[0..Self::SIZE]);
-        let ptr = usize::from_ne_bytes(ptr_bytes) as *const ObjectInner<'gc>;
+        let ptr = usize::from_ne_bytes(ptr_bytes) as *const RefLock<ObjectInner<'gc>>;
 
         if ptr.is_null() {
             ObjectRef(None)
@@ -121,7 +152,7 @@ impl<'gc> ObjectRef<'gc> {
             // the object is guaranteed to be alive (as it is traced by the caller),
             // it is safe to reconstruct the Gc pointer.
             debug_assert!(
-                (ptr as usize).is_multiple_of(std::mem::align_of::<RefLock<HeapStorage<'gc>>>()),
+                (ptr as usize).is_multiple_of(std::mem::align_of::<RefLock<ObjectInner<'gc>>>()),
                 "Attempted to reconstruct unaligned Gc pointer: {:?}",
                 ptr
             );
@@ -130,7 +161,7 @@ impl<'gc> ObjectRef<'gc> {
     }
 
     pub fn write(&self, dest: &mut [u8]) {
-        let ptr: *const RefLock<_> = match self.0 {
+        let ptr: *const RefLock<ObjectInner<'_>> = match self.0 {
             None => std::ptr::null(),
             Some(s) => Gc::as_ptr(s),
         };
@@ -149,8 +180,8 @@ impl<'gc> ObjectRef<'gc> {
         let ObjectRef(Some(o)) = &self else {
             panic!("NullReferenceException: called ObjectRef::as_object on NULL object reference")
         };
-        let heap = o.borrow();
-        let HeapStorage::Obj(instance) = &*heap else {
+        let inner = o.borrow();
+        let HeapStorage::Obj(instance) = &inner.storage else {
             panic!("called ObjectRef::as_object on non-object heap reference")
         };
 
@@ -163,8 +194,8 @@ impl<'gc> ObjectRef<'gc> {
                 "NullReferenceException: called ObjectRef::as_object_mut on NULL object reference"
             )
         };
-        let mut heap = o.borrow_mut(gc);
-        let HeapStorage::Obj(instance) = &mut *heap else {
+        let mut inner = o.borrow_mut(gc);
+        let HeapStorage::Obj(instance) = &mut inner.storage else {
             panic!("called ObjectRef::as_object_mut on non-object heap reference")
         };
 
@@ -175,8 +206,8 @@ impl<'gc> ObjectRef<'gc> {
         let ObjectRef(Some(o)) = &self else {
             panic!("NullReferenceException: called ObjectRef::as_vector on NULL object reference")
         };
-        let heap = o.borrow();
-        let HeapStorage::Vec(instance) = &*heap else {
+        let inner = o.borrow();
+        let HeapStorage::Vec(instance) = &inner.storage else {
             panic!("called ObjectRef::as_vector on non-vector heap reference")
         };
 
@@ -189,8 +220,8 @@ impl Debug for ObjectRef<'_> {
         match self.0 {
             None => f.write_str("NULL"),
             Some(gc) => {
-                let handle = gc.borrow();
-                let desc = match &*handle {
+                let inner = gc.borrow();
+                let desc = match &inner.storage {
                     HeapStorage::Obj(o) => o.description.type_name(),
                     HeapStorage::Vec(v) => format!("{:?}[{}]", v.element, v.layout.length),
                     HeapStorage::Str(s) => format!("{:?}", s),
@@ -222,6 +253,15 @@ unsafe impl<'gc> Collect for HeapStorage<'gc> {
 }
 
 impl<'gc> HeapStorage<'gc> {
+    pub fn size_bytes(&self) -> usize {
+        match self {
+            HeapStorage::Vec(v) => v.size_bytes(),
+            HeapStorage::Obj(o) => o.size_bytes(),
+            HeapStorage::Str(s) => s.size_bytes(),
+            HeapStorage::Boxed(v) => v.size_bytes(),
+        }
+    }
+
     pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
         match self {
             HeapStorage::Vec(v) => v.resurrect(fc, visited),
@@ -312,6 +352,13 @@ where
 }
 
 impl<'gc> ValueType<'gc> {
+    pub fn size_bytes(&self) -> usize {
+        match self {
+            ValueType::Struct(o) => o.size_bytes(),
+            _ => size_of::<ValueType>(),
+        }
+    }
+
     pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
         match self {
             ValueType::Pointer(p) => p.resurrect(fc, visited),
@@ -592,6 +639,10 @@ unsafe impl Collect for Vector<'_> {
 }
 
 impl<'gc> Vector<'gc> {
+    pub fn size_bytes(&self) -> usize {
+        size_of::<Vector>() + self.storage.len()
+    }
+
     pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
         self.layout.resurrect(&self.storage, fc, visited);
     }
@@ -651,11 +702,12 @@ impl Debug for Vector<'_> {
 #[derive(Clone, PartialEq)]
 pub struct Object<'gc> {
     pub description: TypeDescription,
-    pub instance_storage: FieldStorage<'gc>,
+    pub instance_storage: FieldStorage,
     pub finalizer_suppressed: bool,
     /// Sync block index for System.Threading.Monitor support.
     /// None means no sync block allocated yet (lazy allocation).
     pub sync_block_index: Option<usize>,
+    pub _phantom: PhantomData<&'gc ()>,
 }
 
 unsafe impl<'gc> Collect for Object<'gc> {
@@ -665,6 +717,10 @@ unsafe impl<'gc> Collect for Object<'gc> {
 }
 
 impl<'gc> Object<'gc> {
+    pub fn size_bytes(&self) -> usize {
+        size_of::<Object>() + self.instance_storage.get().len()
+    }
+
     pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
         self.instance_storage.resurrect(fc, visited);
     }
@@ -674,6 +730,7 @@ impl<'gc> Object<'gc> {
             instance_storage: FieldStorage::instance_fields(description, context),
             finalizer_suppressed: false,
             sync_block_index: None,
+            _phantom: PhantomData,
         }
     }
 }

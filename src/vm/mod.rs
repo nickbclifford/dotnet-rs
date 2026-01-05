@@ -14,6 +14,10 @@ pub(crate) mod intrinsics;
 pub mod metrics;
 #[macro_use]
 mod macros;
+#[cfg(feature = "multi-threaded-gc")]
+pub mod arena_storage;
+#[cfg(feature = "multi-threaded-gc")]
+pub mod gc_coordinator;
 mod pinvoke;
 mod stack;
 pub mod sync;
@@ -103,6 +107,7 @@ pub enum StepResult {
     MethodReturned,
     MethodThrew,
     InstructionStepped,
+    YieldForGC,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Collect)]

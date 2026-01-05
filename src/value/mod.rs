@@ -3,7 +3,7 @@ use crate::{
     vm::{context::ResolutionContext, GCHandle},
 };
 use dotnetdll::prelude::*;
-use gc_arena::{lock::RefLock, Collect, Collection, Gc};
+use gc_arena::{Collect, Collection};
 use std::{
     cmp::Ordering,
     fmt::Debug,
@@ -17,7 +17,7 @@ pub mod pointer;
 pub mod storage;
 pub mod string;
 
-use object::{HeapStorage, Object, ObjectHandle, ObjectRef};
+use object::{HeapStorage, Object, ObjectHandle, ObjectPtr, ObjectRef};
 use pointer::{ManagedPtr, UnmanagedPtr};
 use string::CLRString;
 
@@ -31,13 +31,20 @@ pub enum StackValue<'gc> {
     UnmanagedPtr(UnmanagedPtr),
     ManagedPtr(ManagedPtr<'gc>),
     ValueType(Box<Object<'gc>>),
+    /// Reference to an object in another thread's arena.
+    /// (ObjectPtr, OwningThreadID)
+    CrossArenaObjectRef(ObjectPtr, u64),
 }
+
 unsafe impl<'gc> Collect for StackValue<'gc> {
     fn trace(&self, cc: &Collection) {
         match self {
             Self::ObjectRef(o) => o.trace(cc),
             Self::ManagedPtr(m) => m.trace(cc),
             Self::ValueType(v) => v.as_ref().trace(cc),
+            Self::CrossArenaObjectRef(ptr, tid) => {
+                crate::vm::gc_coordinator::record_cross_arena_ref(*tid, *ptr);
+            }
             _ => {}
         }
     }
@@ -66,11 +73,16 @@ impl<'gc> StackValue<'gc> {
     pub fn null() -> Self {
         Self::ObjectRef(ObjectRef(None))
     }
+
+    pub fn size_bytes(&self) -> usize {
+        match self {
+            Self::ValueType(v) => v.size_bytes(),
+            _ => std::mem::size_of::<StackValue>(),
+        }
+    }
+
     pub fn string(gc: GCHandle<'gc>, s: CLRString) -> Self {
-        Self::ObjectRef(ObjectRef(Some(Gc::new(
-            gc,
-            RefLock::new(HeapStorage::Str(s)),
-        ))))
+        Self::ObjectRef(ObjectRef::new(gc, HeapStorage::Str(s)))
     }
 
     pub fn data_location(&self) -> NonNull<u8> {
@@ -89,6 +101,7 @@ impl<'gc> StackValue<'gc> {
             Self::ValueType(o) => {
                 NonNull::new(o.instance_storage.get().as_ptr() as *mut u8).unwrap()
             }
+            _ => todo!("handle CrossArenaObjectRef in data_location"),
         }
     }
 
@@ -102,6 +115,7 @@ impl<'gc> StackValue<'gc> {
             Self::ObjectRef(ObjectRef(None)) => ctx.loader.corlib_type("System.Object"),
             Self::ManagedPtr(m) => m.inner_type,
             Self::ValueType(o) => o.description,
+            _ => todo!("handle CrossArenaObjectRef in contains_type"),
         }
     }
 

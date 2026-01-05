@@ -112,11 +112,8 @@ impl TestHarness {
             _ => panic!("Expected method entry point in {:?}", dll_path),
         };
 
-        let arena = Box::new(vm::GCArena::new(|gc| {
-            let global = std::rc::Rc::new(vm::GlobalState::new(gc, self.assemblies));
-            vm::CallStack::new(gc, global)
-        }));
-        let mut executor = vm::Executor::new(Box::leak(arena));
+        let shared = std::sync::Arc::new(vm::SharedGlobalState::new(self.assemblies));
+        let mut executor = vm::Executor::new(shared);
 
         let entrypoint = MethodDescription {
             parent: TypeDescription::new(
@@ -135,6 +132,12 @@ impl TestHarness {
         }
     }
 }
+
+// NOTE: To run tests with a timeout (to catch infinite loops or deadlocks), use:
+//   cargo test -- --test-threads=1 --timeout 10
+// or set RUST_TEST_TIME_UNIT and RUST_TEST_TIME_INTEGRATION environment variables
+// or use an external timeout mechanism like GNU timeout:
+//   timeout 60s cargo test
 
 // used in generated tests from build.rs
 macro_rules! fixture_test {
@@ -170,4 +173,143 @@ fn hello_world() {
     let dll_path = harness.build(fixture_path);
     let exit_code = harness.run(&dll_path);
     assert_eq!(exit_code, 0);
+}
+
+// ============================================================================
+// Phase 7: Multi-Arena GC Tests
+// ============================================================================
+// These tests verify the multi-arena garbage collection infrastructure works
+// correctly when multiple Rust threads create their own arenas.
+
+#[test]
+fn test_multiple_arenas_basic() {
+    use std::thread;
+
+    let harness = TestHarness::get();
+    let fixture_path = Path::new("tests/fixtures/basic_42.cs");
+    let dll_path = harness.build(fixture_path);
+
+    // Spawn multiple threads, each creating its own arena and running the same program
+    let handles: Vec<_> = (0..3)
+        .map(|_| {
+            let dll_path = dll_path.clone();
+            let harness_ptr = harness as *const TestHarness as usize;
+            thread::spawn(move || {
+                let harness = unsafe { &*(harness_ptr as *const TestHarness) };
+                let exit_code = harness.run(&dll_path);
+                assert_eq!(exit_code, 42);
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+}
+
+#[test]
+fn test_multiple_arenas_with_gc() {
+    use std::thread;
+
+    let harness = TestHarness::get();
+    let fixture_path = Path::new("tests/fixtures/gc_finalization_42.cs");
+    let dll_path = harness.build(fixture_path);
+
+    // Run GC tests in parallel threads to test cross-arena coordination
+    let handles: Vec<_> = (0..3)
+        .map(|_| {
+            let dll_path = dll_path.clone();
+            let harness_ptr = harness as *const TestHarness as usize;
+            thread::spawn(move || {
+                let harness = unsafe { &*(harness_ptr as *const TestHarness) };
+                let exit_code = harness.run(&dll_path);
+                assert_eq!(exit_code, 42);
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+}
+
+#[test]
+fn test_multiple_arenas_static_fields() {
+    use std::thread;
+
+    let harness = TestHarness::get();
+    let fixture_path = Path::new("tests/fixtures/static_field_42.cs");
+    let dll_path = harness.build(fixture_path);
+
+    // Test that static fields work correctly across multiple arenas
+    let handles: Vec<_> = (0..3)
+        .map(|_| {
+            let dll_path = dll_path.clone();
+            let harness_ptr = harness as *const TestHarness as usize;
+            thread::spawn(move || {
+                let harness = unsafe { &*(harness_ptr as *const TestHarness) };
+                let exit_code = harness.run(&dll_path);
+                assert_eq!(exit_code, 42);
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+}
+
+#[test]
+fn test_multiple_arenas_allocation_stress() {
+    use std::thread;
+
+    let harness = TestHarness::get();
+    let fixture_path = Path::new("tests/fixtures/array_0.cs");
+    let dll_path = harness.build(fixture_path);
+
+    // Stress test allocation across multiple arenas simultaneously
+    let handles: Vec<_> = (0..5)
+        .map(|_| {
+            let dll_path = dll_path.clone();
+            let harness_ptr = harness as *const TestHarness as usize;
+            thread::spawn(move || {
+                let harness = unsafe { &*(harness_ptr as *const TestHarness) };
+                // Run multiple times to increase allocation pressure
+                for _ in 0..3 {
+                    let exit_code = harness.run(&dll_path);
+                    assert_eq!(exit_code, 0);
+                }
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+}
+
+#[test]
+fn test_arena_local_state_isolation() {
+    use std::thread;
+
+    let harness = TestHarness::get();
+    let fixture_path = Path::new("tests/fixtures/generic_0.cs");
+    let dll_path = harness.build(fixture_path);
+
+    // Test that arena-local state (reflection caches, etc.) is properly isolated
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let dll_path = dll_path.clone();
+            let harness_ptr = harness as *const TestHarness as usize;
+            thread::spawn(move || {
+                let harness = unsafe { &*(harness_ptr as *const TestHarness) };
+                let exit_code = harness.run(&dll_path);
+                assert_eq!(exit_code, 0);
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
 }
