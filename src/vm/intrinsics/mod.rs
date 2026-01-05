@@ -709,16 +709,9 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             vm_expect_stack!(let ObjectRef(obj_ref) = pop!());
 
             if obj_ref.0.is_some() {
-                // Get the current thread ID from the thread manager
-                let thread_id = stack.global.thread_manager.current_thread_id()
-                    .unwrap_or_else(|| {
-                        // Fallback: hash the native thread ID if not registered
-                        use std::collections::hash_map::DefaultHasher;
-                        use std::hash::{Hash, Hasher};
-                        let mut hasher = DefaultHasher::new();
-                        std::thread::current().id().hash(&mut hasher);
-                        hasher.finish()
-                    });
+                // Get the current thread ID from the call stack
+                let thread_id = stack.thread_id.get();
+                assert!(thread_id != 0, "Monitor.Exit called from unregistered thread");
 
                 // Get or access the sync block
                 let sync_block_index = obj_ref.as_object(|o| o.sync_block_index);
@@ -739,16 +732,9 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             vm_expect_stack!(let ObjectRef(obj_ref) = pop!());
 
             if obj_ref.0.is_some() {
-                // Get the current thread ID from the thread manager
-                let thread_id = stack.global.thread_manager.current_thread_id()
-                    .unwrap_or_else(|| {
-                        // Fallback: hash the native thread ID if not registered
-                        use std::collections::hash_map::DefaultHasher;
-                        use std::hash::{Hash, Hasher};
-                        let mut hasher = DefaultHasher::new();
-                        std::thread::current().id().hash(&mut hasher);
-                        hasher.finish()
-                    });
+                // Get the current thread ID from the call stack
+                let thread_id = stack.thread_id.get();
+                assert!(thread_id != 0, "Monitor.ReliableEnter called from unregistered thread");
 
                 // Get or create sync block
                 let (_index, sync_block) = stack.global.sync_blocks.get_or_create_sync_block(
@@ -776,16 +762,9 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             vm_expect_stack!(let ObjectRef(obj_ref) = pop!());
 
             if obj_ref.0.is_some() {
-                // Get the current thread ID from the thread manager
-                let thread_id = stack.global.thread_manager.current_thread_id()
-                    .unwrap_or_else(|| {
-                        // Fallback: hash the native thread ID if not registered
-                        use std::collections::hash_map::DefaultHasher;
-                        use std::hash::{Hash, Hasher};
-                        let mut hasher = DefaultHasher::new();
-                        std::thread::current().id().hash(&mut hasher);
-                        hasher.finish()
-                    });
+                // Get the current thread ID from the call stack
+                let thread_id = stack.thread_id.get();
+                assert!(thread_id != 0, "Monitor.TryEnter_FastPath called from unregistered thread");
 
                 // Get or create sync block
                 let (_index, sync_block) = stack.global.sync_blocks.get_or_create_sync_block(
@@ -810,14 +789,9 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             vm_expect_stack!(let ObjectRef(obj_ref) = pop!());
 
             if obj_ref.0.is_some() {
-                let thread_id = stack.global.thread_manager.current_thread_id()
-                    .unwrap_or_else(|| {
-                        use std::collections::hash_map::DefaultHasher;
-                        use std::hash::{Hash, Hasher};
-                        let mut hasher = DefaultHasher::new();
-                        std::thread::current().id().hash(&mut hasher);
-                        hasher.finish()
-                    });
+                // Get the current thread ID from the call stack
+                let thread_id = stack.thread_id.get();
+                assert!(thread_id != 0, "Monitor.TryEnter called from unregistered thread");
 
                 let (_index, sync_block) = stack.global.sync_blocks.get_or_create_sync_block(
                     &obj_ref,
@@ -843,14 +817,9 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             vm_expect_stack!(let ObjectRef(obj_ref) = pop!());
 
             if obj_ref.0.is_some() {
-                let thread_id = stack.global.thread_manager.current_thread_id()
-                    .unwrap_or_else(|| {
-                        use std::collections::hash_map::DefaultHasher;
-                        use std::hash::{Hash, Hasher};
-                        let mut hasher = DefaultHasher::new();
-                        std::thread::current().id().hash(&mut hasher);
-                        hasher.finish()
-                    });
+                // Get the current thread ID from the call stack
+                let thread_id = stack.thread_id.get();
+                assert!(thread_id != 0, "Monitor.TryEnter called from unregistered thread");
 
                 let (_index, sync_block) = stack.global.sync_blocks.get_or_create_sync_block(
                     &obj_ref,
@@ -970,6 +939,19 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             if handle_type == GCHandleType::Pinned {
                 stack.heap().pinned_objects.borrow_mut().insert(obj);
+
+                // Trace pinning event
+                if stack.tracer_enabled() {
+                    let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p) as usize).unwrap_or(0);
+                    stack.global.tracer.lock().trace_gc_pin(stack.indent(), "PINNED", addr);
+                }
+            }
+
+            // Trace GC handle allocation
+            if stack.tracer_enabled() {
+                let handle_type_str = format!("{:?}", handle_type);
+                let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p) as usize).unwrap_or(0);
+                stack.global.tracer.lock().trace_gc_handle(stack.indent(), "ALLOC", &handle_type_str, addr);
             }
 
             push!(NativeInt((index + 1) as isize));
@@ -983,6 +965,19 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     if let Some((obj, handle_type)) = handles[index] {
                         if handle_type == GCHandleType::Pinned {
                             stack.heap().pinned_objects.borrow_mut().remove(&obj);
+
+                            // Trace unpinning event
+                            if stack.tracer_enabled() {
+                                let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p) as usize).unwrap_or(0);
+                                stack.global.tracer.lock().trace_gc_pin(stack.indent(), "UNPINNED", addr);
+                            }
+                        }
+
+                        // Trace GC handle free
+                        if stack.tracer_enabled() {
+                            let handle_type_str = format!("{:?}", handle_type);
+                            let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p) as usize).unwrap_or(0);
+                            stack.global.tracer.lock().trace_gc_handle(stack.indent(), "FREE", &handle_type_str, addr);
                         }
                     }
                     handles[index] = None;

@@ -58,8 +58,7 @@ macro_rules! vm_msg {
 macro_rules! vm_trace_instruction {
     ($src:expr, $ip:expr, $instr:expr) => {
         if $src.tracer_enabled() {
-            $src.tracer()
-                .trace_instruction($src.indent(), $ip, $instr);
+            $src.tracer().trace_instruction($src.indent(), $ip, $instr);
         }
     };
 }
@@ -68,8 +67,7 @@ macro_rules! vm_trace_instruction {
 macro_rules! vm_trace_method_entry {
     ($src:expr, $name:expr, $sig:expr) => {
         if $src.tracer_enabled() {
-            $src.tracer()
-                .trace_method_entry($src.indent(), $name, $sig);
+            $src.tracer().trace_method_entry($src.indent(), $name, $sig);
         }
     };
 }
@@ -117,12 +115,8 @@ macro_rules! vm_trace_branch {
 macro_rules! vm_trace_field {
     ($src:expr, $op:expr, $field:expr, $val:expr) => {
         if $src.tracer_enabled() {
-            $src.tracer().trace_field_access(
-                $src.indent(),
-                $op,
-                $field,
-                &format!("{:?}", $val),
-            );
+            $src.tracer()
+                .trace_field_access($src.indent(), $op, $field, &format!("{:?}", $val));
         }
     };
 }

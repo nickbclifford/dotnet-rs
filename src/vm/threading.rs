@@ -138,6 +138,13 @@ impl ThreadManager {
         managed_id
     }
 
+    /// Register a new thread with tracing support
+    pub fn register_thread_traced(&self, tracer: &crate::vm::tracer::Tracer, name: &str) -> u64 {
+        let managed_id = self.register_thread();
+        tracer.trace_thread_create(0, managed_id, name);
+        managed_id
+    }
+
     /// Unregister a thread (called when thread exits).
     pub fn unregister_thread(&self, managed_id: u64) {
         let mut threads = self.threads.lock();
@@ -155,6 +162,12 @@ impl ThreadManager {
             // but we MUST notify the coordinator because thread_count decreased.
             self.all_threads_stopped.notify_all();
         }
+    }
+
+    /// Unregister a thread with tracing support
+    pub fn unregister_thread_traced(&self, managed_id: u64, tracer: &crate::vm::tracer::Tracer) {
+        tracer.trace_thread_exit(0, managed_id);
+        self.unregister_thread(managed_id);
     }
 
     /// Get the current thread's managed ID.
@@ -249,6 +262,20 @@ impl ThreadManager {
         }
     }
 
+    /// Mark that the current thread has reached a safe point (with tracing support).
+    pub fn safe_point_traced(
+        &self,
+        managed_id: u64,
+        tracer: &crate::vm::tracer::Tracer,
+        location: &str,
+    ) {
+        // Trace safepoint arrival before blocking
+        if tracer.is_enabled() && self.is_gc_stop_requested() {
+            tracer.trace_thread_safepoint(0, managed_id, location);
+        }
+        self.safe_point(managed_id);
+    }
+
     /// Request a stop-the-world pause and wait for all threads to reach safe points.
     /// Returns a GC guard that will resume threads when dropped.
     ///
@@ -281,14 +308,22 @@ impl ThreadManager {
             if !warned && start_time.elapsed() > WARN_TIMEOUT {
                 eprintln!("[GC WARNING] Stop-the-world pause taking longer than expected:");
                 eprintln!("  Total threads: {}", thread_count);
-                eprintln!("  Threads at safe point: {}", self.threads_at_safepoint.load(Ordering::Acquire));
+                eprintln!(
+                    "  Threads at safe point: {}",
+                    self.threads_at_safepoint.load(Ordering::Acquire)
+                );
 
                 // List threads that haven't reached safe point
                 let threads = self.threads.lock();
                 eprintln!("  Threads not at safe point:");
                 for (tid, thread) in threads.iter() {
                     if thread.get_state() != ThreadState::AtSafePoint {
-                        eprintln!("    - Thread ID {}: {:?} (native: {:?})", tid, thread.get_state(), thread.native_id);
+                        eprintln!(
+                            "    - Thread ID {}: {:?} (native: {:?})",
+                            tid,
+                            thread.get_state(),
+                            thread.native_id
+                        );
                     }
                 }
                 drop(threads);
@@ -300,10 +335,25 @@ impl ThreadManager {
         }
 
         if warned {
-            eprintln!("[GC] Stop-the-world completed after {} ms", start_time.elapsed().as_millis());
+            eprintln!(
+                "[GC] Stop-the-world completed after {} ms",
+                start_time.elapsed().as_millis()
+            );
         }
 
-        StopTheWorldGuard::new(self, guard)
+        StopTheWorldGuard::new(self, guard, start_time)
+    }
+
+    /// Request a stop-the-world pause with tracing support.
+    pub fn request_stop_the_world_traced(
+        &self,
+        tracer: &crate::vm::tracer::Tracer,
+    ) -> StopTheWorldGuard<'_> {
+        let thread_count = self.thread_count();
+        if tracer.is_enabled() {
+            tracer.trace_stw_start(0, thread_count);
+        }
+        self.request_stop_the_world()
     }
 
     /// Resume all threads after a stop-the-world pause.
@@ -325,16 +375,27 @@ impl Default for ThreadManager {
 pub struct StopTheWorldGuard<'a> {
     manager: &'a ThreadManager,
     _lock: MutexGuard<'a, ()>,
+    start_time: std::time::Instant,
 }
 
 impl<'a> StopTheWorldGuard<'a> {
     /// Create a new StopTheWorldGuard and mark this thread as performing GC
-    fn new(manager: &'a ThreadManager, lock: MutexGuard<'a, ()>) -> Self {
+    fn new(
+        manager: &'a ThreadManager,
+        lock: MutexGuard<'a, ()>,
+        start_time: std::time::Instant,
+    ) -> Self {
         IS_PERFORMING_GC.set(true);
         Self {
             manager,
             _lock: lock,
+            start_time,
         }
+    }
+
+    /// Get the elapsed time since the STW pause started
+    pub fn elapsed_micros(&self) -> u64 {
+        self.start_time.elapsed().as_micros() as u64
     }
 }
 

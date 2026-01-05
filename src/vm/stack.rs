@@ -46,20 +46,6 @@ pub struct ThreadContext<'gc, 'm> {
     pub original_stack_height: usize,
 }
 
-/// Legacy alias for backward compatibility during refactoring.
-#[derive(Collect)]
-#[collect(no_drop)]
-pub struct ExecutionStack<'gc, 'm> {
-    pub stack: Vec<StackSlotHandle<'gc>>,
-    pub frames: Vec<StackFrame<'gc, 'm>>,
-    pub exception_mode: ExceptionState<'gc>,
-    pub suspended_frames: Vec<StackFrame<'gc, 'm>>,
-    pub suspended_stack: Vec<StackSlotHandle<'gc>>,
-    pub original_ip: usize,
-    pub original_stack_height: usize,
-}
-
-
 pub struct HeapManager<'gc> {
     pub finalization_queue: RefCell<Vec<ObjectRef<'gc>>>,
     pub pending_finalization: RefCell<Vec<ObjectRef<'gc>>>,
@@ -103,7 +89,7 @@ unsafe impl<'gc> Collect for HeapManager<'gc> {
 /// # Architecture
 ///
 /// This structure represents the "Phase 1" multithreading architecture, where global
-/// state is separated from per-thread state (ThreadContext/ExecutionStack). It is
+/// state is separated from per-thread state (ThreadContext). It is
 /// designed to be shared via `Arc` across multiple executor threads.
 ///
 /// # ⚠️ IMPORTANT: GC IS STILL SINGLE-THREADED ⚠️
@@ -206,9 +192,9 @@ impl<'gc, 'm> GlobalState<'gc, 'm> {
 }
 
 pub struct CallStack<'gc, 'm> {
-    pub execution: ExecutionStack<'gc, 'm>,
+    pub execution: ThreadContext<'gc, 'm>,
     pub global: Arc<GlobalState<'gc, 'm>>,
-    /// Thread ID for this call stack (if registered)
+    /// Thread ID for this call stack
     pub thread_id: Cell<u64>,
 }
 
@@ -273,7 +259,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     /// This is now the primary and only constructor for CallStack.
     pub fn new(_gc: GCHandle<'gc>, global: Arc<GlobalState<'gc, 'm>>) -> Self {
         Self {
-            execution: ExecutionStack {
+            execution: ThreadContext {
                 stack: vec![],
                 frames: vec![],
                 exception_mode: ExceptionState::None,
@@ -449,6 +435,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 _ => unreachable!(),
             };
 
+            // Trace finalization event
+            if self.tracer_enabled() {
+                let type_name = format!("{:?}", obj_type);
+                let addr = gc_arena::Gc::as_ptr(ptr) as usize;
+                self.global
+                    .tracer
+                    .lock()
+                    .trace_gc_finalization(self.indent(), &type_name, addr);
+            }
+
             let object_type = self.global.loader.corlib_type("System.Object");
             let base_finalize = object_type
                 .definition()
@@ -546,7 +542,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     ) {
         if self.tracer_enabled() {
             let method_desc = format!("{:?}", method.source);
-            self.global.tracer.lock()
+            self.global
+                .tracer
+                .lock()
                 .trace_method_entry(self.indent(), &method_desc, "");
         }
 
@@ -617,7 +615,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         if self.tracer_enabled() {
             let method_name = format!("{:?}", frame.state.info_handle.source);
-            self.global.tracer.lock()
+            self.global
+                .tracer
+                .lock()
                 .trace_method_exit(self.indent(), &method_name);
         }
 
@@ -773,6 +773,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let ptr = obj.0.unwrap();
                     pending.push(obj);
                     if resurrected.insert(Gc::as_ptr(ptr) as usize) {
+                        // Trace resurrection event
+                        if self.tracer_enabled() {
+                            let obj_type_name = match &*ptr.borrow() {
+                                HeapStorage::Obj(o) => format!("{:?}", o.description),
+                                HeapStorage::Vec(_) => "Vector".to_string(),
+                                HeapStorage::Str(_) => "String".to_string(),
+                                HeapStorage::Boxed(_) => "Boxed".to_string(),
+                            };
+                            let addr = Gc::as_ptr(ptr) as usize;
+                            self.global.tracer.lock().trace_gc_resurrection(
+                                self.indent(),
+                                &obj_type_name,
+                                addr,
+                            );
+                        }
                         Gc::resurrect(fc, ptr);
                         ptr.borrow().resurrect(fc, &mut resurrected);
                     }
@@ -861,8 +876,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn push_stack(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {
         if self.tracer_enabled() {
-            self.global.tracer.lock()
-                .trace_stack_op(self.indent(), "PUSH", &format!("{:?}", value));
+            self.global.tracer.lock().trace_stack_op(
+                self.indent(),
+                "PUSH",
+                &format!("{:?}", value),
+            );
         }
         self.set_slot_at(gc, self.top_of_stack(), value);
         self.current_frame_mut().stack_height += 1;
@@ -875,7 +893,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
         let value = self.get_slot(&self.execution.stack[top - 1]);
         if self.tracer_enabled() {
-            self.global.tracer.lock()
+            self.global
+                .tracer
+                .lock()
                 .trace_stack_op(self.indent(), "POP", &format!("{:?}", value));
         }
         self.current_frame_mut().stack_height -= 1;
@@ -953,9 +973,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     // ========================================================================
-    // Compatibility Layer Methods
-    // These methods provide a unified interface that delegates to global state
-    // when available, falling back to legacy fields during migration.
+    // Global State Delegation Methods
+    // These methods provide a unified interface that delegates to global state.
     // ========================================================================
 
     /// Get the heap manager.
@@ -1009,30 +1028,38 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     // ========================================================================
-    // Reflection Cache Compatibility Methods
+    // Reflection Cache Methods
     // ========================================================================
 
     /// Get access to runtime_asms cache (read-only).
     #[inline]
-    pub fn runtime_asms_read(&self) -> parking_lot::RwLockReadGuard<'_, HashMap<ResolutionS, ObjectRef<'gc>>> {
+    pub fn runtime_asms_read(
+        &self,
+    ) -> parking_lot::RwLockReadGuard<'_, HashMap<ResolutionS, ObjectRef<'gc>>> {
         self.global.runtime_asms.read()
     }
 
     /// Get access to runtime_asms cache (mutable).
     #[inline]
-    pub fn runtime_asms_write(&self) -> parking_lot::RwLockWriteGuard<'_, HashMap<ResolutionS, ObjectRef<'gc>>> {
+    pub fn runtime_asms_write(
+        &self,
+    ) -> parking_lot::RwLockWriteGuard<'_, HashMap<ResolutionS, ObjectRef<'gc>>> {
         self.global.runtime_asms.write()
     }
 
     /// Get access to runtime_types cache (read-only).
     #[inline]
-    pub fn runtime_types_read(&self) -> parking_lot::RwLockReadGuard<'_, HashMap<RuntimeType, ObjectRef<'gc>>> {
+    pub fn runtime_types_read(
+        &self,
+    ) -> parking_lot::RwLockReadGuard<'_, HashMap<RuntimeType, ObjectRef<'gc>>> {
         self.global.runtime_types.read()
     }
 
     /// Get access to runtime_types cache (mutable).
     #[inline]
-    pub fn runtime_types_write(&self) -> parking_lot::RwLockWriteGuard<'_, HashMap<RuntimeType, ObjectRef<'gc>>> {
+    pub fn runtime_types_write(
+        &self,
+    ) -> parking_lot::RwLockWriteGuard<'_, HashMap<RuntimeType, ObjectRef<'gc>>> {
         self.global.runtime_types.write()
     }
 
@@ -1050,61 +1077,87 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     /// Get access to runtime_methods list (read-only).
     #[inline]
-    pub fn runtime_methods_read(&self) -> parking_lot::RwLockReadGuard<'_, Vec<(MethodDescription, GenericLookup)>> {
+    pub fn runtime_methods_read(
+        &self,
+    ) -> parking_lot::RwLockReadGuard<'_, Vec<(MethodDescription, GenericLookup)>> {
         self.global.runtime_methods.read()
     }
 
     /// Get access to runtime_methods list (mutable).
     #[inline]
-    pub fn runtime_methods_write(&self) -> parking_lot::RwLockWriteGuard<'_, Vec<(MethodDescription, GenericLookup)>> {
+    pub fn runtime_methods_write(
+        &self,
+    ) -> parking_lot::RwLockWriteGuard<'_, Vec<(MethodDescription, GenericLookup)>> {
         self.global.runtime_methods.write()
     }
 
     /// Get access to runtime_method_objs cache (read-only).
     #[inline]
-    pub fn runtime_method_objs_read(&self) -> parking_lot::RwLockReadGuard<'_, HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>> {
+    pub fn runtime_method_objs_read(
+        &self,
+    ) -> parking_lot::RwLockReadGuard<'_, HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>>
+    {
         self.global.runtime_method_objs.read()
     }
 
     /// Get access to runtime_method_objs cache (mutable).
     #[inline]
-    pub fn runtime_method_objs_write(&self) -> parking_lot::RwLockWriteGuard<'_, HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>> {
+    pub fn runtime_method_objs_write(
+        &self,
+    ) -> parking_lot::RwLockWriteGuard<
+        '_,
+        HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>,
+    > {
         self.global.runtime_method_objs.write()
     }
 
     /// Get access to runtime_fields list (read-only).
     #[inline]
-    pub fn runtime_fields_read(&self) -> parking_lot::RwLockReadGuard<'_, Vec<(FieldDescription, GenericLookup)>> {
+    pub fn runtime_fields_read(
+        &self,
+    ) -> parking_lot::RwLockReadGuard<'_, Vec<(FieldDescription, GenericLookup)>> {
         self.global.runtime_fields.read()
     }
 
     /// Get access to runtime_fields list (mutable).
     #[inline]
-    pub fn runtime_fields_write(&self) -> parking_lot::RwLockWriteGuard<'_, Vec<(FieldDescription, GenericLookup)>> {
+    pub fn runtime_fields_write(
+        &self,
+    ) -> parking_lot::RwLockWriteGuard<'_, Vec<(FieldDescription, GenericLookup)>> {
         self.global.runtime_fields.write()
     }
 
     /// Get access to runtime_field_objs cache (read-only).
     #[inline]
-    pub fn runtime_field_objs_read(&self) -> parking_lot::RwLockReadGuard<'_, HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>> {
+    pub fn runtime_field_objs_read(
+        &self,
+    ) -> parking_lot::RwLockReadGuard<'_, HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>>
+    {
         self.global.runtime_field_objs.read()
     }
 
     /// Get access to runtime_field_objs cache (mutable).
     #[inline]
-    pub fn runtime_field_objs_write(&self) -> parking_lot::RwLockWriteGuard<'_, HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>> {
+    pub fn runtime_field_objs_write(
+        &self,
+    ) -> parking_lot::RwLockWriteGuard<'_, HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>>
+    {
         self.global.runtime_field_objs.write()
     }
 
     /// Get access to method_tables cache (read-only).
     #[inline]
-    pub fn method_tables_read(&self) -> parking_lot::RwLockReadGuard<'_, HashMap<TypeDescription, Box<[u8]>>> {
+    pub fn method_tables_read(
+        &self,
+    ) -> parking_lot::RwLockReadGuard<'_, HashMap<TypeDescription, Box<[u8]>>> {
         self.global.method_tables.read()
     }
 
     /// Get access to method_tables cache (mutable).
     #[inline]
-    pub fn method_tables_write(&self) -> parking_lot::RwLockWriteGuard<'_, HashMap<TypeDescription, Box<[u8]>>> {
+    pub fn method_tables_write(
+        &self,
+    ) -> parking_lot::RwLockWriteGuard<'_, HashMap<TypeDescription, Box<[u8]>>> {
         self.global.method_tables.write()
     }
 }

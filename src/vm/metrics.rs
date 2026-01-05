@@ -19,12 +19,14 @@ impl RuntimeMetrics {
     }
 
     pub fn record_gc_pause(&self, duration: Duration) {
-        self.gc_pause_total_us.fetch_add(duration.as_micros() as u64, Ordering::Relaxed);
+        self.gc_pause_total_us
+            .fetch_add(duration.as_micros() as u64, Ordering::Relaxed);
         self.gc_pause_count.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn record_lock_contention(&self, duration: Duration) {
         self.lock_contention_count.fetch_add(1, Ordering::Relaxed);
-        self.lock_contention_total_us.fetch_add(duration.as_micros() as u64, Ordering::Relaxed);
+        self.lock_contention_total_us
+            .fetch_add(duration.as_micros() as u64, Ordering::Relaxed);
     }
 }

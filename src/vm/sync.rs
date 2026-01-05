@@ -380,7 +380,10 @@ mod tests {
         block.enter(1, &metrics);
         let result = block.pulse(1);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Monitor.Pulse() is not yet implemented");
+        assert_eq!(
+            result.unwrap_err(),
+            "Monitor.Pulse() is not yet implemented"
+        );
         block.exit(1);
     }
 
@@ -391,7 +394,10 @@ mod tests {
         block.enter(1, &metrics);
         let result = block.pulse_all(1);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Monitor.PulseAll() is not yet implemented");
+        assert_eq!(
+            result.unwrap_err(),
+            "Monitor.PulseAll() is not yet implemented"
+        );
         block.exit(1);
     }
 

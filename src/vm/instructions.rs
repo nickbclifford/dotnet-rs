@@ -28,7 +28,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     pub fn check_gc_safe_point(&self) {
         let thread_manager = &self.global.thread_manager;
         if thread_manager.is_gc_stop_requested() {
-            if let Some(managed_id) = thread_manager.current_thread_id() {
+            let managed_id = self.thread_id.get();
+            if managed_id != 0 {
                 thread_manager.safe_point(managed_id);
             }
         }
@@ -76,17 +77,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             self.external_call(method, gc);
             StepResult::InstructionStepped
         } else {
-            self.call_frame(
-                gc,
-                MethodInfo::new(method, &lookup, self.loader()),
-                lookup,
-            );
+            self.call_frame(gc, MethodInfo::new(method, &lookup, self.loader()), lookup);
             StepResult::InstructionStepped
         }
     }
 
     /// Initialize static storage for a type and invoke its .cctor if needed.
-    /// This method is thread-safe when using the new_with_global architecture.
+    /// This method is thread-safe.
     ///
     /// Returns `true` if a .cctor was invoked (caller should return early),
     /// or `false` if initialization is complete or not needed.
@@ -123,11 +120,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         "-- calling static constructor (will return to ip {}) --",
                         self.current_frame().state.ip
                     );
-                    self.call_frame(
-                        gc,
-                        MethodInfo::new(m, &generics, self.loader()),
-                        generics,
-                    );
+                    self.call_frame(gc, MethodInfo::new(m, &generics, self.loader()), generics);
                     return true;
                 }
                 crate::value::storage::StaticInitResult::Initialized
@@ -342,9 +335,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let constraint_type = self.current_context().make_concrete(constraint);
                 let (method, lookup) = self.find_generic_method(source);
 
-                let td = self
-                    .loader()
-                    .find_concrete_type(constraint_type.clone());
+                let td = self.loader().find_concrete_type(constraint_type.clone());
 
                 for o in td.definition().overrides.iter() {
                     let target = self
@@ -927,15 +918,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                     // For reference types with constrained callvirt, try to find the method
                     // implementation directly in the constraint type first
-                    if let Some(impl_method) =
-                        self.loader().find_method_in_type_with_substitution(
-                            constraint_type,
-                            &base_method.method.name,
-                            &base_method.method.signature,
-                            base_method.resolution(),
-                            &lookup,
-                        )
-                    {
+                    if let Some(impl_method) = self.loader().find_method_in_type_with_substitution(
+                        constraint_type,
+                        &base_method.method.name,
+                        &base_method.method.signature,
+                        base_method.resolution(),
+                        &lookup,
+                    ) {
                         impl_method
                     } else {
                         // Fall back to normal virtual dispatch
@@ -963,9 +952,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 if let ObjectRef(Some(o)) = target_obj {
                     let ctx = self.current_context();
                     let obj_type = ctx.get_heap_description(o);
-                    let target_type = self
-                        .loader()
-                        .find_concrete_type(ctx.make_concrete(target));
+                    let target_type = self.loader().find_concrete_type(ctx.make_concrete(target));
 
                     if ctx.is_a(obj_type, target_type) {
                         push!(ObjectRef(target_obj));
@@ -992,9 +979,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 if let ObjectRef(Some(o)) = target_obj {
                     let ctx = self.current_context();
                     let obj_type = ctx.get_heap_description(o);
-                    let target_type = self
-                        .loader()
-                        .find_concrete_type(ctx.make_concrete(target));
+                    let target_type = self.loader().find_concrete_type(ctx.make_concrete(target));
 
                     if ctx.is_a(obj_type, target_type) {
                         push!(ObjectRef(target_obj));
@@ -1356,9 +1341,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let (method, lookup) = self.find_generic_method(source);
                 let method_obj = self.get_runtime_method_obj(gc, method, lookup);
 
-                let rmh = self
-                    .loader()
-                    .corlib_type("System.RuntimeMethodHandle");
+                let rmh = self.loader().corlib_type("System.RuntimeMethodHandle");
                 let mut instance = Object::new(rmh, &self.current_context());
                 method_obj.write(instance.instance_storage.get_field_mut("_value"));
 

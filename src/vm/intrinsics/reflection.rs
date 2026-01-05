@@ -353,10 +353,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         lookup: GenericLookup,
     ) -> u16 {
         let mut fields = self.runtime_fields_write();
-        let idx = match fields
-            .iter()
-            .position(|(f, g)| *f == field && *g == lookup)
-        {
+        let idx = match fields.iter().position(|(f, g)| *f == field && *g == lookup) {
             Some(i) => i,
             None => {
                 fields.push((field, lookup));
@@ -411,10 +408,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         field: FieldDescription,
         lookup: GenericLookup,
     ) -> ObjectRef<'gc> {
-        if let Some(obj) = self
-            .runtime_field_objs_read()
-            .get(&(field, lookup.clone()))
-        {
+        if let Some(obj) = self.runtime_field_objs_read().get(&(field, lookup.clone())) {
             return *obj;
         }
 

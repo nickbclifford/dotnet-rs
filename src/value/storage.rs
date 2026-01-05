@@ -272,12 +272,15 @@ impl<'gc> StaticStorageManager<'gc> {
 
         if cctor.is_none() {
             // No .cctor, so mark as initialized if it was uninitialized
-            storage.init_state.compare_exchange(
-                INIT_STATE_UNINITIALIZED,
-                INIT_STATE_INITIALIZED,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ).ok();
+            storage
+                .init_state
+                .compare_exchange(
+                    INIT_STATE_UNINITIALIZED,
+                    INIT_STATE_INITIALIZED,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .ok();
             return StaticInitResult::Initialized;
         }
 

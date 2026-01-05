@@ -10,7 +10,8 @@
 //! - Stack operations (push/pop)
 //! - Branch instructions
 //! - Field accesses
-//! - GC events
+//! - GC events (collection, allocation, finalization, resurrection, handles, pinning)
+//! - Threading events (create, start, exit, safepoint, suspend, resume, STW pauses)
 //! - Exception handling
 //!
 //! ### State snapshots
@@ -89,6 +90,12 @@ pub struct TraceStats {
     pub branches: usize,
     pub stack_ops: usize,
     pub field_accesses: usize,
+    pub gc_collections: usize,
+    pub gc_allocations: usize,
+    pub gc_finalizations: usize,
+    pub thread_events: usize,
+    pub thread_safepoints: usize,
+    pub thread_suspensions: usize,
 }
 
 pub struct Tracer {
@@ -319,6 +326,12 @@ impl Tracer {
         eprintln!("Method calls:        {:>12}", stats.method_calls);
         eprintln!("Method returns:      {:>12}", stats.method_returns);
         eprintln!("GC events:           {:>12}", stats.gc_events);
+        eprintln!("  Collections:       {:>12}", stats.gc_collections);
+        eprintln!("  Allocations:       {:>12}", stats.gc_allocations);
+        eprintln!("  Finalizations:     {:>12}", stats.gc_finalizations);
+        eprintln!("Thread events:       {:>12}", stats.thread_events);
+        eprintln!("  Safepoints:        {:>12}", stats.thread_safepoints);
+        eprintln!("  Suspensions:       {:>12}", stats.thread_suspensions);
         eprintln!("Exceptions:          {:>12}", stats.exceptions);
         eprintln!("Branches:            {:>12}", stats.branches);
         eprintln!("Stack operations:    {:>12}", stats.stack_ops);
@@ -557,6 +570,288 @@ impl Tracer {
         self.msg(
             0,
             format_args!("╚════════════════════════════════════════════════════════════"),
+        );
+    }
+
+    // === GC-specific tracing methods ===
+
+    /// Trace the start of a GC collection cycle
+    pub fn trace_gc_collection_start(&self, indent: usize, generation: usize, reason: &str) {
+        if !self.enabled {
+            return;
+        }
+        if self.detailed_stats {
+            self.stats.borrow_mut().gc_collections += 1;
+            self.stats.borrow_mut().gc_events += 1;
+        }
+        self.write_msg(
+            indent,
+            format_args!("♻ GC   COLLECTION START [Gen {}] ({})", generation, reason),
+        );
+    }
+
+    /// Trace the end of a GC collection cycle
+    pub fn trace_gc_collection_end(
+        &self,
+        indent: usize,
+        generation: usize,
+        collected: usize,
+        duration_us: u64,
+    ) {
+        if !self.enabled {
+            return;
+        }
+        if self.detailed_stats {
+            self.stats.borrow_mut().gc_events += 1;
+        }
+        self.write_msg(
+            indent,
+            format_args!(
+                "♻ GC   COLLECTION END [Gen {}] ({} objects collected, {} μs)",
+                generation, collected, duration_us
+            ),
+        );
+    }
+
+    /// Trace heap allocation
+    pub fn trace_gc_allocation(&self, indent: usize, type_name: &str, size_bytes: usize) {
+        if !self.enabled {
+            return;
+        }
+        if self.detailed_stats {
+            self.stats.borrow_mut().gc_allocations += 1;
+            self.stats.borrow_mut().gc_events += 1;
+        }
+        self.write_msg(
+            indent,
+            format_args!("♻ GC   ALLOC {} ({} bytes)", type_name, size_bytes),
+        );
+    }
+
+    /// Trace object finalization
+    pub fn trace_gc_finalization(&self, indent: usize, obj_type: &str, obj_addr: usize) {
+        if !self.enabled {
+            return;
+        }
+        if self.detailed_stats {
+            self.stats.borrow_mut().gc_finalizations += 1;
+            self.stats.borrow_mut().gc_events += 1;
+        }
+        self.write_msg(
+            indent,
+            format_args!("♻ GC   FINALIZE {} @ {:#x}", obj_type, obj_addr),
+        );
+    }
+
+    /// Trace GC handle operations
+    pub fn trace_gc_handle(&self, indent: usize, operation: &str, handle_type: &str, addr: usize) {
+        if !self.enabled {
+            return;
+        }
+        if self.detailed_stats {
+            self.stats.borrow_mut().gc_events += 1;
+        }
+        self.write_msg(
+            indent,
+            format_args!(
+                "♻ GC   HANDLE {} [{}] @ {:#x}",
+                operation, handle_type, addr
+            ),
+        );
+    }
+
+    /// Trace GC pinning operations
+    pub fn trace_gc_pin(&self, indent: usize, operation: &str, obj_addr: usize) {
+        if !self.enabled {
+            return;
+        }
+        if self.detailed_stats {
+            self.stats.borrow_mut().gc_events += 1;
+        }
+        self.write_msg(
+            indent,
+            format_args!("♻ GC   PIN {} @ {:#x}", operation, obj_addr),
+        );
+    }
+
+    /// Trace weak reference updates
+    pub fn trace_gc_weak_ref(&self, indent: usize, operation: &str, handle_id: usize) {
+        if !self.enabled {
+            return;
+        }
+        if self.detailed_stats {
+            self.stats.borrow_mut().gc_events += 1;
+        }
+        self.write_msg(
+            indent,
+            format_args!("♻ GC   WEAK {} (handle {})", operation, handle_id),
+        );
+    }
+
+    /// Trace resurrection during finalization
+    pub fn trace_gc_resurrection(&self, indent: usize, obj_type: &str, obj_addr: usize) {
+        if !self.enabled {
+            return;
+        }
+        if self.detailed_stats {
+            self.stats.borrow_mut().gc_events += 1;
+        }
+        self.write_msg(
+            indent,
+            format_args!("♻ GC   RESURRECT {} @ {:#x}", obj_type, obj_addr),
+        );
+    }
+
+    // === Threading-specific tracing methods ===
+
+    /// Trace thread creation
+    pub fn trace_thread_create(&self, indent: usize, thread_id: u64, name: &str) {
+        if !self.enabled {
+            return;
+        }
+        if self.detailed_stats {
+            self.stats.borrow_mut().thread_events += 1;
+        }
+        self.write_msg(
+            indent,
+            format_args!("⚙ THREAD CREATE [ID:{}] \"{}\"", thread_id, name),
+        );
+    }
+
+    /// Trace thread start
+    pub fn trace_thread_start(&self, indent: usize, thread_id: u64) {
+        if !self.enabled {
+            return;
+        }
+        if self.detailed_stats {
+            self.stats.borrow_mut().thread_events += 1;
+        }
+        self.write_msg(indent, format_args!("⚙ THREAD START [ID:{}]", thread_id));
+    }
+
+    /// Trace thread exit
+    pub fn trace_thread_exit(&self, indent: usize, thread_id: u64) {
+        if !self.enabled {
+            return;
+        }
+        if self.detailed_stats {
+            self.stats.borrow_mut().thread_events += 1;
+        }
+        self.write_msg(indent, format_args!("⚙ THREAD EXIT [ID:{}]", thread_id));
+    }
+
+    /// Trace thread reaching a safe point
+    pub fn trace_thread_safepoint(&self, indent: usize, thread_id: u64, location: &str) {
+        if !self.enabled {
+            return;
+        }
+        if self.detailed_stats {
+            self.stats.borrow_mut().thread_safepoints += 1;
+            self.stats.borrow_mut().thread_events += 1;
+        }
+        self.write_msg(
+            indent,
+            format_args!("⚙ THREAD SAFEPOINT [ID:{}] at {}", thread_id, location),
+        );
+    }
+
+    /// Trace thread suspension for GC
+    pub fn trace_thread_suspend(&self, indent: usize, thread_id: u64, reason: &str) {
+        if !self.enabled {
+            return;
+        }
+        if self.detailed_stats {
+            self.stats.borrow_mut().thread_suspensions += 1;
+            self.stats.borrow_mut().thread_events += 1;
+        }
+        self.write_msg(
+            indent,
+            format_args!("⚙ THREAD SUSPEND [ID:{}] ({})", thread_id, reason),
+        );
+    }
+
+    /// Trace thread resumption after GC
+    pub fn trace_thread_resume(&self, indent: usize, thread_id: u64) {
+        if !self.enabled {
+            return;
+        }
+        if self.detailed_stats {
+            self.stats.borrow_mut().thread_events += 1;
+        }
+        self.write_msg(indent, format_args!("⚙ THREAD RESUME [ID:{}]", thread_id));
+    }
+
+    /// Trace stop-the-world GC pause start
+    pub fn trace_stw_start(&self, indent: usize, active_threads: usize) {
+        if !self.enabled {
+            return;
+        }
+        if self.detailed_stats {
+            self.stats.borrow_mut().thread_events += 1;
+        }
+        self.write_msg(
+            indent,
+            format_args!("⚙ STOP-THE-WORLD START ({} active threads)", active_threads),
+        );
+    }
+
+    /// Trace stop-the-world GC pause end
+    pub fn trace_stw_end(&self, indent: usize, duration_us: u64) {
+        if !self.enabled {
+            return;
+        }
+        if self.detailed_stats {
+            self.stats.borrow_mut().thread_events += 1;
+        }
+        self.write_msg(
+            indent,
+            format_args!("⚙ STOP-THE-WORLD END ({} μs)", duration_us),
+        );
+    }
+
+    /// Trace thread state transition
+    pub fn trace_thread_state(
+        &self,
+        indent: usize,
+        thread_id: u64,
+        old_state: &str,
+        new_state: &str,
+    ) {
+        if !self.enabled {
+            return;
+        }
+        if self.detailed_stats {
+            self.stats.borrow_mut().thread_events += 1;
+        }
+        self.write_msg(
+            indent,
+            format_args!(
+                "⚙ THREAD STATE [ID:{}] {} → {}",
+                thread_id, old_state, new_state
+            ),
+        );
+    }
+
+    /// Trace thread synchronization (Monitor.Enter/Exit, etc.)
+    pub fn trace_thread_sync(
+        &self,
+        indent: usize,
+        thread_id: u64,
+        operation: &str,
+        obj_addr: usize,
+    ) {
+        if !self.enabled {
+            return;
+        }
+        if self.detailed_stats {
+            self.stats.borrow_mut().thread_events += 1;
+        }
+        self.write_msg(
+            indent,
+            format_args!(
+                "⚙ THREAD SYNC [ID:{}] {} @ {:#x}",
+                thread_id, operation, obj_addr
+            ),
         );
     }
 }

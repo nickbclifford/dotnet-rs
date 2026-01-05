@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 pub struct Executor {
     arena: &'static mut GCArena,
-    /// Thread ID for this executor (if using new_with_global architecture)
-    thread_id: Option<u64>,
+    /// Thread ID for this executor
+    thread_id: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -20,20 +20,11 @@ pub enum ExecutorResult {
 
 impl Executor {
     pub fn new(arena: &'static mut GCArena) -> Self {
-        Self {
-            arena,
-            thread_id: None,
-        }
-    }
-
-    /// Create a new executor and register it with the global thread manager.
-    /// This should be used with the new_with_global() architecture.
-    pub fn new_with_thread_manager(arena: &'static mut GCArena) -> Self {
         // Register this thread with the thread manager
         let thread_id = arena.mutate(|_, c| {
             let id = c.global.thread_manager.register_thread();
             c.thread_id.set(id);
-            Some(id)
+            id
         });
 
         Self { arena, thread_id }
@@ -110,65 +101,41 @@ impl Executor {
         };
 
         // Unregister thread when execution completes
-        if let Some(tid) = self.thread_id.take() {
-            self.arena.mutate(|_, c| {
-                c.global.thread_manager.unregister_thread(tid);
-            });
-        }
+        self.arena.mutate(|_, c| {
+            c.global.thread_manager.unregister_thread(self.thread_id);
+        });
 
         self.arena.mutate(|_, c| c.tracer().flush());
         result
     }
 
     /// Perform a full GC collection with stop-the-world coordination.
-    ///
-    /// If the executor is using the new architecture with a thread manager,
-    /// this will coordinate a stop-the-world pause across all threads before
-    /// performing the collection. Otherwise, it falls back to single-threaded GC.
     fn perform_full_gc(&mut self) {
         use std::time::Instant;
         let start_time = Instant::now();
 
-        // Check if we're using the new architecture with thread manager
-        // We escape the Arc<ThreadManager> because it is 'static and can leave the arena.mutate call.
-        let thread_manager = self.arena.mutate(|_, c| {
-            Some(Arc::clone(&c.global.thread_manager))
+        self.arena.mutate(|_, c| {
+            vm_msg!(
+                c,
+                "GC: Manual collection triggered (stop-the-world coordination)"
+            );
         });
 
-        if let Some(tm) = thread_manager {
-            self.arena.mutate(|_, c| {
-                vm_msg!(
-                    c,
-                    "GC: Manual collection triggered (stop-the-world coordination)"
-                );
-            });
+        // Request stop-the-world pause and wait for all threads to reach safe points
+        let tm = self
+            .arena
+            .mutate(|_, c| Arc::clone(&c.global.thread_manager));
+        let _stw_guard = tm.request_stop_the_world();
 
-            // Request stop-the-world pause and wait for all threads to reach safe points
-            let _stw_guard = tm.request_stop_the_world();
-
-            // Perform GC while all other threads are paused at safe points
-            let mut marked = None;
-            while marked.is_none() {
-                marked = self.arena.mark_all();
-            }
-            if let Some(marked) = marked {
-                marked.finalize(|fc, c| c.finalize_check(fc));
-            }
-            self.arena.collect_all();
-        } else {
-            // Legacy single-threaded GC
-            self.arena.mutate(|_, c| {
-                vm_msg!(c, "GC: Manual collection triggered");
-            });
-            let mut marked = None;
-            while marked.is_none() {
-                marked = self.arena.mark_all();
-            }
-            if let Some(marked) = marked {
-                marked.finalize(|fc, c| c.finalize_check(fc));
-            }
-            self.arena.collect_all();
+        // Perform GC while all other threads are paused at safe points
+        let mut marked = None;
+        while marked.is_none() {
+            marked = self.arena.mark_all();
         }
+        if let Some(marked) = marked {
+            marked.finalize(|fc, c| c.finalize_check(fc));
+        }
+        self.arena.collect_all();
 
         let duration = start_time.elapsed();
         self.arena.mutate(|_, c| {
@@ -181,10 +148,8 @@ impl Executor {
 impl Drop for Executor {
     fn drop(&mut self) {
         // Ensure thread is unregistered if not already done
-        if let Some(tid) = self.thread_id {
-            self.arena.mutate(|_, c| {
-                c.global.thread_manager.unregister_thread(tid);
-            });
-        }
+        self.arena.mutate(|_, c| {
+            c.global.thread_manager.unregister_thread(self.thread_id);
+        });
     }
 }
