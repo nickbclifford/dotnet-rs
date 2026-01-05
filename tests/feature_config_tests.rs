@@ -111,7 +111,7 @@ fn test_multithreaded_gc_arena_handle() {
     let shared = Arc::new(vm::SharedGlobalState::new(loader));
 
     // Create an arena handle
-    let handle = vm::gc_coordinator::ArenaHandle {
+    let handle = vm::gc::coordinator::ArenaHandle {
         thread_id: 1,
         allocation_counter: Arc::new(AtomicUsize::new(0)),
         needs_collection: Arc::new(AtomicBool::new(false)),

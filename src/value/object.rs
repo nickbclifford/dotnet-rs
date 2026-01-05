@@ -60,12 +60,12 @@ unsafe impl<'gc> Collect for ObjectRef<'gc> {
             #[cfg(feature = "multithreaded-gc")]
             {
                 // Check for cross-arena reference
-                if let Some(tracing_id) = crate::vm::gc_coordinator::get_currently_tracing() {
+                if let Some(tracing_id) = crate::vm::gc::coordinator::get_currently_tracing() {
                     let owner_id = h.borrow().owner_id;
                     if owner_id != tracing_id {
                         // This is a reference to an object in another arena.
                         // Do not trace it here; instead, record it for coordinated resurrection.
-                        crate::vm::gc_coordinator::record_cross_arena_ref(
+                        crate::vm::gc::coordinator::record_cross_arena_ref(
                             owner_id,
                             ObjectPtr(NonNull::new(Gc::as_ptr(h) as *mut _).unwrap()),
                         );
@@ -133,7 +133,7 @@ impl<'gc> ObjectRef<'gc> {
         #[cfg(feature = "multithreaded-gc")]
         {
             let size = size_of::<ObjectInner>() + value.size_bytes();
-            crate::vm::gc_coordinator::record_allocation(size);
+            crate::vm::gc::coordinator::record_allocation(size);
         }
 
         Self(Some(Gc::new(

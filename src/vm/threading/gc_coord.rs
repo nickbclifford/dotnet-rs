@@ -1,5 +1,5 @@
 use super::basic::{get_current_thread_id, IS_PERFORMING_GC, ThreadManager, ThreadState};
-use crate::vm::gc_coordinator::{GCCommand, GCCoordinator};
+use crate::vm::gc::coordinator::{GCCommand, GCCoordinator};
 use crate::vm::sync::{MutexGuard, Ordering};
 
 pub struct StopTheWorldGuard<'a> {
@@ -85,7 +85,7 @@ impl ThreadManager {
         &self,
         managed_id: u64,
         coordinator: &GCCoordinator,
-        tracer: &crate::vm::tracer::Tracer,
+        tracer: &crate::vm::gc::tracer::Tracer,
         location: &str,
     ) {
         if tracer.is_enabled() && self.is_gc_stop_requested() {
@@ -154,7 +154,7 @@ impl ThreadManager {
 
     pub fn request_stop_the_world_traced(
         &self,
-        tracer: &crate::vm::tracer::Tracer,
+        tracer: &crate::vm::gc::tracer::Tracer,
     ) -> StopTheWorldGuard<'_> {
         let thread_count = self.thread_count();
         if tracer.is_enabled() {
@@ -173,14 +173,14 @@ pub fn execute_gc_command_for_current_thread(
     command: GCCommand,
     coordinator: &GCCoordinator,
 ) {
-    use crate::vm::arena_storage::THREAD_ARENA;
+    use crate::vm::gc::arena::THREAD_ARENA;
     match command {
         GCCommand::CollectAll => {
             THREAD_ARENA.with(|cell| {
                 if let Ok(mut arena_opt) = cell.try_borrow_mut() {
                     if let Some(arena) = arena_opt.as_mut() {
                         let thread_id = get_current_thread_id();
-                        crate::vm::gc_coordinator::set_currently_tracing(Some(thread_id));
+                        crate::vm::gc::coordinator::set_currently_tracing(Some(thread_id));
 
                         arena.mutate(|_, c| {
                             c.local.heap.cross_arena_roots.borrow_mut().clear();
@@ -194,10 +194,10 @@ pub fn execute_gc_command_for_current_thread(
                             marked.finalize(|fc, c| c.finalize_check(fc));
                         }
                         arena.collect_all();
-                        crate::vm::gc_coordinator::set_currently_tracing(None);
+                        crate::vm::gc::coordinator::set_currently_tracing(None);
 
                         for (target_id, ptr) in
-                            crate::vm::gc_coordinator::take_found_cross_arena_refs()
+                            crate::vm::gc::coordinator::take_found_cross_arena_refs()
                         {
                             coordinator.record_cross_arena_ref(target_id, ptr);
                         }
@@ -210,7 +210,7 @@ pub fn execute_gc_command_for_current_thread(
                 if let Ok(mut arena_opt) = cell.try_borrow_mut() {
                     if let Some(arena) = arena_opt.as_mut() {
                         let thread_id = get_current_thread_id();
-                        crate::vm::gc_coordinator::set_currently_tracing(Some(thread_id));
+                        crate::vm::gc::coordinator::set_currently_tracing(Some(thread_id));
 
                         arena.mutate(|_, c| {
                             let mut roots = c.local.heap.cross_arena_roots.borrow_mut();
@@ -228,9 +228,9 @@ pub fn execute_gc_command_for_current_thread(
                         }
                         arena.collect_all();
 
-                        crate::vm::gc_coordinator::set_currently_tracing(None);
+                        crate::vm::gc::coordinator::set_currently_tracing(None);
                         for (target_id, ptr) in
-                            crate::vm::gc_coordinator::take_found_cross_arena_refs()
+                            crate::vm::gc::coordinator::take_found_cross_arena_refs()
                         {
                             coordinator.record_cross_arena_ref(target_id, ptr);
                         }

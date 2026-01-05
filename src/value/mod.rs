@@ -47,7 +47,7 @@ unsafe impl<'gc> Collect for StackValue<'gc> {
             Self::ValueType(v) => v.as_ref().trace(cc),
             #[cfg(feature = "multithreaded-gc")]
             Self::CrossArenaObjectRef(ptr, tid) => {
-                crate::vm::gc_coordinator::record_cross_arena_ref(*tid, *ptr);
+                crate::vm::gc::coordinator::record_cross_arena_ref(*tid, *ptr);
             }
             _ => {}
         }

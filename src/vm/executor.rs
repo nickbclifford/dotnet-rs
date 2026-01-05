@@ -9,7 +9,7 @@ use crate::{
 };
 
 #[cfg(feature = "multithreaded-gc")]
-use crate::vm::{arena_storage::THREAD_ARENA, gc_coordinator::ArenaHandle};
+use crate::vm::gc::{arena::THREAD_ARENA, coordinator::ArenaHandle};
 
 #[cfg(feature = "multithreaded-gc")]
 use crate::vm::sync::{AtomicBool, AtomicUsize, Condvar, Mutex};
@@ -85,7 +85,7 @@ impl Executor {
                 finish_signal: Arc::new(Condvar::new()),
             };
             shared.gc_coordinator.register_arena(handle.clone());
-            crate::vm::gc_coordinator::set_current_arena_handle(handle);
+            crate::vm::gc::coordinator::set_current_arena_handle(handle);
         }
 
         #[cfg(feature = "multithreaded-gc")]
@@ -187,10 +187,10 @@ impl Executor {
             };
 
             #[cfg(feature = "multithreaded-gc")]
-            if full_collect || crate::vm::gc_coordinator::is_current_arena_collection_requested() {
+            if full_collect || crate::vm::gc::coordinator::is_current_arena_collection_requested() {
                 // For multithreading: coordinate stop-the-world pause
                 self.perform_full_gc();
-                crate::vm::gc_coordinator::reset_current_arena_collection_requested();
+                crate::vm::gc::coordinator::reset_current_arena_collection_requested();
             }
 
             #[cfg(not(feature = "multithreaded-gc"))]
@@ -290,7 +290,7 @@ impl Executor {
         let start_time = Instant::now();
 
         // 1. Mark that we are starting collection (acquires coordinator lock)
-        let coordinator = Arc::clone(&self.shared.gc_coordinator);
+        let coordinator: Arc<crate::vm::gc::coordinator::GCCoordinator> = Arc::clone(&self.shared.gc_coordinator);
         let _gc_lock = match coordinator.start_collection() {
             Some(guard) => guard,
             None => return, // Another thread is already collecting

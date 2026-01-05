@@ -14,14 +14,11 @@ pub(crate) mod intrinsics;
 pub mod metrics;
 #[macro_use]
 mod macros;
-#[cfg(feature = "multithreaded-gc")]
-pub mod arena_storage;
-pub mod gc_coordinator;
+pub mod gc;
 mod pinvoke;
 mod stack;
 pub mod sync;
 pub mod threading;
-pub mod tracer;
 
 pub use executor::*;
 pub use stack::*;

@@ -14,9 +14,9 @@ use crate::{
     vm::{
         context::ResolutionContext,
         exceptions::ExceptionState,
+        gc::tracer::Tracer,
         intrinsics::reflection::RuntimeType,
         pinvoke::NativeLibraries,
-        tracer::Tracer,
         GCHandleType,
         MethodInfo,
         MethodState,
@@ -26,7 +26,7 @@ use crate::{
 #[cfg(feature = "multithreaded-gc")]
 use crate::{
     value::object::ObjectPtr,
-    vm::gc_coordinator::GCCoordinator
+    vm::gc::coordinator::GCCoordinator
 };
 use dotnetdll::prelude::*;
 use gc_arena::{lock::RefLock, Arena, Collect, Collection, Gc, Mutation, Rootable};
@@ -304,7 +304,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     // careful with this, it always allocates a new slot
     fn insert_value(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {
         #[cfg(feature = "multithreaded-gc")]
-        crate::vm::gc_coordinator::record_allocation(value.size_bytes() + 16); // +16 for Gc/RefLock overhead
+        crate::vm::gc::coordinator::record_allocation(value.size_bytes() + 16); // +16 for Gc/RefLock overhead
         let handle = Gc::new(gc, RefLock::new(value));
         self.execution.stack.push(StackSlotHandle(handle));
     }

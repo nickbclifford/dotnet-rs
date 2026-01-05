@@ -1,5 +1,5 @@
-use crate::vm::gc_coordinator::{GCCommand, GCCoordinator};
-use crate::vm::tracer::Tracer;
+use crate::vm::gc::coordinator::{GCCommand, GCCoordinator};
+use crate::vm::gc::tracer::Tracer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadState {

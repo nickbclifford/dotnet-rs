@@ -123,7 +123,7 @@ impl ThreadManager {
     }
 
     /// Register a new thread with tracing support
-    pub fn register_thread_traced(&self, tracer: &crate::vm::tracer::Tracer, name: &str) -> u64 {
+    pub fn register_thread_traced(&self, tracer: &crate::vm::gc::tracer::Tracer, name: &str) -> u64 {
         let managed_id = self.register_thread();
         tracer.trace_thread_create(0, managed_id, name);
         managed_id
@@ -152,7 +152,7 @@ impl ThreadManager {
     }
 
     /// Unregister a thread with tracing support
-    pub fn unregister_thread_traced(&self, managed_id: u64, tracer: &crate::vm::tracer::Tracer) {
+    pub fn unregister_thread_traced(&self, managed_id: u64, tracer: &crate::vm::gc::tracer::Tracer) {
         tracer.trace_thread_exit(0, managed_id);
         self.unregister_thread(managed_id);
     }
@@ -200,20 +200,20 @@ impl ThreadManager {
         false
     }
 
-    pub fn safe_point(&self, _managed_id: u64, _coordinator: &crate::vm::gc_coordinator::GCCoordinator) {}
+    pub fn safe_point(&self, _managed_id: u64, _coordinator: &crate::vm::gc::coordinator::GCCoordinator) {}
 
     pub fn execute_gc_command(
         &self,
-        _command: crate::vm::gc_coordinator::GCCommand,
-        _coordinator: &crate::vm::gc_coordinator::GCCoordinator,
+        _command: crate::vm::gc::coordinator::GCCommand,
+        _coordinator: &crate::vm::gc::coordinator::GCCoordinator,
     ) {
     }
 
     pub fn safe_point_traced(
         &self,
         _managed_id: u64,
-        _coordinator: &crate::vm::gc_coordinator::GCCoordinator,
-        _tracer: &crate::vm::tracer::Tracer,
+        _coordinator: &crate::vm::gc::coordinator::GCCoordinator,
+        _tracer: &crate::vm::gc::tracer::Tracer,
         _location: &str,
     ) {
     }
@@ -224,7 +224,7 @@ impl ThreadManager {
 
     pub fn request_stop_the_world_traced(
         &self,
-        _tracer: &crate::vm::tracer::Tracer,
+        _tracer: &crate::vm::gc::tracer::Tracer,
     ) -> crate::vm::threading::gc_coord::StopTheWorldGuard<'static> {
         panic!("request_stop_the_world_traced called without multithreaded-gc feature")
     }

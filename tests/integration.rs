@@ -451,7 +451,7 @@ fn test_gc_coordinator_multi_arena_tracking() {
     use parking_lot::{Condvar, Mutex};
     use std::sync::atomic::{AtomicBool, AtomicUsize};
 
-    let handle1 = vm::gc_coordinator::ArenaHandle {
+    let handle1 = vm::gc::coordinator::ArenaHandle {
         thread_id: 1,
         allocation_counter: Arc::new(AtomicUsize::new(0)),
         needs_collection: Arc::new(AtomicBool::new(false)),
@@ -460,7 +460,7 @@ fn test_gc_coordinator_multi_arena_tracking() {
         finish_signal: Arc::new(Condvar::new()),
     };
 
-    let handle2 = vm::gc_coordinator::ArenaHandle {
+    let handle2 = vm::gc::coordinator::ArenaHandle {
         thread_id: 2,
         allocation_counter: Arc::new(AtomicUsize::new(0)),
         needs_collection: Arc::new(AtomicBool::new(false)),
@@ -498,7 +498,7 @@ fn test_cross_arena_reference_tracking() {
     use parking_lot::{Condvar, Mutex};
     use std::sync::atomic::{AtomicBool, AtomicUsize};
 
-    let handle = vm::gc_coordinator::ArenaHandle {
+    let handle = vm::gc::coordinator::ArenaHandle {
         thread_id: 1,
         allocation_counter: Arc::new(AtomicUsize::new(0)),
         needs_collection: Arc::new(AtomicBool::new(false)),
@@ -515,9 +515,9 @@ fn test_cross_arena_reference_tracking() {
     let ptr2 =
         unsafe { dotnet_rs::value::object::ObjectPtr::from_raw(0x2000 as *const _).unwrap() };
 
-    vm::gc_coordinator::set_current_arena_handle(handle.clone());
-    vm::gc_coordinator::record_cross_arena_ref(2, ptr1);
-    vm::gc_coordinator::record_cross_arena_ref(2, ptr2);
+    vm::gc::coordinator::set_current_arena_handle(handle.clone());
+    vm::gc::coordinator::record_cross_arena_ref(2, ptr1);
+    vm::gc::coordinator::record_cross_arena_ref(2, ptr2);
 
     // The fact that we can record cross-arena refs without panicking demonstrates the system works
     shared.gc_coordinator.unregister_arena(1);
@@ -533,7 +533,7 @@ fn test_allocation_pressure_triggers_collection() {
 
     let shared = Arc::new(vm::SharedGlobalState::new(TestHarness::get().loader));
 
-    let handle = vm::gc_coordinator::ArenaHandle {
+    let handle = vm::gc::coordinator::ArenaHandle {
         thread_id: 1,
         allocation_counter: Arc::new(AtomicUsize::new(0)),
         needs_collection: Arc::new(AtomicBool::new(false)),
@@ -543,11 +543,11 @@ fn test_allocation_pressure_triggers_collection() {
     };
 
     shared.gc_coordinator.register_arena(handle.clone());
-    vm::gc_coordinator::set_current_arena_handle(handle.clone());
+    vm::gc::coordinator::set_current_arena_handle(handle.clone());
 
     // Simulate allocations using the thread-local function
     for _ in 0..100 {
-        vm::gc_coordinator::record_allocation(1024);
+        vm::gc::coordinator::record_allocation(1024);
     }
 
     // Check if collection should be triggered
