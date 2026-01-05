@@ -12,6 +12,8 @@ use std::{
 thread_local! {
     /// Cached managed thread ID for the current thread
     static MANAGED_THREAD_ID: Cell<Option<u64>> = const { Cell::new(None) };
+    /// Flag indicating if this thread is currently performing GC
+    static IS_PERFORMING_GC: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Represents the state of a .NET thread.
@@ -131,7 +133,7 @@ impl ThreadManager {
         }
 
         // Cache the managed ID in thread-local storage
-        MANAGED_THREAD_ID.with(|id| id.set(Some(managed_id)));
+        MANAGED_THREAD_ID.set(Some(managed_id));
 
         managed_id
     }
@@ -145,7 +147,7 @@ impl ThreadManager {
         threads.remove(&managed_id);
 
         // Clear thread-local cache
-        MANAGED_THREAD_ID.with(|id| id.set(None));
+        MANAGED_THREAD_ID.set(None);
 
         // If we were at a safe point, decrement the counter
         if self.threads_at_safepoint.load(Ordering::Acquire) > 0 {
@@ -159,8 +161,9 @@ impl ThreadManager {
     /// Returns None if the thread is not registered.
     pub fn current_thread_id(&self) -> Option<u64> {
         // Try thread-local cache first
-        if let Some(id) = MANAGED_THREAD_ID.with(|id| id.get()) {
-            return Some(id);
+        let cached_id = MANAGED_THREAD_ID.get();
+        if cached_id.is_some() {
+            return cached_id;
         }
 
         // Fallback to linear search
@@ -172,8 +175,8 @@ impl ThreadManager {
             .map(|t| t.managed_id);
 
         // Update cache if found
-        if let Some(id) = managed_id {
-            MANAGED_THREAD_ID.with(|cache| cache.set(Some(id)));
+        if managed_id.is_some() {
+            MANAGED_THREAD_ID.set(managed_id);
         }
 
         managed_id
@@ -199,6 +202,13 @@ impl ThreadManager {
             return;
         }
 
+        // Critical fix: If this thread is currently performing GC, do not try to reach
+        // a safe point as it would deadlock trying to re-acquire gc_coordination lock
+        let is_gc_thread = IS_PERFORMING_GC.get();
+        if is_gc_thread {
+            return;
+        }
+
         // Get thread info
         let thread_info = {
             let threads = self.threads.lock();
@@ -209,25 +219,30 @@ impl ThreadManager {
             // Mark ourselves at safe point
             thread.set_state(ThreadState::AtSafePoint);
 
+            // CRITICAL: Increment safe point counter BEFORE acquiring gc_coordination lock.
+            // This prevents a deadlock where:
+            // 1. GC coordinator holds gc_coordination lock and waits for threads_at_safepoint to reach target
+            // 2. Worker threads try to acquire gc_coordination lock but are blocked
+            // 3. Deadlock: coordinator waits for counter, workers wait for lock
+            // By incrementing before the lock, the coordinator can see us immediately.
+            self.threads_at_safepoint.fetch_add(1, Ordering::AcqRel);
+
+            // Notify coordinator that we've reached a safe point
+            self.all_threads_stopped.notify_all();
+
             // Wait for GC to complete.
             // We lock the coordination mutex which the coordinator holds during GC.
-            // IMPORTANT: Increment counter inside lock to avoid race with coordinator
             {
                 let mut guard = self.gc_coordination.lock();
 
-                // Increment safe point counter (inside lock to prevent race condition)
-                self.threads_at_safepoint.fetch_add(1, Ordering::AcqRel);
-
-                // Notify coordinator that we've reached a safe point
-                self.all_threads_stopped.notify_all();
-
+                // Wait while GC is in progress
                 while self.gc_stop_requested.load(Ordering::Acquire) {
                     self.all_threads_stopped.wait(&mut guard);
                 }
-
-                // Decrement safe point counter (still inside lock)
-                self.threads_at_safepoint.fetch_sub(1, Ordering::Release);
             }
+
+            // Decrement safe point counter after we're done waiting
+            self.threads_at_safepoint.fetch_sub(1, Ordering::Release);
 
             // Mark ourselves running again
             thread.set_state(ThreadState::Running);
@@ -288,10 +303,7 @@ impl ThreadManager {
             eprintln!("[GC] Stop-the-world completed after {} ms", start_time.elapsed().as_millis());
         }
 
-        StopTheWorldGuard {
-            manager: self,
-            _lock: guard,
-        }
+        StopTheWorldGuard::new(self, guard)
     }
 
     /// Resume all threads after a stop-the-world pause.
@@ -315,9 +327,21 @@ pub struct StopTheWorldGuard<'a> {
     _lock: MutexGuard<'a, ()>,
 }
 
+impl<'a> StopTheWorldGuard<'a> {
+    /// Create a new StopTheWorldGuard and mark this thread as performing GC
+    fn new(manager: &'a ThreadManager, lock: MutexGuard<'a, ()>) -> Self {
+        IS_PERFORMING_GC.set(true);
+        Self {
+            manager,
+            _lock: lock,
+        }
+    }
+}
+
 impl<'a> Drop for StopTheWorldGuard<'a> {
     fn drop(&mut self) {
         self.manager.resume_threads();
+        IS_PERFORMING_GC.set(false);
     }
 }
 

@@ -462,8 +462,9 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             let target_type = stack.resolve_runtime_type(obj);
             let resolution = target_type.resolution(stack.loader());
 
-            let value = match stack.runtime_asms_read().get(&resolution) {
-                Some(o) => *o,
+            let cached_asm = stack.runtime_asms_read().get(&resolution).copied();
+            let value = match cached_asm {
+                Some(o) => o,
                 None => {
                     let support_res = stack.loader().get_assembly(SUPPORT_ASSEMBLY);
                     let definition = support_res.definition().type_definitions

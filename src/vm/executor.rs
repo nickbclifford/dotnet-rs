@@ -54,19 +54,9 @@ impl Executor {
     // assumes args are already on stack
     pub fn run(&mut self) -> ExecutorResult {
         let result = loop {
-            // GC Safe Point: Check if stop-the-world is requested
-            // If using thread manager, pause here if GC is happening on another thread
-            if let Some(tid) = self.thread_id {
-                self.arena.mutate(|_, c| {
-                    c.global.thread_manager.safe_point(tid);
-                });
-            }
-
-            // Perform incremental GC mark phase
-            // For multithreading: only the GC coordinator should do this during stop-the-world
-            if let Some(marked) = self.arena.mark_all() {
-                marked.finalize(|fc, c| c.finalize_check(fc));
-            }
+            // Perform incremental GC progress
+            // In a real VM this would be tuned based on allocation pressure
+            self.arena.collect_debt();
 
             let full_collect = self.arena.mutate(|_, c| {
                 if c.heap().needs_full_collect.get() {
