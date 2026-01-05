@@ -43,3 +43,5 @@ pub mod compat {
 
 #[cfg(not(feature = "multithreading"))]
 pub use compat::*;
+#[cfg(not(feature = "multithreading"))]
+pub use std::sync::{MutexGuard, RwLockReadGuard, RwLockWriteGuard};

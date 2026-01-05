@@ -198,6 +198,14 @@ impl Executor {
 
             #[cfg(not(feature = "multithreaded-gc"))]
             if full_collect {
+                // Perform full collection with finalization (mimics multithreaded-gc behavior)
+                let mut marked = None;
+                while marked.is_none() {
+                    marked = self.arena.mark_all();
+                }
+                if let Some(marked) = marked {
+                    marked.finalize(|fc, c| c.finalize_check(fc));
+                }
                 self.arena.collect_all();
             }
 

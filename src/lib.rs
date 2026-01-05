@@ -47,10 +47,10 @@ pub fn run_cli() -> ExitCode {
         None => panic!("expected input module to have an entry point, received one without"),
     };
 
-    let assemblies = assemblies::AssemblyLoader::new(args.assemblies);
-    let assemblies = Box::leak(Box::new(assemblies));
+    let loader = assemblies::AssemblyLoader::new(args.assemblies);
+    let loader = Box::leak(Box::new(loader));
 
-    let shared = std::sync::Arc::new(vm::SharedGlobalState::new(assemblies));
+    let shared = std::sync::Arc::new(vm::SharedGlobalState::new(loader));
     let mut executor = vm::Executor::new(shared);
 
     let entrypoint = MethodDescription {

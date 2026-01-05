@@ -274,7 +274,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let mt_ptr = stack
                 .method_tables_read()
                 .get(&object_type)
-                .map(|p| p.as_ptr() as isize);
+                .map(|p: &Box<[u8]>| p.as_ptr() as isize);
             if let Some(ptr) = mt_ptr {
                 push!(NativeInt(ptr));
             } else {

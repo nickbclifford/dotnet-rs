@@ -30,7 +30,7 @@ use crate::{
 };
 use dotnetdll::prelude::*;
 use gc_arena::{lock::RefLock, Arena, Collect, Collection, Gc, Mutation, Rootable};
-use crate::vm::sync::{Mutex, RwLock};
+use crate::vm::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     collections::{HashMap, HashSet},
@@ -1020,32 +1020,32 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     /// Get access to statics storage (read-only).
     /// Returns a guard that must be held for the duration of access.
     #[inline]
-    pub fn statics_read(&self) -> parking_lot::RwLockReadGuard<'_, StaticStorageManager> {
+    pub fn statics_read(&self) -> RwLockReadGuard<'_, StaticStorageManager> {
         self.shared.statics.read()
     }
 
     /// Get access to statics storage (mutable).
     /// Returns a guard that must be held for the duration of access.
     #[inline]
-    pub fn statics_write(&self) -> parking_lot::RwLockWriteGuard<'_, StaticStorageManager> {
+    pub fn statics_write(&self) -> RwLockWriteGuard<'_, StaticStorageManager> {
         self.shared.statics.write()
     }
 
     /// Get access to the P/Invoke libraries manager (read-only).
     #[inline]
-    pub fn pinvoke_read(&self) -> parking_lot::RwLockReadGuard<'_, NativeLibraries> {
+    pub fn pinvoke_read(&self) -> RwLockReadGuard<'_, NativeLibraries> {
         self.shared.pinvoke.read()
     }
 
     /// Get access to the P/Invoke libraries manager (mutable).
     #[inline]
-    pub fn pinvoke_write(&self) -> parking_lot::RwLockWriteGuard<'_, NativeLibraries> {
+    pub fn pinvoke_write(&self) -> RwLockWriteGuard<'_, NativeLibraries> {
         self.shared.pinvoke.write()
     }
 
     /// Get the tracer for debugging output.
     #[inline]
-    pub fn tracer(&self) -> parking_lot::MutexGuard<'_, Tracer> {
+    pub fn tracer(&self) -> MutexGuard<'_, Tracer> {
         self.shared.tracer.lock()
     }
 
@@ -1155,7 +1155,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     #[inline]
     pub fn method_tables_read(
         &self,
-    ) -> parking_lot::RwLockReadGuard<'_, HashMap<TypeDescription, Box<[u8]>>> {
+    ) -> RwLockReadGuard<'_, HashMap<TypeDescription, Box<[u8]>>> {
         self.shared.method_tables.read()
     }
 
@@ -1163,7 +1163,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     #[inline]
     pub fn method_tables_write(
         &self,
-    ) -> parking_lot::RwLockWriteGuard<'_, HashMap<TypeDescription, Box<[u8]>>> {
+    ) -> RwLockWriteGuard<'_, HashMap<TypeDescription, Box<[u8]>>> {
         self.shared.method_tables.write()
     }
 }

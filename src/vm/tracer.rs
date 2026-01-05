@@ -67,7 +67,7 @@
 //! vm_trace_heap_snapshot!(ctx);         // Just the heap
 //! ```
 use crate::{value::object::HeapStorage, vm::CallStack};
-use gc_arena::Gc;
+use gc_arena::{unsafe_empty_collect, Gc, Collect};
 use std::{
     cell::{Cell, RefCell},
     env,
@@ -109,13 +109,7 @@ pub struct Tracer {
     stats: RefCell<TraceStats>,
     detailed_stats: bool,
 }
-
-// Implement Collect for Tracer manually to ensure it's safe for gc-arena
-unsafe impl gc_arena::Collect for Tracer {
-    fn trace(&self, _cc: &gc_arena::Collection) {
-        // No GC pointers to trace
-    }
-}
+unsafe_empty_collect!(Tracer);
 
 impl Tracer {
     pub fn new() -> Self {

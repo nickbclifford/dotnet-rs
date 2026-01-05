@@ -77,7 +77,7 @@ impl SyncBlockManager {
         set_index: impl FnOnce(usize),
     ) -> (usize, Arc<SyncBlock>) {
         if let Some(index) = get_index() {
-            let mut blocks = self.blocks.take().unwrap();
+            let blocks = self.blocks.take().unwrap();
             if let Some(block) = blocks.get(&index) {
                 let res = (index, block.clone());
                 self.blocks.set(Some(blocks));

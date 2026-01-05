@@ -176,6 +176,7 @@ macro_rules! parse_type {
 }
 
 #[macro_export]
+#[doc(hidden)]
 macro_rules! __munch_types {
     ([ $($acc:expr,)* ] ) => {
         [ $($acc),* ]

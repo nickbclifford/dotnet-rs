@@ -11,7 +11,7 @@ use std::{
 };
 
 pub struct TestHarness {
-    pub assemblies: &'static assemblies::AssemblyLoader,
+    pub loader: &'static assemblies::AssemblyLoader,
 }
 
 impl TestHarness {
@@ -24,9 +24,9 @@ impl TestHarness {
 
     fn new() -> Self {
         let assemblies_path = Self::find_dotnet_app_path().to_str().unwrap().to_string();
-        let assemblies = assemblies::AssemblyLoader::new(assemblies_path);
-        let assemblies = Box::leak(Box::new(assemblies));
-        Self { assemblies }
+        let loader = assemblies::AssemblyLoader::new(assemblies_path);
+        let loader = Box::leak(Box::new(loader));
+        Self { loader }
     }
 
     fn find_dotnet_app_path() -> PathBuf {
@@ -106,7 +106,7 @@ impl TestHarness {
     pub fn run(&self, dll_path: &Path) -> u8 {
         let dll_path_str = dll_path.to_str().unwrap().to_string();
         let resolution = static_res_from_file(&dll_path_str);
-        let shared = std::sync::Arc::new(vm::SharedGlobalState::new(self.assemblies));
+        let shared = std::sync::Arc::new(vm::SharedGlobalState::new(self.loader));
         self.run_with_shared(resolution, shared)
     }
 
@@ -189,6 +189,7 @@ fn hello_world() {
 // correctly when multiple Rust threads create their own arenas.
 
 #[test]
+#[cfg(feature = "multithreading")]
 fn test_multiple_arenas_basic() {
     use std::thread;
 
@@ -215,6 +216,7 @@ fn test_multiple_arenas_basic() {
 }
 
 #[test]
+#[cfg(feature = "multithreading")]
 fn test_multiple_arenas_with_gc() {
     use std::thread;
 
@@ -241,6 +243,7 @@ fn test_multiple_arenas_with_gc() {
 }
 
 #[test]
+#[cfg(feature = "multithreading")]
 fn test_multiple_arenas_static_fields() {
     use std::thread;
 
@@ -267,6 +270,7 @@ fn test_multiple_arenas_static_fields() {
 }
 
 #[test]
+#[cfg(feature = "multithreading")]
 fn test_multiple_arenas_allocation_stress() {
     use std::thread;
 
@@ -296,6 +300,7 @@ fn test_multiple_arenas_allocation_stress() {
 }
 
 #[test]
+#[cfg(feature = "multithreading")]
 fn test_arena_local_state_isolation() {
     use std::thread;
 
@@ -322,9 +327,10 @@ fn test_arena_local_state_isolation() {
 }
 
 #[test]
+#[cfg(feature = "multithreading")]
 fn test_thread_manager_lifecycle() {
     let harness = TestHarness::get();
-    let shared = std::sync::Arc::new(vm::SharedGlobalState::new(harness.assemblies));
+    let shared = std::sync::Arc::new(vm::SharedGlobalState::new(harness.loader));
     let thread_manager = &shared.thread_manager;
 
     assert_eq!(thread_manager.thread_count(), 0);
@@ -345,6 +351,7 @@ fn test_thread_manager_lifecycle() {
 }
 
 #[test]
+#[cfg(feature = "multithreading")]
 fn test_multiple_arenas_simple() {
     use std::sync::Arc;
     use std::thread;
@@ -353,7 +360,7 @@ fn test_multiple_arenas_simple() {
     let fixture_path = Path::new("tests/fixtures/threading_simple_0.cs");
     let dll_path = harness.build(fixture_path);
 
-    let shared = Arc::new(vm::SharedGlobalState::new(harness.assemblies));
+    let shared = Arc::new(vm::SharedGlobalState::new(harness.loader));
     let resolution = static_res_from_file(dll_path.to_str().unwrap());
     shared.loader.register_assembly(resolution);
 
@@ -427,17 +434,18 @@ fn test_multiple_arenas_simple() {
         counter
     );
     assert!(
-        counter >= 1 && counter <= 5,
+        (1..=5).contains(&counter),
         "Counter should be between 1 and 5"
     );
 }
 
 /// Test that verifies the GC coordinator properly tracks multiple arenas
 #[test]
+#[cfg(feature = "multithreaded-gc")]
 fn test_gc_coordinator_multi_arena_tracking() {
     use std::sync::Arc;
 
-    let shared = Arc::new(vm::SharedGlobalState::new(TestHarness::get().assemblies));
+    let shared = Arc::new(vm::SharedGlobalState::new(TestHarness::get().loader));
 
     // Simulate multiple arenas being registered
     use parking_lot::{Condvar, Mutex};
@@ -480,10 +488,11 @@ fn test_gc_coordinator_multi_arena_tracking() {
 
 /// Test that verifies cross-arena reference tracking works
 #[test]
+#[cfg(feature = "multithreaded-gc")]
 fn test_cross_arena_reference_tracking() {
     use std::sync::Arc;
 
-    let shared = Arc::new(vm::SharedGlobalState::new(TestHarness::get().assemblies));
+    let shared = Arc::new(vm::SharedGlobalState::new(TestHarness::get().loader));
 
     // Create a mock arena handle
     use parking_lot::{Condvar, Mutex};
@@ -516,12 +525,13 @@ fn test_cross_arena_reference_tracking() {
 
 /// Test that allocation pressure triggers collection requests
 #[test]
+#[cfg(feature = "multithreaded-gc")]
 fn test_allocation_pressure_triggers_collection() {
     use parking_lot::{Condvar, Mutex};
     use std::sync::atomic::{AtomicBool, AtomicUsize};
     use std::sync::Arc;
 
-    let shared = Arc::new(vm::SharedGlobalState::new(TestHarness::get().assemblies));
+    let shared = Arc::new(vm::SharedGlobalState::new(TestHarness::get().loader));
 
     let handle = vm::gc_coordinator::ArenaHandle {
         thread_id: 1,
