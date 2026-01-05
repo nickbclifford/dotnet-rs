@@ -93,8 +93,11 @@ pub struct TraceStats {
     pub gc_collections: usize,
     pub gc_allocations: usize,
     pub gc_finalizations: usize,
+    #[cfg(feature = "multithreading")]
     pub thread_events: usize,
+    #[cfg(feature = "multithreading")]
     pub thread_safepoints: usize,
+    #[cfg(feature = "multithreading")]
     pub thread_suspensions: usize,
 }
 
@@ -329,9 +332,12 @@ impl Tracer {
         eprintln!("  Collections:       {:>12}", stats.gc_collections);
         eprintln!("  Allocations:       {:>12}", stats.gc_allocations);
         eprintln!("  Finalizations:     {:>12}", stats.gc_finalizations);
-        eprintln!("Thread events:       {:>12}", stats.thread_events);
-        eprintln!("  Safepoints:        {:>12}", stats.thread_safepoints);
-        eprintln!("  Suspensions:       {:>12}", stats.thread_suspensions);
+        #[cfg(feature = "multithreading")]
+        {
+            eprintln!("Thread events:       {:>12}", stats.thread_events);
+            eprintln!("  Safepoints:        {:>12}", stats.thread_safepoints);
+            eprintln!("  Suspensions:       {:>12}", stats.thread_suspensions);
+        }
         eprintln!("Exceptions:          {:>12}", stats.exceptions);
         eprintln!("Branches:            {:>12}", stats.branches);
         eprintln!("Stack operations:    {:>12}", stats.stack_ops);
@@ -704,6 +710,7 @@ impl Tracer {
 
     // === Threading-specific tracing methods ===
 
+    #[cfg(feature = "multithreading")]
     /// Trace thread creation
     pub fn trace_thread_create(&self, indent: usize, thread_id: u64, name: &str) {
         if !self.enabled {
@@ -718,6 +725,7 @@ impl Tracer {
         );
     }
 
+    #[cfg(feature = "multithreading")]
     /// Trace thread start
     pub fn trace_thread_start(&self, indent: usize, thread_id: u64) {
         if !self.enabled {
@@ -729,6 +737,7 @@ impl Tracer {
         self.write_msg(indent, format_args!("⚙ THREAD START [ID:{}]", thread_id));
     }
 
+    #[cfg(feature = "multithreading")]
     /// Trace thread exit
     pub fn trace_thread_exit(&self, indent: usize, thread_id: u64) {
         if !self.enabled {
@@ -740,6 +749,7 @@ impl Tracer {
         self.write_msg(indent, format_args!("⚙ THREAD EXIT [ID:{}]", thread_id));
     }
 
+    #[cfg(feature = "multithreading")]
     /// Trace thread reaching a safe point
     pub fn trace_thread_safepoint(&self, indent: usize, thread_id: u64, location: &str) {
         if !self.enabled {
@@ -755,6 +765,7 @@ impl Tracer {
         );
     }
 
+    #[cfg(feature = "multithreading")]
     /// Trace thread suspension for GC
     pub fn trace_thread_suspend(&self, indent: usize, thread_id: u64, reason: &str) {
         if !self.enabled {
@@ -770,6 +781,7 @@ impl Tracer {
         );
     }
 
+    #[cfg(feature = "multithreading")]
     /// Trace thread resumption after GC
     pub fn trace_thread_resume(&self, indent: usize, thread_id: u64) {
         if !self.enabled {
@@ -781,6 +793,7 @@ impl Tracer {
         self.write_msg(indent, format_args!("⚙ THREAD RESUME [ID:{}]", thread_id));
     }
 
+    #[cfg(feature = "multithreaded-gc")]
     /// Trace stop-the-world GC pause start
     pub fn trace_stw_start(&self, indent: usize, active_threads: usize) {
         if !self.enabled {
@@ -795,6 +808,7 @@ impl Tracer {
         );
     }
 
+    #[cfg(feature = "multithreaded-gc")]
     /// Trace stop-the-world GC pause end
     pub fn trace_stw_end(&self, indent: usize, duration_us: u64) {
         if !self.enabled {
@@ -809,6 +823,7 @@ impl Tracer {
         );
     }
 
+    #[cfg(feature = "multithreading")]
     /// Trace thread state transition
     pub fn trace_thread_state(
         &self,
@@ -832,6 +847,7 @@ impl Tracer {
         );
     }
 
+    #[cfg(feature = "multithreading")]
     /// Trace thread synchronization (Monitor.Enter/Exit, etc.)
     pub fn trace_thread_sync(
         &self,

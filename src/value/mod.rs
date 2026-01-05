@@ -17,7 +17,9 @@ pub mod pointer;
 pub mod storage;
 pub mod string;
 
-use object::{HeapStorage, Object, ObjectHandle, ObjectPtr, ObjectRef};
+#[cfg(feature = "multithreaded-gc")]
+use object::ObjectPtr;
+use object::{HeapStorage, Object, ObjectHandle, ObjectRef};
 use pointer::{ManagedPtr, UnmanagedPtr};
 use string::CLRString;
 
@@ -33,6 +35,7 @@ pub enum StackValue<'gc> {
     ValueType(Box<Object<'gc>>),
     /// Reference to an object in another thread's arena.
     /// (ObjectPtr, OwningThreadID)
+    #[cfg(feature = "multithreaded-gc")]
     CrossArenaObjectRef(ObjectPtr, u64),
 }
 
@@ -42,6 +45,7 @@ unsafe impl<'gc> Collect for StackValue<'gc> {
             Self::ObjectRef(o) => o.trace(cc),
             Self::ManagedPtr(m) => m.trace(cc),
             Self::ValueType(v) => v.as_ref().trace(cc),
+            #[cfg(feature = "multithreaded-gc")]
             Self::CrossArenaObjectRef(ptr, tid) => {
                 crate::vm::gc_coordinator::record_cross_arena_ref(*tid, *ptr);
             }
@@ -101,7 +105,8 @@ impl<'gc> StackValue<'gc> {
             Self::ValueType(o) => {
                 NonNull::new(o.instance_storage.get().as_ptr() as *mut u8).unwrap()
             }
-            _ => todo!("handle CrossArenaObjectRef in data_location"),
+            #[cfg(feature = "multithreaded-gc")]
+            Self::CrossArenaObjectRef(_, _) => todo!("handle CrossArenaObjectRef in data_location"),
         }
     }
 
@@ -115,7 +120,8 @@ impl<'gc> StackValue<'gc> {
             Self::ObjectRef(ObjectRef(None)) => ctx.loader.corlib_type("System.Object"),
             Self::ManagedPtr(m) => m.inner_type,
             Self::ValueType(o) => o.description,
-            _ => todo!("handle CrossArenaObjectRef in contains_type"),
+            #[cfg(feature = "multithreaded-gc")]
+            Self::CrossArenaObjectRef(_, _) => todo!("handle CrossArenaObjectRef in contains_type"),
         }
     }
 

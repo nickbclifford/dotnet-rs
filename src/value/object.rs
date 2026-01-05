@@ -57,17 +57,20 @@ pub struct ObjectRef<'gc>(pub Option<ObjectHandle<'gc>>);
 unsafe impl<'gc> Collect for ObjectRef<'gc> {
     fn trace(&self, cc: &Collection) {
         if let Some(h) = self.0 {
-            // Check for cross-arena reference
-            if let Some(tracing_id) = crate::vm::gc_coordinator::get_currently_tracing() {
-                let owner_id = h.borrow().owner_id;
-                if owner_id != tracing_id {
-                    // This is a reference to an object in another arena.
-                    // Do not trace it here; instead, record it for coordinated resurrection.
-                    crate::vm::gc_coordinator::record_cross_arena_ref(
-                        owner_id,
-                        ObjectPtr(NonNull::new(Gc::as_ptr(h) as *mut _).unwrap()),
-                    );
-                    return;
+            #[cfg(feature = "multithreaded-gc")]
+            {
+                // Check for cross-arena reference
+                if let Some(tracing_id) = crate::vm::gc_coordinator::get_currently_tracing() {
+                    let owner_id = h.borrow().owner_id;
+                    if owner_id != tracing_id {
+                        // This is a reference to an object in another arena.
+                        // Do not trace it here; instead, record it for coordinated resurrection.
+                        crate::vm::gc_coordinator::record_cross_arena_ref(
+                            owner_id,
+                            ObjectPtr(NonNull::new(Gc::as_ptr(h) as *mut _).unwrap()),
+                        );
+                        return;
+                    }
                 }
             }
             h.trace(cc);
@@ -127,8 +130,11 @@ impl<'gc> ObjectRef<'gc> {
 
     pub fn new(gc: GCHandle<'gc>, value: HeapStorage<'gc>) -> Self {
         let owner_id = crate::vm::threading::get_current_thread_id();
-        let size = size_of::<ObjectInner>() + value.size_bytes();
-        crate::vm::gc_coordinator::record_allocation(size);
+        #[cfg(feature = "multithreaded-gc")]
+        {
+            let size = size_of::<ObjectInner>() + value.size_bytes();
+            crate::vm::gc_coordinator::record_allocation(size);
+        }
 
         Self(Some(Gc::new(
             gc,
@@ -182,7 +188,16 @@ impl<'gc> ObjectRef<'gc> {
         };
         let inner = o.borrow();
         let HeapStorage::Obj(instance) = &inner.storage else {
-            panic!("called ObjectRef::as_object on non-object heap reference")
+            let variant = match &inner.storage {
+                HeapStorage::Vec(_) => "Vec",
+                HeapStorage::Obj(_) => "Obj",
+                HeapStorage::Str(_) => "Str",
+                HeapStorage::Boxed(_) => "Boxed",
+            };
+            panic!(
+                "called ObjectRef::as_object on non-object heap reference: variant={}",
+                variant
+            )
         };
 
         op(instance)
@@ -196,7 +211,16 @@ impl<'gc> ObjectRef<'gc> {
         };
         let mut inner = o.borrow_mut(gc);
         let HeapStorage::Obj(instance) = &mut inner.storage else {
-            panic!("called ObjectRef::as_object_mut on non-object heap reference")
+            let variant = match &inner.storage {
+                HeapStorage::Vec(_) => "Vec",
+                HeapStorage::Obj(_) => "Obj",
+                HeapStorage::Str(_) => "Str",
+                HeapStorage::Boxed(_) => "Boxed",
+            };
+            panic!(
+                "called ObjectRef::as_object_mut on non-object heap reference: variant={}",
+                variant
+            )
         };
 
         op(instance)

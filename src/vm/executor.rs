@@ -2,20 +2,29 @@ use crate::{
     types::members::MethodDescription,
     value::StackValue,
     vm::{
-        arena_storage::THREAD_ARENA,
-        gc_coordinator::ArenaHandle,
         stack::{ArenaLocalState, CallStack, GCArena, SharedGlobalState},
         MethodInfo, StepResult,
     },
     vm_msg,
 };
+
+#[cfg(feature = "multithreaded-gc")]
+use crate::vm::{arena_storage::THREAD_ARENA, gc_coordinator::ArenaHandle};
+
+#[cfg(feature = "multithreaded-gc")]
 use parking_lot::{Condvar, Mutex};
-use std::sync::{atomic::AtomicBool, atomic::AtomicUsize, Arc};
+
+#[cfg(feature = "multithreaded-gc")]
+use std::sync::{atomic::AtomicBool, atomic::AtomicUsize};
+
+use std::sync::Arc;
 
 pub struct Executor {
     shared: Arc<SharedGlobalState<'static>>,
     /// Thread ID for this executor
     thread_id: u64,
+    #[cfg(not(feature = "multithreaded-gc"))]
+    arena: Box<crate::vm::stack::GCArena>,
 }
 
 #[derive(Clone, Debug)]
@@ -25,6 +34,36 @@ pub enum ExecutorResult {
 }
 
 impl Executor {
+    fn with_arena<R>(&mut self, f: impl FnOnce(&mut crate::vm::stack::GCArena) -> R) -> R {
+        #[cfg(feature = "multithreaded-gc")]
+        {
+            THREAD_ARENA.with(|cell| {
+                let mut arena_opt = cell.borrow_mut();
+                let arena = arena_opt.as_mut().expect("Thread arena not initialized");
+                f(arena)
+            })
+        }
+        #[cfg(not(feature = "multithreaded-gc"))]
+        {
+            f(&mut self.arena)
+        }
+    }
+
+    fn with_arena_ref<R>(&self, f: impl FnOnce(&crate::vm::stack::GCArena) -> R) -> R {
+        #[cfg(feature = "multithreaded-gc")]
+        {
+            THREAD_ARENA.with(|cell| {
+                let arena_opt = cell.borrow();
+                let arena = arena_opt.as_ref().expect("Thread arena not initialized");
+                f(arena)
+            })
+        }
+        #[cfg(not(feature = "multithreaded-gc"))]
+        {
+            f(&self.arena)
+        }
+    }
+
     pub fn new(shared: Arc<SharedGlobalState<'static>>) -> Self {
         let shared_clone = Arc::clone(&shared);
         let arena = Box::new(GCArena::new(|gc| {
@@ -32,25 +71,33 @@ impl Executor {
             CallStack::new(gc, shared_clone, local)
         }));
 
+        #[cfg(feature = "multithreading")]
         let thread_id = shared.thread_manager.register_thread();
+        #[cfg(not(feature = "multithreading"))]
+        let thread_id = 1u64;
 
         // Register with GC coordinator
-        let handle = ArenaHandle {
-            thread_id,
-            allocation_counter: Arc::new(AtomicUsize::new(0)),
-            needs_collection: Arc::new(AtomicBool::new(false)),
-            current_command: Arc::new(Mutex::new(None)),
-            command_signal: Arc::new(Condvar::new()),
-            finish_signal: Arc::new(Condvar::new()),
-        };
-        shared.gc_coordinator.register_arena(handle.clone());
-        crate::vm::gc_coordinator::set_current_arena_handle(handle);
+        #[cfg(feature = "multithreaded-gc")]
+        {
+            let handle = ArenaHandle {
+                thread_id,
+                allocation_counter: Arc::new(AtomicUsize::new(0)),
+                needs_collection: Arc::new(AtomicBool::new(false)),
+                current_command: Arc::new(Mutex::new(None)),
+                command_signal: Arc::new(Condvar::new()),
+                finish_signal: Arc::new(Condvar::new()),
+            };
+            shared.gc_coordinator.register_arena(handle.clone());
+            crate::vm::gc_coordinator::set_current_arena_handle(handle);
+        }
 
+        #[cfg(feature = "multithreaded-gc")]
         THREAD_ARENA.with(|cell| {
             *cell.borrow_mut() = Some(arena);
         });
 
         // Set thread id in arena
+        #[cfg(feature = "multithreaded-gc")]
         THREAD_ARENA.with(|cell| {
             let mut arena_opt = cell.borrow_mut();
             let arena = arena_opt.as_mut().unwrap();
@@ -59,11 +106,22 @@ impl Executor {
             });
         });
 
-        Self { shared, thread_id }
+        #[cfg(not(feature = "multithreaded-gc"))]
+        arena.mutate(|_, c| {
+            c.thread_id.set(thread_id);
+        });
+
+        Self {
+            shared,
+            thread_id,
+            #[cfg(not(feature = "multithreaded-gc"))]
+            arena,
+        }
     }
 
     pub fn entrypoint(&mut self, method: MethodDescription) {
         // TODO: initialize argv (entry point args are either string[] or nothing, II.15.4.1.2)
+        #[cfg(feature = "multithreaded-gc")]
         THREAD_ARENA.with(|cell| {
             let mut arena_opt = cell.borrow_mut();
             let arena = arena_opt.as_mut().unwrap();
@@ -76,6 +134,16 @@ impl Executor {
                 )
             });
         });
+
+        #[cfg(not(feature = "multithreaded-gc"))]
+        self.arena.mutate_root(|gc, c| {
+            c.entrypoint_frame(
+                gc,
+                MethodInfo::new(method, &Default::default(), c.loader()),
+                Default::default(),
+                vec![],
+            )
+        });
     }
 
     // assumes args are already on stack
@@ -83,63 +151,87 @@ impl Executor {
         let result = loop {
             // Perform incremental GC progress with finalization support
             // In a real VM this would be tuned based on allocation pressure
-            THREAD_ARENA.with(|cell| {
-                let mut arena_opt = cell.borrow_mut();
-                let arena = arena_opt.as_mut().unwrap();
+            #[cfg(feature = "multithreaded-gc")]
+            self.with_arena(|arena| {
                 if let Some(marked) = arena.mark_debt() {
                     marked.finalize(|fc, c| c.finalize_check(fc));
                 }
             });
+            #[cfg(not(feature = "multithreaded-gc"))]
+            if let Some(marked) = self.arena.mark_debt() {
+                marked.finalize(|fc, c| c.finalize_check(fc));
+            }
 
-            let full_collect = THREAD_ARENA.with(|cell| {
-                let mut arena_opt = cell.borrow_mut();
-                let arena = arena_opt.as_mut().unwrap();
-                arena.mutate(|_, c| {
-                    if c.heap().needs_full_collect.get() {
-                        c.heap().needs_full_collect.set(false);
-                        true
-                    } else {
-                        false
-                    }
-                })
-            });
+            let full_collect = {
+                #[cfg(feature = "multithreaded-gc")]
+                {
+                    self.with_arena(|arena| {
+                        arena.mutate(|_, c| {
+                            if c.heap().needs_full_collect.get() {
+                                c.heap().needs_full_collect.set(false);
+                                true
+                            } else {
+                                false
+                            }
+                        })
+                    })
+                }
+                #[cfg(not(feature = "multithreaded-gc"))]
+                {
+                    self.arena.mutate(|_, c| {
+                        if c.heap().needs_full_collect.get() {
+                            c.heap().needs_full_collect.set(false);
+                            true
+                        } else {
+                            false
+                        }
+                    })
+                }
+            };
 
+            #[cfg(feature = "multithreaded-gc")]
             if full_collect || crate::vm::gc_coordinator::is_current_arena_collection_requested() {
                 // For multithreading: coordinate stop-the-world pause
                 self.perform_full_gc();
                 crate::vm::gc_coordinator::reset_current_arena_collection_requested();
             }
 
+            #[cfg(not(feature = "multithreaded-gc"))]
+            if full_collect {
+                self.arena.collect_all();
+            }
+
             // Reach a safe point between instructions if requested
+            #[cfg(feature = "multithreading")]
             if self.shared.thread_manager.is_gc_stop_requested() {
+                #[cfg(feature = "multithreaded-gc")]
                 self.shared
                     .thread_manager
                     .safe_point(self.thread_id, &self.shared.gc_coordinator);
+
+                #[cfg(not(feature = "multithreaded-gc"))]
+                self.shared
+                    .thread_manager
+                    .safe_point(self.thread_id, &Default::default()); // Use default GCCoordinator stub
             }
 
-            THREAD_ARENA.with(|cell| {
-                let mut arena_opt = cell.borrow_mut();
-                let arena = arena_opt.as_mut().unwrap();
+            self.with_arena(|arena| {
                 arena.mutate_root(|gc, c| c.process_pending_finalizers(gc));
             });
 
-            let step_result = THREAD_ARENA.with(|cell| {
-                let mut arena_opt = cell.borrow_mut();
-                let arena = arena_opt.as_mut().unwrap();
+            let step_result = self.with_arena(|arena| {
                 arena.mutate_root(|gc, c| c.step(gc))
             });
 
-            let frames_empty = || THREAD_ARENA.with(|cell| {
-                let arena_opt = cell.borrow();
-                let arena = arena_opt.as_ref().unwrap();
-                arena.mutate(|_, c| c.execution.frames.is_empty())
-            });
+            let frames_empty = |executor: &Self| {
+                executor.with_arena_ref(|arena| {
+                    arena.mutate(|_, c| c.execution.frames.is_empty())
+                })
+            };
 
             match step_result {
                 StepResult::MethodReturned => {
-                    let was_auto_invoked = THREAD_ARENA.with(|cell| {
-                        let mut arena_opt = cell.borrow_mut();
-                        let arena = arena_opt.as_mut().unwrap();
+                    let was_auto_invoked = self.with_arena(|arena| {
                         arena.mutate_root(|gc, c| {
                             let frame = c.execution.frames.last().unwrap();
                             let val = frame.state.info_handle.is_cctor || frame.is_finalizer;
@@ -148,10 +240,8 @@ impl Executor {
                         })
                     });
 
-                    if frames_empty() {
-                        let exit_code = THREAD_ARENA.with(|cell| {
-                            let arena_opt = cell.borrow();
-                            let arena = arena_opt.as_ref().unwrap();
+                    if frames_empty(self) {
+                        let exit_code = self.with_arena_ref(|arena| {
                             arena.mutate(|_, c| match c.bottom_of_stack() {
                                 Some(StackValue::Int32(i)) => i as u8,
                                 Some(v) => panic!("invalid value for entrypoint return: {:?}", v),
@@ -161,22 +251,18 @@ impl Executor {
                         break ExecutorResult::Exited(exit_code);
                     } else if !was_auto_invoked {
                         // step the caller past the call instruction
-                        THREAD_ARENA.with(|cell| {
-                            let mut arena_opt = cell.borrow_mut();
-                            let arena = arena_opt.as_mut().unwrap();
+                        self.with_arena(|arena| {
                             arena.mutate_root(|_, c| c.increment_ip());
                         });
                     }
                 }
                 StepResult::MethodThrew => {
-                    THREAD_ARENA.with(|cell| {
-                        let mut arena_opt = cell.borrow_mut();
-                        let arena = arena_opt.as_mut().unwrap();
+                    self.with_arena(|arena| {
                         arena.mutate(|_, c| {
                             vm_msg!(c, "Exception thrown: {:?}", c.execution.exception_mode);
                         });
                     });
-                    if frames_empty() {
+                    if frames_empty(self) {
                         break ExecutorResult::Threw;
                     }
                 }
@@ -193,26 +279,27 @@ impl Executor {
     }
 
     /// Perform a full GC collection with stop-the-world coordination.
+    #[cfg(feature = "multithreaded-gc")]
     fn perform_full_gc(&mut self) {
         use std::time::Instant;
         let start_time = Instant::now();
 
         // 1. Mark that we are starting collection (acquires coordinator lock)
-        let _gc_lock = match self.shared.gc_coordinator.start_collection() {
+        let coordinator = Arc::clone(&self.shared.gc_coordinator);
+        let _gc_lock = match coordinator.start_collection() {
             Some(guard) => guard,
             None => return, // Another thread is already collecting
         };
 
-        THREAD_ARENA.with(|cell| {
-            let mut arena_opt = cell.borrow_mut();
-            let arena = arena_opt.as_mut().unwrap();
+        self.with_arena(|arena| {
             arena.mutate(|_, c| {
                 vm_msg!(c, "GC: Coordinated stop-the-world collection started");
             });
         });
 
         // 2. Request stop-the-world pause and wait for all threads to reach safe points
-        let _stw_guard = self.shared.thread_manager.request_stop_the_world();
+        let thread_manager = Arc::clone(&self.shared.thread_manager);
+        let _stw_guard = thread_manager.request_stop_the_world();
 
         // 3. Perform coordinated GC across all arenas
         self.shared
@@ -226,9 +313,7 @@ impl Executor {
         // Mark collection as finished (releases coordinator lock)
         self.shared.gc_coordinator.finish_collection();
 
-        THREAD_ARENA.with(|cell| {
-            let mut arena_opt = cell.borrow_mut();
-            let arena = arena_opt.as_mut().unwrap();
+        self.with_arena(|arena| {
             arena.mutate(|_, c| {
                 vm_msg!(c, "GC: Coordinated collection completed in {:?}", duration);
             });
@@ -241,6 +326,7 @@ impl Drop for Executor {
         // Ensure thread is unregistered if not already done
         self.shared.thread_manager.unregister_thread(self.thread_id);
 
+        #[cfg(feature = "multithreaded-gc")]
         self.shared.gc_coordinator.unregister_arena(self.thread_id);
     }
 }

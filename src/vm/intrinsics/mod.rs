@@ -711,7 +711,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             if obj_ref.0.is_some() {
                 // Get the current thread ID from the call stack
                 let thread_id = stack.thread_id.get();
-                assert!(thread_id != 0, "Monitor.Exit called from unregistered thread");
+                assert_ne!(thread_id, 0,"Monitor.Exit called from unregistered thread");
 
                 // Get or access the sync block
                 let sync_block_index = obj_ref.as_object(|o| o.sync_block_index);
@@ -734,7 +734,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             if obj_ref.0.is_some() {
                 // Get the current thread ID from the call stack
                 let thread_id = stack.thread_id.get();
-                assert!(thread_id != 0, "Monitor.ReliableEnter called from unregistered thread");
+                assert_ne!(thread_id, 0,"Monitor.ReliableEnter called from unregistered thread");
 
                 // Get or create sync block
                 let (_index, sync_block) = stack.shared.sync_blocks.get_or_create_sync_block(
@@ -748,7 +748,10 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 );
 
                 // Enter the monitor
-                sync_block.enter(thread_id, &stack.shared.metrics);
+                while !stack.shared.sync_blocks.try_enter_block(sync_block.clone(), thread_id, &stack.shared.metrics) {
+                    stack.check_gc_safe_point();
+                    std::thread::yield_now();
+                }
 
                 // Set success flag
                 unsafe {
@@ -764,7 +767,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             if obj_ref.0.is_some() {
                 // Get the current thread ID from the call stack
                 let thread_id = stack.thread_id.get();
-                assert!(thread_id != 0, "Monitor.TryEnter_FastPath called from unregistered thread");
+                assert_ne!(thread_id, 0,"Monitor.TryEnter_FastPath called from unregistered thread");
 
                 // Get or create sync block
                 let (_index, sync_block) = stack.shared.sync_blocks.get_or_create_sync_block(
@@ -791,7 +794,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             if obj_ref.0.is_some() {
                 // Get the current thread ID from the call stack
                 let thread_id = stack.thread_id.get();
-                assert!(thread_id != 0, "Monitor.TryEnter called from unregistered thread");
+                assert_ne!(thread_id, 0,"Monitor.TryEnter called from unregistered thread");
 
                 let (_index, sync_block) = stack.shared.sync_blocks.get_or_create_sync_block(
                     &obj_ref,
@@ -819,7 +822,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             if obj_ref.0.is_some() {
                 // Get the current thread ID from the call stack
                 let thread_id = stack.thread_id.get();
-                assert!(thread_id != 0, "Monitor.TryEnter called from unregistered thread");
+                assert_ne!(thread_id, 0,"Monitor.TryEnter called from unregistered thread");
 
                 let (_index, sync_block) = stack.shared.sync_blocks.get_or_create_sync_block(
                     &obj_ref,

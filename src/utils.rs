@@ -13,6 +13,8 @@ use std::{
 #[derive(Clone, Copy)]
 pub struct ResolutionS(Option<NonNull<Resolution<'static>>>);
 unsafe_empty_collect!(ResolutionS);
+unsafe impl Send for ResolutionS {}
+unsafe impl Sync for ResolutionS {}
 impl ResolutionS {
     pub fn new(ptr: *const Resolution<'static>) -> Self {
         Self(NonNull::new(ptr as *mut _))

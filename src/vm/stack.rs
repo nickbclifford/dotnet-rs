@@ -7,19 +7,30 @@ use crate::{
     },
     utils::{decompose_type_source, ResolutionS},
     value::{
-        object::{HeapStorage, Object as ObjectInstance, ObjectPtr, ObjectRef},
+        object::{HeapStorage, Object as ObjectInstance, ObjectRef},
         storage::StaticStorageManager,
         StackValue,
     },
     vm::{
-        context::ResolutionContext, exceptions::ExceptionState, gc_coordinator::GCCoordinator,
-        intrinsics::reflection::RuntimeType, pinvoke::NativeLibraries, tracer::Tracer,
-        GCHandleType, MethodInfo, MethodState, StepResult,
+        context::ResolutionContext,
+        exceptions::ExceptionState,
+        intrinsics::reflection::RuntimeType,
+        pinvoke::NativeLibraries,
+        tracer::Tracer,
+        GCHandleType,
+        MethodInfo,
+        MethodState,
+        StepResult,
     },
+};
+#[cfg(feature = "multithreaded-gc")]
+use crate::{
+    value::object::ObjectPtr,
+    vm::gc_coordinator::GCCoordinator
 };
 use dotnetdll::prelude::*;
 use gc_arena::{lock::RefLock, Arena, Collect, Collection, Gc, Mutation, Rootable};
-use parking_lot::{Mutex, RwLock};
+use crate::vm::sync::{Mutex, RwLock};
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     collections::{HashMap, HashSet},
@@ -55,6 +66,7 @@ pub struct HeapManager<'gc> {
     pub needs_full_collect: Cell<bool>,
     /// Roots for objects in this arena that are referenced by other arenas.
     /// This is populated during coordinated GC marking phase.
+    #[cfg(feature = "multithreaded-gc")]
     pub cross_arena_roots: RefCell<HashSet<ObjectPtr>>,
     // untraced handles to every heap object, used only by the tracer during debugging
     pub(super) _all_objs: RefCell<HashSet<ObjectRef<'gc>>>,
@@ -78,6 +90,7 @@ unsafe impl<'gc> Collect for HeapManager<'gc> {
         for obj in self.pinned_objects.borrow().iter() {
             obj.trace(cc);
         }
+        #[cfg(feature = "multithreaded-gc")]
         for ptr in self.cross_arena_roots.borrow().iter() {
             unsafe {
                 Gc::from_ptr(ptr.as_ptr()).trace(cc);
@@ -96,10 +109,14 @@ pub struct SharedGlobalState<'m> {
     pub loader: &'m AssemblyLoader,
     pub pinvoke: RwLock<NativeLibraries>,
     pub sync_blocks: crate::vm::sync::SyncBlockManager,
+    #[cfg(feature = "multithreading")]
     pub thread_manager: Arc<crate::vm::threading::ThreadManager>,
+    #[cfg(not(feature = "multithreading"))]
+    pub thread_manager: crate::vm::threading::ThreadManager,
     pub metrics: crate::vm::metrics::RuntimeMetrics,
     pub tracer: Mutex<Tracer>,
     pub empty_generics: GenericLookup,
+    #[cfg(feature = "multithreaded-gc")]
     pub gc_coordinator: Arc<GCCoordinator>,
     pub method_tables: RwLock<HashMap<TypeDescription, Box<[u8]>>>,
     pub statics: RwLock<StaticStorageManager>,
@@ -118,10 +135,14 @@ impl<'m> SharedGlobalState<'m> {
             loader,
             pinvoke: RwLock::new(NativeLibraries::new(loader.get_root())),
             sync_blocks: crate::vm::sync::SyncBlockManager::new(),
+            #[cfg(feature = "multithreading")]
             thread_manager: Arc::new(crate::vm::threading::ThreadManager::new()),
+            #[cfg(not(feature = "multithreading"))]
+            thread_manager: crate::vm::threading::ThreadManager::new(),
             metrics: crate::vm::metrics::RuntimeMetrics::new(),
             tracer: Mutex::new(Tracer::new()),
             empty_generics: GenericLookup::default(),
+            #[cfg(feature = "multithreaded-gc")]
             gc_coordinator: Arc::new(GCCoordinator::new()),
             method_tables: RwLock::new(HashMap::new()),
             statics: RwLock::new(StaticStorageManager::new()),
@@ -177,6 +198,7 @@ impl<'gc, 'm> ArenaLocalState<'gc, 'm> {
                 gchandles: RefCell::new(vec![]),
                 processing_finalizer: Cell::new(false),
                 needs_full_collect: Cell::new(false),
+                #[cfg(feature = "multithreaded-gc")]
                 cross_arena_roots: RefCell::new(HashSet::new()),
             },
             runtime_asms: RefCell::new(HashMap::new()),
@@ -281,6 +303,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     // careful with this, it always allocates a new slot
     fn insert_value(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {
+        #[cfg(feature = "multithreaded-gc")]
         crate::vm::gc_coordinator::record_allocation(value.size_bytes() + 16); // +16 for Gc/RefLock overhead
         let handle = Gc::new(gc, RefLock::new(value));
         self.execution.stack.push(StackSlotHandle(handle));

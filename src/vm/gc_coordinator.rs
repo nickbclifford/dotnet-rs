@@ -1,9 +1,17 @@
+#[cfg(feature = "multithreaded-gc")]
 use crate::value::object::ObjectPtr;
+#[cfg(feature = "multithreaded-gc")]
 use parking_lot::{Condvar, Mutex};
+#[cfg(feature = "multithreaded-gc")]
 use std::collections::{HashMap, HashSet};
+#[cfg(feature = "multithreaded-gc")]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+#[cfg(feature = "multithreaded-gc")]
 use std::sync::Arc;
+#[cfg(feature = "multithreaded-gc")]
+use std::cell::{Cell, RefCell};
 
+#[cfg(feature = "multithreaded-gc")]
 thread_local! {
     /// Found cross-arena references during the current marking phase.
     static FOUND_CROSS_ARENA_REFS: RefCell<Vec<(u64, ObjectPtr)>> = const { RefCell::new(Vec::new()) };
@@ -13,6 +21,7 @@ thread_local! {
     static CURRENT_ARENA_HANDLE: RefCell<Option<ArenaHandle>> = const { RefCell::new(None) };
 }
 
+#[cfg(feature = "multithreaded-gc")]
 /// Set the ArenaHandle for the current thread.
 pub fn set_current_arena_handle(handle: ArenaHandle) {
     CURRENT_ARENA_HANDLE.with(|h| {
@@ -20,6 +29,7 @@ pub fn set_current_arena_handle(handle: ArenaHandle) {
     });
 }
 
+#[cfg(feature = "multithreaded-gc")]
 /// Record an allocation of the given size in the current thread's arena.
 /// This tracks allocation pressure and may trigger a GC when the threshold is exceeded.
 ///
@@ -32,6 +42,7 @@ pub fn record_allocation(size: usize) {
     });
 }
 
+#[cfg(feature = "multithreaded-gc")]
 /// Check if the current thread's arena has requested a collection.
 pub fn is_current_arena_collection_requested() -> bool {
     CURRENT_ARENA_HANDLE.with(|h| {
@@ -43,6 +54,7 @@ pub fn is_current_arena_collection_requested() -> bool {
     })
 }
 
+#[cfg(feature = "multithreaded-gc")]
 /// Reset the collection request flag for the current thread's arena.
 pub fn reset_current_arena_collection_requested() {
     CURRENT_ARENA_HANDLE.with(|h| {
@@ -53,11 +65,13 @@ pub fn reset_current_arena_collection_requested() {
     });
 }
 
+#[cfg(feature = "multithreaded-gc")]
 /// Allocation threshold in bytes that triggers a GC request for a thread-local arena.
 /// When a thread allocates more than this amount since the last GC, it will request
 /// a coordinated collection at the next safe point.
 const ALLOCATION_THRESHOLD: usize = 1024 * 1024; // 1MB per-thread trigger
 
+#[cfg(feature = "multithreaded-gc")]
 impl ArenaHandle {
     /// Record an allocation and check if we've exceeded the threshold.
     pub fn record_allocation(&self, size: usize) {
@@ -68,8 +82,7 @@ impl ArenaHandle {
     }
 }
 
-use std::cell::{Cell, RefCell};
-
+#[cfg(feature = "multithreaded-gc")]
 /// Set the thread ID of the arena currently being traced.
 pub fn set_currently_tracing(thread_id: Option<u64>) {
     CURRENTLY_TRACING_THREAD_ID.with(|id| {
@@ -77,11 +90,13 @@ pub fn set_currently_tracing(thread_id: Option<u64>) {
     });
 }
 
+#[cfg(feature = "multithreaded-gc")]
 /// Get the thread ID of the arena currently being traced.
 pub fn get_currently_tracing() -> Option<u64> {
     CURRENTLY_TRACING_THREAD_ID.with(|id| id.get())
 }
 
+#[cfg(feature = "multithreaded-gc")]
 /// Take all found cross-arena references and clear the local list.
 pub fn take_found_cross_arena_refs() -> Vec<(u64, ObjectPtr)> {
     FOUND_CROSS_ARENA_REFS.with(|refs| {
@@ -90,6 +105,7 @@ pub fn take_found_cross_arena_refs() -> Vec<(u64, ObjectPtr)> {
     })
 }
 
+#[cfg(feature = "multithreaded-gc")]
 /// Record a cross-arena reference found during marking.
 ///
 /// When an object in arena A references an object in arena B, this function
@@ -104,6 +120,7 @@ pub fn record_cross_arena_ref(target_thread_id: u64, ptr: ObjectPtr) {
     });
 }
 
+#[cfg(feature = "multithreaded-gc")]
 /// GC commands sent from the coordinator to worker threads.
 #[derive(Debug, Clone)]
 pub enum GCCommand {
@@ -113,6 +130,7 @@ pub enum GCCommand {
     MarkObjects(HashSet<ObjectPtr>),
 }
 
+#[cfg(feature = "multithreaded-gc")]
 /// Metadata about each thread's arena and its communication channel.
 #[derive(Debug, Clone)]
 pub struct ArenaHandle {
@@ -127,6 +145,7 @@ pub struct ArenaHandle {
     pub finish_signal: Arc<Condvar>,
 }
 
+#[cfg(feature = "multithreaded-gc")]
 /// Coordinates stop-the-world collections across multiple thread-local arenas.
 pub struct GCCoordinator {
     /// thread_id -> arena metadata
@@ -139,6 +158,7 @@ pub struct GCCoordinator {
     cross_arena_refs: Mutex<HashMap<u64, HashSet<ObjectPtr>>>,
 }
 
+#[cfg(feature = "multithreaded-gc")]
 impl GCCoordinator {
     pub fn new() -> Self {
         Self {
@@ -202,32 +222,6 @@ impl GCCoordinator {
     }
 
     /// Perform a coordinated collection across all registered arenas.
-    ///
-    /// This implements the cross-arena resurrection algorithm with fixed-point iteration:
-    ///
-    /// # Algorithm
-    ///
-    /// 1. **Phase 1 - Initial Marking**: Each arena marks from its local roots (stack, GC handles, etc.)
-    ///    - Cross-arena references are detected by comparing `owner_id` with the tracing thread ID
-    ///    - Cross-arena refs are recorded but NOT traced in the source arena
-    ///
-    /// 2. **Phase 2 - Fixed-Point Iteration**: Repeatedly resurrect cross-arena referenced objects
-    ///    - For each cross-arena ref, send `MarkObjects` command to the target arena
-    ///    - Target arenas re-mark from these new roots
-    ///    - Continue until no new cross-arena refs are discovered (fixed point)
-    ///
-    /// 3. **Phase 3 - Sweep**: Each arena independently sweeps unmarked objects
-    ///
-    /// # Threading Model
-    ///
-    /// - The `initiating_thread_id` is the thread that triggered GC and calls this function
-    /// - It executes GC commands directly (to avoid self-deadlock)
-    /// - Other threads receive commands via their command channels and execute at safe points
-    ///
-    /// # Safety
-    ///
-    /// This function MUST be called while holding a `StopTheWorldGuard` to ensure all threads
-    /// are at safe points and cannot mutate objects during marking.
     pub fn collect_all_arenas(&self, initiating_thread_id: u64) {
         // This is called by the thread that triggered the GC, after STW is established.
 
@@ -369,17 +363,70 @@ impl GCCoordinator {
     }
 }
 
+#[cfg(feature = "multithreaded-gc")]
 impl Default for GCCoordinator {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(feature = "multithreaded-gc")]
 pub type MutexGuard<'a, T> = parking_lot::MutexGuard<'a, T>;
 
-#[cfg(test)]
+#[cfg(not(feature = "multithreaded-gc"))]
+pub mod stubs {
+    use std::collections::HashSet;
+    use crate::value::object::ObjectPtr;
+
+    #[derive(Debug, Clone)]
+    pub enum GCCommand {
+        CollectAll,
+        MarkObjects(HashSet<ObjectPtr>),
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct ArenaHandle {
+        pub thread_id: u64,
+    }
+
+    impl ArenaHandle {
+        pub fn record_allocation(&self, _size: usize) {}
+    }
+
+    pub struct GCCoordinator;
+
+    impl GCCoordinator {
+        pub fn new() -> Self { Self }
+        pub fn register_arena(&self, _handle: ArenaHandle) {}
+        pub fn unregister_arena(&self, _thread_id: u64) {}
+        pub fn should_collect(&self) -> bool { false }
+        pub fn finish_collection(&self) {}
+        pub fn record_cross_arena_ref(&self, _target_thread_id: u64, _ptr: ObjectPtr) {}
+        pub fn start_collection(&self) -> Option<std::sync::MutexGuard<'_, ()>> { None }
+    }
+
+    pub fn set_current_arena_handle(_handle: ArenaHandle) {}
+    pub fn record_allocation(_size: usize) {}
+    pub fn is_current_arena_collection_requested() -> bool { false }
+    pub fn reset_current_arena_collection_requested() {}
+    pub fn set_currently_tracing(_thread_id: Option<u64>) {}
+    pub fn get_currently_tracing() -> Option<u64> { None }
+    pub fn take_found_cross_arena_refs() -> Vec<(u64, ObjectPtr)> { Vec::new() }
+    pub fn record_cross_arena_ref(_target_thread_id: u64, _ptr: ObjectPtr) {}
+
+    impl Default for GCCoordinator {
+        fn default() -> Self { Self::new() }
+    }
+}
+
+#[cfg(not(feature = "multithreaded-gc"))]
+pub use stubs::*;
+
+#[cfg(all(test, feature = "multithreaded-gc"))]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     #[test]
     fn test_coordinator_registration() {

@@ -87,16 +87,30 @@ impl AssemblyLoader {
     }
 
     pub fn get_assembly(&self, name: &str) -> ResolutionS {
-        let res = {
-            self.external
-                .read()
-                .unwrap()
-                .get(name)
-                .copied()
-                .unwrap_or_else(|| panic!("could not find assembly {name}"))
-        };
+        let res = { self.external.read().unwrap().get(name).copied() };
         match res {
             None => {
+                let mut file = PathBuf::from(&self.assembly_root);
+                file.push(format!("{name}.dll"));
+                if !file.exists() {
+                    panic!(
+                        "could not find assembly {name} in root {}",
+                        self.assembly_root
+                    );
+                }
+                let resolution = static_res_from_file(file);
+                match &resolution.assembly {
+                    None => panic!("no assembly present in external module"),
+                    Some(a) => {
+                        self.external
+                            .write()
+                            .unwrap()
+                            .insert(a.name.to_string(), Some(resolution));
+                    }
+                }
+                resolution
+            }
+            Some(None) => {
                 let mut file = PathBuf::from(&self.assembly_root);
                 file.push(format!("{name}.dll"));
                 let resolution = static_res_from_file(file);
@@ -111,7 +125,16 @@ impl AssemblyLoader {
                 }
                 resolution
             }
-            Some(res) => res,
+            Some(Some(res)) => res,
+        }
+    }
+
+    pub fn register_assembly(&self, resolution: ResolutionS) {
+        if let Some(a) = &resolution.assembly {
+            self.external
+                .write()
+                .unwrap()
+                .insert(a.name.to_string(), Some(resolution));
         }
     }
 

@@ -60,7 +60,7 @@ impl ConcreteType {
 
 impl Debug for ConcreteType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.get().show(self.source.definition()))
+        write!(f, "ConcreteType")
     }
 }
 

@@ -30,7 +30,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         if thread_manager.is_gc_stop_requested() {
             let managed_id = self.thread_id.get();
             if managed_id != 0 {
+                #[cfg(feature = "multithreaded-gc")]
                 thread_manager.safe_point(managed_id, &self.shared.gc_coordinator);
+                #[cfg(not(feature = "multithreaded-gc"))]
+                thread_manager.safe_point(managed_id, &Default::default());
             }
         }
     }
@@ -131,6 +134,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     // If INITIALIZING on another thread, we wait.
                     // We use yield_now() to avoid deadlocking with the statics lock.
                     std::thread::yield_now();
+                    self.check_gc_safe_point();
                 }
             }
         }
@@ -1517,6 +1521,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::ValueType(_) => {
                         panic!("received valuetype for StoreElementPrimitive")
                     }
+                    #[cfg(feature = "multithreaded-gc")]
                     StackValue::CrossArenaObjectRef(ptr, _) => {
                         let mut vec = vec![0; ObjectRef::SIZE];
                         vec.copy_from_slice(&(ptr.as_ptr() as usize).to_ne_bytes());
