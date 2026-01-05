@@ -1,11 +1,7 @@
-use parking_lot::Mutex;
+use crate::vm::sync::{Arc, AtomicU64, Mutex, Ordering};
 use std::{
     cell::Cell,
     collections::HashMap,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
     thread::ThreadId,
 };
 
@@ -73,13 +69,13 @@ pub struct ThreadManager {
     
     #[cfg(feature = "multithreaded-gc")]
     /// Whether a GC stop-the-world is currently requested
-    pub(super) gc_stop_requested: std::sync::atomic::AtomicBool,
+    pub(super) gc_stop_requested: crate::vm::sync::AtomicBool,
     #[cfg(feature = "multithreaded-gc")]
     /// Number of threads that have reached safe point during GC
-    pub(super) threads_at_safepoint: std::sync::atomic::AtomicUsize,
+    pub(super) threads_at_safepoint: crate::vm::sync::AtomicUsize,
     #[cfg(feature = "multithreaded-gc")]
     /// Condvar for notifying when all threads reach safe point
-    pub(super) all_threads_stopped: parking_lot::Condvar,
+    pub(super) all_threads_stopped: crate::vm::sync::Condvar,
     #[cfg(feature = "multithreaded-gc")]
     /// Mutex for GC coordination
     pub(super) gc_coordination: Mutex<()>,
@@ -97,11 +93,11 @@ impl ThreadManager {
             next_thread_id: AtomicU64::new(1), // Thread ID 0 is reserved
             
             #[cfg(feature = "multithreaded-gc")]
-            gc_stop_requested: std::sync::atomic::AtomicBool::new(false),
+            gc_stop_requested: crate::vm::sync::AtomicBool::new(false),
             #[cfg(feature = "multithreaded-gc")]
-            threads_at_safepoint: std::sync::atomic::AtomicUsize::new(0),
+            threads_at_safepoint: crate::vm::sync::AtomicUsize::new(0),
             #[cfg(feature = "multithreaded-gc")]
-            all_threads_stopped: parking_lot::Condvar::new(),
+            all_threads_stopped: crate::vm::sync::Condvar::new(),
             #[cfg(feature = "multithreaded-gc")]
             gc_coordination: Mutex::new(()),
         }

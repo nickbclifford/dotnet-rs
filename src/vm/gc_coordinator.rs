@@ -1,13 +1,9 @@
 #[cfg(feature = "multithreaded-gc")]
 use crate::value::object::ObjectPtr;
 #[cfg(feature = "multithreaded-gc")]
-use parking_lot::{Condvar, Mutex};
+use crate::vm::sync::{Arc, AtomicBool, AtomicUsize, Condvar, Mutex, Ordering};
 #[cfg(feature = "multithreaded-gc")]
 use std::collections::{HashMap, HashSet};
-#[cfg(feature = "multithreaded-gc")]
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-#[cfg(feature = "multithreaded-gc")]
-use std::sync::Arc;
 #[cfg(feature = "multithreaded-gc")]
 use std::cell::{Cell, RefCell};
 
@@ -371,7 +367,7 @@ impl Default for GCCoordinator {
 }
 
 #[cfg(feature = "multithreaded-gc")]
-pub type MutexGuard<'a, T> = parking_lot::MutexGuard<'a, T>;
+pub type MutexGuard<'a, T> = crate::vm::sync::MutexGuard<'a, T>;
 
 #[cfg(not(feature = "multithreaded-gc"))]
 pub mod stubs {
@@ -425,8 +421,7 @@ pub use stubs::*;
 #[cfg(all(test, feature = "multithreaded-gc"))]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use crate::vm::sync::{Arc, AtomicBool, AtomicUsize, Ordering};
 
     #[test]
     fn test_coordinator_registration() {

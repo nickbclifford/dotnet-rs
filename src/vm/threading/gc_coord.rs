@@ -1,7 +1,6 @@
 use super::basic::{get_current_thread_id, IS_PERFORMING_GC, ThreadManager, ThreadState};
 use crate::vm::gc_coordinator::{GCCommand, GCCoordinator};
-use parking_lot::MutexGuard;
-use std::sync::atomic::Ordering;
+use crate::vm::sync::{MutexGuard, Ordering};
 
 pub struct StopTheWorldGuard<'a> {
     manager: &'a ThreadManager,

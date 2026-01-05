@@ -8,6 +8,12 @@ pub use threaded::*;
 #[cfg(not(feature = "multithreading"))]
 pub use single_threaded::*;
 
+// Re-export Arc (same for both std and parking_lot)
+pub use std::sync::Arc;
+
+// Re-export atomic types (always from std::sync::atomic)
+pub use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+
 #[cfg(feature = "multithreading")]
 pub use parking_lot::{Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -37,6 +43,14 @@ pub mod compat {
         }
         pub fn write(&self) -> RwLockWriteGuard<'_, T> {
             self.0.write().unwrap()
+        }
+    }
+
+    #[derive(Debug, Default)]
+    pub struct Condvar(());
+    impl Condvar {
+        pub fn new() -> Self {
+            Self(())
         }
     }
 }

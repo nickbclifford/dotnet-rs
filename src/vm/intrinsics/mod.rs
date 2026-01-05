@@ -686,7 +686,8 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             push!(Int32(value));
         },
         [static System.Threading.Interlocked::CompareExchange(ref int, int, int)] => {
-            use std::sync::atomic::{AtomicI32, Ordering};
+            use std::sync::atomic::AtomicI32;
+            use crate::vm::sync::Ordering;
 
             vm_expect_stack!(let Int32(comparand) = pop!());
             vm_expect_stack!(let Int32(value) = pop!());
@@ -846,7 +847,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             let value = unsafe { std::ptr::read_volatile(ptr) };
             // Ensure acquire semantics to match .NET memory model
-            std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
+            std::sync::atomic::fence(crate::vm::sync::Ordering::Acquire);
 
             push!(ObjectRef(value));
         },
@@ -857,7 +858,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let src = pop!().as_ptr();
 
             // Ensure release semantics to match .NET memory model
-            std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
+            std::sync::atomic::fence(crate::vm::sync::Ordering::Release);
             unsafe { std::ptr::write_volatile(src, as_bool) };
         },
         [static System.String::op_Implicit(string)]

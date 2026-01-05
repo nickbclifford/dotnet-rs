@@ -12,12 +12,9 @@ use crate::{
 use crate::vm::{arena_storage::THREAD_ARENA, gc_coordinator::ArenaHandle};
 
 #[cfg(feature = "multithreaded-gc")]
-use parking_lot::{Condvar, Mutex};
+use crate::vm::sync::{AtomicBool, AtomicUsize, Condvar, Mutex};
 
-#[cfg(feature = "multithreaded-gc")]
-use std::sync::{atomic::AtomicBool, atomic::AtomicUsize};
-
-use std::sync::Arc;
+use crate::vm::sync::Arc;
 
 pub struct Executor {
     shared: Arc<SharedGlobalState<'static>>,
