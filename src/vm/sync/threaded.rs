@@ -1,4 +1,6 @@
 use crate::value::object::ObjectRef;
+use crate::vm::metrics::RuntimeMetrics;
+use crate::vm::sync::{SyncBlockOps, SyncManagerOps};
 use parking_lot::{Condvar, Mutex};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -28,8 +30,10 @@ impl SyncBlock {
             condvar: Condvar::new(),
         }
     }
+}
 
-    pub fn try_enter(&self, thread_id: u64) -> bool {
+impl SyncBlockOps for SyncBlock {
+    fn try_enter(&self, thread_id: u64) -> bool {
         let mut state = self.state.lock();
         if state.owner_thread_id == 0 {
             state.owner_thread_id = thread_id;
@@ -43,7 +47,7 @@ impl SyncBlock {
         }
     }
 
-    pub fn enter(&self, thread_id: u64, metrics: &crate::vm::metrics::RuntimeMetrics) {
+    fn enter(&self, thread_id: u64, metrics: &RuntimeMetrics) {
         use std::time::Instant;
         let mut state = self.state.lock();
 
@@ -64,11 +68,11 @@ impl SyncBlock {
         state.recursion_count = 1;
     }
 
-    pub fn enter_with_timeout(
+    fn enter_with_timeout(
         &self,
         thread_id: u64,
         timeout_ms: u64,
-        metrics: &crate::vm::metrics::RuntimeMetrics,
+        metrics: &RuntimeMetrics,
     ) -> bool {
         use std::time::{Duration, Instant};
 
@@ -108,7 +112,7 @@ impl SyncBlock {
         true
     }
 
-    pub fn exit(&self, thread_id: u64) -> bool {
+    fn exit(&self, thread_id: u64) -> bool {
         let mut state = self.state.lock();
 
         if state.owner_thread_id != thread_id || thread_id == 0 {
@@ -129,15 +133,15 @@ impl SyncBlock {
         true
     }
 
-    pub fn wait(&self, _thread_id: u64, _timeout_ms: Option<u64>) -> Result<(), &'static str> {
+    fn wait(&self, _thread_id: u64, _timeout_ms: Option<u64>) -> Result<(), &'static str> {
         Err("Monitor.Wait() is not yet implemented")
     }
 
-    pub fn pulse(&self, _thread_id: u64) -> Result<(), &'static str> {
+    fn pulse(&self, _thread_id: u64) -> Result<(), &'static str> {
         Err("Monitor.Pulse() is not yet implemented")
     }
 
-    pub fn pulse_all(&self, _thread_id: u64) -> Result<(), &'static str> {
+    fn pulse_all(&self, _thread_id: u64) -> Result<(), &'static str> {
         Err("Monitor.PulseAll() is not yet implemented")
     }
 }
@@ -154,8 +158,12 @@ impl SyncBlockManager {
             next_index: Mutex::new(1),
         }
     }
+}
 
-    pub fn get_or_create_sync_block(
+impl SyncManagerOps for SyncBlockManager {
+    type Block = SyncBlock;
+
+    fn get_or_create_sync_block(
         &self,
         _object: &ObjectRef<'_>,
         get_index: impl FnOnce() -> Option<usize>,
@@ -183,15 +191,15 @@ impl SyncBlockManager {
         (index, block)
     }
 
-    pub fn get_sync_block(&self, index: usize) -> Option<Arc<SyncBlock>> {
+    fn get_sync_block(&self, index: usize) -> Option<Arc<SyncBlock>> {
         self.blocks.lock().get(&index).cloned()
     }
 
-    pub fn try_enter_block(
+    fn try_enter_block(
         &self,
         block: Arc<SyncBlock>,
         thread_id: u64,
-        _metrics: &crate::vm::metrics::RuntimeMetrics,
+        _metrics: &RuntimeMetrics,
     ) -> bool {
         block.try_enter(thread_id)
     }

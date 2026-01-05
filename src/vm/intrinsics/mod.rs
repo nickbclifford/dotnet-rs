@@ -20,6 +20,7 @@ use crate::{
             runtime_field_info_intrinsic_call, runtime_method_info_intrinsic_call,
             runtime_type_intrinsic_call,
         },
+        sync::{SyncBlockOps, SyncManagerOps},
         CallStack, GCHandle, GCHandleType, MethodInfo, StepResult,
     },
     vm_expect_stack, vm_msg, vm_pop, vm_push,

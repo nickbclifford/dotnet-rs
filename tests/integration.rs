@@ -4,6 +4,7 @@ use dotnet_rs::{
     utils::{static_res_from_file, ResolutionS},
     vm,
 };
+use dotnet_rs::vm::threading::ThreadManagerOps;
 use dotnetdll::prelude::*;
 use std::{
     path::{Path, PathBuf},

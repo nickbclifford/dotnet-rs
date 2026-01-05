@@ -21,6 +21,8 @@ use crate::{
 use dotnetdll::prelude::*;
 use std::cmp::Ordering;
 
+use crate::vm::threading::ThreadManagerOps;
+
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     /// Check if a GC safe point should be reached.
     /// This should be called before large allocations or long-running operations.
@@ -116,8 +118,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 statics.init(description, &ctx, tid)
             };
 
+            use crate::value::storage::StaticInitResult::*;
             match init_result {
-                crate::value::storage::StaticInitResult::Execute(m) => {
+                Execute(m) => {
                     vm_msg!(
                         self,
                         "-- calling static constructor (will return to ip {}) --",
@@ -126,11 +129,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     self.call_frame(gc, MethodInfo::new(m, &generics, self.loader()), generics);
                     return true;
                 }
-                crate::value::storage::StaticInitResult::Initialized
-                | crate::value::storage::StaticInitResult::Recursive => {
+                Initialized | Recursive => {
                     return false;
                 }
-                crate::value::storage::StaticInitResult::Waiting => {
+                Waiting => {
                     // If INITIALIZING on another thread, we wait.
                     // We use yield_now() to avoid deadlocking with the statics lock.
                     std::thread::yield_now();
@@ -909,7 +911,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     vm_expect_stack!(let ManagedPtr(m) = args[0].clone());
                     debug_assert!(
                         (m.value.as_ptr() as usize)
-                            .is_multiple_of(std::mem::align_of::<ObjectRef>()),
+                            .is_multiple_of(align_of::<ObjectRef>()),
                         "ManagedPtr value is not aligned for ObjectRef"
                     );
                     let obj_ref = unsafe { *(m.value.as_ptr() as *const ObjectRef) };

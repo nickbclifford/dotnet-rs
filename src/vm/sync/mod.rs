@@ -8,6 +8,39 @@ pub use threaded::*;
 #[cfg(not(feature = "multithreading"))]
 pub use single_threaded::*;
 
+use crate::value::object::ObjectRef;
+use crate::vm::metrics::RuntimeMetrics;
+
+pub trait SyncBlockOps {
+    fn try_enter(&self, thread_id: u64) -> bool;
+    fn enter(&self, thread_id: u64, metrics: &RuntimeMetrics);
+    fn enter_with_timeout(&self, thread_id: u64, timeout_ms: u64, metrics: &RuntimeMetrics) -> bool;
+    fn exit(&self, thread_id: u64) -> bool;
+    fn wait(&self, thread_id: u64, timeout_ms: Option<u64>) -> Result<(), &'static str>;
+    fn pulse(&self, thread_id: u64) -> Result<(), &'static str>;
+    fn pulse_all(&self, thread_id: u64) -> Result<(), &'static str>;
+}
+
+pub trait SyncManagerOps {
+    type Block: SyncBlockOps;
+
+    fn get_or_create_sync_block(
+        &self,
+        object: &ObjectRef<'_>,
+        get_index: impl FnOnce() -> Option<usize>,
+        set_index: impl FnOnce(usize),
+    ) -> (usize, Arc<Self::Block>);
+
+    fn get_sync_block(&self, index: usize) -> Option<Arc<Self::Block>>;
+
+    fn try_enter_block(
+        &self,
+        block: Arc<Self::Block>,
+        thread_id: u64,
+        metrics: &RuntimeMetrics,
+    ) -> bool;
+}
+
 // Re-export Arc (same for both std and parking_lot)
 pub use std::sync::Arc;
 

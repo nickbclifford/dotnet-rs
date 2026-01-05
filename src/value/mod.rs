@@ -53,6 +53,94 @@ unsafe impl<'gc> Collect for StackValue<'gc> {
         }
     }
 }
+macro_rules! checked_arithmetic_op {
+    ($l:expr, $r:expr, $sgn:expr, $op:ident) => {
+        match ($l, $r, $sgn) {
+            (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Signed) => l
+                .$op(r)
+                .map(StackValue::Int32)
+                .ok_or("System.OverflowException"),
+            (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Unsigned) => (l as u32)
+                .$op(r as u32)
+                .map(|v| StackValue::Int32(v as i32))
+                .ok_or("System.OverflowException"),
+            (StackValue::Int64(l), StackValue::Int64(r), NumberSign::Signed) => l
+                .$op(r)
+                .map(StackValue::Int64)
+                .ok_or("System.OverflowException"),
+            (StackValue::Int64(l), StackValue::Int64(r), NumberSign::Unsigned) => (l as u64)
+                .$op(r as u64)
+                .map(|v| StackValue::Int64(v as i64))
+                .ok_or("System.OverflowException"),
+            (StackValue::NativeInt(l), StackValue::NativeInt(r), NumberSign::Signed) => l
+                .$op(r)
+                .map(StackValue::NativeInt)
+                .ok_or("System.OverflowException"),
+            (StackValue::NativeInt(l), StackValue::NativeInt(r), NumberSign::Unsigned) => (l as usize)
+                .$op(r as usize)
+                .map(|v| StackValue::NativeInt(v as isize))
+                .ok_or("System.OverflowException"),
+            (l, r, _) => panic!("invalid types for checked operation: {:?}, {:?}", l, r),
+        }
+    };
+}
+
+macro_rules! arithmetic_op {
+    ($l:expr, $r:expr, $sgn:expr, $op:tt) => {
+        match ($l, $r, $sgn) {
+            (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Signed) => StackValue::Int32(l $op r),
+            (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Unsigned) => StackValue::Int32(((l as u32) $op (r as u32)) as i32),
+            (StackValue::Int64(l), StackValue::Int64(r), NumberSign::Signed) => StackValue::Int64(l $op r),
+            (StackValue::Int64(l), StackValue::Int64(r), NumberSign::Unsigned) => StackValue::Int64(((l as u64) $op (r as u64)) as i64),
+            (StackValue::NativeInt(l), StackValue::NativeInt(r), NumberSign::Signed) => StackValue::NativeInt(l $op r),
+            (StackValue::NativeInt(l), StackValue::NativeInt(r), NumberSign::Unsigned) => StackValue::NativeInt(((l as usize) $op (r as usize)) as isize),
+            (StackValue::NativeFloat(l), StackValue::NativeFloat(r), _) => StackValue::NativeFloat(l $op r),
+            (l, r, _) => panic!("invalid types for arithmetic operation: {:?}, {:?}", l, r),
+        }
+    };
+}
+
+macro_rules! shift_op {
+    ($target:expr, $amount:expr, $sgn:expr, $op:tt) => {
+        match ($target, $sgn) {
+            (StackValue::Int32(i), NumberSign::Signed) => StackValue::Int32(i $op $amount),
+            (StackValue::Int32(i), NumberSign::Unsigned) => StackValue::Int32(((i as u32) $op $amount) as i32),
+            (StackValue::Int64(i), NumberSign::Signed) => StackValue::Int64(i $op $amount),
+            (StackValue::Int64(i), NumberSign::Unsigned) => StackValue::Int64(((i as u64) $op $amount) as i64),
+            (StackValue::NativeInt(i), NumberSign::Signed) => StackValue::NativeInt(i $op $amount),
+            (StackValue::NativeInt(i), NumberSign::Unsigned) => StackValue::NativeInt(((i as usize) $op $amount) as isize),
+            (v, _) => panic!("invalid shift target: {:?}", v),
+        }
+    };
+}
+
+macro_rules! bitwise_op {
+    ($l:expr, $r:expr, $op:tt) => {
+        match ($l, $r) {
+            (StackValue::Int32(l), StackValue::Int32(r)) => StackValue::Int32(l $op r),
+            (StackValue::Int32(l), StackValue::NativeInt(r)) => StackValue::NativeInt((l as isize) $op r),
+            (StackValue::Int64(l), StackValue::Int64(r)) => StackValue::Int64(l $op r),
+            (StackValue::NativeInt(l), StackValue::Int32(r)) => StackValue::NativeInt(l $op (r as isize)),
+            (StackValue::NativeInt(l), StackValue::NativeInt(r)) => StackValue::NativeInt(l $op r),
+            (l, r) => panic!("invalid types for bitwise operation: {:?}, {:?}", l, r),
+        }
+    };
+}
+
+macro_rules! wrapping_arithmetic_op {
+    ($l:expr, $r:expr, $op:ident, $float_op:tt) => {
+        match ($l, $r) {
+            (StackValue::Int32(l), StackValue::Int32(r)) => StackValue::Int32(l.$op(r)),
+            (StackValue::Int32(l), StackValue::NativeInt(r)) => StackValue::NativeInt((l as isize).$op(r)),
+            (StackValue::Int64(l), StackValue::Int64(r)) => StackValue::Int64(l.$op(r)),
+            (StackValue::NativeInt(l), StackValue::Int32(r)) => StackValue::NativeInt(l.$op(r as isize)),
+            (StackValue::NativeInt(l), StackValue::NativeInt(r)) => StackValue::NativeInt(l.$op(r)),
+            (StackValue::NativeFloat(l), StackValue::NativeFloat(r)) => StackValue::NativeFloat(l $float_op r),
+            (l, r) => panic!("invalid types for arithmetic operation: {:?}, {:?}", l, r),
+        }
+    };
+}
+
 impl<'gc> StackValue<'gc> {
     pub fn unmanaged_ptr(ptr: *mut u8) -> Self {
         if ptr.is_null() {
@@ -81,7 +169,7 @@ impl<'gc> StackValue<'gc> {
     pub fn size_bytes(&self) -> usize {
         match self {
             Self::ValueType(v) => v.size_bytes(),
-            _ => std::mem::size_of::<StackValue>(),
+            _ => size_of::<StackValue>(),
         }
     }
 
@@ -174,62 +262,26 @@ impl<'gc> StackValue<'gc> {
     }
 
     pub fn shr(self, other: Self, sgn: NumberSign) -> Self {
-        use NumberSign::*;
-        use StackValue::*;
         let amount = match other {
-            Int32(i) => i as u32,
-            NativeInt(i) => i as u32,
-            _ => panic!("invalid shift amount"),
+            StackValue::Int32(i) => i as u32,
+            StackValue::NativeInt(i) => i as u32,
+            _ => panic!("invalid shift amount: {:?}", other),
         };
-        match (self, sgn) {
-            (Int32(i), Signed) => Int32(i >> amount),
-            (Int32(i), Unsigned) => Int32(((i as u32) >> amount) as i32),
-            (Int64(i), Signed) => Int64(i >> amount),
-            (Int64(i), Unsigned) => Int64(((i as u64) >> amount) as i64),
-            (NativeInt(i), Signed) => NativeInt(i >> amount),
-            (NativeInt(i), Unsigned) => NativeInt(((i as usize) >> amount) as isize),
-            (v, _) => panic!("invalid shift target: {:?}", v),
-        }
+        shift_op!(self, amount, sgn, >>)
     }
 
     pub fn div(self, other: Self, sgn: NumberSign) -> Result<Self, &'static str> {
-        use NumberSign::*;
-        use StackValue::*;
         if other.is_zero() {
             return Err("System.DivideByZeroException");
         }
-        match (self, other, sgn) {
-            (Int32(l), Int32(r), Signed) => Ok(Int32(l / r)),
-            (Int32(l), Int32(r), Unsigned) => Ok(Int32(((l as u32) / (r as u32)) as i32)),
-            (Int64(l), Int64(r), Signed) => Ok(Int64(l / r)),
-            (Int64(l), Int64(r), Unsigned) => Ok(Int64(((l as u64) / (r as u64)) as i64)),
-            (NativeInt(l), NativeInt(r), Signed) => Ok(NativeInt(l / r)),
-            (NativeInt(l), NativeInt(r), Unsigned) => {
-                Ok(NativeInt(((l as usize) / (r as usize)) as isize))
-            }
-            (NativeFloat(l), NativeFloat(r), _) => Ok(NativeFloat(l / r)),
-            (l, r, _) => panic!("invalid types for div: {:?}, {:?}", l, r),
-        }
+        Ok(arithmetic_op!(self, other, sgn, /))
     }
 
     pub fn rem(self, other: Self, sgn: NumberSign) -> Result<Self, &'static str> {
-        use NumberSign::*;
-        use StackValue::*;
         if other.is_zero() {
             return Err("System.DivideByZeroException");
         }
-        match (self, other, sgn) {
-            (Int32(l), Int32(r), Signed) => Ok(Int32(l % r)),
-            (Int32(l), Int32(r), Unsigned) => Ok(Int32(((l as u32) % (r as u32)) as i32)),
-            (Int64(l), Int64(r), Signed) => Ok(Int64(l % r)),
-            (Int64(l), Int64(r), Unsigned) => Ok(Int64(((l as u64) % (r as u64)) as i64)),
-            (NativeInt(l), NativeInt(r), Signed) => Ok(NativeInt(l % r)),
-            (NativeInt(l), NativeInt(r), Unsigned) => {
-                Ok(NativeInt(((l as usize) % (r as usize)) as isize))
-            }
-            (NativeFloat(l), NativeFloat(r), _) => Ok(NativeFloat(l % r)),
-            (l, r, _) => panic!("invalid types for rem: {:?}, {:?}", l, r),
-        }
+        Ok(arithmetic_op!(self, other, sgn, %))
     }
 
     pub fn compare(&self, other: &Self, sgn: NumberSign) -> Option<Ordering> {
@@ -246,115 +298,22 @@ impl<'gc> StackValue<'gc> {
     }
 
     pub fn checked_add(self, other: Self, sgn: NumberSign) -> Result<Self, &'static str> {
-        use NumberSign::*;
-        use StackValue::*;
-        match (self, other, sgn) {
-            (Int32(l), Int32(r), Signed) => l
-                .checked_add(r)
-                .map(Int32)
-                .ok_or("System.OverflowException"),
-            (Int32(l), Int32(r), Unsigned) => (l as u32)
-                .checked_add(r as u32)
-                .map(|v| Int32(v as i32))
-                .ok_or("System.OverflowException"),
-            (Int64(l), Int64(r), Signed) => l
-                .checked_add(r)
-                .map(Int64)
-                .ok_or("System.OverflowException"),
-            (Int64(l), Int64(r), Unsigned) => (l as u64)
-                .checked_add(r as u64)
-                .map(|v| Int64(v as i64))
-                .ok_or("System.OverflowException"),
-            (NativeInt(l), NativeInt(r), Signed) => l
-                .checked_add(r)
-                .map(NativeInt)
-                .ok_or("System.OverflowException"),
-            (NativeInt(l), NativeInt(r), Unsigned) => (l as usize)
-                .checked_add(r as usize)
-                .map(|v| NativeInt(v as isize))
-                .ok_or("System.OverflowException"),
-            (l, r, _) => panic!("invalid types for checked_add: {:?}, {:?}", l, r),
-        }
+        checked_arithmetic_op!(self, other, sgn, checked_add)
     }
 
     pub fn checked_sub(self, other: Self, sgn: NumberSign) -> Result<Self, &'static str> {
-        use NumberSign::*;
-        use StackValue::*;
-        match (self, other, sgn) {
-            (Int32(l), Int32(r), Signed) => l
-                .checked_sub(r)
-                .map(Int32)
-                .ok_or("System.OverflowException"),
-            (Int32(l), Int32(r), Unsigned) => (l as u32)
-                .checked_sub(r as u32)
-                .map(|v| Int32(v as i32))
-                .ok_or("System.OverflowException"),
-            (Int64(l), Int64(r), Signed) => l
-                .checked_sub(r)
-                .map(Int64)
-                .ok_or("System.OverflowException"),
-            (Int64(l), Int64(r), Unsigned) => (l as u64)
-                .checked_sub(r as u64)
-                .map(|v| Int64(v as i64))
-                .ok_or("System.OverflowException"),
-            (NativeInt(l), NativeInt(r), Signed) => l
-                .checked_sub(r)
-                .map(NativeInt)
-                .ok_or("System.OverflowException"),
-            (NativeInt(l), NativeInt(r), Unsigned) => (l as usize)
-                .checked_sub(r as usize)
-                .map(|v| NativeInt(v as isize))
-                .ok_or("System.OverflowException"),
-            (l, r, _) => panic!("invalid types for checked_sub: {:?}, {:?}", l, r),
-        }
+        checked_arithmetic_op!(self, other, sgn, checked_sub)
     }
 
     pub fn checked_mul(self, other: Self, sgn: NumberSign) -> Result<Self, &'static str> {
-        use NumberSign::*;
-        use StackValue::*;
-        match (self, other, sgn) {
-            (Int32(l), Int32(r), Signed) => l
-                .checked_mul(r)
-                .map(Int32)
-                .ok_or("System.OverflowException"),
-            (Int32(l), Int32(r), Unsigned) => (l as u32)
-                .checked_mul(r as u32)
-                .map(|v| Int32(v as i32))
-                .ok_or("System.OverflowException"),
-            (Int64(l), Int64(r), Signed) => l
-                .checked_mul(r)
-                .map(Int64)
-                .ok_or("System.OverflowException"),
-            (Int64(l), Int64(r), Unsigned) => (l as u64)
-                .checked_mul(r as u64)
-                .map(|v| Int64(v as i64))
-                .ok_or("System.OverflowException"),
-            (NativeInt(l), NativeInt(r), Signed) => l
-                .checked_mul(r)
-                .map(NativeInt)
-                .ok_or("System.OverflowException"),
-            (NativeInt(l), NativeInt(r), Unsigned) => (l as usize)
-                .checked_mul(r as usize)
-                .map(|v| NativeInt(v as isize))
-                .ok_or("System.OverflowException"),
-            (l, r, _) => panic!("invalid types for checked_mul: {:?}, {:?}", l, r),
-        }
+        checked_arithmetic_op!(self, other, sgn, checked_mul)
     }
 
     /// # Safety
     /// `ptr` must be a valid, aligned pointer to a value of the type specified by `t`.
     pub unsafe fn load(ptr: *const u8, t: LoadType) -> Self {
         debug_assert!(!ptr.is_null(), "Attempted to load from a null pointer");
-        let alignment = match t {
-            LoadType::Int8 | LoadType::UInt8 => 1,
-            LoadType::Int16 | LoadType::UInt16 => std::mem::align_of::<i16>(),
-            LoadType::Int32 | LoadType::UInt32 => std::mem::align_of::<i32>(),
-            LoadType::Int64 => std::mem::align_of::<i64>(),
-            LoadType::Float32 => std::mem::align_of::<f32>(),
-            LoadType::Float64 => std::mem::align_of::<f64>(),
-            LoadType::IntPtr => std::mem::align_of::<isize>(),
-            LoadType::Object => std::mem::align_of::<ObjectRef>(),
-        };
+        let alignment = load_type_alignment(t);
         debug_assert!(
             (ptr as usize).is_multiple_of(alignment),
             "Attempted to load from an unaligned pointer {:?} for type {:?}",
@@ -381,16 +340,7 @@ impl<'gc> StackValue<'gc> {
     /// `ptr` must be a valid, aligned pointer to a location with sufficient space for the type specified by `t`.
     pub unsafe fn store(self, ptr: *mut u8, t: StoreType) {
         debug_assert!(!ptr.is_null(), "Attempted to store to a null pointer");
-        let alignment = match t {
-            StoreType::Int8 => 1,
-            StoreType::Int16 => std::mem::align_of::<i16>(),
-            StoreType::Int32 => std::mem::align_of::<i32>(),
-            StoreType::Int64 => std::mem::align_of::<i64>(),
-            StoreType::Float32 => std::mem::align_of::<f32>(),
-            StoreType::Float64 => std::mem::align_of::<f64>(),
-            StoreType::IntPtr => std::mem::align_of::<isize>(),
-            StoreType::Object => std::mem::align_of::<ObjectRef>(),
-        };
+        let alignment = store_type_alignment(t);
         debug_assert!(
             (ptr as usize).is_multiple_of(alignment),
             "Attempted to store to an unaligned pointer {:?} for type {:?}",
@@ -408,6 +358,32 @@ impl<'gc> StackValue<'gc> {
             StoreType::IntPtr => *(ptr as *mut isize) = self.as_isize(),
             StoreType::Object => *(ptr as *mut ObjectRef) = self.as_object_ref(),
         }
+    }
+}
+
+fn load_type_alignment(t: LoadType) -> usize {
+    match t {
+        LoadType::Int8 | LoadType::UInt8 => 1,
+        LoadType::Int16 | LoadType::UInt16 => align_of::<i16>(),
+        LoadType::Int32 | LoadType::UInt32 => align_of::<i32>(),
+        LoadType::Int64 => align_of::<i64>(),
+        LoadType::Float32 => align_of::<f32>(),
+        LoadType::Float64 => align_of::<f64>(),
+        LoadType::IntPtr => align_of::<isize>(),
+        LoadType::Object => align_of::<ObjectRef>(),
+    }
+}
+
+fn store_type_alignment(t: StoreType) -> usize {
+    match t {
+        StoreType::Int8 => 1,
+        StoreType::Int16 => align_of::<i16>(),
+        StoreType::Int32 => align_of::<i32>(),
+        StoreType::Int64 => align_of::<i64>(),
+        StoreType::Float32 => align_of::<f32>(),
+        StoreType::Float64 => align_of::<f64>(),
+        StoreType::IntPtr => align_of::<isize>(),
+        StoreType::Object => align_of::<ObjectRef>(),
     }
 }
 impl Default for StackValue<'_> {
@@ -459,12 +435,6 @@ impl<'gc> Add for StackValue<'gc> {
     fn add(self, rhs: Self) -> Self::Output {
         use StackValue::*;
         match (self, rhs) {
-            (Int32(l), Int32(r)) => Int32(l.wrapping_add(r)),
-            (Int32(l), NativeInt(r)) => NativeInt((l as isize).wrapping_add(r)),
-            (Int64(l), Int64(r)) => Int64(l.wrapping_add(r)),
-            (NativeInt(l), Int32(r)) => NativeInt(l.wrapping_add(r as isize)),
-            (NativeInt(l), NativeInt(r)) => NativeInt(l.wrapping_add(r)),
-            (NativeFloat(l), NativeFloat(r)) => NativeFloat(l + r),
             (Int32(i), ManagedPtr(m)) | (ManagedPtr(m), Int32(i)) => {
                 // SAFETY: Pointer arithmetic is performed within the bounds of the managed object
                 // or stack slot it points to. The VM ensures that pointers stay within allocated regions.
@@ -474,7 +444,7 @@ impl<'gc> Add for StackValue<'gc> {
                 // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
                 unsafe { ManagedPtr(m.offset(i)) }
             }
-            (l, r) => panic!("invalid types for add: {:?}, {:?}", l, r),
+            (l, r) => wrapping_arithmetic_op!(l, r, wrapping_add, +),
         }
     }
 }
@@ -484,12 +454,6 @@ impl<'gc> Sub for StackValue<'gc> {
     fn sub(self, rhs: Self) -> Self::Output {
         use StackValue::*;
         match (self, rhs) {
-            (Int32(l), Int32(r)) => Int32(l.wrapping_sub(r)),
-            (Int32(l), NativeInt(r)) => NativeInt((l as isize).wrapping_sub(r)),
-            (Int64(l), Int64(r)) => Int64(l.wrapping_sub(r)),
-            (NativeInt(l), Int32(r)) => NativeInt(l.wrapping_sub(r as isize)),
-            (NativeInt(l), NativeInt(r)) => NativeInt(l.wrapping_sub(r)),
-            (NativeFloat(l), NativeFloat(r)) => NativeFloat(l - r),
             (ManagedPtr(m), Int32(i)) => {
                 // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
                 unsafe { ManagedPtr(m.offset(-(i as isize))) }
@@ -501,7 +465,7 @@ impl<'gc> Sub for StackValue<'gc> {
             (ManagedPtr(m1), ManagedPtr(m2)) => {
                 NativeInt((m1.value.as_ptr() as isize) - (m2.value.as_ptr() as isize))
             }
-            (l, r) => panic!("invalid types for sub: {:?}, {:?}", l, r),
+            (l, r) => wrapping_arithmetic_op!(l, r, wrapping_sub, -),
         }
     }
 }
@@ -509,77 +473,43 @@ impl<'gc> Sub for StackValue<'gc> {
 impl<'gc> Mul for StackValue<'gc> {
     type Output = Self;
     fn mul(self, rhs: Self) -> Self::Output {
-        use StackValue::*;
-        match (self, rhs) {
-            (Int32(l), Int32(r)) => Int32(l.wrapping_mul(r)),
-            (Int32(l), NativeInt(r)) => NativeInt((l as isize).wrapping_mul(r)),
-            (Int64(l), Int64(r)) => Int64(l.wrapping_mul(r)),
-            (NativeInt(l), Int32(r)) => NativeInt(l.wrapping_mul(r as isize)),
-            (NativeInt(l), NativeInt(r)) => NativeInt(l.wrapping_mul(r)),
-            (NativeFloat(l), NativeFloat(r)) => NativeFloat(l * r),
-            (l, r) => panic!("invalid types for mul: {:?}, {:?}", l, r),
-        }
+        wrapping_arithmetic_op!(self, rhs, wrapping_mul, *)
     }
 }
 
 impl<'gc> BitAnd for StackValue<'gc> {
     type Output = Self;
     fn bitand(self, rhs: Self) -> Self::Output {
-        use StackValue::*;
-        match (self, rhs) {
-            (Int32(l), Int32(r)) => Int32(l & r),
-            (Int32(l), NativeInt(r)) => NativeInt((l as isize) & r),
-            (Int64(l), Int64(r)) => Int64(l & r),
-            (NativeInt(l), Int32(r)) => NativeInt(l & (r as isize)),
-            (NativeInt(l), NativeInt(r)) => NativeInt(l & r),
-            (l, r) => panic!("invalid types for and: {:?}, {:?}", l, r),
-        }
+        bitwise_op!(self, rhs, &)
     }
 }
 
 impl<'gc> BitOr for StackValue<'gc> {
     type Output = Self;
     fn bitor(self, rhs: Self) -> Self::Output {
-        use StackValue::*;
-        match (self, rhs) {
-            (Int32(l), Int32(r)) => Int32(l | r),
-            (Int32(l), NativeInt(r)) => NativeInt((l as isize) | r),
-            (Int64(l), Int64(r)) => Int64(l | r),
-            (NativeInt(l), Int32(r)) => NativeInt(l | (r as isize)),
-            (NativeInt(l), NativeInt(r)) => NativeInt(l | r),
-            (l, r) => panic!("invalid types for or: {:?}, {:?}", l, r),
-        }
+        bitwise_op!(self, rhs, |)
     }
 }
 
 impl<'gc> BitXor for StackValue<'gc> {
     type Output = Self;
     fn bitxor(self, rhs: Self) -> Self::Output {
-        use StackValue::*;
-        match (self, rhs) {
-            (Int32(l), Int32(r)) => Int32(l ^ r),
-            (Int32(l), NativeInt(r)) => NativeInt((l as isize) ^ r),
-            (Int64(l), Int64(r)) => Int64(l ^ r),
-            (NativeInt(l), Int32(r)) => NativeInt(l ^ (r as isize)),
-            (NativeInt(l), NativeInt(r)) => NativeInt(l ^ r),
-            (l, r) => panic!("invalid types for xor: {:?}, {:?}", l, r),
-        }
+        bitwise_op!(self, rhs, ^)
     }
 }
 
 impl<'gc> Shl for StackValue<'gc> {
     type Output = Self;
     fn shl(self, rhs: Self) -> Self::Output {
-        use StackValue::*;
         let amount = match rhs {
-            Int32(i) => i as u32,
-            NativeInt(i) => i as u32,
+            StackValue::Int32(i) => i as u32,
+            StackValue::NativeInt(i) => i as u32,
             _ => panic!("invalid shift amount"),
         };
         match self {
-            Int32(i) => Int32(i << amount),
-            Int64(i) => Int64(i << amount),
-            NativeInt(i) => NativeInt(i << amount),
+            StackValue::Int32(i) => StackValue::Int32(i << amount),
+            StackValue::Int64(i) => StackValue::Int64(i << amount),
+            StackValue::NativeInt(i) => StackValue::NativeInt(i << amount),
             _ => panic!("invalid shift target"),
         }
     }

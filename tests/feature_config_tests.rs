@@ -2,6 +2,7 @@
 /// Tests that verify the correct behavior of different feature configurations
 
 use dotnet_rs::vm;
+use dotnet_rs::vm::threading::ThreadManagerOps;
 use std::path::PathBuf;
 use std::sync::Arc;
 

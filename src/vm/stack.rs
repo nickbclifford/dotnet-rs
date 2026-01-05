@@ -109,10 +109,7 @@ pub struct SharedGlobalState<'m> {
     pub loader: &'m AssemblyLoader,
     pub pinvoke: RwLock<NativeLibraries>,
     pub sync_blocks: crate::vm::sync::SyncBlockManager,
-    #[cfg(feature = "multithreading")]
     pub thread_manager: Arc<crate::vm::threading::ThreadManager>,
-    #[cfg(not(feature = "multithreading"))]
-    pub thread_manager: crate::vm::threading::ThreadManager,
     pub metrics: crate::vm::metrics::RuntimeMetrics,
     pub tracer: Mutex<Tracer>,
     pub empty_generics: GenericLookup,
@@ -135,9 +132,6 @@ impl<'m> SharedGlobalState<'m> {
             loader,
             pinvoke: RwLock::new(NativeLibraries::new(loader.get_root())),
             sync_blocks: crate::vm::sync::SyncBlockManager::new(),
-            #[cfg(feature = "multithreading")]
-            thread_manager: Arc::new(crate::vm::threading::ThreadManager::new()),
-            #[cfg(not(feature = "multithreading"))]
             thread_manager: crate::vm::threading::ThreadManager::new(),
             metrics: crate::vm::metrics::RuntimeMetrics::new(),
             tracer: Mutex::new(Tracer::new()),

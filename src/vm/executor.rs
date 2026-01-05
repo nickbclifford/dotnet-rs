@@ -3,6 +3,7 @@ use crate::{
     value::StackValue,
     vm::{
         stack::{ArenaLocalState, CallStack, GCArena, SharedGlobalState},
+        threading::ThreadManagerOps,
         MethodInfo, StepResult,
     },
     vm_msg,
@@ -68,10 +69,7 @@ impl Executor {
             CallStack::new(gc, shared_clone, local)
         }));
 
-        #[cfg(feature = "multithreading")]
         let thread_id = shared.thread_manager.register_thread();
-        #[cfg(not(feature = "multithreading"))]
-        let thread_id = 1u64;
 
         // Register with GC coordinator
         #[cfg(feature = "multithreaded-gc")]
@@ -88,24 +86,14 @@ impl Executor {
             crate::vm::gc::coordinator::set_current_arena_handle(handle);
         }
 
+        // Set thread id in arena
+        arena.mutate(|_, c| {
+            c.thread_id.set(thread_id);
+        });
+
         #[cfg(feature = "multithreaded-gc")]
         THREAD_ARENA.with(|cell| {
             *cell.borrow_mut() = Some(arena);
-        });
-
-        // Set thread id in arena
-        #[cfg(feature = "multithreaded-gc")]
-        THREAD_ARENA.with(|cell| {
-            let mut arena_opt = cell.borrow_mut();
-            let arena = arena_opt.as_mut().unwrap();
-            arena.mutate(|_, c| {
-                c.thread_id.set(thread_id);
-            });
-        });
-
-        #[cfg(not(feature = "multithreaded-gc"))]
-        arena.mutate(|_, c| {
-            c.thread_id.set(thread_id);
         });
 
         Self {
@@ -118,10 +106,7 @@ impl Executor {
 
     pub fn entrypoint(&mut self, method: MethodDescription) {
         // TODO: initialize argv (entry point args are either string[] or nothing, II.15.4.1.2)
-        #[cfg(feature = "multithreaded-gc")]
-        THREAD_ARENA.with(|cell| {
-            let mut arena_opt = cell.borrow_mut();
-            let arena = arena_opt.as_mut().unwrap();
+        self.with_arena(|arena| {
             arena.mutate_root(|gc, c| {
                 c.entrypoint_frame(
                     gc,
@@ -131,16 +116,6 @@ impl Executor {
                 )
             });
         });
-
-        #[cfg(not(feature = "multithreaded-gc"))]
-        self.arena.mutate_root(|gc, c| {
-            c.entrypoint_frame(
-                gc,
-                MethodInfo::new(method, &Default::default(), c.loader()),
-                Default::default(),
-                vec![],
-            )
-        });
     }
 
     // assumes args are already on stack
@@ -148,76 +123,49 @@ impl Executor {
         let result = loop {
             // Perform incremental GC progress with finalization support
             // In a real VM this would be tuned based on allocation pressure
-            #[cfg(feature = "multithreaded-gc")]
             self.with_arena(|arena| {
                 if let Some(marked) = arena.mark_debt() {
                     marked.finalize(|fc, c| c.finalize_check(fc));
                 }
             });
-            #[cfg(not(feature = "multithreaded-gc"))]
-            if let Some(marked) = self.arena.mark_debt() {
-                marked.finalize(|fc, c| c.finalize_check(fc));
-            }
 
-            let full_collect = {
-                #[cfg(feature = "multithreaded-gc")]
-                {
-                    self.with_arena(|arena| {
-                        arena.mutate(|_, c| {
-                            if c.heap().needs_full_collect.get() {
-                                c.heap().needs_full_collect.set(false);
-                                true
-                            } else {
-                                false
-                            }
-                        })
-                    })
-                }
-                #[cfg(not(feature = "multithreaded-gc"))]
-                {
-                    self.arena.mutate(|_, c| {
-                        if c.heap().needs_full_collect.get() {
-                            c.heap().needs_full_collect.set(false);
-                            true
-                        } else {
-                            false
-                        }
-                    })
-                }
-            };
+            let full_collect = self.with_arena(|arena| {
+                arena.mutate(|_, c| {
+                    if c.heap().needs_full_collect.get() {
+                        c.heap().needs_full_collect.set(false);
+                        true
+                    } else {
+                        false
+                    }
+                })
+            });
 
             #[cfg(feature = "multithreaded-gc")]
-            if full_collect || crate::vm::gc::coordinator::is_current_arena_collection_requested() {
-                // For multithreading: coordinate stop-the-world pause
-                self.perform_full_gc();
-                crate::vm::gc::coordinator::reset_current_arena_collection_requested();
-            }
-
+            let collection_requested =
+                full_collect || crate::vm::gc::coordinator::is_current_arena_collection_requested();
             #[cfg(not(feature = "multithreaded-gc"))]
-            if full_collect {
-                // Perform full collection with finalization (mimics multithreaded-gc behavior)
-                let mut marked = None;
-                while marked.is_none() {
-                    marked = self.arena.mark_all();
-                }
-                if let Some(marked) = marked {
-                    marked.finalize(|fc, c| c.finalize_check(fc));
-                }
-                self.arena.collect_all();
+            let collection_requested = full_collect;
+
+            if collection_requested {
+                self.perform_full_gc();
+                #[cfg(feature = "multithreaded-gc")]
+                crate::vm::gc::coordinator::reset_current_arena_collection_requested();
             }
 
             // Reach a safe point between instructions if requested
             #[cfg(feature = "multithreading")]
-            if self.shared.thread_manager.is_gc_stop_requested() {
-                #[cfg(feature = "multithreaded-gc")]
-                self.shared
-                    .thread_manager
-                    .safe_point(self.thread_id, &self.shared.gc_coordinator);
-
-                #[cfg(not(feature = "multithreaded-gc"))]
-                self.shared
-                    .thread_manager
-                    .safe_point(self.thread_id, &Default::default()); // Use default GCCoordinator stub
+            if (*self.shared.thread_manager).is_gc_stop_requested() {
+                let coordinator = {
+                    #[cfg(feature = "multithreaded-gc")]
+                    {
+                        &self.shared.gc_coordinator
+                    }
+                    #[cfg(not(feature = "multithreaded-gc"))]
+                    {
+                        &Default::default()
+                    }
+                };
+                (*self.shared.thread_manager).safe_point(self.thread_id, coordinator);
             }
 
             self.with_arena(|arena| {
@@ -277,59 +225,76 @@ impl Executor {
         };
 
         // Unregister thread when execution completes
-        self.shared.thread_manager.unregister_thread(self.thread_id);
+        (*self.shared.thread_manager).unregister_thread(self.thread_id);
 
         self.shared.tracer.lock().flush();
         result
     }
 
     /// Perform a full GC collection with stop-the-world coordination.
-    #[cfg(feature = "multithreaded-gc")]
     fn perform_full_gc(&mut self) {
-        use std::time::Instant;
-        let start_time = Instant::now();
+        #[cfg(feature = "multithreaded-gc")]
+        {
+            use std::time::Instant;
+            let start_time = Instant::now();
 
-        // 1. Mark that we are starting collection (acquires coordinator lock)
-        let coordinator: Arc<crate::vm::gc::coordinator::GCCoordinator> = Arc::clone(&self.shared.gc_coordinator);
-        let _gc_lock = match coordinator.start_collection() {
-            Some(guard) => guard,
-            None => return, // Another thread is already collecting
-        };
+            // 1. Mark that we are starting collection (acquires coordinator lock)
+            let coordinator: Arc<crate::vm::gc::coordinator::GCCoordinator> =
+                Arc::clone(&self.shared.gc_coordinator);
+            let _gc_lock = match coordinator.start_collection() {
+                Some(guard) => guard,
+                None => return, // Another thread is already collecting
+            };
 
-        self.with_arena(|arena| {
-            arena.mutate(|_, c| {
-                vm_msg!(c, "GC: Coordinated stop-the-world collection started");
+            self.with_arena(|arena| {
+                arena.mutate(|_, c| {
+                    vm_msg!(c, "GC: Coordinated stop-the-world collection started");
+                });
             });
-        });
 
-        // 2. Request stop-the-world pause and wait for all threads to reach safe points
-        let thread_manager = Arc::clone(&self.shared.thread_manager);
-        let _stw_guard = thread_manager.request_stop_the_world();
+            // 2. Request stop-the-world pause and wait for all threads to reach safe points
+            let thread_manager = Arc::clone(&self.shared.thread_manager);
+            let _stw_guard = (*thread_manager).request_stop_the_world();
 
-        // 3. Perform coordinated GC across all arenas
-        self.shared
-            .gc_coordinator
-            .collect_all_arenas(self.thread_id);
+            // 3. Perform coordinated GC across all arenas
+            self.shared
+                .gc_coordinator
+                .collect_all_arenas(self.thread_id);
 
-        // 4. Record metrics and log completion
-        let duration = start_time.elapsed();
-        self.shared.metrics.record_gc_pause(duration);
+            // 4. Record metrics and log completion
+            let duration = start_time.elapsed();
+            self.shared.metrics.record_gc_pause(duration);
 
-        // Mark collection as finished (releases coordinator lock)
-        self.shared.gc_coordinator.finish_collection();
+            // Mark collection as finished (releases coordinator lock)
+            self.shared.gc_coordinator.finish_collection();
 
-        self.with_arena(|arena| {
-            arena.mutate(|_, c| {
-                vm_msg!(c, "GC: Coordinated collection completed in {:?}", duration);
+            self.with_arena(|arena| {
+                arena.mutate(|_, c| {
+                    vm_msg!(c, "GC: Coordinated collection completed in {:?}", duration);
+                });
             });
-        });
+        }
+        #[cfg(not(feature = "multithreaded-gc"))]
+        {
+            // Perform full collection with finalization (mimics multithreaded-gc behavior)
+            self.with_arena(|arena| {
+                let mut marked = None;
+                while marked.is_none() {
+                    marked = arena.mark_all();
+                }
+                if let Some(marked) = marked {
+                    marked.finalize(|fc, c| c.finalize_check(fc));
+                }
+                arena.collect_all();
+            });
+        }
     }
 }
 
 impl Drop for Executor {
     fn drop(&mut self) {
         // Ensure thread is unregistered if not already done
-        self.shared.thread_manager.unregister_thread(self.thread_id);
+        (*self.shared.thread_manager).unregister_thread(self.thread_id);
 
         #[cfg(feature = "multithreaded-gc")]
         self.shared.gc_coordinator.unregister_arena(self.thread_id);
