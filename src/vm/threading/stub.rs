@@ -22,13 +22,13 @@ impl ThreadManagerOps for ThreadManager {
         1
     }
 
-    fn register_thread_traced(&self, _tracer: &Tracer, _name: &str) -> u64 {
+    fn register_thread_traced(&self, _tracer: &mut Tracer, _name: &str) -> u64 {
         1
     }
 
     fn unregister_thread(&self, _managed_id: u64) {}
 
-    fn unregister_thread_traced(&self, _managed_id: u64, _tracer: &Tracer) {}
+    fn unregister_thread_traced(&self, _managed_id: u64, _tracer: &mut Tracer) {}
 
     fn current_thread_id(&self) -> Option<u64> {
         Some(1)
@@ -50,7 +50,7 @@ impl ThreadManagerOps for ThreadManager {
         &self,
         _managed_id: u64,
         _coordinator: &GCCoordinator,
-        _tracer: &Tracer,
+        _tracer: &mut Tracer,
         _location: &str,
     ) {
     }
@@ -59,7 +59,7 @@ impl ThreadManagerOps for ThreadManager {
         StopTheWorldGuard
     }
 
-    fn request_stop_the_world_traced(&self, _tracer: &Tracer) -> Self::Guard {
+    fn request_stop_the_world_traced(&self, _tracer: &mut Tracer) -> Self::Guard {
         StopTheWorldGuard
     }
 }

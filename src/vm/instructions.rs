@@ -17,7 +17,7 @@ use crate::{
         threading::ThreadManagerOps,
         CallStack, GCHandle, MethodInfo, StepResult,
     },
-    vm_expect_stack, vm_msg, vm_pop, vm_push, vm_trace_branch, vm_trace_field,
+    vm_expect_stack, vm_pop, vm_push, vm_trace, vm_trace_branch, vm_trace_field,
     vm_trace_instruction,
 };
 use dotnetdll::prelude::*;
@@ -128,7 +128,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             use crate::value::storage::StaticInitResult::*;
             match init_result {
                 Execute(m) => {
-                    vm_msg!(
+                    vm_trace!(
                         self,
                         "-- calling static constructor (will return to ip {}) --",
                         self.current_frame().state.ip
@@ -370,7 +370,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         .locate_method(o.implementation, &lookup);
                     let declaration = self.current_context().locate_method(o.declaration, &lookup);
                     if method == declaration {
-                        vm_msg!(self, "-- dispatching to {:?} --", target);
+                        vm_trace!(self, "-- dispatching to {:?} --", target);
                         let result = self.dispatch_method(gc, target, lookup);
                         if let StepResult::InstructionStepped = result {
                             if initial_frame_count == self.execution.frames.len() {

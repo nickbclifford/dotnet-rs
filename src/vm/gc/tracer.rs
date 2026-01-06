@@ -32,13 +32,26 @@
 //!
 //! - `DOTNET_RS_TRACE_STATS`: Enable detailed statistics collection (`"1"` or `"true"`)
 //!
+//! - `DOTNET_RS_TRACE_FORMAT`: Output format (`"text"` or `"json"`, default: `"text"`)
+//!
+//! - `DOTNET_RS_TRACE_LEVEL`: Minimum trace level to output
+//!   - `"error"`: Only errors
+//!   - `"info"`: Info and above (includes errors)
+//!   - `"debug"`: Debug and above (includes info and errors)
+//!   - `"trace"`: Trace and above (includes debug, info, and errors)
+//!   - `"instruction"`: All messages including instruction-level tracing (default)
+//!
 //! ## Performance Characteristics
 //!
-//! - 256KB write buffer to minimize syscalls
-//! - Automatic periodic flushing to prevent buffer overflow
-//! - Early-exit checks when tracing is disabled (zero-cost when off)
-//! - Lazy string formatting only when tracing is active
-//! - Optional statistics collection (disabled by default for minimal overhead)
+//! - **Asynchronous I/O**: Trace messages are sent to a background thread via a bounded channel,
+//!   decoupling tracing from VM execution for minimal performance impact
+//! - **Lock-free checks**: Tracer enabled status uses atomic operations, avoiding mutex contention
+//! - **256KB write buffer**: Minimizes syscalls in the background writer thread
+//! - **Automatic periodic flushing**: Prevents buffer overflow and ensures trace visibility
+//! - **Early-exit checks**: Zero-cost when tracing is disabled
+//! - **Lazy string formatting**: Strings are only formatted when tracing is active and not filtered
+//! - **Level filtering**: Messages are filtered before formatting to avoid unnecessary work
+//! - **Optional statistics collection**: Disabled by default for minimal overhead
 //!
 //! ## Usage Examples
 //!
@@ -67,16 +80,76 @@
 //! vm_trace_heap_snapshot!(ctx);         // Just the heap
 //! ```
 use crate::{value::object::HeapStorage, vm::CallStack};
+use crossbeam_channel::{bounded, Sender};
 use gc_arena::{unsafe_empty_collect, Collect, Gc};
+use serde::{Deserialize, Serialize};
 use std::{
-    cell::{Cell, RefCell},
     env,
     fs::File,
     io::{stderr, stdout, BufWriter, Write},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    thread::{self, JoinHandle},
 };
 
 const BUFFER_SIZE: usize = 256 * 1024; // 256KB buffer for better IO performance
 const AUTO_FLUSH_INTERVAL: usize = 10_000; // Auto-flush every N messages
+const CHANNEL_CAPACITY: usize = 10_000; // Channel capacity for trace messages
+
+/// Trace level for filtering messages
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TraceLevel {
+    Error = 0,
+    Info = 1,
+    Debug = 2,
+    Trace = 3,
+    Instruction = 4,
+}
+
+impl TraceLevel {
+    fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "error" => Some(Self::Error),
+            "info" => Some(Self::Info),
+            "debug" => Some(Self::Debug),
+            "trace" => Some(Self::Trace),
+            "instruction" => Some(Self::Instruction),
+            _ => None,
+        }
+    }
+}
+
+/// Output format for trace messages
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TraceFormat {
+    Text,
+    Json,
+}
+
+/// Trace message types for asynchronous tracing
+#[derive(Debug)]
+enum TraceMessage {
+    /// Generic message with indentation and level
+    Message {
+        level: TraceLevel,
+        indent: usize,
+        text: String,
+        metadata: MessageMetadata,
+    },
+    /// Flush the output
+    Flush,
+    /// Shutdown the tracer thread
+    Shutdown,
+}
+
+/// Metadata for trace messages
+#[derive(Debug, Clone, Serialize)]
+struct MessageMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thread_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timestamp_us: Option<u64>,
+}
 
 /// Statistics for runtime execution tracing
 #[derive(Debug, Clone, Default)]
@@ -102,12 +175,13 @@ pub struct TraceStats {
 }
 
 pub struct Tracer {
-    enabled: bool,
-    writer: RefCell<Option<BufWriter<Box<dyn Write + Send>>>>,
-    message_count: Cell<usize>,
-    auto_flush_interval: usize,
-    stats: RefCell<TraceStats>,
+    enabled: AtomicBool,
+    sender: Option<Sender<TraceMessage>>,
+    writer_thread: Option<JoinHandle<()>>,
+    message_count: AtomicUsize,
+    stats: TraceStats,
     detailed_stats: bool,
+    min_level: TraceLevel,
 }
 unsafe_empty_collect!(Tracer);
 
@@ -143,180 +217,304 @@ impl Tracer {
             .map(|v| v == "1" || v == "true")
             .unwrap_or(false);
 
+        // Determine output format
+        let format = env::var("DOTNET_RS_TRACE_FORMAT")
+            .ok()
+            .and_then(|v| match v.to_lowercase().as_str() {
+                "json" => Some(TraceFormat::Json),
+                "text" => Some(TraceFormat::Text),
+                _ => None,
+            })
+            .unwrap_or(TraceFormat::Text);
+
+        // Determine minimum trace level
+        let min_level = env::var("DOTNET_RS_TRACE_LEVEL")
+            .ok()
+            .and_then(|v| TraceLevel::from_str(&v))
+            .unwrap_or(TraceLevel::Instruction);
+
+        // Set up asynchronous tracing if enabled
+        let (sender, writer_thread) = if enabled {
+            let (tx, rx) = bounded(CHANNEL_CAPACITY);
+            let mut buffered_writer = writer.map(|w| BufWriter::with_capacity(BUFFER_SIZE, w));
+
+            let handle = thread::spawn(move || {
+                let mut message_count = 0usize;
+
+                while let Ok(msg) = rx.recv() {
+                    match msg {
+                        TraceMessage::Message {
+                            level,
+                            indent,
+                            text,
+                            metadata,
+                        } => {
+                            if let Some(ref mut writer) = buffered_writer {
+                                match format {
+                                    TraceFormat::Text => {
+                                        // Write indentation
+                                        for _ in 0..indent {
+                                            let _ = writer.write_all(b"  ");
+                                        }
+                                        // Write message
+                                        let _ = writer.write_all(text.as_bytes());
+                                        let _ = writer.write_all(b"\n");
+                                    }
+                                    TraceFormat::Json => {
+                                        // Serialize as JSON
+                                        let json_msg = serde_json::json!({
+                                            "level": level,
+                                            "indent": indent,
+                                            "message": text,
+                                            "metadata": metadata,
+                                        });
+                                        if let Ok(json_str) = serde_json::to_string(&json_msg) {
+                                            let _ = writer.write_all(json_str.as_bytes());
+                                            let _ = writer.write_all(b"\n");
+                                        }
+                                    }
+                                }
+
+                                // Periodic auto-flush
+                                message_count += 1;
+                                if message_count >= auto_flush_interval {
+                                    let _ = writer.flush();
+                                    message_count = 0;
+                                }
+                            }
+                        }
+                        TraceMessage::Flush => {
+                            if let Some(ref mut writer) = buffered_writer {
+                                let _ = writer.flush();
+                            }
+                            message_count = 0;
+                        }
+                        TraceMessage::Shutdown => {
+                            // Final flush before shutdown
+                            if let Some(ref mut writer) = buffered_writer {
+                                let _ = writer.flush();
+                            }
+                            break;
+                        }
+                    }
+                }
+            });
+
+            (Some(tx), Some(handle))
+        } else {
+            (None, None)
+        };
+
         Self {
-            enabled,
-            writer: RefCell::new(writer.map(|w| BufWriter::with_capacity(BUFFER_SIZE, w))),
-            message_count: Cell::new(0),
-            auto_flush_interval,
-            stats: RefCell::new(TraceStats::default()),
+            enabled: AtomicBool::new(enabled),
+            sender,
+            writer_thread,
+            message_count: AtomicUsize::new(0),
+            stats: TraceStats::default(),
             detailed_stats,
+            min_level,
         }
     }
 
     #[inline(always)]
     pub fn is_enabled(&self) -> bool {
-        self.enabled
+        self.enabled.load(Ordering::Relaxed)
     }
 
     #[inline(always)]
-    fn write_msg(&self, indent: usize, args: std::fmt::Arguments) {
-        if let Some(ref mut writer) = *self.writer.borrow_mut() {
-            // Write indentation
-            for _ in 0..indent {
-                let _ = writer.write_all(b"  ");
-            }
-            // Write message
-            let _ = writer.write_fmt(args);
-            let _ = writer.write_all(b"\n");
+    fn write_msg(&mut self, level: TraceLevel, indent: usize, args: std::fmt::Arguments) {
+        // Early exit if level is filtered out
+        if level > self.min_level {
+            return;
+        }
 
-            // Periodic auto-flush to prevent buffer overflow and ensure visibility
-            let count = self.message_count.get() + 1;
-            self.message_count.set(count);
-            if count >= self.auto_flush_interval {
-                let _ = writer.flush();
-                self.message_count.set(0);
-            }
+        if let Some(ref sender) = self.sender {
+            let text = format!("{}", args);
+            let metadata = MessageMetadata {
+                thread_id: None,    // TODO: Add thread ID support
+                timestamp_us: None, // TODO: Add timestamp support
+            };
+            // Use blocking send to ensure message delivery. If the channel is full,
+            // this indicates the trace consumer cannot keep up, which is acceptable
+            // since tracing is a debugging tool and blocking prevents message loss.
+            let _ = sender.send(TraceMessage::Message {
+                level,
+                indent,
+                text,
+                metadata,
+            });
+
+            // Track message count for statistics
+            self.message_count.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    pub fn msg(&self, indent: usize, args: std::fmt::Arguments) {
-        if !self.enabled {
+    pub fn msg(&mut self, level: TraceLevel, indent: usize, args: std::fmt::Arguments) {
+        if !self.is_enabled() {
             return;
         }
 
         if self.detailed_stats {
-            self.stats.borrow_mut().total_messages += 1;
+            self.stats.total_messages += 1;
         }
 
-        self.write_msg(indent, args);
+        self.write_msg(level, indent, args);
     }
 
-    pub fn flush(&self) {
-        if self.enabled {
-            if let Some(ref mut writer) = *self.writer.borrow_mut() {
-                let _ = writer.flush();
+    pub fn flush(&mut self) {
+        if self.is_enabled() {
+            if let Some(ref sender) = self.sender {
+                let _ = sender.try_send(TraceMessage::Flush);
             }
-            self.message_count.set(0);
         }
     }
 
-    pub fn trace_instruction(&self, indent: usize, ip: usize, instruction: &str) {
-        if !self.enabled {
+    pub fn trace_instruction(&mut self, indent: usize, ip: usize, instruction: &str) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().instructions_traced += 1;
+            self.stats.instructions_traced += 1;
         }
-        self.write_msg(indent, format_args!("[IP:{:04}] {}", ip, instruction));
+        self.write_msg(
+            TraceLevel::Instruction,
+            indent,
+            format_args!("[IP:{:04}] {}", ip, instruction),
+        );
     }
 
-    pub fn trace_method_entry(&self, indent: usize, name: &str, signature: &str) {
-        if !self.enabled {
+    pub fn trace_method_entry(&mut self, indent: usize, name: &str, signature: &str) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().method_calls += 1;
+            self.stats.method_calls += 1;
         }
         if signature.is_empty() {
-            self.write_msg(indent, format_args!("→ CALL {}", name));
+            self.write_msg(TraceLevel::Trace, indent, format_args!("→ CALL {}", name));
         } else {
-            self.write_msg(indent, format_args!("→ CALL {} ({})", name, signature));
+            self.write_msg(
+                TraceLevel::Trace,
+                indent,
+                format_args!("→ CALL {} ({})", name, signature),
+            );
         }
     }
 
-    pub fn trace_method_exit(&self, indent: usize, name: &str) {
-        if !self.enabled {
+    pub fn trace_method_exit(&mut self, indent: usize, name: &str) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().method_returns += 1;
+            self.stats.method_returns += 1;
         }
-        self.write_msg(indent, format_args!("← RET  {}", name));
+        self.write_msg(TraceLevel::Trace, indent, format_args!("← RET  {}", name));
     }
 
-    pub fn trace_exception(&self, indent: usize, exception: &str, location: &str) {
-        if !self.enabled {
+    pub fn trace_exception(&mut self, indent: usize, exception: &str, location: &str) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().exceptions += 1;
+            self.stats.exceptions += 1;
         }
-        self.write_msg(indent, format_args!("⚠ EXC  {} at {}", exception, location));
+        self.write_msg(
+            TraceLevel::Error,
+            indent,
+            format_args!("⚠ EXC  {} at {}", exception, location),
+        );
     }
 
-    pub fn trace_gc_event(&self, indent: usize, event: &str, details: &str) {
-        if !self.enabled {
+    pub fn trace_gc_event(&mut self, indent: usize, event: &str, details: &str) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().gc_events += 1;
+            self.stats.gc_events += 1;
         }
-        self.write_msg(indent, format_args!("♻ GC   {} ({})", event, details));
+        self.write_msg(
+            TraceLevel::Debug,
+            indent,
+            format_args!("♻ GC   {} ({})", event, details),
+        );
     }
 
-    pub fn trace_stack_op(&self, indent: usize, op: &str, value: &str) {
-        if !self.enabled {
+    pub fn trace_stack_op(&mut self, indent: usize, op: &str, value: &str) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().stack_ops += 1;
+            self.stats.stack_ops += 1;
         }
-        self.write_msg(indent, format_args!("  STACK {} {}", op, value));
+        self.write_msg(
+            TraceLevel::Instruction,
+            indent,
+            format_args!("  STACK {} {}", op, value),
+        );
     }
 
-    pub fn trace_field_access(&self, indent: usize, op: &str, field: &str, value: &str) {
-        if !self.enabled {
+    pub fn trace_field_access(&mut self, indent: usize, op: &str, field: &str, value: &str) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().field_accesses += 1;
+            self.stats.field_accesses += 1;
         }
-        self.write_msg(indent, format_args!("  FIELD {} {} = {}", op, field, value));
+        self.write_msg(
+            TraceLevel::Instruction,
+            indent,
+            format_args!("  FIELD {} {} = {}", op, field, value),
+        );
     }
 
-    pub fn trace_branch(&self, indent: usize, branch_type: &str, target: usize, taken: bool) {
-        if !self.enabled {
+    pub fn trace_branch(&mut self, indent: usize, branch_type: &str, target: usize, taken: bool) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().branches += 1;
+            self.stats.branches += 1;
         }
         let status = if taken { "TAKEN" } else { "NOT TAKEN" };
         self.write_msg(
+            TraceLevel::Instruction,
             indent,
             format_args!("↷ {} to {:04} ({})", branch_type, target, status),
         );
     }
 
-    pub fn trace_type_info(&self, indent: usize, operation: &str, type_name: &str) {
-        if !self.enabled {
+    pub fn trace_type_info(&mut self, indent: usize, operation: &str, type_name: &str) {
+        if !self.is_enabled() {
             return;
         }
-        self.write_msg(indent, format_args!("  TYPE {} {}", operation, type_name));
+        self.write_msg(
+            TraceLevel::Debug,
+            indent,
+            format_args!("  TYPE {} {}", operation, type_name),
+        );
     }
 
     // Performance counter helpers
     pub fn get_message_count(&self) -> usize {
-        self.message_count.get()
+        self.message_count.load(Ordering::Relaxed)
     }
 
-    pub fn reset_message_count(&self) {
-        self.message_count.set(0);
+    pub fn reset_message_count(&mut self) {
+        self.message_count.store(0, Ordering::Relaxed);
     }
 
     pub fn get_stats(&self) -> TraceStats {
-        self.stats.borrow().clone()
+        self.stats.clone()
     }
 
-    pub fn reset_stats(&self) {
-        *self.stats.borrow_mut() = TraceStats::default();
+    pub fn reset_stats(&mut self) {
+        self.stats = TraceStats::default();
     }
 
     pub fn print_stats(&self) {
         if !self.detailed_stats {
             return;
         }
-        let stats = self.stats.borrow();
+        let stats = &self.stats;
         eprintln!("\n=== Tracer Statistics ===");
         eprintln!("Total messages:      {:>12}", stats.total_messages);
         eprintln!("Instructions traced: {:>12}", stats.instructions_traced);
@@ -343,11 +541,22 @@ impl Tracer {
 impl Drop for Tracer {
     fn drop(&mut self) {
         // Print stats on drop if enabled
-        if self.detailed_stats && self.enabled {
+        if self.detailed_stats && self.is_enabled() {
             self.print_stats();
         }
-        // Final flush on drop
-        self.flush();
+
+        // Send shutdown signal to background thread.
+        // If sending fails, the channel is already disconnected (thread panicked).
+        if let Some(ref sender) = self.sender {
+            let _ = sender.send(TraceMessage::Shutdown);
+        }
+
+        // Wait for background thread to finish flushing and exit.
+        // If the thread panicked, join() will return Err, which we ignore to avoid
+        // panicking during drop. The thread owns no critical resources.
+        if let Some(handle) = self.writer_thread.take() {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -360,24 +569,30 @@ impl Default for Tracer {
 // Structured state capture methods for comprehensive debugging
 impl Tracer {
     /// Writes a stack snapshot to the trace output
-    pub fn dump_stack_state(&self, stack_contents: &[String], frame_markers: &[(usize, String)]) {
-        if !self.enabled {
+    pub fn dump_stack_state(
+        &mut self,
+        stack_contents: &[String],
+        frame_markers: &[(usize, String)],
+    ) {
+        if !self.is_enabled() {
             return;
         }
 
-        self.msg(0, format_args!(""));
+        self.msg(TraceLevel::Debug, 0, format_args!(""));
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("╔════════════════════════════════════════════════════════════"),
         );
-        self.msg(0, format_args!("║ STACK SNAPSHOT"));
+        self.msg(TraceLevel::Debug, 0, format_args!("║ STACK SNAPSHOT"));
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("╠════════════════════════════════════════════════════════════"),
         );
 
         if stack_contents.is_empty() {
-            self.msg(0, format_args!("║ (empty stack)"));
+            self.msg(TraceLevel::Debug, 0, format_args!("║ (empty stack)"));
         } else {
             for (idx, content) in stack_contents.iter().enumerate().rev() {
                 // Check for frame markers at this position
@@ -389,15 +604,16 @@ impl Tracer {
 
                 if !markers.is_empty() {
                     for marker in markers {
-                        self.msg(0, format_args!("╟─ {} ", marker));
+                        self.msg(TraceLevel::Debug, 0, format_args!("╟─ {} ", marker));
                     }
                 }
 
-                self.msg(0, format_args!("║ [{:4}] {}", idx, content));
+                self.msg(TraceLevel::Debug, 0, format_args!("║ [{:4}] {}", idx, content));
             }
         }
 
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("╚════════════════════════════════════════════════════════════"),
         );
@@ -406,7 +622,7 @@ impl Tracer {
     /// Writes frame information to the trace output
     #[allow(clippy::too_many_arguments)]
     pub fn dump_frame_state(
-        &self,
+        &mut self,
         frame_idx: usize,
         method_name: &str,
         ip: usize,
@@ -415,116 +631,129 @@ impl Tracer {
         stack_base: usize,
         stack_height: usize,
     ) {
-        if !self.enabled {
+        if !self.is_enabled() {
             return;
         }
 
-        self.msg(0, format_args!(""));
+        self.msg(TraceLevel::Debug, 0, format_args!(""));
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("╔════════════════════════════════════════════════════════════"),
         );
-        self.msg(0, format_args!("║ FRAME #{} - {}", frame_idx, method_name));
+        self.msg(TraceLevel::Debug, 0, format_args!("║ FRAME #{} - {}", frame_idx, method_name));
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("╠════════════════════════════════════════════════════════════"),
         );
-        self.msg(0, format_args!("║ IP:           {:04}", ip));
-        self.msg(0, format_args!("║ Args base:    {}", args_base));
-        self.msg(0, format_args!("║ Locals base:  {}", locals_base));
-        self.msg(0, format_args!("║ Stack base:   {}", stack_base));
-        self.msg(0, format_args!("║ Stack height: {}", stack_height));
+        self.msg(TraceLevel::Debug, 0, format_args!("║ IP:           {:04}", ip));
+        self.msg(TraceLevel::Debug, 0, format_args!("║ Args base:    {}", args_base));
+        self.msg(TraceLevel::Debug, 0, format_args!("║ Locals base:  {}", locals_base));
+        self.msg(TraceLevel::Debug, 0, format_args!("║ Stack base:   {}", stack_base));
+        self.msg(TraceLevel::Debug, 0, format_args!("║ Stack height: {}", stack_height));
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("╚════════════════════════════════════════════════════════════"),
         );
     }
 
     /// Writes heap object information to the trace output
-    pub fn dump_heap_object(&self, ptr_addr: usize, obj_type: &str, details: &str) {
-        if !self.enabled {
+    pub fn dump_heap_object(&mut self, ptr_addr: usize, obj_type: &str, details: &str) {
+        if !self.is_enabled() {
             return;
         }
 
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("HEAP[{:#x}] {} => {}", ptr_addr, obj_type, details),
         );
     }
 
     /// Writes a heap snapshot header
-    pub fn dump_heap_snapshot_start(&self, object_count: usize) {
-        if !self.enabled {
+    pub fn dump_heap_snapshot_start(&mut self, object_count: usize) {
+        if !self.is_enabled() {
             return;
         }
 
-        self.msg(0, format_args!(""));
+        self.msg(TraceLevel::Debug, 0, format_args!(""));
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("╔════════════════════════════════════════════════════════════"),
         );
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("║ HEAP SNAPSHOT ({} objects)", object_count),
         );
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("╠════════════════════════════════════════════════════════════"),
         );
     }
 
     /// Writes a heap snapshot footer
-    pub fn dump_heap_snapshot_end(&self) {
-        if !self.enabled {
+    pub fn dump_heap_snapshot_end(&mut self) {
+        if !self.is_enabled() {
             return;
         }
 
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("╚════════════════════════════════════════════════════════════"),
         );
     }
 
     /// Writes static storage information
-    pub fn dump_statics_snapshot(&self, statics_debug: &str) {
-        if !self.enabled {
+    pub fn dump_statics_snapshot(&mut self, statics_debug: &str) {
+        if !self.is_enabled() {
             return;
         }
 
-        self.msg(0, format_args!(""));
+        self.msg(TraceLevel::Debug, 0, format_args!(""));
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("╔════════════════════════════════════════════════════════════"),
         );
-        self.msg(0, format_args!("║ STATIC STORAGE SNAPSHOT"));
+        self.msg(TraceLevel::Debug, 0, format_args!("║ STATIC STORAGE SNAPSHOT"));
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("╠════════════════════════════════════════════════════════════"),
         );
 
         for line in statics_debug.lines() {
-            self.msg(0, format_args!("║ {}", line));
+            self.msg(TraceLevel::Debug, 0, format_args!("║ {}", line));
         }
 
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("╚════════════════════════════════════════════════════════════"),
         );
     }
 
     /// Writes a complete runtime state snapshot
-    pub fn dump_full_state_header(&self) {
-        if !self.enabled {
+    pub fn dump_full_state_header(&mut self) {
+        if !self.is_enabled() {
             return;
         }
 
-        self.msg(0, format_args!(""));
+        self.msg(TraceLevel::Debug, 0, format_args!(""));
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("╔════════════════════════════════════════════════════════════"),
         );
-        self.msg(0, format_args!("║ FULL RUNTIME STATE SNAPSHOT"));
+        self.msg(TraceLevel::Debug, 0, format_args!("║ FULL RUNTIME STATE SNAPSHOT"));
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("╚════════════════════════════════════════════════════════════"),
         );
@@ -532,42 +761,48 @@ impl Tracer {
 
     /// Writes GC statistics
     pub fn dump_gc_stats(
-        &self,
+        &mut self,
         finalization_queue: usize,
         pending_finalization: usize,
         pinned_objects: usize,
         gc_handles: usize,
         all_objects: usize,
     ) {
-        if !self.enabled {
+        if !self.is_enabled() {
             return;
         }
 
-        self.msg(0, format_args!(""));
+        self.msg(TraceLevel::Debug, 0, format_args!(""));
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("╔════════════════════════════════════════════════════════════"),
         );
-        self.msg(0, format_args!("║ GC STATISTICS"));
+        self.msg(TraceLevel::Debug, 0, format_args!("║ GC STATISTICS"));
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("╠════════════════════════════════════════════════════════════"),
         );
-        self.msg(0, format_args!("║ All objects:          {}", all_objects));
+        self.msg(TraceLevel::Debug, 0, format_args!("║ All objects:          {}", all_objects));
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("║ Finalization queue:   {}", finalization_queue),
         );
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("║ Pending finalization: {}", pending_finalization),
         );
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("║ Pinned objects:       {}", pinned_objects),
         );
-        self.msg(0, format_args!("║ GC handles:           {}", gc_handles));
+        self.msg(TraceLevel::Debug, 0, format_args!("║ GC handles:           {}", gc_handles));
         self.msg(
+            TraceLevel::Debug,
             0,
             format_args!("╚════════════════════════════════════════════════════════════"),
         );
@@ -576,15 +811,16 @@ impl Tracer {
     // === GC-specific tracing methods ===
 
     /// Trace the start of a GC collection cycle
-    pub fn trace_gc_collection_start(&self, indent: usize, generation: usize, reason: &str) {
-        if !self.enabled {
+    pub fn trace_gc_collection_start(&mut self, indent: usize, generation: usize, reason: &str) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().gc_collections += 1;
-            self.stats.borrow_mut().gc_events += 1;
+            self.stats.gc_collections += 1;
+            self.stats.gc_events += 1;
         }
         self.write_msg(
+            TraceLevel::Info,
             indent,
             format_args!("♻ GC   COLLECTION START [Gen {}] ({})", generation, reason),
         );
@@ -592,19 +828,20 @@ impl Tracer {
 
     /// Trace the end of a GC collection cycle
     pub fn trace_gc_collection_end(
-        &self,
+        &mut self,
         indent: usize,
         generation: usize,
         collected: usize,
         duration_us: u64,
     ) {
-        if !self.enabled {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().gc_events += 1;
+            self.stats.gc_events += 1;
         }
         self.write_msg(
+            TraceLevel::Info,
             indent,
             format_args!(
                 "♻ GC   COLLECTION END [Gen {}] ({} objects collected, {} μs)",
@@ -614,44 +851,53 @@ impl Tracer {
     }
 
     /// Trace heap allocation
-    pub fn trace_gc_allocation(&self, indent: usize, type_name: &str, size_bytes: usize) {
-        if !self.enabled {
+    pub fn trace_gc_allocation(&mut self, indent: usize, type_name: &str, size_bytes: usize) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().gc_allocations += 1;
-            self.stats.borrow_mut().gc_events += 1;
+            self.stats.gc_allocations += 1;
+            self.stats.gc_events += 1;
         }
         self.write_msg(
+            TraceLevel::Debug,
             indent,
             format_args!("♻ GC   ALLOC {} ({} bytes)", type_name, size_bytes),
         );
     }
 
     /// Trace object finalization
-    pub fn trace_gc_finalization(&self, indent: usize, obj_type: &str, obj_addr: usize) {
-        if !self.enabled {
+    pub fn trace_gc_finalization(&mut self, indent: usize, obj_type: &str, obj_addr: usize) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().gc_finalizations += 1;
-            self.stats.borrow_mut().gc_events += 1;
+            self.stats.gc_finalizations += 1;
+            self.stats.gc_events += 1;
         }
         self.write_msg(
+            TraceLevel::Debug,
             indent,
             format_args!("♻ GC   FINALIZE {} @ {:#x}", obj_type, obj_addr),
         );
     }
 
     /// Trace GC handle operations
-    pub fn trace_gc_handle(&self, indent: usize, operation: &str, handle_type: &str, addr: usize) {
-        if !self.enabled {
+    pub fn trace_gc_handle(
+        &mut self,
+        indent: usize,
+        operation: &str,
+        handle_type: &str,
+        addr: usize,
+    ) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().gc_events += 1;
+            self.stats.gc_events += 1;
         }
         self.write_msg(
+            TraceLevel::Debug,
             indent,
             format_args!(
                 "♻ GC   HANDLE {} [{}] @ {:#x}",
@@ -661,42 +907,45 @@ impl Tracer {
     }
 
     /// Trace GC pinning operations
-    pub fn trace_gc_pin(&self, indent: usize, operation: &str, obj_addr: usize) {
-        if !self.enabled {
+    pub fn trace_gc_pin(&mut self, indent: usize, operation: &str, obj_addr: usize) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().gc_events += 1;
+            self.stats.gc_events += 1;
         }
         self.write_msg(
+            TraceLevel::Debug,
             indent,
             format_args!("♻ GC   PIN {} @ {:#x}", operation, obj_addr),
         );
     }
 
     /// Trace weak reference updates
-    pub fn trace_gc_weak_ref(&self, indent: usize, operation: &str, handle_id: usize) {
-        if !self.enabled {
+    pub fn trace_gc_weak_ref(&mut self, indent: usize, operation: &str, handle_id: usize) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().gc_events += 1;
+            self.stats.gc_events += 1;
         }
         self.write_msg(
+            TraceLevel::Debug,
             indent,
             format_args!("♻ GC   WEAK {} (handle {})", operation, handle_id),
         );
     }
 
     /// Trace resurrection during finalization
-    pub fn trace_gc_resurrection(&self, indent: usize, obj_type: &str, obj_addr: usize) {
-        if !self.enabled {
+    pub fn trace_gc_resurrection(&mut self, indent: usize, obj_type: &str, obj_addr: usize) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().gc_events += 1;
+            self.stats.gc_events += 1;
         }
         self.write_msg(
+            TraceLevel::Debug,
             indent,
             format_args!("♻ GC   RESURRECT {} @ {:#x}", obj_type, obj_addr),
         );
@@ -706,14 +955,15 @@ impl Tracer {
 
     #[cfg(feature = "multithreading")]
     /// Trace thread creation
-    pub fn trace_thread_create(&self, indent: usize, thread_id: u64, name: &str) {
-        if !self.enabled {
+    pub fn trace_thread_create(&mut self, indent: usize, thread_id: u64, name: &str) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().thread_events += 1;
+            self.stats.thread_events += 1;
         }
         self.write_msg(
+            TraceLevel::Info,
             indent,
             format_args!("⚙ THREAD CREATE [ID:{}] \"{}\"", thread_id, name),
         );
@@ -721,39 +971,48 @@ impl Tracer {
 
     #[cfg(feature = "multithreading")]
     /// Trace thread start
-    pub fn trace_thread_start(&self, indent: usize, thread_id: u64) {
-        if !self.enabled {
+    pub fn trace_thread_start(&mut self, indent: usize, thread_id: u64) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().thread_events += 1;
+            self.stats.thread_events += 1;
         }
-        self.write_msg(indent, format_args!("⚙ THREAD START [ID:{}]", thread_id));
+        self.write_msg(
+            TraceLevel::Info,
+            indent,
+            format_args!("⚙ THREAD START [ID:{}]", thread_id),
+        );
     }
 
     #[cfg(feature = "multithreading")]
     /// Trace thread exit
-    pub fn trace_thread_exit(&self, indent: usize, thread_id: u64) {
-        if !self.enabled {
+    pub fn trace_thread_exit(&mut self, indent: usize, thread_id: u64) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().thread_events += 1;
+            self.stats.thread_events += 1;
         }
-        self.write_msg(indent, format_args!("⚙ THREAD EXIT [ID:{}]", thread_id));
+        self.write_msg(
+            TraceLevel::Info,
+            indent,
+            format_args!("⚙ THREAD EXIT [ID:{}]", thread_id),
+        );
     }
 
     #[cfg(feature = "multithreading")]
     /// Trace thread reaching a safe point
-    pub fn trace_thread_safepoint(&self, indent: usize, thread_id: u64, location: &str) {
-        if !self.enabled {
+    pub fn trace_thread_safepoint(&mut self, indent: usize, thread_id: u64, location: &str) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().thread_safepoints += 1;
-            self.stats.borrow_mut().thread_events += 1;
+            self.stats.thread_safepoints += 1;
+            self.stats.thread_events += 1;
         }
         self.write_msg(
+            TraceLevel::Debug,
             indent,
             format_args!("⚙ THREAD SAFEPOINT [ID:{}] at {}", thread_id, location),
         );
@@ -761,15 +1020,16 @@ impl Tracer {
 
     #[cfg(feature = "multithreading")]
     /// Trace thread suspension for GC
-    pub fn trace_thread_suspend(&self, indent: usize, thread_id: u64, reason: &str) {
-        if !self.enabled {
+    pub fn trace_thread_suspend(&mut self, indent: usize, thread_id: u64, reason: &str) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().thread_suspensions += 1;
-            self.stats.borrow_mut().thread_events += 1;
+            self.stats.thread_suspensions += 1;
+            self.stats.thread_events += 1;
         }
         self.write_msg(
+            TraceLevel::Debug,
             indent,
             format_args!("⚙ THREAD SUSPEND [ID:{}] ({})", thread_id, reason),
         );
@@ -777,26 +1037,31 @@ impl Tracer {
 
     #[cfg(feature = "multithreading")]
     /// Trace thread resumption after GC
-    pub fn trace_thread_resume(&self, indent: usize, thread_id: u64) {
-        if !self.enabled {
+    pub fn trace_thread_resume(&mut self, indent: usize, thread_id: u64) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().thread_events += 1;
+            self.stats.thread_events += 1;
         }
-        self.write_msg(indent, format_args!("⚙ THREAD RESUME [ID:{}]", thread_id));
+        self.write_msg(
+            TraceLevel::Debug,
+            indent,
+            format_args!("⚙ THREAD RESUME [ID:{}]", thread_id),
+        );
     }
 
     #[cfg(feature = "multithreaded-gc")]
     /// Trace stop-the-world GC pause start
-    pub fn trace_stw_start(&self, indent: usize, active_threads: usize) {
-        if !self.enabled {
+    pub fn trace_stw_start(&mut self, indent: usize, active_threads: usize) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().thread_events += 1;
+            self.stats.thread_events += 1;
         }
         self.write_msg(
+            TraceLevel::Info,
             indent,
             format_args!("⚙ STOP-THE-WORLD START ({} active threads)", active_threads),
         );
@@ -804,14 +1069,15 @@ impl Tracer {
 
     #[cfg(feature = "multithreaded-gc")]
     /// Trace stop-the-world GC pause end
-    pub fn trace_stw_end(&self, indent: usize, duration_us: u64) {
-        if !self.enabled {
+    pub fn trace_stw_end(&mut self, indent: usize, duration_us: u64) {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().thread_events += 1;
+            self.stats.thread_events += 1;
         }
         self.write_msg(
+            TraceLevel::Info,
             indent,
             format_args!("⚙ STOP-THE-WORLD END ({} μs)", duration_us),
         );
@@ -820,19 +1086,20 @@ impl Tracer {
     #[cfg(feature = "multithreading")]
     /// Trace thread state transition
     pub fn trace_thread_state(
-        &self,
+        &mut self,
         indent: usize,
         thread_id: u64,
         old_state: &str,
         new_state: &str,
     ) {
-        if !self.enabled {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().thread_events += 1;
+            self.stats.thread_events += 1;
         }
         self.write_msg(
+            TraceLevel::Debug,
             indent,
             format_args!(
                 "⚙ THREAD STATE [ID:{}] {} → {}",
@@ -844,19 +1111,20 @@ impl Tracer {
     #[cfg(feature = "multithreading")]
     /// Trace thread synchronization (Monitor.Enter/Exit, etc.)
     pub fn trace_thread_sync(
-        &self,
+        &mut self,
         indent: usize,
         thread_id: u64,
         operation: &str,
         obj_addr: usize,
     ) {
-        if !self.enabled {
+        if !self.is_enabled() {
             return;
         }
         if self.detailed_stats {
-            self.stats.borrow_mut().thread_events += 1;
+            self.stats.thread_events += 1;
         }
         self.write_msg(
+            TraceLevel::Debug,
             indent,
             format_args!(
                 "⚙ THREAD SYNC [ID:{}] {} @ {:#x}",
@@ -898,7 +1166,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             return;
         }
 
-        let tracer = self.tracer();
+        let mut tracer = self.tracer();
         for (idx, frame) in self.execution.frames.iter().enumerate() {
             let method_name = format!("{:?}", frame.state.info_handle.source);
             tracer.dump_frame_state(
@@ -919,7 +1187,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
 
         let objects: Vec<_> = self.heap()._all_objs.borrow().iter().copied().collect();
-        let tracer = self.tracer();
+        let mut tracer = self.tracer();
         tracer.dump_heap_snapshot_start(objects.len());
 
         for obj in objects {

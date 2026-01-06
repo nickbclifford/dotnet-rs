@@ -189,7 +189,7 @@ mod tests {
         let mut arena = TestArena::new(|_mc| ThreadSafeLock::new(42));
         arena.mutate_root(|mc, lock| {
             {
-                let mut guard = lock.borrow_mut(&mc);
+                let mut guard = lock.borrow_mut(mc);
                 *guard = 100;
             }
             let guard = lock.borrow();
@@ -205,7 +205,7 @@ mod tests {
 
         let mut arena = TestArena::new(|_mc| ThreadSafeLock::new(42));
         arena.mutate_root(|mc, lock| {
-            let _writer = lock.borrow_mut(&mc);
+            let _writer = lock.borrow_mut(mc);
             // Should fail to get reader while writer is active
             assert!(lock.try_borrow().is_none());
         });

@@ -7,7 +7,7 @@ use crate::{
         threading::ThreadManagerOps,
         MethodInfo, StepResult,
     },
-    vm_msg,
+    vm_debug, vm_error,
 };
 
 #[cfg(feature = "multithreaded-gc")]
@@ -240,7 +240,7 @@ impl Executor {
                 StepResult::MethodThrew => {
                     self.with_arena(|arena| {
                         arena.mutate(|_, c| {
-                            vm_msg!(c, "Exception thrown: {:?}", c.execution.exception_mode);
+                            vm_error!(c, "Exception thrown: {:?}", c.execution.exception_mode);
                         });
                     });
                     if frames_empty(self) {
@@ -276,7 +276,7 @@ impl Executor {
 
             self.with_arena(|arena| {
                 arena.mutate(|_, c| {
-                    vm_msg!(c, "GC: Coordinated stop-the-world collection started");
+                    vm_debug!(c, "GC: Coordinated stop-the-world collection started");
                 });
             });
 
@@ -298,7 +298,7 @@ impl Executor {
 
             self.with_arena(|arena| {
                 arena.mutate(|_, c| {
-                    vm_msg!(c, "GC: Coordinated collection completed in {:?}", duration);
+                    vm_debug!(c, "GC: Coordinated collection completed in {:?}", duration);
                 });
             });
         }

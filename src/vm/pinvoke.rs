@@ -141,7 +141,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let module = res.definition()[p.import_scope].name.as_ref();
         let function = p.import_name.as_ref();
 
-        vm_msg!(
+        vm_trace!(
             self,
             "-- calling P/Invoke {} with arguments {stack_values:?} --",
             method
@@ -252,7 +252,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     rest => todo!("marshalling not yet supported for {:?}", rest),
                 };
-                vm_msg!(self, "-- returning {v:?} --");
+                vm_trace!(self, "-- returning {v:?} --");
                 self.push_stack(gc, v);
             }
         }

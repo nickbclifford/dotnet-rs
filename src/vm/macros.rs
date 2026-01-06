@@ -46,9 +46,47 @@ macro_rules! vm_expect_stack {
 
 #[macro_export]
 macro_rules! vm_msg {
+    // Default to Debug level - format string with args
     ($src:expr, $($format:tt)*) => {
         if $src.tracer_enabled() {
-            $src.msg(format_args!($($format)*))
+            $src.tracer().msg($crate::vm::gc::tracer::TraceLevel::Debug, $src.indent(), format_args!($($format)*))
+        }
+    }
+}
+
+// Level-specific message macros for convenience
+#[macro_export]
+macro_rules! vm_error {
+    ($src:expr, $($format:tt)*) => {
+        if $src.tracer_enabled() {
+            $src.tracer().msg($crate::vm::gc::tracer::TraceLevel::Error, $src.indent(), format_args!($($format)*))
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! vm_info {
+    ($src:expr, $($format:tt)*) => {
+        if $src.tracer_enabled() {
+            $src.tracer().msg($crate::vm::gc::tracer::TraceLevel::Info, $src.indent(), format_args!($($format)*))
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! vm_debug {
+    ($src:expr, $($format:tt)*) => {
+        if $src.tracer_enabled() {
+            $src.tracer().msg($crate::vm::gc::tracer::TraceLevel::Debug, $src.indent(), format_args!($($format)*))
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! vm_trace {
+    ($src:expr, $($format:tt)*) => {
+        if $src.tracer_enabled() {
+            $src.tracer().msg($crate::vm::gc::tracer::TraceLevel::Trace, $src.indent(), format_args!($($format)*))
         }
     }
 }

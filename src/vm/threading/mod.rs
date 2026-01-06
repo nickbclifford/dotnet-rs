@@ -30,9 +30,9 @@ pub trait ThreadManagerOps {
     type Guard: STWGuardOps;
 
     fn register_thread(&self) -> u64;
-    fn register_thread_traced(&self, tracer: &Tracer, name: &str) -> u64;
+    fn register_thread_traced(&self, tracer: &mut Tracer, name: &str) -> u64;
     fn unregister_thread(&self, managed_id: u64);
-    fn unregister_thread_traced(&self, managed_id: u64, tracer: &Tracer);
+    fn unregister_thread_traced(&self, managed_id: u64, tracer: &mut Tracer);
     fn current_thread_id(&self) -> Option<u64>;
     fn thread_count(&self) -> usize;
     fn is_gc_stop_requested(&self) -> bool;
@@ -42,9 +42,9 @@ pub trait ThreadManagerOps {
         &self,
         managed_id: u64,
         coordinator: &GCCoordinator,
-        tracer: &Tracer,
+        tracer: &mut Tracer,
         location: &str,
     );
     fn request_stop_the_world(&self) -> Self::Guard;
-    fn request_stop_the_world_traced(&self, tracer: &Tracer) -> Self::Guard;
+    fn request_stop_the_world_traced(&self, tracer: &mut Tracer) -> Self::Guard;
 }

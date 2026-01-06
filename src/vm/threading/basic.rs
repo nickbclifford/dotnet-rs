@@ -134,7 +134,7 @@ impl ThreadManagerOps for ThreadManager {
     }
 
     /// Register a new thread with tracing support
-    fn register_thread_traced(&self, tracer: &Tracer, name: &str) -> u64 {
+    fn register_thread_traced(&self, tracer: &mut Tracer, name: &str) -> u64 {
         let managed_id = self.register_thread();
         tracer.trace_thread_create(0, managed_id, name);
         managed_id
@@ -163,7 +163,7 @@ impl ThreadManagerOps for ThreadManager {
     }
 
     /// Unregister a thread with tracing support
-    fn unregister_thread_traced(&self, managed_id: u64, tracer: &Tracer) {
+    fn unregister_thread_traced(&self, managed_id: u64, tracer: &mut Tracer) {
         tracer.trace_thread_exit(0, managed_id);
         self.unregister_thread(managed_id);
     }
@@ -268,7 +268,7 @@ impl ThreadManagerOps for ThreadManager {
         &self,
         managed_id: u64,
         coordinator: &GCCoordinator,
-        tracer: &Tracer,
+        tracer: &mut Tracer,
         location: &str,
     ) {
         #[cfg(feature = "multithreaded-gc")]
@@ -365,7 +365,7 @@ impl ThreadManagerOps for ThreadManager {
         }
     }
 
-    fn request_stop_the_world_traced(&self, tracer: &Tracer) -> Self::Guard {
+    fn request_stop_the_world_traced(&self, tracer: &mut Tracer) -> Self::Guard {
         #[cfg(feature = "multithreaded-gc")]
         {
             let thread_count = self.thread_count();

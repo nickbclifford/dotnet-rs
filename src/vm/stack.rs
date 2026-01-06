@@ -112,6 +112,7 @@ pub struct SharedGlobalState<'m> {
     pub thread_manager: Arc<ThreadManager>,
     pub metrics: RuntimeMetrics,
     pub tracer: Mutex<Tracer>,
+    pub tracer_enabled: Arc<std::sync::atomic::AtomicBool>,
     pub empty_generics: GenericLookup,
     pub method_tables: RwLock<HashMap<TypeDescription, Box<[u8]>>>,
     pub statics: StaticStorageManager,
@@ -128,13 +129,16 @@ pub struct SharedGlobalState<'m> {
 
 impl<'m> SharedGlobalState<'m> {
     pub fn new(loader: &'m AssemblyLoader) -> Self {
+        let tracer = Tracer::new();
+        let tracer_enabled = Arc::new(std::sync::atomic::AtomicBool::new(tracer.is_enabled()));
         Self {
             loader,
             pinvoke: RwLock::new(NativeLibraries::new(loader.get_root())),
             sync_blocks: SyncBlockManager::new(),
             thread_manager: ThreadManager::new(),
             metrics: RuntimeMetrics::new(),
-            tracer: Mutex::new(Tracer::new()),
+            tracer: Mutex::new(tracer),
+            tracer_enabled,
             empty_generics: GenericLookup::default(),
             method_tables: RwLock::new(HashMap::new()),
             statics: StaticStorageManager::new(),
@@ -987,7 +991,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn tracer_enabled(&self) -> bool {
-        self.shared.tracer.lock().is_enabled()
+        self.shared
+            .tracer_enabled
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn indent(&self) -> usize {
@@ -998,8 +1004,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
     }
 
-    pub fn msg(&self, fmt: fmt::Arguments) {
-        self.shared.tracer.lock().msg(self.indent(), fmt);
+    pub fn msg(&self, level: crate::vm::gc::tracer::TraceLevel, fmt: fmt::Arguments) {
+        self.shared.tracer.lock().msg(level, self.indent(), fmt);
     }
 
     pub fn throw_by_name(&mut self, gc: GCHandle<'gc>, name: &str) -> StepResult {
