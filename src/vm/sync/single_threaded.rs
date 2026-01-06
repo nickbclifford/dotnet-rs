@@ -1,6 +1,9 @@
 use crate::{
     value::object::ObjectRef,
-    vm::{metrics::RuntimeMetrics, sync::{SyncBlockOps, SyncManagerOps}},
+    vm::{
+        metrics::RuntimeMetrics,
+        sync::{SyncBlockOps, SyncManagerOps},
+    },
 };
 use std::{cell::Cell, collections::HashMap, sync::Arc};
 

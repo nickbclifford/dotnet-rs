@@ -1,6 +1,7 @@
 use dotnet_rs::{
-    assemblies, types::{TypeDescription, members::MethodDescription},
-    utils::{ResolutionS, static_res_from_file},
+    assemblies,
+    types::{members::MethodDescription, TypeDescription},
+    utils::{static_res_from_file, ResolutionS},
     vm::{self, threading::ThreadManagerOps},
 };
 use dotnetdll::prelude::*;

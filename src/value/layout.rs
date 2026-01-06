@@ -1,7 +1,8 @@
 use crate::{
     types::{
-        TypeDescription, generics::{ConcreteType, GenericLookup},
+        generics::{ConcreteType, GenericLookup},
         members::FieldDescription,
+        TypeDescription,
     },
     value::{object::ObjectRef, pointer::ManagedPtr},
     vm::context::ResolutionContext,
@@ -11,7 +12,8 @@ use enum_dispatch::enum_dispatch;
 use gc_arena::{Collect, Collection};
 use std::{
     collections::{HashMap, HashSet},
-    mem::size_of, ops::Range,
+    mem::size_of,
+    ops::Range,
 };
 
 #[enum_dispatch]

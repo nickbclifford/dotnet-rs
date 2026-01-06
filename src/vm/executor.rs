@@ -1,9 +1,11 @@
 use crate::{
-    types::members::MethodDescription, value::StackValue,
+    types::members::MethodDescription,
+    value::StackValue,
     vm::{
-        MethodInfo, StepResult,
         stack::{ArenaLocalState, CallStack, GCArena, SharedGlobalState},
-        sync::Arc, threading::ThreadManagerOps,
+        sync::Arc,
+        threading::ThreadManagerOps,
+        MethodInfo, StepResult,
     },
     vm_msg,
 };

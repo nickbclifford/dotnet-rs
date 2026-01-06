@@ -3,13 +3,14 @@ use crate::vm::{
         coordinator::{GCCommand, GCCoordinator},
         tracer::Tracer,
     },
-    sync::{
-        Arc, AtomicBool, AtomicU64, AtomicUsize, Condvar, Mutex, MutexGuard, Ordering,
-    },
+    sync::{Arc, AtomicBool, AtomicU64, AtomicUsize, Condvar, Mutex, MutexGuard, Ordering},
     threading::{STWGuardOps, ThreadManagerOps, ThreadState},
 };
 use std::{
-    cell::Cell, collections::HashMap, mem, sync, thread::{self, ThreadId},
+    cell::Cell,
+    collections::HashMap,
+    mem, sync,
+    thread::{self, ThreadId},
     time::{Duration, Instant},
 };
 

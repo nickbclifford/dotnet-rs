@@ -1,33 +1,37 @@
 use crate::{
     assemblies::AssemblyLoader,
     types::{
-        TypeDescription, generics::{ConcreteType, GenericLookup},
+        generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
+        TypeDescription,
     },
-    utils::{ResolutionS, decompose_type_source},
+    utils::{decompose_type_source, ResolutionS},
     value::{
-        StackValue, object::{HeapStorage, Object as ObjectInstance, ObjectRef},
+        object::{HeapStorage, Object as ObjectInstance, ObjectRef},
         storage::StaticStorageManager,
+        StackValue,
     },
     vm::{
-        GCHandleType, MethodInfo, MethodState, StepResult, context::ResolutionContext,
-        exceptions::ExceptionState, gc::tracer::Tracer,
-        intrinsics::reflection::RuntimeType, metrics::RuntimeMetrics,
+        context::ResolutionContext,
+        exceptions::ExceptionState,
+        gc::tracer::Tracer,
+        intrinsics::reflection::RuntimeType,
+        metrics::RuntimeMetrics,
         pinvoke::NativeLibraries,
-        sync::{
-            Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
-            SyncBlockManager,
-        },
+        sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, SyncBlockManager},
         threading::ThreadManager,
+        GCHandleType, MethodInfo, MethodState, StepResult,
     },
 };
 use dotnetdll::prelude::*;
-use gc_arena::{Arena, Collect, Collection, Gc, Mutation, Rootable, lock::RefLock};
+use gc_arena::{lock::RefLock, Arena, Collect, Collection, Gc, Mutation, Rootable};
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     collections::{HashMap, HashSet},
     fmt::{self, Debug},
-    marker::PhantomData, ptr::NonNull, sync::Arc,
+    marker::PhantomData,
+    ptr::NonNull,
+    sync::Arc,
 };
 
 #[cfg(feature = "multithreaded-gc")]

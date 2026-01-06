@@ -1,6 +1,9 @@
 use crate::{
     value::object::ObjectRef,
-    vm::{metrics::RuntimeMetrics, sync::{SyncBlockOps, SyncManagerOps}},
+    vm::{
+        metrics::RuntimeMetrics,
+        sync::{SyncBlockOps, SyncManagerOps},
+    },
 };
 use parking_lot::{Condvar, Mutex};
 use std::{collections::HashMap, sync::Arc};

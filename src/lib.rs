@@ -8,8 +8,8 @@
 //!   and `Monitor` synchronization primitives. Pulls in `parking_lot`.
 //! - `multithreaded-gc`: Enables stop-the-world coordinated garbage collection across
 //!   multiple thread-local arenas. Depends on `multithreading`.
-use clap::Parser;
 use crate::{utils::static_res_from_file, vm::ExecutorResult};
+use clap::Parser;
 use dotnetdll::prelude::*;
 use std::{process::ExitCode, sync::Arc};
 
@@ -20,7 +20,7 @@ pub mod value;
 #[macro_use]
 pub mod vm;
 
-use types::{TypeDescription, members::MethodDescription};
+use types::{members::MethodDescription, TypeDescription};
 
 #[derive(Parser, Debug)]
 #[command(

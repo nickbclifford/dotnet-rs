@@ -1,20 +1,28 @@
 use crate::{
-    types::{TypeDescription, generics::ConcreteType},
+    types::{generics::ConcreteType, TypeDescription},
     utils::DebugStr,
     value::{
-        StackValue, layout::{ArrayLayoutManager, HasLayout, LayoutManager, Scalar},
+        layout::{ArrayLayoutManager, HasLayout, LayoutManager, Scalar},
         pointer::{ManagedPtr, UnmanagedPtr},
-        storage::FieldStorage, string::CLRString,
+        storage::FieldStorage,
+        string::CLRString,
+        StackValue,
     },
-    vm::{GCHandle, context::ResolutionContext},
+    vm::{context::ResolutionContext, GCHandle},
     vm_expect_stack,
 };
-use gc_arena::{Collect, Collection, Gc, lock::RefLock};
+use gc_arena::{lock::RefLock, Collect, Collection, Gc};
 use std::{
-    any, cmp::Ordering, collections::HashSet, error::Error,
+    any,
+    cmp::Ordering,
+    collections::HashSet,
+    error::Error,
     fmt::{self, Debug, Formatter},
     hash::{Hash, Hasher},
-    iter, marker::PhantomData, mem, ptr::{self, NonNull},
+    iter,
+    marker::PhantomData,
+    mem,
+    ptr::{self, NonNull},
 };
 
 #[derive(Collect, Debug)]

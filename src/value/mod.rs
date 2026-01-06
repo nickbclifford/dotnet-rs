@@ -1,8 +1,12 @@
-use crate::{types::TypeDescription, vm::{GCHandle, context::ResolutionContext}};
+use crate::{
+    types::TypeDescription,
+    vm::{context::ResolutionContext, GCHandle},
+};
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, Collection};
 use std::{
-    cmp::Ordering, fmt::Debug,
+    cmp::Ordering,
+    fmt::Debug,
     ops::{Add, BitAnd, BitOr, BitXor, Mul, Neg, Not, Shl, Sub},
     ptr::NonNull,
 };
