@@ -608,7 +608,11 @@ impl Tracer {
                     }
                 }
 
-                self.msg(TraceLevel::Debug, 0, format_args!("║ [{:4}] {}", idx, content));
+                self.msg(
+                    TraceLevel::Debug,
+                    0,
+                    format_args!("║ [{:4}] {}", idx, content),
+                );
             }
         }
 
@@ -641,17 +645,41 @@ impl Tracer {
             0,
             format_args!("╔════════════════════════════════════════════════════════════"),
         );
-        self.msg(TraceLevel::Debug, 0, format_args!("║ FRAME #{} - {}", frame_idx, method_name));
+        self.msg(
+            TraceLevel::Debug,
+            0,
+            format_args!("║ FRAME #{} - {}", frame_idx, method_name),
+        );
         self.msg(
             TraceLevel::Debug,
             0,
             format_args!("╠════════════════════════════════════════════════════════════"),
         );
-        self.msg(TraceLevel::Debug, 0, format_args!("║ IP:           {:04}", ip));
-        self.msg(TraceLevel::Debug, 0, format_args!("║ Args base:    {}", args_base));
-        self.msg(TraceLevel::Debug, 0, format_args!("║ Locals base:  {}", locals_base));
-        self.msg(TraceLevel::Debug, 0, format_args!("║ Stack base:   {}", stack_base));
-        self.msg(TraceLevel::Debug, 0, format_args!("║ Stack height: {}", stack_height));
+        self.msg(
+            TraceLevel::Debug,
+            0,
+            format_args!("║ IP:           {:04}", ip),
+        );
+        self.msg(
+            TraceLevel::Debug,
+            0,
+            format_args!("║ Args base:    {}", args_base),
+        );
+        self.msg(
+            TraceLevel::Debug,
+            0,
+            format_args!("║ Locals base:  {}", locals_base),
+        );
+        self.msg(
+            TraceLevel::Debug,
+            0,
+            format_args!("║ Stack base:   {}", stack_base),
+        );
+        self.msg(
+            TraceLevel::Debug,
+            0,
+            format_args!("║ Stack height: {}", stack_height),
+        );
         self.msg(
             TraceLevel::Debug,
             0,
@@ -721,7 +749,11 @@ impl Tracer {
             0,
             format_args!("╔════════════════════════════════════════════════════════════"),
         );
-        self.msg(TraceLevel::Debug, 0, format_args!("║ STATIC STORAGE SNAPSHOT"));
+        self.msg(
+            TraceLevel::Debug,
+            0,
+            format_args!("║ STATIC STORAGE SNAPSHOT"),
+        );
         self.msg(
             TraceLevel::Debug,
             0,
@@ -751,7 +783,11 @@ impl Tracer {
             0,
             format_args!("╔════════════════════════════════════════════════════════════"),
         );
-        self.msg(TraceLevel::Debug, 0, format_args!("║ FULL RUNTIME STATE SNAPSHOT"));
+        self.msg(
+            TraceLevel::Debug,
+            0,
+            format_args!("║ FULL RUNTIME STATE SNAPSHOT"),
+        );
         self.msg(
             TraceLevel::Debug,
             0,
@@ -784,7 +820,11 @@ impl Tracer {
             0,
             format_args!("╠════════════════════════════════════════════════════════════"),
         );
-        self.msg(TraceLevel::Debug, 0, format_args!("║ All objects:          {}", all_objects));
+        self.msg(
+            TraceLevel::Debug,
+            0,
+            format_args!("║ All objects:          {}", all_objects),
+        );
         self.msg(
             TraceLevel::Debug,
             0,
@@ -800,7 +840,11 @@ impl Tracer {
             0,
             format_args!("║ Pinned objects:       {}", pinned_objects),
         );
-        self.msg(TraceLevel::Debug, 0, format_args!("║ GC handles:           {}", gc_handles));
+        self.msg(
+            TraceLevel::Debug,
+            0,
+            format_args!("║ GC handles:           {}", gc_handles),
+        );
         self.msg(
             TraceLevel::Debug,
             0,

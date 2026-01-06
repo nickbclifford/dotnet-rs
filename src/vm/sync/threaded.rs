@@ -73,6 +73,50 @@ impl SyncBlockOps for SyncBlock {
         state.recursion_count = 1;
     }
 
+    fn enter_with_timeout(
+        &self,
+        thread_id: u64,
+        timeout_ms: u64,
+        metrics: &RuntimeMetrics,
+    ) -> bool {
+        use std::time::{Duration, Instant};
+
+        if timeout_ms == 0 {
+            return self.try_enter(thread_id);
+        }
+
+        let mut state = self.state.lock();
+
+        if state.owner_thread_id == thread_id {
+            state.recursion_count += 1;
+            return true;
+        }
+
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+
+        if state.owner_thread_id != 0 {
+            let start_wait = Instant::now();
+            while state.owner_thread_id != 0 {
+                let now = Instant::now();
+                if now >= deadline {
+                    return false;
+                }
+
+                let remaining = deadline - now;
+                let timed_out = self.condvar.wait_for(&mut state, remaining).timed_out();
+
+                if timed_out && state.owner_thread_id != 0 {
+                    return false;
+                }
+            }
+            metrics.record_lock_contention(start_wait.elapsed());
+        }
+
+        state.owner_thread_id = thread_id;
+        state.recursion_count = 1;
+        true
+    }
+
     fn enter_safe(
         &self,
         thread_id: u64,
@@ -177,50 +221,6 @@ impl SyncBlockOps for SyncBlock {
                 thread_manager.safe_point(thread_id, gc_coordinator);
             }
         }
-    }
-
-    fn enter_with_timeout(
-        &self,
-        thread_id: u64,
-        timeout_ms: u64,
-        metrics: &RuntimeMetrics,
-    ) -> bool {
-        use std::time::{Duration, Instant};
-
-        if timeout_ms == 0 {
-            return self.try_enter(thread_id);
-        }
-
-        let mut state = self.state.lock();
-
-        if state.owner_thread_id == thread_id {
-            state.recursion_count += 1;
-            return true;
-        }
-
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-
-        if state.owner_thread_id != 0 {
-            let start_wait = Instant::now();
-            while state.owner_thread_id != 0 {
-                let now = Instant::now();
-                if now >= deadline {
-                    return false;
-                }
-
-                let remaining = deadline - now;
-                let timed_out = self.condvar.wait_for(&mut state, remaining).timed_out();
-
-                if timed_out && state.owner_thread_id != 0 {
-                    return false;
-                }
-            }
-            metrics.record_lock_contention(start_wait.elapsed());
-        }
-
-        state.owner_thread_id = thread_id;
-        state.recursion_count = 1;
-        true
     }
 
     fn exit(&self, thread_id: u64) -> bool {

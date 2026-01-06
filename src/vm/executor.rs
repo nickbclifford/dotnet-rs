@@ -267,8 +267,7 @@ impl Executor {
             let start_time = Instant::now();
 
             // 1. Mark that we are starting collection (acquires coordinator lock)
-            let coordinator: Arc<crate::vm::gc::coordinator::GCCoordinator> =
-                Arc::clone(&self.shared.gc_coordinator);
+            let coordinator = Arc::clone(&self.shared.gc_coordinator);
             let _gc_lock = match coordinator.start_collection() {
                 Some(guard) => guard,
                 None => return, // Another thread is already collecting
