@@ -136,7 +136,6 @@ fn print_type_info(
     _resolution: dotnet_rs::utils::ResolutionS,
     type_def: &dotnetdll::prelude::TypeDefinition,
 ) {
-    dbg!(type_def);
     println!("\nFields:");
     for field in &type_def.fields {
         println!(

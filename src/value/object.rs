@@ -8,10 +8,15 @@ use crate::{
         string::CLRString,
         StackValue,
     },
-    vm::{context::ResolutionContext, GCHandle},
+    vm::{
+        context::ResolutionContext,
+        sync::{AtomicUsize, Ordering as AtomicOrdering},
+        threadsafe_lock::ThreadSafeLock,
+        GCHandle,
+    },
     vm_expect_stack,
 };
-use gc_arena::{lock::RefLock, Collect, Collection, Gc};
+use gc_arena::{Collect, Collection, Gc};
 use std::{
     any,
     cmp::Ordering,
@@ -34,7 +39,7 @@ pub struct ObjectInner<'gc> {
 
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ObjectPtr(pub NonNull<RefLock<ObjectInner<'static>>>);
+pub struct ObjectPtr(pub NonNull<ThreadSafeLock<ObjectInner<'static>>>);
 
 unsafe impl Send for ObjectPtr {}
 unsafe impl Sync for ObjectPtr {}
@@ -43,16 +48,16 @@ impl ObjectPtr {
     /// # Safety
     ///
     /// The pointer must be valid for the program lifetime and properly aligned.
-    pub unsafe fn from_raw(ptr: *const RefLock<ObjectInner<'static>>) -> Option<Self> {
+    pub unsafe fn from_raw(ptr: *const ThreadSafeLock<ObjectInner<'static>>) -> Option<Self> {
         NonNull::new(ptr as *mut _).map(ObjectPtr)
     }
 
-    pub fn as_ptr(&self) -> *const RefLock<ObjectInner<'static>> {
+    pub fn as_ptr(&self) -> *const ThreadSafeLock<ObjectInner<'static>> {
         self.0.as_ptr()
     }
 }
 
-pub type ObjectHandle<'gc> = Gc<'gc, RefLock<ObjectInner<'gc>>>;
+pub type ObjectHandle<'gc> = Gc<'gc, ThreadSafeLock<ObjectInner<'gc>>>;
 
 #[derive(Copy, Clone)]
 #[repr(transparent)]
@@ -65,7 +70,10 @@ unsafe impl<'gc> Collect for ObjectRef<'gc> {
             {
                 // Check for cross-arena reference
                 if let Some(tracing_id) = crate::vm::gc::coordinator::get_currently_tracing() {
-                    let owner_id = h.borrow().owner_id;
+                    // SAFETY: During stop-the-world GC, no other threads are running,
+                    // so we can safely access the owner_id without acquiring the lock.
+                    // This avoids potential deadlock if a thread was stopped while holding a write lock.
+                    let owner_id = unsafe { (*h.as_ptr()).owner_id };
                     if owner_id != tracing_id {
                         // This is a reference to an object in another arena.
                         // Do not trace it here; instead, record it for coordinated resurrection.
@@ -142,7 +150,7 @@ impl<'gc> ObjectRef<'gc> {
 
         Self(Some(Gc::new(
             gc,
-            RefLock::new(ObjectInner {
+            ThreadSafeLock::new(ObjectInner {
                 owner_id,
                 storage: value,
             }),
@@ -150,9 +158,9 @@ impl<'gc> ObjectRef<'gc> {
     }
 
     pub fn read(source: &[u8]) -> Self {
-        let mut ptr_bytes = [0u8; Self::SIZE];
-        ptr_bytes.copy_from_slice(&source[0..Self::SIZE]);
-        let ptr = usize::from_ne_bytes(ptr_bytes) as *const RefLock<ObjectInner<'gc>>;
+        let ptr_val =
+            unsafe { (*(source.as_ptr() as *const AtomicUsize)).load(AtomicOrdering::Acquire) };
+        let ptr = ptr_val as *const ThreadSafeLock<ObjectInner<'gc>>;
 
         if ptr.is_null() {
             ObjectRef(None)
@@ -162,7 +170,7 @@ impl<'gc> ObjectRef<'gc> {
             // the object is guaranteed to be alive (as it is traced by the caller),
             // it is safe to reconstruct the Gc pointer.
             debug_assert!(
-                (ptr as usize).is_multiple_of(mem::align_of::<RefLock<ObjectInner<'gc>>>()),
+                (ptr as usize).is_multiple_of(mem::align_of::<ThreadSafeLock<ObjectInner<'gc>>>()),
                 "Attempted to reconstruct unaligned Gc pointer: {:?}",
                 ptr
             );
@@ -171,12 +179,14 @@ impl<'gc> ObjectRef<'gc> {
     }
 
     pub fn write(&self, dest: &mut [u8]) {
-        let ptr: *const RefLock<ObjectInner<'_>> = match self.0 {
+        let ptr: *const ThreadSafeLock<ObjectInner<'_>> = match self.0 {
             None => ptr::null(),
             Some(s) => Gc::as_ptr(s),
         };
-        let ptr_bytes = (ptr as usize).to_ne_bytes();
-        dest[..ptr_bytes.len()].copy_from_slice(&ptr_bytes);
+        unsafe {
+            (*(dest.as_mut_ptr() as *const AtomicUsize))
+                .store(ptr as usize, AtomicOrdering::Release);
+        }
     }
 
     pub fn expect_object_ref(self) -> Self {
@@ -518,7 +528,7 @@ impl<'gc> CTSValue<'gc> {
         }
     }
 
-    pub fn read(t: &ConcreteType, context: &ResolutionContext, data: &[u8]) -> Self {
+    pub fn read(t: &ConcreteType, context: &ResolutionContext, data: &[u8]) -> CTSValue<'gc> {
         use crate::types::generics::GenericLookup;
         use crate::utils::decompose_type_source;
         use dotnetdll::prelude::{BaseType, ValueKind};

@@ -13,6 +13,7 @@ use crate::{
         context::ResolutionContext,
         exceptions::{ExceptionState, HandlerAddress, UnwindTarget},
         intrinsics::*,
+        sync::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering as AtomicOrdering},
         threading::ThreadManagerOps,
         CallStack, GCHandle, MethodInfo, StepResult,
     },
@@ -20,11 +21,19 @@ use crate::{
     vm_trace_instruction,
 };
 use dotnetdll::prelude::*;
-use std::{cmp::Ordering, ptr, slice, thread};
+use std::{cmp::Ordering as CmpOrdering, ptr, slice};
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
-    /// Check if a GC safe point should be reached.
-    /// This should be called before large allocations or long-running operations.
+    /// Check for GC safe point and suspend if stop-the-world is requested.
+    ///
+    /// This method should be called:
+    /// - Before long-running operations (large allocations, reflection, etc.)
+    /// - Periodically during loops with many iterations
+    /// - At method entry/exit points (already happens via executor loop)
+    ///
+    /// Note: The current implementation checks on every instruction via the executor loop.
+    /// For better performance, future optimization could check only on backward branches
+    /// (detected by IP decreasing), method entries, and explicit calls in long operations.
     #[inline]
     pub fn check_gc_safe_point(&self) {
         let thread_manager = &self.shared.thread_manager;
@@ -112,9 +121,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         loop {
             let tid = self.thread_id.get();
             let init_result = {
-                // Thread-safe path: use RwLock-protected StaticStorageManager
-                let mut statics = self.shared.statics.write();
-                statics.init(description, &ctx, tid)
+                // Thread-safe path: use StaticStorageManager's internal locking
+                self.shared.statics.init(description, &ctx, tid)
             };
 
             use crate::value::storage::StaticInitResult::*;
@@ -132,10 +140,22 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     return false;
                 }
                 Waiting => {
-                    // If INITIALIZING on another thread, we wait.
-                    // We use yield_now() to avoid deadlocking with the statics lock.
-                    thread::yield_now();
-                    self.check_gc_safe_point();
+                    // If INITIALIZING on another thread, we wait using the condition variable.
+                    // wait_for_init now checks for GC safe points internally
+                    #[cfg(feature = "multithreaded-gc")]
+                    self.shared.statics.wait_for_init(
+                        description,
+                        self.shared.thread_manager.as_ref(),
+                        self.thread_id.get(),
+                        &self.shared.gc_coordinator,
+                    );
+                    #[cfg(not(feature = "multithreaded-gc"))]
+                    self.shared.statics.wait_for_init(
+                        description,
+                        self.shared.thread_manager.as_ref(),
+                        self.thread_id.get(),
+                        &Default::default(),
+                    );
                 }
             }
         }
@@ -144,8 +164,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     /// Mark a type's static initialization as complete after its .cctor returns.
     /// This should be called when a .cctor method returns normally.
     pub fn mark_type_initialized(&mut self, description: TypeDescription) {
-        let mut statics = self.shared.statics.write();
-        statics.mark_initialized(description);
+        self.shared.statics.mark_initialized(description);
     }
 
     pub fn step(&mut self, gc: GCHandle<'gc>) -> StepResult {
@@ -162,8 +181,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         macro_rules! statics {
             (|$s:ident| $body:expr) => {{
-                #[allow(unused_mut)]
-                let mut $s = self.statics_write();
+                let $s = self.statics();
                 $body
             }};
         }
@@ -274,8 +292,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         vm_trace_instruction!(self, ip, &i.show(i_res.definition()));
 
-        // self.debug_dump();
-
         match i {
             Add => {
                 let v2 = pop!();
@@ -300,15 +316,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 conditional_branch!(equal!(), i)
             }
             BranchGreaterOrEqual(sgn, i) => {
-                conditional_branch!(compare!(sgn, >= (Ordering::Greater | Ordering::Equal)), i)
+                conditional_branch!(
+                    compare!(sgn, >= (CmpOrdering::Greater | CmpOrdering::Equal)),
+                    i
+                )
             }
             BranchGreater(sgn, i) => {
-                conditional_branch!(compare!(sgn, > (Ordering::Greater)), i)
+                conditional_branch!(compare!(sgn, > (CmpOrdering::Greater)), i)
             }
             BranchLessOrEqual(sgn, i) => {
-                conditional_branch!(compare!(sgn, <= (Ordering::Less | Ordering::Equal)), i)
+                conditional_branch!(
+                    compare!(sgn, <= (CmpOrdering::Less | CmpOrdering::Equal)),
+                    i
+                )
             }
-            BranchLess(sgn, i) => conditional_branch!(compare!(sgn, < (Ordering::Less)), i),
+            BranchLess(sgn, i) => conditional_branch!(compare!(sgn, < (CmpOrdering::Less)), i),
             BranchNotEqual(i) => {
                 conditional_branch!(!equal!(), i)
             }
@@ -370,7 +392,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 push!(Int32(val))
             }
             CompareGreater(sgn) => {
-                let val = compare!(sgn, > (Ordering::Greater)) as i32;
+                let val = compare!(sgn, > (CmpOrdering::Greater)) as i32;
                 push!(Int32(val))
             }
             CheckFinite => {
@@ -381,7 +403,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 push!(NativeFloat(f));
             }
             CompareLess(sgn) => {
-                let val = compare!(sgn, < (Ordering::Less)) as i32;
+                let val = compare!(sgn, < (CmpOrdering::Less)) as i32;
                 push!(Int32(val))
             }
             Convert(t) => {
@@ -602,7 +624,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     };
                     return self.handle_exception(gc);
                 }
-                _ => panic!("endfinally called outside of handler"),
+                _ => panic!(
+                    "endfinally called outside of handler, state: {:?}",
+                    self.execution.exception_mode
+                ),
             },
             InitializeMemoryBlock { .. } => {
                 let size = match pop!() {
@@ -681,16 +706,38 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             LoadNull => push!(null()),
             Leave(jump_target) => {
-                self.execution.exception_mode = ExceptionState::Unwinding {
-                    exception: None,
-                    target: UnwindTarget::Instruction(*jump_target),
-                    cursor: HandlerAddress {
-                        frame_index: self.execution.frames.len() - 1,
-                        section_index: 0,
-                        handler_index: 0,
-                    },
-                };
-                return self.handle_exception(gc);
+                // If we're already executing a handler (e.g., a finally block during unwinding),
+                // we need to preserve that state. The Leave instruction in this case just means
+                // "exit this finally block and continue unwinding".
+                match self.execution.exception_mode {
+                    ExceptionState::ExecutingHandler {
+                        exception,
+                        target,
+                        cursor,
+                    } => {
+                        // We're inside a finally/fault handler. Transition back to Unwinding
+                        // to continue processing remaining handlers.
+                        self.execution.exception_mode = ExceptionState::Unwinding {
+                            exception,
+                            target,
+                            cursor,
+                        };
+                        return self.handle_exception(gc);
+                    }
+                    _ => {
+                        // Normal Leave: start a new unwind operation
+                        self.execution.exception_mode = ExceptionState::Unwinding {
+                            exception: None,
+                            target: UnwindTarget::Instruction(*jump_target),
+                            cursor: HandlerAddress {
+                                frame_index: self.execution.frames.len() - 1,
+                                section_index: 0,
+                                handler_index: 0,
+                            },
+                        };
+                        return self.handle_exception(gc);
+                    }
+                }
             }
             LocalMemoryAllocate => {
                 let size = match pop!() {
@@ -747,8 +794,49 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 }
             }
             Return => {
-                // expects a single value on stack for non-void methods
-                // call stack manager will put this in the right spot for the caller
+                // If we're executing a handler (e.g., inside a finally block) in the CURRENT frame,
+                // we need to continue unwinding through any remaining handlers before actually returning.
+                let frame_index = self.execution.frames.len() - 1;
+                if let ExceptionState::ExecutingHandler {
+                    exception, cursor, ..
+                } = self.execution.exception_mode
+                {
+                    // Only treat this as a return-inside-handler if the handler being executed
+                    // is in the current frame. If it's in a parent frame, this is just a normal
+                    // return from a nested call.
+                    if cursor.frame_index == frame_index {
+                        // Change the target to indicate we want to return after unwinding,
+                        // not jump to the original target
+                        self.execution.exception_mode = ExceptionState::Unwinding {
+                            exception,
+                            target: UnwindTarget::Instruction(usize::MAX),
+                            cursor,
+                        };
+                        return self.handle_exception(gc);
+                    }
+                }
+
+                // If there are any finally blocks in the current frame, we need to execute them
+                // before returning. Check if there are any exception handling sections.
+                let frame_index = self.execution.frames.len() - 1;
+                let has_finally_blocks = state!(|s| !s.info_handle.exceptions.is_empty());
+
+                if has_finally_blocks {
+                    // Start unwinding to execute any finally blocks before returning
+                    self.execution.exception_mode = ExceptionState::Unwinding {
+                        exception: None,
+                        // We use a special target that indicates we want to return after unwinding
+                        target: UnwindTarget::Instruction(usize::MAX), // Special sentinel value
+                        cursor: HandlerAddress {
+                            frame_index,
+                            section_index: 0,
+                            handler_index: 0,
+                        },
+                    };
+                    return self.handle_exception(gc);
+                }
+
+                // No handlers to execute, just return normally
                 return StepResult::MethodReturned;
             }
             ShiftLeft => {
@@ -1120,7 +1208,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             LoadField {
                 param0: source,
-                volatile: _, // TODO
+                volatile,
                 ..
             } => {
                 let parent = pop!();
@@ -1134,20 +1222,79 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let name = &field.field.name;
                 let t = ctx.get_field_type(field);
 
-                let read_data = |d| CTSValue::read(&t, &ctx, d);
+                let ordering = if *volatile {
+                    AtomicOrdering::SeqCst
+                } else {
+                    AtomicOrdering::Acquire
+                };
+
+                let read_data = |d: &[u8]| -> CTSValue<'gc> { CTSValue::read(&t, &ctx, d) };
                 let read_from_pointer = |ptr: *mut u8| {
                     debug_assert!(!ptr.is_null(), "Attempted to read field from null pointer");
                     let layout = FieldLayoutManager::instance_fields(field.parent, &ctx);
                     let field_layout = layout.fields.get(name.as_ref()).unwrap();
-                    // SAFETY: ptr is a raw pointer to either heap storage, a stack slot, or unmanaged memory.
-                    // The offset is calculated based on the type's field layout, and the size matches the field's type.
-                    let slice = unsafe {
-                        slice::from_raw_parts(
-                            ptr.add(field_layout.position),
-                            field_layout.layout.size(),
-                        )
-                    };
-                    read_data(slice)
+
+                    let size = field_layout.layout.size();
+                    let field_ptr = unsafe { ptr.add(field_layout.position) };
+
+                    // For pointer-sized types, use atomic load even if not volatile to ensure atomicity
+                    // as required by ECMA-335.
+                    if size <= std::mem::size_of::<usize>() {
+                        // Check alignment before attempting atomic operations
+                        let is_aligned = match size {
+                            1 => true, // u8 is always aligned
+                            2 => (field_ptr as usize).is_multiple_of(std::mem::align_of::<u16>()),
+                            4 => (field_ptr as usize).is_multiple_of(std::mem::align_of::<u32>()),
+                            8 => (field_ptr as usize).is_multiple_of(std::mem::align_of::<u64>()),
+                            _ => false,
+                        };
+
+                        if !is_aligned {
+                            // Fall back to non-atomic read if not aligned
+                            let slice = unsafe { slice::from_raw_parts(field_ptr, size) };
+                            return read_data(slice);
+                        }
+
+                        match size {
+                            1 => {
+                                let val =
+                                    unsafe { (*(field_ptr as *const AtomicU8)).load(ordering) };
+                                read_data(&[val])
+                            }
+                            2 => {
+                                let val =
+                                    unsafe { (*(field_ptr as *const AtomicU16)).load(ordering) };
+                                let bytes = val.to_ne_bytes();
+                                read_data(&bytes)
+                            }
+                            4 => {
+                                let val =
+                                    unsafe { (*(field_ptr as *const AtomicU32)).load(ordering) };
+                                let bytes = val.to_ne_bytes();
+                                read_data(&bytes)
+                            }
+                            8 => {
+                                let val =
+                                    unsafe { (*(field_ptr as *const AtomicU64)).load(ordering) };
+                                let bytes = val.to_ne_bytes();
+                                read_data(&bytes)
+                            }
+                            _ => {
+                                let slice = unsafe { slice::from_raw_parts(field_ptr, size) };
+                                read_data(slice)
+                            }
+                        }
+                    } else {
+                        // SAFETY: ptr is a raw pointer to either heap storage, a stack slot, or unmanaged memory.
+                        // The offset is calculated based on the type's field layout, and the size matches the field's type.
+                        let slice = unsafe {
+                            slice::from_raw_parts(
+                                ptr.add(field_layout.position),
+                                field_layout.layout.size(),
+                            )
+                        };
+                        read_data(slice)
+                    }
                 };
 
                 let value = match parent {
@@ -1168,7 +1315,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         let data = h.borrow();
                         match &data.storage {
                             HeapStorage::Vec(_) => todo!("field on array"),
-                            HeapStorage::Obj(o) => read_data(o.instance_storage.get_field(name)),
+                            HeapStorage::Obj(o) => {
+                                let field_data =
+                                    o.instance_storage.get_field_atomic(name, ordering);
+                                read_data(&field_data)
+                            }
                             HeapStorage::Str(_) => todo!("field on string"),
                             HeapStorage::Boxed(_) => todo!("field on boxed value type"),
                         }
@@ -1182,7 +1333,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                 o.description.type_name()
                             )
                         }
-                        read_data(o.instance_storage.get_field(name))
+                        read_data(o.instance_storage.get_field_local(name))
                     }
                     StackValue::NativeInt(i) => read_from_pointer(i as *mut u8),
                     StackValue::UnmanagedPtr(UnmanagedPtr(ptr))
@@ -1282,7 +1433,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     CTSValue::read(&load_type, &self.current_context(), source).into_stack();
                 push!(value);
             }
-            LoadStaticField { param0: source, .. } => {
+            LoadStaticField {
+                param0: source,
+                volatile,
+                ..
+            } => {
                 let (field, lookup) = self.locate_field(*source);
                 let name = &field.field.name;
 
@@ -1295,12 +1450,18 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     .current_context()
                     .for_type_with_generics(field.parent, &lookup);
 
+                let ordering = if *volatile {
+                    AtomicOrdering::SeqCst
+                } else {
+                    AtomicOrdering::Acquire
+                };
+
                 // Thread-safe path: use GlobalState
                 let value = {
-                    let statics = self.statics_read();
-                    let field_data = statics.get(field.parent).get_field(name);
+                    let storage = self.statics().get(field.parent);
+                    let field_data = storage.storage.get_field_atomic(name, ordering);
                     let t = ctx.make_concrete(&field.field.return_type);
-                    CTSValue::read(&t, &ctx, field_data).into_stack()
+                    CTSValue::read(&t, &ctx, &field_data).into_stack()
                 };
 
                 vm_trace_field!(self, "LOAD_STATIC", name, &value);
@@ -1319,7 +1480,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     .for_type_with_generics(field.parent, &lookup);
                 let field_type = ctx.get_field_desc(field);
                 let value = statics!(|s| {
-                    let field_data = s.get(field.parent).get_field(name);
+                    let storage = s.get(field.parent);
+                    let field_data = storage.storage.get_field_local(name);
                     StackValue::managed_ptr(field_data.as_ptr() as *mut _, field_type, None, true)
                 });
 
@@ -1336,7 +1498,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 let rfh = self.loader().corlib_type("System.RuntimeFieldHandle");
                 let mut instance = Object::new(rfh, &self.current_context());
-                field_obj.write(instance.instance_storage.get_field_mut("_value"));
+                field_obj.write(instance.instance_storage.get_field_mut_local("_value"));
 
                 push!(ValueType(Box::new(instance)));
             }
@@ -1346,7 +1508,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 let rmh = self.loader().corlib_type("System.RuntimeMethodHandle");
                 let mut instance = Object::new(rmh, &self.current_context());
-                method_obj.write(instance.instance_storage.get_field_mut("_value"));
+                method_obj.write(instance.instance_storage.get_field_mut_local("_value"));
 
                 push!(ValueType(Box::new(instance)));
             }
@@ -1558,7 +1720,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             StoreField {
                 param0: source,
-                volatile: _, // TODO
+                volatile,
                 ..
             } => {
                 let value = pop!();
@@ -1574,7 +1736,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 vm_trace_field!(self, "STORE", name, &value);
 
-                let write_data = |dest: &mut [u8]| CTSValue::new(&t, &ctx, value).write(dest);
+                let ordering = if *volatile {
+                    AtomicOrdering::SeqCst
+                } else {
+                    AtomicOrdering::Release
+                };
+
+                let cts_value = CTSValue::new(&t, &ctx, value);
+                let write_data = |dest: &mut [u8]| cts_value.write(dest);
                 let slice_from_pointer = |dest: *mut u8| {
                     let layout = FieldLayoutManager::instance_fields(field.parent, &ctx);
                     let field_layout = layout.fields.get(name.as_ref()).unwrap();
@@ -1583,6 +1752,54 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             dest.add(field_layout.position),
                             field_layout.layout.size(),
                         )
+                    }
+                };
+
+                let write_to_pointer_atomic = |ptr: *mut u8| {
+                    let layout = FieldLayoutManager::instance_fields(field.parent, &ctx);
+                    let field_layout = layout.fields.get(name.as_ref()).unwrap();
+                    let size = field_layout.layout.size();
+                    let field_ptr = unsafe { ptr.add(field_layout.position) };
+
+                    let mut val_bytes = vec![0u8; size];
+                    write_data(&mut val_bytes);
+
+                    if size <= std::mem::size_of::<usize>() {
+                        // Check alignment before attempting atomic operations
+                        let is_aligned = match size {
+                            1 => true, // u8 is always aligned
+                            2 => (field_ptr as usize).is_multiple_of(std::mem::align_of::<u16>()),
+                            4 => (field_ptr as usize).is_multiple_of(std::mem::align_of::<u32>()),
+                            8 => (field_ptr as usize).is_multiple_of(std::mem::align_of::<u64>()),
+                            _ => false,
+                        };
+
+                        if !is_aligned {
+                            // Fall back to non-atomic write if not aligned
+                            write_data(slice_from_pointer(ptr));
+                            return;
+                        }
+
+                        match size {
+                            1 => unsafe {
+                                (*(field_ptr as *const AtomicU8)).store(val_bytes[0], ordering)
+                            },
+                            2 => unsafe {
+                                let val = u16::from_ne_bytes(val_bytes.try_into().unwrap());
+                                (*(field_ptr as *const AtomicU16)).store(val, ordering)
+                            },
+                            4 => unsafe {
+                                let val = u32::from_ne_bytes(val_bytes.try_into().unwrap());
+                                (*(field_ptr as *const AtomicU32)).store(val, ordering)
+                            },
+                            8 => unsafe {
+                                let val = u64::from_ne_bytes(val_bytes.try_into().unwrap());
+                                (*(field_ptr as *const AtomicU64)).store(val, ordering)
+                            },
+                            _ => write_data(slice_from_pointer(ptr)),
+                        }
+                    } else {
+                        write_data(slice_from_pointer(ptr));
                     }
                 };
 
@@ -1601,20 +1818,23 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             )
                         }
 
-                        let mut data = h.unlock(gc).borrow_mut();
+                        let mut data = h.unlock(gc).write();
                         match &mut data.storage {
                             HeapStorage::Vec(_) => todo!("field on array"),
                             HeapStorage::Obj(o) => {
-                                write_data(o.instance_storage.get_field_mut(name))
+                                let mut val_bytes = vec![0u8; type_layout(t.clone(), &ctx).size()];
+                                write_data(&mut val_bytes);
+                                o.instance_storage
+                                    .set_field_atomic(name, &val_bytes, ordering);
                             }
                             HeapStorage::Str(_) => todo!("field on string"),
                             HeapStorage::Boxed(_) => todo!("field on boxed value type"),
                         }
                     }
-                    StackValue::NativeInt(i) => write_data(slice_from_pointer(i as *mut u8)),
+                    StackValue::NativeInt(i) => write_to_pointer_atomic(i as *mut u8),
                     StackValue::UnmanagedPtr(UnmanagedPtr(ptr))
                     | StackValue::ManagedPtr(ManagedPtr { value: ptr, .. }) => {
-                        write_data(slice_from_pointer(ptr.as_ptr()))
+                        write_to_pointer_atomic(ptr.as_ptr())
                     }
                     rest => panic!(
                         "invalid type on stack (expected object or pointer, received {:?})",
@@ -1624,7 +1844,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             StoreFieldSkipNullCheck(_) => todo!("no.nullcheck stfld"),
             StoreObject { .. } => todo!("stobj"),
-            StoreStaticField { param0: source, .. } => {
+            StoreStaticField {
+                param0: source,
+                volatile,
+                ..
+            } => {
                 let (field, lookup) = self.locate_field(*source);
                 let name = &field.field.name;
 
@@ -1637,13 +1861,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     .current_context()
                     .for_type_with_generics(field.parent, &lookup);
 
+                let ordering = if *volatile {
+                    AtomicOrdering::SeqCst
+                } else {
+                    AtomicOrdering::Release
+                };
+
                 // Thread-safe path: use GlobalState
                 {
-                    let mut statics = self.statics_write();
-                    let field_data = statics.get_mut(field.parent).get_field_mut(name);
+                    let storage = self.statics().get(field.parent);
                     let t = ctx.make_concrete(&field.field.return_type);
                     vm_trace_field!(self, "STORE_STATIC", name, &value);
-                    CTSValue::new(&t, &ctx, value).write(field_data);
+
+                    let mut val_bytes = vec![0u8; type_layout(t.clone(), &ctx).size()];
+                    CTSValue::new(&t, &ctx, value).write(&mut val_bytes);
+                    storage.storage.set_field_atomic(name, &val_bytes, ordering);
                 }
             }
             Throw => {

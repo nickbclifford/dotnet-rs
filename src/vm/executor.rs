@@ -152,8 +152,14 @@ impl Executor {
             }
 
             // Reach a safe point between instructions if requested
+            // This check is performed on every loop iteration, but `is_gc_stop_requested()`
+            // is optimized to be a fast atomic load that returns false in the common case.
+            // For further optimization, consider checking only on:
+            // - Backward branches (loops)
+            // - Method calls/returns
+            // - Long-running operations
             #[cfg(feature = "multithreading")]
-            if (*self.shared.thread_manager).is_gc_stop_requested() {
+            if self.shared.thread_manager.is_gc_stop_requested() {
                 let coordinator = {
                     #[cfg(feature = "multithreaded-gc")]
                     {
@@ -164,7 +170,9 @@ impl Executor {
                         &Default::default()
                     }
                 };
-                (*self.shared.thread_manager).safe_point(self.thread_id, coordinator);
+                self.shared
+                    .thread_manager
+                    .safe_point(self.thread_id, coordinator);
             }
 
             self.with_arena(|arena| {
@@ -199,9 +207,34 @@ impl Executor {
                         break ExecutorResult::Exited(exit_code);
                     } else if !was_auto_invoked {
                         // step the caller past the call instruction
-                        self.with_arena(|arena| {
-                            arena.mutate_root(|_, c| c.increment_ip());
+                        let ip_out_of_bounds = self.with_arena(|arena| {
+                            arena.mutate_root(|_, c| {
+                                c.increment_ip();
+                                // Check if the IP is now out of bounds (implicit return)
+                                let frame = c.execution.frames.last().unwrap();
+                                frame.state.ip >= frame.state.info_handle.instructions.len()
+                            })
                         });
+                        // If the IP is out of bounds, treat it as an implicit return from the caller
+                        if ip_out_of_bounds {
+                            self.with_arena(|arena| {
+                                arena.mutate_root(|gc, c| {
+                                    c.return_frame(gc);
+                                });
+                            });
+                            if frames_empty(self) {
+                                let exit_code = self.with_arena_ref(|arena| {
+                                    arena.mutate(|_, c| match c.bottom_of_stack() {
+                                        Some(StackValue::Int32(i)) => i as u8,
+                                        Some(v) => {
+                                            panic!("invalid value for entrypoint return: {:?}", v)
+                                        }
+                                        None => 0,
+                                    })
+                                });
+                                break ExecutorResult::Exited(exit_code);
+                            }
+                        }
                     }
                 }
                 StepResult::MethodThrew => {
@@ -220,7 +253,7 @@ impl Executor {
         };
 
         // Unregister thread when execution completes
-        (*self.shared.thread_manager).unregister_thread(self.thread_id);
+        self.shared.thread_manager.unregister_thread(self.thread_id);
 
         self.shared.tracer.lock().flush();
         result
@@ -249,7 +282,7 @@ impl Executor {
 
             // 2. Request stop-the-world pause and wait for all threads to reach safe points
             let thread_manager = Arc::clone(&self.shared.thread_manager);
-            let _stw_guard = (*thread_manager).request_stop_the_world();
+            let _stw_guard = thread_manager.request_stop_the_world();
 
             // 3. Perform coordinated GC across all arenas
             self.shared
@@ -289,7 +322,7 @@ impl Executor {
 impl Drop for Executor {
     fn drop(&mut self) {
         // Ensure thread is unregistered if not already done
-        (*self.shared.thread_manager).unregister_thread(self.thread_id);
+        self.shared.thread_manager.unregister_thread(self.thread_id);
 
         #[cfg(feature = "multithreaded-gc")]
         self.shared.gc_coordinator.unregister_arena(self.thread_id);

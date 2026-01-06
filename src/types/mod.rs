@@ -21,6 +21,9 @@ pub struct TypeDescription {
 
 unsafe_empty_collect!(TypeDescription);
 
+unsafe impl Send for TypeDescription {}
+unsafe impl Sync for TypeDescription {}
+
 impl TypeDescription {
     pub fn new(resolution: ResolutionS, definition: &'static TypeDefinition<'static>) -> Self {
         Self {

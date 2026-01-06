@@ -5,14 +5,16 @@ use crate::{
         layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
         object::ObjectRef,
     },
-    vm::context::ResolutionContext,
+    vm::{
+        context::ResolutionContext,
+        sync::{Arc, AtomicU16, AtomicU32, AtomicU64, AtomicU8, Condvar, Mutex, Ordering, RwLock},
+    },
 };
 use gc_arena::{Collect, Collection};
 use std::{
     collections::{HashMap, HashSet},
     fmt::{Debug, Formatter},
     ops::Range,
-    sync::atomic::{AtomicU8, Ordering},
 };
 
 #[derive(Clone, PartialEq)]
@@ -101,13 +103,97 @@ impl FieldStorage {
         }
     }
 
-    pub fn get_field(&self, field: &str) -> &[u8] {
+    pub fn get_field_local(&self, field: &str) -> &[u8] {
         &self.storage[self.get_field_range(field)]
     }
 
-    pub fn get_field_mut(&mut self, field: &str) -> &mut [u8] {
+    pub fn get_field_mut_local(&mut self, field: &str) -> &mut [u8] {
         let r = self.get_field_range(field);
         &mut self.storage[r]
+    }
+
+    pub fn get_field_atomic(&self, field: &str, ordering: Ordering) -> Vec<u8> {
+        let layout = self.layout.fields.get(field).expect("field not found");
+        let size = layout.layout.size();
+        let offset = layout.position;
+        let ptr = unsafe { self.storage.as_ptr().add(offset) };
+
+        // Check alignment before attempting atomic operations
+        // Unaligned atomic operations are UB in Rust
+        let is_aligned = match size {
+            1 => true, // u8 is always aligned
+            2 => (ptr as usize).is_multiple_of(std::mem::align_of::<u16>()),
+            4 => (ptr as usize).is_multiple_of(std::mem::align_of::<u32>()),
+            8 => (ptr as usize).is_multiple_of(std::mem::align_of::<u64>()),
+            _ => false,
+        };
+
+        if !is_aligned {
+            // Fall back to non-atomic read if not aligned
+            // This can happen with ExplicitLayout types
+            return self.get_field_local(field).to_vec();
+        }
+
+        match size {
+            1 => vec![unsafe { (*(ptr as *const AtomicU8)).load(ordering) }],
+            2 => unsafe { (*(ptr as *const AtomicU16)).load(ordering) }
+                .to_ne_bytes()
+                .to_vec(),
+            4 => unsafe { (*(ptr as *const AtomicU32)).load(ordering) }
+                .to_ne_bytes()
+                .to_vec(),
+            8 => unsafe { (*(ptr as *const AtomicU64)).load(ordering) }
+                .to_ne_bytes()
+                .to_vec(),
+            _ => self.get_field_local(field).to_vec(),
+        }
+    }
+
+    pub fn set_field_atomic(&self, field: &str, value: &[u8], ordering: Ordering) {
+        let layout = self.layout.fields.get(field).expect("field not found");
+        let size = layout.layout.size();
+        let offset = layout.position;
+        let ptr = unsafe { self.storage.as_ptr().add(offset) as *mut u8 };
+
+        // Check alignment before attempting atomic operations
+        // Unaligned atomic operations are UB in Rust
+        let is_aligned = match size {
+            1 => true, // u8 is always aligned
+            2 => (ptr as usize).is_multiple_of(std::mem::align_of::<u16>()),
+            4 => (ptr as usize).is_multiple_of(std::mem::align_of::<u32>()),
+            8 => (ptr as usize).is_multiple_of(std::mem::align_of::<u64>()),
+            _ => false,
+        };
+
+        if !is_aligned {
+            // Fall back to non-atomic write if not aligned
+            // This can happen with ExplicitLayout types
+            // NOTE: This violates ECMA-335 atomicity requirements, but it's
+            // better than UB. A proper implementation would need to lock.
+            unsafe {
+                std::ptr::copy_nonoverlapping(value.as_ptr(), ptr, size.min(value.len()));
+            }
+            return;
+        }
+
+        match size {
+            1 => unsafe { (*(ptr as *const AtomicU8)).store(value[0], ordering) },
+            2 => unsafe {
+                let val = u16::from_ne_bytes(value.try_into().unwrap());
+                (*(ptr as *const AtomicU16)).store(val, ordering)
+            },
+            4 => unsafe {
+                let val = u32::from_ne_bytes(value.try_into().unwrap());
+                (*(ptr as *const AtomicU32)).store(val, ordering)
+            },
+            8 => unsafe {
+                let val = u64::from_ne_bytes(value.try_into().unwrap());
+                (*(ptr as *const AtomicU64)).store(val, ordering)
+            },
+            _ => unsafe {
+                std::ptr::copy_nonoverlapping(value.as_ptr(), ptr, size);
+            },
+        }
     }
 }
 
@@ -120,25 +206,36 @@ pub const INIT_STATE_INITIALIZED: u8 = 2;
 pub struct StaticStorage {
     /// Atomic initialization state for thread-safe .cctor execution.
     /// States: 0=uninitialized, 1=initializing (in progress), 2=initialized (complete)
-    init_state: AtomicU8,
+    pub(crate) init_state: AtomicU8,
     /// The ID of the thread currently initializing this type.
     /// Only valid if init_state is INITIALIZING.
-    initializing_thread: u64,
-    storage: FieldStorage,
+    pub(crate) initializing_thread: AtomicU64,
+    /// Storage for static fields. Access must use atomic operations
+    /// for thread-safety.
+    pub storage: FieldStorage,
+    /// Condition variable to wait for initialization completion.
+    pub(crate) init_cond: Arc<Condvar>,
+    /// Mutex for use with init_cond.
+    pub(crate) init_mutex: Arc<Mutex<()>>,
 }
 
 impl Clone for StaticStorage {
     fn clone(&self) -> Self {
         Self {
             init_state: AtomicU8::new(self.init_state.load(Ordering::Acquire)),
-            initializing_thread: self.initializing_thread,
+            initializing_thread: AtomicU64::new(self.initializing_thread.load(Ordering::Acquire)),
             storage: self.storage.clone(),
+            init_cond: self.init_cond.clone(),
+            init_mutex: self.init_mutex.clone(),
         }
     }
 }
 
 unsafe impl Collect for StaticStorage {
     fn trace(&self, cc: &Collection) {
+        // Tracing is safe because FieldStorage::trace uses atomic reads for ObjectRefs
+        // and we are during a stop-the-world pause or at least in a state where
+        // the GC has control.
         self.storage.trace(cc);
     }
 }
@@ -152,22 +249,26 @@ impl Debug for StaticStorage {
     }
 }
 
-#[derive(Clone)]
 pub struct StaticStorageManager {
-    types: HashMap<TypeDescription, StaticStorage>,
+    /// Thread-safe map of types to their static storage.
+    /// We use a RwLock for the map itself to allow concurrent access to different types,
+    /// and each StaticStorage has its own locks for even more granularity.
+    types: RwLock<HashMap<TypeDescription, Arc<StaticStorage>>>,
 }
 
 unsafe impl Collect for StaticStorageManager {
     fn trace(&self, cc: &Collection) {
-        for v in self.types.values() {
+        let types = self.types.read();
+        for v in types.values() {
             v.trace(cc);
         }
     }
 }
 impl Debug for StaticStorageManager {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let types = self.types.read();
         f.debug_map()
-            .entries(self.types.iter().map(|(k, v)| (DebugStr(k.type_name()), v)))
+            .entries(types.iter().map(|(k, v)| (DebugStr(k.type_name()), v)))
             .finish()
     }
 }
@@ -187,7 +288,7 @@ pub enum StaticInitResult {
 impl StaticStorageManager {
     pub fn new() -> Self {
         Self {
-            types: HashMap::new(),
+            types: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -199,25 +300,18 @@ impl Default for StaticStorageManager {
 }
 
 impl StaticStorageManager {
-    pub fn get(&self, description: TypeDescription) -> &FieldStorage {
-        &self
-            .types
+    pub fn get(&self, description: TypeDescription) -> Arc<StaticStorage> {
+        let types = self.types.read();
+        types
             .get(&description)
+            .cloned()
             .expect("missing type in static storage")
-            .storage
-    }
-
-    pub fn get_mut(&mut self, description: TypeDescription) -> &mut FieldStorage {
-        &mut self
-            .types
-            .get_mut(&description)
-            .expect("missing type in static storage")
-            .storage
     }
 
     /// Get the current initialization state of a type.
     pub fn get_init_state(&self, description: TypeDescription) -> u8 {
-        self.types
+        let types = self.types.read();
+        types
             .get(&description)
             .map(|s| s.init_state.load(Ordering::Acquire))
             .unwrap_or(INIT_STATE_UNINITIALIZED)
@@ -231,32 +325,36 @@ impl StaticStorageManager {
     /// Returns a `StaticInitResult` indicating what the calling thread should do.
     #[must_use]
     pub fn init(
-        &mut self,
+        &self,
         description: TypeDescription,
         context: &ResolutionContext,
         thread_id: u64,
     ) -> StaticInitResult {
-        // Ensure the storage exists
-        self.types
-            .entry(description)
-            .or_insert_with(|| StaticStorage {
-                init_state: AtomicU8::new(INIT_STATE_UNINITIALIZED),
-                initializing_thread: 0,
-                storage: FieldStorage::static_fields(description, context),
+        // Ensure the storage exists. We use a write lock on the types map for this.
+        {
+            let mut types = self.types.write();
+            types.entry(description).or_insert_with(|| {
+                Arc::new(StaticStorage {
+                    init_state: AtomicU8::new(INIT_STATE_UNINITIALIZED),
+                    initializing_thread: AtomicU64::new(0),
+                    storage: FieldStorage::static_fields(description, context),
+                    init_cond: Arc::new(Condvar::new()),
+                    init_mutex: Arc::new(Mutex::new(())),
+                })
             });
+        }
 
-        // Check for recursion on same thread
-        let storage = self
-            .types
-            .get(&description)
-            .expect("missing type in static storage");
+        // Get the storage and check its state.
+        let storage = self.get(description);
         let state = storage.init_state.load(Ordering::Acquire);
 
         if state == INIT_STATE_INITIALIZED {
             return StaticInitResult::Initialized;
         }
 
-        if state == INIT_STATE_INITIALIZING && storage.initializing_thread == thread_id {
+        if state == INIT_STATE_INITIALIZING
+            && storage.initializing_thread.load(Ordering::Acquire) == thread_id
+        {
             return StaticInitResult::Recursive;
         }
 
@@ -287,8 +385,9 @@ impl StaticStorageManager {
         ) {
             Ok(_) => {
                 // We won the race - this thread should execute the .cctor
-                let storage_mut = self.types.get_mut(&description).unwrap();
-                storage_mut.initializing_thread = thread_id;
+                storage
+                    .initializing_thread
+                    .store(thread_id, Ordering::Release);
                 StaticInitResult::Execute(cctor)
             }
             Err(INIT_STATE_INITIALIZED) => {
@@ -305,11 +404,60 @@ impl StaticStorageManager {
 
     /// Mark a type as fully initialized after its .cctor completes.
     /// This must be called after the .cctor returned by `init()` has finished executing.
-    pub fn mark_initialized(&mut self, description: TypeDescription) {
-        if let Some(storage) = self.types.get(&description) {
+    pub fn mark_initialized(&self, description: TypeDescription) {
+        let types = self.types.read();
+        if let Some(storage) = types.get(&description) {
             storage
                 .init_state
                 .store(INIT_STATE_INITIALIZED, Ordering::Release);
+            // Notify any threads waiting for initialization
+            let _lock = storage.init_mutex.lock();
+            storage.init_cond.notify_all();
+        }
+    }
+
+    /// Wait for a type's initialization to complete if another thread is currently initializing it.
+    /// This method checks for GC safe points while waiting to avoid deadlocks during stop-the-world pauses.
+    pub fn wait_for_init(
+        &self,
+        description: TypeDescription,
+        thread_manager: &impl crate::vm::threading::ThreadManagerOps,
+        thread_id: u64,
+        gc_coordinator: &crate::vm::gc::coordinator::GCCoordinator,
+    ) {
+        let storage = self.get(description);
+
+        loop {
+            // Check state before acquiring lock
+            let state = storage.init_state.load(Ordering::Acquire);
+            if state != INIT_STATE_INITIALIZING {
+                break;
+            }
+
+            // Check for GC safe point before waiting
+            if thread_manager.is_gc_stop_requested() {
+                thread_manager.safe_point(thread_id, gc_coordinator);
+            }
+
+            // Try to wait with a timeout
+            let mut lock = storage.init_mutex.lock();
+            if storage.init_state.load(Ordering::Acquire) != INIT_STATE_INITIALIZING {
+                break;
+            }
+
+            // Wait for a short duration to allow periodic safe point checks
+            #[cfg(feature = "multithreading")]
+            {
+                use std::time::Duration;
+                let _ = storage
+                    .init_cond
+                    .wait_for(&mut lock, Duration::from_millis(10));
+            }
+            #[cfg(not(feature = "multithreading"))]
+            {
+                // In single-threaded mode, just wait normally
+                storage.init_cond.wait(&mut lock);
+            }
         }
     }
 }

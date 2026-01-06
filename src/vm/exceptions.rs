@@ -475,6 +475,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 vm_push!(self, gc, ObjectRef(exception));
             }
             UnwindTarget::Instruction(target_ip) => {
+                // Special case: usize::MAX indicates we should return from the method
+                // after executing finally blocks
+                if target_ip == usize::MAX {
+                    return StepResult::MethodReturned;
+                }
+
                 let frame = &mut self.execution.frames[target_frame];
                 frame.state.ip = target_ip;
                 frame.stack_height = 0;

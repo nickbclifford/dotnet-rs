@@ -16,12 +16,13 @@ use crate::{
     },
     vm::{
         context::ResolutionContext,
+        gc::GCHandleType,
         intrinsics::reflection::{
             runtime_field_info_intrinsic_call, runtime_method_info_intrinsic_call,
             runtime_type_intrinsic_call,
         },
         sync::{SyncBlockOps, SyncManagerOps},
-        CallStack, GCHandle, GCHandleType, MethodInfo, StepResult,
+        CallStack, GCHandle, MethodInfo, StepResult,
     },
     vm_expect_stack, vm_msg, vm_pop, vm_push,
 };
@@ -97,11 +98,11 @@ pub fn is_intrinsic_field(field: FieldDescription, loader: &AssemblyLoader) -> b
 }
 
 pub fn span_to_slice<'gc, 'a>(span: Object<'gc>) -> &'a [u8] {
-    let ptr_data = span.instance_storage.get_field("_reference");
+    let ptr_data = span.instance_storage.get_field_local("_reference");
     let mut len_data = [0u8; size_of::<i32>()];
 
     let ptr = ManagedPtr::read(ptr_data).value;
-    len_data.copy_from_slice(span.instance_storage.get_field("_length"));
+    len_data.copy_from_slice(span.instance_storage.get_field_local("_length"));
 
     let len = i32::from_ne_bytes(len_data) as usize;
 
@@ -165,7 +166,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                         || v.description.type_name() == "System.UIntPtr" =>
                 {
                     let mut buf = [0u8; size_of::<isize>()];
-                    buf.copy_from_slice(v.instance_storage.get_field("_value"));
+                    buf.copy_from_slice(v.instance_storage.get_field_local("_value"));
                     isize::from_ne_bytes(buf)
                 }
                 _ => panic!("expected native int or IntPtr, got {:?}", val),
@@ -389,7 +390,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         [static System.Runtime.CompilerServices.RuntimeHelpers::RunClassConstructor(System.RuntimeTypeHandle)] => {
             // https://github.com/dotnet/runtime/blob/main/src/libraries/System.Private.CoreLib/src/System/SR.cs#L78
             vm_expect_stack!(let ValueType(handle) = pop!());
-            let rt = ObjectRef::read(handle.instance_storage.get_field("_value"));
+            let rt = ObjectRef::read(handle.instance_storage.get_field_local("_value"));
             let target = stack.resolve_runtime_type(rt.expect_object_ref());
             let target: ConcreteType = target.to_concrete(stack.loader());
             let target = stack.loader().find_concrete_type(target);
@@ -410,14 +411,15 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             // Extract the field index from RuntimeFieldHandle
             let field_index = {
                 let mut ptr_buf = [0u8; ObjectRef::SIZE];
-                ptr_buf.copy_from_slice(field_handle.instance_storage.get_field("_value"));
+                ptr_buf.copy_from_slice(field_handle.instance_storage.get_field_local("_value"));
                 let obj_ref = ObjectRef::read(&ptr_buf);
                 let handle_obj = obj_ref.0.expect("Null pointer in RuntimeFieldHandle");
+                let borrowed = handle_obj.borrow();
 
-                match &handle_obj.borrow().storage {
+                match &borrowed.storage {
                     HeapStorage::Obj(o) => {
                         let mut idx_buf = [0u8; size_of::<usize>()];
-                        idx_buf.copy_from_slice(o.instance_storage.get_field("index"));
+                        idx_buf.copy_from_slice(o.instance_storage.get_field_local("index"));
                         usize::from_ne_bytes(idx_buf)
                     }
                     _ => panic!("RuntimeFieldHandle._value does not point to an object"),
@@ -448,11 +450,11 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 let element_desc = stack.loader().find_concrete_type(element_type.clone());
                 let data_ptr = StackValue::managed_ptr(data_slice.as_ptr() as *mut u8, element_desc, None, false);
                 vm_expect_stack!(let ManagedPtr(m) = data_ptr);
-                m.write(span_instance.instance_storage.get_field_mut("_reference"));
+                m.write(span_instance.instance_storage.get_field_mut_local("_reference"));
 
                 // Set the _length field
                 let element_count = (array_size / element_size) as i32;
-                span_instance.instance_storage.get_field_mut("_length")
+                span_instance.instance_storage.get_field_mut_local("_length")
                     .copy_from_slice(&element_count.to_ne_bytes());
 
                 push!(ValueType(Box::new(span_instance)));
@@ -814,6 +816,15 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     },
                 );
 
+                #[cfg(feature = "multithreaded-gc")]
+                let success = sync_block.enter_with_timeout_safe(
+                    thread_id,
+                    timeout_ms as u64,
+                    &stack.shared.metrics,
+                    stack.shared.thread_manager.as_ref(),
+                    &stack.shared.gc_coordinator,
+                );
+                #[cfg(not(feature = "multithreaded-gc"))]
                 let success = sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &stack.shared.metrics);
 
                 unsafe {
@@ -842,7 +853,17 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                     },
                 );
 
+                #[cfg(feature = "multithreaded-gc")]
+                let success = sync_block.enter_with_timeout_safe(
+                    thread_id,
+                    timeout_ms as u64,
+                    &stack.shared.metrics,
+                    stack.shared.thread_manager.as_ref(),
+                    &stack.shared.gc_coordinator,
+                );
+                #[cfg(not(feature = "multithreaded-gc"))]
                 let success = sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &stack.shared.metrics);
+
                 push!(Int32(if success { 1 } else { 0 }));
             } else {
                 return stack.throw_by_name(gc, "System.NullReferenceException");
@@ -885,8 +906,8 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                 None,
                 false,
             );
-            managed.write(span.instance_storage.get_field_mut("_reference"));
-            span.instance_storage.get_field_mut("_length").copy_from_slice(&(len as i32).to_ne_bytes());
+            managed.write(span.instance_storage.get_field_mut_local("_reference"));
+            span.instance_storage.get_field_mut_local("_length").copy_from_slice(&(len as i32).to_ne_bytes());
 
             push!(ValueType(Box::new(span)));
         },
@@ -894,18 +915,18 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         | [static System.Reflection.MethodBase::GetMethodFromHandle(System.RuntimeMethodHandle)]
         | [static System.Reflection.FieldInfo::GetFieldFromHandle(System.RuntimeFieldHandle)] => {
             vm_expect_stack!(let ValueType(handle) = pop!());
-            let target = ObjectRef::read(handle.instance_storage.get_field("_value"));
+            let target = ObjectRef::read(handle.instance_storage.get_field_local("_value"));
             push!(ObjectRef(target));
         },
         [static System.RuntimeTypeHandle::ToIntPtr(System.RuntimeTypeHandle)] => {
             vm_expect_stack!(let ValueType(handle) = pop!());
-            let target = handle.instance_storage.get_field("_value");
+            let target = handle.instance_storage.get_field_local("_value");
             let val = usize::from_ne_bytes(target.try_into().unwrap());
             push!(NativeInt(val as isize));
         },
         [System.RuntimeMethodHandle::GetFunctionPointer()] => {
             vm_expect_stack!(let ValueType(handle) = pop!());
-            let method_obj = ObjectRef::read(handle.instance_storage.get_field("_value"));
+            let method_obj = ObjectRef::read(handle.instance_storage.get_field_local("_value"));
             let (method, lookup) = stack.resolve_runtime_method(method_obj);
             let index = stack.get_runtime_method_index(method, lookup.clone());
             push!(NativeInt(index as isize));
@@ -928,7 +949,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
             let rth = stack.loader().corlib_type("System.RuntimeTypeHandle");
             let mut instance = Object::new(rth, &ctx);
-            obj.write(instance.instance_storage.get_field_mut("_value"));
+            obj.write(instance.instance_storage.get_field_mut_local("_value"));
 
             push!(ValueType(Box::new(instance)));
         },
@@ -1039,7 +1060,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
                         if entry.1 == GCHandleType::Pinned {
                             if let Some(ptr) = entry.0.0 {
                                 match &ptr.borrow().storage {
-                                    HeapStorage::Obj(_) => ptr.as_ptr() as isize,
+                                    HeapStorage::Obj(_) => unsafe { ptr.as_ptr() as isize },
                                     HeapStorage::Vec(v) => v.get().as_ptr() as isize,
                                     HeapStorage::Str(s) => s.as_ptr() as isize,
                                     _ => 0,

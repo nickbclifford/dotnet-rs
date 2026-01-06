@@ -927,7 +927,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 continue;
             };
             let raw_ptr = Gc::as_ptr(ptr) as *const _ as usize;
-            match &ptr.borrow().storage {
+            let borrowed = ptr.borrow();
+            match &borrowed.storage {
                 HeapStorage::Obj(o) => {
                     let details = format!("{:?}", o);
                     tracer.dump_heap_object(raw_ptr, "Object", &details);
@@ -955,8 +956,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             return;
         }
 
-        let s = self.statics_read();
-        let debug_str = format!("{:#?}", &*s);
+        let s = self.statics();
+        let debug_str = format!("{:#?}", s);
         self.tracer().dump_statics_snapshot(&debug_str);
     }
 

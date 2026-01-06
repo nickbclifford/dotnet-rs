@@ -1,8 +1,10 @@
 use crate::{
     value::object::ObjectRef,
     vm::{
+        gc::coordinator::GCCoordinator,
         metrics::RuntimeMetrics,
         sync::{SyncBlockOps, SyncManagerOps},
+        threading::ThreadManagerOps,
     },
 };
 use std::{cell::Cell, collections::HashMap, sync::Arc};
@@ -38,6 +40,27 @@ impl SyncBlockOps for SyncBlock {
     ) -> bool {
         self.enter(thread_id, _metrics);
         true
+    }
+
+    fn enter_safe(
+        &self,
+        thread_id: u64,
+        metrics: &RuntimeMetrics,
+        _thread_manager: &impl ThreadManagerOps,
+        _gc_coordinator: &GCCoordinator,
+    ) {
+        self.enter(thread_id, metrics);
+    }
+
+    fn enter_with_timeout_safe(
+        &self,
+        thread_id: u64,
+        timeout_ms: u64,
+        metrics: &RuntimeMetrics,
+        _thread_manager: &impl ThreadManagerOps,
+        _gc_coordinator: &GCCoordinator,
+    ) -> bool {
+        self.enter_with_timeout(thread_id, timeout_ms, metrics)
     }
 
     fn exit(&self, _thread_id: u64) -> bool {

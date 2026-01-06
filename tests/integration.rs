@@ -421,10 +421,10 @@ fn test_multiple_arenas_simple() {
         .unwrap();
     let type_desc = TypeDescription::new(resolution, type_def);
 
-    let statics = shared.statics.read();
-    let storage = statics.get(type_desc);
+    let storage_arc = shared.statics.get(type_desc);
+    let storage = &storage_arc.storage;
 
-    let counter_bytes = storage.get_field("Counter");
+    let counter_bytes = storage.get_field_local("Counter");
     let counter = i32::from_ne_bytes(counter_bytes.try_into().unwrap());
 
     // Note: Without synchronization, the counter value is not guaranteed to be 5
@@ -484,6 +484,35 @@ fn test_gc_coordinator_multi_arena_tracking() {
     // After unregister, commands should not be available
     assert!(!shared.gc_coordinator.has_command(1));
     assert!(!shared.gc_coordinator.has_command(2));
+}
+
+#[test]
+#[cfg(feature = "multithreading")]
+fn test_volatile_sharing() {
+    use std::thread;
+    let harness = TestHarness::get();
+    let fixture_path = Path::new("tests/fixtures/volatile_sharing_42.cs");
+    let dll_path = harness.build(fixture_path);
+
+    let shared = std::sync::Arc::new(vm::SharedGlobalState::new(harness.loader));
+
+    let handles: Vec<_> = (0..2)
+        .map(|_| {
+            let dll_path = dll_path.clone();
+            let shared = shared.clone();
+            let harness_ptr = harness as *const TestHarness as usize;
+            thread::spawn(move || {
+                let harness = unsafe { &*(harness_ptr as *const TestHarness) };
+                let resolution = static_res_from_file(dll_path.to_str().unwrap());
+                let exit_code = harness.run_with_shared(resolution, shared);
+                assert_eq!(exit_code, 42);
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().expect("Thread should complete");
+    }
 }
 
 /// Test that verifies cross-arena reference tracking works

@@ -1,9 +1,16 @@
 use crate::{
     types::TypeDescription,
-    vm::{context::ResolutionContext, GCHandle},
+    vm::{
+        context::ResolutionContext,
+        sync::{
+            AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
+            AtomicU64, AtomicU8, AtomicUsize, Ordering as AtomicOrdering,
+        },
+        GCHandle,
+    },
 };
 use dotnetdll::prelude::*;
-use gc_arena::{Collect, Collection};
+use gc_arena::{Collect, Collection, Gc};
 use std::{
     cmp::Ordering,
     fmt::Debug,
@@ -314,6 +321,12 @@ impl<'gc> StackValue<'gc> {
     /// # Safety
     /// `ptr` must be a valid, aligned pointer to a value of the type specified by `t`.
     pub unsafe fn load(ptr: *const u8, t: LoadType) -> Self {
+        Self::load_atomic(ptr, t, AtomicOrdering::Relaxed)
+    }
+
+    /// # Safety
+    /// `ptr` must be a valid, aligned pointer to a value of the type specified by `t`.
+    pub unsafe fn load_atomic(ptr: *const u8, t: LoadType, ordering: AtomicOrdering) -> Self {
         debug_assert!(!ptr.is_null(), "Attempted to load from a null pointer");
         let alignment = load_type_alignment(t);
         debug_assert!(
@@ -324,23 +337,45 @@ impl<'gc> StackValue<'gc> {
         );
 
         match t {
-            LoadType::Int8 => Self::Int32(*(ptr as *const i8) as i32),
-            LoadType::UInt8 => Self::Int32(*ptr as i32),
-            LoadType::Int16 => Self::Int32(*(ptr as *const i16) as i32),
-            LoadType::UInt16 => Self::Int32(*(ptr as *const u16) as i32),
-            LoadType::Int32 => Self::Int32(*(ptr as *const i32)),
-            LoadType::UInt32 => Self::Int32(*(ptr as *const u32) as i32),
-            LoadType::Int64 => Self::Int64(*(ptr as *const i64)),
-            LoadType::Float32 => Self::NativeFloat(*(ptr as *const f32) as f64),
-            LoadType::Float64 => Self::NativeFloat(*(ptr as *const f64)),
-            LoadType::IntPtr => Self::NativeInt(*(ptr as *const isize)),
-            LoadType::Object => Self::ObjectRef(*(ptr as *const ObjectRef)),
+            LoadType::Int8 => Self::Int32((*(ptr as *const AtomicI8)).load(ordering) as i32),
+            LoadType::UInt8 => Self::Int32((*(ptr as *const AtomicU8)).load(ordering) as i32),
+            LoadType::Int16 => Self::Int32((*(ptr as *const AtomicI16)).load(ordering) as i32),
+            LoadType::UInt16 => Self::Int32((*(ptr as *const AtomicU16)).load(ordering) as i32),
+            LoadType::Int32 => Self::Int32((*(ptr as *const AtomicI32)).load(ordering)),
+            LoadType::UInt32 => Self::Int32((*(ptr as *const AtomicU32)).load(ordering) as i32),
+            LoadType::Int64 => Self::Int64((*(ptr as *const AtomicI64)).load(ordering)),
+            LoadType::Float32 => {
+                let val = (*(ptr as *const AtomicU32)).load(ordering);
+                Self::NativeFloat(f32::from_bits(val) as f64)
+            }
+            LoadType::Float64 => {
+                let val = (*(ptr as *const AtomicU64)).load(ordering);
+                Self::NativeFloat(f64::from_bits(val))
+            }
+            LoadType::IntPtr => Self::NativeInt((*(ptr as *const AtomicIsize)).load(ordering)),
+            LoadType::Object => {
+                let val = (*(ptr as *const AtomicUsize)).load(ordering);
+                let ptr = val as *const crate::vm::threadsafe_lock::ThreadSafeLock<
+                    object::ObjectInner<'gc>,
+                >;
+                if ptr.is_null() {
+                    Self::ObjectRef(ObjectRef(None))
+                } else {
+                    Self::ObjectRef(ObjectRef(Some(Gc::from_ptr(ptr))))
+                }
+            }
         }
     }
 
     /// # Safety
     /// `ptr` must be a valid, aligned pointer to a location with sufficient space for the type specified by `t`.
     pub unsafe fn store(self, ptr: *mut u8, t: StoreType) {
+        self.store_atomic(ptr, t, AtomicOrdering::Relaxed);
+    }
+
+    /// # Safety
+    /// `ptr` must be a valid, aligned pointer to a location with sufficient space for the type specified by `t`.
+    pub unsafe fn store_atomic(self, ptr: *mut u8, t: StoreType, ordering: AtomicOrdering) {
         debug_assert!(!ptr.is_null(), "Attempted to store to a null pointer");
         let alignment = store_type_alignment(t);
         debug_assert!(
@@ -351,14 +386,27 @@ impl<'gc> StackValue<'gc> {
         );
 
         match t {
-            StoreType::Int8 => *(ptr as *mut i8) = self.as_i32() as i8,
-            StoreType::Int16 => *(ptr as *mut i16) = self.as_i32() as i16,
-            StoreType::Int32 => *(ptr as *mut i32) = self.as_i32(),
-            StoreType::Int64 => *(ptr as *mut i64) = self.as_i64(),
-            StoreType::Float32 => *(ptr as *mut f32) = self.as_f64() as f32,
-            StoreType::Float64 => *(ptr as *mut f64) = self.as_f64(),
-            StoreType::IntPtr => *(ptr as *mut isize) = self.as_isize(),
-            StoreType::Object => *(ptr as *mut ObjectRef) = self.as_object_ref(),
+            StoreType::Int8 => (*(ptr as *const AtomicI8)).store(self.as_i32() as i8, ordering),
+            StoreType::Int16 => (*(ptr as *const AtomicI16)).store(self.as_i32() as i16, ordering),
+            StoreType::Int32 => (*(ptr as *const AtomicI32)).store(self.as_i32(), ordering),
+            StoreType::Int64 => (*(ptr as *const AtomicI64)).store(self.as_i64(), ordering),
+            StoreType::Float32 => {
+                let val = (self.as_f64() as f32).to_bits();
+                (*(ptr as *const AtomicU32)).store(val, ordering);
+            }
+            StoreType::Float64 => {
+                let val = self.as_f64().to_bits();
+                (*(ptr as *const AtomicU64)).store(val, ordering);
+            }
+            StoreType::IntPtr => (*(ptr as *const AtomicIsize)).store(self.as_isize(), ordering),
+            StoreType::Object => {
+                let obj = self.as_object_ref();
+                let val = match obj.0 {
+                    Some(h) => Gc::as_ptr(h) as usize,
+                    None => 0,
+                };
+                (*(ptr as *const AtomicUsize)).store(val, ordering);
+            }
         }
     }
 }

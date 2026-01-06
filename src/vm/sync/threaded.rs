@@ -1,8 +1,10 @@
 use crate::{
     value::object::ObjectRef,
     vm::{
+        gc::coordinator::GCCoordinator,
         metrics::RuntimeMetrics,
         sync::{SyncBlockOps, SyncManagerOps},
+        threading::ThreadManagerOps,
     },
 };
 use parking_lot::{Condvar, Mutex};
@@ -69,6 +71,112 @@ impl SyncBlockOps for SyncBlock {
 
         state.owner_thread_id = thread_id;
         state.recursion_count = 1;
+    }
+
+    fn enter_safe(
+        &self,
+        thread_id: u64,
+        metrics: &RuntimeMetrics,
+        thread_manager: &impl ThreadManagerOps,
+        gc_coordinator: &GCCoordinator,
+    ) {
+        use std::time::{Duration, Instant};
+
+        loop {
+            let mut state = self.state.lock();
+
+            if state.owner_thread_id == thread_id {
+                state.recursion_count += 1;
+                return;
+            }
+
+            if state.owner_thread_id == 0 {
+                state.owner_thread_id = thread_id;
+                state.recursion_count = 1;
+                return;
+            }
+
+            // Owner is someone else, we need to wait
+            let start_wait = Instant::now();
+
+            // Wait with timeout to allow periodic safe point checks
+            let timeout = Duration::from_millis(10);
+            let _ = self.condvar.wait_for(&mut state, timeout);
+
+            if state.owner_thread_id == 0 {
+                state.owner_thread_id = thread_id;
+                state.recursion_count = 1;
+                metrics.record_lock_contention(start_wait.elapsed());
+                return;
+            }
+
+            // Drop the lock before checking safe point
+            drop(state);
+
+            // Check for GC safe point
+            if thread_manager.is_gc_stop_requested() {
+                thread_manager.safe_point(thread_id, gc_coordinator);
+            }
+        }
+    }
+
+    fn enter_with_timeout_safe(
+        &self,
+        thread_id: u64,
+        timeout_ms: u64,
+        metrics: &RuntimeMetrics,
+        thread_manager: &impl ThreadManagerOps,
+        gc_coordinator: &GCCoordinator,
+    ) -> bool {
+        use std::time::{Duration, Instant};
+
+        if timeout_ms == 0 {
+            return self.try_enter(thread_id);
+        }
+
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+
+            let mut state = self.state.lock();
+
+            if state.owner_thread_id == thread_id {
+                state.recursion_count += 1;
+                return true;
+            }
+
+            if state.owner_thread_id == 0 {
+                state.owner_thread_id = thread_id;
+                state.recursion_count = 1;
+                return true;
+            }
+
+            // Calculate remaining time, with a maximum wait of 10ms
+            let remaining = deadline - now;
+            let wait_duration = remaining.min(Duration::from_millis(10));
+
+            let start_wait = Instant::now();
+            let _ = self.condvar.wait_for(&mut state, wait_duration);
+
+            if state.owner_thread_id == 0 {
+                state.owner_thread_id = thread_id;
+                state.recursion_count = 1;
+                metrics.record_lock_contention(start_wait.elapsed());
+                return true;
+            }
+
+            // Drop the lock before checking safe point
+            drop(state);
+
+            // Check for GC safe point
+            if thread_manager.is_gc_stop_requested() {
+                thread_manager.safe_point(thread_id, gc_coordinator);
+            }
+        }
     }
 
     fn enter_with_timeout(

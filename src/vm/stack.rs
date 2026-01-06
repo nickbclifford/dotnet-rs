@@ -14,17 +14,17 @@ use crate::{
     vm::{
         context::ResolutionContext,
         exceptions::ExceptionState,
-        gc::tracer::Tracer,
+        gc::{tracer::Tracer, GCHandleType},
         intrinsics::reflection::RuntimeType,
         metrics::RuntimeMetrics,
         pinvoke::NativeLibraries,
         sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, SyncBlockManager},
         threading::ThreadManager,
-        GCHandleType, MethodInfo, MethodState, StepResult,
+        MethodInfo, MethodState, StepResult,
     },
 };
 use dotnetdll::prelude::*;
-use gc_arena::{lock::RefLock, Arena, Collect, Collection, Gc, Mutation, Rootable};
+use gc_arena::{Arena, Collect, Collection, Gc, Mutation, Rootable};
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     collections::{HashMap, HashSet},
@@ -39,7 +39,9 @@ use crate::{value::object::ObjectPtr, vm::gc::coordinator::GCCoordinator};
 
 #[derive(Collect)]
 #[collect(no_drop)]
-pub struct StackSlotHandle<'gc>(Gc<'gc, RefLock<StackValue<'gc>>>);
+pub struct StackSlotHandle<'gc>(
+    Gc<'gc, crate::vm::threadsafe_lock::ThreadSafeLock<StackValue<'gc>>>,
+);
 
 /// Thread-local execution state for a single .NET thread.
 /// Contains the evaluation stack, call frames, and exception state.
@@ -111,18 +113,18 @@ pub struct SharedGlobalState<'m> {
     pub metrics: RuntimeMetrics,
     pub tracer: Mutex<Tracer>,
     pub empty_generics: GenericLookup,
+    pub method_tables: RwLock<HashMap<TypeDescription, Box<[u8]>>>,
+    pub statics: StaticStorageManager,
     #[cfg(feature = "multithreaded-gc")]
     pub gc_coordinator: Arc<GCCoordinator>,
-    pub method_tables: RwLock<HashMap<TypeDescription, Box<[u8]>>>,
-    pub statics: RwLock<StaticStorageManager>,
 }
 
-// SAFETY: SharedGlobalState contains only thread-safe components:
-// - AssemblyLoader is immutable after construction
-// - All mutable state is protected by RwLock/Mutex/Arc
+// SharedGlobalState contains only thread-safe components:
+// - AssemblyLoader is thread-safe
+// - All mutable state is protected by RwLock/Mutex/Arc/Atomic
 // - No raw pointers or non-thread-safe types
-unsafe impl<'m> Send for SharedGlobalState<'m> {}
-unsafe impl<'m> Sync for SharedGlobalState<'m> {}
+// unsafe impl<'m> Send for SharedGlobalState<'m> {}
+// unsafe impl<'m> Sync for SharedGlobalState<'m> {}
 
 impl<'m> SharedGlobalState<'m> {
     pub fn new(loader: &'m AssemblyLoader) -> Self {
@@ -134,10 +136,10 @@ impl<'m> SharedGlobalState<'m> {
             metrics: RuntimeMetrics::new(),
             tracer: Mutex::new(Tracer::new()),
             empty_generics: GenericLookup::default(),
+            method_tables: RwLock::new(HashMap::new()),
+            statics: StaticStorageManager::new(),
             #[cfg(feature = "multithreaded-gc")]
             gc_coordinator: Arc::new(GCCoordinator::new()),
-            method_tables: RwLock::new(HashMap::new()),
-            statics: RwLock::new(StaticStorageManager::new()),
         }
     }
 }
@@ -216,7 +218,7 @@ unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
     fn trace(&self, cc: &Collection) {
         self.execution.trace(cc);
         self.local.trace(cc);
-        self.shared.statics.read().trace(cc);
+        self.shared.statics.trace(cc);
     }
 }
 
@@ -265,6 +267,54 @@ pub struct BasePointer {
     pub stack: usize,
 }
 
+/* EXPERIMENTAL CODE - Phase 2 Unified Arena Attempt (NOT FEASIBLE)
+ *
+ * The following code was an attempt to create a unified global GC arena.
+ * It was abandoned because gc-arena uses !Send types (Rc) internally,
+ * making it impossible to share an Arena across threads even with a Mutex.
+ *
+ * Keeping this code commented out for reference and future consideration.
+ *
+/// Thread-specific execution state within the unified arena.
+/// This replaces the per-thread CallStack in the new single-arena architecture.
+pub struct ThreadExecutionState<'gc, 'm> {
+    pub execution: ThreadContext<'gc, 'm>,
+    pub local: ArenaLocalState<'gc, 'm>,
+}
+
+unsafe impl<'gc, 'm: 'gc> Collect for ThreadExecutionState<'gc, 'm> {
+    fn trace(&self, cc: &Collection) {
+        self.execution.trace(cc);
+        self.local.trace(cc);
+    }
+}
+
+/// Unified VM state for single global arena (Phase 2 architecture).
+/// This is the root of the GC arena and contains all thread execution states
+/// and the shared heap.
+pub struct VMState<'gc, 'm> {
+    /// Per-thread execution contexts indexed by thread_id
+    pub threads: RefCell<HashMap<u64, ThreadExecutionState<'gc, 'm>>>,
+    /// Shared heap manager (unified across all threads)
+    pub heap: HeapManager<'gc>,
+    /// Runtime assembly objects (shared)
+    pub runtime_asms: RefCell<HashMap<ResolutionS, ObjectRef<'gc>>>,
+    /// Runtime type objects (shared)
+    pub runtime_types: RefCell<HashMap<RuntimeType, ObjectRef<'gc>>>,
+    pub runtime_types_list: RefCell<Vec<RuntimeType>>,
+    /// Runtime method metadata (shared)
+    pub runtime_methods: RefCell<Vec<(MethodDescription, GenericLookup)>>,
+    pub runtime_method_objs: RefCell<HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>>,
+    /// Runtime field metadata (shared)
+    pub runtime_fields: RefCell<Vec<(FieldDescription, GenericLookup)>>,
+    pub runtime_field_objs: RefCell<HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>>,
+    /// Reference to SharedGlobalState for tracing statics
+    /// (stored as raw pointer since Arc is not Collect)
+    pub shared_state_ptr: Cell<*const SharedGlobalState<'m>>,
+    pub _phantom: PhantomData<&'m ()>,
+}
+ */
+
 pub type GCArena = Arena<Rootable!['gc => CallStack<'gc, 'static>]>;
 
 pub type GCHandle<'gc> = &'gc Mutation<'gc>;
@@ -296,8 +346,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     // careful with this, it always allocates a new slot
     fn insert_value(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {
         #[cfg(feature = "multithreaded-gc")]
-        crate::vm::gc::coordinator::record_allocation(value.size_bytes() + 16); // +16 for Gc/RefLock overhead
-        let handle = Gc::new(gc, RefLock::new(value));
+        crate::vm::gc::coordinator::record_allocation(value.size_bytes() + 16); // +16 for Gc/ThreadSafeLock overhead
+        let handle = Gc::new(gc, crate::vm::threadsafe_lock::ThreadSafeLock::new(value));
         self.execution.stack.push(StackSlotHandle(handle));
     }
 
@@ -646,7 +696,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         // If this was a static constructor (.cctor), mark the type as initialized
         if frame.state.info_handle.is_cctor {
             let type_desc = frame.state.info_handle.source.parent;
-            self.shared.statics.write().mark_initialized(type_desc);
+            self.shared.statics.mark_initialized(type_desc);
         }
 
         if frame.is_finalizer {
@@ -1009,18 +1059,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.shared.loader
     }
 
-    /// Get access to statics storage (read-only).
-    /// Returns a guard that must be held for the duration of access.
+    /// Get access to statics storage.
     #[inline]
-    pub fn statics_read(&self) -> RwLockReadGuard<'_, StaticStorageManager> {
-        self.shared.statics.read()
-    }
-
-    /// Get access to statics storage (mutable).
-    /// Returns a guard that must be held for the duration of access.
-    #[inline]
-    pub fn statics_write(&self) -> RwLockWriteGuard<'_, StaticStorageManager> {
-        self.shared.statics.write()
+    pub fn statics(&self) -> &StaticStorageManager {
+        &self.shared.statics
     }
 
     /// Get access to the P/Invoke libraries manager (read-only).

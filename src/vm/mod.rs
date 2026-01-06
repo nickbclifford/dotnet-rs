@@ -19,6 +19,7 @@ mod pinvoke;
 mod stack;
 pub mod sync;
 pub mod threading;
+pub mod threadsafe_lock;
 
 pub use executor::*;
 pub use stack::*;
@@ -104,25 +105,4 @@ pub enum StepResult {
     MethodThrew,
     InstructionStepped,
     YieldForGC,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Collect)]
-#[collect(require_static)]
-pub enum GCHandleType {
-    Weak = 0,
-    WeakTrackResurrection = 1,
-    Normal = 2,
-    Pinned = 3,
-}
-
-impl From<i32> for GCHandleType {
-    fn from(i: i32) -> Self {
-        match i {
-            0 => GCHandleType::Weak,
-            1 => GCHandleType::WeakTrackResurrection,
-            2 => GCHandleType::Normal,
-            3 => GCHandleType::Pinned,
-            _ => panic!("invalid GCHandleType: {}", i),
-        }
-    }
 }

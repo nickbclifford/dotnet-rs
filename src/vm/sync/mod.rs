@@ -1,4 +1,7 @@
-use crate::{value::object::ObjectRef, vm::metrics::RuntimeMetrics};
+use crate::{
+    value::object::ObjectRef,
+    vm::{gc::coordinator::GCCoordinator, metrics::RuntimeMetrics, threading::ThreadManagerOps},
+};
 
 #[cfg(not(feature = "multithreading"))]
 mod single_threaded;
@@ -16,6 +19,21 @@ pub trait SyncBlockOps {
     fn enter(&self, thread_id: u64, metrics: &RuntimeMetrics);
     fn enter_with_timeout(&self, thread_id: u64, timeout_ms: u64, metrics: &RuntimeMetrics)
         -> bool;
+    fn enter_safe(
+        &self,
+        thread_id: u64,
+        metrics: &RuntimeMetrics,
+        thread_manager: &impl ThreadManagerOps,
+        gc_coordinator: &GCCoordinator,
+    );
+    fn enter_with_timeout_safe(
+        &self,
+        thread_id: u64,
+        timeout_ms: u64,
+        metrics: &RuntimeMetrics,
+        thread_manager: &impl ThreadManagerOps,
+        gc_coordinator: &GCCoordinator,
+    ) -> bool;
     fn exit(&self, thread_id: u64) -> bool;
     fn wait(&self, thread_id: u64, timeout_ms: Option<u64>) -> Result<(), &'static str>;
     fn pulse(&self, thread_id: u64) -> Result<(), &'static str>;
@@ -46,7 +64,10 @@ pub trait SyncManagerOps {
 pub use std::sync::Arc;
 
 // Re-export atomic types (always from std::sync::atomic)
-pub use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+pub use std::sync::atomic::{
+    AtomicBool, AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
+    AtomicU64, AtomicU8, AtomicUsize, Ordering,
+};
 
 #[cfg(feature = "multithreading")]
 pub use parking_lot::{Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};

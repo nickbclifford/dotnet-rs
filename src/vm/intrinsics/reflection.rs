@@ -225,7 +225,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         obj_ref.as_object_mut(gc, |instance| {
             instance
                 .instance_storage
-                .get_field_mut("index")
+                .get_field_mut_local("index")
                 .copy_from_slice(&index.to_ne_bytes());
         });
         obj_ref
@@ -233,7 +233,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> RuntimeType {
         obj.as_object(|instance| {
-            let ct = instance.instance_storage.get_field("index");
+            let ct = instance.instance_storage.get_field_local("index");
             let index = usize::from_ne_bytes(ct.try_into().unwrap());
             self.runtime_types_list_read()[index].clone()
         })
@@ -244,7 +244,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         obj: ObjectRef<'gc>,
     ) -> (MethodDescription, GenericLookup) {
         obj.as_object(|instance| {
-            let data = instance.instance_storage.get_field("index");
+            let data = instance.instance_storage.get_field_local("index");
             let index = usize::from_ne_bytes(data.try_into().unwrap());
             self.runtime_methods_read()[index].clone()
         })
@@ -252,7 +252,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn resolve_runtime_field(&self, obj: ObjectRef<'gc>) -> (FieldDescription, GenericLookup) {
         obj.as_object(|instance| {
-            let data = instance.instance_storage.get_field("index");
+            let data = instance.instance_storage.get_field_local("index");
             let index = usize::from_ne_bytes(data.try_into().unwrap());
             self.runtime_fields_read()[index].clone()
         })
@@ -323,7 +323,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     pub fn get_handle_for_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> Object<'gc> {
         let rth = self.loader().corlib_type("System.RuntimeTypeHandle");
         let mut instance = Object::new(rth, &self.current_context());
-        let handle_location = instance.instance_storage.get_field_mut("_value");
+        let handle_location = instance.instance_storage.get_field_mut_local("_value");
         self.get_runtime_type(gc, target).write(handle_location);
         instance
     }
@@ -393,7 +393,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         obj_ref.as_object_mut(gc, |instance| {
             instance
                 .instance_storage
-                .get_field_mut("index")
+                .get_field_mut_local("index")
                 .copy_from_slice(&(index as usize).to_ne_bytes());
         });
 
@@ -422,7 +422,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         obj_ref.as_object_mut(gc, |instance| {
             instance
                 .instance_storage
-                .get_field_mut("index")
+                .get_field_mut_local("index")
                 .copy_from_slice(&(index as usize).to_ne_bytes());
         });
 
@@ -470,7 +470,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                         &ResolutionContext::new(&generics, stack.loader(), support_res),
                     );
                     let data = (resolution.as_raw() as usize).to_ne_bytes();
-                    asm_handle.instance_storage.get_field_mut("resolution").copy_from_slice(&data);
+                    asm_handle.instance_storage.get_field_mut_local("resolution").copy_from_slice(&data);
                     let v = ObjectRef::new(gc, HeapStorage::Obj(asm_handle));
                     stack.register_new_object(&v);
                     stack.runtime_asms_write().insert(resolution, v);
@@ -561,7 +561,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
 
             let rth = stack.loader().corlib_type("System.RuntimeTypeHandle");
             let mut instance = Object::new(rth, &stack.current_context());
-            obj.write(instance.instance_storage.get_field_mut("_value"));
+            obj.write(instance.instance_storage.get_field_mut_local("_value"));
 
             push!(ValueType(Box::new(instance)));
             Some(StepResult::InstructionStepped)
@@ -688,7 +688,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
 
             let rmh = stack.loader().corlib_type("System.RuntimeMethodHandle");
             let mut instance = Object::new(rmh, &stack.current_context());
-            obj.write(instance.instance_storage.get_field_mut("_value"));
+            obj.write(instance.instance_storage.get_field_mut_local("_value"));
 
             push!(ValueType(Box::new(instance)));
             Some(StepResult::InstructionStepped)
@@ -735,7 +735,7 @@ pub fn runtime_field_info_intrinsic_call<'gc, 'm: 'gc>(
 
             let rfh = stack.loader().corlib_type("System.RuntimeFieldHandle");
             let mut instance = Object::new(rfh, &stack.current_context());
-            obj.write(instance.instance_storage.get_field_mut("_value"));
+            obj.write(instance.instance_storage.get_field_mut_local("_value"));
 
             push!(ValueType(Box::new(instance)));
             Some(StepResult::InstructionStepped)
