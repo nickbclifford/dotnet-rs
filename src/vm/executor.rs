@@ -7,7 +7,7 @@ use crate::{
         threading::ThreadManagerOps,
         MethodInfo, StepResult,
     },
-    vm_debug, vm_error,
+    vm_debug,
 };
 
 #[cfg(feature = "multithreaded-gc")]
@@ -238,11 +238,6 @@ impl Executor {
                     }
                 }
                 StepResult::MethodThrew => {
-                    self.with_arena(|arena| {
-                        arena.mutate(|_, c| {
-                            vm_error!(c, "Exception thrown: {:?}", c.execution.exception_mode);
-                        });
-                    });
                     if frames_empty(self) {
                         break ExecutorResult::Threw;
                     }

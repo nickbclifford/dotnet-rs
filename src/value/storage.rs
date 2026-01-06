@@ -112,6 +112,10 @@ impl FieldStorage {
         &mut self.storage[r]
     }
 
+    pub fn has_field(&self, field: &str) -> bool {
+        self.layout.fields.contains_key(field)
+    }
+
     pub fn get_field_atomic(&self, field: &str, ordering: Ordering) -> Vec<u8> {
         let layout = self.layout.fields.get(field).expect("field not found");
         let size = layout.layout.size();

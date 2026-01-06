@@ -3,7 +3,7 @@ use crate::{
     utils::DebugStr,
     value::object::ObjectRef,
     vm::{context::ResolutionContext, CallStack, GCHandle, StepResult},
-    vm_push,
+    vm_error, vm_push,
 };
 use dotnetdll::prelude::*;
 use gc_arena::Collect;
@@ -314,7 +314,74 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         // No handler found - the exception is unhandled.
         // In a real VM this might trigger a debugger or a default handler.
-        // Here we just clear the stack and return MethodThrew to signal process exit.
+        // Log the exception and full backtrace before clearing the stack.
+
+        let mut message = None;
+        exception.as_object(|obj| {
+            if obj.instance_storage.has_field("_message") {
+                let message_bytes = obj.instance_storage.get_field_local("_message");
+                let message_ref = ObjectRef::read(message_bytes);
+                if let Some(msg_inner) = message_ref.0 {
+                    let storage = &msg_inner.borrow().storage;
+                    if let crate::value::object::HeapStorage::Str(clr_str) = storage {
+                        message = Some(clr_str.as_string());
+                    }
+                }
+            }
+        });
+
+        // Always log to stderr (regardless of tracer configuration)
+        eprintln!("╔═══════════════════════════════════════════════════════");
+        eprintln!("║ UNHANDLED EXCEPTION");
+        if let Some(msg) = &message {
+            eprintln!("║ Message: {}", msg);
+        }
+        eprintln!("╠═══════════════════════════════════════════════════════");
+        eprintln!("║ Exception Object: {:?}", exception);
+        eprintln!("╠═══════════════════════════════════════════════════════");
+        eprintln!("║ Call Stack (backtrace):");
+        eprintln!("╠═══════════════════════════════════════════════════════");
+
+        // Log the full call stack backtrace
+        for (frame_idx, frame) in self.execution.frames.iter().enumerate() {
+            eprintln!(
+                "║   Frame #{}: {:?}",
+                frame_idx, frame.state.info_handle.source
+            );
+            eprintln!(
+                "║     at IP {} (method has {} instructions total)",
+                frame.state.ip,
+                frame.state.info_handle.instructions.len()
+            );
+        }
+
+        eprintln!("╚═══════════════════════════════════════════════════════");
+
+        // Also log to tracer if enabled
+        if let Some(msg) = &message {
+            vm_error!(
+                self,
+                "UNHANDLED EXCEPTION: {} ({:?}) - No matching exception handler found",
+                msg,
+                exception
+            );
+        } else {
+            vm_error!(
+                self,
+                "UNHANDLED EXCEPTION: {:?} - No matching exception handler found",
+                exception
+            );
+        }
+        for (frame_idx, frame) in self.execution.frames.iter().enumerate() {
+            vm_error!(
+                self,
+                "  Frame #{}: {:?} at IP {}",
+                frame_idx,
+                frame.state.info_handle.source,
+                frame.state.ip
+            );
+        }
+
         self.execution.exception_mode = ExceptionState::None;
         self.execution.frames.clear();
         self.execution.stack.clear();
