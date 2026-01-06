@@ -13,13 +13,16 @@ use crate::{
 };
 use gc_arena::{lock::RefLock, Collect, Collection, Gc};
 use std::{
-    any, cmp::Ordering,
+    any,
+    cmp::Ordering,
     collections::HashSet,
     error::Error,
     fmt::{self, Debug, Formatter},
     hash::{Hash, Hasher},
-    iter, marker::PhantomData,
-    mem, ptr::{self, NonNull},
+    iter,
+    marker::PhantomData,
+    mem,
+    ptr::{self, NonNull},
 };
 
 #[derive(Collect, Debug)]

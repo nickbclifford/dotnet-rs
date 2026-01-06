@@ -67,7 +67,7 @@
 //! vm_trace_heap_snapshot!(ctx);         // Just the heap
 //! ```
 use crate::{value::object::HeapStorage, vm::CallStack};
-use gc_arena::{unsafe_empty_collect, Gc, Collect};
+use gc_arena::{unsafe_empty_collect, Collect, Gc};
 use std::{
     cell::{Cell, RefCell},
     env,

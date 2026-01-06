@@ -76,7 +76,8 @@ macro_rules! checked_arithmetic_op {
                 .$op(r)
                 .map(StackValue::NativeInt)
                 .ok_or("System.OverflowException"),
-            (StackValue::NativeInt(l), StackValue::NativeInt(r), NumberSign::Unsigned) => (l as usize)
+            (StackValue::NativeInt(l), StackValue::NativeInt(r), NumberSign::Unsigned) => (l
+                as usize)
                 .$op(r as usize)
                 .map(|v| StackValue::NativeInt(v as isize))
                 .ok_or("System.OverflowException"),

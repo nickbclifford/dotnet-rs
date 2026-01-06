@@ -910,8 +910,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     // Reference type: dereference the managed pointer
                     vm_expect_stack!(let ManagedPtr(m) = args[0].clone());
                     debug_assert!(
-                        (m.value.as_ptr() as usize)
-                            .is_multiple_of(align_of::<ObjectRef>()),
+                        (m.value.as_ptr() as usize).is_multiple_of(align_of::<ObjectRef>()),
                         "ManagedPtr value is not aligned for ObjectRef"
                     );
                     let obj_ref = unsafe { *(m.value.as_ptr() as *const ObjectRef) };

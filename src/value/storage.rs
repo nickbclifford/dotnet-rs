@@ -78,11 +78,7 @@ impl FieldStorage {
         Self::new(FieldLayoutManager::instance_fields(description, context))
     }
 
-    pub fn resurrect<'gc>(
-        &self,
-        fc: &gc_arena::Finalization<'gc>,
-        visited: &mut HashSet<usize>,
-    ) {
+    pub fn resurrect<'gc>(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
         self.layout.resurrect(&self.storage, fc, visited);
     }
 

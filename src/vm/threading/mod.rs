@@ -1,6 +1,6 @@
 use crate::vm::gc::{
     coordinator::{GCCommand, GCCoordinator},
-    tracer::Tracer
+    tracer::Tracer,
 };
 
 #[cfg(feature = "multithreading")]

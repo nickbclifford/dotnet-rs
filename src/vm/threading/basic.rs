@@ -1,7 +1,7 @@
 use crate::vm::{
     gc::coordinator::{GCCommand, GCCoordinator},
     gc::tracer::Tracer,
-    sync::{Arc, AtomicU64, Mutex, MutexGuard, Ordering, AtomicBool, AtomicUsize, Condvar},
+    sync::{Arc, AtomicBool, AtomicU64, AtomicUsize, Condvar, Mutex, MutexGuard, Ordering},
     threading::{STWGuardOps, ThreadManagerOps, ThreadState},
 };
 use std::{

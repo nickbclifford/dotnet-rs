@@ -11,7 +11,7 @@ use crate::{
 use gc_arena::{unsafe_empty_collect, Collect};
 use std::{
     fmt::{Debug, Formatter},
-    hash::{Hash, Hasher, DefaultHasher},
+    hash::{DefaultHasher, Hash, Hasher},
     ops::Deref,
 };
 
@@ -43,8 +43,12 @@ impl CLRString {
         self.0.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub fn size_bytes(&self) -> usize {
-        std::mem::size_of::<CLRString>() + self.0.len() * 2
+        size_of::<CLRString>() + self.0.len() * 2
     }
 
     pub fn as_string(&self) -> String {

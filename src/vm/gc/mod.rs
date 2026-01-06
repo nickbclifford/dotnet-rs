@@ -14,4 +14,4 @@ pub mod tracer;
 #[cfg(feature = "multithreaded-gc")]
 pub use arena::THREAD_ARENA;
 pub use coordinator::*;
-pub use tracer::{Tracer, TraceStats};
+pub use tracer::{TraceStats, Tracer};

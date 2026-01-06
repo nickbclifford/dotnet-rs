@@ -48,7 +48,8 @@ impl ThreadManagerOps for ThreadManager {
         _coordinator: &GCCoordinator,
         _tracer: &Tracer,
         _location: &str,
-    ) {}
+    ) {
+    }
 
     fn request_stop_the_world(&self) -> Self::Guard {
         StopTheWorldGuard

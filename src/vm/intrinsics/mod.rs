@@ -26,7 +26,13 @@ use crate::{
     vm_expect_stack, vm_msg, vm_pop, vm_push,
 };
 use dotnetdll::prelude::*;
-use std::{env, ptr::{self, NonNull}, slice, sync::atomic, thread};
+use std::{
+    env,
+    ptr::{self, NonNull},
+    slice,
+    sync::atomic,
+    thread,
+};
 
 pub mod matcher;
 pub mod reflection;
@@ -275,7 +281,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
             let mt_ptr = stack
                 .method_tables_read()
                 .get(&object_type)
-                .map(|p: &Box<[u8]>| p.as_ptr() as isize);
+                .map(|p| p.as_ptr() as isize);
             if let Some(ptr) = mt_ptr {
                 push!(NativeInt(ptr));
             } else {

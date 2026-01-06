@@ -1,6 +1,5 @@
 /// Configuration-specific tests for feature flags
 /// Tests that verify the correct behavior of different feature configurations
-
 use dotnet_rs::vm;
 use dotnet_rs::vm::threading::ThreadManagerOps;
 use std::path::PathBuf;
@@ -219,8 +218,5 @@ fn find_dotnet_app_path() -> PathBuf {
         .collect();
 
     versions.sort_by_key(|e| e.file_name());
-    versions
-        .last()
-        .expect("no .NET version found")
-        .path()
+    versions.last().expect("no .NET version found").path()
 }

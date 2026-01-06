@@ -16,21 +16,15 @@ use crate::{
         exceptions::ExceptionState,
         gc::tracer::Tracer,
         intrinsics::reflection::RuntimeType,
-        pinvoke::NativeLibraries,
-        GCHandleType,
-        MethodInfo,
-        MethodState,
-        StepResult,
-        sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, SyncBlockManager},
         metrics::RuntimeMetrics,
-        threading::ThreadManager
+        pinvoke::NativeLibraries,
+        sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, SyncBlockManager},
+        threading::ThreadManager,
+        GCHandleType, MethodInfo, MethodState, StepResult,
     },
 };
 #[cfg(feature = "multithreaded-gc")]
-use crate::{
-    value::object::ObjectPtr,
-    vm::gc::coordinator::GCCoordinator
-};
+use crate::{value::object::ObjectPtr, vm::gc::coordinator::GCCoordinator};
 
 use dotnetdll::prelude::*;
 use gc_arena::{lock::RefLock, Arena, Collect, Collection, Gc, Mutation, Rootable};
@@ -1151,17 +1145,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     /// Get access to method_tables cache (read-only).
     #[inline]
-    pub fn method_tables_read(
-        &self,
-    ) -> RwLockReadGuard<'_, HashMap<TypeDescription, Box<[u8]>>> {
+    pub fn method_tables_read(&self) -> RwLockReadGuard<'_, HashMap<TypeDescription, Box<[u8]>>> {
         self.shared.method_tables.read()
     }
 
     /// Get access to method_tables cache (mutable).
     #[inline]
-    pub fn method_tables_write(
-        &self,
-    ) -> RwLockWriteGuard<'_, HashMap<TypeDescription, Box<[u8]>>> {
+    pub fn method_tables_write(&self) -> RwLockWriteGuard<'_, HashMap<TypeDescription, Box<[u8]>>> {
         self.shared.method_tables.write()
     }
 }

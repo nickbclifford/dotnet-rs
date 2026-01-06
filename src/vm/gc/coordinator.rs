@@ -373,8 +373,8 @@ pub type MutexGuard<'a, T> = crate::vm::sync::MutexGuard<'a, T>;
 
 #[cfg(not(feature = "multithreaded-gc"))]
 pub mod stubs {
-    use std::{collections::HashSet, sync::MutexGuard};
     use crate::value::object::ObjectPtr;
+    use std::{collections::HashSet, sync::MutexGuard};
 
     #[derive(Debug, Clone)]
     pub enum GCCommand {
@@ -394,26 +394,40 @@ pub mod stubs {
     pub struct GCCoordinator;
 
     impl GCCoordinator {
-        pub fn new() -> Self { Self }
+        pub fn new() -> Self {
+            Self
+        }
         pub fn register_arena(&self, _handle: ArenaHandle) {}
         pub fn unregister_arena(&self, _thread_id: u64) {}
-        pub fn should_collect(&self) -> bool { false }
+        pub fn should_collect(&self) -> bool {
+            false
+        }
         pub fn finish_collection(&self) {}
         pub fn record_cross_arena_ref(&self, _target_thread_id: u64, _ptr: ObjectPtr) {}
-        pub fn start_collection(&self) -> Option<MutexGuard<'_, ()>> { None }
+        pub fn start_collection(&self) -> Option<MutexGuard<'_, ()>> {
+            None
+        }
     }
 
     pub fn set_current_arena_handle(_handle: ArenaHandle) {}
     pub fn record_allocation(_size: usize) {}
-    pub fn is_current_arena_collection_requested() -> bool { false }
+    pub fn is_current_arena_collection_requested() -> bool {
+        false
+    }
     pub fn reset_current_arena_collection_requested() {}
     pub fn set_currently_tracing(_thread_id: Option<u64>) {}
-    pub fn get_currently_tracing() -> Option<u64> { None }
-    pub fn take_found_cross_arena_refs() -> Vec<(u64, ObjectPtr)> { Vec::new() }
+    pub fn get_currently_tracing() -> Option<u64> {
+        None
+    }
+    pub fn take_found_cross_arena_refs() -> Vec<(u64, ObjectPtr)> {
+        Vec::new()
+    }
     pub fn record_cross_arena_ref(_target_thread_id: u64, _ptr: ObjectPtr) {}
 
     impl Default for GCCoordinator {
-        fn default() -> Self { Self::new() }
+        fn default() -> Self {
+            Self::new()
+        }
     }
 }
 

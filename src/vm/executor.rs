@@ -3,9 +3,9 @@ use crate::{
     value::StackValue,
     vm::{
         stack::{ArenaLocalState, CallStack, GCArena, SharedGlobalState},
+        sync::Arc,
         threading::ThreadManagerOps,
         MethodInfo, StepResult,
-        sync::Arc
     },
     vm_msg,
 };
@@ -171,14 +171,10 @@ impl Executor {
                 arena.mutate_root(|gc, c| c.process_pending_finalizers(gc));
             });
 
-            let step_result = self.with_arena(|arena| {
-                arena.mutate_root(|gc, c| c.step(gc))
-            });
+            let step_result = self.with_arena(|arena| arena.mutate_root(|gc, c| c.step(gc)));
 
             let frames_empty = |executor: &Self| {
-                executor.with_arena_ref(|arena| {
-                    arena.mutate(|_, c| c.execution.frames.is_empty())
-                })
+                executor.with_arena_ref(|arena| arena.mutate(|_, c| c.execution.frames.is_empty()))
             };
 
             match step_result {
