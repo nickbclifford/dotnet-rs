@@ -1,14 +1,10 @@
 use crate::{
-    match_method,
-    types::{generics::GenericLookup, members::MethodDescription},
-    value::{
-        object::{HeapStorage, Object, ObjectRef},
-        StackValue,
-    },
-    vm::{intrinsics::span_to_slice, CallStack, GCHandle, StepResult},
+    match_method, types::{generics::GenericLookup, members::MethodDescription},
+    value::{StackValue, object::{HeapStorage, Object, ObjectRef}},
+    vm::{CallStack, GCHandle, StepResult, intrinsics::span_to_slice},
     vm_expect_stack, vm_pop, vm_push,
 };
-use gc_arena::{unsafe_empty_collect, Collect};
+use gc_arena::{Collect, unsafe_empty_collect};
 use std::{
     fmt::{Debug, Formatter},
     hash::{DefaultHasher, Hash, Hasher},

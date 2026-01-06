@@ -1,13 +1,9 @@
 use crate::{
-    types::TypeDescription,
-    utils::ResolutionS,
-    value::object::{ObjectHandle, ObjectRef},
+    types::TypeDescription, utils::ResolutionS, value::object::{ObjectHandle, ObjectRef},
 };
-use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};
+use gc_arena::{Collect, Collection, Gc, unsafe_empty_collect};
 use std::{
-    cmp::Ordering,
-    collections::HashSet,
-    fmt::{Debug, Formatter},
+    cmp::Ordering, collections::HashSet, fmt::{Debug, Formatter},
     ptr::NonNull,
 };
 

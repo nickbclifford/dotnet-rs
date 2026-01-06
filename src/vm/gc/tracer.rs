@@ -67,12 +67,10 @@
 //! vm_trace_heap_snapshot!(ctx);         // Just the heap
 //! ```
 use crate::{value::object::HeapStorage, vm::CallStack};
-use gc_arena::{unsafe_empty_collect, Collect, Gc};
+use gc_arena::{Collect, Gc, unsafe_empty_collect};
 use std::{
     cell::{Cell, RefCell},
-    env,
-    fs::File,
-    io::{stderr, stdout, BufWriter, Write},
+    env, fs::File, io::{BufWriter, Write, stderr, stdout},
 };
 
 const BUFFER_SIZE: usize = 256 * 1024; // 256KB buffer for better IO performance

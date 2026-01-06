@@ -1,7 +1,8 @@
 #[cfg(feature = "multithreaded-gc")]
-use crate::value::object::ObjectPtr;
-#[cfg(feature = "multithreaded-gc")]
-use crate::vm::sync::{Arc, AtomicBool, AtomicUsize, Condvar, Mutex, Ordering};
+use crate::{
+    value::object::ObjectPtr,
+    vm::sync::{Arc, AtomicBool, AtomicUsize, Condvar, Mutex, Ordering},
+};
 #[cfg(feature = "multithreaded-gc")]
 use std::{
     cell::{Cell, RefCell},

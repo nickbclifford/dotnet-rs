@@ -1,13 +1,12 @@
 use crate::{
     types::{
-        generics::{ConcreteType, GenericLookup},
+        TypeDescription, generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
-        TypeDescription,
     },
-    utils::{decompose_type_source, static_res_from_file, ResolutionS},
+    utils::{ResolutionS, decompose_type_source, static_res_from_file},
 };
 use dotnetdll::prelude::*;
-use gc_arena::{unsafe_empty_collect, Collect};
+use gc_arena::{Collect, unsafe_empty_collect};
 use std::{collections::HashMap, error::Error, fmt, fs, path::PathBuf, ptr, sync::RwLock};
 
 pub struct AssemblyLoader {

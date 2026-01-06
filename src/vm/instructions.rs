@@ -1,27 +1,23 @@
 use crate::{
     match_method,
-    types::{generics::GenericLookup, members::MethodDescription, TypeDescription},
+    types::{TypeDescription, generics::GenericLookup, members::MethodDescription},
     utils::decompose_type_source,
     value::{
-        layout::{type_layout, FieldLayoutManager, HasLayout},
+        StackValue, layout::{FieldLayoutManager, HasLayout, type_layout},
         object::{CTSValue, HeapStorage, Object, ObjectRef, ValueType, Vector},
         pointer::{ManagedPtr, UnmanagedPtr},
         string::CLRString,
-        StackValue,
     },
     vm::{
-        context::ResolutionContext,
+        CallStack, GCHandle, MethodInfo, StepResult, context::ResolutionContext,
         exceptions::{ExceptionState, HandlerAddress, UnwindTarget},
-        intrinsics::*,
-        CallStack, GCHandle, MethodInfo, StepResult,
+        intrinsics::*, threading::ThreadManagerOps,
     },
     vm_expect_stack, vm_msg, vm_pop, vm_push, vm_trace_branch, vm_trace_field,
     vm_trace_instruction,
 };
 use dotnetdll::prelude::*;
 use std::{cmp::Ordering, ptr, slice, thread};
-
-use crate::vm::threading::ThreadManagerOps;
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     /// Check if a GC safe point should be reached.

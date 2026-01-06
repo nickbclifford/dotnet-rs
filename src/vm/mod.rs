@@ -3,18 +3,18 @@ use crate::{
     types::{generics::GenericLookup, members::MethodDescription},
 };
 use dotnetdll::prelude::*;
-use gc_arena::{unsafe_empty_collect, Collect};
+use gc_arena::{Collect, unsafe_empty_collect};
 use std::rc::Rc;
 
 pub mod context;
 mod exceptions;
 mod executor;
+pub mod gc;
 mod instructions;
 pub(crate) mod intrinsics;
-pub mod metrics;
 #[macro_use]
 mod macros;
-pub mod gc;
+pub mod metrics;
 mod pinvoke;
 mod stack;
 pub mod sync;

@@ -2,13 +2,12 @@ use crate::{
     assemblies::{AssemblyLoader, SUPPORT_ASSEMBLY},
     match_method,
     types::{
-        generics::{ConcreteType, GenericLookup},
+        TypeDescription, generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
-        TypeDescription,
     },
-    utils::{decompose_type_source, ResolutionS},
+    utils::{ResolutionS, decompose_type_source},
     value::object::{HeapStorage, Object, ObjectRef, Vector},
-    vm::{context::ResolutionContext, CallStack, GCHandle, MethodInfo, StepResult},
+    vm::{CallStack, GCHandle, MethodInfo, StepResult, context::ResolutionContext},
     vm_expect_stack, vm_pop, vm_push,
 };
 use dotnetdll::prelude::{BaseType, MethodType, TypeSource};

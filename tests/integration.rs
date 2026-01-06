@@ -1,9 +1,7 @@
-use dotnet_rs::vm::threading::ThreadManagerOps;
 use dotnet_rs::{
-    assemblies,
-    types::{members::MethodDescription, TypeDescription},
-    utils::{static_res_from_file, ResolutionS},
-    vm,
+    assemblies, types::{TypeDescription, members::MethodDescription},
+    utils::{ResolutionS, static_res_from_file},
+    vm::{self, threading::ThreadManagerOps},
 };
 use dotnetdll::prelude::*;
 use std::{

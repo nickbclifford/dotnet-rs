@@ -1,9 +1,8 @@
-use crate::value::object::ObjectRef;
-use crate::vm::metrics::RuntimeMetrics;
-use crate::vm::sync::{SyncBlockOps, SyncManagerOps};
-use std::cell::Cell;
-use std::collections::HashMap;
-use std::sync::Arc;
+use crate::{
+    value::object::ObjectRef,
+    vm::{metrics::RuntimeMetrics, sync::{SyncBlockOps, SyncManagerOps}},
+};
+use std::{cell::Cell, collections::HashMap, sync::Arc};
 
 #[derive(Debug)]
 pub struct SyncBlock {

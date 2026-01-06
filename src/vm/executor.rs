@@ -1,20 +1,18 @@
 use crate::{
-    types::members::MethodDescription,
-    value::StackValue,
+    types::members::MethodDescription, value::StackValue,
     vm::{
-        stack::{ArenaLocalState, CallStack, GCArena, SharedGlobalState},
-        sync::Arc,
-        threading::ThreadManagerOps,
         MethodInfo, StepResult,
+        stack::{ArenaLocalState, CallStack, GCArena, SharedGlobalState},
+        sync::Arc, threading::ThreadManagerOps,
     },
     vm_msg,
 };
 
 #[cfg(feature = "multithreaded-gc")]
-use crate::vm::gc::{arena::THREAD_ARENA, coordinator::ArenaHandle};
-
-#[cfg(feature = "multithreaded-gc")]
-use crate::vm::sync::{AtomicBool, AtomicUsize, Condvar, Mutex};
+use crate::vm::{
+    gc::{arena::THREAD_ARENA, coordinator::ArenaHandle},
+    sync::{AtomicBool, AtomicUsize, Condvar, Mutex},
+};
 
 pub struct Executor {
     shared: Arc<SharedGlobalState<'static>>,

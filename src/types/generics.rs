@@ -1,5 +1,7 @@
 use crate::{types::TypeDescription, utils::ResolutionS};
-use dotnetdll::prelude::{BaseType, MethodType, Resolution, ResolvedDebug, TypeSource, UserType};
+use dotnetdll::prelude::{
+    BaseType, MethodType, Resolution, ResolvedDebug, TypeSource, UserType,
+};
 use gc_arena::{Collect, Collection};
 use std::fmt::{Debug, Formatter};
 

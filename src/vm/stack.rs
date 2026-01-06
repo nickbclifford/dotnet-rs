@@ -1,41 +1,37 @@
 use crate::{
     assemblies::AssemblyLoader,
     types::{
-        generics::{ConcreteType, GenericLookup},
+        TypeDescription, generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
-        TypeDescription,
     },
-    utils::{decompose_type_source, ResolutionS},
+    utils::{ResolutionS, decompose_type_source},
     value::{
-        object::{HeapStorage, Object as ObjectInstance, ObjectRef},
+        StackValue, object::{HeapStorage, Object as ObjectInstance, ObjectRef},
         storage::StaticStorageManager,
-        StackValue,
     },
     vm::{
-        context::ResolutionContext,
-        exceptions::ExceptionState,
-        gc::tracer::Tracer,
-        intrinsics::reflection::RuntimeType,
-        metrics::RuntimeMetrics,
+        GCHandleType, MethodInfo, MethodState, StepResult, context::ResolutionContext,
+        exceptions::ExceptionState, gc::tracer::Tracer,
+        intrinsics::reflection::RuntimeType, metrics::RuntimeMetrics,
         pinvoke::NativeLibraries,
-        sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, SyncBlockManager},
+        sync::{
+            Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
+            SyncBlockManager,
+        },
         threading::ThreadManager,
-        GCHandleType, MethodInfo, MethodState, StepResult,
     },
 };
-#[cfg(feature = "multithreaded-gc")]
-use crate::{value::object::ObjectPtr, vm::gc::coordinator::GCCoordinator};
-
 use dotnetdll::prelude::*;
-use gc_arena::{lock::RefLock, Arena, Collect, Collection, Gc, Mutation, Rootable};
+use gc_arena::{Arena, Collect, Collection, Gc, Mutation, Rootable, lock::RefLock};
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     collections::{HashMap, HashSet},
     fmt::{self, Debug},
-    marker::PhantomData,
-    ptr::NonNull,
-    sync::Arc,
+    marker::PhantomData, ptr::NonNull, sync::Arc,
 };
+
+#[cfg(feature = "multithreaded-gc")]
+use crate::{value::object::ObjectPtr, vm::gc::coordinator::GCCoordinator};
 
 #[derive(Collect)]
 #[collect(no_drop)]

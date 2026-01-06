@@ -10,6 +10,7 @@ mod stub;
 
 #[cfg(feature = "multithreading")]
 pub use basic::*;
+
 #[cfg(not(feature = "multithreading"))]
 pub use stub::*;
 

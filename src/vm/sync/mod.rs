@@ -1,3 +1,5 @@
+use crate::{value::object::ObjectRef, vm::metrics::RuntimeMetrics};
+
 #[cfg(not(feature = "multithreading"))]
 mod single_threaded;
 #[cfg(feature = "multithreading")]
@@ -5,11 +7,9 @@ mod threaded;
 
 #[cfg(not(feature = "multithreading"))]
 pub use single_threaded::*;
+
 #[cfg(feature = "multithreading")]
 pub use threaded::*;
-
-use crate::value::object::ObjectRef;
-use crate::vm::metrics::RuntimeMetrics;
 
 pub trait SyncBlockOps {
     fn try_enter(&self, thread_id: u64) -> bool;

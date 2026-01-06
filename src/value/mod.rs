@@ -1,12 +1,8 @@
-use crate::{
-    types::TypeDescription,
-    vm::{context::ResolutionContext, GCHandle},
-};
+use crate::{types::TypeDescription, vm::{GCHandle, context::ResolutionContext}};
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, Collection};
 use std::{
-    cmp::Ordering,
-    fmt::Debug,
+    cmp::Ordering, fmt::Debug,
     ops::{Add, BitAnd, BitOr, BitXor, Mul, Neg, Not, Shl, Sub},
     ptr::NonNull,
 };
@@ -19,6 +15,7 @@ pub mod string;
 
 #[cfg(feature = "multithreaded-gc")]
 use object::ObjectPtr;
+
 use object::{HeapStorage, Object, ObjectHandle, ObjectRef};
 use pointer::{ManagedPtr, UnmanagedPtr};
 use string::CLRString;

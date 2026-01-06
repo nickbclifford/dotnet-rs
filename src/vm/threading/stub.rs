@@ -1,6 +1,10 @@
-use crate::vm::gc::coordinator::{GCCommand, GCCoordinator};
-use crate::vm::gc::tracer::Tracer;
-use crate::vm::threading::{STWGuardOps, ThreadManagerOps};
+use crate::vm::{
+    gc::{
+        coordinator::{GCCommand, GCCoordinator},
+        tracer::Tracer,
+    },
+    threading::{STWGuardOps, ThreadManagerOps},
+};
 use std::sync::Arc;
 
 pub struct ThreadManager;
