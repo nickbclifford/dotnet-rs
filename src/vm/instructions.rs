@@ -1,5 +1,4 @@
 use crate::{
-    match_method,
     types::{generics::GenericLookup, members::MethodDescription, TypeDescription},
     utils::decompose_type_source,
     value::{
@@ -1581,7 +1580,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                 }
 
-                if match_method!(method, "System.IntPtr"::".ctor"(int)) {
+                let method_name = &*method.method.name;
+                let parent_name = method.parent.definition().type_name();
+                if parent_name == "System.IntPtr" && method_name == ".ctor" && method.method.signature.parameters.len() == 1 {
                     vm_expect_stack!(let Int32(i) = pop!());
                     push!(NativeInt(i as isize));
                 } else {

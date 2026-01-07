@@ -1,6 +1,6 @@
 use crate::{
     assemblies::{AssemblyLoader, SUPPORT_ASSEMBLY},
-    match_method, pop_args,
+    pop_args,
     types::{
         generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
@@ -453,8 +453,11 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
         };
     }
 
-    match_method!(method, {
-        [DotnetRs.RuntimeType::GetAssembly()] => {
+    let method_name = &*method.method.name;
+    let param_count = method.method.signature.parameters.len();
+
+    let result = match (method_name, param_count) {
+        ("GetAssembly", 0) => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
 
             let target_type = stack.resolve_runtime_type(obj);
@@ -484,7 +487,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             push!(ObjectRef(value));
             Some(StepResult::InstructionStepped)
         },
-        [DotnetRs.RuntimeType::GetNamespace()] => {
+        ("GetNamespace", 0) => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             match target_type {
@@ -498,13 +501,13 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             }
             Some(StepResult::InstructionStepped)
         },
-        [DotnetRs.RuntimeType::GetName()] => {
+        ("GetName", 0) => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             push!(string(target_type.get_name()));
             Some(StepResult::InstructionStepped)
         },
-        [DotnetRs.RuntimeType::GetBaseType()] => {
+        ("GetBaseType", 0) => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             match target_type {
@@ -579,14 +582,14 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             }
             Some(StepResult::InstructionStepped)
         },
-        [DotnetRs.RuntimeType::GetIsGenericType()] => {
+        ("GetIsGenericType", 0) => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             let is_generic = matches!(target_type, RuntimeType::Generic(_, _));
             push!(Int32(if is_generic { 1 } else { 0 }));
             Some(StepResult::InstructionStepped)
         },
-        [DotnetRs.RuntimeType::GetGenericTypeDefinition()] => {
+        ("GetGenericTypeDefinition", 0) => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             match target_type {
@@ -607,7 +610,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             }
             Some(StepResult::InstructionStepped)
         },
-        [DotnetRs.RuntimeType::GetGenericArguments()] => {
+        ("GetGenericArguments", 0) => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             let args = match target_type {
@@ -635,7 +638,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             push!(ObjectRef(obj));
             Some(StepResult::InstructionStepped)
         },
-        [DotnetRs.RuntimeType::GetTypeHandle()] => {
+        ("GetTypeHandle", 0) => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
 
             let rth = stack.loader().corlib_type("System.RuntimeTypeHandle");
@@ -645,7 +648,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             push!(ValueType(Box::new(instance)));
             Some(StepResult::InstructionStepped)
         },
-        [DotnetRs.RuntimeType::MakeGenericType(any)] => {
+        ("MakeGenericType", 1) => {
             vm_expect_stack!(let ObjectRef(parameters) = pop!());
             vm_expect_stack!(let ObjectRef(target) = pop!());
 
@@ -675,7 +678,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             }
             Some(StepResult::InstructionStepped)
         },
-        [DotnetRs.RuntimeType::CreateInstanceDefaultCtor(any, any)] => {
+        ("CreateInstanceDefaultCtor", 2) => {
             pop!(); // skipCheck
             pop!(); // publicOnly
             vm_expect_stack!(let ObjectRef(target_obj) = pop!());
@@ -723,8 +726,10 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
 
             panic!("could not find a parameterless constructor in {:?}", td)
         },
-    }).unwrap_or_else(|| panic!("unimplemented runtime type intrinsic: {:?}", method));
-    StepResult::InstructionStepped
+        _ => None,
+    };
+
+    result.unwrap_or_else(|| panic!("unimplemented runtime type intrinsic: {:?}", method))
 }
 
 pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
@@ -744,24 +749,24 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
         };
     }
 
-    match_method!(method, {
-        [DotnetRs.MethodInfo::GetName()]
-        | [DotnetRs.ConstructorInfo::GetName()] => {
+    let method_name = &*method.method.name;
+    let param_count = method.method.signature.parameters.len();
+
+    let result = match (method_name, param_count) {
+        ("GetName", 0) => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (method, _) = stack.resolve_runtime_method(obj);
             push!(string(&method.method.name));
             Some(StepResult::InstructionStepped)
         },
-        [DotnetRs.MethodInfo::GetDeclaringType()]
-        | [DotnetRs.ConstructorInfo::GetDeclaringType()] => {
+        ("GetDeclaringType", 0) => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (method, _) = stack.resolve_runtime_method(obj);
             let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(method.parent));
             push!(ObjectRef(rt_obj));
             Some(StepResult::InstructionStepped)
         },
-        [DotnetRs.MethodInfo::GetMethodHandle()]
-        | [DotnetRs.ConstructorInfo::GetMethodHandle()] => {
+        ("GetMethodHandle", 0) => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
 
             let rmh = stack.loader().corlib_type("System.RuntimeMethodHandle");
@@ -771,9 +776,10 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
             push!(ValueType(Box::new(instance)));
             Some(StepResult::InstructionStepped)
         },
-    })
-    .expect("unimplemented method info intrinsic");
+        _ => None,
+    };
 
+    result.expect("unimplemented method info intrinsic");
     StepResult::InstructionStepped
 }
 
@@ -794,21 +800,24 @@ pub fn runtime_field_info_intrinsic_call<'gc, 'm: 'gc>(
         };
     }
 
-    match_method!(method, {
-        [DotnetRs.FieldInfo::GetName()] => {
+    let method_name = &*method.method.name;
+    let param_count = method.method.signature.parameters.len();
+
+    let result = match (method_name, param_count) {
+        ("GetName", 0) => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (field, _) = stack.resolve_runtime_field(obj);
             push!(string(&field.field.name));
             Some(StepResult::InstructionStepped)
         },
-        [DotnetRs.FieldInfo::GetDeclaringType()] => {
+        ("GetDeclaringType", 0) => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let (field, _) = stack.resolve_runtime_field(obj);
             let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(field.parent));
             push!(ObjectRef(rt_obj));
             Some(StepResult::InstructionStepped)
         },
-        [DotnetRs.FieldInfo::GetFieldHandle()] => {
+        ("GetFieldHandle", 0) => {
             vm_expect_stack!(let ObjectRef(obj) = pop!());
 
             let rfh = stack.loader().corlib_type("System.RuntimeFieldHandle");
@@ -818,9 +827,10 @@ pub fn runtime_field_info_intrinsic_call<'gc, 'm: 'gc>(
             push!(ValueType(Box::new(instance)));
             Some(StepResult::InstructionStepped)
         },
-    })
-    .expect("unimplemented field info intrinsic");
+        _ => None,
+    };
 
+    result.expect("unimplemented field info intrinsic");
     StepResult::InstructionStepped
 }
 

@@ -1,6 +1,9 @@
 use crate::{
     pop_args,
-    types::{generics::GenericLookup, members::MethodDescription},
+    types::{
+        generics::{ConcreteType, GenericLookup},
+        members::{FieldDescription, MethodDescription},
+    },
     value::{
         layout::{type_layout, HasLayout, LayoutManager, Scalar},
         object::ObjectRef,
@@ -373,4 +376,13 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
         _ => panic!("unsupported layout for write unaligned"),
     }
     StepResult::InstructionStepped
+}
+
+pub fn intrinsic_field_intptr_zero<'gc, 'm: 'gc>(
+    _gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _field: FieldDescription,
+    _type_generics: Vec<ConcreteType>,
+) {
+    stack.push_stack(_gc, StackValue::NativeInt(0));
 }

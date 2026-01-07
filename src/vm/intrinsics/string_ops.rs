@@ -1,6 +1,9 @@
 use crate::{
     pop_args,
-    types::{generics::GenericLookup, members::MethodDescription},
+    types::{
+        generics::{ConcreteType, GenericLookup},
+        members::{FieldDescription, MethodDescription},
+    },
     value::{
         object::{Object, ObjectRef},
         string::{with_string, CLRString},
@@ -220,23 +223,11 @@ pub fn intrinsic_string_is_null_or_empty<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
-/// Dispatcher for string intrinsics that use string matching
-/// (for methods not in metadata)
-pub fn handle_string_intrinsic<'gc, 'm: 'gc>(
+pub fn intrinsic_field_string_empty<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
-    method: MethodDescription,
-    generics: &GenericLookup,
-) -> StepResult {
-    use crate::match_method;
-
-    if match_method!(method, System.String::get_Length()) {
-        return intrinsic_string_get_length(gc, stack, method, generics);
-    }
-
-    if match_method!(method, System.String::get_Chars(int)) {
-        return intrinsic_string_get_chars(gc, stack, method, generics);
-    }
-
-    panic!("unsupported string intrinsic: {:?}", method);
+    _field: FieldDescription,
+    _type_generics: Vec<ConcreteType>,
+) {
+    vm_push!(stack, gc, string(gc, CLRString::new(vec![])));
 }
