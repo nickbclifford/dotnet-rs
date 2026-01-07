@@ -1,6 +1,5 @@
 use crate::{
-    types::generics::GenericLookup,
-    types::members::MethodDescription,
+    types::{generics::GenericLookup, members::MethodDescription},
     value::{
         object::{HeapStorage, Object, ObjectRef},
         StackValue,

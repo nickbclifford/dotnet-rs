@@ -1,7 +1,6 @@
 use crate::{
     pop_args,
-    types::generics::GenericLookup,
-    types::members::MethodDescription,
+    types::{generics::GenericLookup, members::MethodDescription},
     value::{
         layout::{type_layout, HasLayout},
         object::{Object, ObjectRef},
@@ -11,8 +10,7 @@ use crate::{
     vm::{context::ResolutionContext, CallStack, GCHandle, StepResult},
     vm_pop, vm_push,
 };
-use std::ptr::NonNull;
-use std::{mem::size_of, slice};
+use std::{mem::size_of, ptr::NonNull, slice};
 
 pub fn span_to_slice<'gc, 'a>(span: Object<'gc>) -> &'a [u8] {
     let ptr_data = span.instance_storage.get_field_local("_reference");

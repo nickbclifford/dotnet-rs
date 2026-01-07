@@ -1,7 +1,6 @@
 use crate::{
     pop_args,
-    types::generics::GenericLookup,
-    types::members::MethodDescription,
+    types::{generics::GenericLookup, members::MethodDescription},
     value::{
         object::{HeapStorage, ObjectRef},
         StackValue,
