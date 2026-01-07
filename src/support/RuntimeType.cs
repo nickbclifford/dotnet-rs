@@ -59,6 +59,13 @@ internal class RuntimeType : Type
 
         return false;
     }
+
+    public new bool IsAssignableTo(Type? targetType)
+    {
+        // IsAssignableTo is the inverse of IsAssignableFrom
+        // this.IsAssignableTo(target) means target.IsAssignableFrom(this)
+        return targetType?.IsAssignableFrom(this) ?? false;
+    }
     
     [MethodImpl(MethodImplOptions.InternalCall)]
     private extern Assembly GetAssembly();

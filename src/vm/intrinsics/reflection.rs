@@ -1,17 +1,21 @@
 use crate::{
     assemblies::{AssemblyLoader, SUPPORT_ASSEMBLY},
-    match_method,
+    match_method, pop_args,
     types::{
         generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
         TypeDescription,
     },
     utils::{decompose_type_source, ResolutionS},
-    value::object::{HeapStorage, Object, ObjectRef, Vector},
+    value::{
+        layout::{type_layout, LayoutManager, Scalar},
+        object::{HeapStorage, Object, ObjectRef, Vector},
+        StackValue,
+    },
     vm::{context::ResolutionContext, CallStack, GCHandle, MethodInfo, StepResult},
     vm_expect_stack, vm_pop, vm_push,
 };
-use dotnetdll::prelude::{BaseType, MethodType, TypeSource};
+use dotnetdll::prelude::{BaseType, Kind, MemberType, MethodType, TypeSource};
 use std::{fmt::Debug, hash::Hash};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -436,7 +440,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
     method: MethodDescription,
-    generics: GenericLookup,
+    generics: &GenericLookup,
 ) -> StepResult {
     macro_rules! pop {
         () => {
@@ -467,7 +471,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                         .expect("could find DotnetRs.Assembly in support library");
                     let mut asm_handle = Object::new(
                         TypeDescription::new(support_res, definition),
-                        &ResolutionContext::new(&generics, stack.loader(), support_res),
+                        &ResolutionContext::new(generics, stack.loader(), support_res),
                     );
                     let data = (resolution.as_raw() as usize).to_ne_bytes();
                     asm_handle.instance_storage.get_field_mut_local("resolution").copy_from_slice(&data);
@@ -498,6 +502,81 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             vm_expect_stack!(let ObjectRef(obj) = pop!());
             let target_type = stack.resolve_runtime_type(obj);
             push!(string(target_type.get_name()));
+            Some(StepResult::InstructionStepped)
+        },
+        [DotnetRs.RuntimeType::GetBaseType()] => {
+            vm_expect_stack!(let ObjectRef(obj) = pop!());
+            let target_type = stack.resolve_runtime_type(obj);
+            match target_type {
+                RuntimeType::Type(td) | RuntimeType::Generic(td, _) => {
+                    if td.definition().extends.is_some() {
+                        // Get the first ancestor (the direct parent)
+                        let mut ancestors = stack.loader().ancestors(td);
+                        if let Some((base_td, base_generics)) = ancestors.next() {
+                            let _ctx = ResolutionContext::for_method(method, stack.loader(), generics);
+                            let base_rt = if base_generics.is_empty() {
+                                RuntimeType::Type(base_td)
+                            } else {
+                                // Convert member type generic parameters to runtime types
+                                let runtime_generics: Vec<RuntimeType> = base_generics
+                                    .iter()
+                                    .map(|mt| {
+                                        // Wrap MemberType in MethodType::Base to convert it
+                                        let method_type = match mt {
+                                            MemberType::Base(b) => {
+                                                // We need to convert BaseType<MemberType> to a RuntimeType
+                                                // For now, let's use decompose_type_source approach on the base type
+                                                match &**b {
+                                                    BaseType::Type { source, .. } => {
+                                                        let (ut, sub_generics) = decompose_type_source(source);
+                                                        let sub_td = stack.loader().locate_type(td.resolution, ut);
+                                                        if sub_generics.is_empty() {
+                                                            RuntimeType::Type(sub_td)
+                                                        } else {
+                                                            // Recursively handle generics - for now, just use Type
+                                                            RuntimeType::Type(sub_td)
+                                                        }
+                                                    }
+                                                    BaseType::Object => RuntimeType::Object,
+                                                    BaseType::String => RuntimeType::String,
+                                                    BaseType::Boolean => RuntimeType::Boolean,
+                                                    BaseType::Char => RuntimeType::Char,
+                                                    BaseType::Int8 => RuntimeType::Int8,
+                                                    BaseType::UInt8 => RuntimeType::UInt8,
+                                                    BaseType::Int16 => RuntimeType::Int16,
+                                                    BaseType::UInt16 => RuntimeType::UInt16,
+                                                    BaseType::Int32 => RuntimeType::Int32,
+                                                    BaseType::UInt32 => RuntimeType::UInt32,
+                                                    BaseType::Int64 => RuntimeType::Int64,
+                                                    BaseType::UInt64 => RuntimeType::UInt64,
+                                                    BaseType::Float32 => RuntimeType::Float32,
+                                                    BaseType::Float64 => RuntimeType::Float64,
+                                                    BaseType::IntPtr => RuntimeType::IntPtr,
+                                                    BaseType::UIntPtr => RuntimeType::UIntPtr,
+                                                    _ => RuntimeType::Object, // Fallback
+                                                }
+                                            }
+                                            MemberType::TypeGeneric(i) => RuntimeType::TypeParameter {
+                                                owner: td,
+                                                index: *i as u16,
+                                            },
+                                        };
+                                        method_type
+                                    })
+                                    .collect();
+                                RuntimeType::Generic(base_td, runtime_generics)
+                            };
+                            let rt_obj = stack.get_runtime_type(gc, base_rt);
+                            push!(ObjectRef(rt_obj));
+                        } else {
+                            push!(null());
+                        }
+                    } else {
+                        push!(null());
+                    }
+                }
+                _ => push!(null()),
+            }
             Some(StepResult::InstructionStepped)
         },
         [DotnetRs.RuntimeType::GetIsGenericType()] => {
@@ -644,8 +723,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
 
             panic!("could not find a parameterless constructor in {:?}", td)
         },
-    })
-    .expect("unimplemented runtime type intrinsic");
+    }).unwrap_or_else(|| panic!("unimplemented runtime type intrinsic: {:?}", method));
     StepResult::InstructionStepped
 }
 
@@ -653,7 +731,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
     method: MethodDescription,
-    _generics: GenericLookup,
+    _generics: &GenericLookup,
 ) -> StepResult {
     macro_rules! pop {
         () => {
@@ -703,7 +781,7 @@ pub fn runtime_field_info_intrinsic_call<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
     method: MethodDescription,
-    _generics: GenericLookup,
+    _generics: &GenericLookup,
 ) -> StepResult {
     macro_rules! pop {
         () => {
@@ -743,5 +821,250 @@ pub fn runtime_field_info_intrinsic_call<'gc, 'm: 'gc>(
     })
     .expect("unimplemented field info intrinsic");
 
+    StepResult::InstructionStepped
+}
+
+pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc>(
+    _gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
+    let obj = vm_pop!(stack);
+    let object_type = match obj {
+        StackValue::ObjectRef(ObjectRef(Some(h))) => ctx.get_heap_description(h),
+        StackValue::ObjectRef(ObjectRef(None)) => {
+            return stack.throw_by_name(_gc, "System.NullReferenceException");
+        }
+        _ => panic!("invalid type on stack"),
+    };
+
+    let mt_ptr = object_type.definition_ptr().unwrap().as_ptr();
+    vm_push!(stack, _gc, NativeInt(mt_ptr as isize));
+    StepResult::InstructionStepped
+}
+
+pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
+    let target = &generics.method_generics[0];
+    let layout = type_layout(target.clone(), &ctx);
+    let value = match layout {
+        LayoutManager::Scalar(Scalar::ObjectRef) => false,
+        LayoutManager::Scalar(_) => true,
+        _ => false,
+    };
+    vm_push!(stack, gc, Int32(value as i32));
+    StepResult::InstructionStepped
+}
+
+pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
+    let target = &generics.method_generics[0];
+    let layout = type_layout(target.clone(), &ctx);
+    vm_push!(stack, gc, Int32(layout.is_or_contains_refs() as i32));
+    StepResult::InstructionStepped
+}
+
+pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc>(
+    _gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    pop_args!(stack, [ValueType(handle)]);
+    let target_obj = ObjectRef::read(handle.instance_storage.get_field_local("_value"));
+    let target_type = stack.resolve_runtime_type(target_obj);
+    let target_ct = target_type.to_concrete(stack.loader());
+    let target_desc = stack.loader().find_concrete_type(target_ct);
+
+    stack.initialize_static_storage(_gc, target_desc, generics.clone());
+    StepResult::InstructionStepped
+}
+
+pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let target_ct = generics.method_generics[0].clone();
+    let target_td = stack.loader().find_concrete_type(target_ct.clone());
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
+
+    if target_td.is_value_type(&ctx) {
+        let instance = Object::new(target_td, &ctx);
+        vm_push!(stack, gc, ValueType(Box::new(instance)));
+        StepResult::InstructionStepped
+    } else {
+        let instance = Object::new(target_td, &ctx);
+        let mut new_lookup = GenericLookup::default();
+        if let BaseType::Type {
+            source: TypeSource::Generic { parameters, .. },
+            ..
+        } = target_ct.get()
+        {
+            new_lookup.type_generics = parameters.clone();
+        }
+
+        for m in target_td.definition().methods.iter() {
+            if m.name == ".ctor" && m.signature.instance && m.signature.parameters.is_empty() {
+                let desc = MethodDescription {
+                    parent: target_td,
+                    method: m,
+                };
+
+                stack.constructor_frame(
+                    gc,
+                    instance,
+                    MethodInfo::new(desc, &new_lookup, stack.loader()),
+                    new_lookup,
+                );
+                return StepResult::InstructionStepped;
+            }
+        }
+
+        panic!(
+            "could not find a parameterless constructor in {:?}",
+            target_td
+        )
+    }
+}
+
+pub fn intrinsic_get_from_handle<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    pop_args!(stack, [ValueType(handle)]);
+    let target = ObjectRef::read(handle.instance_storage.get_field_local("_value"));
+    vm_push!(stack, gc, ObjectRef(target));
+    StepResult::InstructionStepped
+}
+
+pub fn intrinsic_type_handle_to_int_ptr<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    pop_args!(stack, [ValueType(handle)]);
+    let target = handle.instance_storage.get_field_local("_value");
+    let val = usize::from_ne_bytes(target.try_into().unwrap());
+    vm_push!(stack, gc, NativeInt(val as isize));
+    StepResult::InstructionStepped
+}
+
+pub fn intrinsic_method_handle_get_function_pointer<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    pop_args!(stack, [ValueType(handle)]);
+    let method_obj = ObjectRef::read(handle.instance_storage.get_field_local("_value"));
+    let (method, lookup) = stack.resolve_runtime_method(method_obj);
+    let index = stack.get_runtime_method_index(method, lookup.clone());
+    vm_push!(stack, gc, NativeInt(index as isize));
+    StepResult::InstructionStepped
+}
+
+pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    pop_args!(stack, [ObjectRef(o)]);
+    let target = stack.resolve_runtime_type(o);
+    let target_ct = target.to_concrete(stack.loader());
+    let target_desc = stack.loader().find_concrete_type(target_ct);
+    let ctx = ResolutionContext::for_method(_method, stack.loader(), generics);
+    let value = target_desc.is_value_type(&ctx);
+    vm_push!(stack, gc, Int32(value as i32));
+    StepResult::InstructionStepped
+}
+
+pub fn intrinsic_type_get_is_enum<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    pop_args!(stack, [ObjectRef(o)]);
+    let target = stack.resolve_runtime_type(o);
+    let value = match target {
+        RuntimeType::Type(td) | RuntimeType::Generic(td, _) => td.is_enum().is_some(),
+        _ => false,
+    };
+    vm_push!(stack, gc, Int32(value as i32));
+    StepResult::InstructionStepped
+}
+
+pub fn intrinsic_type_get_is_interface<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    pop_args!(stack, [ObjectRef(o)]);
+    let target = stack.resolve_runtime_type(o);
+    let value = match target {
+        RuntimeType::Type(td) | RuntimeType::Generic(td, _) => {
+            matches!(td.definition().flags.kind, Kind::Interface)
+        }
+        _ => false,
+    };
+    vm_push!(stack, gc, Int32(value as i32));
+    StepResult::InstructionStepped
+}
+
+pub fn intrinsic_type_op_equality<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    pop_args!(stack, [ObjectRef(o2), ObjectRef(o1)]);
+    vm_push!(stack, gc, Int32((o1 == o2) as i32));
+    StepResult::InstructionStepped
+}
+
+pub fn intrinsic_type_op_inequality<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    pop_args!(stack, [ObjectRef(o2), ObjectRef(o1)]);
+    vm_push!(stack, gc, Int32((o1 != o2) as i32));
+    StepResult::InstructionStepped
+}
+
+pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    pop_args!(stack, [ObjectRef(obj)]);
+
+    let rth = stack.loader().corlib_type("System.RuntimeTypeHandle");
+    let ctx = ResolutionContext::for_method(_method, stack.loader(), generics);
+    let mut instance = Object::new(rth, &ctx);
+    obj.write(instance.instance_storage.get_field_mut_local("_value"));
+
+    vm_push!(stack, gc, ValueType(Box::new(instance)));
     StepResult::InstructionStepped
 }

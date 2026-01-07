@@ -85,7 +85,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         lookup: GenericLookup,
     ) -> StepResult {
         if is_intrinsic(method, self.loader()) {
-            intrinsic_call(gc, self, method, lookup)
+            intrinsic_call(gc, self, method, &lookup)
         } else if method.method.pinvoke.is_some() {
             self.external_call(method, gc);
             StepResult::InstructionStepped

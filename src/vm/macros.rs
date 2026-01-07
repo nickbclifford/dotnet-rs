@@ -186,3 +186,38 @@ macro_rules! vm_trace_heap_snapshot {
         }
     };
 }
+
+/// Pop and validate multiple arguments from the stack in one call.
+///
+/// This macro simplifies the common pattern of popping multiple arguments
+/// with type validation. Arguments are listed in REVERSE stack order
+/// (i.e., last parameter first, which is how they appear on the stack).
+///
+/// # Syntax
+/// ```ignore
+/// pop_args!(stack, [
+///     VariantN(nameN),  // last parameter (top of stack)
+///     ...
+///     Variant1(name1),  // first parameter (bottom of argument block)
+/// ])
+/// ```
+///
+/// # Example
+/// ```ignore
+/// // For System.String::Substring(int startIndex, int length)
+/// pop_args!(stack, [
+///     Int32(length),      // popped first (last param)
+///     Int32(start_index)  // popped second (first param)
+/// ]);
+/// ```
+///
+/// The macro uses vm_expect_stack! internally, so it will panic with a
+/// descriptive message if the stack value doesn't match the expected type.
+#[macro_export]
+macro_rules! pop_args {
+    ($stack:expr, [ $($variant:ident($name:ident)),+ $(,)? ]) => {
+        $(
+            $crate::vm_expect_stack!(let $variant($name) = $crate::vm_pop!($stack));
+        )+
+    };
+}

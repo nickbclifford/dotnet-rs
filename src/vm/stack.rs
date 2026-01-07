@@ -129,6 +129,10 @@ pub struct SharedGlobalState<'m> {
 
 impl<'m> SharedGlobalState<'m> {
     pub fn new(loader: &'m AssemblyLoader) -> Self {
+        // Initialize the intrinsic registry early during VM startup
+        // This is more efficient than lazy initialization in the hot path
+        crate::vm::intrinsics::IntrinsicRegistry::initialize_global(loader);
+
         let tracer = Tracer::new();
         let tracer_enabled = Arc::new(std::sync::atomic::AtomicBool::new(tracer.is_enabled()));
         Self {

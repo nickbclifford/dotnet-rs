@@ -1,44 +1,848 @@
 use crate::{
-    any_match_field, any_match_method,
-    assemblies::{AssemblyLoader, SUPPORT_ASSEMBLY},
-    match_field, match_method,
+    any_match_field,
+    assemblies::AssemblyLoader,
+    match_field,
     types::{
         generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
     },
-    utils::decompose_type_source,
-    value::{
-        layout::*,
-        object::{HeapStorage, Object, ObjectRef},
-        pointer::ManagedPtr,
-        string::{string_intrinsic_call, with_string, CLRString},
-        StackValue,
-    },
-    vm::{
-        context::ResolutionContext,
-        gc::GCHandleType,
-        intrinsics::reflection::{
-            runtime_field_info_intrinsic_call, runtime_method_info_intrinsic_call,
-            runtime_type_intrinsic_call,
-        },
-        sync::{SyncBlockOps, SyncManagerOps},
-        CallStack, GCHandle, MethodInfo, StepResult,
-    },
-    vm_expect_stack, vm_msg, vm_pop, vm_push,
+    value::{object::ObjectRef, string::CLRString, StackValue},
+    vm::{context::ResolutionContext, CallStack, GCHandle, StepResult},
+    vm_msg, vm_push,
 };
-use dotnetdll::prelude::*;
 use std::{
-    env,
-    ptr::{self, NonNull},
-    slice,
-    sync::atomic,
-    thread,
+    collections::HashMap,
+    sync::{Arc, OnceLock, RwLock},
 };
 
+pub mod gc;
 pub mod matcher;
+pub mod math;
 pub mod reflection;
+pub mod span;
+pub mod string_ops;
+pub mod threading;
+pub mod unsafe_ops;
+
+use reflection::{
+    runtime_field_info_intrinsic_call, runtime_method_info_intrinsic_call,
+    runtime_type_intrinsic_call,
+};
 
 pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttribute";
+
+// ============================================================================
+// Phase 1: Intrinsic Registry Infrastructure
+// ============================================================================
+
+/// Type alias for intrinsic handler functions.
+///
+/// An intrinsic handler is responsible for:
+/// 1. Popping its arguments from the call stack
+/// 2. Performing the intrinsic operation
+/// 3. Pushing any return value onto the stack
+/// 4. Returning a StepResult indicating the outcome
+///
+/// Note: The actual implementations should use `'m: 'gc` bound, but we can't
+/// express this in higher-ranked trait bounds. The registry uses transmute
+/// to work around this limitation safely.
+///
+/// GenericLookup is passed by reference to avoid cloning on every intrinsic call.
+pub type IntrinsicHandler = for<'gc, 'm> fn(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult;
+
+// Note on transmute safety:
+// Throughout this file, we use `unsafe { std::mem::transmute::<_, IntrinsicHandler>(...) }`
+// to convert concrete function pointers to the IntrinsicHandler type. This is safe because:
+// 1. Both function types have identical memory layouts and ABI
+// 2. We're converting between function pointers with the same parameter/return types
+// 3. The only difference is the lifetime representation ('m: 'gc vs higher-ranked 'for')
+// 4. The transmute is from a concrete function pointer to a higher-ranked one, which
+//    is valid since the concrete function can be called with any valid lifetime combination
+// 5. The Rust type system cannot express 'm: 'gc in higher-ranked trait bounds, but the
+//    actual runtime behavior is identical
+
+/// Registry for intrinsic method implementations.
+///
+/// This provides O(1) lookup of intrinsic handlers by MethodDescription,
+/// replacing the previous O(N) string-based matching approach.
+///
+/// The registry is lazily initialized on first use via OnceLock.
+/// A key for looking up intrinsics that works across different AssemblyLoader instances.
+/// Uses type name + method name + parameter count instead of pointer equality.
+///
+/// We use `Arc<str>` instead of `Box<str>` or `String` to optimize lookups:
+/// - Cloning Arc<str> is cheap (just incrementing a reference count, no heap allocation)
+/// - This allows us to construct lookup keys without new heap allocations
+/// - Arc<str> can be created from &str via Arc::from() which reuses existing string data
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct IntrinsicKey {
+    type_name: Arc<str>,
+    method_name: Arc<str>,
+    param_count: usize,
+}
+
+impl IntrinsicKey {
+    /// Creates an IntrinsicKey from a MethodDescription.
+    ///
+    /// Uses Arc::from to potentially reuse string data. While this still allocates
+    /// the Arc control block, it's much cheaper than allocating new strings.
+    fn from_method(method: MethodDescription) -> Self {
+        let type_name = Arc::from(method.parent.definition().type_name());
+        let method_name = Arc::from(&*method.method.name);
+        let param_count = method.method.signature.parameters.len();
+        Self {
+            type_name,
+            method_name,
+            param_count,
+        }
+    }
+}
+
+pub struct IntrinsicRegistry {
+    handlers: HashMap<IntrinsicKey, IntrinsicHandler>,
+}
+
+impl IntrinsicRegistry {
+    /// Creates a new empty registry.
+    fn new() -> Self {
+        Self {
+            handlers: HashMap::new(),
+        }
+    }
+
+    /// Registers an intrinsic handler for the given method.
+    #[allow(dead_code)] // Will be used in Phase 2+
+    pub fn register(&mut self, method: MethodDescription, handler: IntrinsicHandler) {
+        let key = IntrinsicKey::from_method(method);
+        #[cfg(feature = "intrinsic-trace")]
+        eprintln!(
+            "Registering intrinsic: {}.{}({} params)",
+            key.type_name, key.method_name, key.param_count
+        );
+        self.handlers.insert(key, handler);
+    }
+
+    /// Looks up an intrinsic handler for the given method.
+    /// Returns None if no handler is registered.
+    ///
+    /// Creates an Arc-based key for lookup. While this increments reference counts,
+    /// it avoids full string allocations and is much faster than Box<str>.
+    pub fn get(&self, method: &MethodDescription) -> Option<&IntrinsicHandler> {
+        let key = IntrinsicKey::from_method(*method);
+        self.handlers.get(&key)
+    }
+
+    /// Returns the global intrinsic registry instance.
+    ///
+    /// Note: The registry uses RwLock to allow concurrent read access since
+    /// the registry is read-only after initialization.
+    pub fn global() -> &'static RwLock<IntrinsicRegistry> {
+        static REGISTRY: OnceLock<RwLock<IntrinsicRegistry>> = OnceLock::new();
+        REGISTRY.get_or_init(|| RwLock::new(IntrinsicRegistry::new()))
+    }
+
+    /// Initializes the registry with intrinsic handlers.
+    ///
+    /// This is called dynamically when we have access to the AssemblyLoader,
+    /// allowing us to look up MethodDescriptions. This should be called once
+    /// during VM initialization.
+    #[allow(unused_variables)] // loader is used in the register_intrinsic! macro
+    #[allow(clippy::missing_transmute_annotations)] // Transmute safety documented at file level
+    pub fn initialize_global(loader: &AssemblyLoader) {
+        let mut registry = Self::global().write().unwrap();
+
+        // Skip if already initialized
+        if !registry.handlers.is_empty() {
+            return;
+        }
+
+        // Helper macro to register a handler
+        macro_rules! register_intrinsic {
+            ($type_name:expr, $method_name:expr, $handler:expr) => {
+                let type_def = loader.corlib_type($type_name);
+                if let Some(method) = type_def
+                    .definition()
+                    .methods
+                    .iter()
+                    .find(|m| m.name == $method_name)
+                {
+                    let method_desc = MethodDescription {
+                        parent: type_def,
+                        method,
+                    };
+                    registry.register(method_desc, $handler);
+                }
+            };
+            ($type_name:expr, $method_name:expr, params = $param_count:expr, $handler:expr) => {
+                let type_def = loader.corlib_type($type_name);
+                if let Some(method) = type_def.definition().methods.iter().find(|m| {
+                    m.name == $method_name && m.signature.parameters.len() == $param_count
+                }) {
+                    let method_desc = MethodDescription {
+                        parent: type_def,
+                        method,
+                    };
+                    registry.register(method_desc, $handler);
+                }
+            };
+        }
+
+        // Register GC intrinsics
+        register_intrinsic!("System.GC", "KeepAlive", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                gc::intrinsic_gc_keep_alive as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.GC", "SuppressFinalize", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                gc::intrinsic_gc_suppress_finalize as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.GC", "ReRegisterForFinalize", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                gc::intrinsic_gc_reregister_for_finalize as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.GC", "Collect", params = 0, unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                gc::intrinsic_gc_collect_0 as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.GC", "Collect", params = 1, unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                gc::intrinsic_gc_collect_1 as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.GC", "Collect", params = 2, unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                gc::intrinsic_gc_collect_2 as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.GC", "WaitForPendingFinalizers", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                gc::intrinsic_gc_wait_for_pending_finalizers as fn(_, _, _, _) -> _,
+            )
+        });
+
+        // Register GCHandle intrinsics
+        register_intrinsic!(
+            "System.Runtime.InteropServices.GCHandle",
+            "InternalAlloc",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    gc::intrinsic_gchandle_internal_alloc as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!(
+            "System.Runtime.InteropServices.GCHandle",
+            "InternalFree",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    gc::intrinsic_gchandle_internal_free as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!(
+            "System.Runtime.InteropServices.GCHandle",
+            "InternalGet",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    gc::intrinsic_gchandle_internal_get as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!(
+            "System.Runtime.InteropServices.GCHandle",
+            "InternalSet",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    gc::intrinsic_gchandle_internal_set as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!(
+            "System.Runtime.InteropServices.GCHandle",
+            "InternalAddrOfPinnedObject",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    gc::intrinsic_gchandle_internal_addr_of_pinned_object as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+
+        // Register Environment intrinsics
+        register_intrinsic!("System.Environment", "GetEnvironmentVariableCore", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                gc::intrinsic_environment_get_variable_core as fn(_, _, _, _) -> _,
+            )
+        });
+
+        // Register ArgumentNullException intrinsics
+        register_intrinsic!("System.ArgumentNullException", "ThrowIfNull", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                gc::intrinsic_argument_null_exception_throw_if_null as fn(_, _, _, _) -> _,
+            )
+        });
+
+        // Register Threading intrinsics
+        register_intrinsic!("System.Threading.Monitor", "Exit", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                threading::intrinsic_monitor_exit as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.Threading.Monitor", "ReliableEnter", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                threading::intrinsic_monitor_reliable_enter as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.Threading.Monitor", "TryEnter_FastPath", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                threading::intrinsic_monitor_try_enter_fast_path as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.Threading.Monitor", "TryEnter", params = 3, unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                threading::intrinsic_monitor_try_enter_timeout_ref as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.Threading.Monitor", "TryEnter", params = 2, unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                threading::intrinsic_monitor_try_enter_timeout as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!(
+            "System.Threading.Interlocked",
+            "CompareExchange",
+            params = 3,
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    threading::intrinsic_interlocked_compare_exchange as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!("System.Threading.Volatile", "Read", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                threading::intrinsic_volatile_read as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.Threading.Volatile", "Write", params = 2, unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                threading::intrinsic_volatile_write_bool as fn(_, _, _, _) -> _,
+            )
+        });
+
+        // Register String intrinsics
+        register_intrinsic!("System.String", "Equals", params = 1, unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                string_ops::intrinsic_string_equals as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.String", "Equals", params = 2, unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                string_ops::intrinsic_string_equals as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.String", "FastAllocateString", params = 1, unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                string_ops::intrinsic_string_fast_allocate_string as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.String", "FastAllocateString", params = 2, unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                string_ops::intrinsic_string_fast_allocate_string as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.String", "get_Chars", params = 1, unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                string_ops::intrinsic_string_get_chars as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.String", "get_Length", params = 0, unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                string_ops::intrinsic_string_get_length as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.String", "Concat", params = 3, unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                string_ops::intrinsic_string_concat_three_spans as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.String", "GetHashCodeOrdinalIgnoreCase", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                string_ops::intrinsic_string_get_hash_code_ordinal_ignore_case
+                    as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.String", "GetPinnableReference", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                string_ops::intrinsic_string_get_raw_data as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.String", "GetRawStringData", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                string_ops::intrinsic_string_get_raw_data as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.String", "IndexOf", params = 1, unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                string_ops::intrinsic_string_index_of as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.String", "IndexOf", params = 2, unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                string_ops::intrinsic_string_index_of as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.String", "Substring", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                string_ops::intrinsic_string_substring as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.String", "IsNullOrEmpty", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                string_ops::intrinsic_string_is_null_or_empty as fn(_, _, _, _) -> _,
+            )
+        });
+
+        // Register Marshal intrinsics
+        register_intrinsic!(
+            "System.Runtime.InteropServices.Marshal",
+            "GetLastPInvokeError",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_marshal_get_last_pinvoke_error as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!(
+            "System.Runtime.InteropServices.Marshal",
+            "SetLastPInvokeError",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_marshal_set_last_pinvoke_error as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!("System.Buffer", "Memmove", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                unsafe_ops::intrinsic_buffer_memmove as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!(
+            "System.Runtime.InteropServices.MemoryMarshal",
+            "GetArrayDataReference",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_memory_marshal_get_array_data_reference
+                        as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!(
+            "System.Runtime.CompilerServices.RuntimeHelpers",
+            "GetMethodTable",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    reflection::intrinsic_runtime_helpers_get_method_table as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+
+        // Register Span and MemoryExtensions intrinsics
+        register_intrinsic!("System.MemoryExtensions", "Equals", params = 3, unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                span::intrinsic_memory_extensions_equals_span_char as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.ReadOnlySpan`1", "get_Item", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                span::intrinsic_span_get_item as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.Span`1", "get_Length", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                span::intrinsic_span_get_length as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.ReadOnlySpan`1", "get_Length", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                span::intrinsic_span_get_length as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.String", "op_Implicit", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                span::intrinsic_string_as_span as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.MemoryExtensions", "AsSpan", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                span::intrinsic_string_as_span as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!(
+            "System.Runtime.CompilerServices.RuntimeHelpers",
+            "CreateSpan",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    span::intrinsic_runtime_helpers_create_span as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+
+        // Register Unsafe intrinsics
+        register_intrinsic!("System.Runtime.CompilerServices.Unsafe", "Add", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                unsafe_ops::intrinsic_unsafe_add as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!(
+            "System.Runtime.CompilerServices.Unsafe",
+            "AreSame",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_unsafe_are_same as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!(
+            "System.Runtime.CompilerServices.Unsafe",
+            "As",
+            params = 1,
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_unsafe_as as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!(
+            "System.Runtime.CompilerServices.Unsafe",
+            "As",
+            params = 2,
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_unsafe_as_generic as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!(
+            "System.Runtime.CompilerServices.Unsafe",
+            "AsRef",
+            params = 1,
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_unsafe_as_ref_any as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        // We need a way to distinguish between AsRef(ref T) and AsRef(void*) if they both have 1 param.
+        // Actually AsRef(ref T) has 1 param (ManagedPtr), and AsRef(void*) has 1 param (NativeInt).
+        // Our registry uses param count. If they have same param count, we might have a conflict.
+        // Let's check Unsafe.AsRef signatures.
+        // public static ref T AsRef<T>(in T source);
+        // public static ref T AsRef<T>(void* ptr);
+        // Both have 1 parameter.
+
+        register_intrinsic!("System.Runtime.CompilerServices.Unsafe", "SizeOf", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                unsafe_ops::intrinsic_unsafe_size_of as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!(
+            "System.Runtime.CompilerServices.Unsafe",
+            "ByteOffset",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_unsafe_byte_offset as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!(
+            "System.Runtime.CompilerServices.Unsafe",
+            "ReadUnaligned",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_unsafe_read_unaligned as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!(
+            "System.Runtime.CompilerServices.Unsafe",
+            "WriteUnaligned",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_unsafe_write_unaligned as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+
+        // Register additional Marshal intrinsics
+        register_intrinsic!(
+            "System.Runtime.InteropServices.Marshal",
+            "SizeOf",
+            params = 0,
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_marshal_size_of as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!(
+            "System.Runtime.InteropServices.Marshal",
+            "SizeOf",
+            params = 1,
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_marshal_size_of as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!(
+            "System.Runtime.InteropServices.Marshal",
+            "OffsetOf",
+            params = 1,
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_marshal_offset_of as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!(
+            "System.Runtime.InteropServices.Marshal",
+            "OffsetOf",
+            params = 2,
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_marshal_offset_of as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+
+        // Register additional RuntimeHelpers intrinsics
+        register_intrinsic!(
+            "System.Runtime.CompilerServices.RuntimeHelpers",
+            "IsBitwiseEquatable",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    reflection::intrinsic_runtime_helpers_is_bitwise_equatable
+                        as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!(
+            "System.Runtime.CompilerServices.RuntimeHelpers",
+            "IsReferenceOrContainsReferences",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    reflection::intrinsic_runtime_helpers_is_reference_or_contains_references
+                        as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!(
+            "System.Runtime.CompilerServices.RuntimeHelpers",
+            "RunClassConstructor",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    reflection::intrinsic_runtime_helpers_run_class_constructor
+                        as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+
+        // Register Vector and Numeric intrinsics
+        register_intrinsic!(
+            "System.Runtime.Intrinsics.Vector128",
+            "get_IsHardwareAccelerated",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    math::intrinsic_vector_is_hardware_accelerated as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!(
+            "System.Runtime.Intrinsics.Vector256",
+            "get_IsHardwareAccelerated",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    math::intrinsic_vector_is_hardware_accelerated as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!(
+            "System.Runtime.Intrinsics.Vector512",
+            "get_IsHardwareAccelerated",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    math::intrinsic_vector_is_hardware_accelerated as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+
+        register_intrinsic!("System.Byte", "CreateTruncating", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                math::intrinsic_numeric_create_truncating as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.SByte", "CreateTruncating", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                math::intrinsic_numeric_create_truncating as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.UInt16", "CreateTruncating", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                math::intrinsic_numeric_create_truncating as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.Int16", "CreateTruncating", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                math::intrinsic_numeric_create_truncating as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.UInt32", "CreateTruncating", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                math::intrinsic_numeric_create_truncating as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.Int32", "CreateTruncating", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                math::intrinsic_numeric_create_truncating as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.UInt64", "CreateTruncating", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                math::intrinsic_numeric_create_truncating as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.Int64", "CreateTruncating", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                math::intrinsic_numeric_create_truncating as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.UIntPtr", "CreateTruncating", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                math::intrinsic_numeric_create_truncating as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.IntPtr", "CreateTruncating", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                math::intrinsic_numeric_create_truncating as fn(_, _, _, _) -> _,
+            )
+        });
+
+        // Register Misc intrinsics
+        register_intrinsic!("System.Activator", "CreateInstance", params = 0, unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                reflection::intrinsic_activator_create_instance as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!(
+            "System.Collections.Generic.EqualityComparer`1",
+            "get_Default",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    math::intrinsic_equality_comparer_get_default as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+
+        // Register System.Reflection and System.Type intrinsics
+        register_intrinsic!("System.Type", "GetTypeFromHandle", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                reflection::intrinsic_get_from_handle as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!(
+            "System.Reflection.MethodBase",
+            "GetMethodFromHandle",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    reflection::intrinsic_get_from_handle as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!(
+            "System.Reflection.FieldInfo",
+            "GetFieldFromHandle",
+            unsafe {
+                std::mem::transmute::<_, IntrinsicHandler>(
+                    reflection::intrinsic_get_from_handle as fn(_, _, _, _) -> _,
+                )
+            }
+        );
+        register_intrinsic!("System.RuntimeTypeHandle", "ToIntPtr", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                reflection::intrinsic_type_handle_to_int_ptr as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.RuntimeMethodHandle", "GetFunctionPointer", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                reflection::intrinsic_method_handle_get_function_pointer as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.Type", "get_IsValueType", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                reflection::intrinsic_type_get_is_value_type as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.Type", "get_IsEnum", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                reflection::intrinsic_type_get_is_enum as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.Type", "get_IsInterface", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                reflection::intrinsic_type_get_is_interface as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.Type", "op_Equality", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                reflection::intrinsic_type_op_equality as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.Type", "op_Inequality", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                reflection::intrinsic_type_op_inequality as fn(_, _, _, _) -> _,
+            )
+        });
+        register_intrinsic!("System.Type", "get_TypeHandle", unsafe {
+            std::mem::transmute::<_, IntrinsicHandler>(
+                reflection::intrinsic_type_get_type_handle as fn(_, _, _, _) -> _,
+            )
+        });
+
+        #[cfg(feature = "intrinsic-trace")]
+        eprintln!(
+            "Intrinsic registry initialized with {} handlers",
+            registry.handlers.len()
+        );
+    }
+}
+
+/// Dispatches an intrinsic call via the registry.
+///
+/// This function provides the new dispatch mechanism that will eventually
+/// replace the match_method! macro. Returns None if no handler is found,
+/// allowing fallback to legacy code.
+pub fn dispatch_intrinsic<'gc, 'm>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    method: MethodDescription,
+    generics: &GenericLookup,
+) -> Option<StepResult> {
+    let registry = IntrinsicRegistry::global().read().unwrap();
+    let result = registry.get(&method);
+    result.map(|handler| handler(gc, stack, method, generics))
+}
+
+// ============================================================================
+// End Phase 1 Infrastructure
+// ============================================================================
 
 pub fn is_intrinsic(method: MethodDescription, loader: &AssemblyLoader) -> bool {
     if method.method.internal_call {
@@ -52,31 +856,13 @@ pub fn is_intrinsic(method: MethodDescription, loader: &AssemblyLoader) -> bool 
         }
     }
 
-    any_match_method!(method,
-        [static System.Environment::GetEnvironmentVariableCore(string)],
-        [System.String::GetPinnableReference()],
-        [System.String::get_Length()],
-        [System.String::get_Chars(int)],
-        [System.String::GetRawStringData()],
-        [System.String::IndexOf(char)],
-        [System.String::IndexOf(char, int)],
-        [System.String::Substring(int)],
-        [System.String::GetHashCodeOrdinalIgnoreCase()],
-        [static System.String::Concat(ReadOnlySpan<char>, ReadOnlySpan<char>, ReadOnlySpan<char>)],
-        [static System.Runtime.CompilerServices.RuntimeHelpers::RunClassConstructor(System.RuntimeTypeHandle)],
-        [System.Type::get_TypeHandle()],
-        [static System.Runtime.InteropServices.Marshal::SizeOf(System.Type)],
-        [static System.Runtime.InteropServices.Marshal::SizeOf<1>()],
-        [static System.Runtime.InteropServices.Marshal::OffsetOf(System.Type, string)],
-        [static System.Runtime.InteropServices.Marshal::OffsetOf<1>(string)],
-        [static System.GC::Collect()],
-        [static System.GC::Collect(int)],
-        [static System.GC::Collect(int, System.GCCollectionMode)],
-        [static System.GC::KeepAlive(object)],
-        [static System.GC::WaitForPendingFinalizers()],
-        [static System.GC::SuppressFinalize(object)],
-        [static System.GC::ReRegisterForFinalize(object)],
-    )
+    // Check the registry for migrated intrinsics
+    // Note: Registry is initialized during VM startup, so no need to initialize here
+    IntrinsicRegistry::global()
+        .read()
+        .unwrap()
+        .get(&method)
+        .is_some()
 }
 
 pub fn is_intrinsic_field(field: FieldDescription, loader: &AssemblyLoader) -> bool {
@@ -97,45 +883,66 @@ pub fn is_intrinsic_field(field: FieldDescription, loader: &AssemblyLoader) -> b
     false
 }
 
-pub fn span_to_slice<'gc, 'a>(span: Object<'gc>) -> &'a [u8] {
-    let ptr_data = span.instance_storage.get_field_local("_reference");
-    let mut len_data = [0u8; size_of::<i32>()];
-
-    let ptr = ManagedPtr::read(ptr_data).value;
-    len_data.copy_from_slice(span.instance_storage.get_field_local("_length"));
-
-    let len = i32::from_ne_bytes(len_data) as usize;
-
-    unsafe { slice::from_raw_parts(ptr.as_ptr() as *const u8, len) }
-}
-
-const STATIC_ARRAY_TYPE_PREFIX: &str = "__StaticArrayInitTypeSize=";
-
 pub fn intrinsic_call<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
     method: MethodDescription,
-    generics: GenericLookup,
+    generics: &GenericLookup,
 ) -> StepResult {
-    macro_rules! pop {
-        () => {
-            vm_pop!(stack)
-        };
-    }
-    macro_rules! push {
-        ($($args:tt)*) => {
-            vm_push!(stack, gc, $($args)*)
-        };
-    }
+    // Note: Registry is initialized during VM startup, so no need to initialize here
+
     macro_rules! msg {
         ($($args:tt)*) => {
             vm_msg!(stack, $($args)*)
         }
     }
-    let ctx = ResolutionContext::for_method(method, stack.loader(), &generics);
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
 
     msg!("-- method marked as runtime intrinsic --");
 
+    // Phase 3: Check the new registry-based dispatch first
+    // This provides O(1) lookup instead of O(N) string matching
+    if let Some(result) = dispatch_intrinsic(gc, stack, method, generics) {
+        return result;
+    }
+
+    // For virtual intrinsic calls on base types, check the actual runtime type of 'this' to support derived types
+    // This allows DotnetRs.RuntimeType to override System.Type methods
+    let static_type_name = method.parent.definition().type_name();
+    let should_check_runtime_type = method.method.signature.instance
+        && (static_type_name == "System.Type"
+            || static_type_name == "System.Reflection.MethodBase"
+            || static_type_name == "System.Reflection.MethodInfo"
+            || static_type_name == "System.Reflection.ConstructorInfo"
+            || static_type_name == "System.Reflection.FieldInfo");
+
+    if should_check_runtime_type && !stack.execution.stack.is_empty() {
+        // Peek at the 'this' argument (it's at the bottom of the arguments on the stack)
+        let num_args = method.method.signature.parameters.len() + 1; // +1 for 'this'
+        let this_index = stack.execution.stack.len() - num_args;
+        if let Some(this_handle) = stack.execution.stack.get(this_index) {
+            let this_value = stack.get_slot(this_handle);
+            if let StackValue::ObjectRef(ObjectRef(Some(obj_handle))) = this_value {
+                let actual_type = ctx.get_heap_description(obj_handle);
+                let actual_type_name = actual_type.definition().type_name();
+
+                // Check if the actual runtime type is one of our specialized types
+                if actual_type_name == "DotnetRs.RuntimeType" {
+                    return runtime_type_intrinsic_call(gc, stack, method, generics);
+                }
+                if actual_type_name == "DotnetRs.MethodInfo"
+                    || actual_type_name == "DotnetRs.ConstructorInfo"
+                {
+                    return runtime_method_info_intrinsic_call(gc, stack, method, generics);
+                }
+                if actual_type_name == "DotnetRs.FieldInfo" {
+                    return runtime_field_info_intrinsic_call(gc, stack, method, generics);
+                }
+            }
+        }
+    }
+
+    // Fall back to checking the static type for static methods or when runtime type check doesn't apply
     if method.parent.definition().type_name() == "DotnetRs.RuntimeType" {
         return runtime_type_intrinsic_call(gc, stack, method, generics);
     }
@@ -150,939 +957,18 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         return runtime_field_info_intrinsic_call(gc, stack, method, generics);
     }
 
-    if method.parent.definition().type_name() == "System.String"
-        && method.method.name != "op_Implicit"
-    {
-        return string_intrinsic_call(gc, stack, method, generics);
+    // Fallback to legacy string-based matching for intrinsics not in metadata
+    // These are intrinsics that exist in the IL but aren't in the type metadata
+    use crate::any_match_method;
+    if any_match_method!(method,
+        [System.String::get_Length()],
+        [System.String::get_Chars(int)],
+    ) {
+        // Delegate to string_ops module
+        return string_ops::handle_string_intrinsic(gc, stack, method, generics);
     }
 
-    macro_rules! pop_native {
-        () => {{
-            let val = pop!();
-            match val {
-                StackValue::NativeInt(i) => i,
-                StackValue::ValueType(v)
-                    if v.description.type_name() == "System.IntPtr"
-                        || v.description.type_name() == "System.UIntPtr" =>
-                {
-                    let mut buf = [0u8; size_of::<isize>()];
-                    buf.copy_from_slice(v.instance_storage.get_field_local("_value"));
-                    isize::from_ne_bytes(buf)
-                }
-                _ => panic!("expected native int or IntPtr, got {:?}", val),
-            }
-        }};
-    }
-
-    match_method!(method, {
-        [static System.Activator::CreateInstance<1>()] => {
-            // Check GC safe point before reflection-based object instantiation
-            stack.check_gc_safe_point();
-
-            let target = &generics.method_generics[0];
-
-            let mut type_generics = vec![];
-
-            let td = match target.get() {
-                BaseType::Object => stack.loader().corlib_type("System.Object"),
-                BaseType::Type { source, .. } => {
-                    let (ut, generics) = decompose_type_source(source);
-                    type_generics = generics;
-                    stack.loader().locate_type(target.resolution(), ut)
-                }
-                err => panic!(
-                    "cannot call parameterless constructor on primitive type {:?}",
-                    err
-                ),
-            };
-
-            let new_lookup = GenericLookup::new(type_generics);
-            let new_ctx = ctx.with_generics(&new_lookup);
-
-            let instance = Object::new(td, &new_ctx);
-
-            for m in &td.definition().methods {
-                if m.runtime_special_name
-                    && m.name == ".ctor"
-                    && m.signature.instance
-                    && m.signature.parameters.is_empty()
-                {
-                    msg!(
-                        "-- invoking parameterless constructor for {} --",
-                        td.type_name()
-                    );
-
-                    let desc = MethodDescription {
-                        parent: td,
-                        method: m
-                    };
-
-                    stack.constructor_frame(
-                        gc,
-                        instance,
-                        MethodInfo::new(desc, &new_lookup, stack.loader()),
-                        new_lookup,
-                    );
-                    return StepResult::InstructionStepped;
-                }
-            }
-
-            panic!("could not find a parameterless constructor in {:?}", td)
-        },
-        [static System.ArgumentNullException::ThrowIfNull(object, string)] => {
-            let _param_name = pop!();
-            let target = pop!();
-            if let StackValue::ObjectRef(ObjectRef(None)) = target {
-                return stack.throw_by_name(gc, "System.ArgumentNullException");
-            }
-        },
-        [static System.Buffer::Memmove<1>(ref !!0, ref !!0, nint)] => {
-            vm_expect_stack!(let NativeInt(len) = pop!());
-            let src = pop!().as_ptr();
-            let dst = pop!().as_ptr();
-
-            let target = &generics.method_generics[0];
-            let layout = type_layout(target.clone(), &ctx);
-            let total_count = len as usize * layout.size();
-
-            // Check GC safe point before large bulk memory operations
-            // Threshold: operations moving more than 4KB of data
-            const LARGE_MEMMOVE_THRESHOLD: usize = 4096;
-            if total_count > LARGE_MEMMOVE_THRESHOLD {
-                stack.check_gc_safe_point();
-            }
-
-            unsafe {
-                ptr::copy(src, dst, total_count);
-            }
-        },
-        [static System.Runtime.InteropServices.MemoryMarshal::GetArrayDataReference<1>(!!0[])] => {
-            vm_expect_stack!(let ObjectRef(obj) = pop!());
-            let Some(array_handle) = obj.0 else {
-                return stack.throw_by_name(gc, "System.NullReferenceException");
-            };
-
-            let data_ptr = match &array_handle.borrow().storage {
-                HeapStorage::Vec(v) => v.get().as_ptr() as *mut u8,
-                _ => panic!("GetArrayDataReference called on non-array"),
-            };
-
-            let element_type = stack.loader().find_concrete_type(generics.method_generics[0].clone());
-            push!(StackValue::managed_ptr(data_ptr, element_type, Some(array_handle), false));
-        },
-        [static System.Runtime.CompilerServices.RuntimeHelpers::GetMethodTable(object)] => {
-            let obj = pop!();
-            let object_type = match obj {
-                StackValue::ObjectRef(ObjectRef(Some(h))) => ctx.get_heap_description(h),
-                StackValue::ObjectRef(ObjectRef(None)) => return stack.throw_by_name(gc, "System.NullReferenceException"),
-                _ => panic!("GetMethodTable called on non-object: {:?}", obj),
-            };
-
-            // Check if we already have a method table for this type
-            let mt_ptr = stack
-                .method_tables_read()
-                .get(&object_type)
-                .map(|p| p.as_ptr() as isize);
-            if let Some(ptr) = mt_ptr {
-                push!(NativeInt(ptr));
-            } else {
-                // Otherwise create it
-                let mt_type = stack
-                    .loader()
-                    .corlib_type("System.Runtime.CompilerServices.MethodTable");
-                let mt_ctx = stack.current_context().for_type(mt_type);
-                let layout = FieldLayoutManager::instance_fields(mt_type, &mt_ctx);
-
-                let mut data = vec![0u8; layout.total_size].into_boxed_slice();
-
-                // Find Flags field
-                if let Some(field_layout) = layout.fields.get("Flags") {
-                    let mut flags: u32 = 0;
-                    if object_type.has_finalizer(&ctx) {
-                        flags |= 0x100000;
-                    }
-                    data[field_layout.position..field_layout.position + 4]
-                        .copy_from_slice(&flags.to_ne_bytes());
-                }
-
-                let ptr = data.as_ptr();
-                stack.method_tables_write().insert(object_type, data);
-                push!(NativeInt(ptr as isize));
-            }
-        },
-        [static System.Environment::GetEnvironmentVariableCore(string)] => {
-            let value = with_string!(stack, gc, pop!(), |s| {
-                env::var(s.as_string())
-            });
-            match value.ok() {
-                Some(s) => push!(string(s)),
-                None => push!(null()),
-            }
-        },
-        [static "System.Collections.Generic.EqualityComparer`1"::get_Default()] => {
-            let target = MethodType::TypeGeneric(0);
-            let rt = stack.get_runtime_type(gc, stack.make_runtime_type(&stack.current_context(), &target));
-            push!(ObjectRef(rt));
-
-            let parent = stack.loader().find_in_assembly(
-                &ExternalAssemblyReference::new(SUPPORT_ASSEMBLY),
-                "DotnetRs.Comparers.Equality"
-            );
-            let method = parent.definition().methods.iter().find(|m| m.name == "GetDefault").unwrap();
-            stack.call_frame(
-                gc,
-                MethodInfo::new(MethodDescription { parent, method }, &GenericLookup::default(), stack.loader()),
-                GenericLookup::default()
-            );
-            return StepResult::InstructionStepped;
-        },
-        [static System.GC::SuppressFinalize(object)] => {
-            vm_expect_stack!(let ObjectRef(obj) = pop!());
-            if let Some(handle) = obj.0 {
-                if let Some(o) = handle.borrow_mut(gc).storage.as_obj_mut() {
-                    o.finalizer_suppressed = true;
-                }
-            }
-        },
-        [static System.GC::ReRegisterForFinalize(object)] => {
-            vm_expect_stack!(let ObjectRef(obj) = pop!());
-            if let Some(handle) = obj.0 {
-                let is_obj = handle.borrow_mut(gc).storage.as_obj_mut().map(|o| {
-                    o.finalizer_suppressed = false;
-                    true
-                }).unwrap_or(false);
-                if is_obj {
-                    stack.register_new_object(&obj);
-                }
-            }
-        },
-        [static System.GC::Collect()] => {
-            stack.heap().needs_full_collect.set(true);
-        },
-        [static System.GC::Collect(int)] => {
-            pop!();
-            stack.heap().needs_full_collect.set(true);
-        },
-        [static System.GC::Collect(int, System.GCCollectionMode)] => {
-            pop!();
-            pop!();
-            stack.heap().needs_full_collect.set(true);
-        },
-        [static System.GC::WaitForPendingFinalizers()] => {
-            if !stack.heap().pending_finalization.borrow().is_empty() || stack.heap().processing_finalizer.get() {
-                stack.current_frame_mut().state.ip -= 1;
-                return StepResult::InstructionStepped;
-            }
-        },
-        [static System.GC::KeepAlive(object)] => {
-            pop!();
-        },
-        [static System.MemoryExtensions::Equals(ReadOnlySpan<char>, ReadOnlySpan<char>, System.StringComparison)] => {
-            vm_expect_stack!(let Int32(_culture_comparison) = pop!()); // TODO(i18n): respect StringComparison rules
-            vm_expect_stack!(let ValueType(b) = pop!());
-            vm_expect_stack!(let ValueType(a) = pop!());
-
-            let a = span_to_slice(*a);
-            let b = span_to_slice(*b);
-
-            push!(Int32((a == b) as i32));
-        },
-        [static System.Runtime.CompilerServices.RuntimeHelpers::RunClassConstructor(System.RuntimeTypeHandle)] => {
-            // https://github.com/dotnet/runtime/blob/main/src/libraries/System.Private.CoreLib/src/System/SR.cs#L78
-            vm_expect_stack!(let ValueType(handle) = pop!());
-            let rt = ObjectRef::read(handle.instance_storage.get_field_local("_value"));
-            let target = stack.resolve_runtime_type(rt.expect_object_ref());
-            let target: ConcreteType = target.to_concrete(stack.loader());
-            let target = stack.loader().find_concrete_type(target);
-            if stack.initialize_static_storage(gc, target, generics) {
-                let second_to_last = stack.execution.frames.len() - 2;
-                let ip = &mut stack.execution.frames[second_to_last].state.ip;
-                *ip += 1;
-                let i = *ip;
-                msg!("-- explicit initialization! setting return ip to {} --", i);
-                return StepResult::InstructionStepped;
-            }
-        },
-        [static System.Runtime.CompilerServices.RuntimeHelpers::CreateSpan<1>(System.RuntimeFieldHandle)] => {
-            let element_type = &generics.method_generics[0];
-            let element_size = type_layout(element_type.clone(), &ctx).size();
-            vm_expect_stack!(let ValueType(field_handle) = pop!());
-
-            // Extract the field index from RuntimeFieldHandle
-            let field_index = {
-                let mut ptr_buf = [0u8; ObjectRef::SIZE];
-                ptr_buf.copy_from_slice(field_handle.instance_storage.get_field_local("_value"));
-                let obj_ref = ObjectRef::read(&ptr_buf);
-                let handle_obj = obj_ref.0.expect("Null pointer in RuntimeFieldHandle");
-                let borrowed = handle_obj.borrow();
-
-                match &borrowed.storage {
-                    HeapStorage::Obj(o) => {
-                        let mut idx_buf = [0u8; size_of::<usize>()];
-                        idx_buf.copy_from_slice(o.instance_storage.get_field_local("index"));
-                        usize::from_ne_bytes(idx_buf)
-                    }
-                    _ => panic!("RuntimeFieldHandle._value does not point to an object"),
-                }
-            };
-
-            let (FieldDescription { field, .. }, lookup) = stack.runtime_fields_read()[field_index].clone();
-            let field_type = ctx.with_generics(&lookup).make_concrete(&field.return_type);
-            let field_desc = stack.loader().find_concrete_type(field_type.clone());
-
-            let Some(initial_data) = &field.initial_value else {
-                return stack.throw_by_name(gc, "System.ArgumentException");
-            };
-
-            if field_desc.definition().name.starts_with(STATIC_ARRAY_TYPE_PREFIX) {
-                // Parse the size from the type name (e.g., "__StaticArrayInitTypeSize=123")
-                let size_str = &field_desc.definition().name[STATIC_ARRAY_TYPE_PREFIX.len()..];
-                let size_end = size_str.find('_').unwrap_or(size_str.len());
-                let array_size = size_str[..size_end].parse::<usize>().unwrap();
-                let data_slice = &initial_data[..array_size];
-
-                // Create a ReadOnlySpan<T> pointing to the static data
-                let span_type = stack.loader().corlib_type("System.ReadOnlySpan`1");
-                let span_lookup = GenericLookup::new(vec![field_type]);
-                let mut span_instance = Object::new(span_type, &ctx.with_generics(&span_lookup));
-
-                // Set the _reference field to point to the data
-                let element_desc = stack.loader().find_concrete_type(element_type.clone());
-                let data_ptr = StackValue::managed_ptr(data_slice.as_ptr() as *mut u8, element_desc, None, false);
-                vm_expect_stack!(let ManagedPtr(m) = data_ptr);
-                m.write(span_instance.instance_storage.get_field_mut_local("_reference"));
-
-                // Set the _length field
-                let element_count = (array_size / element_size) as i32;
-                span_instance.instance_storage.get_field_mut_local("_length")
-                    .copy_from_slice(&element_count.to_ne_bytes());
-
-                push!(ValueType(Box::new(span_instance)));
-            } else {
-                todo!("initial field data for {:?}", field_desc);
-            }
-        },
-        [static System.Runtime.CompilerServices.RuntimeHelpers::IsBitwiseEquatable<1>()] => {
-            let target = &generics.method_generics[0];
-            let layout = type_layout(target.clone(), &ctx);
-            let value = match layout {
-                LayoutManager::Scalar(Scalar::ObjectRef) => false,
-                LayoutManager::Scalar(_) => true,
-                _ => false
-            };
-            push!(Int32(value as i32));
-        },
-        [static System.Runtime.CompilerServices.RuntimeHelpers::IsReferenceOrContainsReferences<1>()] => {
-            let target = &generics.method_generics[0];
-            let layout = type_layout(target.clone(), &ctx);
-            push!(Int32(layout.is_or_contains_refs() as i32));
-        },
-        [static System.Runtime.CompilerServices.Unsafe::Add<1>(ref !!0, nint)] => {
-            let target = &generics.method_generics[0];
-            let target_type = stack.loader().find_concrete_type(target.clone());
-            let layout = type_layout(target.clone(), &ctx);
-            vm_expect_stack!(let NativeInt(offset) = pop!());
-            let m_val = pop!();
-            let (owner, pinned) = if let StackValue::ManagedPtr(m) = &m_val {
-                (m.owner, m.pinned)
-            } else {
-                (None, false)
-            };
-            let m = m_val.as_ptr();
-            push!(managed_ptr(
-                unsafe { m.offset(offset * layout.size() as isize) },
-                target_type,
-                owner,
-                pinned
-            ));
-        },
-        [static System.Runtime.CompilerServices.Unsafe::AreSame<1>(ref !!0, ref !!0)] => {
-            let m1 = pop!().as_ptr();
-            let m2 = pop!().as_ptr();
-            push!(Int32((m1 == m2) as i32));
-        },
-        [static System.Runtime.CompilerServices.Unsafe::As<1>(object)]
-        | [static System.Runtime.CompilerServices.Unsafe::AsRef<1>(ref !!0)] => {
-            let o = pop!();
-            push!(o);
-        },
-        [static System.Runtime.CompilerServices.Unsafe::As<2>(ref !!0)] => {
-            let target_type = stack.loader().find_concrete_type(generics.method_generics[1].clone());
-            let m_val = pop!();
-            let (owner, pinned) = match &m_val {
-                StackValue::ManagedPtr(m) => (m.owner, m.pinned),
-                StackValue::ObjectRef(ObjectRef(Some(h))) => (Some(*h), false),
-                _ => (None, false)
-            };
-            let m = m_val.as_ptr();
-            push!(managed_ptr(m, target_type, owner, pinned));
-        },
-        [static System.Runtime.CompilerServices.Unsafe::AsRef<1>(* void)] => {
-            let target_type = stack.loader().find_concrete_type(generics.method_generics[0].clone());
-            vm_expect_stack!(let NativeInt(ptr) = pop!());
-            push!(managed_ptr(ptr as *mut u8, target_type, None, false));
-        },
-        [static System.Runtime.CompilerServices.Unsafe::SizeOf<1>()] => {
-            let target = &generics.method_generics[0];
-            let layout = type_layout(target.clone(), &ctx);
-            push!(Int32(layout.size() as i32));
-        },
-        [static System.Runtime.CompilerServices.Unsafe::ByteOffset<1>(ref !!0, ref !!0)] => {
-            let r = pop!().as_ptr();
-            let l = pop!().as_ptr();
-            let offset = (l as isize) - (r as isize);
-            push!(NativeInt(offset));
-        },
-        [static System.Runtime.CompilerServices.Unsafe::ReadUnaligned<1>(nint)]
-        | [static System.Runtime.CompilerServices.Unsafe::ReadUnaligned<1>(* void)] => {
-            vm_expect_stack!(let NativeInt(ptr) = pop!());
-            let target = &generics.method_generics[0];
-            let layout = type_layout(target.clone(), &ctx);
-
-            macro_rules! read_ua {
-                ($t:ty) => {
-                    unsafe {
-                        ptr::read_unaligned(ptr as *const $t)
-                    }
-                };
-            }
-
-            let v = match layout {
-                LayoutManager::Scalar(s) => match s {
-                    Scalar::ObjectRef => StackValue::ObjectRef(read_ua!(ObjectRef)),
-                    Scalar::Int8 => StackValue::Int32(read_ua!(i8) as i32),
-                    Scalar::Int16 => StackValue::Int32(read_ua!(i16) as i32),
-                    Scalar::Int32 => StackValue::Int32(read_ua!(i32)),
-                    Scalar::Int64 => StackValue::Int64(read_ua!(i64)),
-                    Scalar::NativeInt => StackValue::NativeInt(read_ua!(isize)),
-                    Scalar::Float32 => StackValue::NativeFloat(read_ua!(f32) as f64),
-                    Scalar::Float64 => StackValue::NativeFloat(read_ua!(f64)),
-                    Scalar::ManagedPtr => StackValue::ManagedPtr(read_ua!(ManagedPtr<'gc>)),
-                },
-                _ => panic!("unsupported layout for read unaligned"),
-            };
-            push!(v);
-        },
-        [static System.Runtime.CompilerServices.Unsafe::WriteUnaligned<1>(nint, !!0)] => {
-            // equivalent to unaligned.stobj
-            let target = &generics.method_generics[0];
-            let layout = type_layout(target.clone(), &ctx);
-            let value = pop!();
-            vm_expect_stack!(let NativeInt(ptr) = pop!());
-
-            macro_rules! write_ua {
-                ($variant:ident, $t:ty) => {{
-                    vm_expect_stack!(let $variant(v) = value);
-                    unsafe {
-                        ptr::write_unaligned(ptr as *mut _, v as $t);
-                    }
-                }};
-            }
-
-            match layout {
-                LayoutManager::Scalar(s) => match s {
-                    Scalar::ObjectRef => write_ua!(ObjectRef, ObjectRef),
-                    Scalar::Int8 => write_ua!(Int32, i8),
-                    Scalar::Int16 => write_ua!(Int32, i16),
-                    Scalar::Int32 => write_ua!(Int32, i32),
-                    Scalar::Int64 => write_ua!(Int64, i64),
-                    Scalar::NativeInt => write_ua!(NativeInt, isize),
-                    Scalar::Float32 => write_ua!(NativeFloat, f32),
-                    Scalar::Float64 => write_ua!(NativeFloat, f64),
-                    Scalar::ManagedPtr => write_ua!(ManagedPtr, ManagedPtr<'gc>),
-                }
-                _ => panic!("unsupported layout for write unaligned"),
-            }
-        },
-        [static System.Runtime.InteropServices.Marshal::GetLastPInvokeError()] => {
-            let value = unsafe { super::pinvoke::LAST_ERROR };
-
-            push!(Int32(value));
-        },
-        [static System.Runtime.InteropServices.Marshal::SizeOf(System.Type)]
-        | [static System.Runtime.InteropServices.Marshal::SizeOf<1>()] => {
-            let concrete_type = if method.method.signature.parameters.is_empty() {
-                generics.method_generics[0].clone()
-            } else {
-                let type_obj = match pop!() {
-                    StackValue::ObjectRef(o) => o,
-                    rest => panic!("Marshal.SizeOf(Type) called on non-object: {:?}", rest),
-                };
-                stack.resolve_runtime_type(type_obj).to_concrete(stack.loader())
-            };
-            let layout = type_layout(concrete_type, &ctx);
-            push!(Int32(layout.size() as i32));
-        },
-        [static System.Runtime.InteropServices.Marshal::OffsetOf(System.Type, string)]
-        | [static System.Runtime.InteropServices.Marshal::OffsetOf<1>(string)] => {
-            let field_name_val = pop!();
-            let field_name = with_string!(stack, gc, field_name_val, |s| s.as_string());
-            let concrete_type = if method.method.signature.parameters.len() == 1 {
-                generics.method_generics[0].clone()
-            } else {
-                let type_obj = match pop!() {
-                    StackValue::ObjectRef(o) => o,
-                    rest => panic!("Marshal.OffsetOf(Type, string) called on non-object: {:?}", rest),
-                };
-                stack.resolve_runtime_type(type_obj).to_concrete(stack.loader())
-            };
-            let layout = type_layout(concrete_type.clone(), &ctx);
-
-            if let LayoutManager::FieldLayoutManager(flm) = layout {
-                if let Some(field) = flm.fields.get(&field_name) {
-                    push!(NativeInt(field.position as isize));
-                } else {
-                    panic!("Field {} not found in type {:?}", field_name, concrete_type);
-                }
-            } else {
-                panic!("Type {:?} does not have field layout", concrete_type);
-            }
-        },
-        [static System.Runtime.InteropServices.Marshal::SetLastPInvokeError(int)] => {
-            vm_expect_stack!(let Int32(value) = pop!());
-
-            unsafe {
-                super::pinvoke::LAST_ERROR = value;
-            }
-        },
-        [static System.Runtime.Intrinsics.Vector128::get_IsHardwareAccelerated()]
-        | [static System.Runtime.Intrinsics.Vector256::get_IsHardwareAccelerated()]
-        | [static System.Runtime.Intrinsics.Vector512::get_IsHardwareAccelerated()] => {
-            // not in a million years, lol
-            push!(Int32(0));
-        },
-        ["System.ReadOnlySpan`1"::get_Item(int)] => {
-            vm_expect_stack!(let Int32(index) = pop!());
-            vm_expect_stack!(let ManagedPtr(m) = pop!());
-            if !m.inner_type.type_name().contains("Span") {
-                panic!("invalid type on stack");
-            }
-            let span_layout = FieldLayoutManager::instance_fields(
-                m.inner_type,
-                &ctx
-            );
-
-            let value_type = &generics.type_generics[0];
-            let value_layout = type_layout(value_type.clone(), &ctx);
-
-            let ptr = unsafe {
-                m.value
-                    // find the span's base pointer
-                    .add(span_layout.fields["_reference"].position)
-                    // navigate to the specified index
-                    .add(value_layout.size() * index as usize)
-            };
-            push!(managed_ptr(
-                ptr.as_ptr(),
-                stack.loader().find_concrete_type(value_type.clone()),
-                m.owner,
-                m.pinned
-            ));
-        },
-        ["System.Span`1"::get_Length()] | ["System.ReadOnlySpan`1"::get_Length()] => {
-            vm_expect_stack!(let ManagedPtr(m) = pop!());
-            if !m.inner_type.type_name().contains("Span") {
-                panic!("invalid type on stack");
-            }
-            let layout = FieldLayoutManager::instance_fields(
-                m.inner_type,
-                &ctx
-            );
-            let value = unsafe {
-                let target = m.value.as_ptr().add(layout.fields["_length"].position) as *const i32;
-                *target
-            };
-            push!(Int32(value));
-        },
-        [static System.Threading.Interlocked::CompareExchange(ref int, int, int)] => {
-            use atomic::AtomicI32;
-            use crate::vm::sync::Ordering;
-
-            vm_expect_stack!(let Int32(comparand) = pop!());
-            vm_expect_stack!(let Int32(value) = pop!());
-            let target = pop!().as_ptr() as *mut i32;
-
-            // Use SeqCst ordering to match .NET's strong memory model guarantees
-            let atomic_view = unsafe { AtomicI32::from_ptr(target) };
-            let prev = match atomic_view.compare_exchange(
-                comparand,
-                value,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                Ok(prev) | Err(prev) => prev,
-            };
-
-            push!(Int32(prev));
-        },
-        [static System.Threading.Monitor::Exit(object)] => {
-            vm_expect_stack!(let ObjectRef(obj_ref) = pop!());
-
-            if obj_ref.0.is_some() {
-                // Get the current thread ID from the call stack
-                let thread_id = stack.thread_id.get();
-                assert_ne!(thread_id, 0,"Monitor.Exit called from unregistered thread");
-
-                // Get or access the sync block
-                let sync_block_index = obj_ref.as_object(|o| o.sync_block_index);
-
-                if let Some(index) = sync_block_index {
-                    if let Some(sync_block) = stack.shared.sync_blocks.get_sync_block(index) {
-                        if !sync_block.exit(thread_id) {
-                            panic!("SynchronizationLockException: Object synchronization method was called from an unsynchronized block of code.");
-                        }
-                    }
-                }
-            } else {
-                return stack.throw_by_name(gc, "System.NullReferenceException");
-            }
-        },
-        [static System.Threading.Monitor::ReliableEnter(object, ref bool)] => {
-            let success_flag = pop!().as_ptr();
-            vm_expect_stack!(let ObjectRef(obj_ref) = pop!());
-
-            if obj_ref.0.is_some() {
-                // Get the current thread ID from the call stack
-                let thread_id = stack.thread_id.get();
-                assert_ne!(thread_id, 0,"Monitor.ReliableEnter called from unregistered thread");
-
-                // Get or create sync block
-                let (_index, sync_block) = stack.shared.sync_blocks.get_or_create_sync_block(
-                    &obj_ref,
-                    || obj_ref.as_object(|o| o.sync_block_index),
-                    |new_index| {
-                        obj_ref.as_object_mut(gc, |o| {
-                            o.sync_block_index = Some(new_index);
-                        });
-                    },
-                );
-
-                // Enter the monitor
-                while !stack.shared.sync_blocks.try_enter_block(sync_block.clone(), thread_id, &stack.shared.metrics) {
-                    stack.check_gc_safe_point();
-                    thread::yield_now();
-                }
-
-                // Set success flag
-                unsafe {
-                    *success_flag = 1u8;
-                }
-            } else {
-                return stack.throw_by_name(gc, "System.NullReferenceException");
-            }
-        },
-        [static System.Threading.Monitor::TryEnter_FastPath(object)] => {
-            vm_expect_stack!(let ObjectRef(obj_ref) = pop!());
-
-            if obj_ref.0.is_some() {
-                // Get the current thread ID from the call stack
-                let thread_id = stack.thread_id.get();
-                assert_ne!(thread_id, 0,"Monitor.TryEnter_FastPath called from unregistered thread");
-
-                // Get or create sync block
-                let (_index, sync_block) = stack.shared.sync_blocks.get_or_create_sync_block(
-                    &obj_ref,
-                    || obj_ref.as_object(|o| o.sync_block_index),
-                    |new_index| {
-                        obj_ref.as_object_mut(gc, |o| {
-                            o.sync_block_index = Some(new_index);
-                        });
-                    },
-                );
-                let success = sync_block.try_enter(thread_id);
-
-                push!(Int32(if success { 1 } else { 0 }));
-            } else {
-                return stack.throw_by_name(gc, "System.NullReferenceException");
-            }
-        },
-        [static System.Threading.Monitor::TryEnter(object, int, ref bool)] => {
-            let success_flag = pop!().as_ptr();
-            vm_expect_stack!(let Int32(timeout_ms) = pop!());
-            vm_expect_stack!(let ObjectRef(obj_ref) = pop!());
-
-            if obj_ref.0.is_some() {
-                // Get the current thread ID from the call stack
-                let thread_id = stack.thread_id.get();
-                assert_ne!(thread_id, 0,"Monitor.TryEnter called from unregistered thread");
-
-                let (_index, sync_block) = stack.shared.sync_blocks.get_or_create_sync_block(
-                    &obj_ref,
-                    || obj_ref.as_object(|o| o.sync_block_index),
-                    |new_index| {
-                        obj_ref.as_object_mut(gc, |o| {
-                            o.sync_block_index = Some(new_index);
-                        });
-                    },
-                );
-
-                #[cfg(feature = "multithreaded-gc")]
-                let success = sync_block.enter_with_timeout_safe(
-                    thread_id,
-                    timeout_ms as u64,
-                    &stack.shared.metrics,
-                    stack.shared.thread_manager.as_ref(),
-                    &stack.shared.gc_coordinator,
-                );
-                #[cfg(not(feature = "multithreaded-gc"))]
-                let success = sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &stack.shared.metrics);
-
-                unsafe {
-                    *success_flag = if success { 1u8 } else { 0u8 };
-                }
-            } else {
-                return stack.throw_by_name(gc, "System.NullReferenceException");
-            }
-        },
-        [static System.Threading.Monitor::TryEnter(object, int)] => {
-            vm_expect_stack!(let Int32(timeout_ms) = pop!());
-            vm_expect_stack!(let ObjectRef(obj_ref) = pop!());
-
-            if obj_ref.0.is_some() {
-                // Get the current thread ID from the call stack
-                let thread_id = stack.thread_id.get();
-                assert_ne!(thread_id, 0,"Monitor.TryEnter called from unregistered thread");
-
-                let (_index, sync_block) = stack.shared.sync_blocks.get_or_create_sync_block(
-                    &obj_ref,
-                    || obj_ref.as_object(|o| o.sync_block_index),
-                    |new_index| {
-                        obj_ref.as_object_mut(gc, |o| {
-                            o.sync_block_index = Some(new_index);
-                        });
-                    },
-                );
-
-                #[cfg(feature = "multithreaded-gc")]
-                let success = sync_block.enter_with_timeout_safe(
-                    thread_id,
-                    timeout_ms as u64,
-                    &stack.shared.metrics,
-                    stack.shared.thread_manager.as_ref(),
-                    &stack.shared.gc_coordinator,
-                );
-                #[cfg(not(feature = "multithreaded-gc"))]
-                let success = sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &stack.shared.metrics);
-
-                push!(Int32(if success { 1 } else { 0 }));
-            } else {
-                return stack.throw_by_name(gc, "System.NullReferenceException");
-            }
-        },
-        [static System.Threading.Volatile::Read<1>(ref !!0)] => {
-            // note that this method's signature restricts the generic to only reference types
-            let ptr = pop!().as_ptr() as *const ObjectRef<'gc>;
-
-            let value = unsafe { ptr::read_volatile(ptr) };
-            // Ensure acquire semantics to match .NET memory model
-            atomic::fence(crate::vm::sync::Ordering::Acquire);
-
-            push!(ObjectRef(value));
-        },
-        [static System.Threading.Volatile::Write(ref bool, bool)] => {
-            vm_expect_stack!(let Int32(value) = pop!());
-            let as_bool = value as u8;
-
-            let src = pop!().as_ptr();
-
-            // Ensure release semantics to match .NET memory model
-            atomic::fence(crate::vm::sync::Ordering::Release);
-            unsafe { ptr::write_volatile(src, as_bool) };
-        },
-        [static System.String::op_Implicit(string)]
-        | [static System.MemoryExtensions::AsSpan(string)] => {
-            let (ptr, len) = with_string!(stack, gc, pop!(), |s| (s.as_ptr(), s.len()));
-
-            let span_type = stack.loader().corlib_type("System.ReadOnlySpan`1");
-            let new_lookup = GenericLookup::new(vec![ctx.make_concrete(&BaseType::Char)]);
-            let ctx = ctx.with_generics(&new_lookup);
-
-            let mut span = Object::new(span_type, &ctx);
-
-            let char_type = stack.loader().find_concrete_type(ctx.make_concrete(&BaseType::Char));
-            let managed = ManagedPtr::new(
-                NonNull::new(ptr as *mut u8).expect("String pointer should not be null"),
-                char_type,
-                None,
-                false,
-            );
-            managed.write(span.instance_storage.get_field_mut_local("_reference"));
-            span.instance_storage.get_field_mut_local("_length").copy_from_slice(&(len as i32).to_ne_bytes());
-
-            push!(ValueType(Box::new(span)));
-        },
-        [static System.Type::GetTypeFromHandle(System.RuntimeTypeHandle)]
-        | [static System.Reflection.MethodBase::GetMethodFromHandle(System.RuntimeMethodHandle)]
-        | [static System.Reflection.FieldInfo::GetFieldFromHandle(System.RuntimeFieldHandle)] => {
-            vm_expect_stack!(let ValueType(handle) = pop!());
-            let target = ObjectRef::read(handle.instance_storage.get_field_local("_value"));
-            push!(ObjectRef(target));
-        },
-        [static System.RuntimeTypeHandle::ToIntPtr(System.RuntimeTypeHandle)] => {
-            vm_expect_stack!(let ValueType(handle) = pop!());
-            let target = handle.instance_storage.get_field_local("_value");
-            let val = usize::from_ne_bytes(target.try_into().unwrap());
-            push!(NativeInt(val as isize));
-        },
-        [System.RuntimeMethodHandle::GetFunctionPointer()] => {
-            vm_expect_stack!(let ValueType(handle) = pop!());
-            let method_obj = ObjectRef::read(handle.instance_storage.get_field_local("_value"));
-            let (method, lookup) = stack.resolve_runtime_method(method_obj);
-            let index = stack.get_runtime_method_index(method, lookup.clone());
-            push!(NativeInt(index as isize));
-        },
-        [System.Type::get_IsValueType()] => {
-            vm_expect_stack!(let ObjectRef(o) = pop!());
-            let target = stack.resolve_runtime_type(o);
-            let target_ct = target.to_concrete(stack.loader());
-            let target_desc = stack.loader().find_concrete_type(target_ct);
-            let value = target_desc.is_value_type(&ctx);
-            push!(Int32(value as i32));
-        },
-        [static System.Type::op_Equality(any, any)] => {
-            vm_expect_stack!(let ObjectRef(o2) = pop!());
-            vm_expect_stack!(let ObjectRef(o1) = pop!());
-            push!(Int32((o1 == o2) as i32));
-        },
-        [System.Type::get_TypeHandle()] => {
-            vm_expect_stack!(let ObjectRef(obj) = pop!());
-
-            let rth = stack.loader().corlib_type("System.RuntimeTypeHandle");
-            let mut instance = Object::new(rth, &ctx);
-            obj.write(instance.instance_storage.get_field_mut_local("_value"));
-
-            push!(ValueType(Box::new(instance)));
-        },
-        [static System.Runtime.InteropServices.GCHandle::InternalAlloc(object, System.Runtime.InteropServices.GCHandleType)] => {
-            vm_expect_stack!(let Int32(handle_type) = pop!());
-            vm_expect_stack!(let ObjectRef(obj) = pop!());
-
-            let handle_type = GCHandleType::from(handle_type);
-            let index = {
-                let mut handles = stack.heap().gchandles.borrow_mut();
-                if let Some(i) = handles.iter().position(|h| h.is_none()) {
-                    handles[i] = Some((obj, handle_type));
-                    i
-                } else {
-                    handles.push(Some((obj, handle_type)));
-                    handles.len() - 1
-                }
-            };
-
-            if handle_type == GCHandleType::Pinned {
-                stack.heap().pinned_objects.borrow_mut().insert(obj);
-
-                // Trace pinning event
-                if stack.tracer_enabled() {
-                    let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p) as usize).unwrap_or(0);
-                    stack.shared.tracer.lock().trace_gc_pin(stack.indent(), "PINNED", addr);
-                }
-            }
-
-            // Trace GC handle allocation
-            if stack.tracer_enabled() {
-                let handle_type_str = format!("{:?}", handle_type);
-                let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p) as usize).unwrap_or(0);
-                stack.shared.tracer.lock().trace_gc_handle(stack.indent(), "ALLOC", &handle_type_str, addr);
-            }
-
-            push!(NativeInt((index + 1) as isize));
-        },
-        [static System.Runtime.InteropServices.GCHandle::InternalFree(nint)] => {
-            let handle = pop_native!();
-            if handle != 0 {
-                let index = (handle - 1) as usize;
-                let mut handles = stack.heap().gchandles.borrow_mut();
-                if index < handles.len() {
-                    if let Some((obj, handle_type)) = handles[index] {
-                        if handle_type == GCHandleType::Pinned {
-                            stack.heap().pinned_objects.borrow_mut().remove(&obj);
-
-                            // Trace unpinning event
-                            if stack.tracer_enabled() {
-                                let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p) as usize).unwrap_or(0);
-                                stack.shared.tracer.lock().trace_gc_pin(stack.indent(), "UNPINNED", addr);
-                            }
-                        }
-
-                        // Trace GC handle free
-                        if stack.tracer_enabled() {
-                            let handle_type_str = format!("{:?}", handle_type);
-                            let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p) as usize).unwrap_or(0);
-                            stack.shared.tracer.lock().trace_gc_handle(stack.indent(), "FREE", &handle_type_str, addr);
-                        }
-                    }
-                    handles[index] = None;
-                }
-            }
-        },
-        [static System.Runtime.InteropServices.GCHandle::InternalGet(nint)] => {
-            let handle = pop_native!();
-            let result = if handle == 0 {
-                ObjectRef(None)
-            } else {
-                let index = (handle - 1) as usize;
-                let handles = stack.heap().gchandles.borrow();
-                match handles.get(index) {
-                    Some(Some((obj, _))) => *obj,
-                    _ => ObjectRef(None),
-                }
-            };
-            push!(ObjectRef(result));
-        },
-        [static System.Runtime.InteropServices.GCHandle::InternalSet(nint, object)] => {
-            vm_expect_stack!(let ObjectRef(obj) = pop!());
-            let handle = pop_native!();
-            if handle != 0 {
-                let index = (handle - 1) as usize;
-                let mut handles = stack.heap().gchandles.borrow_mut();
-                if index < handles.len() {
-                    if let Some(entry) = &mut handles[index] {
-                        if entry.1 == GCHandleType::Pinned {
-                            let mut pinned = stack.heap().pinned_objects.borrow_mut();
-                            pinned.remove(&entry.0);
-                            pinned.insert(obj);
-                        }
-                        entry.0 = obj;
-                    }
-                }
-            }
-        },
-        [static System.Runtime.InteropServices.GCHandle::InternalAddrOfPinnedObject(nint)] => {
-            let handle = pop_native!();
-            let addr = if handle == 0 {
-                0
-            } else {
-                let index = (handle - 1) as usize;
-                let handles = stack.heap().gchandles.borrow();
-                if index < handles.len() {
-                    if let Some(entry) = &handles[index] {
-                        if entry.1 == GCHandleType::Pinned {
-                            if let Some(ptr) = entry.0.0 {
-                                match &ptr.borrow().storage {
-                                    HeapStorage::Obj(_) => unsafe { ptr.as_ptr() as isize },
-                                    HeapStorage::Vec(v) => v.get().as_ptr() as isize,
-                                    HeapStorage::Str(s) => s.as_ptr() as isize,
-                                    _ => 0,
-                                }
-                            } else {
-                                0
-                            }
-                        } else {
-                            0
-                        }
-                    } else {
-                        0
-                    }
-                } else {
-                    0
-                }
-            };
-            push!(NativeInt(addr));
-        },
-    });
-
-    StepResult::InstructionStepped
+    panic!("unsupported intrinsic {:?}", method);
 }
 
 pub fn intrinsic_field<'gc, 'm: 'gc>(
