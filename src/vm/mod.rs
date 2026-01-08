@@ -20,6 +20,7 @@ mod stack;
 pub mod sync;
 pub mod threading;
 pub mod threadsafe_lock;
+pub mod tracer;
 
 pub use executor::*;
 pub use stack::*;

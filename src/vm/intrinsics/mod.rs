@@ -28,11 +28,11 @@
 //!     ```rust,ignore
 //!     define_intrinsics!(registry, loader, {
 //!         "Namespace.TypeName" {
-//!             "MethodName" => submodule::my_intrinsic_handler,
+//!             MethodName => submodule::my_intrinsic_handler,
 //!         }
 //!     });
 //!     ```
-//!     If the method is overloaded, specify the parameter count: `"MethodName"(1) => ...`.
+//!     If the method is overloaded, specify the parameter count: `MethodName(1) => ...`.
 //!
 //! 3.  **Ensure the method is marked as intrinsic**:
 //!     The method in the .NET assembly should be marked with `[IntrinsicAttribute]`
@@ -111,7 +111,7 @@ pub type IntrinsicFieldHandler = for<'gc, 'm> fn(
 macro_rules! define_intrinsics {
     ($registry:ident, $loader:ident, {
         $( $type_name:literal {
-            $( $method_name:literal $( ( $params:expr ) )? => $handler:path ),* $(,)?
+            $( $method_name:ident $( ( $params:expr ) )? => $handler:path ),* $(,)?
         } )*
     }) => {
         $(
@@ -119,7 +119,7 @@ macro_rules! define_intrinsics {
                 let type_def = $loader.corlib_type($type_name);
                 $(
                     {
-                        let method_name = $method_name;
+                        let method_name = stringify!($method_name);
                         #[allow(unused_mut, unused_assignments)]
                         let mut param_count: Option<usize> = None;
                         $( param_count = Some($params); )?
@@ -153,7 +153,7 @@ macro_rules! define_intrinsics {
 macro_rules! define_field_intrinsics {
     ($registry:ident, $loader:ident, {
         $( $type_name:literal {
-            $( $field_name:literal => $handler:path ),* $(,)?
+            $( $field_name:ident => $handler:path ),* $(,)?
         } )*
     }) => {
         $(
@@ -161,7 +161,7 @@ macro_rules! define_field_intrinsics {
                 let type_def = $loader.corlib_type($type_name);
                 $(
                     {
-                        let field_name = $field_name;
+                        let field_name = stringify!($field_name);
                         if let Some(field) = type_def.definition().fields.iter().find(|f| f.name == field_name) {
                             let field_desc = FieldDescription {
                                 parent: type_def,
@@ -327,151 +327,151 @@ impl IntrinsicRegistry {
 
         define_intrinsics!(registry, loader, {
             "System.GC" {
-                "KeepAlive" => gc::intrinsic_gc_keep_alive,
-                "SuppressFinalize" => gc::intrinsic_gc_suppress_finalize,
-                "ReRegisterForFinalize" => gc::intrinsic_gc_reregister_for_finalize,
-                "Collect"(0) => gc::intrinsic_gc_collect_0,
-                "Collect"(1) => gc::intrinsic_gc_collect_1,
-                "Collect"(2) => gc::intrinsic_gc_collect_2,
-                "WaitForPendingFinalizers" => gc::intrinsic_gc_wait_for_pending_finalizers,
+                KeepAlive => gc::intrinsic_gc_keep_alive,
+                SuppressFinalize => gc::intrinsic_gc_suppress_finalize,
+                ReRegisterForFinalize => gc::intrinsic_gc_reregister_for_finalize,
+                Collect(0) => gc::intrinsic_gc_collect_0,
+                Collect(1) => gc::intrinsic_gc_collect_1,
+                Collect(2) => gc::intrinsic_gc_collect_2,
+                WaitForPendingFinalizers => gc::intrinsic_gc_wait_for_pending_finalizers,
             }
             "System.Runtime.InteropServices.GCHandle" {
-                "InternalAlloc" => gc::intrinsic_gchandle_internal_alloc,
-                "InternalFree" => gc::intrinsic_gchandle_internal_free,
-                "InternalGet" => gc::intrinsic_gchandle_internal_get,
-                "InternalSet" => gc::intrinsic_gchandle_internal_set,
-                "InternalAddrOfPinnedObject" => gc::intrinsic_gchandle_internal_addr_of_pinned_object,
+                InternalAlloc => gc::intrinsic_gchandle_internal_alloc,
+                InternalFree => gc::intrinsic_gchandle_internal_free,
+                InternalGet => gc::intrinsic_gchandle_internal_get,
+                InternalSet => gc::intrinsic_gchandle_internal_set,
+                InternalAddrOfPinnedObject => gc::intrinsic_gchandle_internal_addr_of_pinned_object,
             }
             "System.Environment" {
-                "GetEnvironmentVariableCore" => gc::intrinsic_environment_get_variable_core,
+                GetEnvironmentVariableCore => gc::intrinsic_environment_get_variable_core,
             }
             "System.ArgumentNullException" {
-                "ThrowIfNull" => gc::intrinsic_argument_null_exception_throw_if_null,
+                ThrowIfNull => gc::intrinsic_argument_null_exception_throw_if_null,
             }
             "System.Threading.Monitor" {
-                "Exit" => threading::intrinsic_monitor_exit,
-                "ReliableEnter" => threading::intrinsic_monitor_reliable_enter,
-                "TryEnter_FastPath" => threading::intrinsic_monitor_try_enter_fast_path,
-                "TryEnter"(3) => threading::intrinsic_monitor_try_enter_timeout_ref,
-                "TryEnter"(2) => threading::intrinsic_monitor_try_enter_timeout,
+                Exit => threading::intrinsic_monitor_exit,
+                ReliableEnter => threading::intrinsic_monitor_reliable_enter,
+                TryEnter_FastPath => threading::intrinsic_monitor_try_enter_fast_path,
+                TryEnter(3) => threading::intrinsic_monitor_try_enter_timeout_ref,
+                TryEnter(2) => threading::intrinsic_monitor_try_enter_timeout,
             }
             "System.Threading.Interlocked" {
-                "CompareExchange"(3) => threading::intrinsic_interlocked_compare_exchange,
+                CompareExchange(3) => threading::intrinsic_interlocked_compare_exchange,
             }
             "System.Threading.Volatile" {
-                "Read" => threading::intrinsic_volatile_read,
-                "Write"(2) => threading::intrinsic_volatile_write_bool,
+                Read => threading::intrinsic_volatile_read,
+                Write(2) => threading::intrinsic_volatile_write_bool,
             }
             "System.String" {
-                "Equals"(1) => string_ops::intrinsic_string_equals,
-                "Equals"(2) => string_ops::intrinsic_string_equals,
-                "FastAllocateString"(1) => string_ops::intrinsic_string_fast_allocate_string,
-                "FastAllocateString"(2) => string_ops::intrinsic_string_fast_allocate_string,
-                "get_Chars"(1) => string_ops::intrinsic_string_get_chars,
-                "get_Length"(0) => string_ops::intrinsic_string_get_length,
-                "Concat"(3) => string_ops::intrinsic_string_concat_three_spans,
-                "GetHashCodeOrdinalIgnoreCase" => string_ops::intrinsic_string_get_hash_code_ordinal_ignore_case,
-                "GetPinnableReference" => string_ops::intrinsic_string_get_raw_data,
-                "GetRawStringData" => string_ops::intrinsic_string_get_raw_data,
-                "IndexOf"(1) => string_ops::intrinsic_string_index_of,
-                "IndexOf"(2) => string_ops::intrinsic_string_index_of,
-                "Substring" => string_ops::intrinsic_string_substring,
-                "IsNullOrEmpty" => string_ops::intrinsic_string_is_null_or_empty,
-                "op_Implicit" => span::intrinsic_string_as_span,
+                Equals(1) => string_ops::intrinsic_string_equals,
+                Equals(2) => string_ops::intrinsic_string_equals,
+                FastAllocateString(1) => string_ops::intrinsic_string_fast_allocate_string,
+                FastAllocateString(2) => string_ops::intrinsic_string_fast_allocate_string,
+                get_Chars(1) => string_ops::intrinsic_string_get_chars,
+                get_Length(0) => string_ops::intrinsic_string_get_length,
+                Concat(3) => string_ops::intrinsic_string_concat_three_spans,
+                GetHashCodeOrdinalIgnoreCase => string_ops::intrinsic_string_get_hash_code_ordinal_ignore_case,
+                GetPinnableReference => string_ops::intrinsic_string_get_raw_data,
+                GetRawStringData => string_ops::intrinsic_string_get_raw_data,
+                IndexOf(1) => string_ops::intrinsic_string_index_of,
+                IndexOf(2) => string_ops::intrinsic_string_index_of,
+                Substring => string_ops::intrinsic_string_substring,
+                IsNullOrEmpty => string_ops::intrinsic_string_is_null_or_empty,
+                op_Implicit => span::intrinsic_string_as_span,
             }
             "System.Runtime.InteropServices.Marshal" {
-                "GetLastPInvokeError" => unsafe_ops::intrinsic_marshal_get_last_pinvoke_error,
-                "SetLastPInvokeError" => unsafe_ops::intrinsic_marshal_set_last_pinvoke_error,
-                "SizeOf"(0) => unsafe_ops::intrinsic_marshal_size_of,
-                "SizeOf"(1) => unsafe_ops::intrinsic_marshal_size_of,
-                "OffsetOf"(1) => unsafe_ops::intrinsic_marshal_offset_of,
-                "OffsetOf"(2) => unsafe_ops::intrinsic_marshal_offset_of,
+                GetLastPInvokeError => unsafe_ops::intrinsic_marshal_get_last_pinvoke_error,
+                SetLastPInvokeError => unsafe_ops::intrinsic_marshal_set_last_pinvoke_error,
+                SizeOf(0) => unsafe_ops::intrinsic_marshal_size_of,
+                SizeOf(1) => unsafe_ops::intrinsic_marshal_size_of,
+                OffsetOf(1) => unsafe_ops::intrinsic_marshal_offset_of,
+                OffsetOf(2) => unsafe_ops::intrinsic_marshal_offset_of,
             }
             "System.Buffer" {
-                "Memmove" => unsafe_ops::intrinsic_buffer_memmove,
+                Memmove => unsafe_ops::intrinsic_buffer_memmove,
             }
             "System.Runtime.InteropServices.MemoryMarshal" {
-                "GetArrayDataReference" => unsafe_ops::intrinsic_memory_marshal_get_array_data_reference,
+                GetArrayDataReference => unsafe_ops::intrinsic_memory_marshal_get_array_data_reference,
             }
             "System.Runtime.CompilerServices.RuntimeHelpers" {
-                "GetMethodTable" => reflection::intrinsic_runtime_helpers_get_method_table,
-                "CreateSpan" => span::intrinsic_runtime_helpers_create_span,
-                "IsBitwiseEquatable" => reflection::intrinsic_runtime_helpers_is_bitwise_equatable,
-                "IsReferenceOrContainsReferences" => reflection::intrinsic_runtime_helpers_is_reference_or_contains_references,
-                "RunClassConstructor" => reflection::intrinsic_runtime_helpers_run_class_constructor,
+                GetMethodTable => reflection::intrinsic_runtime_helpers_get_method_table,
+                CreateSpan => span::intrinsic_runtime_helpers_create_span,
+                IsBitwiseEquatable => reflection::intrinsic_runtime_helpers_is_bitwise_equatable,
+                IsReferenceOrContainsReferences => reflection::intrinsic_runtime_helpers_is_reference_or_contains_references,
+                RunClassConstructor => reflection::intrinsic_runtime_helpers_run_class_constructor,
             }
             "System.MemoryExtensions" {
-                "Equals"(3) => span::intrinsic_memory_extensions_equals_span_char,
-                "AsSpan" => span::intrinsic_string_as_span,
+                Equals(3) => span::intrinsic_memory_extensions_equals_span_char,
+                AsSpan => span::intrinsic_string_as_span,
             }
             "System.ReadOnlySpan`1" {
-                "get_Item" => span::intrinsic_span_get_item,
-                "get_Length" => span::intrinsic_span_get_length,
+                get_Item => span::intrinsic_span_get_item,
+                get_Length => span::intrinsic_span_get_length,
             }
             "System.Span`1" {
-                "get_Length" => span::intrinsic_span_get_length,
+                get_Length => span::intrinsic_span_get_length,
             }
             "System.Runtime.CompilerServices.Unsafe" {
-                "Add" => unsafe_ops::intrinsic_unsafe_add,
-                "AreSame" => unsafe_ops::intrinsic_unsafe_are_same,
-                "As"(1) => unsafe_ops::intrinsic_unsafe_as,
-                "As"(2) => unsafe_ops::intrinsic_unsafe_as_generic,
-                "AsRef"(1) => unsafe_ops::intrinsic_unsafe_as_ref_any,
-                "SizeOf" => unsafe_ops::intrinsic_unsafe_size_of,
-                "ByteOffset" => unsafe_ops::intrinsic_unsafe_byte_offset,
-                "ReadUnaligned" => unsafe_ops::intrinsic_unsafe_read_unaligned,
-                "WriteUnaligned" => unsafe_ops::intrinsic_unsafe_write_unaligned,
+                Add => unsafe_ops::intrinsic_unsafe_add,
+                AreSame => unsafe_ops::intrinsic_unsafe_are_same,
+                As(1) => unsafe_ops::intrinsic_unsafe_as,
+                As(2) => unsafe_ops::intrinsic_unsafe_as_generic,
+                AsRef(1) => unsafe_ops::intrinsic_unsafe_as_ref_any,
+                SizeOf => unsafe_ops::intrinsic_unsafe_size_of,
+                ByteOffset => unsafe_ops::intrinsic_unsafe_byte_offset,
+                ReadUnaligned => unsafe_ops::intrinsic_unsafe_read_unaligned,
+                WriteUnaligned => unsafe_ops::intrinsic_unsafe_write_unaligned,
             }
             "System.Runtime.Intrinsics.Vector128" {
-                "get_IsHardwareAccelerated" => math::intrinsic_vector_is_hardware_accelerated,
+                get_IsHardwareAccelerated => math::intrinsic_vector_is_hardware_accelerated,
             }
             "System.Runtime.Intrinsics.Vector256" {
-                "get_IsHardwareAccelerated" => math::intrinsic_vector_is_hardware_accelerated,
+                get_IsHardwareAccelerated => math::intrinsic_vector_is_hardware_accelerated,
             }
             "System.Runtime.Intrinsics.Vector512" {
-                "get_IsHardwareAccelerated" => math::intrinsic_vector_is_hardware_accelerated,
+                get_IsHardwareAccelerated => math::intrinsic_vector_is_hardware_accelerated,
             }
-            "System.Byte" { "CreateTruncating" => math::intrinsic_numeric_create_truncating }
-            "System.SByte" { "CreateTruncating" => math::intrinsic_numeric_create_truncating }
-            "System.UInt16" { "CreateTruncating" => math::intrinsic_numeric_create_truncating }
-            "System.Int16" { "CreateTruncating" => math::intrinsic_numeric_create_truncating }
-            "System.UInt32" { "CreateTruncating" => math::intrinsic_numeric_create_truncating }
-            "System.Int32" { "CreateTruncating" => math::intrinsic_numeric_create_truncating }
-            "System.UInt64" { "CreateTruncating" => math::intrinsic_numeric_create_truncating }
-            "System.Int64" { "CreateTruncating" => math::intrinsic_numeric_create_truncating }
-            "System.UIntPtr" { "CreateTruncating" => math::intrinsic_numeric_create_truncating }
-            "System.IntPtr" { "CreateTruncating" => math::intrinsic_numeric_create_truncating }
-            "System.Activator" { "CreateInstance"(0) => reflection::intrinsic_activator_create_instance }
-            "System.Collections.Generic.EqualityComparer`1" { "get_Default" => math::intrinsic_equality_comparer_get_default }
+            "System.Byte" { CreateTruncating => math::intrinsic_numeric_create_truncating }
+            "System.SByte" { CreateTruncating => math::intrinsic_numeric_create_truncating }
+            "System.UInt16" { CreateTruncating => math::intrinsic_numeric_create_truncating }
+            "System.Int16" { CreateTruncating => math::intrinsic_numeric_create_truncating }
+            "System.UInt32" { CreateTruncating => math::intrinsic_numeric_create_truncating }
+            "System.Int32" { CreateTruncating => math::intrinsic_numeric_create_truncating }
+            "System.UInt64" { CreateTruncating => math::intrinsic_numeric_create_truncating }
+            "System.Int64" { CreateTruncating => math::intrinsic_numeric_create_truncating }
+            "System.UIntPtr" { CreateTruncating => math::intrinsic_numeric_create_truncating }
+            "System.IntPtr" { CreateTruncating => math::intrinsic_numeric_create_truncating }
+            "System.Activator" { CreateInstance(0) => reflection::intrinsic_activator_create_instance }
+            "System.Collections.Generic.EqualityComparer`1" { get_Default => math::intrinsic_equality_comparer_get_default }
             "System.Type" {
-                "GetTypeFromHandle" => reflection::intrinsic_get_from_handle,
-                "get_IsValueType" => reflection::intrinsic_type_get_is_value_type,
-                "get_IsEnum" => reflection::intrinsic_type_get_is_enum,
-                "get_IsInterface" => reflection::intrinsic_type_get_is_interface,
-                "op_Equality" => reflection::intrinsic_type_op_equality,
-                "op_Inequality" => reflection::intrinsic_type_op_inequality,
-                "get_TypeHandle" => reflection::intrinsic_type_get_type_handle,
+                GetTypeFromHandle => reflection::intrinsic_get_from_handle,
+                get_IsValueType => reflection::intrinsic_type_get_is_value_type,
+                get_IsEnum => reflection::intrinsic_type_get_is_enum,
+                get_IsInterface => reflection::intrinsic_type_get_is_interface,
+                op_Equality => reflection::intrinsic_type_op_equality,
+                op_Inequality => reflection::intrinsic_type_op_inequality,
+                get_TypeHandle => reflection::intrinsic_type_get_type_handle,
             }
             "System.Reflection.MethodBase" {
-                "GetMethodFromHandle" => reflection::intrinsic_get_from_handle,
+                GetMethodFromHandle => reflection::intrinsic_get_from_handle,
             }
             "System.Reflection.FieldInfo" {
-                "GetFieldFromHandle" => reflection::intrinsic_get_from_handle,
+                GetFieldFromHandle => reflection::intrinsic_get_from_handle,
             }
             "System.RuntimeTypeHandle" {
-                "ToIntPtr" => reflection::intrinsic_type_handle_to_int_ptr,
+                ToIntPtr => reflection::intrinsic_type_handle_to_int_ptr,
             }
             "System.RuntimeMethodHandle" {
-                "GetFunctionPointer" => reflection::intrinsic_method_handle_get_function_pointer,
+                GetFunctionPointer => reflection::intrinsic_method_handle_get_function_pointer,
             }
         });
 
         define_field_intrinsics!(registry, loader, {
             "System.IntPtr" {
-                "Zero" => unsafe_ops::intrinsic_field_intptr_zero,
+                Zero => unsafe_ops::intrinsic_field_intptr_zero,
             }
             "System.String" {
-                "Empty" => string_ops::intrinsic_field_string_empty,
+                Empty => string_ops::intrinsic_field_string_empty,
             }
         });
 
@@ -544,14 +544,9 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 ) -> StepResult {
     // Note: Registry is initialized during VM startup, so no need to initialize here
 
-    macro_rules! msg {
-        ($($args:tt)*) => {
-            vm_msg!(stack, $($args)*)
-        }
-    }
     let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
 
-    msg!("-- method marked as runtime intrinsic --");
+    vm_msg!(stack, "-- method marked as runtime intrinsic --");
 
     // Check the registry-based dispatch first.
     // This provides O(1) lookup instead of O(N) macro-based matching.

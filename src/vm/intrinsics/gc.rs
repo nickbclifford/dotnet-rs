@@ -37,8 +37,8 @@ pub fn intrinsic_environment_get_variable_core<'gc, 'm: 'gc>(
         s.as_string()
     ));
     match value.ok() {
-        Some(s) => crate::vm_push!(stack, gc, string(s)),
-        None => crate::vm_push!(stack, gc, StackValue::null()),
+        Some(s) => vm_push!(stack, gc, string(s)),
+        None => vm_push!(stack, gc, StackValue::null()),
     }
     StepResult::InstructionStepped
 }

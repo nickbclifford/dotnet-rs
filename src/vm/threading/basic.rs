@@ -1,10 +1,8 @@
 use crate::vm::{
-    gc::{
-        coordinator::{GCCommand, GCCoordinator},
-        tracer::Tracer,
-    },
+    gc::coordinator::{GCCommand, GCCoordinator},
     sync::{Arc, AtomicBool, AtomicU64, AtomicUsize, Condvar, Mutex, MutexGuard, Ordering},
     threading::{STWGuardOps, ThreadManagerOps, ThreadState},
+    tracer::Tracer,
 };
 use std::{
     cell::Cell,

@@ -6,7 +6,7 @@ use crate::{
         sync::{AtomicI32, Ordering, SyncBlockOps, SyncManagerOps},
         CallStack, GCHandle, StepResult,
     },
-    vm_expect_stack, vm_pop, vm_push,
+    vm_pop, vm_push,
 };
 use std::{ptr, sync::atomic, thread};
 
@@ -276,7 +276,7 @@ pub fn intrinsic_volatile_write_bool<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    vm_expect_stack!(let Int32(value) = vm_pop!(stack));
+    pop_args!(stack, [Int32(value)]);
     let as_bool = value as u8;
     let src = vm_pop!(stack).as_ptr();
 

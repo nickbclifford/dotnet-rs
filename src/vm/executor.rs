@@ -3,18 +3,16 @@ use crate::{
     value::StackValue,
     vm::{
         stack::{ArenaLocalState, CallStack, GCArena, SharedGlobalState},
-        sync::Arc,
+        sync::{Arc, MutexGuard, Ordering},
         threading::ThreadManagerOps,
+        tracer::Tracer,
         MethodInfo, StepResult,
     },
     vm_debug,
 };
 
 #[cfg(feature = "multithreaded-gc")]
-use crate::vm::{
-    gc::{arena::THREAD_ARENA, coordinator::ArenaHandle},
-    sync::{AtomicBool, AtomicUsize, Condvar, Mutex},
-};
+use crate::vm::gc::{arena::THREAD_ARENA, coordinator::ArenaHandle};
 
 pub struct Executor {
     shared: Arc<SharedGlobalState<'static>>,
@@ -61,11 +59,23 @@ impl Executor {
         }
     }
 
+    pub fn tracer_enabled(&self) -> bool {
+        self.shared.tracer_enabled.load(Ordering::Relaxed)
+    }
+
+    pub fn tracer(&self) -> MutexGuard<'_, Tracer> {
+        self.shared.tracer.lock()
+    }
+
+    pub fn indent(&self) -> usize {
+        0
+    }
+
     pub fn new(shared: Arc<SharedGlobalState<'static>>) -> Self {
         let shared_clone = Arc::clone(&shared);
-        let arena = Box::new(GCArena::new(|gc| {
+        let arena = Box::new(GCArena::new(|_| {
             let local = ArenaLocalState::new();
-            CallStack::new(gc, shared_clone, local)
+            CallStack::new(shared_clone, local)
         }));
 
         let thread_id = shared.thread_manager.register_thread();
@@ -73,14 +83,7 @@ impl Executor {
         // Register with GC coordinator
         #[cfg(feature = "multithreaded-gc")]
         {
-            let handle = ArenaHandle {
-                thread_id,
-                allocation_counter: Arc::new(AtomicUsize::new(0)),
-                needs_collection: Arc::new(AtomicBool::new(false)),
-                current_command: Arc::new(Mutex::new(None)),
-                command_signal: Arc::new(Condvar::new()),
-                finish_signal: Arc::new(Condvar::new()),
-            };
+            let handle = ArenaHandle::new(thread_id);
             shared.gc_coordinator.register_arena(handle.clone());
             crate::vm::gc::coordinator::set_current_arena_handle(handle);
         }
@@ -244,7 +247,37 @@ impl Executor {
                 }
                 StepResult::InstructionStepped | StepResult::YieldForGC => {}
             }
-            // TODO(gc): poll arena for stats
+
+            {
+                let (gc_bytes, external_bytes) = self.with_arena_ref(|arena| {
+                    let metrics = arena.metrics();
+                    (
+                        metrics.total_gc_allocation(),
+                        metrics.total_external_allocation(),
+                    )
+                });
+
+                #[cfg(feature = "multithreaded-gc")]
+                {
+                    crate::vm::gc::coordinator::update_current_arena_metrics(
+                        gc_bytes,
+                        external_bytes,
+                    );
+
+                    // Update global metrics from aggregated values
+                    let total_gc = self.shared.gc_coordinator.total_gc_allocation();
+                    let total_ext = self.shared.gc_coordinator.total_external_allocation();
+                    self.shared
+                        .metrics
+                        .update_gc_metrics(total_gc as u64, total_ext as u64);
+                }
+                #[cfg(not(feature = "multithreaded-gc"))]
+                {
+                    self.shared
+                        .metrics
+                        .update_gc_metrics(gc_bytes as u64, external_bytes as u64);
+                }
+            }
         };
 
         // Unregister thread when execution completes
@@ -256,10 +289,13 @@ impl Executor {
 
     /// Perform a full GC collection with stop-the-world coordination.
     fn perform_full_gc(&mut self) {
+        use crate::{vm_trace_gc_collection_end, vm_trace_gc_collection_start};
         #[cfg(feature = "multithreaded-gc")]
         {
             use std::time::Instant;
             let start_time = Instant::now();
+
+            vm_trace_gc_collection_start!(self, 0, "allocation pressure");
 
             // 1. Mark that we are starting collection (acquires coordinator lock)
             let coordinator = Arc::clone(&self.shared.gc_coordinator);
@@ -290,6 +326,8 @@ impl Executor {
             // Mark collection as finished (releases coordinator lock)
             self.shared.gc_coordinator.finish_collection();
 
+            vm_trace_gc_collection_end!(self, 0, 0, duration.as_micros() as u64);
+
             self.with_arena(|arena| {
                 arena.mutate(|_, c| {
                     vm_debug!(c, "GC: Coordinated collection completed in {:?}", duration);
@@ -298,6 +336,10 @@ impl Executor {
         }
         #[cfg(not(feature = "multithreaded-gc"))]
         {
+            use std::time::Instant;
+            let start_time = Instant::now();
+            vm_trace_gc_collection_start!(self, 0, "allocation pressure");
+
             // Perform full collection with finalization (mimics multithreaded-gc behavior)
             self.with_arena(|arena| {
                 let mut marked = None;
@@ -309,6 +351,10 @@ impl Executor {
                 }
                 arena.collect_all();
             });
+
+            let duration = start_time.elapsed();
+            self.shared.metrics.record_gc_pause(duration);
+            vm_trace_gc_collection_end!(self, 0, 0, duration.as_micros() as u64);
         }
     }
 }

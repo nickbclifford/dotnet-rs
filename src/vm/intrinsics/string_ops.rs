@@ -10,7 +10,7 @@ use crate::{
         StackValue,
     },
     vm::{intrinsics::span::span_to_slice, CallStack, GCHandle, StepResult},
-    vm_expect_stack, vm_pop, vm_push,
+    vm_pop, vm_push,
 };
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -39,11 +39,11 @@ pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let len = if method.method.signature.parameters.len() == 1 {
-        vm_expect_stack!(let Int32(i) = vm_pop!(stack));
+        pop_args!(stack, [Int32(i)]);
         i as usize
     } else {
         // Overload with MethodTable* as first param
-        vm_expect_stack!(let NativeInt(i) = vm_pop!(stack));
+        pop_args!(stack, [NativeInt(i)]);
         vm_pop!(stack); // pop method table pointer
         i as usize
     };
@@ -93,9 +93,10 @@ pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    vm_expect_stack!(let ValueType(span2) = vm_pop!(stack));
-    vm_expect_stack!(let ValueType(span1) = vm_pop!(stack));
-    vm_expect_stack!(let ValueType(span0) = vm_pop!(stack));
+    pop_args!(
+        stack,
+        [ValueType(span2), ValueType(span1), ValueType(span0),]
+    );
 
     fn char_span_into_str(span: Object) -> Vec<u16> {
         span_to_slice(span)
@@ -168,11 +169,10 @@ pub fn intrinsic_string_index_of<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let (c, start_at) = if method.method.signature.parameters.len() == 1 {
-        vm_expect_stack!(let Int32(c) = vm_pop!(stack));
+        pop_args!(stack, [Int32(c)]);
         (c as u16, 0usize)
     } else {
-        vm_expect_stack!(let Int32(start_at) = vm_pop!(stack));
-        vm_expect_stack!(let Int32(c) = vm_pop!(stack));
+        pop_args!(stack, [Int32(start_at), Int32(c)]);
         (c as u16, start_at as usize)
     };
 
@@ -200,7 +200,7 @@ pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    vm_expect_stack!(let Int32(start_at) = vm_pop!(stack));
+    pop_args!(stack, [Int32(start_at)]);
     let val = vm_pop!(stack);
     let value = with_string!(stack, gc, val, |s| s.split_at(start_at as usize).0.to_vec());
     vm_push!(stack, gc, string(gc, CLRString::new(value)));

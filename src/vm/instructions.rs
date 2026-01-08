@@ -22,6 +22,16 @@ use crate::{
 use dotnetdll::prelude::*;
 use std::{cmp::Ordering as CmpOrdering, ptr, slice};
 
+fn is_ptr_aligned_to_field(ptr: *mut u8, field_size: usize) -> bool {
+    match field_size {
+        1 => true, // u8 is always aligned
+        2 => (ptr as usize).is_multiple_of(align_of::<u16>()),
+        4 => (ptr as usize).is_multiple_of(align_of::<u32>()),
+        8 => (ptr as usize).is_multiple_of(align_of::<u64>()),
+        _ => false,
+    }
+}
+
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     /// Check for GC safe point and suspend if stop-the-world is requested.
     ///
@@ -708,35 +718,30 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 // If we're already executing a handler (e.g., a finally block during unwinding),
                 // we need to preserve that state. The Leave instruction in this case just means
                 // "exit this finally block and continue unwinding".
-                match self.execution.exception_mode {
+                self.execution.exception_mode = match self.execution.exception_mode {
+                    // We're inside a finally/fault handler. Transition back to Unwinding
+                    // to continue processing remaining handlers.
                     ExceptionState::ExecutingHandler {
                         exception,
                         target,
                         cursor,
-                    } => {
-                        // We're inside a finally/fault handler. Transition back to Unwinding
-                        // to continue processing remaining handlers.
-                        self.execution.exception_mode = ExceptionState::Unwinding {
-                            exception,
-                            target,
-                            cursor,
-                        };
-                        return self.handle_exception(gc);
-                    }
-                    _ => {
-                        // Normal Leave: start a new unwind operation
-                        self.execution.exception_mode = ExceptionState::Unwinding {
-                            exception: None,
-                            target: UnwindTarget::Instruction(*jump_target),
-                            cursor: HandlerAddress {
-                                frame_index: self.execution.frames.len() - 1,
-                                section_index: 0,
-                                handler_index: 0,
-                            },
-                        };
-                        return self.handle_exception(gc);
-                    }
-                }
+                    } => ExceptionState::Unwinding {
+                        exception,
+                        target,
+                        cursor,
+                    },
+                    // Normal Leave: start a new unwind operation
+                    _ => ExceptionState::Unwinding {
+                        exception: None,
+                        target: UnwindTarget::Instruction(*jump_target),
+                        cursor: HandlerAddress {
+                            frame_index: self.execution.frames.len() - 1,
+                            section_index: 0,
+                            handler_index: 0,
+                        },
+                    },
+                };
+                return self.handle_exception(gc);
             }
             LocalMemoryAllocate => {
                 let size = match pop!() {
@@ -1238,46 +1243,27 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                     // For pointer-sized types, use atomic load even if not volatile to ensure atomicity
                     // as required by ECMA-335.
-                    if size <= std::mem::size_of::<usize>() {
+                    if size <= size_of::<usize>() {
                         // Check alignment before attempting atomic operations
-                        let is_aligned = match size {
-                            1 => true, // u8 is always aligned
-                            2 => (field_ptr as usize).is_multiple_of(std::mem::align_of::<u16>()),
-                            4 => (field_ptr as usize).is_multiple_of(std::mem::align_of::<u32>()),
-                            8 => (field_ptr as usize).is_multiple_of(std::mem::align_of::<u64>()),
-                            _ => false,
-                        };
-
-                        if !is_aligned {
+                        if !is_ptr_aligned_to_field(field_ptr, size) {
                             // Fall back to non-atomic read if not aligned
                             let slice = unsafe { slice::from_raw_parts(field_ptr, size) };
                             return read_data(slice);
                         }
 
+                        macro_rules! load_atomic {
+                            ($t:ty) => {{
+                                let val = unsafe { (*(field_ptr as *const $t)).load(ordering) };
+                                let bytes = val.to_ne_bytes();
+                                read_data(&bytes)
+                            }};
+                        }
+
                         match size {
-                            1 => {
-                                let val =
-                                    unsafe { (*(field_ptr as *const AtomicU8)).load(ordering) };
-                                read_data(&[val])
-                            }
-                            2 => {
-                                let val =
-                                    unsafe { (*(field_ptr as *const AtomicU16)).load(ordering) };
-                                let bytes = val.to_ne_bytes();
-                                read_data(&bytes)
-                            }
-                            4 => {
-                                let val =
-                                    unsafe { (*(field_ptr as *const AtomicU32)).load(ordering) };
-                                let bytes = val.to_ne_bytes();
-                                read_data(&bytes)
-                            }
-                            8 => {
-                                let val =
-                                    unsafe { (*(field_ptr as *const AtomicU64)).load(ordering) };
-                                let bytes = val.to_ne_bytes();
-                                read_data(&bytes)
-                            }
+                            1 => load_atomic!(AtomicU8),
+                            2 => load_atomic!(AtomicU16),
+                            4 => load_atomic!(AtomicU32),
+                            8 => load_atomic!(AtomicU64),
                             _ => {
                                 let slice = unsafe { slice::from_raw_parts(field_ptr, size) };
                                 read_data(slice)
@@ -1582,7 +1568,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 let method_name = &*method.method.name;
                 let parent_name = method.parent.definition().type_name();
-                if parent_name == "System.IntPtr" && method_name == ".ctor" && method.method.signature.parameters.len() == 1 {
+                if parent_name == "System.IntPtr"
+                    && method_name == ".ctor"
+                    && method.method.signature.parameters.len() == 1
+                {
                     vm_expect_stack!(let Int32(i) = pop!());
                     push!(NativeInt(i as isize));
                 } else {
@@ -1765,38 +1754,26 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let mut val_bytes = vec![0u8; size];
                     write_data(&mut val_bytes);
 
-                    if size <= std::mem::size_of::<usize>() {
+                    if size <= size_of::<usize>() {
                         // Check alignment before attempting atomic operations
-                        let is_aligned = match size {
-                            1 => true, // u8 is always aligned
-                            2 => (field_ptr as usize).is_multiple_of(std::mem::align_of::<u16>()),
-                            4 => (field_ptr as usize).is_multiple_of(std::mem::align_of::<u32>()),
-                            8 => (field_ptr as usize).is_multiple_of(std::mem::align_of::<u64>()),
-                            _ => false,
-                        };
-
-                        if !is_aligned {
+                        if !is_ptr_aligned_to_field(field_ptr, size) {
                             // Fall back to non-atomic write if not aligned
                             write_data(slice_from_pointer(ptr));
                             return;
                         }
 
+                        macro_rules! store_atomic {
+                            ($t:ty as $atomic_t:ty) => {{
+                                let val = <$t>::from_ne_bytes(val_bytes.try_into().unwrap());
+                                unsafe { (*(field_ptr as *const $atomic_t)).store(val, ordering) }
+                            }};
+                        }
+
                         match size {
-                            1 => unsafe {
-                                (*(field_ptr as *const AtomicU8)).store(val_bytes[0], ordering)
-                            },
-                            2 => unsafe {
-                                let val = u16::from_ne_bytes(val_bytes.try_into().unwrap());
-                                (*(field_ptr as *const AtomicU16)).store(val, ordering)
-                            },
-                            4 => unsafe {
-                                let val = u32::from_ne_bytes(val_bytes.try_into().unwrap());
-                                (*(field_ptr as *const AtomicU32)).store(val, ordering)
-                            },
-                            8 => unsafe {
-                                let val = u64::from_ne_bytes(val_bytes.try_into().unwrap());
-                                (*(field_ptr as *const AtomicU64)).store(val, ordering)
-                            },
+                            1 => store_atomic!(u8 as AtomicU8),
+                            2 => store_atomic!(u16 as AtomicU16),
+                            4 => store_atomic!(u32 as AtomicU32),
+                            8 => store_atomic!(u64 as AtomicU64),
                             _ => write_data(slice_from_pointer(ptr)),
                         }
                     } else {

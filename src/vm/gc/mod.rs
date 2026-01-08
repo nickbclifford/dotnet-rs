@@ -9,13 +9,12 @@ use gc_arena::Collect;
 #[cfg(feature = "multithreaded-gc")]
 pub mod arena;
 pub mod coordinator;
-pub mod tracer;
 
 #[cfg(feature = "multithreaded-gc")]
 pub use arena::THREAD_ARENA;
 
+pub use crate::vm::tracer::{TraceStats, Tracer};
 pub use coordinator::*;
-pub use tracer::{TraceStats, Tracer};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Collect)]
 #[collect(require_static)]

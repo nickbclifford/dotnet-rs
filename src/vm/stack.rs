@@ -7,6 +7,7 @@ use crate::{
     },
     utils::{decompose_type_source, ResolutionS},
     value::{
+        layout::{type_layout, HasLayout},
         object::{HeapStorage, Object as ObjectInstance, ObjectRef},
         storage::StaticStorageManager,
         StackValue,
@@ -14,12 +15,13 @@ use crate::{
     vm::{
         context::ResolutionContext,
         exceptions::ExceptionState,
-        gc::{tracer::Tracer, GCHandleType},
+        gc::GCHandleType,
         intrinsics::reflection::RuntimeType,
         metrics::RuntimeMetrics,
         pinvoke::NativeLibraries,
         sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, SyncBlockManager},
         threading::ThreadManager,
+        tracer::Tracer,
         MethodInfo, MethodState, StepResult,
     },
 };
@@ -29,7 +31,6 @@ use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     collections::{HashMap, HashSet},
     fmt::{self, Debug},
-    marker::PhantomData,
     ptr::NonNull,
     sync::Arc,
 };
@@ -120,13 +121,6 @@ pub struct SharedGlobalState<'m> {
     pub gc_coordinator: Arc<GCCoordinator>,
 }
 
-// SharedGlobalState contains only thread-safe components:
-// - AssemblyLoader is thread-safe
-// - All mutable state is protected by RwLock/Mutex/Arc/Atomic
-// - No raw pointers or non-thread-safe types
-// unsafe impl<'m> Send for SharedGlobalState<'m> {}
-// unsafe impl<'m> Sync for SharedGlobalState<'m> {}
-
 impl<'m> SharedGlobalState<'m> {
     pub fn new(loader: &'m AssemblyLoader) -> Self {
         // Initialize the intrinsic registry early during VM startup
@@ -153,7 +147,7 @@ impl<'m> SharedGlobalState<'m> {
 }
 
 /// GC-managed state local to a single thread's arena.
-pub struct ArenaLocalState<'gc, 'm> {
+pub struct ArenaLocalState<'gc> {
     pub heap: HeapManager<'gc>,
     pub runtime_asms: RefCell<HashMap<ResolutionS, ObjectRef<'gc>>>,
     pub runtime_types: RefCell<HashMap<RuntimeType, ObjectRef<'gc>>>,
@@ -162,10 +156,9 @@ pub struct ArenaLocalState<'gc, 'm> {
     pub runtime_method_objs: RefCell<HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>>,
     pub runtime_fields: RefCell<Vec<(FieldDescription, GenericLookup)>>,
     pub runtime_field_objs: RefCell<HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>>,
-    pub _phantom: PhantomData<&'m ()>,
 }
 
-unsafe impl<'gc, 'm> Collect for ArenaLocalState<'gc, 'm> {
+unsafe impl<'gc> Collect for ArenaLocalState<'gc> {
     fn trace(&self, cc: &Collection) {
         self.heap.trace(cc);
         for o in self.runtime_asms.borrow().values() {
@@ -183,13 +176,13 @@ unsafe impl<'gc, 'm> Collect for ArenaLocalState<'gc, 'm> {
     }
 }
 
-impl<'gc, 'm> Default for ArenaLocalState<'gc, 'm> {
+impl<'gc> Default for ArenaLocalState<'gc> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<'gc, 'm> ArenaLocalState<'gc, 'm> {
+impl<'gc> ArenaLocalState<'gc> {
     pub fn new() -> Self {
         Self {
             heap: HeapManager {
@@ -210,7 +203,6 @@ impl<'gc, 'm> ArenaLocalState<'gc, 'm> {
             runtime_method_objs: RefCell::new(HashMap::new()),
             runtime_fields: RefCell::new(vec![]),
             runtime_field_objs: RefCell::new(HashMap::new()),
-            _phantom: PhantomData,
         }
     }
 }
@@ -218,7 +210,7 @@ impl<'gc, 'm> ArenaLocalState<'gc, 'm> {
 pub struct CallStack<'gc, 'm> {
     pub execution: ThreadContext<'gc, 'm>,
     pub shared: Arc<SharedGlobalState<'m>>,
-    pub local: ArenaLocalState<'gc, 'm>,
+    pub local: ArenaLocalState<'gc>,
     pub thread_id: Cell<u64>,
 }
 
@@ -275,66 +267,12 @@ pub struct BasePointer {
     pub stack: usize,
 }
 
-/* EXPERIMENTAL CODE - Phase 2 Unified Arena Attempt (NOT FEASIBLE)
- *
- * The following code was an attempt to create a unified global GC arena.
- * It was abandoned because gc-arena uses !Send types (Rc) internally,
- * making it impossible to share an Arena across threads even with a Mutex.
- *
- * Keeping this code commented out for reference and future consideration.
- *
-/// Thread-specific execution state within the unified arena.
-/// This replaces the per-thread CallStack in the new single-arena architecture.
-pub struct ThreadExecutionState<'gc, 'm> {
-    pub execution: ThreadContext<'gc, 'm>,
-    pub local: ArenaLocalState<'gc, 'm>,
-}
-
-unsafe impl<'gc, 'm: 'gc> Collect for ThreadExecutionState<'gc, 'm> {
-    fn trace(&self, cc: &Collection) {
-        self.execution.trace(cc);
-        self.local.trace(cc);
-    }
-}
-
-/// Unified VM state for single global arena (Phase 2 architecture).
-/// This is the root of the GC arena and contains all thread execution states
-/// and the shared heap.
-pub struct VMState<'gc, 'm> {
-    /// Per-thread execution contexts indexed by thread_id
-    pub threads: RefCell<HashMap<u64, ThreadExecutionState<'gc, 'm>>>,
-    /// Shared heap manager (unified across all threads)
-    pub heap: HeapManager<'gc>,
-    /// Runtime assembly objects (shared)
-    pub runtime_asms: RefCell<HashMap<ResolutionS, ObjectRef<'gc>>>,
-    /// Runtime type objects (shared)
-    pub runtime_types: RefCell<HashMap<RuntimeType, ObjectRef<'gc>>>,
-    pub runtime_types_list: RefCell<Vec<RuntimeType>>,
-    /// Runtime method metadata (shared)
-    pub runtime_methods: RefCell<Vec<(MethodDescription, GenericLookup)>>,
-    pub runtime_method_objs: RefCell<HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>>,
-    /// Runtime field metadata (shared)
-    pub runtime_fields: RefCell<Vec<(FieldDescription, GenericLookup)>>,
-    pub runtime_field_objs: RefCell<HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>>,
-    /// Reference to SharedGlobalState for tracing statics
-    /// (stored as raw pointer since Arc is not Collect)
-    pub shared_state_ptr: Cell<*const SharedGlobalState<'m>>,
-    pub _phantom: PhantomData<&'m ()>,
-}
- */
-
 pub type GCArena = Arena<Rootable!['gc => CallStack<'gc, 'static>]>;
 
 pub type GCHandle<'gc> = &'gc Mutation<'gc>;
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
-    /// Create a new CallStack with separated global state (Phase 1 architecture).
-    /// This is now the primary and only constructor for CallStack.
-    pub fn new(
-        _gc: GCHandle<'gc>,
-        shared: Arc<SharedGlobalState<'m>>,
-        local: ArenaLocalState<'gc, 'm>,
-    ) -> Self {
+    pub fn new(shared: Arc<SharedGlobalState<'m>>, local: ArenaLocalState<'gc>) -> Self {
         Self {
             execution: ThreadContext {
                 stack: vec![],
@@ -492,8 +430,23 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         heap._all_objs.borrow_mut().insert(*instance);
 
         let ctx = self.current_context();
+        let borrowed = ptr.borrow();
 
-        if let HeapStorage::Obj(o) = &ptr.borrow().storage {
+        if self.tracer_enabled() {
+            let (type_name, size) = match &borrowed.storage {
+                HeapStorage::Obj(o) => {
+                    let name = o.description.type_name();
+                    let size = type_layout(o.description.into(), &ctx).size();
+                    (name, size)
+                }
+                HeapStorage::Vec(v) => ("System.Array".to_string(), v.size_bytes()),
+                HeapStorage::Str(s) => ("System.String".to_string(), s.size_bytes()),
+                HeapStorage::Boxed(b) => ("Boxed".to_string(), b.size_bytes()),
+            };
+            vm_trace_gc_allocation!(self, &type_name, size);
+        }
+
+        if let HeapStorage::Obj(o) = &borrowed.storage {
             if o.description.has_finalizer(&ctx) {
                 let mut queue = heap.finalization_queue.borrow_mut();
                 queue.push(*instance);
@@ -1008,7 +961,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
     }
 
-    pub fn msg(&self, level: crate::vm::gc::tracer::TraceLevel, fmt: fmt::Arguments) {
+    pub fn msg(&self, level: crate::vm::tracer::TraceLevel, fmt: fmt::Arguments) {
         self.shared.tracer.lock().msg(level, self.indent(), fmt);
     }
 

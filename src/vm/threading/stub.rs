@@ -1,9 +1,7 @@
 use crate::vm::{
-    gc::{
-        coordinator::{GCCommand, GCCoordinator},
-        tracer::Tracer,
-    },
+    gc::coordinator::{GCCommand, GCCoordinator},
     threading::{STWGuardOps, ThreadManagerOps},
+    tracer::Tracer,
 };
 use std::sync::Arc;
 

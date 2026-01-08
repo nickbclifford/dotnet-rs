@@ -65,6 +65,19 @@ pub fn reset_current_arena_collection_requested() {
 }
 
 #[cfg(feature = "multithreaded-gc")]
+/// Update the metrics for the current thread's arena.
+pub fn update_current_arena_metrics(gc_bytes: usize, external_bytes: usize) {
+    CURRENT_ARENA_HANDLE.with(|h| {
+        if let Some(handle) = h.borrow().as_ref() {
+            handle.gc_allocated_bytes.store(gc_bytes, Ordering::Relaxed);
+            handle
+                .external_allocated_bytes
+                .store(external_bytes, Ordering::Relaxed);
+        }
+    });
+}
+
+#[cfg(feature = "multithreaded-gc")]
 /// Allocation threshold in bytes that triggers a GC request for a thread-local arena.
 /// When a thread allocates more than this amount since the last GC, it will request
 /// a coordinated collection at the next safe point.
@@ -92,7 +105,7 @@ pub fn set_currently_tracing(thread_id: Option<u64>) {
 #[cfg(feature = "multithreaded-gc")]
 /// Get the thread ID of the arena currently being traced.
 pub fn get_currently_tracing() -> Option<u64> {
-    CURRENTLY_TRACING_THREAD_ID.with(|id| id.get())
+    CURRENTLY_TRACING_THREAD_ID.get()
 }
 
 #[cfg(feature = "multithreaded-gc")]
@@ -135,6 +148,8 @@ pub enum GCCommand {
 pub struct ArenaHandle {
     pub thread_id: u64,
     pub allocation_counter: Arc<AtomicUsize>,
+    pub gc_allocated_bytes: Arc<AtomicUsize>,
+    pub external_allocated_bytes: Arc<AtomicUsize>,
     pub needs_collection: Arc<AtomicBool>,
     /// Command currently being processed by this thread.
     pub current_command: Arc<Mutex<Option<GCCommand>>>,
@@ -142,6 +157,22 @@ pub struct ArenaHandle {
     pub command_signal: Arc<Condvar>,
     /// Signal to the coordinator that the command is finished.
     pub finish_signal: Arc<Condvar>,
+}
+
+#[cfg(feature = "multithreaded-gc")]
+impl ArenaHandle {
+    pub fn new(thread_id: u64) -> Self {
+        Self {
+            thread_id,
+            allocation_counter: Arc::new(AtomicUsize::new(0)),
+            gc_allocated_bytes: Arc::new(AtomicUsize::new(0)),
+            external_allocated_bytes: Arc::new(AtomicUsize::new(0)),
+            needs_collection: Arc::new(AtomicBool::new(false)),
+            current_command: Arc::new(Mutex::new(None)),
+            command_signal: Arc::new(Condvar::new()),
+            finish_signal: Arc::new(Condvar::new()),
+        }
+    }
 }
 
 #[cfg(feature = "multithreaded-gc")]
@@ -220,14 +251,47 @@ impl GCCoordinator {
             .sum()
     }
 
+    /// Get the total bytes managed by GC-arena across all threads.
+    pub fn total_gc_allocation(&self) -> usize {
+        let arenas = self.arenas.lock();
+        arenas
+            .values()
+            .map(|h| h.gc_allocated_bytes.load(Ordering::Acquire))
+            .sum()
+    }
+
+    /// Get the total external bytes tracked by GC-arena across all threads.
+    pub fn total_external_allocation(&self) -> usize {
+        let arenas = self.arenas.lock();
+        arenas
+            .values()
+            .map(|h| h.external_allocated_bytes.load(Ordering::Acquire))
+            .sum()
+    }
+
+    fn get_arena(&self, thread_id: u64) -> Option<ArenaHandle> {
+        self.arenas.lock().get(&thread_id).cloned()
+    }
+
+    fn get_all_arenas(&self) -> Vec<ArenaHandle> {
+        let arenas = self.arenas.lock();
+        arenas.values().cloned().collect()
+    }
+
+    fn wait_on_other_arenas(&self, initiating_thread_id: u64) {
+        for handle in self.get_all_arenas() {
+            if handle.thread_id != initiating_thread_id {
+                let mut cmd = handle.current_command.lock();
+                while cmd.is_some() {
+                    handle.finish_signal.wait(&mut cmd);
+                }
+            }
+        }
+    }
+
     /// Perform a coordinated collection across all registered arenas.
     pub fn collect_all_arenas(&self, initiating_thread_id: u64) {
         // This is called by the thread that triggered the GC, after STW is established.
-
-        let handles: Vec<ArenaHandle> = {
-            let arenas = self.arenas.lock();
-            arenas.values().cloned().collect()
-        };
 
         // Phase 1: Initial marking - each arena marks its local roots
         {
@@ -237,7 +301,7 @@ impl GCCoordinator {
         }
 
         // Send CollectAll command to all OTHER arenas (not the initiating thread)
-        for handle in &handles {
+        for handle in self.get_all_arenas() {
             if handle.thread_id != initiating_thread_id {
                 let mut cmd = handle.current_command.lock();
                 *cmd = Some(GCCommand::CollectAll);
@@ -249,14 +313,7 @@ impl GCCoordinator {
         crate::vm::threading::execute_gc_command_for_current_thread(GCCommand::CollectAll, self);
 
         // Wait for all OTHER arenas to finish initial marking
-        for handle in &handles {
-            if handle.thread_id != initiating_thread_id {
-                let mut cmd = handle.current_command.lock();
-                while cmd.is_some() {
-                    handle.finish_signal.wait(&mut cmd);
-                }
-            }
-        }
+        self.wait_on_other_arenas(initiating_thread_id);
 
         // Phase 2: Fixed-point iteration for cross-arena resurrection
         // Keep iterating until no new cross-arena references are found
@@ -283,9 +340,7 @@ impl GCCoordinator {
                 if target_thread_id == initiating_thread_id {
                     // Save for direct execution by initiating thread
                     initiator_mark_objs = Some(ptrs);
-                } else if let Some(handle) =
-                    handles.iter().find(|h| h.thread_id == target_thread_id)
-                {
+                } else if let Some(handle) = self.get_arena(target_thread_id) {
                     let mut cmd = handle.current_command.lock();
                     *cmd = Some(GCCommand::MarkObjects(ptrs));
                     handle.command_signal.notify_all();
@@ -301,14 +356,7 @@ impl GCCoordinator {
             }
 
             // Wait for all MarkObjects commands to complete (excluding initiating thread)
-            for handle in &handles {
-                if handle.thread_id != initiating_thread_id {
-                    let mut cmd = handle.current_command.lock();
-                    while cmd.is_some() {
-                        handle.finish_signal.wait(&mut cmd);
-                    }
-                }
-            }
+            self.wait_on_other_arenas(initiating_thread_id);
 
             // Check if any new cross-arena references were discovered
             let has_new_refs = {
@@ -327,8 +375,7 @@ impl GCCoordinator {
 
     /// Check if a thread has a pending GC command.
     pub fn has_command(&self, thread_id: u64) -> bool {
-        let arenas = self.arenas.lock();
-        if let Some(handle) = arenas.get(&thread_id) {
+        if let Some(handle) = self.get_arena(thread_id) {
             handle.current_command.lock().is_some()
         } else {
             false
@@ -337,8 +384,7 @@ impl GCCoordinator {
 
     /// Get the pending command for a thread.
     pub fn get_command(&self, thread_id: u64) -> Option<GCCommand> {
-        let arenas = self.arenas.lock();
-        if let Some(handle) = arenas.get(&thread_id) {
+        if let Some(handle) = self.get_arena(thread_id) {
             handle.current_command.lock().clone()
         } else {
             None
@@ -347,8 +393,7 @@ impl GCCoordinator {
 
     /// Mark a command as finished for a thread.
     pub fn command_finished(&self, thread_id: u64) {
-        let arenas = self.arenas.lock();
-        if let Some(handle) = arenas.get(&thread_id) {
+        if let Some(handle) = self.get_arena(thread_id) {
             let mut cmd = handle.current_command.lock();
             *cmd = None;
             handle.finish_signal.notify_all();
@@ -408,6 +453,15 @@ pub mod stubs {
         pub fn start_collection(&self) -> Option<MutexGuard<'_, ()>> {
             None
         }
+        pub fn total_allocated(&self) -> usize {
+            0
+        }
+        pub fn total_gc_allocation(&self) -> usize {
+            0
+        }
+        pub fn total_external_allocation(&self) -> usize {
+            0
+        }
     }
 
     pub fn set_current_arena_handle(_handle: ArenaHandle) {}
@@ -416,6 +470,7 @@ pub mod stubs {
         false
     }
     pub fn reset_current_arena_collection_requested() {}
+    pub fn update_current_arena_metrics(_gc_bytes: usize, _external_bytes: usize) {}
     pub fn set_currently_tracing(_thread_id: Option<u64>) {}
     pub fn get_currently_tracing() -> Option<u64> {
         None
@@ -447,12 +502,9 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(false));
 
         let handle = ArenaHandle {
-            thread_id: 1,
             allocation_counter: counter.clone(),
             needs_collection: flag.clone(),
-            current_command: Arc::new(Mutex::new(None)),
-            command_signal: Arc::new(Condvar::new()),
-            finish_signal: Arc::new(Condvar::new()),
+            ..ArenaHandle::new(1)
         };
 
         coordinator.register_arena(handle);
@@ -474,14 +526,7 @@ mod tests {
     #[test]
     fn test_allocation_pressure_trigger() {
         let coordinator = GCCoordinator::new();
-        let handle = ArenaHandle {
-            thread_id: 1,
-            allocation_counter: Arc::new(AtomicUsize::new(0)),
-            needs_collection: Arc::new(AtomicBool::new(false)),
-            current_command: Arc::new(Mutex::new(None)),
-            command_signal: Arc::new(Condvar::new()),
-            finish_signal: Arc::new(Condvar::new()),
-        };
+        let handle = ArenaHandle::new(1);
 
         coordinator.register_arena(handle.clone());
         set_current_arena_handle(handle.clone());
@@ -497,5 +542,40 @@ mod tests {
         reset_current_arena_collection_requested();
         assert!(!is_current_arena_collection_requested());
         assert_eq!(handle.allocation_counter.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn test_collect_all_arenas_no_deadlock() {
+        use std::thread;
+        use std::time::Duration;
+
+        let coordinator = Arc::new(GCCoordinator::new());
+
+        let handle1 = ArenaHandle::new(1);
+        let handle2 = ArenaHandle::new(2);
+
+        coordinator.register_arena(handle1);
+        coordinator.register_arena(handle2.clone());
+
+        let coordinator_clone = coordinator.clone();
+        thread::spawn(move || {
+            // Wait until we actually have a command
+            loop {
+                let cmd = handle2.current_command.lock();
+                if cmd.is_some() {
+                    break;
+                }
+                drop(cmd);
+                thread::sleep(Duration::from_millis(10));
+            }
+
+            // Command received! Now call command_finished.
+            coordinator_clone.command_finished(2);
+        });
+
+        // Initiator (Thread 1) calls collect_all_arenas.
+        // This used to deadlock because wait_on_other_arenas held the arenas lock
+        // while waiting for command_finished, which also needed the arenas lock.
+        coordinator.collect_all_arenas(1);
     }
 }

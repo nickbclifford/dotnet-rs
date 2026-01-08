@@ -266,7 +266,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
     let target_type = stack
         .loader()
         .find_concrete_type(generics.method_generics[0].clone());
-    vm_expect_stack!(let NativeInt(ptr) = vm_pop!(stack));
+    pop_args!(stack, [NativeInt(ptr)]);
     vm_push!(
         stack,
         gc,
@@ -311,7 +311,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
-    vm_expect_stack!(let NativeInt(ptr) = vm_pop!(stack));
+    pop_args!(stack, [NativeInt(ptr)]);
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
 
@@ -350,7 +350,7 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
     let value = vm_pop!(stack);
-    vm_expect_stack!(let NativeInt(ptr) = vm_pop!(stack));
+    pop_args!(stack, [NativeInt(ptr)]);
 
     macro_rules! write_ua {
         ($variant:ident, $t:ty) => {{

@@ -1,5 +1,5 @@
-use crate::vm::gc::{
-    coordinator::{GCCommand, GCCoordinator},
+use crate::vm::{
+    gc::coordinator::{GCCommand, GCCoordinator},
     tracer::Tracer,
 };
 

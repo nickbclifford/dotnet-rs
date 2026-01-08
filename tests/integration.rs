@@ -448,26 +448,9 @@ fn test_gc_coordinator_multi_arena_tracking() {
     let shared = Arc::new(vm::SharedGlobalState::new(TestHarness::get().loader));
 
     // Simulate multiple arenas being registered
-    use parking_lot::{Condvar, Mutex};
-    use std::sync::atomic::{AtomicBool, AtomicUsize};
+    let handle1 = vm::gc::coordinator::ArenaHandle::new(1);
 
-    let handle1 = vm::gc::coordinator::ArenaHandle {
-        thread_id: 1,
-        allocation_counter: Arc::new(AtomicUsize::new(0)),
-        needs_collection: Arc::new(AtomicBool::new(false)),
-        current_command: Arc::new(Mutex::new(None)),
-        command_signal: Arc::new(Condvar::new()),
-        finish_signal: Arc::new(Condvar::new()),
-    };
-
-    let handle2 = vm::gc::coordinator::ArenaHandle {
-        thread_id: 2,
-        allocation_counter: Arc::new(AtomicUsize::new(0)),
-        needs_collection: Arc::new(AtomicBool::new(false)),
-        current_command: Arc::new(Mutex::new(None)),
-        command_signal: Arc::new(Condvar::new()),
-        finish_signal: Arc::new(Condvar::new()),
-    };
+    let handle2 = vm::gc::coordinator::ArenaHandle::new(2);
 
     // Register multiple arenas
     shared.gc_coordinator.register_arena(handle1.clone());
@@ -524,17 +507,7 @@ fn test_cross_arena_reference_tracking() {
     let shared = Arc::new(vm::SharedGlobalState::new(TestHarness::get().loader));
 
     // Create a mock arena handle
-    use parking_lot::{Condvar, Mutex};
-    use std::sync::atomic::{AtomicBool, AtomicUsize};
-
-    let handle = vm::gc::coordinator::ArenaHandle {
-        thread_id: 1,
-        allocation_counter: Arc::new(AtomicUsize::new(0)),
-        needs_collection: Arc::new(AtomicBool::new(false)),
-        current_command: Arc::new(Mutex::new(None)),
-        command_signal: Arc::new(Condvar::new()),
-        finish_signal: Arc::new(Condvar::new()),
-    };
+    let handle = vm::gc::coordinator::ArenaHandle::new(1);
 
     shared.gc_coordinator.register_arena(handle.clone());
 
@@ -556,20 +529,11 @@ fn test_cross_arena_reference_tracking() {
 #[test]
 #[cfg(feature = "multithreaded-gc")]
 fn test_allocation_pressure_triggers_collection() {
-    use parking_lot::{Condvar, Mutex};
-    use std::sync::atomic::{AtomicBool, AtomicUsize};
     use std::sync::Arc;
 
     let shared = Arc::new(vm::SharedGlobalState::new(TestHarness::get().loader));
 
-    let handle = vm::gc::coordinator::ArenaHandle {
-        thread_id: 1,
-        allocation_counter: Arc::new(AtomicUsize::new(0)),
-        needs_collection: Arc::new(AtomicBool::new(false)),
-        current_command: Arc::new(Mutex::new(None)),
-        command_signal: Arc::new(Condvar::new()),
-        finish_signal: Arc::new(Condvar::new()),
-    };
+    let handle = vm::gc::coordinator::ArenaHandle::new(1);
 
     shared.gc_coordinator.register_arena(handle.clone());
     vm::gc::coordinator::set_current_arena_handle(handle.clone());

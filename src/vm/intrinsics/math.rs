@@ -40,11 +40,11 @@ pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc>(
 pub fn intrinsic_numeric_create_truncating<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
-    _method: MethodDescription,
+    method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
     let value = vm_pop!(stack);
-    let target_type = _method.parent.definition().type_name();
+    let target_type = method.parent.definition().type_name();
 
     macro_rules! convert {
         ($val:expr) => {

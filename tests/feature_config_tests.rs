@@ -104,21 +104,11 @@ fn test_multithreaded_gc_coordinator_exists() {
 #[test]
 #[cfg(feature = "multithreaded-gc")]
 fn test_multithreaded_gc_arena_handle() {
-    use parking_lot::{Condvar, Mutex};
-    use std::sync::atomic::{AtomicBool, AtomicUsize};
-
     let loader = create_test_loader();
     let shared = Arc::new(vm::SharedGlobalState::new(loader));
 
     // Create an arena handle
-    let handle = vm::gc::coordinator::ArenaHandle {
-        thread_id: 1,
-        allocation_counter: Arc::new(AtomicUsize::new(0)),
-        needs_collection: Arc::new(AtomicBool::new(false)),
-        current_command: Arc::new(Mutex::new(None)),
-        command_signal: Arc::new(Condvar::new()),
-        finish_signal: Arc::new(Condvar::new()),
-    };
+    let handle = vm::gc::coordinator::ArenaHandle::new(1);
 
     // Register and unregister the arena
     shared.gc_coordinator.register_arena(handle.clone());

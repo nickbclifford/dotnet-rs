@@ -45,7 +45,7 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
 pub fn intrinsic_span_get_item<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     pop_args!(stack, [Int32(index), ManagedPtr(m)]);
@@ -54,7 +54,7 @@ pub fn intrinsic_span_get_item<'gc, 'm: 'gc>(
         panic!("invalid type on stack");
     }
 
-    let ctx = ResolutionContext::for_method(_method, stack.loader(), generics);
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
     let span_layout = crate::value::layout::FieldLayoutManager::instance_fields(m.inner_type, &ctx);
 
     let value_type = &generics.type_generics[0];
@@ -82,7 +82,7 @@ pub fn intrinsic_span_get_item<'gc, 'm: 'gc>(
 pub fn intrinsic_span_get_length<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     pop_args!(stack, [ManagedPtr(m)]);
@@ -90,7 +90,7 @@ pub fn intrinsic_span_get_length<'gc, 'm: 'gc>(
         panic!("invalid type on stack");
     }
 
-    let ctx = ResolutionContext::for_method(_method, stack.loader(), generics);
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
     let layout = crate::value::layout::FieldLayoutManager::instance_fields(m.inner_type, &ctx);
     let value = unsafe {
         let target = m.value.as_ptr().add(layout.fields["_length"].position) as *const i32;
@@ -103,13 +103,13 @@ pub fn intrinsic_span_get_length<'gc, 'm: 'gc>(
 pub fn intrinsic_string_as_span<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let string_val = vm_pop!(stack);
     let (ptr, len) = with_string!(stack, gc, string_val, |s| (s.as_ptr(), s.len()));
 
-    let ctx = ResolutionContext::for_method(_method, stack.loader(), generics);
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
     let span_type = stack.loader().corlib_type("System.ReadOnlySpan`1");
     let char_type_base = dotnetdll::prelude::BaseType::Char;
     let new_lookup = GenericLookup::new(vec![ctx.make_concrete(&char_type_base)]);

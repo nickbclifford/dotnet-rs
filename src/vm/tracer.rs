@@ -79,7 +79,10 @@
 //! vm_trace_stack_snapshot!(ctx);        // Just the stack
 //! vm_trace_heap_snapshot!(ctx);         // Just the heap
 //! ```
-use crate::{value::object::HeapStorage, vm::CallStack};
+use crate::{
+    value::object::HeapStorage,
+    vm::{metrics::RuntimeMetrics, CallStack},
+};
 use crossbeam_channel::{bounded, Sender};
 use gc_arena::{unsafe_empty_collect, Collect, Gc};
 use serde::{Deserialize, Serialize};
@@ -188,23 +191,22 @@ unsafe_empty_collect!(Tracer);
 impl Tracer {
     pub fn new() -> Self {
         let trace_env = env::var("DOTNET_RS_TRACE");
-        let (enabled, writer): (bool, Option<Box<dyn Write + Send>>) = match trace_env {
-            Ok(val) if val == "1" || val == "true" || val == "stdout" => {
-                (true, Some(Box::new(stdout())))
-            }
-            Ok(val) if val == "stderr" => (true, Some(Box::new(stderr()))),
+        let writer: Option<Box<dyn Write + Send>> = match trace_env {
+            Ok(val) if val == "1" || val == "true" || val == "stdout" => Some(Box::new(stdout())),
+            Ok(val) if val == "stderr" => Some(Box::new(stderr())),
             Ok(val) if !val.is_empty() => {
                 // assume it's a file path
                 match File::create(&val) {
-                    Ok(f) => (true, Some(Box::new(f))),
+                    Ok(f) => Some(Box::new(f)),
                     Err(e) => {
                         eprintln!("Failed to create trace file {}: {}", val, e);
-                        (false, None)
+                        None
                     }
                 }
             }
-            _ => (false, None),
+            _ => None,
         };
+        let enabled = writer.is_some();
 
         // Check for custom auto-flush interval
         let auto_flush_interval = env::var("DOTNET_RS_TRACE_FLUSH_INTERVAL")
@@ -602,10 +604,8 @@ impl Tracer {
                     .map(|(_, label)| label.as_str())
                     .collect();
 
-                if !markers.is_empty() {
-                    for marker in markers {
-                        self.msg(TraceLevel::Debug, 0, format_args!("╟─ {} ", marker));
-                    }
+                for marker in markers {
+                    self.msg(TraceLevel::Debug, 0, format_args!("╟─ {} ", marker));
                 }
 
                 self.msg(
@@ -844,6 +844,68 @@ impl Tracer {
             TraceLevel::Debug,
             0,
             format_args!("║ GC handles:           {}", gc_handles),
+        );
+        self.msg(
+            TraceLevel::Debug,
+            0,
+            format_args!("╚════════════════════════════════════════════════════════════"),
+        );
+    }
+
+    /// Writes runtime metrics to the trace output
+    pub fn dump_runtime_metrics(&mut self, metrics: &RuntimeMetrics) {
+        if !self.is_enabled() {
+            return;
+        }
+
+        let gc_pause_total = metrics.gc_pause_total_us.load(Ordering::Relaxed);
+        let gc_pause_count = metrics.gc_pause_count.load(Ordering::Relaxed);
+        let gc_allocated = metrics.current_gc_allocated.load(Ordering::Relaxed);
+        let ext_allocated = metrics.current_external_allocated.load(Ordering::Relaxed);
+        let lock_count = metrics.lock_contention_count.load(Ordering::Relaxed);
+        let lock_total = metrics.lock_contention_total_us.load(Ordering::Relaxed);
+
+        self.msg(TraceLevel::Debug, 0, format_args!(""));
+        self.msg(
+            TraceLevel::Debug,
+            0,
+            format_args!("╔════════════════════════════════════════════════════════════"),
+        );
+        self.msg(TraceLevel::Debug, 0, format_args!("║ RUNTIME METRICS"));
+        self.msg(
+            TraceLevel::Debug,
+            0,
+            format_args!("╠════════════════════════════════════════════════════════════"),
+        );
+        self.msg(
+            TraceLevel::Debug,
+            0,
+            format_args!("║ GC Pause Total:       {:>12} μs", gc_pause_total),
+        );
+        self.msg(
+            TraceLevel::Debug,
+            0,
+            format_args!("║ GC Pause Count:       {:>12}", gc_pause_count),
+        );
+        self.msg(
+            TraceLevel::Debug,
+            0,
+            format_args!("║ GC Allocated:         {:>12} bytes", gc_allocated),
+        );
+        self.msg(
+            TraceLevel::Debug,
+            0,
+            format_args!("║ External Allocated:   {:>12} bytes", ext_allocated),
+        );
+        self.msg(
+            TraceLevel::Debug,
+            0,
+            format_args!("║ Lock Contention:      {:>12}", lock_count),
+        );
+        self.msg(
+            TraceLevel::Debug,
+            0,
+            format_args!("║ Lock Wait Total:      {:>12} μs", lock_total),
         );
         self.msg(
             TraceLevel::Debug,
@@ -1287,6 +1349,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         );
     }
 
+    pub fn trace_dump_runtime_metrics(&self) {
+        if !self.tracer_enabled() {
+            return;
+        }
+
+        self.tracer().dump_runtime_metrics(&self.shared.metrics);
+    }
+
     /// Captures a complete snapshot of all runtime state to the tracer
     pub fn trace_full_state(&self) {
         if !self.tracer_enabled() {
@@ -1299,6 +1369,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.trace_dump_heap();
         self.trace_dump_statics();
         self.trace_dump_gc_stats();
+        self.trace_dump_runtime_metrics();
         self.tracer().flush();
     }
 }

@@ -808,12 +808,12 @@ impl Resolver<'static> for AssemblyLoader {
 
     fn find_type(
         &self,
-        _name: &str,
+        name: &str,
     ) -> Result<(&TypeDefinition<'static>, &Resolution<'static>), Self::Error> {
-        if _name.contains("=") {
-            todo!("fully qualified name {}", _name)
+        if name.contains("=") {
+            todo!("fully qualified name {}", name)
         }
-        let td = self.corlib_type(_name);
+        let td = self.corlib_type(name);
         Ok((td.definition(), td.resolution.definition()))
     }
 }

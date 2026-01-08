@@ -49,7 +49,7 @@ macro_rules! vm_msg {
     // Default to Debug level - format string with args
     ($src:expr, $($format:tt)*) => {
         if $src.tracer_enabled() {
-            $src.tracer().msg($crate::vm::gc::tracer::TraceLevel::Debug, $src.indent(), format_args!($($format)*))
+            $src.tracer().msg($crate::vm::tracer::TraceLevel::Debug, $src.indent(), format_args!($($format)*))
         }
     }
 }
@@ -59,7 +59,7 @@ macro_rules! vm_msg {
 macro_rules! vm_error {
     ($src:expr, $($format:tt)*) => {
         if $src.tracer_enabled() {
-            $src.tracer().msg($crate::vm::gc::tracer::TraceLevel::Error, $src.indent(), format_args!($($format)*))
+            $src.tracer().msg($crate::vm::tracer::TraceLevel::Error, $src.indent(), format_args!($($format)*))
         }
     }
 }
@@ -68,7 +68,7 @@ macro_rules! vm_error {
 macro_rules! vm_info {
     ($src:expr, $($format:tt)*) => {
         if $src.tracer_enabled() {
-            $src.tracer().msg($crate::vm::gc::tracer::TraceLevel::Info, $src.indent(), format_args!($($format)*))
+            $src.tracer().msg($crate::vm::tracer::TraceLevel::Info, $src.indent(), format_args!($($format)*))
         }
     }
 }
@@ -77,7 +77,7 @@ macro_rules! vm_info {
 macro_rules! vm_debug {
     ($src:expr, $($format:tt)*) => {
         if $src.tracer_enabled() {
-            $src.tracer().msg($crate::vm::gc::tracer::TraceLevel::Debug, $src.indent(), format_args!($($format)*))
+            $src.tracer().msg($crate::vm::tracer::TraceLevel::Debug, $src.indent(), format_args!($($format)*))
         }
     }
 }
@@ -86,7 +86,7 @@ macro_rules! vm_debug {
 macro_rules! vm_trace {
     ($src:expr, $($format:tt)*) => {
         if $src.tracer_enabled() {
-            $src.tracer().msg($crate::vm::gc::tracer::TraceLevel::Trace, $src.indent(), format_args!($($format)*))
+            $src.tracer().msg($crate::vm::tracer::TraceLevel::Trace, $src.indent(), format_args!($($format)*))
         }
     }
 }
@@ -135,6 +135,36 @@ macro_rules! vm_trace_gc {
         if $src.tracer_enabled() {
             $src.tracer()
                 .trace_gc_event($src.indent(), $event, $details);
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! vm_trace_gc_allocation {
+    ($src:expr, $type_name:expr, $size:expr) => {
+        if $src.tracer_enabled() {
+            $src.tracer()
+                .trace_gc_allocation($src.indent(), $type_name, $size);
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! vm_trace_gc_collection_start {
+    ($src:expr, $gen:expr, $reason:expr) => {
+        if $src.tracer_enabled() {
+            $src.tracer()
+                .trace_gc_collection_start($src.indent(), $gen, $reason);
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! vm_trace_gc_collection_end {
+    ($src:expr, $gen:expr, $collected:expr, $duration:expr) => {
+        if $src.tracer_enabled() {
+            $src.tracer()
+                .trace_gc_collection_end($src.indent(), $gen, $collected, $duration);
         }
     };
 }

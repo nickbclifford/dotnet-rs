@@ -11,6 +11,10 @@ pub struct RuntimeMetrics {
     pub lock_contention_count: AtomicU64,
     /// Total time spent waiting for locks (in microseconds)
     pub lock_contention_total_us: AtomicU64,
+    /// Current bytes managed by GC-arena across all threads
+    pub current_gc_allocated: AtomicU64,
+    /// Current bytes allocated externally but tracked by GC-arena
+    pub current_external_allocated: AtomicU64,
 }
 
 impl RuntimeMetrics {
@@ -28,5 +32,11 @@ impl RuntimeMetrics {
         self.lock_contention_count.fetch_add(1, Ordering::Relaxed);
         self.lock_contention_total_us
             .fetch_add(duration.as_micros() as u64, Ordering::Relaxed);
+    }
+
+    pub fn update_gc_metrics(&self, gc_bytes: u64, external_bytes: u64) {
+        self.current_gc_allocated.store(gc_bytes, Ordering::Relaxed);
+        self.current_external_allocated
+            .store(external_bytes, Ordering::Relaxed);
     }
 }
