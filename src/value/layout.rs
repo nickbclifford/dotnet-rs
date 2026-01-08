@@ -16,6 +16,12 @@ use std::{
     ops::Range,
 };
 
+// TODO: Re-implement layout caching with proper thread safety
+// The naive caching implementation using RwLock causes issues in multithreaded scenarios
+// Consider using a lock-free cache or memoizing at a different level
+// static INSTANCE_LAYOUT_CACHE: OnceLock<RwLock<HashMap<TypeDescription, FieldLayoutManager>>> = OnceLock::new();
+// static STATIC_LAYOUT_CACHE: OnceLock<RwLock<HashMap<TypeDescription, FieldLayoutManager>>> = OnceLock::new();
+
 #[enum_dispatch]
 pub trait HasLayout {
     fn size(&self) -> usize;
@@ -159,9 +165,21 @@ impl FieldLayout {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FieldKey {
+    pub owner: TypeDescription,
+    pub name: String,
+}
+
+impl std::fmt::Display for FieldKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldLayoutManager {
-    pub fields: HashMap<String, FieldLayout>,
+    pub fields: HashMap<FieldKey, FieldLayout>,
     pub total_size: usize,
     pub alignment: usize,
 }
@@ -191,26 +209,38 @@ impl FieldLayoutManager {
     }
 
     fn new<'a>(
-        fields: impl IntoIterator<Item = (&'a str, Option<usize>, LayoutManager)>,
+        fields: impl IntoIterator<Item = (TypeDescription, &'a str, Option<usize>, LayoutManager)>,
         layout: Layout,
+        base_size: usize,
+        base_alignment: usize,
     ) -> Self {
         let mut mapping = HashMap::new();
         let total_size;
-        let mut max_alignment = 1;
+        let mut max_alignment = base_alignment.max(1);
 
         let fields: Vec<_> = fields.into_iter().collect();
 
         match layout {
             Layout::Automatic => {
-                let mut offset = 0;
+                // For automatic layout, we can optimize by reordering fields
+                // Start after base class fields
+                let mut offset = base_size;
 
-                for (name, _, layout) in fields {
+                // Sort fields by alignment (largest first) to minimize padding
+                let mut sorted_fields = fields;
+                sorted_fields
+                    .sort_by_key(|(_, _, _, layout)| std::cmp::Reverse(layout.alignment()));
+
+                for (owner, name, _, layout) in sorted_fields {
                     let field_align = layout.alignment();
                     max_alignment = max_alignment.max(field_align);
 
                     let aligned_offset = align_up(offset, field_align);
                     mapping.insert(
-                        name.to_string(),
+                        FieldKey {
+                            owner,
+                            name: name.to_string(),
+                        },
                         FieldLayout {
                             position: aligned_offset,
                             layout: layout.clone(),
@@ -230,15 +260,19 @@ impl FieldLayoutManager {
                     }) => (if packing_size == 0 { 8 } else { packing_size }, class_size),
                 };
 
-                let mut offset = 0;
+                // Start after base class fields
+                let mut offset = base_size;
 
-                for (name, _, layout) in fields {
+                for (owner, name, _, layout) in fields {
                     let field_align = layout.alignment().min(packing_size);
                     max_alignment = max_alignment.max(field_align);
 
                     let aligned_offset = align_up(offset, field_align);
                     mapping.insert(
-                        name.to_string(),
+                        FieldKey {
+                            owner,
+                            name: name.to_string(),
+                        },
                         FieldLayout {
                             position: aligned_offset,
                             layout: layout.clone(),
@@ -250,22 +284,29 @@ impl FieldLayoutManager {
                 total_size = align_up(offset, max_alignment).max(class_size);
             }
             Layout::Explicit(e) => {
-                let mut offset = 0;
-                for (name, o, layout) in fields {
+                // For explicit layout, offsets are relative to the current type's fields
+                // We need to add base_size to these offsets
+                let mut offset = base_size;
+                for (owner, name, o, layout) in fields {
                     max_alignment = max_alignment.max(layout.alignment());
                     match o {
                         None => panic!(
                             "explicit field layout requires all fields to have defined offsets"
                         ),
                         Some(o) => {
+                            // Add base size to the explicit offset
+                            let actual_offset = base_size + o;
                             mapping.insert(
-                                name.to_string(),
+                                FieldKey {
+                                    owner,
+                                    name: name.to_string(),
+                                },
                                 FieldLayout {
-                                    position: o,
+                                    position: actual_offset,
                                     layout: layout.clone(),
                                 },
                             );
-                            offset = offset.max(o + layout.size());
+                            offset = offset.max(actual_offset + layout.size());
                         }
                     };
                 }
@@ -286,79 +327,103 @@ impl FieldLayoutManager {
     fn collect_fields(
         td: TypeDescription,
         context: &ResolutionContext,
-        mut predicate: impl FnMut(&Field) -> bool,
+        predicate: &mut dyn FnMut(&Field) -> bool,
     ) -> Self {
-        // TODO: check for layout flags all the way down the chain? (II.22.8)
         let ancestors: Vec<_> = context.get_ancestors(td).collect();
 
-        let mut total_fields = vec![];
-        let mut add_field_layout = |f: FieldDescription, ctx: &ResolutionContext| {
-            let t = ctx.get_field_type(f);
-            let layout = type_layout(t, ctx);
-            total_fields.push((f.field.name.as_ref(), f.field.offset, layout));
-        };
-
-        for i in (1..ancestors.len()).rev() {
-            let (td, _) = &ancestors[i];
-            let res = td.resolution;
-            let a = td.definition();
-
-            let (_, generic_params) = &ancestors[i - 1];
+        // Build layout hierarchically: first compute base class layout, then add derived fields
+        let base_layout = if ancestors.len() > 1 {
+            // We have a base class - compute its layout first
+            let (base_td, base_generics) = &ancestors[1];
+            let base_res = base_td.resolution;
 
             let new_lookup = GenericLookup::new(
-                generic_params
+                base_generics
                     .iter()
                     .map(|t| context.make_concrete(*t))
                     .collect(),
             );
-            let new_ctx = ResolutionContext {
+            let base_ctx = ResolutionContext {
                 generics: &new_lookup,
-                resolution: res,
+                resolution: base_res,
                 loader: context.loader,
-                type_owner: Some(*td),
+                type_owner: Some(*base_td),
                 method_owner: None,
             };
-            for f in &a.fields {
-                if !predicate(f) {
-                    continue;
-                }
 
-                add_field_layout(
-                    FieldDescription {
-                        parent: *td,
-                        field: f,
-                    },
-                    &new_ctx,
-                );
-            }
-        }
+            // Recursively compute base layout
+            Some(Self::collect_fields(*base_td, &base_ctx, predicate))
+        } else {
+            None
+        };
 
-        // now for the type's actually declared fields
+        let (base_size, base_alignment) = base_layout
+            .as_ref()
+            .map(|l| (l.total_size, l.alignment))
+            .unwrap_or((0, 1));
+
+        // Now lay out this type's fields on top of the base
+        let mut current_type_fields = vec![];
+
         for f in &td.definition().fields {
             if !predicate(f) {
                 continue;
             }
 
-            add_field_layout(
-                FieldDescription {
-                    parent: td,
-                    field: f,
-                },
-                context,
-            );
+            let t = context.get_field_type(FieldDescription {
+                parent: td,
+                field: f,
+            });
+            let layout = type_layout(t, context);
+            current_type_fields.push((td, f.name.as_ref(), f.offset, layout));
         }
 
-        Self::new(total_fields, td.definition().flags.layout)
+        // Create layout with hierarchical approach
+        let mut result = Self::new(
+            current_type_fields,
+            td.definition().flags.layout,
+            base_size,
+            base_alignment,
+        );
+
+        // Add all base class fields to the result
+        if let Some(base_layout) = base_layout {
+            // Merge base fields into result
+            for (key, field_layout) in base_layout.fields {
+                result.fields.insert(key, field_layout);
+            }
+        }
+
+        result
     }
 
     pub fn instance_fields(td: TypeDescription, context: &ResolutionContext) -> Self {
+        // TODO: Add caching here - see comment at top of file
         let context = context.for_type(td);
-        Self::collect_fields(td, &context, |f| !f.static_member)
+        Self::collect_fields(td, &context, &mut |f| !f.static_member)
     }
 
     pub fn static_fields(td: TypeDescription, context: &ResolutionContext) -> Self {
+        // TODO: Add caching here - see comment at top of file
         let context = context.for_type(td);
-        Self::collect_fields(td, &context, |f| f.static_member)
+        Self::collect_fields(td, &context, &mut |f| f.static_member)
+    }
+
+    /// Get a field's layout by owner and name
+    pub fn get_field(&self, owner: TypeDescription, name: &str) -> Option<&FieldLayout> {
+        self.fields.get(&FieldKey {
+            owner,
+            name: name.to_string(),
+        })
+    }
+
+    /// Get a field's layout by name, searching through all types
+    /// This is a fallback for cases where we don't know the exact owner
+    pub fn get_field_by_name(&self, name: &str) -> Option<&FieldLayout> {
+        self.fields
+            .iter()
+            .find(|(k, _)| k.name == name)
+            .map(|(_, v)| v)
     }
 }
 
@@ -426,6 +491,7 @@ impl Scalar {
 }
 
 pub fn type_layout(t: ConcreteType, context: &ResolutionContext) -> LayoutManager {
+    let t = context.normalize_type(t);
     let context = ResolutionContext {
         resolution: t.resolution(),
         ..*context

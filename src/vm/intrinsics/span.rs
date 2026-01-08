@@ -13,11 +13,16 @@ use crate::{
 use std::{mem::size_of, ptr::NonNull, slice};
 
 pub fn span_to_slice<'gc, 'a>(span: Object<'gc>) -> &'a [u8] {
-    let ptr_data = span.instance_storage.get_field_local("_reference");
+    let ptr_data = span
+        .instance_storage
+        .get_field_local(span.description, "_reference");
     let mut len_data = [0u8; size_of::<i32>()];
 
     let ptr = ManagedPtr::read(ptr_data).value;
-    len_data.copy_from_slice(span.instance_storage.get_field_local("_length"));
+    len_data.copy_from_slice(
+        span.instance_storage
+            .get_field_local(span.description, "_length"),
+    );
 
     let len = i32::from_ne_bytes(len_data) as usize;
 
@@ -62,7 +67,12 @@ pub fn intrinsic_span_get_item<'gc, 'm: 'gc>(
 
     let ptr = unsafe {
         m.value
-            .add(span_layout.fields["_reference"].position)
+            .add(
+                span_layout
+                    .get_field_by_name("_reference")
+                    .unwrap()
+                    .position,
+            )
             .add(value_layout.size() * index as usize)
     };
 
@@ -93,7 +103,11 @@ pub fn intrinsic_span_get_length<'gc, 'm: 'gc>(
     let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
     let layout = crate::value::layout::FieldLayoutManager::instance_fields(m.inner_type, &ctx);
     let value = unsafe {
-        let target = m.value.as_ptr().add(layout.fields["_length"].position) as *const i32;
+        let target = m
+            .value
+            .as_ptr()
+            .add(layout.get_field_by_name("_length").unwrap().position)
+            as *const i32;
         *target
     };
     vm_push!(stack, gc, Int32(value));
@@ -126,9 +140,12 @@ pub fn intrinsic_string_as_span<'gc, 'm: 'gc>(
         None,
         false,
     );
-    managed.write(span.instance_storage.get_field_mut_local("_reference"));
+    managed.write(
+        span.instance_storage
+            .get_field_mut_local(span_type, "_reference"),
+    );
     span.instance_storage
-        .get_field_mut_local("_length")
+        .get_field_mut_local(span_type, "_length")
         .copy_from_slice(&(len as i32).to_ne_bytes());
 
     vm_push!(stack, gc, ValueType(Box::new(span)));
@@ -150,7 +167,11 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
     // Extract the field index from RuntimeFieldHandle
     let field_index = {
         let mut ptr_buf = [0u8; ObjectRef::SIZE];
-        ptr_buf.copy_from_slice(field_handle.instance_storage.get_field_local("_value"));
+        ptr_buf.copy_from_slice(
+            field_handle
+                .instance_storage
+                .get_field_local(field_handle.description, "_value"),
+        );
         let obj_ref = ObjectRef::read(&ptr_buf);
         let handle_obj = obj_ref.0.expect("Null pointer in RuntimeFieldHandle");
         let borrowed = handle_obj.borrow();
@@ -158,7 +179,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
         match &borrowed.storage {
             crate::value::object::HeapStorage::Obj(o) => {
                 let mut idx_buf = [0u8; size_of::<usize>()];
-                idx_buf.copy_from_slice(o.instance_storage.get_field_local("index"));
+                idx_buf.copy_from_slice(o.instance_storage.get_field_local(o.description, "index"));
                 usize::from_ne_bytes(idx_buf)
             }
             _ => panic!("RuntimeFieldHandle._value does not point to an object"),
@@ -200,13 +221,13 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
         managed.write(
             span_instance
                 .instance_storage
-                .get_field_mut_local("_reference"),
+                .get_field_mut_local(span_type, "_reference"),
         );
 
         let element_count = (array_size / element_size) as i32;
         span_instance
             .instance_storage
-            .get_field_mut_local("_length")
+            .get_field_mut_local(span_type, "_length")
             .copy_from_slice(&element_count.to_ne_bytes());
 
         vm_push!(stack, gc, ValueType(Box::new(span_instance)));

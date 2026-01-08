@@ -96,28 +96,36 @@ impl FieldStorage {
         &mut self.storage
     }
 
-    fn get_field_range(&self, field: &str) -> Range<usize> {
-        match self.layout.fields.get(field) {
-            None => panic!("field {} not found", field),
+    fn get_field_range(&self, owner: TypeDescription, field: &str) -> Range<usize> {
+        match self.layout.get_field(owner, field) {
+            None => panic!("field {}::{} not found", owner.type_name(), field),
             Some(l) => l.as_range(),
         }
     }
 
-    pub fn get_field_local(&self, field: &str) -> &[u8] {
-        &self.storage[self.get_field_range(field)]
+    pub fn get_field_local(&self, owner: TypeDescription, field: &str) -> &[u8] {
+        &self.storage[self.get_field_range(owner, field)]
     }
 
-    pub fn get_field_mut_local(&mut self, field: &str) -> &mut [u8] {
-        let r = self.get_field_range(field);
+    pub fn get_field_mut_local(&mut self, owner: TypeDescription, field: &str) -> &mut [u8] {
+        let r = self.get_field_range(owner, field);
         &mut self.storage[r]
     }
 
-    pub fn has_field(&self, field: &str) -> bool {
-        self.layout.fields.contains_key(field)
+    pub fn has_field(&self, owner: TypeDescription, field: &str) -> bool {
+        self.layout.get_field(owner, field).is_some()
     }
 
-    pub fn get_field_atomic(&self, field: &str, ordering: Ordering) -> Vec<u8> {
-        let layout = self.layout.fields.get(field).expect("field not found");
+    pub fn get_field_atomic(
+        &self,
+        owner: TypeDescription,
+        field: &str,
+        ordering: Ordering,
+    ) -> Vec<u8> {
+        let layout = self
+            .layout
+            .get_field(owner, field)
+            .expect("field not found");
         let size = layout.layout.size();
         let offset = layout.position;
         let ptr = unsafe { self.storage.as_ptr().add(offset) };
@@ -135,7 +143,7 @@ impl FieldStorage {
         if !is_aligned {
             // Fall back to non-atomic read if not aligned
             // This can happen with ExplicitLayout types
-            return self.get_field_local(field).to_vec();
+            return self.get_field_local(owner, field).to_vec();
         }
 
         match size {
@@ -149,15 +157,34 @@ impl FieldStorage {
             8 => unsafe { (*(ptr as *const AtomicU64)).load(ordering) }
                 .to_ne_bytes()
                 .to_vec(),
-            _ => self.get_field_local(field).to_vec(),
+            _ => self.get_field_local(owner, field).to_vec(),
         }
     }
 
-    pub fn set_field_atomic(&self, field: &str, value: &[u8], ordering: Ordering) {
-        let layout = self.layout.fields.get(field).expect("field not found");
+    pub fn set_field_atomic(
+        &self,
+        owner: TypeDescription,
+        field: &str,
+        value: &[u8],
+        ordering: Ordering,
+    ) {
+        let layout = self
+            .layout
+            .get_field(owner, field)
+            .expect("field not found");
         let size = layout.layout.size();
         let offset = layout.position;
         let ptr = unsafe { self.storage.as_ptr().add(offset) as *mut u8 };
+
+        if size != value.len() {
+            panic!(
+                "size mismatch for field {}::{} (expected {}, got {})",
+                owner.type_name(),
+                field,
+                size,
+                value.len()
+            );
+        }
 
         // Check alignment before attempting atomic operations
         // Unaligned atomic operations are UB in Rust

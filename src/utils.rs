@@ -145,3 +145,13 @@ pub fn decompose_type_source<T: Clone>(t: &TypeSource<T>) -> (UserType, Vec<T>) 
     };
     (ut, type_generics.to_vec())
 }
+
+pub fn is_ptr_aligned_to_field(ptr: *mut u8, field_size: usize) -> bool {
+    match field_size {
+        1 => true, // u8 is always aligned
+        2 => (ptr as usize).is_multiple_of(align_of::<u16>()),
+        4 => (ptr as usize).is_multiple_of(align_of::<u32>()),
+        8 => (ptr as usize).is_multiple_of(align_of::<u64>()),
+        _ => false,
+    }
+}

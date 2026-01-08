@@ -424,7 +424,7 @@ fn test_multiple_arenas_simple() {
     let storage_arc = shared.statics.get(type_desc);
     let storage = &storage_arc.storage;
 
-    let counter_bytes = storage.get_field_local("Counter");
+    let counter_bytes = storage.get_field_local(type_desc, "Counter");
     let counter = i32::from_ne_bytes(counter_bytes.try_into().unwrap());
 
     // Note: Without synchronization, the counter value is not guaranteed to be 5

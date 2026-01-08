@@ -101,7 +101,7 @@ pub struct Handler {
 }
 
 impl Debug for Handler {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{:?} {{ {:?} }}", self.kind, self.instructions)
     }
 }
@@ -120,7 +120,7 @@ pub enum HandlerKind {
 }
 
 impl Debug for HandlerKind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         use HandlerKind::*;
         match self {
             Catch(t) => write!(f, "catch({t:?})"),
@@ -317,9 +317,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         // Log the exception and full backtrace before clearing the stack.
 
         let mut message = None;
+        let exception_type = self.loader().corlib_type("System.Exception");
         exception.as_object(|obj| {
-            if obj.instance_storage.has_field("_message") {
-                let message_bytes = obj.instance_storage.get_field_local("_message");
+            if obj.instance_storage.has_field(exception_type, "_message") {
+                let message_bytes = obj
+                    .instance_storage
+                    .get_field_local(exception_type, "_message");
                 let message_ref = ObjectRef::read(message_bytes);
                 if let Some(msg_inner) = message_ref.0 {
                     let storage = &msg_inner.borrow().storage;

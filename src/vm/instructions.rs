@@ -22,16 +22,6 @@ use crate::{
 use dotnetdll::prelude::*;
 use std::{cmp::Ordering as CmpOrdering, ptr, slice};
 
-fn is_ptr_aligned_to_field(ptr: *mut u8, field_size: usize) -> bool {
-    match field_size {
-        1 => true, // u8 is always aligned
-        2 => (ptr as usize).is_multiple_of(align_of::<u16>()),
-        4 => (ptr as usize).is_multiple_of(align_of::<u32>()),
-        8 => (ptr as usize).is_multiple_of(align_of::<u64>()),
-        _ => false,
-    }
-}
-
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     /// Check for GC safe point and suspend if stop-the-world is requested.
     ///
@@ -1236,7 +1226,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let read_from_pointer = |ptr: *mut u8| {
                     debug_assert!(!ptr.is_null(), "Attempted to read field from null pointer");
                     let layout = FieldLayoutManager::instance_fields(field.parent, &ctx);
-                    let field_layout = layout.fields.get(name.as_ref()).unwrap();
+                    let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
 
                     let size = field_layout.layout.size();
                     let field_ptr = unsafe { ptr.add(field_layout.position) };
@@ -1245,7 +1235,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     // as required by ECMA-335.
                     if size <= size_of::<usize>() {
                         // Check alignment before attempting atomic operations
-                        if !is_ptr_aligned_to_field(field_ptr, size) {
+                        if !crate::utils::is_ptr_aligned_to_field(field_ptr, size) {
                             // Fall back to non-atomic read if not aligned
                             let slice = unsafe { slice::from_raw_parts(field_ptr, size) };
                             return read_data(slice);
@@ -1301,8 +1291,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         match &data.storage {
                             HeapStorage::Vec(_) => todo!("field on array"),
                             HeapStorage::Obj(o) => {
-                                let field_data =
-                                    o.instance_storage.get_field_atomic(name, ordering);
+                                let field_data = o.instance_storage.get_field_atomic(
+                                    field.parent,
+                                    name,
+                                    ordering,
+                                );
                                 read_data(&field_data)
                             }
                             HeapStorage::Str(_) => todo!("field on string"),
@@ -1318,7 +1311,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                 o.description.type_name()
                             )
                         }
-                        read_data(o.instance_storage.get_field_local(name))
+                        read_data(o.instance_storage.get_field_local(field.parent, name))
                     }
                     StackValue::NativeInt(i) => read_from_pointer(i as *mut u8),
                     StackValue::UnmanagedPtr(UnmanagedPtr(ptr))
@@ -1383,8 +1376,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 // SAFETY: source_ptr is a valid pointer to the start of an object or value type's storage.
                 // The offset is obtained from the field layout, which is guaranteed to be within bounds
                 // for the given type.
-                let ptr =
-                    unsafe { source_ptr.add(layout.fields.get(name.as_ref()).unwrap().position) };
+                let ptr = unsafe {
+                    source_ptr.add(
+                        layout
+                            .get_field(field.parent, name.as_ref())
+                            .unwrap()
+                            .position,
+                    )
+                };
 
                 let target_type = self.current_context().get_field_desc(field);
 
@@ -1444,7 +1443,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 // Thread-safe path: use GlobalState
                 let value = {
                     let storage = self.statics().get(field.parent);
-                    let field_data = storage.storage.get_field_atomic(name, ordering);
+                    let field_data = storage
+                        .storage
+                        .get_field_atomic(field.parent, name, ordering);
                     let t = ctx.make_concrete(&field.field.return_type);
                     CTSValue::read(&t, &ctx, &field_data).into_stack()
                 };
@@ -1466,7 +1467,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let field_type = ctx.get_field_desc(field);
                 let value = statics!(|s| {
                     let storage = s.get(field.parent);
-                    let field_data = storage.storage.get_field_local(name);
+                    let field_data = storage.storage.get_field_local(field.parent, name);
                     StackValue::managed_ptr(field_data.as_ptr() as *mut _, field_type, None, true)
                 });
 
@@ -1483,7 +1484,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 let rfh = self.loader().corlib_type("System.RuntimeFieldHandle");
                 let mut instance = Object::new(rfh, &self.current_context());
-                field_obj.write(instance.instance_storage.get_field_mut_local("_value"));
+                field_obj.write(instance.instance_storage.get_field_mut_local(rfh, "_value"));
 
                 push!(ValueType(Box::new(instance)));
             }
@@ -1493,7 +1494,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 let rmh = self.loader().corlib_type("System.RuntimeMethodHandle");
                 let mut instance = Object::new(rmh, &self.current_context());
-                method_obj.write(instance.instance_storage.get_field_mut_local("_value"));
+                method_obj.write(instance.instance_storage.get_field_mut_local(rmh, "_value"));
 
                 push!(ValueType(Box::new(instance)));
             }
@@ -1736,7 +1737,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let write_data = |dest: &mut [u8]| cts_value.write(dest);
                 let slice_from_pointer = |dest: *mut u8| {
                     let layout = FieldLayoutManager::instance_fields(field.parent, &ctx);
-                    let field_layout = layout.fields.get(name.as_ref()).unwrap();
+                    let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
                     unsafe {
                         slice::from_raw_parts_mut(
                             dest.add(field_layout.position),
@@ -1747,7 +1748,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 let write_to_pointer_atomic = |ptr: *mut u8| {
                     let layout = FieldLayoutManager::instance_fields(field.parent, &ctx);
-                    let field_layout = layout.fields.get(name.as_ref()).unwrap();
+                    let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
                     let size = field_layout.layout.size();
                     let field_ptr = unsafe { ptr.add(field_layout.position) };
 
@@ -1756,7 +1757,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                     if size <= size_of::<usize>() {
                         // Check alignment before attempting atomic operations
-                        if !is_ptr_aligned_to_field(field_ptr, size) {
+                        if !crate::utils::is_ptr_aligned_to_field(field_ptr, size) {
                             // Fall back to non-atomic write if not aligned
                             write_data(slice_from_pointer(ptr));
                             return;
@@ -1800,10 +1801,25 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         match &mut data.storage {
                             HeapStorage::Vec(_) => todo!("field on array"),
                             HeapStorage::Obj(o) => {
-                                let mut val_bytes = vec![0u8; type_layout(t.clone(), &ctx).size()];
+                                let layout = FieldLayoutManager::instance_fields(object_type, &ctx);
+                                let field_layout = layout
+                                    .get_field(field.parent, name.as_ref())
+                                    .unwrap_or_else(|| {
+                                        panic!(
+                                            "field {}::{} not found in layout for type {}",
+                                            field.parent.type_name(),
+                                            name,
+                                            object_type.type_name()
+                                        )
+                                    });
+                                let mut val_bytes = vec![0u8; field_layout.layout.size()];
                                 write_data(&mut val_bytes);
-                                o.instance_storage
-                                    .set_field_atomic(name, &val_bytes, ordering);
+                                o.instance_storage.set_field_atomic(
+                                    field.parent,
+                                    name,
+                                    &val_bytes,
+                                    ordering,
+                                );
                             }
                             HeapStorage::Str(_) => todo!("field on string"),
                             HeapStorage::Boxed(_) => todo!("field on boxed value type"),
@@ -1851,9 +1867,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let t = ctx.make_concrete(&field.field.return_type);
                     vm_trace_field!(self, "STORE_STATIC", name, &value);
 
-                    let mut val_bytes = vec![0u8; type_layout(t.clone(), &ctx).size()];
+                    let layout = FieldLayoutManager::static_fields(field.parent, &ctx);
+                    let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
+                    let mut val_bytes = vec![0u8; field_layout.layout.size()];
                     CTSValue::new(&t, &ctx, value).write(&mut val_bytes);
-                    storage.storage.set_field_atomic(name, &val_bytes, ordering);
+                    storage
+                        .storage
+                        .set_field_atomic(field.parent, name, &val_bytes, ordering);
                 }
             }
             Throw => {

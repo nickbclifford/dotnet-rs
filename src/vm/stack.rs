@@ -760,16 +760,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let mut resurrected = HashSet::new();
 
         let mut zero_out_handles = |for_type: GCHandleType, resurrected: &HashSet<usize>| {
-            for entry in handles.iter_mut().flatten() {
-                if entry.1 == for_type {
-                    if let ObjectRef(Some(ptr)) = entry.0 {
-                        if Gc::is_dead(fc, ptr) {
+            for (obj_ref, handle_type) in handles.iter_mut().flatten() {
+                if *handle_type == for_type {
+                    if let ObjectRef(Some(ptr)) = obj_ref {
+                        if Gc::is_dead(fc, *ptr) {
                             if for_type == GCHandleType::WeakTrackResurrection
-                                && resurrected.contains(&(Gc::as_ptr(ptr) as usize))
+                                && resurrected.contains(&(Gc::as_ptr(*ptr) as usize))
                             {
                                 continue;
                             }
-                            entry.0 = ObjectRef(None);
+                            *obj_ref = ObjectRef(None);
                         }
                     }
                 }

@@ -144,7 +144,8 @@ pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
     let layout = type_layout(concrete_type.clone(), &ctx);
 
     if let LayoutManager::FieldLayoutManager(flm) = layout {
-        if let Some(field) = flm.fields.get(&field_name) {
+        let td = stack.loader().find_concrete_type(concrete_type.clone());
+        if let Some(field) = flm.get_field(td, &field_name) {
             vm_push!(stack, gc, NativeInt(field.position as isize));
         } else {
             panic!("Field {} not found in type {:?}", field_name, concrete_type);
