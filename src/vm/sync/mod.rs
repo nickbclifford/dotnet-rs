@@ -107,6 +107,9 @@ pub mod compat {
         pub fn new() -> Self {
             Self(())
         }
+        pub fn notify_one(&self) {}
+        pub fn notify_all(&self) {}
+        pub fn wait<T>(&self, _guard: &mut MutexGuard<'_, T>) {}
     }
 }
 

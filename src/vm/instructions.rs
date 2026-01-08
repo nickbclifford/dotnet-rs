@@ -1797,7 +1797,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             )
                         }
 
-                        let mut data = h.unlock(gc).write();
+                        let mut data = h.borrow_mut(gc);
                         match &mut data.storage {
                             HeapStorage::Vec(_) => todo!("field on array"),
                             HeapStorage::Obj(o) => {

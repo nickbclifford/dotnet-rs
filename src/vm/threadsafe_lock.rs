@@ -4,20 +4,18 @@
 //! to use across multiple threads. Unlike `RefLock`, which uses non-atomic borrow
 //! flags, `ThreadSafeLock` uses atomic operations to ensure thread-safe access.
 use gc_arena::{barrier::Unlock, Collect, Collection};
+#[cfg(feature = "multithreading")]
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+#[cfg(not(feature = "multithreading"))]
+use std::cell::{Ref as RwLockReadGuard, RefMut as RwLockWriteGuard};
+#[cfg(not(feature = "multithreading"))]
+use gc_arena::lock::RefLock as RwLock;
 use std::ops::{Deref, DerefMut};
 
 /// A thread-safe lock for GC-managed objects.
 ///
-/// This lock uses `parking_lot::RwLock` internally to provide thread-safe
-/// read/write access to objects. It implements `Collect` so it can be used
-/// with `gc-arena`.
-///
-/// Unlike `RefLock`, this lock:
-/// - Uses atomic operations for the borrow flag
-/// - Is safe to use across multiple threads
-/// - Allows multiple concurrent readers or one writer
-/// - Does not panic on lock conflicts (uses OS-level blocking instead)
+/// In multi-threaded mode, this uses `parking_lot::RwLock` internally.
+/// In single-threaded mode, this uses `gc_arena::lock::RefLock`.
 #[derive(Debug)]
 pub struct ThreadSafeLock<T> {
     inner: RwLock<T>,
@@ -32,46 +30,22 @@ impl<T> ThreadSafeLock<T> {
     }
 
     /// Borrow the contents immutably.
-    ///
-    /// This acquires a read lock, which allows multiple concurrent readers.
-    /// If a write lock is held, this will block until the writer releases it.
-    ///
-    /// # GC Safety
-    ///
-    /// CAUTION: This method uses `parking_lot::RwLock`, which may block without
-    /// checking GC safe points. While parking_lot's locks are typically very fast
-    /// (using adaptive spinning), prolonged contention could delay reaching a safe
-    /// point during stop-the-world GC pauses.
-    ///
-    /// For critical sections that may experience contention, consider using
-    /// `try_borrow()` in a loop with explicit safe point checks between attempts.
     pub fn borrow(&self) -> ThreadSafeReadGuard<'_, T> {
         ThreadSafeReadGuard {
+            #[cfg(feature = "multithreading")]
             guard: self.inner.read(),
+            #[cfg(not(feature = "multithreading"))]
+            guard: self.inner.borrow(),
         }
     }
 
     /// Borrow the contents mutably.
-    ///
-    /// This acquires a write lock, which provides exclusive access.
-    /// If any readers or writers are active, this will block until they release.
-    ///
-    /// # GC Safety
-    ///
-    /// CAUTION: This method uses `parking_lot::RwLock`, which may block without
-    /// checking GC safe points. While parking_lot's locks are typically very fast
-    /// (using adaptive spinning), prolonged contention could delay reaching a safe
-    /// point during stop-the-world GC pauses.
-    ///
-    /// For critical sections that may experience contention, consider using
-    /// `try_borrow_mut()` in a loop with explicit safe point checks between attempts.
-    ///
-    /// Note: The `_gc` parameter is kept for API compatibility with `RefLock`,
-    /// which requires a mutation context. We don't actually use it since we're
-    /// using a different synchronization mechanism.
     pub fn borrow_mut<'gc>(&self, _gc: &gc_arena::Mutation<'gc>) -> ThreadSafeWriteGuard<'_, T> {
         ThreadSafeWriteGuard {
+            #[cfg(feature = "multithreading")]
             guard: self.inner.write(),
+            #[cfg(not(feature = "multithreading"))]
+            guard: unsafe { self.inner.unlock_unchecked().borrow_mut() },
         }
     }
 
@@ -79,18 +53,45 @@ impl<T> ThreadSafeLock<T> {
     ///
     /// Returns `None` if a write lock is currently held.
     pub fn try_borrow(&self) -> Option<ThreadSafeReadGuard<'_, T>> {
-        self.inner
-            .try_read()
-            .map(|guard| ThreadSafeReadGuard { guard })
+        #[cfg(feature = "multithreading")]
+        {
+            self.inner
+                .try_read()
+                .map(|guard| ThreadSafeReadGuard { guard })
+        }
+        #[cfg(not(feature = "multithreading"))]
+        {
+            self.inner
+                .try_borrow()
+                .ok()
+                .map(|guard| ThreadSafeReadGuard { guard })
+        }
     }
 
     /// Try to borrow the contents mutably without blocking.
     ///
     /// Returns `None` if any locks (read or write) are currently held.
-    pub fn try_borrow_mut(&self) -> Option<ThreadSafeWriteGuard<'_, T>> {
-        self.inner
-            .try_write()
-            .map(|guard| ThreadSafeWriteGuard { guard })
+    pub fn try_borrow_mut<'gc>(
+        &self,
+        _gc: &gc_arena::Mutation<'gc>,
+    ) -> Option<ThreadSafeWriteGuard<'_, T>> {
+        #[cfg(feature = "multithreading")]
+        {
+            let _ = _gc;
+            self.inner
+                .try_write()
+                .map(|guard| ThreadSafeWriteGuard { guard })
+        }
+        #[cfg(not(feature = "multithreading"))]
+        {
+            unsafe {
+                self.inner
+                    .unlock_unchecked()
+                    .try_borrow_mut()
+                    .ok()
+                    .map(|guard| ThreadSafeWriteGuard { guard })
+            }
+        }
     }
 
     /// Get an immutable reference to the inner value.
@@ -100,18 +101,32 @@ impl<T> ThreadSafeLock<T> {
     /// This bypasses the lock and should only be used when you can guarantee
     /// that no other threads are accessing the value.
     pub unsafe fn as_ptr(&self) -> *const T {
-        self.inner.data_ptr()
+        #[cfg(feature = "multithreading")]
+        {
+            self.inner.data_ptr()
+        }
+        #[cfg(not(feature = "multithreading"))]
+        {
+            self.inner.as_ptr()
+        }
     }
 }
 
 unsafe impl<T: Collect> Collect for ThreadSafeLock<T> {
     fn trace(&self, cc: &Collection) {
-        // SAFETY: Tracing happens during a stop-the-world pause, so no other
-        // threads are running. We can safely access the inner value without
-        // acquiring the lock. This avoids deadlock (or panic) if a thread was
-        // already holding the write lock when it reached a safe point.
-        unsafe {
-            (*self.inner.data_ptr()).trace(cc);
+        #[cfg(feature = "multithreading")]
+        {
+            // SAFETY: Tracing happens during a stop-the-world pause, so no other
+            // threads are running. We can safely access the inner value without
+            // acquiring the lock. This avoids deadlock (or panic) if a thread was
+            // already holding the write lock when it reached a safe point.
+            unsafe {
+                (*self.inner.data_ptr()).trace(cc);
+            }
+        }
+        #[cfg(not(feature = "multithreading"))]
+        {
+            self.inner.trace(cc);
         }
     }
 }
