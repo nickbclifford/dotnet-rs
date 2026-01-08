@@ -15,6 +15,17 @@ pub struct RuntimeMetrics {
     pub current_gc_allocated: AtomicU64,
     /// Current bytes allocated externally but tracked by GC-arena
     pub current_external_allocated: AtomicU64,
+    /// Cache hit/miss counters
+    pub layout_cache_hits: AtomicU64,
+    pub layout_cache_misses: AtomicU64,
+    pub intrinsic_cache_hits: AtomicU64,
+    pub intrinsic_cache_misses: AtomicU64,
+    pub intrinsic_field_cache_hits: AtomicU64,
+    pub intrinsic_field_cache_misses: AtomicU64,
+    pub hierarchy_cache_hits: AtomicU64,
+    pub hierarchy_cache_misses: AtomicU64,
+    pub vmt_cache_hits: AtomicU64,
+    pub vmt_cache_misses: AtomicU64,
 }
 
 impl RuntimeMetrics {
@@ -38,5 +49,52 @@ impl RuntimeMetrics {
         self.current_gc_allocated.store(gc_bytes, Ordering::Relaxed);
         self.current_external_allocated
             .store(external_bytes, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_layout_cache_hit(&self) {
+        self.layout_cache_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_layout_cache_miss(&self) {
+        self.layout_cache_misses.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_intrinsic_cache_hit(&self) {
+        self.intrinsic_cache_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_intrinsic_cache_miss(&self) {
+        self.intrinsic_cache_misses.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_intrinsic_field_cache_hit(&self) {
+        self.intrinsic_field_cache_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_intrinsic_field_cache_miss(&self) {
+        self.intrinsic_field_cache_misses.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_hierarchy_cache_hit(&self) {
+        self.hierarchy_cache_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_hierarchy_cache_miss(&self) {
+        self.hierarchy_cache_misses.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_vmt_cache_hit(&self) {
+        self.vmt_cache_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_vmt_cache_miss(&self) {
+        self.vmt_cache_misses.fetch_add(1, Ordering::Relaxed);
     }
 }

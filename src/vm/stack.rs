@@ -116,6 +116,14 @@ pub struct SharedGlobalState<'m> {
     pub tracer_enabled: Arc<std::sync::atomic::AtomicBool>,
     pub empty_generics: GenericLookup,
     pub method_tables: RwLock<HashMap<TypeDescription, Box<[u8]>>>,
+    /// Cache for virtual method resolution: (base_method, this_type) -> resolved_method
+    pub vmt_cache: RwLock<HashMap<(MethodDescription, TypeDescription), MethodDescription>>,
+    /// Cache for intrinsic checks: method -> is_intrinsic
+    pub intrinsic_cache: RwLock<HashMap<MethodDescription, bool>>,
+    /// Cache for intrinsic field checks: field -> is_intrinsic
+    pub intrinsic_field_cache: RwLock<HashMap<FieldDescription, bool>>,
+    /// Cache for type hierarchy checks: (child, parent) -> is_a result
+    pub hierarchy_cache: RwLock<HashMap<(TypeDescription, TypeDescription), bool>>,
     pub statics: StaticStorageManager,
     #[cfg(feature = "multithreaded-gc")]
     pub gc_coordinator: Arc<GCCoordinator>,
@@ -139,6 +147,10 @@ impl<'m> SharedGlobalState<'m> {
             tracer_enabled,
             empty_generics: GenericLookup::default(),
             method_tables: RwLock::new(HashMap::new()),
+            vmt_cache: RwLock::new(HashMap::new()),
+            intrinsic_cache: RwLock::new(HashMap::new()),
+            intrinsic_field_cache: RwLock::new(HashMap::new()),
+            hierarchy_cache: RwLock::new(HashMap::new()),
             statics: StaticStorageManager::new(),
             #[cfg(feature = "multithreaded-gc")]
             gc_coordinator: Arc::new(GCCoordinator::new()),
@@ -750,7 +762,23 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn is_a(&self, value: TypeDescription, ancestor: TypeDescription) -> bool {
-        self.current_context().is_a(value, ancestor)
+        // Check cache first
+        let cache_key = (value, ancestor);
+        {
+            let cache = self.shared.hierarchy_cache.read();
+            if let Some(&cached) = cache.get(&cache_key) {
+                self.shared.metrics.record_hierarchy_cache_hit();
+                return cached;
+            }
+        }
+
+        // Cache miss - perform hierarchy check
+        self.shared.metrics.record_hierarchy_cache_miss();
+        let result = self.current_context().is_a(value, ancestor);
+
+        // Cache the result
+        self.shared.hierarchy_cache.write().insert(cache_key, result);
+        result
     }
 
     pub fn finalize_check(&self, fc: &gc_arena::Finalization<'gc>) {
@@ -981,6 +1009,19 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         this_type: TypeDescription,
         ctx: Option<&ResolutionContext>,
     ) -> MethodDescription {
+        // Check cache first
+        let cache_key = (base_method, this_type);
+        {
+            let cache = self.shared.vmt_cache.read();
+            if let Some(&cached) = cache.get(&cache_key) {
+                self.shared.metrics.record_vmt_cache_hit();
+                return cached;
+            }
+        }
+
+        // Cache miss - perform resolution
+        self.shared.metrics.record_vmt_cache_miss();
+
         let default_ctx;
         let ctx = if let Some(ctx) = ctx {
             ctx
@@ -996,6 +1037,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 &base_method.method.signature,
                 base_method.resolution(),
             ) {
+                // Cache the result
+                self.shared.vmt_cache.write().insert(cache_key, method);
                 return method;
             }
         }
@@ -1003,6 +1046,52 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             "could not find virtual method implementation of {:?} in {:?}",
             base_method, this_type
         );
+    }
+
+    /// Check if a method is an intrinsic (with caching).
+    /// This is called on every method invocation, so caching is critical for performance.
+    pub fn is_intrinsic_cached(&self, method: MethodDescription) -> bool {
+        // Check cache first
+        {
+            let cache = self.shared.intrinsic_cache.read();
+            if let Some(&cached) = cache.get(&method) {
+                self.shared.metrics.record_intrinsic_cache_hit();
+                return cached;
+            }
+        }
+
+        // Cache miss - perform check
+        self.shared.metrics.record_intrinsic_cache_miss();
+        let result = crate::vm::intrinsics::is_intrinsic(method, self.shared.loader);
+
+        // Cache the result
+        self.shared.intrinsic_cache.write().insert(method, result);
+        result
+    }
+
+    /// Check if a field is an intrinsic (with caching).
+    pub fn is_intrinsic_field_cached(&self, field: FieldDescription) -> bool {
+        // Check cache first
+        {
+            let cache = self.shared.intrinsic_field_cache.read();
+            if let Some(&cached) = cache.get(&field) {
+                self.shared.metrics.record_intrinsic_field_cache_hit();
+                return cached;
+            }
+        }
+
+        // Cache miss - perform check
+        self.shared.metrics.record_intrinsic_field_cache_miss();
+        let result = crate::vm::intrinsics::is_intrinsic_field(field, self.shared.loader);
+
+        // Cache the result
+        self.shared.intrinsic_field_cache.write().insert(field, result);
+        result
+    }
+
+    /// Get the layout of a type (with caching and metrics).
+    pub fn type_layout_cached(&self, t: ConcreteType) -> crate::value::layout::LayoutManager {
+        crate::value::layout::type_layout_with_metrics(t, &self.current_context(), Some(&self.shared.metrics))
     }
 
     // ========================================================================

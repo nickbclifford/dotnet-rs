@@ -83,7 +83,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         method: MethodDescription,
         lookup: GenericLookup,
     ) -> StepResult {
-        if is_intrinsic(method, self.loader()) {
+        if self.is_intrinsic_cached(method) {
             intrinsic_call(gc, self, method, &lookup)
         } else if method.method.pinvoke.is_some() {
             self.external_call(method, gc);
@@ -259,7 +259,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         c
                     );
                 }
-                if is_intrinsic_field($field, self.loader()) {
+                if self.is_intrinsic_field_cached($field) {
                     intrinsic_field(
                         gc,
                         self,

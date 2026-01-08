@@ -5,7 +5,7 @@ use crate::{
         TypeDescription,
     },
     value::{object::ObjectRef, pointer::ManagedPtr},
-    vm::context::ResolutionContext,
+    vm::{context::ResolutionContext, metrics::RuntimeMetrics},
 };
 use dotnetdll::prelude::*;
 use enum_dispatch::enum_dispatch;
@@ -14,13 +14,12 @@ use std::{
     collections::{HashMap, HashSet},
     mem::size_of,
     ops::Range,
+    sync::{OnceLock, RwLock},
 };
 
-// TODO: Re-implement layout caching with proper thread safety
-// The naive caching implementation using RwLock causes issues in multithreaded scenarios
-// Consider using a lock-free cache or memoizing at a different level
-// static INSTANCE_LAYOUT_CACHE: OnceLock<RwLock<HashMap<TypeDescription, FieldLayoutManager>>> = OnceLock::new();
-// static STATIC_LAYOUT_CACHE: OnceLock<RwLock<HashMap<TypeDescription, FieldLayoutManager>>> = OnceLock::new();
+// Global cache for type layouts to avoid redundant calculations.
+// Layouts are deterministic based on the type's metadata and generic parameters.
+static LAYOUT_CACHE: OnceLock<RwLock<HashMap<ConcreteType, LayoutManager>>> = OnceLock::new();
 
 #[enum_dispatch]
 pub trait HasLayout {
@@ -328,6 +327,7 @@ impl FieldLayoutManager {
         td: TypeDescription,
         context: &ResolutionContext,
         predicate: &mut dyn FnMut(&Field) -> bool,
+        metrics: Option<&RuntimeMetrics>,
     ) -> Self {
         let ancestors: Vec<_> = context.get_ancestors(td).collect();
 
@@ -352,7 +352,12 @@ impl FieldLayoutManager {
             };
 
             // Recursively compute base layout
-            Some(Self::collect_fields(*base_td, &base_ctx, predicate))
+            Some(Self::collect_fields(
+                *base_td,
+                &base_ctx,
+                predicate,
+                metrics,
+            ))
         } else {
             None
         };
@@ -374,7 +379,7 @@ impl FieldLayoutManager {
                 parent: td,
                 field: f,
             });
-            let layout = type_layout(t, context);
+            let layout = type_layout_with_metrics(t, context, metrics);
             current_type_fields.push((td, f.name.as_ref(), f.offset, layout));
         }
 
@@ -398,15 +403,29 @@ impl FieldLayoutManager {
     }
 
     pub fn instance_fields(td: TypeDescription, context: &ResolutionContext) -> Self {
-        // TODO: Add caching here - see comment at top of file
+        Self::instance_fields_with_metrics(td, context, None)
+    }
+
+    pub fn instance_fields_with_metrics(
+        td: TypeDescription,
+        context: &ResolutionContext,
+        metrics: Option<&RuntimeMetrics>,
+    ) -> Self {
         let context = context.for_type(td);
-        Self::collect_fields(td, &context, &mut |f| !f.static_member)
+        Self::collect_fields(td, &context, &mut |f| !f.static_member, metrics)
     }
 
     pub fn static_fields(td: TypeDescription, context: &ResolutionContext) -> Self {
-        // TODO: Add caching here - see comment at top of file
+        Self::static_fields_with_metrics(td, context, None)
+    }
+
+    pub fn static_fields_with_metrics(
+        td: TypeDescription,
+        context: &ResolutionContext,
+        metrics: Option<&RuntimeMetrics>,
+    ) -> Self {
         let context = context.for_type(td);
-        Self::collect_fields(td, &context, &mut |f| f.static_member)
+        Self::collect_fields(td, &context, &mut |f| f.static_member, metrics)
     }
 
     /// Get a field's layout by owner and name
@@ -456,6 +475,18 @@ impl ArrayLayoutManager {
             length,
         }
     }
+
+    pub fn new_with_metrics(
+        element: ConcreteType,
+        length: usize,
+        context: &ResolutionContext,
+        metrics: Option<&RuntimeMetrics>,
+    ) -> Self {
+        Self {
+            element_layout: Box::new(type_layout_with_metrics(element, context, metrics)),
+            length,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -491,7 +522,42 @@ impl Scalar {
 }
 
 pub fn type_layout(t: ConcreteType, context: &ResolutionContext) -> LayoutManager {
+    type_layout_with_metrics(t, context, None)
+}
+
+pub fn type_layout_with_metrics(
+    t: ConcreteType,
+    context: &ResolutionContext,
+    metrics: Option<&RuntimeMetrics>,
+) -> LayoutManager {
     let t = context.normalize_type(t);
+
+    let cache = LAYOUT_CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+    {
+        let r = cache.read().unwrap();
+        if let Some(l) = r.get(&t) {
+            if let Some(m) = metrics {
+                m.record_layout_cache_hit();
+            }
+            return l.clone();
+        }
+    }
+
+    if let Some(m) = metrics {
+        m.record_layout_cache_miss();
+    }
+
+    let result = type_layout_internal(t.clone(), context, metrics);
+
+    cache.write().unwrap().insert(t, result.clone());
+    result
+}
+
+fn type_layout_internal(
+    t: ConcreteType,
+    context: &ResolutionContext,
+    metrics: Option<&RuntimeMetrics>,
+) -> LayoutManager {
     let context = ResolutionContext {
         resolution: t.resolution(),
         ..*context
@@ -524,9 +590,9 @@ pub fn type_layout(t: ConcreteType, context: &ResolutionContext) -> LayoutManage
             let ctx = context.with_generics(&new_lookup);
 
             if let Some(inner) = t.is_enum() {
-                type_layout(ctx.make_concrete(inner), &ctx)
+                type_layout_with_metrics(ctx.make_concrete(inner), &ctx, metrics)
             } else {
-                FieldLayoutManager::instance_fields(t, &ctx).into()
+                FieldLayoutManager::instance_fields_with_metrics(t, &ctx, metrics).into()
             }
         }
         BaseType::Type { .. }
