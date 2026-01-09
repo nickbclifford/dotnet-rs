@@ -26,7 +26,6 @@ use std::{
     hash::{Hash, Hasher},
     iter,
     marker::PhantomData,
-    mem,
     ptr::{self, NonNull},
 };
 
@@ -170,7 +169,7 @@ impl<'gc> ObjectRef<'gc> {
             // the object is guaranteed to be alive (as it is traced by the caller),
             // it is safe to reconstruct the Gc pointer.
             debug_assert!(
-                (ptr as usize).is_multiple_of(mem::align_of::<ThreadSafeLock<ObjectInner<'gc>>>()),
+                (ptr as usize).is_multiple_of(align_of::<ThreadSafeLock<ObjectInner<'gc>>>()),
                 "Attempted to reconstruct unaligned Gc pointer: {:?}",
                 ptr
             );
@@ -516,7 +515,7 @@ impl<'gc> CTSValue<'gc> {
                 }
 
                 vm_expect_stack!(let ValueType(o) = data);
-                if !new_ctx.is_a(o.description, td) {
+                if !new_ctx.is_a(o.description.into(), td.into()) {
                     panic!(
                         "type mismatch: expected {:?}, found {:?}",
                         td, o.description
@@ -686,8 +685,19 @@ impl<'gc> Vector<'gc> {
     }
     pub fn new(element: ConcreteType, size: usize, context: &ResolutionContext) -> Self {
         let layout = ArrayLayoutManager::new(element.clone(), size, context);
+        // Additional safety check: ensure the total allocation size is reasonable.
+        // ArrayLayoutManager::new already does some checks, but let's be extra safe here.
+        let total_size = layout.size();
+        if total_size > 0x7FFF_FFFF {
+            // 2GB limit (common in .NET)
+            panic!(
+                "attempted to allocate massive vector of {} bytes (element: {:?}, length: {})",
+                total_size, element, size
+            );
+        }
+
         Self {
-            storage: vec![0; layout.size()], // TODO: initialize properly
+            storage: vec![0; total_size], // TODO: initialize properly
             layout,
             element,
             _contains_gc: PhantomData,

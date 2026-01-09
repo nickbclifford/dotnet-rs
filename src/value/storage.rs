@@ -1,5 +1,9 @@
 use crate::{
-    types::{members::MethodDescription, TypeDescription},
+    types::{
+        generics::GenericLookup,
+        members::MethodDescription,
+        TypeDescription,
+    },
     utils::DebugStr,
     value::{
         layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
@@ -7,6 +11,7 @@ use crate::{
     },
     vm::{
         context::ResolutionContext,
+        metrics::RuntimeMetrics,
         sync::{Arc, AtomicU16, AtomicU32, AtomicU64, AtomicU8, Condvar, Mutex, Ordering, RwLock},
     },
 };
@@ -19,7 +24,7 @@ use std::{
 
 #[derive(Clone, PartialEq)]
 pub struct FieldStorage {
-    layout: FieldLayoutManager,
+    layout: Arc<FieldLayoutManager>,
     storage: Vec<u8>,
 }
 
@@ -31,7 +36,7 @@ impl Debug for FieldStorage {
             .iter()
             .map(|(k, v)| {
                 let data = &self.storage[v.as_range()];
-                let data_rep = match &v.layout {
+                let data_rep = match &*v.layout {
                     LayoutManager::Scalar(Scalar::ObjectRef) => {
                         format!("{:?}", ObjectRef::read(data))
                     }
@@ -69,15 +74,25 @@ unsafe impl Collect for FieldStorage {
 }
 
 impl FieldStorage {
-    pub fn new(layout: FieldLayoutManager) -> Self {
+    pub fn new(layout: Arc<FieldLayoutManager>) -> Self {
+        let size = layout.size();
+        // Defensive check: ensure the total allocation size is reasonable.
+        if size > 0x1000_0000 {
+            // 256MB limit for a single object instance
+            panic!("massive field storage allocation: {} bytes", size);
+        }
         Self {
-            storage: vec![0; layout.size()],
+            storage: vec![0; size],
             layout,
         }
     }
 
     pub fn instance_fields(description: TypeDescription, context: &ResolutionContext) -> Self {
-        Self::new(FieldLayoutManager::instance_fields(description, context))
+        Self::new(FieldLayoutManager::instance_field_layout_cached(
+            description,
+            context,
+            None,
+        ))
     }
 
     pub fn resurrect<'gc>(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
@@ -85,7 +100,10 @@ impl FieldStorage {
     }
 
     pub fn static_fields(description: TypeDescription, context: &ResolutionContext) -> Self {
-        Self::new(FieldLayoutManager::static_fields(description, context))
+        Self::new(Arc::new(FieldLayoutManager::static_fields(
+            description,
+            context,
+        )))
     }
 
     pub fn get(&self) -> &[u8] {
@@ -94,6 +112,10 @@ impl FieldStorage {
 
     pub fn get_mut(&mut self) -> &mut [u8] {
         &mut self.storage
+    }
+
+    pub fn layout(&self) -> &Arc<FieldLayoutManager> {
+        &self.layout
     }
 
     fn get_field_range(&self, owner: TypeDescription, field: &str) -> Range<usize> {
@@ -250,6 +272,12 @@ pub struct StaticStorage {
     pub(crate) init_mutex: Arc<Mutex<()>>,
 }
 
+impl StaticStorage {
+    pub fn layout(&self) -> Arc<FieldLayoutManager> {
+        self.storage.layout().clone()
+    }
+}
+
 impl Clone for StaticStorage {
     fn clone(&self) -> Self {
         Self {
@@ -285,6 +313,8 @@ pub struct StaticStorageManager {
     /// We use a RwLock for the map itself to allow concurrent access to different types,
     /// and each StaticStorage has its own locks for even more granularity.
     types: RwLock<HashMap<TypeDescription, Arc<StaticStorage>>>,
+    /// Cache for static field layouts to avoid recomputing them on every access.
+    pub(crate) field_layout_cache: dashmap::DashMap<(TypeDescription, GenericLookup), Arc<FieldLayoutManager>>,
 }
 
 unsafe impl Collect for StaticStorageManager {
@@ -320,7 +350,33 @@ impl StaticStorageManager {
     pub fn new() -> Self {
         Self {
             types: RwLock::new(HashMap::new()),
+            field_layout_cache: dashmap::DashMap::new(),
         }
+    }
+
+    pub fn get_static_field_layout(
+        &self,
+        description: TypeDescription,
+        context: &ResolutionContext,
+        metrics: Option<&RuntimeMetrics>,
+    ) -> Arc<FieldLayoutManager> {
+        let key = (description, context.generics.clone());
+
+        if let Some(cached) = self.field_layout_cache.get(&key) {
+            return Arc::clone(&cached);
+        }
+
+        if let Some(m) = metrics {
+            m.record_static_field_layout_cache_miss();
+        }
+        let result = Arc::new(FieldLayoutManager::static_fields_with_metrics(
+            description,
+            context,
+            metrics,
+        ));
+        self.field_layout_cache
+            .insert(key, Arc::clone(&result));
+        result
     }
 }
 
@@ -360,19 +416,25 @@ impl StaticStorageManager {
         description: TypeDescription,
         context: &ResolutionContext,
         thread_id: u64,
+        metrics: Option<&RuntimeMetrics>,
     ) -> StaticInitResult {
         // Ensure the storage exists. We use a write lock on the types map for this.
         {
             let mut types = self.types.write();
-            types.entry(description).or_insert_with(|| {
-                Arc::new(StaticStorage {
-                    init_state: AtomicU8::new(INIT_STATE_UNINITIALIZED),
-                    initializing_thread: AtomicU64::new(0),
-                    storage: FieldStorage::static_fields(description, context),
-                    init_cond: Arc::new(Condvar::new()),
-                    init_mutex: Arc::new(Mutex::new(())),
-                })
-            });
+            if !types.contains_key(&description) {
+                // Use the cached layout if available, or create and cache it
+                let layout = self.get_static_field_layout(description, context, metrics);
+                types.insert(
+                    description,
+                    Arc::new(StaticStorage {
+                        init_state: AtomicU8::new(INIT_STATE_UNINITIALIZED),
+                        initializing_thread: AtomicU64::new(0),
+                        storage: FieldStorage::new(layout),
+                        init_cond: Arc::new(Condvar::new()),
+                        init_mutex: Arc::new(Mutex::new(())),
+                    }),
+                );
+            }
         }
 
         // Get the storage and check its state.

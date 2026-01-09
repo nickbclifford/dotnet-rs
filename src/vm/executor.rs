@@ -71,9 +71,13 @@ impl Executor {
         0
     }
 
+    pub fn get_cache_stats(&self) -> crate::vm::metrics::CacheStats {
+        self.shared.get_cache_stats()
+    }
+
     pub fn new(shared: Arc<SharedGlobalState<'static>>) -> Self {
         let shared_clone = Arc::clone(&shared);
-        let arena = Box::new(GCArena::new(|_| {
+        let mut arena = Box::new(GCArena::new(|_| {
             let local = ArenaLocalState::new();
             CallStack::new(shared_clone, local)
         }));
@@ -88,9 +92,10 @@ impl Executor {
             crate::vm::gc::coordinator::set_current_arena_handle(handle);
         }
 
-        // Set thread id in arena
-        arena.mutate(|_, c| {
+        // Set thread id in arena and pre-initialize reflection
+        arena.mutate_root(|gc, c| {
             c.thread_id.set(thread_id);
+            c.pre_initialize_reflection(gc);
         });
 
         #[cfg(feature = "multithreaded-gc")]
@@ -112,7 +117,7 @@ impl Executor {
             arena.mutate_root(|gc, c| {
                 c.entrypoint_frame(
                     gc,
-                    MethodInfo::new(method, &Default::default(), c.loader()),
+                    MethodInfo::new(method, &Default::default(), c.shared.clone()),
                     Default::default(),
                     vec![],
                 )
@@ -365,6 +370,14 @@ impl Drop for Executor {
         self.shared.thread_manager.unregister_thread(self.thread_id);
 
         #[cfg(feature = "multithreaded-gc")]
-        self.shared.gc_coordinator.unregister_arena(self.thread_id);
+        {
+            self.shared.gc_coordinator.unregister_arena(self.thread_id);
+
+            // Clear thread-local GC state to prevent leakage across tests
+            crate::vm::gc::arena::THREAD_ARENA.with(|cell| {
+                *cell.borrow_mut() = None;
+            });
+            crate::vm::gc::coordinator::clear_thread_local_state();
+        }
     }
 }

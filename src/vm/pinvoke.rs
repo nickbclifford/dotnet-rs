@@ -62,13 +62,13 @@ fn type_to_layout(t: &TypeSource<ConcreteType>, ctx: &ResolutionContext) -> Fiel
     FieldLayoutManager::instance_fields(td, &new_ctx)
 }
 
-fn layout_to_ffi(l: LayoutManager) -> Type {
+fn layout_to_ffi(l: &LayoutManager) -> Type {
     match l {
         LayoutManager::FieldLayoutManager(f) => {
-            let mut fields: Vec<_> = f.fields.into_values().collect();
+            let mut fields: Vec<_> = f.fields.values().collect();
             fields.sort_by_key(|f| f.position);
 
-            Type::structure(fields.into_iter().map(|f| layout_to_ffi(f.layout)))
+            Type::structure(fields.into_iter().map(|f| layout_to_ffi(&f.layout)))
         }
         LayoutManager::ArrayLayoutManager(_) => todo!("marshalling not yet supported for arrays"),
         LayoutManager::Scalar(s) => match s {
@@ -112,7 +112,7 @@ fn type_to_ffi(t: &ConcreteType, ctx: &ResolutionContext) -> Type {
             let new_ctx = ctx.with_generics(&new_lookup);
 
             let layout = type_to_layout(source, &new_ctx);
-            layout_to_ffi(layout.into())
+            layout_to_ffi(&layout.into())
         }
         rest => todo!("marshalling not yet supported for {:?}", rest),
     }

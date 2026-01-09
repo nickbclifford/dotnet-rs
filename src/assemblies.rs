@@ -8,12 +8,29 @@ use crate::{
 };
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
-use std::{collections::HashMap, error::Error, fmt, fs, path::PathBuf, ptr, sync::RwLock};
+use std::{
+    collections::HashMap,
+    error::Error,
+    fmt, fs,
+    path::PathBuf,
+    ptr,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        RwLock,
+    },
+};
+use dashmap::DashMap;
 
 pub struct AssemblyLoader {
     assembly_root: String,
     external: RwLock<HashMap<String, Option<ResolutionS>>>,
     stubs: HashMap<String, TypeDescription>,
+    type_cache: DashMap<(ResolutionS, UserType), TypeDescription>,
+    method_cache: DashMap<(ResolutionS, UserMethod, GenericLookup), MethodDescription>,
+    pub type_cache_hits: AtomicU64,
+    pub type_cache_misses: AtomicU64,
+    pub method_cache_hits: AtomicU64,
+    pub method_cache_misses: AtomicU64,
 }
 unsafe_empty_collect!(AssemblyLoader);
 
@@ -48,6 +65,12 @@ impl AssemblyLoader {
             assembly_root,
             external: RwLock::new(resolutions),
             stubs: HashMap::new(),
+            type_cache: DashMap::new(),
+            method_cache: DashMap::new(),
+            type_cache_hits: AtomicU64::new(0),
+            type_cache_misses: AtomicU64::new(0),
+            method_cache_hits: AtomicU64::new(0),
+            method_cache_misses: AtomicU64::new(0),
         };
 
         for t in &support_res.type_definitions {
@@ -127,6 +150,24 @@ impl AssemblyLoader {
             }
             Some(Some(res)) => res,
         }
+    }
+
+    pub fn assemblies(&self) -> Vec<ResolutionS> {
+        self.external
+            .read()
+            .unwrap()
+            .values()
+            .flatten()
+            .copied()
+            .collect()
+    }
+
+    pub fn type_cache_size(&self) -> usize {
+        self.type_cache.len()
+    }
+
+    pub fn method_cache_size(&self) -> usize {
+        self.method_cache.len()
     }
 
     pub fn register_assembly(&self, resolution: ResolutionS) {
@@ -236,19 +277,28 @@ impl AssemblyLoader {
         None
     }
 
-    // TODO: cache
     pub fn locate_type(&self, resolution: ResolutionS, handle: UserType) -> TypeDescription {
-        match handle {
+        let key = (resolution, handle);
+        if let Some(cached) = self.type_cache.get(&key) {
+            self.type_cache_hits.fetch_add(1, Ordering::Relaxed);
+            return *cached;
+        }
+
+        self.type_cache_misses.fetch_add(1, Ordering::Relaxed);
+        let result = match handle {
             UserType::Definition(d) => {
                 let definition = &resolution.definition()[d];
                 if let Some(t) = self.stubs.get(&definition.type_name()) {
-                    return *t;
+                    *t
+                } else {
+                    TypeDescription::new(resolution, definition)
                 }
-
-                TypeDescription::new(resolution, definition)
             }
             UserType::Reference(r) => self.locate_type_ref(resolution, r),
-        }
+        };
+
+        self.type_cache.insert(key, result);
+        result
     }
 
     fn locate_type_ref(&self, resolution: ResolutionS, r: TypeRefIndex) -> TypeDescription {
@@ -648,14 +698,20 @@ impl AssemblyLoader {
         None
     }
 
-    // TODO: cache
     pub fn locate_method(
         &self,
         resolution: ResolutionS,
         handle: UserMethod,
         generic_inst: &GenericLookup,
     ) -> MethodDescription {
-        match handle {
+        let key = (resolution, handle, generic_inst.clone());
+        if let Some(cached) = self.method_cache.get(&key) {
+            self.method_cache_hits.fetch_add(1, Ordering::Relaxed);
+            return *cached;
+        }
+
+        self.method_cache_misses.fetch_add(1, Ordering::Relaxed);
+        let result = match handle {
             UserMethod::Definition(d) => MethodDescription {
                 parent: TypeDescription::new(resolution, &resolution.definition()[d.parent_type()]),
                 method: &resolution.definition()[d],
@@ -687,7 +743,10 @@ impl AssemblyLoader {
                     VarargMethod(_) => todo!("method reference: vararg method"),
                 }
             }
-        }
+        };
+
+        self.method_cache.insert(key, result);
+        result
     }
 
     pub fn locate_attribute(

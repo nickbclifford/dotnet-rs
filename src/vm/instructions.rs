@@ -89,7 +89,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             self.external_call(method, gc);
             StepResult::InstructionStepped
         } else {
-            self.call_frame(gc, MethodInfo::new(method, &lookup, self.loader()), lookup);
+            self.call_frame(gc, MethodInfo::new(method, &lookup, self.shared.clone()), lookup);
             StepResult::InstructionStepped
         }
     }
@@ -115,13 +115,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             loader: self.loader(),
             type_owner: Some(description),
             method_owner: None,
+            shared: self.shared.clone(),
         };
 
         loop {
             let tid = self.thread_id.get();
             let init_result = {
                 // Thread-safe path: use StaticStorageManager's internal locking
-                self.shared.statics.init(description, &ctx, tid)
+                self.shared.statics.init(description, &ctx, tid, Some(&self.shared.metrics))
             };
 
             use crate::value::storage::StaticInitResult::*;
@@ -132,7 +133,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         "-- calling static constructor (will return to ip {}) --",
                         self.current_frame().state.ip
                     );
-                    self.call_frame(gc, MethodInfo::new(m, &generics, self.loader()), generics);
+                    self.call_frame(gc, MethodInfo::new(m, &generics, self.shared.clone()), generics);
                     return true;
                 }
                 Initialized | Recursive => {
@@ -735,13 +736,27 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             LocalMemoryAllocate => {
                 let size = match pop!() {
-                    StackValue::Int32(i) => i as usize,
-                    StackValue::NativeInt(i) => i as usize,
+                    StackValue::Int32(i) => {
+                        if i < 0 {
+                            return self.throw_by_name(gc, "System.OverflowException");
+                        }
+                        i as usize
+                    }
+                    StackValue::NativeInt(i) => {
+                        if i < 0 {
+                            return self.throw_by_name(gc, "System.OverflowException");
+                        }
+                        i as usize
+                    }
                     v => panic!(
                         "invalid type on stack ({:?}) for local memory allocation size",
                         v
                     ),
                 };
+                // Defensive check: limit local allocation to 128MB
+                if size > 0x800_0000 {
+                    return self.throw_by_name(gc, "System.OutOfMemoryException");
+                }
                 let ptr = state!(|s| {
                     let loc = s.memory_pool.len();
                     s.memory_pool.extend(vec![0; size]);
@@ -1038,9 +1053,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 if let ObjectRef(Some(o)) = target_obj {
                     let ctx = self.current_context();
                     let obj_type = ctx.get_heap_description(o);
-                    let target_type = self.loader().find_concrete_type(ctx.make_concrete(target));
+                    let target_ct = ctx.make_concrete(target);
 
-                    if ctx.is_a(obj_type, target_type) {
+                    if ctx.is_a(obj_type.into(), target_ct) {
                         push!(ObjectRef(target_obj));
                     } else {
                         return self.throw_by_name(gc, "System.InvalidCastException");
@@ -1065,9 +1080,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 if let ObjectRef(Some(o)) = target_obj {
                     let ctx = self.current_context();
                     let obj_type = ctx.get_heap_description(o);
-                    let target_type = self.loader().find_concrete_type(ctx.make_concrete(target));
+                    let target_ct = ctx.make_concrete(target);
 
-                    if ctx.is_a(obj_type, target_type) {
+                    if ctx.is_a(obj_type.into(), target_ct) {
                         push!(ObjectRef(target_obj));
                     } else {
                         push!(null());
@@ -1225,7 +1240,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let read_data = |d: &[u8]| -> CTSValue<'gc> { CTSValue::read(&t, &ctx, d) };
                 let read_from_pointer = |ptr: *mut u8| {
                     debug_assert!(!ptr.is_null(), "Attempted to read field from null pointer");
-                    let layout = FieldLayoutManager::instance_fields(field.parent, &ctx);
+                    let layout = FieldLayoutManager::instance_field_layout_cached(
+                        field.parent,
+                        &ctx,
+                        Some(&self.shared.metrics),
+                    );
                     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
 
                     let size = field_layout.layout.size();
@@ -1278,7 +1297,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     StackValue::ObjectRef(ObjectRef(Some(h))) => {
                         let object_type = self.current_context().get_heap_description(h);
-                        if !self.current_context().is_a(object_type, field.parent) {
+                        if !self.current_context().is_a(object_type.into(), field.parent.into()) {
                             panic!(
                                 "tried to load field {}::{} from object of type {}",
                                 field.parent.type_name(),
@@ -1303,7 +1322,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         }
                     }
                     StackValue::ValueType(ref o) => {
-                        if !self.current_context().is_a(o.description, field.parent) {
+                        if !self.current_context().is_a(o.description.into(), field.parent.into()) {
                             panic!(
                                 "tried to load field {}::{} from object of type {}",
                                 field.parent.type_name(),
@@ -1338,7 +1357,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     StackValue::ObjectRef(ObjectRef(Some(h))) => {
                         let object_type = ctx.get_heap_description(h);
-                        if !ctx.is_a(object_type, field.parent) {
+                        if !ctx.is_a(object_type.into(), field.parent.into()) {
                             panic!(
                                 "tried to load field {}::{} from object of type {}",
                                 field.parent.type_name(),
@@ -1371,8 +1390,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     "Attempted to load field address from null pointer"
                 );
 
-                let layout =
-                    FieldLayoutManager::instance_fields(field.parent, &self.current_context());
+                let layout = FieldLayoutManager::instance_field_layout_cached(
+                    field.parent,
+                    &ctx,
+                    Some(&self.shared.metrics),
+                );
                 // SAFETY: source_ptr is a valid pointer to the start of an object or value type's storage.
                 // The offset is obtained from the field layout, which is guaranteed to be within bounds
                 // for the given type.
@@ -1520,8 +1542,18 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             MakeTypedReference(_) => todo!("mkrefany"),
             NewArray(elem_type) => {
                 let length = match pop!() {
-                    StackValue::Int32(i) => i as usize,
-                    StackValue::NativeInt(i) => i as usize,
+                    StackValue::Int32(i) => {
+                        if i < 0 {
+                            return self.throw_by_name(gc, "System.OverflowException");
+                        }
+                        i as usize
+                    }
+                    StackValue::NativeInt(i) => {
+                        if i < 0 {
+                            return self.throw_by_name(gc, "System.OverflowException");
+                        }
+                        i as usize
+                    }
                     rest => panic!(
                         "invalid length for newarr (expected int32 or native int, received {:?})",
                         rest
@@ -1588,7 +1620,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     self.constructor_frame(
                         gc,
                         instance,
-                        MethodInfo::new(method, &lookup, self.loader()),
+                        MethodInfo::new(method, &lookup, self.shared.clone()),
                         lookup,
                     );
                     moved_ip = true;
@@ -1736,7 +1768,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let cts_value = CTSValue::new(&t, &ctx, value);
                 let write_data = |dest: &mut [u8]| cts_value.write(dest);
                 let slice_from_pointer = |dest: *mut u8| {
-                    let layout = FieldLayoutManager::instance_fields(field.parent, &ctx);
+                    let layout = FieldLayoutManager::instance_field_layout_cached(
+                        field.parent,
+                        &ctx,
+                        Some(&self.shared.metrics),
+                    );
                     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
                     unsafe {
                         slice::from_raw_parts_mut(
@@ -1747,7 +1783,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 };
 
                 let write_to_pointer_atomic = |ptr: *mut u8| {
-                    let layout = FieldLayoutManager::instance_fields(field.parent, &ctx);
+                    let layout = FieldLayoutManager::instance_field_layout_cached(
+                        field.parent,
+                        &ctx,
+                        Some(&self.shared.metrics),
+                    );
                     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
                     let size = field_layout.layout.size();
                     let field_ptr = unsafe { ptr.add(field_layout.position) };
@@ -1788,7 +1828,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     StackValue::ObjectRef(ObjectRef(Some(h))) => {
                         let object_type = ctx.get_heap_description(h);
-                        if !ctx.is_a(object_type, field.parent) {
+                        if !ctx.is_a(object_type.into(), field.parent.into()) {
                             panic!(
                                 "tried to store field {}::{} to object of type {}",
                                 field.parent.type_name(),
@@ -1801,7 +1841,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         match &mut data.storage {
                             HeapStorage::Vec(_) => todo!("field on array"),
                             HeapStorage::Obj(o) => {
-                                let layout = FieldLayoutManager::instance_fields(object_type, &ctx);
+                                let layout = o.instance_storage.layout();
                                 let field_layout = layout
                                     .get_field(field.parent, name.as_ref())
                                     .unwrap_or_else(|| {
@@ -1867,7 +1907,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let t = ctx.make_concrete(&field.field.return_type);
                     vm_trace_field!(self, "STORE_STATIC", name, &value);
 
-                    let layout = FieldLayoutManager::static_fields(field.parent, &ctx);
+                    let layout = storage.layout();
                     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
                     let mut val_bytes = vec![0u8; field_layout.layout.size()];
                     CTSValue::new(&t, &ctx, value).write(&mut val_bytes);

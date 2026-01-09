@@ -1,7 +1,5 @@
-use crate::{
-    assemblies::AssemblyLoader,
-    types::{generics::GenericLookup, members::MethodDescription},
-};
+use crate::types::{generics::GenericLookup, members::MethodDescription};
+use std::sync::Arc;
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
 use std::rc::Rc;
@@ -56,11 +54,12 @@ pub struct MethodInfo<'a> {
 }
 unsafe_empty_collect!(MethodInfo<'_>);
 impl MethodInfo<'static> {
-    pub fn new<'c>(
+    pub fn new<'c, 'm>(
         method: MethodDescription,
         generics: &'c GenericLookup,
-        loader: &'c AssemblyLoader,
+        shared: Arc<crate::vm::stack::SharedGlobalState<'m>>,
     ) -> Self {
+        let loader = shared.loader;
         let body = match &method.method.body {
             Some(b) => b,
             None => panic!("no body in executing method"),
@@ -81,7 +80,7 @@ impl MethodInfo<'static> {
             None => panic!("cannot call method with empty body"),
         };
 
-        let ctx = ResolutionContext::for_method(method, loader, generics);
+        let ctx = ResolutionContext::for_method(method, loader, generics, shared);
 
         Self {
             is_cctor: method.method.runtime_special_name

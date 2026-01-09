@@ -16,7 +16,8 @@ use crate::{
     vm_pop, vm_push,
 };
 use dotnetdll::prelude::{BaseType, Kind, MemberType, MethodType, TypeSource};
-use std::{fmt::Debug, hash::Hash};
+use gc_arena::Gc;
+use std::{fmt::Debug, hash::Hash, ptr::NonNull};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct RuntimeMethodSignature; // TODO
@@ -223,10 +224,65 @@ fn get_runtime_member_index<T: PartialEq>(
 }
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
+    pub fn pre_initialize_reflection(&mut self, gc: GCHandle<'gc>) {
+        let blessed = [
+            RuntimeType::Void,
+            RuntimeType::Boolean,
+            RuntimeType::Char,
+            RuntimeType::Int8,
+            RuntimeType::UInt8,
+            RuntimeType::Int16,
+            RuntimeType::UInt16,
+            RuntimeType::Int32,
+            RuntimeType::UInt32,
+            RuntimeType::Int64,
+            RuntimeType::UInt64,
+            RuntimeType::Float32,
+            RuntimeType::Float64,
+            RuntimeType::IntPtr,
+            RuntimeType::UIntPtr,
+            RuntimeType::Object,
+            RuntimeType::String,
+        ];
+
+        for t in blessed {
+            self.get_runtime_type(gc, t);
+        }
+    }
+
     pub fn get_runtime_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> ObjectRef<'gc> {
         if let Some(obj) = self.runtime_types_read().get(&target) {
             return *obj;
         }
+
+        #[cfg(feature = "multithreaded-gc")]
+        if let Some(entry) = self.shared.shared_runtime_types.get(&target) {
+            let (ptr, owner_id) = *entry;
+            if owner_id != self.thread_id.get() {
+                let obj_ref = ObjectRef(Some(unsafe { Gc::from_ptr(ptr.as_ptr() as *const _) }));
+                let index = obj_ref.as_object(|instance| {
+                    let ct = instance
+                        .instance_storage
+                        .get_field_local(instance.description, "index");
+                    usize::from_ne_bytes(ct.try_into().unwrap())
+                });
+
+                // Defensive check: limit to 1M types
+                if index > 1_000_000 {
+                    panic!("corrupted runtime type index: {}", index);
+                }
+
+                let mut list = self.runtime_types_list_write();
+                if index >= list.len() {
+                    list.resize(index + 1, target.clone());
+                } else {
+                    list[index] = target.clone();
+                }
+                self.runtime_types_write().insert(target, obj_ref);
+                return obj_ref;
+            }
+        }
+
         let rt = self.loader().corlib_type("DotnetRs.RuntimeType");
         let rt_obj = Object::new(rt, &self.current_context());
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
@@ -238,14 +294,27 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             list.push(target.clone());
             index
         };
-        self.runtime_types_write().insert(target, obj_ref);
 
+        // CRITICAL: Set the index field BEFORE publishing to shared cache
+        // to avoid race condition where other threads read uninitialized data
         obj_ref.as_object_mut(gc, |instance| {
             instance
                 .instance_storage
                 .get_field_mut_local(rt, "index")
                 .copy_from_slice(&index.to_ne_bytes());
         });
+
+        #[cfg(feature = "multithreaded-gc")]
+        {
+            let ptr =
+                crate::value::object::ObjectPtr(NonNull::new(Gc::as_ptr(obj_ref.0.unwrap()) as *mut _)
+                    .unwrap());
+            self.shared
+                .shared_runtime_types
+                .insert(target.clone(), (ptr, self.thread_id.get()));
+        }
+
+        self.runtime_types_write().insert(target, obj_ref);
         obj_ref
     }
 
@@ -385,6 +454,35 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             return *obj;
         }
 
+        #[cfg(feature = "multithreaded-gc")]
+        if let Some(entry) = self.shared.shared_runtime_methods.get(&(method, lookup.clone())) {
+            let (ptr, owner_id) = *entry;
+            if owner_id != self.thread_id.get() {
+                let obj_ref = ObjectRef(Some(unsafe { Gc::from_ptr(ptr.as_ptr() as *const _) }));
+                let index = obj_ref.as_object(|instance| {
+                    let data = instance
+                        .instance_storage
+                        .get_field_local(instance.description, "index");
+                    usize::from_ne_bytes(data.try_into().unwrap())
+                });
+
+                // Defensive check: limit to 10M methods
+                if index > 10_000_000 {
+                    panic!("corrupted runtime method index: {}", index);
+                }
+
+                let mut list = self.runtime_methods_write();
+                if index >= list.len() {
+                    list.resize(index + 1, (method, lookup.clone()));
+                } else {
+                    list[index] = (method, lookup.clone());
+                }
+                self.runtime_method_objs_write()
+                    .insert((method, lookup), obj_ref);
+                return obj_ref;
+            }
+        }
+
         let is_ctor = method.method.name == ".ctor" || method.method.name == ".cctor";
         let class_name = if is_ctor {
             "DotnetRs.ConstructorInfo"
@@ -399,12 +497,24 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         let index = self.get_runtime_method_index(method, lookup.clone());
 
+        // CRITICAL: Set the index field BEFORE publishing to shared cache
+        // to avoid race condition where other threads read uninitialized data
         obj_ref.as_object_mut(gc, |instance| {
             instance
                 .instance_storage
                 .get_field_mut_local(rt, "index")
                 .copy_from_slice(&(index as usize).to_ne_bytes());
         });
+
+        #[cfg(feature = "multithreaded-gc")]
+        {
+            let ptr =
+                crate::value::object::ObjectPtr(NonNull::new(Gc::as_ptr(obj_ref.0.unwrap()) as *mut _)
+                    .unwrap());
+            self.shared
+                .shared_runtime_methods
+                .insert((method, lookup.clone()), (ptr, self.thread_id.get()));
+        }
 
         self.runtime_method_objs_write()
             .insert((method, lookup), obj_ref);
@@ -421,6 +531,35 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             return *obj;
         }
 
+        #[cfg(feature = "multithreaded-gc")]
+        if let Some(entry) = self.shared.shared_runtime_fields.get(&(field, lookup.clone())) {
+            let (ptr, owner_id) = *entry;
+            if owner_id != self.thread_id.get() {
+                let obj_ref = ObjectRef(Some(unsafe { Gc::from_ptr(ptr.as_ptr() as *const _) }));
+                let index = obj_ref.as_object(|instance| {
+                    let data = instance
+                        .instance_storage
+                        .get_field_local(instance.description, "index");
+                    usize::from_ne_bytes(data.try_into().unwrap())
+                });
+
+                // Defensive check: limit to 10M fields
+                if index > 10_000_000 {
+                    panic!("corrupted runtime field index: {}", index);
+                }
+
+                let mut list = self.runtime_fields_write();
+                if index >= list.len() {
+                    list.resize(index + 1, (field, lookup.clone()));
+                } else {
+                    list[index] = (field, lookup.clone());
+                }
+                self.runtime_field_objs_write()
+                    .insert((field, lookup), obj_ref);
+                return obj_ref;
+            }
+        }
+
         let rt = self.loader().corlib_type("DotnetRs.FieldInfo");
         let rt_obj = Object::new(rt, &self.current_context());
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
@@ -428,12 +567,24 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         let index = self.get_runtime_field_index(field, lookup.clone());
 
+        // CRITICAL: Set the index field BEFORE publishing to shared cache
+        // to avoid race condition where other threads read uninitialized data
         obj_ref.as_object_mut(gc, |instance| {
             instance
                 .instance_storage
                 .get_field_mut_local(rt, "index")
                 .copy_from_slice(&(index as usize).to_ne_bytes());
         });
+
+        #[cfg(feature = "multithreaded-gc")]
+        {
+            let ptr =
+                crate::value::object::ObjectPtr(NonNull::new(Gc::as_ptr(obj_ref.0.unwrap()) as *mut _)
+                    .unwrap());
+            self.shared
+                .shared_runtime_fields
+                .insert((field, lookup.clone()), (ptr, self.thread_id.get()));
+        }
 
         self.runtime_field_objs_write()
             .insert((field, lookup), obj_ref);
@@ -469,32 +620,57 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             let resolution = target_type.resolution(stack.loader());
 
             let cached_asm = stack.runtime_asms_read().get(&resolution).copied();
-            let value = match cached_asm {
-                Some(o) => o,
-                None => {
-                    let support_res = stack.loader().get_assembly(SUPPORT_ASSEMBLY);
-                    let definition = support_res
-                        .definition()
-                        .type_definitions
-                        .iter()
-                        .find(|a| a.type_name() == "DotnetRs.Assembly")
-                        .expect("could find DotnetRs.Assembly in support library");
-                    let mut asm_handle = Object::new(
-                        TypeDescription::new(support_res, definition),
-                        &ResolutionContext::new(generics, stack.loader(), support_res),
-                    );
-                    let data = (resolution.as_raw() as usize).to_ne_bytes();
-                    asm_handle
-                        .instance_storage
-                        .get_field_mut_local(asm_handle.description, "resolution")
-                        .copy_from_slice(&data);
-                    let v = ObjectRef::new(gc, HeapStorage::Obj(asm_handle));
-                    stack.register_new_object(&v);
-                    stack.runtime_asms_write().insert(resolution, v);
-                    v
+            if let Some(o) = cached_asm {
+                push!(ObjectRef(o));
+                return StepResult::InstructionStepped;
+            }
+
+            #[cfg(feature = "multithreaded-gc")]
+            {
+                let shared_entry = stack.shared.shared_runtime_asms.get(&resolution).map(|e| *e);
+                if let Some((ptr, owner_id)) = shared_entry {
+                    if owner_id != stack.thread_id.get() {
+                        let obj_ref =
+                            ObjectRef(Some(unsafe { Gc::from_ptr(ptr.as_ptr() as *const _) }));
+                        stack.runtime_asms_write().insert(resolution, obj_ref);
+                        push!(ObjectRef(obj_ref));
+                        return StepResult::InstructionStepped;
+                    }
                 }
-            };
-            push!(ObjectRef(value));
+            }
+
+            let support_res = stack.loader().get_assembly(SUPPORT_ASSEMBLY);
+            let definition = support_res
+                .definition()
+                .type_definitions
+                .iter()
+                .find(|a| a.type_name() == "DotnetRs.Assembly")
+                .expect("could find DotnetRs.Assembly in support library");
+            let mut asm_handle = Object::new(
+                TypeDescription::new(support_res, definition),
+                &ResolutionContext::new(generics, stack.loader(), support_res, stack.shared.clone()),
+            );
+            let data = (resolution.as_raw() as usize).to_ne_bytes();
+            asm_handle
+                .instance_storage
+                .get_field_mut_local(asm_handle.description, "resolution")
+                .copy_from_slice(&data);
+            let v = ObjectRef::new(gc, HeapStorage::Obj(asm_handle));
+            stack.register_new_object(&v);
+
+            #[cfg(feature = "multithreaded-gc")]
+            {
+                let ptr = crate::value::object::ObjectPtr(
+                    NonNull::new(Gc::as_ptr(v.0.unwrap()) as *mut _).unwrap(),
+                );
+                stack
+                    .shared
+                    .shared_runtime_asms
+                    .insert(resolution, (ptr, stack.thread_id.get()));
+            }
+
+            stack.runtime_asms_write().insert(resolution, v);
+            push!(ObjectRef(v));
             Some(StepResult::InstructionStepped)
         }
         ("GetNamespace", 0) => {
@@ -527,7 +703,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                         let mut ancestors = stack.loader().ancestors(td);
                         if let Some((base_td, base_generics)) = ancestors.next() {
                             let _ctx =
-                                ResolutionContext::for_method(method, stack.loader(), generics);
+                                ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
                             let base_rt = if base_generics.is_empty() {
                                 RuntimeType::Type(base_td)
                             } else {
@@ -732,7 +908,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                     stack.constructor_frame(
                         gc,
                         instance,
-                        MethodInfo::new(desc, &new_lookup, stack.loader()),
+                        MethodInfo::new(desc, &new_lookup, stack.shared.clone()),
                         new_lookup,
                     );
                     return StepResult::InstructionStepped;
@@ -845,7 +1021,7 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
     let obj = vm_pop!(stack);
     let object_type = match obj {
         StackValue::ObjectRef(ObjectRef(Some(h))) => ctx.get_heap_description(h),
@@ -866,10 +1042,10 @@ pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
-    let value = match layout {
+    let value = match &*layout {
         LayoutManager::Scalar(Scalar::ObjectRef) => false,
         LayoutManager::Scalar(_) => true,
         _ => false,
@@ -884,7 +1060,7 @@ pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<'gc, 'm: 'g
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
     vm_push!(stack, gc, Int32(layout.is_or_contains_refs() as i32));
@@ -919,7 +1095,7 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
 ) -> StepResult {
     let target_ct = generics.method_generics[0].clone();
     let target_td = stack.loader().find_concrete_type(target_ct.clone());
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
 
     if target_td.is_value_type(&ctx) {
         let instance = Object::new(target_td, &ctx);
@@ -946,7 +1122,7 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
                 stack.constructor_frame(
                     gc,
                     instance,
-                    MethodInfo::new(desc, &new_lookup, stack.loader()),
+                    MethodInfo::new(desc, &new_lookup, stack.shared.clone()),
                     new_lookup,
                 );
                 return StepResult::InstructionStepped;
@@ -1019,7 +1195,7 @@ pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc>(
     let target = stack.resolve_runtime_type(o);
     let target_ct = target.to_concrete(stack.loader());
     let target_desc = stack.loader().find_concrete_type(target_ct);
-    let ctx = ResolutionContext::for_method(_method, stack.loader(), generics);
+    let ctx = ResolutionContext::for_method(_method, stack.loader(), generics, stack.shared.clone());
     let value = target_desc.is_value_type(&ctx);
     vm_push!(stack, gc, Int32(value as i32));
     StepResult::InstructionStepped
@@ -1090,7 +1266,7 @@ pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc>(
     pop_args!(stack, [ObjectRef(obj)]);
 
     let rth = stack.loader().corlib_type("System.RuntimeTypeHandle");
-    let ctx = ResolutionContext::for_method(_method, stack.loader(), generics);
+    let ctx = ResolutionContext::for_method(_method, stack.loader(), generics, stack.shared.clone());
     let mut instance = Object::new(rth, &ctx);
     obj.write(instance.instance_storage.get_field_mut_local(rth, "_value"));
 

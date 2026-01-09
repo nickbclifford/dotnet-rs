@@ -50,7 +50,7 @@ pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
     let src = vm_pop!(stack).as_ptr();
     let dst = vm_pop!(stack).as_ptr();
 
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
     let total_count = len as usize * layout.size();
@@ -100,7 +100,7 @@ pub fn intrinsic_marshal_size_of<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
     let concrete_type = if method.method.signature.parameters.is_empty() {
         generics.method_generics[0].clone()
     } else {
@@ -124,7 +124,7 @@ pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     use crate::value::string::with_string;
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
     let field_name_val = vm_pop!(stack);
     let field_name = with_string!(stack, gc, field_name_val, |s| s.as_string());
     let concrete_type = if method.method.signature.parameters.len() == 1 {
@@ -143,7 +143,7 @@ pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
     };
     let layout = type_layout(concrete_type.clone(), &ctx);
 
-    if let LayoutManager::FieldLayoutManager(flm) = layout {
+    if let LayoutManager::FieldLayoutManager(flm) = &*layout {
         let td = stack.loader().find_concrete_type(concrete_type.clone());
         if let Some(field) = flm.get_field(td, &field_name) {
             vm_push!(stack, gc, NativeInt(field.position as isize));
@@ -163,7 +163,7 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
     let target = &generics.method_generics[0];
     let target_type = stack.loader().find_concrete_type(target.clone());
     let layout = type_layout(target.clone(), &ctx);
@@ -283,7 +283,7 @@ pub fn intrinsic_unsafe_size_of<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
     vm_push!(stack, gc, Int32(layout.size() as i32));
@@ -311,7 +311,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
     pop_args!(stack, [NativeInt(ptr)]);
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
@@ -322,7 +322,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
         };
     }
 
-    let v = match layout {
+    let v = match &*layout {
         LayoutManager::Scalar(s) => match s {
             Scalar::ObjectRef => StackValue::ObjectRef(read_ua!(ObjectRef)),
             Scalar::Int8 => StackValue::Int32(read_ua!(i8) as i32),
@@ -347,7 +347,7 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
     let value = vm_pop!(stack);
@@ -362,7 +362,7 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
         }};
     }
 
-    match layout {
+    match &*layout {
         LayoutManager::Scalar(s) => match s {
             Scalar::ObjectRef => write_ua!(ObjectRef, ObjectRef),
             Scalar::Int8 => write_ua!(Int32, i8),

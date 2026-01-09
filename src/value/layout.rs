@@ -14,12 +14,9 @@ use std::{
     collections::{HashMap, HashSet},
     mem::size_of,
     ops::Range,
-    sync::{OnceLock, RwLock},
+    sync::Arc,
 };
 
-// Global cache for type layouts to avoid redundant calculations.
-// Layouts are deterministic based on the type's metadata and generic parameters.
-static LAYOUT_CACHE: OnceLock<RwLock<HashMap<ConcreteType, LayoutManager>>> = OnceLock::new();
 
 #[enum_dispatch]
 pub trait HasLayout {
@@ -156,7 +153,7 @@ fn align_up(value: usize, align: usize) -> usize {
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldLayout {
     pub position: usize,
-    pub layout: LayoutManager,
+    pub layout: Arc<LayoutManager>,
 }
 impl FieldLayout {
     pub fn as_range(&self) -> Range<usize> {
@@ -208,7 +205,7 @@ impl FieldLayoutManager {
     }
 
     fn new<'a>(
-        fields: impl IntoIterator<Item = (TypeDescription, &'a str, Option<usize>, LayoutManager)>,
+        fields: impl IntoIterator<Item = (TypeDescription, &'a str, Option<usize>, Arc<LayoutManager>)>,
         layout: Layout,
         base_size: usize,
         base_alignment: usize,
@@ -316,6 +313,10 @@ impl FieldLayoutManager {
             }
         }
 
+        if total_size > 0x1000_0000 {
+            panic!("massive field layout detected: {} bytes", total_size);
+        }
+
         Self {
             fields: mapping,
             total_size,
@@ -349,6 +350,7 @@ impl FieldLayoutManager {
                 loader: context.loader,
                 type_owner: Some(*base_td),
                 method_owner: None,
+                shared: context.shared.clone(),
             };
 
             // Recursively compute base layout
@@ -406,6 +408,28 @@ impl FieldLayoutManager {
         Self::instance_fields_with_metrics(td, context, None)
     }
 
+    pub fn instance_field_layout_cached(
+        td: TypeDescription,
+        context: &ResolutionContext,
+        metrics: Option<&RuntimeMetrics>,
+    ) -> Arc<Self> {
+        let key = (td, context.generics.clone());
+
+        if let Some(cached) = context.shared.instance_field_layout_cache.get(&key) {
+            return Arc::clone(&cached);
+        }
+
+        if let Some(m) = metrics {
+            m.record_instance_field_layout_cache_miss();
+        }
+        let result = Arc::new(Self::instance_fields_with_metrics(td, context, metrics));
+        context
+            .shared
+            .instance_field_layout_cache
+            .insert(key, Arc::clone(&result));
+        result
+    }
+
     pub fn instance_fields_with_metrics(
         td: TypeDescription,
         context: &ResolutionContext,
@@ -448,7 +472,7 @@ impl FieldLayoutManager {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ArrayLayoutManager {
-    pub element_layout: Box<LayoutManager>,
+    pub element_layout: Arc<LayoutManager>,
     pub length: usize,
 }
 impl HasLayout for ArrayLayoutManager {
@@ -470,8 +494,18 @@ impl ArrayLayoutManager {
         }
     }
     pub fn new(element: ConcreteType, length: usize, context: &ResolutionContext) -> Self {
+        let element_layout = type_layout(element, context);
+        // Defensive check for massive allocations (e.g. from corrupted metadata/stack)
+        // Limit to ~1GB elements or overflow of usize
+        if length > 0x4000_0000 || (length > 0 && element_layout.size() > usize::MAX / length) {
+            panic!(
+                "massive array allocation attempt: length={}, element_size={}",
+                length,
+                element_layout.size()
+            );
+        }
         Self {
-            element_layout: Box::new(type_layout(element, context)),
+            element_layout,
             length,
         }
     }
@@ -482,8 +516,17 @@ impl ArrayLayoutManager {
         context: &ResolutionContext,
         metrics: Option<&RuntimeMetrics>,
     ) -> Self {
+        let element_layout = type_layout_with_metrics(element, context, metrics);
+        // Defensive check for massive allocations (e.g. from corrupted metadata/stack)
+        if length > 0x4000_0000 || (length > 0 && element_layout.size() > usize::MAX / length) {
+            panic!(
+                "massive array allocation attempt: length={}, element_size={}",
+                length,
+                element_layout.size()
+            );
+        }
         Self {
-            element_layout: Box::new(type_layout_with_metrics(element, context, metrics)),
+            element_layout,
             length,
         }
     }
@@ -521,7 +564,8 @@ impl Scalar {
     }
 }
 
-pub fn type_layout(t: ConcreteType, context: &ResolutionContext) -> LayoutManager {
+
+pub fn type_layout(t: ConcreteType, context: &ResolutionContext) -> Arc<LayoutManager> {
     type_layout_with_metrics(t, context, None)
 }
 
@@ -529,27 +573,18 @@ pub fn type_layout_with_metrics(
     t: ConcreteType,
     context: &ResolutionContext,
     metrics: Option<&RuntimeMetrics>,
-) -> LayoutManager {
+) -> Arc<LayoutManager> {
     let t = context.normalize_type(t);
 
-    let cache = LAYOUT_CACHE.get_or_init(|| RwLock::new(HashMap::new()));
-    {
-        let r = cache.read().unwrap();
-        if let Some(l) = r.get(&t) {
-            if let Some(m) = metrics {
-                m.record_layout_cache_hit();
-            }
-            return l.clone();
-        }
+    if let Some(cached) = context.shared.layout_cache.get(&t) {
+        return Arc::clone(&cached);
     }
 
     if let Some(m) = metrics {
         m.record_layout_cache_miss();
     }
-
-    let result = type_layout_internal(t.clone(), context, metrics);
-
-    cache.write().unwrap().insert(t, result.clone());
+    let result = Arc::new(type_layout_internal(t.clone(), context, metrics));
+    context.shared.layout_cache.insert(t, Arc::clone(&result));
     result
 }
 
@@ -558,10 +593,8 @@ fn type_layout_internal(
     context: &ResolutionContext,
     metrics: Option<&RuntimeMetrics>,
 ) -> LayoutManager {
-    let context = ResolutionContext {
-        resolution: t.resolution(),
-        ..*context
-    };
+    let mut context = context.clone();
+    context.resolution = t.resolution();
     match t.get() {
         BaseType::Boolean | BaseType::Int8 | BaseType::UInt8 => Scalar::Int8.into(),
         BaseType::Char | BaseType::Int16 | BaseType::UInt16 => Scalar::Int16.into(),
@@ -590,7 +623,7 @@ fn type_layout_internal(
             let ctx = context.with_generics(&new_lookup);
 
             if let Some(inner) = t.is_enum() {
-                type_layout_with_metrics(ctx.make_concrete(inner), &ctx, metrics)
+                (*type_layout_with_metrics(ctx.make_concrete(inner), &ctx, metrics)).clone()
             } else {
                 FieldLayoutManager::instance_fields_with_metrics(t, &ctx, metrics).into()
             }

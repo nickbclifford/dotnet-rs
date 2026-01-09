@@ -11,22 +11,27 @@ use crate::{
 use dotnetdll::prelude::{
     BaseType, FieldSource, MemberType, MethodType, TypeSource, UserMethod, UserType, ValueKind,
 };
-use std::collections::{HashSet, VecDeque};
+use std::{
+    collections::{HashSet, VecDeque},
+    sync::Arc,
+};
 
-#[derive(Clone, Copy)]
-pub struct ResolutionContext<'a> {
+#[derive(Clone)]
+pub struct ResolutionContext<'a, 'm> {
     pub generics: &'a GenericLookup,
-    pub loader: &'a AssemblyLoader,
+    pub loader: &'m AssemblyLoader,
     pub resolution: ResolutionS,
     pub type_owner: Option<TypeDescription>,
     pub method_owner: Option<MethodDescription>,
+    pub shared: Arc<crate::vm::stack::SharedGlobalState<'m>>,
 }
 
-impl<'a> ResolutionContext<'a> {
+impl<'a, 'm> ResolutionContext<'a, 'm> {
     pub fn new(
         generics: &'a GenericLookup,
-        loader: &'a AssemblyLoader,
+        loader: &'m AssemblyLoader,
         resolution: ResolutionS,
+        shared: Arc<crate::vm::stack::SharedGlobalState<'m>>,
     ) -> Self {
         Self {
             generics,
@@ -34,13 +39,15 @@ impl<'a> ResolutionContext<'a> {
             resolution,
             type_owner: None,
             method_owner: None,
+            shared,
         }
     }
 
     pub fn for_method(
         method: MethodDescription,
-        loader: &'a AssemblyLoader,
+        loader: &'m AssemblyLoader,
         generics: &'a GenericLookup,
+        shared: Arc<crate::vm::stack::SharedGlobalState<'m>>,
     ) -> Self {
         Self {
             generics,
@@ -48,14 +55,22 @@ impl<'a> ResolutionContext<'a> {
             resolution: method.resolution(),
             type_owner: Some(method.parent),
             method_owner: Some(method),
+            shared,
         }
     }
 
-    pub fn with_generics(&self, generics: &'a GenericLookup) -> ResolutionContext<'a> {
-        ResolutionContext { generics, ..*self }
+    pub fn with_generics(&self, generics: &'a GenericLookup) -> ResolutionContext<'a, 'm> {
+        ResolutionContext {
+            generics,
+            loader: self.loader,
+            resolution: self.resolution,
+            type_owner: self.type_owner,
+            method_owner: self.method_owner,
+            shared: self.shared.clone(),
+        }
     }
 
-    pub fn for_type(&self, td: TypeDescription) -> ResolutionContext<'a> {
+    pub fn for_type(&self, td: TypeDescription) -> ResolutionContext<'a, 'm> {
         self.for_type_with_generics(td, self.generics)
     }
 
@@ -63,13 +78,14 @@ impl<'a> ResolutionContext<'a> {
         &self,
         td: TypeDescription,
         generics: &'a GenericLookup,
-    ) -> ResolutionContext<'a> {
+    ) -> ResolutionContext<'a, 'm> {
         ResolutionContext {
             resolution: td.resolution,
             generics,
             loader: self.loader,
             type_owner: Some(td),
             method_owner: None,
+            shared: self.shared.clone(),
         }
     }
 
@@ -94,21 +110,38 @@ impl<'a> ResolutionContext<'a> {
     pub fn get_ancestors(
         &self,
         child_type: TypeDescription,
-    ) -> impl Iterator<Item = Ancestor<'a>> + 'a {
+    ) -> impl Iterator<Item = Ancestor<'m>> + 'm {
         self.loader.ancestors(child_type)
     }
 
-    pub fn is_a(&self, value: TypeDescription, ancestor: TypeDescription) -> bool {
+    pub fn is_a(&self, value: ConcreteType, ancestor: ConcreteType) -> bool {
+        let value = self.normalize_type(value);
+        let ancestor = self.normalize_type(ancestor);
+
+        if value == ancestor {
+            return true;
+        }
+
+        let cache_key = (value.clone(), ancestor.clone());
+        if let Some(cached) = self.shared.hierarchy_cache.get(&cache_key) {
+            return *cached;
+        }
+
+        let value_td = self.loader.find_concrete_type(value);
+        let ancestor_td = self.loader.find_concrete_type(ancestor);
+
         let mut seen = HashSet::new();
         let mut queue = VecDeque::new();
 
-        for (a, _) in self.get_ancestors(value) {
+        for (a, _) in self.get_ancestors(value_td) {
             queue.push_back(a);
         }
 
+        let mut result = false;
         while let Some(current) = queue.pop_front() {
-            if current == ancestor {
-                return true;
+            if current == ancestor_td {
+                result = true;
+                break;
             }
             if !seen.insert(current) {
                 continue;
@@ -123,7 +156,8 @@ impl<'a> ResolutionContext<'a> {
             }
         }
 
-        false
+        self.shared.hierarchy_cache.insert(cache_key, result);
+        result
     }
 
     pub fn get_heap_description(&self, object: ObjectHandle) -> TypeDescription {
@@ -187,7 +221,7 @@ impl<'a> ResolutionContext<'a> {
             if let BaseType::Type { source, value_kind } = t.get_mut() {
                 if value_kind.is_none() {
                     let (ut, _) = decompose_type_source(source);
-                    let td = self.locate_type(ut);
+                    let td = self.loader.locate_type(res, ut);
                     if td.is_value_type(self) {
                         *value_kind = Some(ValueKind::ValueType);
                     }

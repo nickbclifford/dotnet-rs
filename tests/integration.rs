@@ -168,6 +168,59 @@ macro_rules! fixture_test {
 
 include!(concat!(env!("OUT_DIR"), "/tests.rs"));
 
+#[test]
+fn test_cache_observability() {
+    let harness = TestHarness::get();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/gc_finalization_42.cs");
+    let dll = harness.build(&fixture);
+
+    let dll_path_str = dll.to_str().unwrap().to_string();
+    let resolution = static_res_from_file(&dll_path_str);
+    let shared = std::sync::Arc::new(vm::SharedGlobalState::new(harness.loader));
+
+    // Get initial stats
+    let stats = shared.get_cache_stats();
+    println!("Initial cache stats:\n{}", stats);
+
+    // Some basic checks
+    assert!(
+        stats.intrinsic.size > 0,
+        "Intrinsic cache should be pre-populated (Phase 2 optimization)"
+    );
+    assert!(
+        stats.intrinsic_field.size > 0,
+        "Intrinsic field cache should be pre-populated (Phase 2 optimization)"
+    );
+
+    // Run it to see hit rates improve
+    let mut executor = vm::Executor::new(shared.clone());
+    let entry_method = match resolution.entry_point {
+        Some(EntryPoint::Method(m)) => m,
+        _ => panic!("Expected method entry point in {:?}", resolution),
+    };
+    let entrypoint = MethodDescription {
+        parent: TypeDescription::new(
+            resolution,
+            &resolution.definition()[entry_method.parent_type()],
+        ),
+        method: &resolution.definition()[entry_method],
+    };
+    executor.entrypoint(entrypoint);
+    executor.run();
+
+    let stats_after = executor.get_cache_stats();
+    println!("After run:\n{}", stats_after);
+    assert!(
+        stats_after.layout.hits > 0 || stats_after.layout.misses > 0,
+        "Layout cache should have been accessed"
+    );
+    assert!(
+        stats_after.intrinsic.hits > 0 || stats_after.intrinsic.misses > 0,
+        "Intrinsic cache should have been accessed"
+    );
+}
+
 /// This test is intended for debugging purposes and is not part of the regular CI.
 /// It runs a "Hello, World!" program using the full .NET SDK libraries.
 /// To run this test, use:

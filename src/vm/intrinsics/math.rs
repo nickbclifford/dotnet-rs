@@ -30,7 +30,7 @@ pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc>(
 
     let new_lookup = GenericLookup::new(vec![target_type]);
     let ctx =
-        ResolutionContext::for_method(method, stack.loader(), generics).with_generics(&new_lookup);
+        ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone()).with_generics(&new_lookup);
     let instance = ObjectRef::new(gc, HeapStorage::Obj(Object::new(comparer_td, &ctx)));
 
     vm_push!(stack, gc, ObjectRef(instance));

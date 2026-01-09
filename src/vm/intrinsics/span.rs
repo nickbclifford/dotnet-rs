@@ -12,7 +12,7 @@ use crate::{
 };
 use std::{mem::size_of, ptr::NonNull, slice};
 
-pub fn span_to_slice<'gc, 'a>(span: Object<'gc>) -> &'a [u8] {
+pub fn span_to_slice<'gc, 'a>(span: Object<'gc>, element_size: usize) -> &'a [u8] {
     let ptr_data = span
         .instance_storage
         .get_field_local(span.description, "_reference");
@@ -26,7 +26,12 @@ pub fn span_to_slice<'gc, 'a>(span: Object<'gc>) -> &'a [u8] {
 
     let len = i32::from_ne_bytes(len_data) as usize;
 
-    unsafe { slice::from_raw_parts(ptr.as_ptr() as *const u8, len) }
+    // Defensive check: limit span size to 1GB
+    if len > 0x4000_0000 || (len > 0 && element_size > usize::MAX / len) {
+        panic!("massive span detected: length={}, element_size={}", len, element_size);
+    }
+
+    unsafe { slice::from_raw_parts(ptr.as_ptr() as *const u8, len * element_size) }
 }
 
 pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
@@ -40,8 +45,8 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
         [Int32(_culture_comparison), ValueType(b), ValueType(a)]
     );
 
-    let a = span_to_slice(*a);
-    let b = span_to_slice(*b);
+    let a = span_to_slice(*a, 2);
+    let b = span_to_slice(*b, 2);
 
     vm_push!(stack, gc, Int32((a == b) as i32));
     StepResult::InstructionStepped
@@ -59,8 +64,12 @@ pub fn intrinsic_span_get_item<'gc, 'm: 'gc>(
         panic!("invalid type on stack");
     }
 
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
-    let span_layout = crate::value::layout::FieldLayoutManager::instance_fields(m.inner_type, &ctx);
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
+    let span_layout = crate::value::layout::FieldLayoutManager::instance_field_layout_cached(
+        m.inner_type,
+        &ctx,
+        Some(&stack.shared.metrics),
+    );
 
     let value_type = &generics.type_generics[0];
     let value_layout = type_layout(value_type.clone(), &ctx);
@@ -100,8 +109,12 @@ pub fn intrinsic_span_get_length<'gc, 'm: 'gc>(
         panic!("invalid type on stack");
     }
 
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
-    let layout = crate::value::layout::FieldLayoutManager::instance_fields(m.inner_type, &ctx);
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
+    let layout = crate::value::layout::FieldLayoutManager::instance_field_layout_cached(
+        m.inner_type,
+        &ctx,
+        Some(&stack.shared.metrics),
+    );
     let value = unsafe {
         let target = m
             .value
@@ -123,7 +136,7 @@ pub fn intrinsic_string_as_span<'gc, 'm: 'gc>(
     let string_val = vm_pop!(stack);
     let (ptr, len) = with_string!(stack, gc, string_val, |s| (s.as_ptr(), s.len()));
 
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
     let span_type = stack.loader().corlib_type("System.ReadOnlySpan`1");
     let char_type_base = dotnetdll::prelude::BaseType::Char;
     let new_lookup = GenericLookup::new(vec![ctx.make_concrete(&char_type_base)]);
@@ -159,7 +172,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let element_type = &generics.method_generics[0];
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics);
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
     let element_size = type_layout(element_type.clone(), &ctx).size();
 
     pop_args!(stack, [ValueType(field_handle)]);

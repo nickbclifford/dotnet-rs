@@ -40,13 +40,24 @@ pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc>(
 ) -> StepResult {
     let len = if method.method.signature.parameters.len() == 1 {
         pop_args!(stack, [Int32(i)]);
+        if i < 0 {
+            return stack.throw_by_name(gc, "System.OverflowException");
+        }
         i as usize
     } else {
         // Overload with MethodTable* as first param
         pop_args!(stack, [NativeInt(i)]);
         vm_pop!(stack); // pop method table pointer
+        if i < 0 {
+            return stack.throw_by_name(gc, "System.OverflowException");
+        }
         i as usize
     };
+
+    // Defensive check: limit string size to 512MB characters
+    if len > 0x2000_0000 {
+        return stack.throw_by_name(gc, "System.OutOfMemoryException");
+    }
 
     // Check GC safe point before allocating large strings
     const LARGE_STRING_THRESHOLD: usize = 1024;
@@ -99,7 +110,7 @@ pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
     );
 
     fn char_span_into_str(span: Object) -> Vec<u16> {
-        span_to_slice(span)
+        span_to_slice(span, 2)
             .chunks_exact(2)
             .map(|c| u16::from_ne_bytes([c[0], c[1]]))
             .collect::<Vec<_>>()

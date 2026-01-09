@@ -256,9 +256,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             let exc_type = self
                                 .current_context()
                                 .get_heap_description(exception.0.expect("throwing null"));
-                            let catch_type = self.loader().find_concrete_type(t.clone());
+                            let catch_type = t.clone();
 
-                            if self.is_a(exc_type, catch_type) {
+                            if self.is_a(exc_type.into(), catch_type) {
                                 // Match found! Start the unwind phase towards this handler.
                                 self.execution.exception_mode = ExceptionState::Unwinding {
                                     exception: Some(exception),

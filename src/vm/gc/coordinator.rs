@@ -29,6 +29,22 @@ pub fn set_current_arena_handle(handle: ArenaHandle) {
 }
 
 #[cfg(feature = "multithreaded-gc")]
+/// Clear all thread-local GC state.
+/// This is used during test teardown to prevent state leakage between tests
+/// running on the same thread pool thread.
+pub fn clear_thread_local_state() {
+    CURRENT_ARENA_HANDLE.with(|h| {
+        *h.borrow_mut() = None;
+    });
+    CURRENTLY_TRACING_THREAD_ID.with(|id| {
+        id.set(None);
+    });
+    FOUND_CROSS_ARENA_REFS.with(|refs| {
+        refs.borrow_mut().clear();
+    });
+}
+
+#[cfg(feature = "multithreaded-gc")]
 /// Record an allocation of the given size in the current thread's arena.
 /// This tracks allocation pressure and may trigger a GC when the threshold is exceeded.
 ///

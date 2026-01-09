@@ -7,8 +7,8 @@ use crate::{
     },
     utils::{decompose_type_source, ResolutionS},
     value::{
-        layout::{type_layout, HasLayout},
-        object::{HeapStorage, Object as ObjectInstance, ObjectRef},
+        layout::{FieldLayoutManager, HasLayout, LayoutManager},
+        object::{HeapStorage, Object as ObjectInstance, ObjectPtr, ObjectRef},
         storage::StaticStorageManager,
         StackValue,
     },
@@ -25,6 +25,7 @@ use crate::{
         MethodInfo, MethodState, StepResult,
     },
 };
+use dashmap::DashMap;
 use dotnetdll::prelude::*;
 use gc_arena::{Arena, Collect, Collection, Gc, Mutation, Rootable};
 use std::{
@@ -36,7 +37,7 @@ use std::{
 };
 
 #[cfg(feature = "multithreaded-gc")]
-use crate::{value::object::ObjectPtr, vm::gc::coordinator::GCCoordinator};
+use crate::vm::gc::coordinator::GCCoordinator;
 
 #[derive(Collect)]
 #[collect(no_drop)]
@@ -115,29 +116,74 @@ pub struct SharedGlobalState<'m> {
     pub tracer: Mutex<Tracer>,
     pub tracer_enabled: Arc<std::sync::atomic::AtomicBool>,
     pub empty_generics: GenericLookup,
-    pub method_tables: RwLock<HashMap<TypeDescription, Box<[u8]>>>,
-    /// Cache for virtual method resolution: (base_method, this_type) -> resolved_method
-    pub vmt_cache: RwLock<HashMap<(MethodDescription, TypeDescription), MethodDescription>>,
+    /// Cache for type layouts: ConcreteType -> Arc<LayoutManager>
+    pub layout_cache: DashMap<ConcreteType, Arc<LayoutManager>>,
+    /// Cache for instance field layouts: (TypeDescription, GenericLookup) -> FieldLayoutManager
+    pub instance_field_layout_cache:
+        DashMap<(TypeDescription, GenericLookup), Arc<FieldLayoutManager>>,
+    /// Cache for virtual method resolution: (base_method, this_type, generics) -> resolved_method
+    pub vmt_cache: DashMap<
+        (MethodDescription, TypeDescription, GenericLookup),
+        MethodDescription,
+    >,
     /// Cache for intrinsic checks: method -> is_intrinsic
-    pub intrinsic_cache: RwLock<HashMap<MethodDescription, bool>>,
+    pub intrinsic_cache: DashMap<MethodDescription, bool>,
     /// Cache for intrinsic field checks: field -> is_intrinsic
-    pub intrinsic_field_cache: RwLock<HashMap<FieldDescription, bool>>,
+    pub intrinsic_field_cache: DashMap<FieldDescription, bool>,
     /// Cache for type hierarchy checks: (child, parent) -> is_a result
-    pub hierarchy_cache: RwLock<HashMap<(TypeDescription, TypeDescription), bool>>,
+    pub hierarchy_cache: DashMap<(ConcreteType, ConcreteType), bool>,
+    pub intrinsic_registry: crate::vm::intrinsics::IntrinsicRegistry,
     pub statics: StaticStorageManager,
     #[cfg(feature = "multithreaded-gc")]
     pub gc_coordinator: Arc<GCCoordinator>,
+    /// Cache for shared reflection objects: RuntimeType -> (ObjectPtr, owner_id)
+    #[cfg(feature = "multithreaded-gc")]
+    pub shared_runtime_types: DashMap<RuntimeType, (ObjectPtr, u64)>,
+    /// Cache for shared assembly reflection objects: ResolutionS -> (ObjectPtr, owner_id)
+    #[cfg(feature = "multithreaded-gc")]
+    pub shared_runtime_asms: DashMap<ResolutionS, (ObjectPtr, u64)>,
+    /// Cache for shared method reflection objects: (Method, Lookup) -> (ObjectPtr, owner_id)
+    #[cfg(feature = "multithreaded-gc")]
+    pub shared_runtime_methods: DashMap<(MethodDescription, GenericLookup), (ObjectPtr, u64)>,
+    /// Cache for shared field reflection objects: (Field, Lookup) -> (ObjectPtr, owner_id)
+    #[cfg(feature = "multithreaded-gc")]
+    pub shared_runtime_fields: DashMap<(FieldDescription, GenericLookup), (ObjectPtr, u64)>,
 }
 
 impl<'m> SharedGlobalState<'m> {
     pub fn new(loader: &'m AssemblyLoader) -> Self {
-        // Initialize the intrinsic registry early during VM startup
-        // This is more efficient than lazy initialization in the hot path
-        crate::vm::intrinsics::IntrinsicRegistry::initialize_global(loader);
+        let intrinsic_registry = crate::vm::intrinsics::IntrinsicRegistry::initialize(loader);
+
+        let intrinsic_cache = DashMap::new();
+        let intrinsic_field_cache = DashMap::new();
+
+        // Pre-populate intrinsic caches
+        for assembly in loader.assemblies() {
+            for type_def in &assembly.definition().type_definitions {
+                let td = TypeDescription::new(assembly, type_def);
+                for method in &type_def.methods {
+                    let md = MethodDescription {
+                        parent: td,
+                        method,
+                    };
+                    intrinsic_cache.insert(
+                        md,
+                        crate::vm::intrinsics::is_intrinsic(md, loader, &intrinsic_registry),
+                    );
+                }
+                for field in &type_def.fields {
+                    let fd = FieldDescription { parent: td, field };
+                    intrinsic_field_cache.insert(
+                        fd,
+                        crate::vm::intrinsics::is_intrinsic_field(fd, loader, &intrinsic_registry),
+                    );
+                }
+            }
+        }
 
         let tracer = Tracer::new();
         let tracer_enabled = Arc::new(std::sync::atomic::AtomicBool::new(tracer.is_enabled()));
-        Self {
+        let this = Self {
             loader,
             pinvoke: RwLock::new(NativeLibraries::new(loader.get_root())),
             sync_blocks: SyncBlockManager::new(),
@@ -146,15 +192,49 @@ impl<'m> SharedGlobalState<'m> {
             tracer: Mutex::new(tracer),
             tracer_enabled,
             empty_generics: GenericLookup::default(),
-            method_tables: RwLock::new(HashMap::new()),
-            vmt_cache: RwLock::new(HashMap::new()),
-            intrinsic_cache: RwLock::new(HashMap::new()),
-            intrinsic_field_cache: RwLock::new(HashMap::new()),
-            hierarchy_cache: RwLock::new(HashMap::new()),
+            layout_cache: DashMap::new(),
+            instance_field_layout_cache: DashMap::new(),
+            vmt_cache: DashMap::new(),
+            intrinsic_cache,
+            intrinsic_field_cache,
+            hierarchy_cache: DashMap::new(),
+            intrinsic_registry,
             statics: StaticStorageManager::new(),
             #[cfg(feature = "multithreaded-gc")]
             gc_coordinator: Arc::new(GCCoordinator::new()),
-        }
+            #[cfg(feature = "multithreaded-gc")]
+            shared_runtime_types: DashMap::new(),
+            #[cfg(feature = "multithreaded-gc")]
+            shared_runtime_asms: DashMap::new(),
+            #[cfg(feature = "multithreaded-gc")]
+            shared_runtime_methods: DashMap::new(),
+            #[cfg(feature = "multithreaded-gc")]
+            shared_runtime_fields: DashMap::new(),
+        };
+
+        this
+    }
+
+    pub fn get_cache_stats(&self) -> crate::vm::metrics::CacheStats {
+        self.metrics.cache_statistics(
+            self.layout_cache.len(),
+            self.vmt_cache.len(),
+            self.intrinsic_cache.len(),
+            self.intrinsic_field_cache.len(),
+            self.hierarchy_cache.len(),
+            self.statics.field_layout_cache.len(),
+            self.instance_field_layout_cache.len(),
+            (
+                self.loader.type_cache_hits.load(std::sync::atomic::Ordering::Relaxed),
+                self.loader.type_cache_misses.load(std::sync::atomic::Ordering::Relaxed),
+                self.loader.type_cache_size(),
+            ),
+            (
+                self.loader.method_cache_hits.load(std::sync::atomic::Ordering::Relaxed),
+                self.loader.method_cache_misses.load(std::sync::atomic::Ordering::Relaxed),
+                self.loader.method_cache_size(),
+            ),
+        )
     }
 }
 
@@ -343,6 +423,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         resolution: method.resolution(),
                         type_owner: Some(method.parent),
                         method_owner: Some(method),
+                        shared: self.shared.clone(),
                     };
 
                     let v = match ctx.make_concrete(var_type).get() {
@@ -448,7 +529,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             let (type_name, size) = match &borrowed.storage {
                 HeapStorage::Obj(o) => {
                     let name = o.description.type_name();
-                    let size = type_layout(o.description.into(), &ctx).size();
+                    let size = self.type_layout_cached(o.description.into()).size();
                     (name, size)
                 }
                 HeapStorage::Vec(v) => ("System.Array".to_string(), v.size_bytes()),
@@ -512,6 +593,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 resolution: obj_type.resolution,
                 type_owner: Some(obj_type),
                 method_owner: None,
+                shared: self.shared.clone(),
             };
             let target_method = self.resolve_virtual_method(base_finalize, obj_type, Some(&ctx));
 
@@ -520,7 +602,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 MethodInfo::new(
                     target_method,
                     &self.shared.empty_generics,
-                    self.shared.loader,
+                    self.shared.clone(),
                 ),
                 self.shared.empty_generics.clone(),
                 vec![StackValue::ObjectRef(obj_ref)],
@@ -725,7 +807,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.current_frame_mut().state.ip += 1;
     }
 
-    pub fn current_context(&self) -> ResolutionContext<'_> {
+    pub fn current_context(&self) -> ResolutionContext<'_, 'm> {
         if let Some(f) = self.execution.frames.last() {
             ResolutionContext {
                 generics: &f.generic_inst,
@@ -733,6 +815,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 resolution: f.source_resolution,
                 type_owner: Some(f.state.info_handle.source.parent),
                 method_owner: Some(f.state.info_handle.source),
+                shared: self.shared.clone(),
             }
         } else {
             ResolutionContext {
@@ -741,11 +824,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 resolution: self.shared.loader.corlib_type("System.Object").resolution,
                 type_owner: None,
                 method_owner: None,
+                shared: self.shared.clone(),
             }
         }
     }
 
-    pub fn ctx_with_generics<'a>(&'a self, generics: &'a GenericLookup) -> ResolutionContext<'a> {
+    pub fn ctx_with_generics<'a>(&'a self, generics: &'a GenericLookup) -> ResolutionContext<'a, 'm> {
         self.current_context().with_generics(generics)
     }
 
@@ -761,23 +845,15 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.current_context().locate_field(handle)
     }
 
-    pub fn is_a(&self, value: TypeDescription, ancestor: TypeDescription) -> bool {
-        // Check cache first
-        let cache_key = (value, ancestor);
-        {
-            let cache = self.shared.hierarchy_cache.read();
-            if let Some(&cached) = cache.get(&cache_key) {
-                self.shared.metrics.record_hierarchy_cache_hit();
-                return cached;
-            }
+    pub fn is_a(&self, value: ConcreteType, ancestor: ConcreteType) -> bool {
+        let cache_key = (value.clone(), ancestor.clone());
+        if let Some(cached) = self.shared.hierarchy_cache.get(&cache_key) {
+            return *cached;
         }
 
-        // Cache miss - perform hierarchy check
         self.shared.metrics.record_hierarchy_cache_miss();
         let result = self.current_context().is_a(value, ancestor);
-
-        // Cache the result
-        self.shared.hierarchy_cache.write().insert(cache_key, result);
+        self.shared.hierarchy_cache.insert(cache_key, result);
         result
     }
 
@@ -1009,19 +1085,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         this_type: TypeDescription,
         ctx: Option<&ResolutionContext>,
     ) -> MethodDescription {
-        // Check cache first
-        let cache_key = (base_method, this_type);
-        {
-            let cache = self.shared.vmt_cache.read();
-            if let Some(&cached) = cache.get(&cache_key) {
-                self.shared.metrics.record_vmt_cache_hit();
-                return cached;
-            }
-        }
-
-        // Cache miss - perform resolution
-        self.shared.metrics.record_vmt_cache_miss();
-
         let default_ctx;
         let ctx = if let Some(ctx) = ctx {
             ctx
@@ -1030,6 +1093,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             &default_ctx
         };
 
+        let cache_key = (base_method, this_type, ctx.generics.clone());
+        if let Some(cached) = self.shared.vmt_cache.get(&cache_key) {
+            return *cached;
+        }
+
+        self.shared.metrics.record_vmt_cache_miss();
+
         for (parent, _) in ctx.get_ancestors(this_type) {
             if let Some(method) = self.shared.loader.find_method_in_type(
                 parent,
@@ -1037,60 +1107,53 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 &base_method.method.signature,
                 base_method.resolution(),
             ) {
-                // Cache the result
-                self.shared.vmt_cache.write().insert(cache_key, method);
+                self.shared.vmt_cache.insert(cache_key, method);
                 return method;
             }
         }
         panic!(
             "could not find virtual method implementation of {:?} in {:?}",
             base_method, this_type
-        );
+        )
     }
 
     /// Check if a method is an intrinsic (with caching).
     /// This is called on every method invocation, so caching is critical for performance.
     pub fn is_intrinsic_cached(&self, method: MethodDescription) -> bool {
         // Check cache first
-        {
-            let cache = self.shared.intrinsic_cache.read();
-            if let Some(&cached) = cache.get(&method) {
-                self.shared.metrics.record_intrinsic_cache_hit();
-                return cached;
-            }
+        if let Some(cached) = self.shared.intrinsic_cache.get(&method) {
+            self.shared.metrics.record_intrinsic_cache_hit();
+            return *cached;
         }
 
         // Cache miss - perform check
         self.shared.metrics.record_intrinsic_cache_miss();
-        let result = crate::vm::intrinsics::is_intrinsic(method, self.shared.loader);
+        let result = crate::vm::intrinsics::is_intrinsic(method, self.shared.loader, &self.shared.intrinsic_registry);
 
         // Cache the result
-        self.shared.intrinsic_cache.write().insert(method, result);
+        self.shared.intrinsic_cache.insert(method, result);
         result
     }
 
     /// Check if a field is an intrinsic (with caching).
     pub fn is_intrinsic_field_cached(&self, field: FieldDescription) -> bool {
         // Check cache first
-        {
-            let cache = self.shared.intrinsic_field_cache.read();
-            if let Some(&cached) = cache.get(&field) {
-                self.shared.metrics.record_intrinsic_field_cache_hit();
-                return cached;
-            }
+        if let Some(cached) = self.shared.intrinsic_field_cache.get(&field) {
+            self.shared.metrics.record_intrinsic_field_cache_hit();
+            return *cached;
         }
 
         // Cache miss - perform check
         self.shared.metrics.record_intrinsic_field_cache_miss();
-        let result = crate::vm::intrinsics::is_intrinsic_field(field, self.shared.loader);
+        let result = crate::vm::intrinsics::is_intrinsic_field(field, self.shared.loader, &self.shared.intrinsic_registry);
 
         // Cache the result
-        self.shared.intrinsic_field_cache.write().insert(field, result);
+        self.shared.intrinsic_field_cache.insert(field, result);
         result
     }
 
     /// Get the layout of a type (with caching and metrics).
-    pub fn type_layout_cached(&self, t: ConcreteType) -> crate::value::layout::LayoutManager {
+    pub fn type_layout_cached(&self, t: ConcreteType) -> Arc<crate::value::layout::LayoutManager> {
         crate::value::layout::type_layout_with_metrics(t, &self.current_context(), Some(&self.shared.metrics))
     }
 
@@ -1237,15 +1300,4 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.local.runtime_field_objs.borrow_mut()
     }
 
-    /// Get access to method_tables cache (read-only).
-    #[inline]
-    pub fn method_tables_read(&self) -> RwLockReadGuard<'_, HashMap<TypeDescription, Box<[u8]>>> {
-        self.shared.method_tables.read()
-    }
-
-    /// Get access to method_tables cache (mutable).
-    #[inline]
-    pub fn method_tables_write(&self) -> RwLockWriteGuard<'_, HashMap<TypeDescription, Box<[u8]>>> {
-        self.shared.method_tables.write()
-    }
 }
