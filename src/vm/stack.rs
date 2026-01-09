@@ -12,10 +12,6 @@ use crate::{
         storage::StaticStorageManager,
         StackValue,
     },
-};
-#[cfg(feature = "multithreaded-gc")]
-use crate::value::object::ObjectPtr;
-use crate::{
     vm::{
         context::ResolutionContext,
         exceptions::ExceptionState,
@@ -41,7 +37,7 @@ use std::{
 };
 
 #[cfg(feature = "multithreaded-gc")]
-use crate::vm::gc::coordinator::GCCoordinator;
+use crate::{value::object::ObjectPtr, vm::gc::coordinator::GCCoordinator};
 
 #[derive(Collect)]
 #[collect(no_drop)]
@@ -126,10 +122,7 @@ pub struct SharedGlobalState<'m> {
     pub instance_field_layout_cache:
         DashMap<(TypeDescription, GenericLookup), Arc<FieldLayoutManager>>,
     /// Cache for virtual method resolution: (base_method, this_type, generics) -> resolved_method
-    pub vmt_cache: DashMap<
-        (MethodDescription, TypeDescription, GenericLookup),
-        MethodDescription,
-    >,
+    pub vmt_cache: DashMap<(MethodDescription, TypeDescription, GenericLookup), MethodDescription>,
     /// Cache for intrinsic checks: method -> is_intrinsic
     pub intrinsic_cache: DashMap<MethodDescription, bool>,
     /// Cache for intrinsic field checks: field -> is_intrinsic
@@ -166,10 +159,7 @@ impl<'m> SharedGlobalState<'m> {
             for type_def in &assembly.definition().type_definitions {
                 let td = TypeDescription::new(assembly, type_def);
                 for method in &type_def.methods {
-                    let md = MethodDescription {
-                        parent: td,
-                        method,
-                    };
+                    let md = MethodDescription { parent: td, method };
                     intrinsic_cache.insert(
                         md,
                         crate::vm::intrinsics::is_intrinsic(md, loader, &intrinsic_registry),
@@ -220,25 +210,34 @@ impl<'m> SharedGlobalState<'m> {
     }
 
     pub fn get_cache_stats(&self) -> crate::vm::metrics::CacheStats {
-        self.metrics.cache_statistics(
-            self.layout_cache.len(),
-            self.vmt_cache.len(),
-            self.intrinsic_cache.len(),
-            self.intrinsic_field_cache.len(),
-            self.hierarchy_cache.len(),
-            self.statics.field_layout_cache.len(),
-            self.instance_field_layout_cache.len(),
-            (
-                self.loader.type_cache_hits.load(std::sync::atomic::Ordering::Relaxed),
-                self.loader.type_cache_misses.load(std::sync::atomic::Ordering::Relaxed),
-                self.loader.type_cache_size(),
-            ),
-            (
-                self.loader.method_cache_hits.load(std::sync::atomic::Ordering::Relaxed),
-                self.loader.method_cache_misses.load(std::sync::atomic::Ordering::Relaxed),
-                self.loader.method_cache_size(),
-            ),
-        )
+        self.metrics
+            .cache_statistics(crate::vm::metrics::CacheSizes {
+                layout_size: self.layout_cache.len(),
+                vmt_size: self.vmt_cache.len(),
+                intrinsic_size: self.intrinsic_cache.len(),
+                intrinsic_field_size: self.intrinsic_field_cache.len(),
+                hierarchy_size: self.hierarchy_cache.len(),
+                static_field_layout_size: self.statics.field_layout_cache.len(),
+                instance_field_layout_size: self.instance_field_layout_cache.len(),
+                assembly_type_info: (
+                    self.loader
+                        .type_cache_hits
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                    self.loader
+                        .type_cache_misses
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                    self.loader.type_cache_size(),
+                ),
+                assembly_method_info: (
+                    self.loader
+                        .method_cache_hits
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                    self.loader
+                        .method_cache_misses
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                    self.loader.method_cache_size(),
+                ),
+            })
     }
 }
 
@@ -833,7 +832,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
     }
 
-    pub fn ctx_with_generics<'a>(&'a self, generics: &'a GenericLookup) -> ResolutionContext<'a, 'm> {
+    pub fn ctx_with_generics<'a>(
+        &'a self,
+        generics: &'a GenericLookup,
+    ) -> ResolutionContext<'a, 'm> {
         self.current_context().with_generics(generics)
     }
 
@@ -1132,7 +1134,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         // Cache miss - perform check
         self.shared.metrics.record_intrinsic_cache_miss();
-        let result = crate::vm::intrinsics::is_intrinsic(method, self.shared.loader, &self.shared.intrinsic_registry);
+        let result = crate::vm::intrinsics::is_intrinsic(
+            method,
+            self.shared.loader,
+            &self.shared.intrinsic_registry,
+        );
 
         // Cache the result
         self.shared.intrinsic_cache.insert(method, result);
@@ -1149,7 +1155,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         // Cache miss - perform check
         self.shared.metrics.record_intrinsic_field_cache_miss();
-        let result = crate::vm::intrinsics::is_intrinsic_field(field, self.shared.loader, &self.shared.intrinsic_registry);
+        let result = crate::vm::intrinsics::is_intrinsic_field(
+            field,
+            self.shared.loader,
+            &self.shared.intrinsic_registry,
+        );
 
         // Cache the result
         self.shared.intrinsic_field_cache.insert(field, result);
@@ -1158,7 +1168,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     /// Get the layout of a type (with caching and metrics).
     pub fn type_layout_cached(&self, t: ConcreteType) -> Arc<crate::value::layout::LayoutManager> {
-        crate::value::layout::type_layout_with_metrics(t, &self.current_context(), Some(&self.shared.metrics))
+        crate::value::layout::type_layout_with_metrics(
+            t,
+            &self.current_context(),
+            Some(&self.shared.metrics),
+        )
     }
 
     // ========================================================================
@@ -1303,5 +1317,4 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     ) -> RefMut<'_, HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>> {
         self.local.runtime_field_objs.borrow_mut()
     }
-
 }

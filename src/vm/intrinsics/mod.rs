@@ -48,10 +48,7 @@ use crate::{
     vm_msg,
 };
 use phf::phf_set;
-use std::{
-    collections::HashMap,
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 pub mod gc;
 pub mod math;
@@ -84,77 +81,115 @@ pub fn get_static_method_handler(
     match type_name {
         "System.GC" => match method_name {
             "KeepAlive" if param_count == 1 => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(gc::intrinsic_gc_keep_alive as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    gc::intrinsic_gc_keep_alive as fn(_, _, _, _) -> _,
+                )
             }),
             "SuppressFinalize" if param_count == 1 => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(gc::intrinsic_gc_suppress_finalize as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    gc::intrinsic_gc_suppress_finalize as fn(_, _, _, _) -> _,
+                )
             }),
             "ReRegisterForFinalize" if param_count == 1 => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(gc::intrinsic_gc_reregister_for_finalize as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    gc::intrinsic_gc_reregister_for_finalize as fn(_, _, _, _) -> _,
+                )
             }),
             "Collect" => match param_count {
                 0 => Some(unsafe {
-                    std::mem::transmute::<_, IntrinsicHandler>(gc::intrinsic_gc_collect_0 as fn(_, _, _, _) -> _)
+                    std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                        gc::intrinsic_gc_collect_0 as fn(_, _, _, _) -> _,
+                    )
                 }),
                 1 => Some(unsafe {
-                    std::mem::transmute::<_, IntrinsicHandler>(gc::intrinsic_gc_collect_1 as fn(_, _, _, _) -> _)
+                    std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                        gc::intrinsic_gc_collect_1 as fn(_, _, _, _) -> _,
+                    )
                 }),
                 2 => Some(unsafe {
-                    std::mem::transmute::<_, IntrinsicHandler>(gc::intrinsic_gc_collect_2 as fn(_, _, _, _) -> _)
+                    std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                        gc::intrinsic_gc_collect_2 as fn(_, _, _, _) -> _,
+                    )
                 }),
                 _ => None,
             },
             "WaitForPendingFinalizers" if param_count == 0 => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(gc::intrinsic_gc_wait_for_pending_finalizers as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    gc::intrinsic_gc_wait_for_pending_finalizers as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
         "System.Runtime.InteropServices.GCHandle" => match method_name {
             "InternalAlloc" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(gc::intrinsic_gchandle_internal_alloc as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    gc::intrinsic_gchandle_internal_alloc as fn(_, _, _, _) -> _,
+                )
             }),
             "InternalFree" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(gc::intrinsic_gchandle_internal_free as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    gc::intrinsic_gchandle_internal_free as fn(_, _, _, _) -> _,
+                )
             }),
             "InternalGet" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(gc::intrinsic_gchandle_internal_get as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    gc::intrinsic_gchandle_internal_get as fn(_, _, _, _) -> _,
+                )
             }),
             "InternalSet" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(gc::intrinsic_gchandle_internal_set as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    gc::intrinsic_gchandle_internal_set as fn(_, _, _, _) -> _,
+                )
             }),
             "InternalAddrOfPinnedObject" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(gc::intrinsic_gchandle_internal_addr_of_pinned_object as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    gc::intrinsic_gchandle_internal_addr_of_pinned_object as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
         "System.Environment" => match method_name {
             "GetEnvironmentVariableCore" if param_count == 1 => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(gc::intrinsic_environment_get_variable_core as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    gc::intrinsic_environment_get_variable_core as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
         "System.ArgumentNullException" => match method_name {
             "ThrowIfNull" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(gc::intrinsic_argument_null_exception_throw_if_null as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    gc::intrinsic_argument_null_exception_throw_if_null as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
         "System.Threading.Monitor" => match method_name {
             "Exit" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(threading::intrinsic_monitor_exit as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    threading::intrinsic_monitor_exit as fn(_, _, _, _) -> _,
+                )
             }),
             "ReliableEnter" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(threading::intrinsic_monitor_reliable_enter as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    threading::intrinsic_monitor_reliable_enter as fn(_, _, _, _) -> _,
+                )
             }),
             "TryEnter_FastPath" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(threading::intrinsic_monitor_try_enter_fast_path as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    threading::intrinsic_monitor_try_enter_fast_path as fn(_, _, _, _) -> _,
+                )
             }),
             "TryEnter" => match param_count {
                 3 => Some(unsafe {
-                    std::mem::transmute::<_, IntrinsicHandler>(threading::intrinsic_monitor_try_enter_timeout_ref as fn(_, _, _, _) -> _)
+                    std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                        threading::intrinsic_monitor_try_enter_timeout_ref as fn(_, _, _, _) -> _,
+                    )
                 }),
                 2 => Some(unsafe {
-                    std::mem::transmute::<_, IntrinsicHandler>(threading::intrinsic_monitor_try_enter_timeout as fn(_, _, _, _) -> _)
+                    std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                        threading::intrinsic_monitor_try_enter_timeout as fn(_, _, _, _) -> _,
+                    )
                 }),
                 _ => None,
             },
@@ -162,148 +197,229 @@ pub fn get_static_method_handler(
         },
         "System.Threading.Interlocked" => match method_name {
             "CompareExchange" if param_count == 3 => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(threading::intrinsic_interlocked_compare_exchange as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    threading::intrinsic_interlocked_compare_exchange as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
         "System.Threading.Volatile" => match method_name {
             "Read" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(threading::intrinsic_volatile_read as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    threading::intrinsic_volatile_read as fn(_, _, _, _) -> _,
+                )
             }),
             "Write" if param_count == 2 => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(threading::intrinsic_volatile_write_bool as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    threading::intrinsic_volatile_write_bool as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
         "System.String" => match method_name {
             "Equals" if param_count == 1 || param_count == 2 => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(string_ops::intrinsic_string_equals as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    string_ops::intrinsic_string_equals as fn(_, _, _, _) -> _,
+                )
             }),
             "FastAllocateString" if param_count == 1 || param_count == 2 => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(string_ops::intrinsic_string_fast_allocate_string as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    string_ops::intrinsic_string_fast_allocate_string as fn(_, _, _, _) -> _,
+                )
             }),
             "get_Chars" if param_count == 1 => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(string_ops::intrinsic_string_get_chars as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    string_ops::intrinsic_string_get_chars as fn(_, _, _, _) -> _,
+                )
             }),
             "get_Length" if param_count == 0 => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(string_ops::intrinsic_string_get_length as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    string_ops::intrinsic_string_get_length as fn(_, _, _, _) -> _,
+                )
             }),
             "Concat" if param_count == 3 => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(string_ops::intrinsic_string_concat_three_spans as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    string_ops::intrinsic_string_concat_three_spans as fn(_, _, _, _) -> _,
+                )
             }),
             "GetHashCodeOrdinalIgnoreCase" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(string_ops::intrinsic_string_get_hash_code_ordinal_ignore_case as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    string_ops::intrinsic_string_get_hash_code_ordinal_ignore_case
+                        as fn(_, _, _, _) -> _,
+                )
             }),
             "GetPinnableReference" | "GetRawStringData" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(string_ops::intrinsic_string_get_raw_data as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    string_ops::intrinsic_string_get_raw_data as fn(_, _, _, _) -> _,
+                )
             }),
             "IndexOf" if param_count == 1 || param_count == 2 => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(string_ops::intrinsic_string_index_of as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    string_ops::intrinsic_string_index_of as fn(_, _, _, _) -> _,
+                )
             }),
             "Substring" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(string_ops::intrinsic_string_substring as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    string_ops::intrinsic_string_substring as fn(_, _, _, _) -> _,
+                )
             }),
             "IsNullOrEmpty" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(string_ops::intrinsic_string_is_null_or_empty as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    string_ops::intrinsic_string_is_null_or_empty as fn(_, _, _, _) -> _,
+                )
             }),
             "op_Implicit" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(span::intrinsic_string_as_span as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    span::intrinsic_string_as_span as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
         "System.Runtime.InteropServices.Marshal" => match method_name {
             "GetLastPInvokeError" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(unsafe_ops::intrinsic_marshal_get_last_pinvoke_error as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_marshal_get_last_pinvoke_error as fn(_, _, _, _) -> _,
+                )
             }),
             "SetLastPInvokeError" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(unsafe_ops::intrinsic_marshal_set_last_pinvoke_error as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_marshal_set_last_pinvoke_error as fn(_, _, _, _) -> _,
+                )
             }),
             "SizeOf" if param_count == 0 || param_count == 1 => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(unsafe_ops::intrinsic_marshal_size_of as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_marshal_size_of as fn(_, _, _, _) -> _,
+                )
             }),
             "OffsetOf" if param_count == 1 || param_count == 2 => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(unsafe_ops::intrinsic_marshal_offset_of as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_marshal_offset_of as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
         "System.Buffer" => match method_name {
             "Memmove" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(unsafe_ops::intrinsic_buffer_memmove as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_buffer_memmove as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
         "System.Runtime.InteropServices.MemoryMarshal" => match method_name {
             "GetArrayDataReference" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(unsafe_ops::intrinsic_memory_marshal_get_array_data_reference as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_memory_marshal_get_array_data_reference
+                        as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
         "System.Runtime.CompilerServices.RuntimeHelpers" => match method_name {
             "GetMethodTable" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(reflection::intrinsic_runtime_helpers_get_method_table as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    reflection::intrinsic_runtime_helpers_get_method_table as fn(_, _, _, _) -> _,
+                )
             }),
             "CreateSpan" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(span::intrinsic_runtime_helpers_create_span as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    span::intrinsic_runtime_helpers_create_span as fn(_, _, _, _) -> _,
+                )
             }),
             "IsBitwiseEquatable" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(reflection::intrinsic_runtime_helpers_is_bitwise_equatable as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    reflection::intrinsic_runtime_helpers_is_bitwise_equatable
+                        as fn(_, _, _, _) -> _,
+                )
             }),
             "IsReferenceOrContainsReferences" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(reflection::intrinsic_runtime_helpers_is_reference_or_contains_references as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    reflection::intrinsic_runtime_helpers_is_reference_or_contains_references
+                        as fn(_, _, _, _) -> _,
+                )
             }),
             "RunClassConstructor" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(reflection::intrinsic_runtime_helpers_run_class_constructor as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    reflection::intrinsic_runtime_helpers_run_class_constructor
+                        as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
         "System.MemoryExtensions" => match method_name {
             "Equals" if param_count == 3 => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(span::intrinsic_memory_extensions_equals_span_char as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    span::intrinsic_memory_extensions_equals_span_char as fn(_, _, _, _) -> _,
+                )
             }),
             "AsSpan" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(span::intrinsic_string_as_span as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    span::intrinsic_string_as_span as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
         "System.ReadOnlySpan`1" | "System.Span`1" => match method_name {
             "get_Item" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(span::intrinsic_span_get_item as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    span::intrinsic_span_get_item as fn(_, _, _, _) -> _,
+                )
             }),
             "get_Length" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(span::intrinsic_span_get_length as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    span::intrinsic_span_get_length as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
         "System.Runtime.CompilerServices.Unsafe" => match method_name {
             "Add" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(unsafe_ops::intrinsic_unsafe_add as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_unsafe_add as fn(_, _, _, _) -> _,
+                )
             }),
             "AreSame" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(unsafe_ops::intrinsic_unsafe_are_same as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_unsafe_are_same as fn(_, _, _, _) -> _,
+                )
             }),
             "As" => match param_count {
                 1 => Some(unsafe {
-                    std::mem::transmute::<_, IntrinsicHandler>(unsafe_ops::intrinsic_unsafe_as as fn(_, _, _, _) -> _)
+                    std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                        unsafe_ops::intrinsic_unsafe_as as fn(_, _, _, _) -> _,
+                    )
                 }),
                 2 => Some(unsafe {
-                    std::mem::transmute::<_, IntrinsicHandler>(unsafe_ops::intrinsic_unsafe_as_generic as fn(_, _, _, _) -> _)
+                    std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                        unsafe_ops::intrinsic_unsafe_as_generic as fn(_, _, _, _) -> _,
+                    )
                 }),
                 _ => None,
             },
             "AsRef" if param_count == 1 => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(unsafe_ops::intrinsic_unsafe_as_ref_any as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_unsafe_as_ref_any as fn(_, _, _, _) -> _,
+                )
             }),
             "SizeOf" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(unsafe_ops::intrinsic_unsafe_size_of as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_unsafe_size_of as fn(_, _, _, _) -> _,
+                )
             }),
             "ByteOffset" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(unsafe_ops::intrinsic_unsafe_byte_offset as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_unsafe_byte_offset as fn(_, _, _, _) -> _,
+                )
             }),
             "ReadUnaligned" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(unsafe_ops::intrinsic_unsafe_read_unaligned as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_unsafe_read_unaligned as fn(_, _, _, _) -> _,
+                )
             }),
             "WriteUnaligned" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(unsafe_ops::intrinsic_unsafe_write_unaligned as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_unsafe_write_unaligned as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
@@ -311,82 +427,105 @@ pub fn get_static_method_handler(
         | "System.Runtime.Intrinsics.Vector256"
         | "System.Runtime.Intrinsics.Vector512" => match method_name {
             "get_IsHardwareAccelerated" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(math::intrinsic_vector_is_hardware_accelerated as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    math::intrinsic_vector_is_hardware_accelerated as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
-        "System.Byte"
-        | "System.SByte"
-        | "System.UInt16"
-        | "System.Int16"
-        | "System.UInt32"
-        | "System.Int32"
-        | "System.UInt64"
-        | "System.Int64"
-        | "System.UIntPtr"
+        "System.Byte" | "System.SByte" | "System.UInt16" | "System.Int16" | "System.UInt32"
+        | "System.Int32" | "System.UInt64" | "System.Int64" | "System.UIntPtr"
         | "System.IntPtr" => match method_name {
             "CreateTruncating" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(math::intrinsic_numeric_create_truncating as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    math::intrinsic_numeric_create_truncating as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
         "System.Activator" => match method_name {
             "CreateInstance" if param_count == 0 => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(reflection::intrinsic_activator_create_instance as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    reflection::intrinsic_activator_create_instance as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
         "System.Collections.Generic.EqualityComparer`1" => match method_name {
             "get_Default" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(math::intrinsic_equality_comparer_get_default as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    math::intrinsic_equality_comparer_get_default as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
         "System.Type" => match method_name {
             "GetTypeFromHandle" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(reflection::intrinsic_get_from_handle as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    reflection::intrinsic_get_from_handle as fn(_, _, _, _) -> _,
+                )
             }),
             "get_IsValueType" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(reflection::intrinsic_type_get_is_value_type as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    reflection::intrinsic_type_get_is_value_type as fn(_, _, _, _) -> _,
+                )
             }),
             "get_IsEnum" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(reflection::intrinsic_type_get_is_enum as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    reflection::intrinsic_type_get_is_enum as fn(_, _, _, _) -> _,
+                )
             }),
             "get_IsInterface" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(reflection::intrinsic_type_get_is_interface as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    reflection::intrinsic_type_get_is_interface as fn(_, _, _, _) -> _,
+                )
             }),
             "op_Equality" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(reflection::intrinsic_type_op_equality as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    reflection::intrinsic_type_op_equality as fn(_, _, _, _) -> _,
+                )
             }),
             "op_Inequality" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(reflection::intrinsic_type_op_inequality as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    reflection::intrinsic_type_op_inequality as fn(_, _, _, _) -> _,
+                )
             }),
             "get_TypeHandle" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(reflection::intrinsic_type_get_type_handle as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    reflection::intrinsic_type_get_type_handle as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
         "System.Reflection.MethodBase" => match method_name {
             "GetMethodFromHandle" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(reflection::intrinsic_get_from_handle as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    reflection::intrinsic_get_from_handle as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
         "System.Reflection.FieldInfo" => match method_name {
             "GetFieldFromHandle" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(reflection::intrinsic_get_from_handle as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    reflection::intrinsic_get_from_handle as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
         "System.RuntimeTypeHandle" => match method_name {
             "ToIntPtr" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(reflection::intrinsic_type_handle_to_int_ptr as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    reflection::intrinsic_type_handle_to_int_ptr as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
         "System.RuntimeMethodHandle" => match method_name {
             "GetFunctionPointer" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicHandler>(reflection::intrinsic_method_handle_get_function_pointer as fn(_, _, _, _) -> _)
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    reflection::intrinsic_method_handle_get_function_pointer as fn(_, _, _, _) -> _,
+                )
             }),
             _ => None,
         },
@@ -402,13 +541,17 @@ pub fn get_static_field_handler(
     match type_name {
         "System.IntPtr" => match field_name {
             "Zero" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicFieldHandler>(unsafe_ops::intrinsic_field_intptr_zero as fn(_, _, _, _))
+                std::mem::transmute::<fn(_, _, _, _), IntrinsicFieldHandler>(
+                    unsafe_ops::intrinsic_field_intptr_zero as fn(_, _, _, _),
+                )
             }),
             _ => None,
         },
         "System.String" => match field_name {
             "Empty" => Some(unsafe {
-                std::mem::transmute::<_, IntrinsicFieldHandler>(string_ops::intrinsic_field_string_empty as fn(_, _, _, _))
+                std::mem::transmute::<fn(_, _, _, _), IntrinsicFieldHandler>(
+                    string_ops::intrinsic_field_string_empty as fn(_, _, _, _),
+                )
             }),
             _ => None,
         },
@@ -633,10 +776,9 @@ impl IntrinsicRegistry {
     /// Looks up an intrinsic handler for the given field.
     pub fn get_field(&self, field: &FieldDescription) -> Option<IntrinsicFieldHandler> {
         // First check static handlers
-        if let Some(handler) = get_static_field_handler(
-            field.parent.type_name().as_ref(),
-            &field.field.name,
-        ) {
+        if let Some(handler) =
+            get_static_field_handler(field.parent.type_name().as_ref(), &field.field.name)
+        {
             return Some(handler);
         }
 
@@ -652,7 +794,7 @@ impl IntrinsicRegistry {
 
         // Methods and fields are now handled by compile-time static handlers in mod.rs.
         // initialize is kept for any future dynamic registration needs.
-        
+
         #[cfg(feature = "intrinsic-trace")]
         eprintln!("Intrinsic registry initialized (static handlers preferred)");
 

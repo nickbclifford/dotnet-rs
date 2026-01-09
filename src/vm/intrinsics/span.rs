@@ -28,7 +28,10 @@ pub fn span_to_slice<'gc, 'a>(span: Object<'gc>, element_size: usize) -> &'a [u8
 
     // Defensive check: limit span size to 1GB
     if len > 0x4000_0000 || (len > 0 && element_size > usize::MAX / len) {
-        panic!("massive span detected: length={}, element_size={}", len, element_size);
+        panic!(
+            "massive span detected: length={}, element_size={}",
+            len, element_size
+        );
     }
 
     unsafe { slice::from_raw_parts(ptr.as_ptr() as *const u8, len * element_size) }

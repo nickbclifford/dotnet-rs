@@ -1,8 +1,7 @@
 use crate::types::{generics::GenericLookup, members::MethodDescription};
-use std::sync::Arc;
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 pub mod context;
 mod exceptions;

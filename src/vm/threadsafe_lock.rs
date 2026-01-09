@@ -4,13 +4,15 @@
 //! to use across multiple threads. Unlike `RefLock`, which uses non-atomic borrow
 //! flags, `ThreadSafeLock` uses atomic operations to ensure thread-safe access.
 use gc_arena::{barrier::Unlock, Collect, Collection};
+use std::ops::{Deref, DerefMut};
+
 #[cfg(feature = "multithreading")]
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-#[cfg(not(feature = "multithreading"))]
-use std::cell::{Ref as RwLockReadGuard, RefMut as RwLockWriteGuard};
+
 #[cfg(not(feature = "multithreading"))]
 use gc_arena::lock::RefLock as RwLock;
-use std::ops::{Deref, DerefMut};
+#[cfg(not(feature = "multithreading"))]
+use std::cell::{Ref as RwLockReadGuard, RefMut as RwLockWriteGuard};
 
 /// A thread-safe lock for GC-managed objects.
 ///

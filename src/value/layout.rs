@@ -17,7 +17,6 @@ use std::{
     sync::Arc,
 };
 
-
 #[enum_dispatch]
 pub trait HasLayout {
     fn size(&self) -> usize;
@@ -355,10 +354,7 @@ impl FieldLayoutManager {
 
             // Recursively compute base layout
             Some(Self::collect_fields(
-                *base_td,
-                &base_ctx,
-                predicate,
-                metrics,
+                *base_td, &base_ctx, predicate, metrics,
             ))
         } else {
             None
@@ -563,7 +559,6 @@ impl Scalar {
         self.size()
     }
 }
-
 
 pub fn type_layout(t: ConcreteType, context: &ResolutionContext) -> Arc<LayoutManager> {
     type_layout_with_metrics(t, context, None)

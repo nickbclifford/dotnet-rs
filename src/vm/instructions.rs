@@ -89,7 +89,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             self.external_call(method, gc);
             StepResult::InstructionStepped
         } else {
-            self.call_frame(gc, MethodInfo::new(method, &lookup, self.shared.clone()), lookup);
+            self.call_frame(
+                gc,
+                MethodInfo::new(method, &lookup, self.shared.clone()),
+                lookup,
+            );
             StepResult::InstructionStepped
         }
     }
@@ -122,7 +126,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             let tid = self.thread_id.get();
             let init_result = {
                 // Thread-safe path: use StaticStorageManager's internal locking
-                self.shared.statics.init(description, &ctx, tid, Some(&self.shared.metrics))
+                self.shared
+                    .statics
+                    .init(description, &ctx, tid, Some(&self.shared.metrics))
             };
 
             use crate::value::storage::StaticInitResult::*;
@@ -133,7 +139,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         "-- calling static constructor (will return to ip {}) --",
                         self.current_frame().state.ip
                     );
-                    self.call_frame(gc, MethodInfo::new(m, &generics, self.shared.clone()), generics);
+                    self.call_frame(
+                        gc,
+                        MethodInfo::new(m, &generics, self.shared.clone()),
+                        generics,
+                    );
                     return true;
                 }
                 Initialized | Recursive => {
@@ -1297,7 +1307,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     StackValue::ObjectRef(ObjectRef(Some(h))) => {
                         let object_type = self.current_context().get_heap_description(h);
-                        if !self.current_context().is_a(object_type.into(), field.parent.into()) {
+                        if !self
+                            .current_context()
+                            .is_a(object_type.into(), field.parent.into())
+                        {
                             panic!(
                                 "tried to load field {}::{} from object of type {}",
                                 field.parent.type_name(),
@@ -1322,7 +1335,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         }
                     }
                     StackValue::ValueType(ref o) => {
-                        if !self.current_context().is_a(o.description.into(), field.parent.into()) {
+                        if !self
+                            .current_context()
+                            .is_a(o.description.into(), field.parent.into())
+                        {
                             panic!(
                                 "tried to load field {}::{} from object of type {}",
                                 field.parent.type_name(),

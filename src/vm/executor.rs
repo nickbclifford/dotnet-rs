@@ -11,10 +11,10 @@ use crate::{
 };
 
 #[cfg(feature = "multithreaded-gc")]
-use crate::vm_debug;
-
-#[cfg(feature = "multithreaded-gc")]
-use crate::vm::gc::{arena::THREAD_ARENA, coordinator::ArenaHandle};
+use crate::{
+    vm::gc::{arena::THREAD_ARENA, coordinator::ArenaHandle},
+    vm_debug,
+};
 
 pub struct Executor {
     shared: Arc<SharedGlobalState<'static>>,

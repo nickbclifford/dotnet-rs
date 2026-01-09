@@ -6,6 +6,7 @@ use crate::{
     },
     utils::{decompose_type_source, static_res_from_file, ResolutionS},
 };
+use dashmap::DashMap;
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
 use std::{
@@ -19,7 +20,6 @@ use std::{
         RwLock,
     },
 };
-use dashmap::DashMap;
 
 pub struct AssemblyLoader {
     assembly_root: String,

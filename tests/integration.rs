@@ -2,15 +2,16 @@ use dotnet_rs::{
     assemblies,
     types::{members::MethodDescription, TypeDescription},
     utils::{static_res_from_file, ResolutionS},
-    vm::{self},
+    vm,
 };
-#[cfg(feature = "multithreading")]
-use dotnet_rs::vm::threading::ThreadManagerOps;
 use dotnetdll::prelude::*;
 use std::{
     path::{Path, PathBuf},
     process::Command,
 };
+
+#[cfg(feature = "multithreading")]
+use dotnet_rs::vm::threading::ThreadManagerOps;
 
 pub struct TestHarness {
     pub loader: &'static assemblies::AssemblyLoader,

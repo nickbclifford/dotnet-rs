@@ -16,9 +16,10 @@ use crate::{
     vm_pop, vm_push,
 };
 use dotnetdll::prelude::{BaseType, Kind, MemberType, MethodType, TypeSource};
+use std::{fmt::Debug, hash::Hash};
+
 #[cfg(feature = "multithreaded-gc")]
 use gc_arena::Gc;
-use std::{fmt::Debug, hash::Hash};
 #[cfg(feature = "multithreaded-gc")]
 use std::ptr::NonNull;
 
@@ -309,9 +310,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         #[cfg(feature = "multithreaded-gc")]
         {
-            let ptr =
-                crate::value::object::ObjectPtr(NonNull::new(Gc::as_ptr(obj_ref.0.unwrap()) as *mut _)
-                    .unwrap());
+            let ptr = crate::value::object::ObjectPtr(
+                NonNull::new(Gc::as_ptr(obj_ref.0.unwrap()) as *mut _).unwrap(),
+            );
             self.shared
                 .shared_runtime_types
                 .insert(target.clone(), (ptr, self.thread_id.get()));
@@ -458,7 +459,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
 
         #[cfg(feature = "multithreaded-gc")]
-        if let Some(entry) = self.shared.shared_runtime_methods.get(&(method, lookup.clone())) {
+        if let Some(entry) = self
+            .shared
+            .shared_runtime_methods
+            .get(&(method, lookup.clone()))
+        {
             let (ptr, owner_id) = *entry;
             if owner_id != self.thread_id.get() {
                 let obj_ref = ObjectRef(Some(unsafe { Gc::from_ptr(ptr.as_ptr() as *const _) }));
@@ -511,9 +516,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         #[cfg(feature = "multithreaded-gc")]
         {
-            let ptr =
-                crate::value::object::ObjectPtr(NonNull::new(Gc::as_ptr(obj_ref.0.unwrap()) as *mut _)
-                    .unwrap());
+            let ptr = crate::value::object::ObjectPtr(
+                NonNull::new(Gc::as_ptr(obj_ref.0.unwrap()) as *mut _).unwrap(),
+            );
             self.shared
                 .shared_runtime_methods
                 .insert((method, lookup.clone()), (ptr, self.thread_id.get()));
@@ -535,7 +540,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
 
         #[cfg(feature = "multithreaded-gc")]
-        if let Some(entry) = self.shared.shared_runtime_fields.get(&(field, lookup.clone())) {
+        if let Some(entry) = self
+            .shared
+            .shared_runtime_fields
+            .get(&(field, lookup.clone()))
+        {
             let (ptr, owner_id) = *entry;
             if owner_id != self.thread_id.get() {
                 let obj_ref = ObjectRef(Some(unsafe { Gc::from_ptr(ptr.as_ptr() as *const _) }));
@@ -581,9 +590,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         #[cfg(feature = "multithreaded-gc")]
         {
-            let ptr =
-                crate::value::object::ObjectPtr(NonNull::new(Gc::as_ptr(obj_ref.0.unwrap()) as *mut _)
-                    .unwrap());
+            let ptr = crate::value::object::ObjectPtr(
+                NonNull::new(Gc::as_ptr(obj_ref.0.unwrap()) as *mut _).unwrap(),
+            );
             self.shared
                 .shared_runtime_fields
                 .insert((field, lookup.clone()), (ptr, self.thread_id.get()));
@@ -630,7 +639,11 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
 
             #[cfg(feature = "multithreaded-gc")]
             {
-                let shared_entry = stack.shared.shared_runtime_asms.get(&resolution).map(|e| *e);
+                let shared_entry = stack
+                    .shared
+                    .shared_runtime_asms
+                    .get(&resolution)
+                    .map(|e| *e);
                 if let Some((ptr, owner_id)) = shared_entry {
                     if owner_id != stack.thread_id.get() {
                         let obj_ref =
@@ -651,7 +664,12 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 .expect("could find DotnetRs.Assembly in support library");
             let mut asm_handle = Object::new(
                 TypeDescription::new(support_res, definition),
-                &ResolutionContext::new(generics, stack.loader(), support_res, stack.shared.clone()),
+                &ResolutionContext::new(
+                    generics,
+                    stack.loader(),
+                    support_res,
+                    stack.shared.clone(),
+                ),
             );
             let data = (resolution.as_raw() as usize).to_ne_bytes();
             asm_handle
@@ -705,8 +723,12 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                         // Get the first ancestor (the direct parent)
                         let mut ancestors = stack.loader().ancestors(td);
                         if let Some((base_td, base_generics)) = ancestors.next() {
-                            let _ctx =
-                                ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
+                            let _ctx = ResolutionContext::for_method(
+                                method,
+                                stack.loader(),
+                                generics,
+                                stack.shared.clone(),
+                            );
                             let base_rt = if base_generics.is_empty() {
                                 RuntimeType::Type(base_td)
                             } else {
@@ -1198,7 +1220,8 @@ pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc>(
     let target = stack.resolve_runtime_type(o);
     let target_ct = target.to_concrete(stack.loader());
     let target_desc = stack.loader().find_concrete_type(target_ct);
-    let ctx = ResolutionContext::for_method(_method, stack.loader(), generics, stack.shared.clone());
+    let ctx =
+        ResolutionContext::for_method(_method, stack.loader(), generics, stack.shared.clone());
     let value = target_desc.is_value_type(&ctx);
     vm_push!(stack, gc, Int32(value as i32));
     StepResult::InstructionStepped
@@ -1269,7 +1292,8 @@ pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc>(
     pop_args!(stack, [ObjectRef(obj)]);
 
     let rth = stack.loader().corlib_type("System.RuntimeTypeHandle");
-    let ctx = ResolutionContext::for_method(_method, stack.loader(), generics, stack.shared.clone());
+    let ctx =
+        ResolutionContext::for_method(_method, stack.loader(), generics, stack.shared.clone());
     let mut instance = Object::new(rth, &ctx);
     obj.write(instance.instance_storage.get_field_mut_local(rth, "_value"));
 

@@ -32,7 +32,11 @@ impl std::fmt::Display for CacheStats {
         writeln!(f, "  Intrinsic Field Cache:  {}", self.intrinsic_field)?;
         writeln!(f, "  Hierarchy Cache:        {}", self.hierarchy)?;
         writeln!(f, "  Static Field Layout:    {}", self.static_field_layout)?;
-        writeln!(f, "  Instance Field Layout:  {}", self.instance_field_layout)?;
+        writeln!(
+            f,
+            "  Instance Field Layout:  {}",
+            self.instance_field_layout
+        )?;
         writeln!(f, "  Assembly Type Cache:    {}", self.assembly_type)?;
         writeln!(f, "  Assembly Method Cache:  {}", self.assembly_method)?;
         Ok(())
@@ -50,6 +54,19 @@ impl std::fmt::Display for CacheStat {
             self.size
         )
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CacheSizes {
+    pub layout_size: usize,
+    pub vmt_size: usize,
+    pub intrinsic_size: usize,
+    pub intrinsic_field_size: usize,
+    pub hierarchy_size: usize,
+    pub static_field_layout_size: usize,
+    pub instance_field_layout_size: usize,
+    pub assembly_type_info: (u64, u64, usize),
+    pub assembly_method_info: (u64, u64, usize),
 }
 
 #[derive(Debug, Default)]
@@ -127,11 +144,13 @@ impl RuntimeMetrics {
     }
 
     pub fn record_intrinsic_field_cache_hit(&self) {
-        self.intrinsic_field_cache_hits.fetch_add(1, Ordering::Relaxed);
+        self.intrinsic_field_cache_hits
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn record_intrinsic_field_cache_miss(&self) {
-        self.intrinsic_field_cache_misses.fetch_add(1, Ordering::Relaxed);
+        self.intrinsic_field_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn record_hierarchy_cache_hit(&self) {
@@ -155,77 +174,77 @@ impl RuntimeMetrics {
 
     #[inline]
     pub fn record_static_field_layout_cache_hit(&self) {
-        self.static_field_layout_cache_hits.fetch_add(1, Ordering::Relaxed);
+        self.static_field_layout_cache_hits
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     #[inline]
     pub fn record_static_field_layout_cache_miss(&self) {
-        self.static_field_layout_cache_misses.fetch_add(1, Ordering::Relaxed);
+        self.static_field_layout_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     #[inline]
     pub fn record_instance_field_layout_cache_hit(&self) {
-        self.instance_field_layout_cache_hits.fetch_add(1, Ordering::Relaxed);
+        self.instance_field_layout_cache_hits
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     #[inline]
     pub fn record_instance_field_layout_cache_miss(&self) {
-        self.instance_field_layout_cache_misses.fetch_add(1, Ordering::Relaxed);
+        self.instance_field_layout_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn cache_statistics(
-        &self,
-        layout_size: usize,
-        vmt_size: usize,
-        intrinsic_size: usize,
-        intrinsic_field_size: usize,
-        hierarchy_size: usize,
-        static_field_layout_size: usize,
-        instance_field_layout_size: usize,
-        assembly_type_info: (u64, u64, usize),
-        assembly_method_info: (u64, u64, usize),
-    ) -> CacheStats {
+    pub fn cache_statistics(&self, sizes: CacheSizes) -> CacheStats {
         CacheStats {
             layout: self.stat(
                 self.layout_cache_hits.load(Ordering::Relaxed),
                 self.layout_cache_misses.load(Ordering::Relaxed),
-                layout_size,
+                sizes.layout_size,
             ),
             vmt: self.stat(
                 self.vmt_cache_hits.load(Ordering::Relaxed),
                 self.vmt_cache_misses.load(Ordering::Relaxed),
-                vmt_size,
+                sizes.vmt_size,
             ),
             intrinsic: self.stat(
                 self.intrinsic_cache_hits.load(Ordering::Relaxed),
                 self.intrinsic_cache_misses.load(Ordering::Relaxed),
-                intrinsic_size,
+                sizes.intrinsic_size,
             ),
             intrinsic_field: self.stat(
                 self.intrinsic_field_cache_hits.load(Ordering::Relaxed),
                 self.intrinsic_field_cache_misses.load(Ordering::Relaxed),
-                intrinsic_field_size,
+                sizes.intrinsic_field_size,
             ),
             hierarchy: self.stat(
                 self.hierarchy_cache_hits.load(Ordering::Relaxed),
                 self.hierarchy_cache_misses.load(Ordering::Relaxed),
-                hierarchy_size,
+                sizes.hierarchy_size,
             ),
             static_field_layout: self.stat(
                 self.static_field_layout_cache_hits.load(Ordering::Relaxed),
-                self.static_field_layout_cache_misses.load(Ordering::Relaxed),
-                static_field_layout_size,
+                self.static_field_layout_cache_misses
+                    .load(Ordering::Relaxed),
+                sizes.static_field_layout_size,
             ),
             instance_field_layout: self.stat(
-                self.instance_field_layout_cache_hits.load(Ordering::Relaxed),
-                self.instance_field_layout_cache_misses.load(Ordering::Relaxed),
-                instance_field_layout_size,
+                self.instance_field_layout_cache_hits
+                    .load(Ordering::Relaxed),
+                self.instance_field_layout_cache_misses
+                    .load(Ordering::Relaxed),
+                sizes.instance_field_layout_size,
             ),
-            assembly_type: self.stat(assembly_type_info.0, assembly_type_info.1, assembly_type_info.2),
+            assembly_type: self.stat(
+                sizes.assembly_type_info.0,
+                sizes.assembly_type_info.1,
+                sizes.assembly_type_info.2,
+            ),
             assembly_method: self.stat(
-                assembly_method_info.0,
-                assembly_method_info.1,
-                assembly_method_info.2,
+                sizes.assembly_method_info.0,
+                sizes.assembly_method_info.1,
+                sizes.assembly_method_info.2,
             ),
         }
     }
