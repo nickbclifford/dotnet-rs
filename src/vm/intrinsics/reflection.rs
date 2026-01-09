@@ -744,7 +744,11 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
 
             #[cfg(feature = "multithreaded-gc")]
             {
-                let shared_entry = stack.shared.shared_runtime_asms.get(&resolution).map(|e| *e);
+                let shared_entry = stack
+                    .shared
+                    .shared_runtime_asms
+                    .get(&resolution)
+                    .map(|e| *e);
                 if let Some((ptr, owner_id)) = shared_entry {
                     if owner_id != stack.thread_id.get() {
                         let obj_ref =
@@ -768,7 +772,11 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
 
             #[cfg(feature = "multithreaded-gc")]
             {
-                let shared_entry = stack.shared.shared_runtime_asms.get(&resolution).map(|e| *e);
+                let shared_entry = stack
+                    .shared
+                    .shared_runtime_asms
+                    .get(&resolution)
+                    .map(|e| *e);
                 if let Some((ptr, owner_id)) = shared_entry {
                     if owner_id != stack.thread_id.get() {
                         let obj_ref =

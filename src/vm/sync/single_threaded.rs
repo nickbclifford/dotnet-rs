@@ -7,7 +7,13 @@ use crate::{
         threading::ThreadManagerOps,
     },
 };
-use std::{collections::HashMap, sync::{Arc, atomic::{AtomicUsize, Ordering}}};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 #[derive(Debug)]
 pub struct SyncBlock {
