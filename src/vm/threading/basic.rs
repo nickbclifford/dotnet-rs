@@ -1,16 +1,19 @@
 use crate::vm::{
     gc::coordinator::{GCCommand, GCCoordinator},
-    sync::{Arc, AtomicBool, AtomicU64, AtomicUsize, Condvar, Mutex, MutexGuard, Ordering},
+    sync::{Arc, AtomicU64, Mutex, Ordering},
     threading::{STWGuardOps, ThreadManagerOps, ThreadState},
     tracer::Tracer,
 };
+#[cfg(feature = "multithreaded-gc")]
+use crate::vm::sync::{AtomicBool, AtomicUsize, Condvar, MutexGuard};
 use std::{
     cell::Cell,
     collections::HashMap,
-    mem, sync,
+    sync,
     thread::{self, ThreadId},
-    time::{Duration, Instant},
 };
+#[cfg(feature = "multithreaded-gc")]
+use std::{mem, time::{Duration, Instant}};
 
 thread_local! {
     /// Cached managed thread ID for the current thread
@@ -357,9 +360,7 @@ impl ThreadManagerOps for ThreadManager {
         }
         #[cfg(not(feature = "multithreaded-gc"))]
         {
-            StopTheWorldGuard {
-                _marker: PhantomData,
-            }
+            StopTheWorldGuard {}
         }
     }
 

@@ -16,8 +16,11 @@ use crate::{
     vm_pop, vm_push,
 };
 use dotnetdll::prelude::{BaseType, Kind, MemberType, MethodType, TypeSource};
+#[cfg(feature = "multithreaded-gc")]
 use gc_arena::Gc;
-use std::{fmt::Debug, hash::Hash, ptr::NonNull};
+use std::{fmt::Debug, hash::Hash};
+#[cfg(feature = "multithreaded-gc")]
+use std::ptr::NonNull;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct RuntimeMethodSignature; // TODO

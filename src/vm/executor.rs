@@ -8,8 +8,10 @@ use crate::{
         tracer::Tracer,
         MethodInfo, StepResult,
     },
-    vm_debug,
 };
+
+#[cfg(feature = "multithreaded-gc")]
+use crate::vm_debug;
 
 #[cfg(feature = "multithreaded-gc")]
 use crate::vm::gc::{arena::THREAD_ARENA, coordinator::ArenaHandle};

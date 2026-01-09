@@ -2,8 +2,10 @@ use dotnet_rs::{
     assemblies,
     types::{members::MethodDescription, TypeDescription},
     utils::{static_res_from_file, ResolutionS},
-    vm::{self, threading::ThreadManagerOps},
+    vm::{self},
 };
+#[cfg(feature = "multithreading")]
+use dotnet_rs::vm::threading::ThreadManagerOps;
 use dotnetdll::prelude::*;
 use std::{
     path::{Path, PathBuf},

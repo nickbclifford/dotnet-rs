@@ -8,10 +8,14 @@ use crate::{
     utils::{decompose_type_source, ResolutionS},
     value::{
         layout::{FieldLayoutManager, HasLayout, LayoutManager},
-        object::{HeapStorage, Object as ObjectInstance, ObjectPtr, ObjectRef},
+        object::{HeapStorage, Object as ObjectInstance, ObjectRef},
         storage::StaticStorageManager,
         StackValue,
     },
+};
+#[cfg(feature = "multithreaded-gc")]
+use crate::value::object::ObjectPtr;
+use crate::{
     vm::{
         context::ResolutionContext,
         exceptions::ExceptionState,

@@ -10,8 +10,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    name: Build and Test
+  format:
+    name: Format Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,7 +19,83 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: rustfmt
+
+      - name: Rustfmt Check
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy Check
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        features:
+          - ""                                    # No features
+          - "multithreading"                      # Multithreading only
+          - "multithreaded-gc"                    # Multithreaded GC (default)
+          - "intrinsic-trace"                     # Intrinsic trace only
+          - "multithreading,intrinsic-trace"      # Multithreading + trace
+          - "multithreaded-gc,intrinsic-trace"    # Full features
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libffi-dev
+
+      - name: Clippy Check (${{ matrix.features || 'no features' }})
+        run: |
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo clippy --all-targets --no-default-features -- -D warnings
+          else
+            cargo clippy --all-targets --no-default-features --features ${{ matrix.features }} -- -D warnings
+          fi
+
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Single-threaded configurations
+          - name: "No features"
+            features: ""
+            expected_tests: "lib: 4, feature_config: 3, integration: 23"
+
+          - name: "Intrinsic trace only"
+            features: "intrinsic-trace"
+            expected_tests: "lib: 4, feature_config: 3, integration: 23"
+
+          # Multithreading configurations
+          - name: "Multithreading only"
+            features: "multithreading"
+            expected_tests: "lib: 4, feature_config: 4, integration: 31"
+
+          - name: "Multithreading + intrinsic trace"
+            features: "multithreading,intrinsic-trace"
+            expected_tests: "lib: 4, feature_config: 4, integration: 31"
+
+          # Multithreaded GC configurations (includes multithreading)
+          - name: "Default (multithreaded-gc)"
+            features: "multithreaded-gc"
+            expected_tests: "lib: 7, feature_config: 6, integration: 34"
+
+          - name: "All features"
+            features: "multithreaded-gc,intrinsic-trace"
+            expected_tests: "lib: 7, feature_config: 6, integration: 34"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
@@ -31,11 +107,60 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libffi-dev
 
-      - name: Rustfmt Check
-        run: cargo fmt --all -- --check
+      - name: Build (${{ matrix.name }})
+        run: |
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo build --verbose --no-default-features
+          else
+            cargo build --verbose --no-default-features --features ${{ matrix.features }}
+          fi
 
-      - name: Clippy Check
-        run: cargo clippy --all-targets -- -D warnings
+      - name: Run lib tests (${{ matrix.name }})
+        run: |
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo test --verbose --no-default-features --lib
+          else
+            cargo test --verbose --no-default-features --features ${{ matrix.features }} --lib
+          fi
 
-      - name: Run tests
+      - name: Run feature config tests (${{ matrix.name }})
+        run: |
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo test --verbose --no-default-features --test feature_config_tests
+          else
+            cargo test --verbose --no-default-features --features ${{ matrix.features }} --test feature_config_tests
+          fi
+
+      - name: Run integration tests (${{ matrix.name }})
+        run: |
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo test --verbose --no-default-features --test integration
+          else
+            cargo test --verbose --no-default-features --features ${{ matrix.features }} --test integration
+          fi
+
+  # Ensure default features still work as expected
+  test-default:
+    name: Test with Default Features
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libffi-dev
+
+      - name: Build with default features
+        run: cargo build --verbose
+
+      - name: Test with default features
         run: cargo test --verbose
