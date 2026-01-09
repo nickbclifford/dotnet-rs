@@ -495,6 +495,17 @@ impl Tracer {
         );
     }
 
+    pub fn trace_intrinsic(&mut self, indent: usize, operation: &str, details: &str) {
+        if !self.is_enabled() {
+            return;
+        }
+        self.write_msg(
+            TraceLevel::Debug,
+            indent,
+            format_args!("⚡ INTRINSIC {} {}", operation, details),
+        );
+    }
+
     // Performance counter helpers
     pub fn get_message_count(&self) -> usize {
         self.message_count.load(Ordering::Relaxed)

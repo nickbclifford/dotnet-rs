@@ -5,9 +5,6 @@ FEATURES_COMBINATIONS=(
     ""
     "multithreading"
     "multithreaded-gc"
-    "intrinsic-trace"
-    "multithreading,intrinsic-trace"
-    "multithreaded-gc,intrinsic-trace"
 )
 
 echo "Running checks for all feature combinations..."

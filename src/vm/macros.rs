@@ -111,6 +111,15 @@ macro_rules! vm_trace_method_entry {
 }
 
 #[macro_export]
+macro_rules! vm_trace_intrinsic {
+    ($src:expr, $op:expr, $details:expr) => {
+        if $src.tracer_enabled() {
+            $src.tracer().trace_intrinsic($src.indent(), $op, $details);
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! vm_trace_method_exit {
     ($src:expr, $name:expr) => {
         if $src.tracer_enabled() {

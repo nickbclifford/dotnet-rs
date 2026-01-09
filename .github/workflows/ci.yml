@@ -33,9 +33,6 @@ jobs:
           - ""                                    # No features
           - "multithreading"                      # Multithreading only
           - "multithreaded-gc"                    # Multithreaded GC (default)
-          - "intrinsic-trace"                     # Intrinsic trace only
-          - "multithreading,intrinsic-trace"      # Multithreading + trace
-          - "multithreaded-gc,intrinsic-trace"    # Full features
     steps:
       - uses: actions/checkout@v4
 
@@ -69,26 +66,14 @@ jobs:
             features: ""
             expected_tests: "lib: 4, feature_config: 3, integration: 23"
 
-          - name: "Intrinsic trace only"
-            features: "intrinsic-trace"
-            expected_tests: "lib: 4, feature_config: 3, integration: 23"
-
           # Multithreading configurations
           - name: "Multithreading only"
             features: "multithreading"
             expected_tests: "lib: 4, feature_config: 4, integration: 31"
 
-          - name: "Multithreading + intrinsic trace"
-            features: "multithreading,intrinsic-trace"
-            expected_tests: "lib: 4, feature_config: 4, integration: 31"
-
           # Multithreaded GC configurations (includes multithreading)
           - name: "Default (multithreaded-gc)"
             features: "multithreaded-gc"
-            expected_tests: "lib: 7, feature_config: 6, integration: 34"
-
-          - name: "All features"
-            features: "multithreaded-gc,intrinsic-trace"
             expected_tests: "lib: 7, feature_config: 6, integration: 34"
 
     steps:

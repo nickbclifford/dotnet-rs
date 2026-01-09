@@ -44,8 +44,8 @@ use crate::{
         members::{FieldDescription, MethodDescription},
     },
     value::{object::ObjectRef, StackValue},
-    vm::{context::ResolutionContext, CallStack, GCHandle, StepResult},
-    vm_msg,
+    vm::{context::ResolutionContext, tracer::Tracer, CallStack, GCHandle, StepResult},
+    vm_trace_intrinsic,
 };
 use phf::phf_set;
 use std::{collections::HashMap, sync::Arc};
@@ -713,15 +713,25 @@ impl IntrinsicRegistry {
     }
 
     /// Registers an intrinsic handler for the given method.
-    pub fn register(&mut self, method: MethodDescription, handler: IntrinsicHandler) {
+    pub fn register(
+        &mut self,
+        method: MethodDescription,
+        handler: IntrinsicHandler,
+        tracer: Option<&mut Tracer>,
+    ) {
         let key = IntrinsicKey::from_method(method);
-        #[cfg(feature = "intrinsic-trace")]
-        eprintln!(
-            "Registering intrinsic method: {}.{}({:?} params)",
-            key.type_name,
-            key.member_name,
-            key.param_count.unwrap_or(0)
-        );
+        if let Some(tracer) = tracer {
+            tracer.trace_intrinsic(
+                0,
+                "REGISTER",
+                &format!(
+                    "{}.{}({:?} params)",
+                    key.type_name,
+                    key.member_name,
+                    key.param_count.unwrap_or(0)
+                ),
+            );
+        }
         self.method_handlers.insert(key, handler);
     }
 
@@ -733,28 +743,41 @@ impl IntrinsicRegistry {
         method_name: &str,
         param_count: usize,
         handler: IntrinsicHandler,
+        tracer: Option<&mut Tracer>,
     ) {
         let key = IntrinsicKey {
             type_name: Arc::from(type_name),
             member_name: Arc::from(method_name),
             param_count: Some(param_count),
         };
-        #[cfg(feature = "intrinsic-trace")]
-        eprintln!(
-            "Registering raw intrinsic method: {}.{}({} params)",
-            key.type_name, key.member_name, param_count
-        );
+        if let Some(tracer) = tracer {
+            tracer.trace_intrinsic(
+                0,
+                "REGISTER-RAW",
+                &format!(
+                    "{}.{}({} params)",
+                    key.type_name, key.member_name, param_count
+                ),
+            );
+        }
         self.method_handlers.insert(key, handler);
     }
 
     /// Registers an intrinsic handler for the given field.
-    pub fn register_field(&mut self, field: FieldDescription, handler: IntrinsicFieldHandler) {
+    pub fn register_field(
+        &mut self,
+        field: FieldDescription,
+        handler: IntrinsicFieldHandler,
+        tracer: Option<&mut Tracer>,
+    ) {
         let key = IntrinsicKey::from_field(field);
-        #[cfg(feature = "intrinsic-trace")]
-        eprintln!(
-            "Registering intrinsic field: {}.{}",
-            key.type_name, key.member_name
-        );
+        if let Some(tracer) = tracer {
+            tracer.trace_intrinsic(
+                0,
+                "REGISTER-FIELD",
+                &format!("{}.{}", key.type_name, key.member_name),
+            );
+        }
         self.field_handlers.insert(key, handler);
     }
 
@@ -789,14 +812,19 @@ impl IntrinsicRegistry {
     /// Initializes a new registry with intrinsic handlers.
     #[allow(unused_variables)] // loader is used in the register_intrinsic! macro
     #[allow(clippy::missing_transmute_annotations)] // Transmute safety documented at file level
-    pub fn initialize(loader: &AssemblyLoader) -> Self {
+    pub fn initialize(loader: &AssemblyLoader, tracer: Option<&mut Tracer>) -> Self {
         let registry = Self::new();
 
         // Methods and fields are now handled by compile-time static handlers in mod.rs.
         // initialize is kept for any future dynamic registration needs.
 
-        #[cfg(feature = "intrinsic-trace")]
-        eprintln!("Intrinsic registry initialized (static handlers preferred)");
+        if let Some(tracer) = tracer {
+            tracer.trace_intrinsic(
+                0,
+                "INIT",
+                "Intrinsic registry initialized (static handlers preferred)",
+            );
+        }
 
         registry
     }
@@ -894,7 +922,11 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
     let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
 
-    vm_msg!(stack, "-- method marked as runtime intrinsic --");
+    vm_trace_intrinsic!(
+        stack,
+        "CALL",
+        &format!("{}.{}", method.parent.type_name(), method.method.name)
+    );
 
     // Check the registry-based dispatch first.
     // This provides O(1) lookup instead of O(N) macro-based matching.
@@ -962,6 +994,11 @@ pub fn intrinsic_field<'gc, 'm: 'gc>(
     field: FieldDescription,
     type_generics: Vec<ConcreteType>,
 ) {
+    vm_trace_intrinsic!(
+        stack,
+        "FIELD-LOAD",
+        &format!("{}.{}", field.parent.type_name(), field.field.name)
+    );
     if let Some(handler) = stack.shared.intrinsic_registry.get_field(&field) {
         handler(gc, stack, field, type_generics);
     } else {

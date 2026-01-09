@@ -150,7 +150,9 @@ pub struct SharedGlobalState<'m> {
 
 impl<'m> SharedGlobalState<'m> {
     pub fn new(loader: &'m AssemblyLoader) -> Self {
-        let intrinsic_registry = crate::vm::intrinsics::IntrinsicRegistry::initialize(loader);
+        let mut tracer = Tracer::new();
+        let intrinsic_registry =
+            crate::vm::intrinsics::IntrinsicRegistry::initialize(loader, Some(&mut tracer));
 
         let intrinsic_cache = DashMap::new();
         let intrinsic_field_cache = DashMap::new();
@@ -176,7 +178,6 @@ impl<'m> SharedGlobalState<'m> {
             }
         }
 
-        let tracer = Tracer::new();
         let tracer_enabled = Arc::new(std::sync::atomic::AtomicBool::new(tracer.is_enabled()));
         let this = Self {
             loader,
