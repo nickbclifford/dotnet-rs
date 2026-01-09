@@ -69,12 +69,10 @@ jobs:
           # Multithreading configurations
           - name: "Multithreading only"
             features: "multithreading"
-            expected_tests: "lib: 4, feature_config: 4, integration: 31"
 
           # Multithreaded GC configurations (includes multithreading)
           - name: "Default (multithreaded-gc)"
             features: "multithreaded-gc"
-            expected_tests: "lib: 7, feature_config: 6, integration: 34"
 
     steps:
       - uses: actions/checkout@v4

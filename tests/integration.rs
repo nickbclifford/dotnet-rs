@@ -495,6 +495,56 @@ fn test_multiple_arenas_simple() {
     );
 }
 
+#[test]
+#[cfg(feature = "multithreaded-gc")]
+fn test_reflection_race_condition() {
+    use std::sync::Arc;
+    use std::thread;
+
+    let harness = TestHarness::get();
+    let fixture_path = Path::new("tests/fixtures/reflection_stress_0.cs");
+    let dll_path = harness.build(fixture_path);
+
+    let shared = Arc::new(vm::SharedGlobalState::new(harness.loader));
+    let resolution = static_res_from_file(dll_path.to_str().unwrap());
+    shared.loader.register_assembly(resolution);
+
+    let num_threads = 20;
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    let handles: Vec<_> = (0..num_threads)
+        .map(|i| {
+            let harness_ptr = harness as *const TestHarness as usize;
+            let shared = Arc::clone(&shared);
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let harness = unsafe { &*(harness_ptr as *const TestHarness) };
+                for _ in 0..50 {
+                    let exit_code = harness.run_with_shared(resolution, shared.clone());
+                    if exit_code != 0 {
+                        tx.send((i, Err(format!("Exit code {}", exit_code)))).ok();
+                        return;
+                    }
+                }
+                tx.send((i, Ok(()))).ok();
+            })
+        })
+        .collect();
+
+    for _ in 0..num_threads {
+        let (_i, result) = rx
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("Test timed out");
+        if let Err(e) = result {
+            panic!("Thread failed: {:?}", e);
+        }
+    }
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+}
+
 /// Test that verifies the GC coordinator properly tracks multiple arenas
 #[test]
 #[cfg(feature = "multithreaded-gc")]
