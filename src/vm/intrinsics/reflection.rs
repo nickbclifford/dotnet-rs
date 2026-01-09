@@ -287,6 +287,38 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
         }
 
+        // If not in cache, use the global reflection lock to prevent races during creation
+        let shared = self.shared.clone();
+        let _lock = shared.reflection_init_lock.lock();
+
+        // Check cache again after acquiring lock
+        if let Some(obj) = self.runtime_types_read().get(&target) {
+            return *obj;
+        }
+
+        #[cfg(feature = "multithreaded-gc")]
+        if let Some(entry) = self.shared.shared_runtime_types.get(&target) {
+            // ... same logic as above ...
+            let (ptr, owner_id) = *entry;
+            if owner_id != self.thread_id.get() {
+                let obj_ref = ObjectRef(Some(unsafe { Gc::from_ptr(ptr.as_ptr() as *const _) }));
+                let index = obj_ref.as_object(|instance| {
+                    let ct = instance
+                        .instance_storage
+                        .get_field_local(instance.description, "index");
+                    usize::from_ne_bytes(ct.try_into().unwrap())
+                });
+                let mut list = self.runtime_types_list_write();
+                if index >= list.len() {
+                    list.resize(index + 1, target.clone());
+                } else {
+                    list[index] = target.clone();
+                }
+                self.runtime_types_write().insert(target, obj_ref);
+                return obj_ref;
+            }
+        }
+
         let rt = self.loader().corlib_type("DotnetRs.RuntimeType");
         let rt_obj = Object::new(rt, &self.current_context());
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
@@ -491,6 +523,44 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
         }
 
+        let shared = self.shared.clone();
+        let _lock = shared.reflection_init_lock.lock();
+
+        // Check cache again after acquiring lock
+        if let Some(obj) = self
+            .runtime_method_objs_read()
+            .get(&(method, lookup.clone()))
+        {
+            return *obj;
+        }
+
+        #[cfg(feature = "multithreaded-gc")]
+        if let Some(entry) = self
+            .shared
+            .shared_runtime_methods
+            .get(&(method, lookup.clone()))
+        {
+            let (ptr, owner_id) = *entry;
+            if owner_id != self.thread_id.get() {
+                let obj_ref = ObjectRef(Some(unsafe { Gc::from_ptr(ptr.as_ptr() as *const _) }));
+                let index = obj_ref.as_object(|instance| {
+                    let data = instance
+                        .instance_storage
+                        .get_field_local(instance.description, "index");
+                    usize::from_ne_bytes(data.try_into().unwrap())
+                });
+                let mut list = self.runtime_methods_write();
+                if index >= list.len() {
+                    list.resize(index + 1, (method, lookup.clone()));
+                } else {
+                    list[index] = (method, lookup.clone());
+                }
+                self.runtime_method_objs_write()
+                    .insert((method, lookup), obj_ref);
+                return obj_ref;
+            }
+        }
+
         let is_ctor = method.method.name == ".ctor" || method.method.name == ".cctor";
         let class_name = if is_ctor {
             "DotnetRs.ConstructorInfo"
@@ -572,6 +642,41 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
         }
 
+        let shared = self.shared.clone();
+        let _lock = shared.reflection_init_lock.lock();
+
+        // Check cache again after acquiring lock
+        if let Some(obj) = self.runtime_field_objs_read().get(&(field, lookup.clone())) {
+            return *obj;
+        }
+
+        #[cfg(feature = "multithreaded-gc")]
+        if let Some(entry) = self
+            .shared
+            .shared_runtime_fields
+            .get(&(field, lookup.clone()))
+        {
+            let (ptr, owner_id) = *entry;
+            if owner_id != self.thread_id.get() {
+                let obj_ref = ObjectRef(Some(unsafe { Gc::from_ptr(ptr.as_ptr() as *const _) }));
+                let index = obj_ref.as_object(|instance| {
+                    let data = instance
+                        .instance_storage
+                        .get_field_local(instance.description, "index");
+                    usize::from_ne_bytes(data.try_into().unwrap())
+                });
+                let mut list = self.runtime_fields_write();
+                if index >= list.len() {
+                    list.resize(index + 1, (field, lookup.clone()));
+                } else {
+                    list[index] = (field, lookup.clone());
+                }
+                self.runtime_field_objs_write()
+                    .insert((field, lookup), obj_ref);
+                return obj_ref;
+            }
+        }
+
         let rt = self.loader().corlib_type("DotnetRs.FieldInfo");
         let rt_obj = Object::new(rt, &self.current_context());
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
@@ -639,11 +744,31 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
 
             #[cfg(feature = "multithreaded-gc")]
             {
-                let shared_entry = stack
-                    .shared
-                    .shared_runtime_asms
-                    .get(&resolution)
-                    .map(|e| *e);
+                let shared_entry = stack.shared.shared_runtime_asms.get(&resolution).map(|e| *e);
+                if let Some((ptr, owner_id)) = shared_entry {
+                    if owner_id != stack.thread_id.get() {
+                        let obj_ref =
+                            ObjectRef(Some(unsafe { Gc::from_ptr(ptr.as_ptr() as *const _) }));
+                        stack.runtime_asms_write().insert(resolution, obj_ref);
+                        push!(ObjectRef(obj_ref));
+                        return StepResult::InstructionStepped;
+                    }
+                }
+            }
+
+            let shared = stack.shared.clone();
+            let _lock = shared.reflection_init_lock.lock();
+
+            // Check cache again after lock
+            let cached_asm = stack.runtime_asms_read().get(&resolution).copied();
+            if let Some(o) = cached_asm {
+                push!(ObjectRef(o));
+                return StepResult::InstructionStepped;
+            }
+
+            #[cfg(feature = "multithreaded-gc")]
+            {
+                let shared_entry = stack.shared.shared_runtime_asms.get(&resolution).map(|e| *e);
                 if let Some((ptr, owner_id)) = shared_entry {
                     if owner_id != stack.thread_id.get() {
                         let obj_ref =

@@ -145,6 +145,7 @@ pub struct SharedGlobalState<'m> {
     /// Cache for shared field reflection objects: (Field, Lookup) -> (ObjectPtr, owner_id)
     #[cfg(feature = "multithreaded-gc")]
     pub shared_runtime_fields: DashMap<(FieldDescription, GenericLookup), (ObjectPtr, u64)>,
+    pub reflection_init_lock: Mutex<()>,
 }
 
 impl<'m> SharedGlobalState<'m> {
@@ -204,6 +205,7 @@ impl<'m> SharedGlobalState<'m> {
             shared_runtime_methods: DashMap::new(),
             #[cfg(feature = "multithreaded-gc")]
             shared_runtime_fields: DashMap::new(),
+            reflection_init_lock: Mutex::new(()),
         };
 
         this

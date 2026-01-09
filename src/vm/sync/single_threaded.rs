@@ -3,28 +3,28 @@ use crate::{
     vm::{
         gc::coordinator::GCCoordinator,
         metrics::RuntimeMetrics,
-        sync::{SyncBlockOps, SyncManagerOps},
+        sync::{Mutex, SyncBlockOps, SyncManagerOps},
         threading::ThreadManagerOps,
     },
 };
-use std::{cell::Cell, collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::{Arc, atomic::{AtomicUsize, Ordering}}};
 
 #[derive(Debug)]
 pub struct SyncBlock {
-    recursion_count: Cell<usize>,
+    recursion_count: AtomicUsize,
 }
 
 impl SyncBlock {
     pub(super) fn new() -> Self {
         Self {
-            recursion_count: Cell::new(0),
+            recursion_count: AtomicUsize::new(0),
         }
     }
 }
 
 impl SyncBlockOps for SyncBlock {
     fn try_enter(&self, _thread_id: u64) -> bool {
-        self.recursion_count.set(self.recursion_count.get() + 1);
+        self.recursion_count.fetch_add(1, Ordering::SeqCst);
         true
     }
 
@@ -64,9 +64,9 @@ impl SyncBlockOps for SyncBlock {
     }
 
     fn exit(&self, _thread_id: u64) -> bool {
-        let count = self.recursion_count.get();
+        let count = self.recursion_count.load(Ordering::SeqCst);
         if count > 0 {
-            self.recursion_count.set(count - 1);
+            self.recursion_count.fetch_sub(1, Ordering::SeqCst);
             true
         } else {
             false
@@ -87,15 +87,15 @@ impl SyncBlockOps for SyncBlock {
 }
 
 pub struct SyncBlockManager {
-    blocks: Cell<Option<HashMap<usize, Arc<SyncBlock>>>>,
-    next_index: Cell<usize>,
+    blocks: Mutex<HashMap<usize, Arc<SyncBlock>>>,
+    next_index: AtomicUsize,
 }
 
 impl SyncBlockManager {
     pub fn new() -> Self {
         Self {
-            blocks: Cell::new(Some(HashMap::new())),
-            next_index: Cell::new(1),
+            blocks: Mutex::new(HashMap::new()),
+            next_index: AtomicUsize::new(1),
         }
     }
 }
@@ -110,32 +110,25 @@ impl SyncManagerOps for SyncBlockManager {
         set_index: impl FnOnce(usize),
     ) -> (usize, Arc<SyncBlock>) {
         if let Some(index) = get_index() {
-            let blocks = self.blocks.take().expect("Sync blocks were already taken");
+            let blocks = self.blocks.lock();
             if let Some(block) = blocks.get(&index) {
-                let res = (index, block.clone());
-                self.blocks.set(Some(blocks));
-                return res;
+                return (index, block.clone());
             }
-            self.blocks.set(Some(blocks));
         }
 
-        let index = self.next_index.get();
-        self.next_index.set(index + 1);
+        let index = self.next_index.fetch_add(1, Ordering::SeqCst);
 
         let block = Arc::new(SyncBlock::new());
-        let mut blocks = self.blocks.take().expect("Sync blocks were already taken");
+        let mut blocks = self.blocks.lock();
         blocks.insert(index, block.clone());
-        self.blocks.set(Some(blocks));
 
         set_index(index);
         (index, block)
     }
 
     fn get_sync_block(&self, index: usize) -> Option<Arc<SyncBlock>> {
-        let blocks = self.blocks.take().expect("Sync blocks were already taken");
-        let res = blocks.get(&index).cloned();
-        self.blocks.set(Some(blocks));
-        res
+        let blocks = self.blocks.lock();
+        blocks.get(&index).cloned()
     }
 
     fn try_enter_block(
