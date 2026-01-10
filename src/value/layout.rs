@@ -4,7 +4,7 @@ use crate::{
         members::FieldDescription,
         TypeDescription,
     },
-    value::{object::ObjectRef, pointer::ManagedPtr},
+    value::object::ObjectRef,
     vm::{context::ResolutionContext, metrics::RuntimeMetrics},
 };
 use dotnetdll::prelude::*;
@@ -12,7 +12,6 @@ use enum_dispatch::enum_dispatch;
 use gc_arena::{Collect, Collection};
 use std::{
     collections::{HashMap, HashSet},
-    mem::size_of,
     ops::Range,
     sync::Arc,
 };
@@ -81,13 +80,11 @@ impl LayoutManager {
                 ObjectRef::read(storage).trace(cc);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                // SAFETY: We only trace if the storage is not zero-initialized.
-                // Zero-initialized storage represents a null/default ManagedPtr which
-                // doesn't need tracing. This prevents attempting to trace uninitialized
-                // or default-constructed values that may not have valid GC pointers yet.
-                if !storage.iter().take(ManagedPtr::SIZE).all(|&b| b == 0) {
-                    ManagedPtr::read(storage).trace(cc);
-                }
+                // NOTE: ManagedPtr in memory is now pointer-sized (8 bytes).
+                // The GC metadata (owner handle) is stored in the Object's side-table.
+                // Tracing of managed pointer owners is handled by Object::trace,
+                // which has access to the side-table. Here we do nothing since
+                // the raw pointer value doesn't need tracing.
             }
             LayoutManager::FieldLayoutManager(f) => {
                 for field in f.fields.values() {
@@ -115,11 +112,8 @@ impl LayoutManager {
                 ObjectRef::read(storage).resurrect(fc, visited);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                // SAFETY: Same zero-initialization check as in trace(). Avoid resurrecting
-                // objects referenced by uninitialized ManagedPtr values.
-                if !storage.iter().take(ManagedPtr::SIZE).all(|&b| b == 0) {
-                    ManagedPtr::read(storage).resurrect(fc, visited);
-                }
+                // NOTE: ManagedPtr resurrection is handled by Object::resurrect
+                // which has access to the side-table containing the owner handles.
             }
             LayoutManager::FieldLayoutManager(f) => {
                 for field in f.fields.values() {
@@ -548,7 +542,8 @@ impl HasLayout for Scalar {
             Scalar::Int32 => 4,
             Scalar::Int64 => 8,
             Scalar::ObjectRef | Scalar::NativeInt => ObjectRef::SIZE,
-            Scalar::ManagedPtr => size_of::<ManagedPtr>(),
+            // ManagedPtr is pointer-sized in memory (metadata stored in side-table)
+            Scalar::ManagedPtr => ObjectRef::SIZE,
             Scalar::Float32 => 4,
             Scalar::Float64 => 8,
         }

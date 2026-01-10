@@ -3,7 +3,7 @@ use crate::{
     utils::DebugStr,
     value::{
         layout::{ArrayLayoutManager, HasLayout, LayoutManager, Scalar},
-        pointer::{ManagedPtr, UnmanagedPtr},
+        pointer::{ManagedPtr, ManagedPtrOwner, UnmanagedPtr},
         storage::FieldStorage,
         string::CLRString,
         StackValue,
@@ -20,7 +20,7 @@ use gc_arena::{Collect, Collection, Gc};
 use std::{
     any,
     cmp::Ordering,
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     error::Error,
     fmt::{self, Debug, Formatter},
     hash::{Hash, Hasher},
@@ -28,6 +28,92 @@ use std::{
     marker::PhantomData,
     ptr::{self, NonNull},
 };
+
+/// Owner information for managed pointers stored in metadata.
+/// We MUST store actual Gc handles, not raw pointers, because:
+/// - GC can move objects (invalidating raw pointers)
+/// - We need to trace through these for GC correctness
+/// - Gc::from_ptr() on stale pointers causes undefined behavior
+#[derive(Clone, Debug)]
+pub enum MetadataOwner<'gc> {
+    None,
+    Heap(ObjectHandle<'gc>),
+    Stack(NonNull<Object<'gc>>), // Stack pointers are traced separately, don't reconstruct
+}
+
+/// Metadata for managed pointers stored in object fields.
+/// Since managed pointers in memory are pointer-sized (8 bytes), we store
+/// the GC and type metadata in a side-table indexed by byte offset.
+#[derive(Clone, Debug)]
+pub struct ManagedPtrMetadata<'gc> {
+    pub inner_type: TypeDescription,
+    pub owner: MetadataOwner<'gc>,
+    pub pinned: bool,
+}
+
+impl<'gc> PartialEq for ManagedPtrMetadata<'gc> {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner_type == other.inner_type
+            && match (&self.owner, &other.owner) {
+                (MetadataOwner::None, MetadataOwner::None) => true,
+                (MetadataOwner::Heap(a), MetadataOwner::Heap(b)) => Gc::ptr_eq(*a, *b),
+                (MetadataOwner::Stack(a), MetadataOwner::Stack(b)) => a.as_ptr() == b.as_ptr(),
+                _ => false,
+            }
+            && self.pinned == other.pinned
+    }
+}
+
+impl<'gc> ManagedPtrMetadata<'gc> {
+    pub fn from_managed_ptr(m: &ManagedPtr<'gc>) -> Self {
+        let owner = match m.owner {
+            Some(ManagedPtrOwner::Heap(h)) => MetadataOwner::Heap(h),
+            Some(ManagedPtrOwner::Stack(s)) => MetadataOwner::Stack(s),
+            None => MetadataOwner::None,
+        };
+        Self {
+            inner_type: m.inner_type,
+            owner,
+            pinned: m.pinned,
+        }
+    }
+
+    pub fn recover_owner(&self) -> Option<ManagedPtrOwner<'gc>> {
+        // Now that we store actual Gc handles instead of raw pointers,
+        // recovery is safe and straightforward!
+        match self.owner {
+            MetadataOwner::Heap(h) => Some(ManagedPtrOwner::Heap(h)),
+            MetadataOwner::Stack(s) => Some(ManagedPtrOwner::Stack(s)),
+            MetadataOwner::None => None,
+        }
+    }
+}
+
+/// Side-table for managed pointer metadata, indexed by byte offset in storage.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ManagedPtrSideTable<'gc> {
+    pub metadata: HashMap<usize, ManagedPtrMetadata<'gc>>,
+}
+
+impl<'gc> ManagedPtrSideTable<'gc> {
+    pub fn new() -> Self {
+        Self {
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn insert(&mut self, offset: usize, metadata: ManagedPtrMetadata<'gc>) {
+        self.metadata.insert(offset, metadata);
+    }
+
+    pub fn get(&self, offset: usize) -> Option<&ManagedPtrMetadata<'gc>> {
+        self.metadata.get(&offset)
+    }
+
+    pub fn remove(&mut self, offset: usize) {
+        self.metadata.remove(&offset);
+    }
+}
 
 #[derive(Collect, Debug)]
 #[collect(no_drop)]
@@ -550,7 +636,16 @@ impl<'gc> CTSValue<'gc> {
             BaseType::UIntPtr | BaseType::FunctionPointer(_) => {
                 Self::Value(NativeUInt(from_bytes!(usize, data)))
             }
-            BaseType::ValuePointer(_, _) => Self::Value(Pointer(ManagedPtr::read(data))),
+            BaseType::ValuePointer(_, _) => {
+                // Read only the pointer value (8 bytes) from memory.
+                // Metadata (type, owner, pinned) should be in the Object's side-table,
+                // but CTSValue::read doesn't have access to it.
+                // We create a ManagedPtr with a placeholder type (IntPtr).
+                // The actual type information would need to come from the side-table.
+                let ptr = ManagedPtr::read_ptr_only(data);
+                let placeholder_type = context.loader.corlib_type("System.IntPtr");
+                Self::Value(Pointer(ManagedPtr::new(ptr, placeholder_type, None, false)))
+            }
             BaseType::Object
             | BaseType::String
             | BaseType::Vector(_, _)
@@ -625,7 +720,11 @@ impl<'gc> CTSValue<'gc> {
                 UInt64(i) => dest.copy_from_slice(&i.to_ne_bytes()),
                 NativeInt(i) => dest.copy_from_slice(&i.to_ne_bytes()),
                 NativeUInt(i) => dest.copy_from_slice(&i.to_ne_bytes()),
-                Pointer(p) => p.write(dest),
+                Pointer(p) => {
+                    // Write only the pointer value (8 bytes) to memory.
+                    // Metadata should be stored in Object's side-table separately.
+                    p.write_ptr_only(dest);
+                }
                 Float32(f) => dest.copy_from_slice(&f.to_ne_bytes()),
                 Float64(f) => dest.copy_from_slice(&f.to_ne_bytes()),
                 TypedRef => todo!("typedref implementation"),
@@ -655,16 +754,12 @@ unsafe impl Collect for Vector<'_> {
                 }
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                // SAFETY: For arrays of ManagedPtr, check each element for zero-initialization
-                // before tracing. This prevents tracing uninitialized array elements that may
-                // exist in partially-filled or default-constructed arrays.
-                let elem_size = self.layout.element_layout.size();
-                for i in 0..self.layout.length {
-                    let storage = &self.storage[(i * elem_size)..];
-                    if !storage.iter().take(ManagedPtr::SIZE).all(|&b| b == 0) {
-                        ManagedPtr::read(storage).trace(cc);
-                    }
-                }
+                // NOTE: Arrays cannot contain managed pointers in valid .NET code.
+                // Managed pointers (&T) are only allowed as local variables, method parameters,
+                // return values, and fields of ref structs (which can only exist on the stack).
+                // ECMA-335 Part III §1.8.1.1 forbids managed pointers in arrays.
+                // If we reach here, it's likely a bug in the bytecode or our verification.
+                // Do nothing - there's no metadata to trace since arrays can't contain managed ptrs.
             }
             _ => {
                 for i in 0..self.layout.length {
@@ -755,12 +850,26 @@ pub struct Object<'gc> {
     /// Sync block index for System.Threading.Monitor support.
     /// None means no sync block allocated yet (lazy allocation).
     pub sync_block_index: Option<usize>,
+    /// Side-table for managed pointer metadata.
+    /// Only allocated when the object contains managed pointer fields.
+    pub managed_ptr_metadata: Option<ManagedPtrSideTable<'gc>>,
     pub _phantom: PhantomData<&'gc ()>,
 }
 
 unsafe impl<'gc> Collect for Object<'gc> {
     fn trace(&self, cc: &Collection) {
         self.instance_storage.trace(cc);
+
+        // Trace managed pointer owners from side-table
+        // Now that we store actual Gc handles, tracing is safe!
+        if let Some(ref side_table) = self.managed_ptr_metadata {
+            for metadata in side_table.metadata.values() {
+                if let MetadataOwner::Heap(handle) = metadata.owner {
+                    handle.trace(cc);
+                }
+                // Stack owners are traced separately through the VM stack
+            }
+        }
     }
 }
 
@@ -771,6 +880,19 @@ impl<'gc> Object<'gc> {
 
     pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
         self.instance_storage.resurrect(fc, visited);
+
+        // Resurrect managed pointer owners from side-table
+        if let Some(ref side_table) = self.managed_ptr_metadata {
+            for metadata in side_table.metadata.values() {
+                if let MetadataOwner::Heap(handle) = metadata.owner {
+                    let ptr = Gc::as_ptr(handle) as usize;
+                    if visited.insert(ptr) {
+                        Gc::resurrect(fc, handle);
+                        handle.borrow().storage.resurrect(fc, visited);
+                    }
+                }
+            }
+        }
     }
     pub fn new(description: TypeDescription, context: &ResolutionContext) -> Self {
         Self {
@@ -778,8 +900,17 @@ impl<'gc> Object<'gc> {
             instance_storage: FieldStorage::instance_fields(description, context),
             finalizer_suppressed: false,
             sync_block_index: None,
+            managed_ptr_metadata: None,
             _phantom: PhantomData,
         }
+    }
+
+    /// Register a managed pointer's metadata in the side-table.
+    pub fn register_managed_ptr(&mut self, offset: usize, m: &ManagedPtr<'gc>) {
+        let side_table = self
+            .managed_ptr_metadata
+            .get_or_insert_with(ManagedPtrSideTable::new);
+        side_table.insert(offset, ManagedPtrMetadata::from_managed_ptr(m));
     }
 }
 

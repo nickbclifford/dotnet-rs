@@ -1,13 +1,13 @@
 use crate::{
     types::TypeDescription,
     utils::ResolutionS,
-    value::object::{ObjectHandle, ObjectRef},
+    value::object::{Object, ObjectHandle, ObjectRef},
 };
 use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};
 use std::{
     cmp::Ordering,
     collections::HashSet,
-    fmt::{Debug, Formatter},
+    fmt::{self, Debug, Formatter},
     ptr::NonNull,
 };
 
@@ -16,10 +16,46 @@ pub struct UnmanagedPtr(pub NonNull<u8>);
 unsafe_empty_collect!(UnmanagedPtr);
 
 #[derive(Copy, Clone)]
+pub enum ManagedPtrOwner<'gc> {
+    Heap(ObjectHandle<'gc>),
+    Stack(NonNull<Object<'gc>>),
+}
+
+impl<'gc> ManagedPtrOwner<'gc> {
+    pub fn as_ptr(&self) -> *const u8 {
+        match self {
+            Self::Heap(h) => Gc::as_ptr(*h) as *const u8,
+            Self::Stack(s) => s.as_ptr() as *const u8,
+        }
+    }
+}
+
+unsafe impl<'gc> Collect for ManagedPtrOwner<'gc> {
+    fn trace(&self, cc: &Collection) {
+        match self {
+            Self::Heap(h) => h.trace(cc),
+            // Stack objects are already traced through the VM stack.
+            // Do NOT trace them here to avoid infinite recursion:
+            // Object → StackValue → ManagedPtr → ManagedPtrOwner::Stack → Object (cycle!)
+            Self::Stack(_) => {}
+        }
+    }
+}
+
+impl Debug for ManagedPtrOwner<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Heap(h) => write!(f, "Heap({:?})", Gc::as_ptr(*h)),
+            Self::Stack(s) => write!(f, "Stack({:?})", s.as_ptr()),
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
 pub struct ManagedPtr<'gc> {
     pub value: NonNull<u8>,
     pub inner_type: TypeDescription,
-    pub owner: Option<ObjectHandle<'gc>>,
+    pub owner: Option<ManagedPtrOwner<'gc>>,
     pub pinned: bool,
 }
 
@@ -30,7 +66,7 @@ impl Debug for ManagedPtr<'_> {
             "[{}] {:#?} (owner: {:?}, pinned: {})",
             self.inner_type.type_name(),
             self.value,
-            self.owner.map(Gc::as_ptr),
+            self.owner,
             self.pinned
         )
     }
@@ -49,15 +85,20 @@ impl PartialOrd for ManagedPtr<'_> {
 }
 
 impl<'gc> ManagedPtr<'gc> {
-    // Storage format: pointer (8) + TypeDescription (16) + ObjectRef (8) + pinned (1) = 33 bytes
-    // But we need to account for actual sizes, not hardcoded values
+    /// DEPRECATED: Old storage format size (33 bytes).
+    /// In the new implementation, managed pointers are pointer-sized in memory (8 bytes).
+    /// Metadata is stored in Object's side-table.
     pub const SIZE: usize =
         size_of::<NonNull<u8>>() + size_of::<TypeDescription>() + ObjectRef::SIZE + 1;
+
+    /// Size of managed pointer in memory (pointer-sized, 8 bytes on 64-bit).
+    /// This is the .NET-compliant size per ECMA-335.
+    pub const MEMORY_SIZE: usize = size_of::<usize>();
 
     pub fn new(
         value: NonNull<u8>,
         inner_type: TypeDescription,
-        owner: Option<ObjectHandle<'gc>>,
+        owner: Option<ManagedPtrOwner<'gc>>,
         pinned: bool,
     ) -> Self {
         Self {
@@ -68,6 +109,25 @@ impl<'gc> ManagedPtr<'gc> {
         }
     }
 
+    /// Read just the pointer value from memory (8 bytes).
+    /// This is the new memory format. Metadata must be retrieved from the Object's side-table.
+    pub fn read_ptr_only(source: &[u8]) -> NonNull<u8> {
+        let mut value_bytes = [0u8; size_of::<usize>()];
+        value_bytes.copy_from_slice(&source[0..size_of::<usize>()]);
+        let value_ptr = usize::from_ne_bytes(value_bytes) as *mut u8;
+        NonNull::new(value_ptr).expect("ManagedPtr value should not be null")
+    }
+
+    /// Write just the pointer value to memory (8 bytes).
+    /// Metadata should be stored in the Object's side-table separately.
+    pub fn write_ptr_only(&self, dest: &mut [u8]) {
+        let value_bytes = (self.value.as_ptr() as usize).to_ne_bytes();
+        dest[0..size_of::<usize>()].copy_from_slice(&value_bytes);
+    }
+
+    /// DEPRECATED: Read the old 33-byte format.
+    /// This is only for backward compatibility during transition.
+    #[deprecated(note = "Use read_ptr_only and side-table lookup instead")]
     pub fn read(source: &[u8]) -> Self {
         let expected_size =
             size_of::<NonNull<u8>>() + size_of::<TypeDescription>() + ObjectRef::SIZE + 1;
@@ -108,7 +168,7 @@ impl<'gc> ManagedPtr<'gc> {
         Self {
             value,
             inner_type,
-            owner,
+            owner: owner.map(ManagedPtrOwner::Heap),
             pinned,
         }
     }
@@ -131,7 +191,12 @@ impl<'gc> ManagedPtr<'gc> {
             ..(size_of::<NonNull<u8>>() + 2 * size_of::<usize>())]
             .copy_from_slice(&def_bytes);
 
-        ObjectRef(self.owner)
+        let heap_owner = self.owner.and_then(|o| match o {
+            ManagedPtrOwner::Heap(h) => Some(h),
+            ManagedPtrOwner::Stack(_) => None, // Cannot write stack owner to persistent memory
+        });
+
+        ObjectRef(heap_owner)
             .write(&mut dest[(size_of::<NonNull<u8>>() + size_of::<TypeDescription>())..]);
 
         dest[size_of::<NonNull<u8>>() + size_of::<TypeDescription>() + ObjectRef::SIZE] =
@@ -167,10 +232,17 @@ unsafe impl<'gc> Collect for ManagedPtr<'gc> {
 impl<'gc> ManagedPtr<'gc> {
     pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
         if let Some(owner) = self.owner {
-            let ptr = Gc::as_ptr(owner) as usize;
-            if visited.insert(ptr) {
-                Gc::resurrect(fc, owner);
-                owner.borrow().storage.resurrect(fc, visited);
+            match owner {
+                ManagedPtrOwner::Heap(h) => {
+                    let ptr = Gc::as_ptr(h) as usize;
+                    if visited.insert(ptr) {
+                        Gc::resurrect(fc, h);
+                        h.borrow().storage.resurrect(fc, visited);
+                    }
+                }
+                ManagedPtrOwner::Stack(s) => {
+                    unsafe { s.as_ref().resurrect(fc, visited) };
+                }
             }
         }
     }

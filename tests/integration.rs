@@ -657,3 +657,21 @@ fn test_allocation_pressure_triggers_collection() {
 
     shared.gc_coordinator.unregister_arena(1);
 }
+
+#[test]
+fn test_managed_ptr_size() {
+    let harness = TestHarness::get();
+    let fixture_path = Path::new("tests/fixtures/managed_ptr_size_0.cs");
+    let dll_path = harness.build(fixture_path);
+    let exit_code = harness.run(&dll_path);
+    assert_eq!(exit_code, 0, "ManagedPtr size test failed (incorrect size or memory corruption)");
+}
+
+#[test]
+fn test_managed_ptr_unsafe_ops() {
+    let harness = TestHarness::get();
+    let fixture_path = Path::new("tests/fixtures/managed_ptr_unsafe_ops_0.cs");
+    let dll_path = harness.build(fixture_path);
+    let exit_code = harness.run(&dll_path);
+    assert_eq!(exit_code, 0, "ManagedPtr unsafe ops test failed");
+}

@@ -27,8 +27,8 @@ pub mod string;
 #[cfg(feature = "multithreaded-gc")]
 use object::ObjectPtr;
 
-use object::{HeapStorage, Object, ObjectHandle, ObjectRef};
-use pointer::{ManagedPtr, UnmanagedPtr};
+use object::{HeapStorage, Object, ObjectRef};
+use pointer::{ManagedPtr, ManagedPtrOwner, UnmanagedPtr};
 use string::CLRString;
 
 #[derive(Clone, Debug)]
@@ -161,7 +161,7 @@ impl<'gc> StackValue<'gc> {
     pub fn managed_ptr(
         ptr: *mut u8,
         target_type: TypeDescription,
-        owner: Option<ObjectHandle<'gc>>,
+        owner: Option<ManagedPtrOwner<'gc>>,
         pinned: bool,
     ) -> Self {
         Self::ManagedPtr(ManagedPtr {

@@ -9,6 +9,7 @@ use crate::{
     value::{
         layout::{FieldLayoutManager, HasLayout, LayoutManager},
         object::{HeapStorage, Object as ObjectInstance, ObjectRef},
+        pointer::ManagedPtrOwner,
         storage::StaticStorageManager,
         StackValue,
     },
@@ -644,14 +645,20 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         // first pushing the NewObject 'return value', then the value of the 'this' parameter
         if desc.is_value_type(&self.current_context()) {
-            self.push_stack(gc, value);
+            self.push_stack(gc, value.clone());
+
+            let owner = if let StackValue::ValueType(ref obj) = value {
+                Some(ManagedPtrOwner::Stack(NonNull::from(&**obj)))
+            } else {
+                None
+            };
 
             self.push_stack(
                 gc,
                 StackValue::managed_ptr(
                     self.top_of_stack_address().as_ptr() as *mut _,
                     desc,
-                    None,
+                    owner,
                     false,
                 ),
             );

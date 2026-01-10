@@ -4,8 +4,9 @@ use crate::{
     value::{
         layout::{type_layout, HasLayout},
         object::{Object, ObjectRef},
-        pointer::ManagedPtr,
+        pointer::{ManagedPtr, ManagedPtrOwner},
         string::with_string,
+        StackValue,
     },
     vm::{context::ResolutionContext, CallStack, GCHandle, StepResult},
     vm_pop, vm_push,
@@ -18,7 +19,9 @@ pub fn span_to_slice<'gc, 'a>(span: Object<'gc>, element_size: usize) -> &'a [u8
         .get_field_local(span.description, "_reference");
     let mut len_data = [0u8; size_of::<i32>()];
 
-    let ptr = ManagedPtr::read(ptr_data).value;
+    // Read only the pointer value (8 bytes) from memory.
+    // Managed pointers in Span fields are stored pointer-sized.
+    let ptr = ManagedPtr::read_ptr_only(ptr_data);
     len_data.copy_from_slice(
         span.instance_storage
             .get_field_local(span.description, "_length"),
@@ -77,16 +80,21 @@ pub fn intrinsic_span_get_item<'gc, 'm: 'gc>(
     let value_type = &generics.type_generics[0];
     let value_layout = type_layout(value_type.clone(), &ctx);
 
-    let ptr = unsafe {
-        m.value
-            .add(
-                span_layout
-                    .get_field_by_name("_reference")
-                    .unwrap()
-                    .position,
-            )
-            .add(value_layout.size() * index as usize)
-    };
+    let reference_field = span_layout.get_field_by_name("_reference").unwrap();
+    let ptr_data = unsafe { m.value.as_ptr().add(reference_field.position) };
+    let base_ptr = ManagedPtr::read_ptr_only(unsafe {
+        slice::from_raw_parts(ptr_data, ManagedPtr::MEMORY_SIZE)
+    });
+
+    // NOTE: We don't recover metadata from side-table because:
+    // 1. The Span's _reference field points into an array (or other memory)
+    // 2. The owner we have (m.owner) points to the Span object itself, not the array
+    // 3. Trying to lookup side-table metadata causes panics when m.owner is a Vec
+    // 4. For Span element access, we just need the raw pointer - the array is
+    //    independently GC-rooted, so we don't need owner tracking here.
+    // 5. The returned ManagedPtr will have no owner, which is fine for Span elements.
+
+    let ptr = unsafe { base_ptr.add(value_layout.size() * index as usize) };
 
     vm_push!(
         stack,
@@ -94,8 +102,8 @@ pub fn intrinsic_span_get_item<'gc, 'm: 'gc>(
         ManagedPtr(ManagedPtr::new(
             ptr,
             stack.loader().find_concrete_type(value_type.clone()),
-            m.owner,
-            m.pinned
+            None, // No owner needed - array is independently rooted
+            false // Not pinned
         ))
     );
     StepResult::InstructionStepped
@@ -137,7 +145,14 @@ pub fn intrinsic_string_as_span<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let string_val = vm_pop!(stack);
-    let (ptr, len) = with_string!(stack, gc, string_val, |s| (s.as_ptr(), s.len()));
+    let h = match &string_val {
+        StackValue::ObjectRef(ObjectRef(Some(h))) => *h,
+        _ => panic!("invalid string on stack"),
+    };
+    let (ptr, len) = (
+        with_string!(stack, gc, string_val, |s| s.as_ptr()),
+        with_string!(stack, gc, string_val, |s| s.len()),
+    );
 
     let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
     let span_type = stack.loader().corlib_type("System.ReadOnlySpan`1");
@@ -153,13 +168,24 @@ pub fn intrinsic_string_as_span<'gc, 'm: 'gc>(
     let managed = ManagedPtr::new(
         NonNull::new(ptr as *mut u8).expect("String pointer should not be null"),
         char_type,
-        None,
+        Some(ManagedPtrOwner::Heap(h)),
         false,
     );
-    managed.write(
+    // Write only the pointer value (8 bytes) to memory.
+    // Span's _reference field is a managed pointer stored pointer-sized.
+    managed.write_ptr_only(
         span.instance_storage
             .get_field_mut_local(span_type, "_reference"),
     );
+    // Register metadata in Span's side-table
+    let span_layout = crate::value::layout::FieldLayoutManager::instance_field_layout_cached(
+        span_type,
+        &ctx,
+        Some(&stack.shared.metrics),
+    );
+    let reference_field = span_layout.get_field_by_name("_reference").unwrap();
+    span.register_managed_ptr(reference_field.position, &managed);
+
     span.instance_storage
         .get_field_mut_local(span_type, "_length")
         .copy_from_slice(&(len as i32).to_ne_bytes());
@@ -222,9 +248,10 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
         let array_size = size_str[..size_end].parse::<usize>().unwrap();
         let data_slice = &initial_data[..array_size];
 
-        let span_type = stack.loader().corlib_type("System.ReadOnlySpan`1");
-        let span_lookup = GenericLookup::new(vec![field_type]);
-        let mut span_instance = Object::new(span_type, &ctx.with_generics(&span_lookup));
+    let span_type = stack.loader().corlib_type("System.ReadOnlySpan`1");
+    let span_lookup = GenericLookup::new(vec![element_type.clone()]);
+    let ctx = ctx.with_generics(&span_lookup);
+    let mut span_instance = Object::new(span_type, &ctx);
 
         let element_desc = stack.loader().find_concrete_type(element_type.clone());
         let managed = ManagedPtr::new(
@@ -234,19 +261,29 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
             None,
             false,
         );
-        managed.write(
+        // Write only the pointer value (8 bytes) to memory.
+        managed.write_ptr_only(
             span_instance
                 .instance_storage
                 .get_field_mut_local(span_type, "_reference"),
         );
 
-        let element_count = (array_size / element_size) as i32;
-        span_instance
-            .instance_storage
-            .get_field_mut_local(span_type, "_length")
-            .copy_from_slice(&element_count.to_ne_bytes());
+    let element_count = (array_size / element_size) as i32;
+    span_instance
+        .instance_storage
+        .get_field_mut_local(span_type, "_length")
+        .copy_from_slice(&element_count.to_ne_bytes());
 
-        vm_push!(stack, gc, ValueType(Box::new(span_instance)));
+    // Register metadata in Span's side-table
+    let span_layout = crate::value::layout::FieldLayoutManager::instance_field_layout_cached(
+        span_type,
+        &ctx,
+        Some(&stack.shared.metrics),
+    );
+    let reference_field = span_layout.get_field_by_name("_reference").unwrap();
+    span_instance.register_managed_ptr(reference_field.position, &managed);
+
+    vm_push!(stack, gc, ValueType(Box::new(span_instance)));
         StepResult::InstructionStepped
     } else {
         todo!("initial field data for {:?}", field_desc);

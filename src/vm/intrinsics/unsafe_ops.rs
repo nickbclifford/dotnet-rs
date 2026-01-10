@@ -6,8 +6,8 @@ use crate::{
     },
     value::{
         layout::{type_layout, HasLayout, LayoutManager, Scalar},
-        object::ObjectRef,
-        pointer::ManagedPtr,
+        object::{HeapStorage, ManagedPtrSideTable, Object as ObjectInstance, ObjectRef},
+        pointer::{ManagedPtr, ManagedPtrOwner},
         StackValue,
     },
     vm::{context::ResolutionContext, CallStack, GCHandle, StepResult},
@@ -89,7 +89,7 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<'gc, 'm: 'gc>(
     vm_push!(
         stack,
         gc,
-        StackValue::managed_ptr(data_ptr, element_type, Some(array_handle), false)
+        StackValue::managed_ptr(data_ptr, element_type, Some(ManagedPtrOwner::Heap(array_handle)), false)
     );
     StepResult::InstructionStepped
 }
@@ -227,7 +227,7 @@ pub fn intrinsic_unsafe_as_generic<'gc, 'm: 'gc>(
     let m_val = vm_pop!(stack);
     let (owner, pinned) = match &m_val {
         StackValue::ManagedPtr(m) => (m.owner, m.pinned),
-        StackValue::ObjectRef(ObjectRef(Some(h))) => (Some(*h), false),
+        StackValue::ObjectRef(ObjectRef(Some(h))) => (Some(ManagedPtrOwner::Heap(*h)), false),
         _ => (None, false),
     };
     let m = m_val.as_ptr();
@@ -271,7 +271,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
     vm_push!(
         stack,
         gc,
-        managed_ptr(ptr as *mut u8, target_type, None, false)
+        StackValue::managed_ptr(ptr as *mut u8, target_type, None, false)
     );
     StepResult::InstructionStepped
 }
@@ -312,7 +312,14 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
-    pop_args!(stack, [NativeInt(ptr)]);
+
+    let source = vm_pop!(stack);
+    let (ptr, owner) = match source {
+        StackValue::NativeInt(p) => (p as *mut u8, None),
+        StackValue::ManagedPtr(m) => (m.value.as_ptr(), m.owner),
+        rest => panic!("invalid source for read unaligned: {:?}", rest),
+    };
+
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
 
@@ -332,8 +339,119 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
             Scalar::NativeInt => StackValue::NativeInt(read_ua!(isize)),
             Scalar::Float32 => StackValue::NativeFloat(read_ua!(f32) as f64),
             Scalar::Float64 => StackValue::NativeFloat(read_ua!(f64)),
-            Scalar::ManagedPtr => StackValue::ManagedPtr(read_ua!(ManagedPtr<'gc>)),
+            Scalar::ManagedPtr => {
+                // Read only the pointer value (8 bytes) from memory.
+                // ManagedPtr is now stored pointer-sized per ECMA-335.
+                let ptr_value = read_ua!(usize);
+                let ptr_val = ptr::NonNull::new(ptr_value as *mut u8)
+                    .expect("Read null managed pointer");
+                let target_type = stack.loader().find_concrete_type(target.clone());
+
+                // Try to find metadata from owner's side-table if it's a managed pointer
+                let mut metadata = (None, false);
+                if let Some(owner) = owner {
+                    let side_table = match owner {
+                        ManagedPtrOwner::Heap(h) => {
+                            let obj = h.borrow();
+                            if let HeapStorage::Obj(o) = &obj.storage {
+                                o.managed_ptr_metadata.clone()
+                            } else {
+                                None
+                            }
+                        }
+                        ManagedPtrOwner::Stack(s) => {
+                            let o = unsafe { s.as_ref() };
+                            o.managed_ptr_metadata.clone()
+                        }
+                    };
+
+                    if let Some(side_table) = side_table {
+                        let base_ptr = match owner {
+                            ManagedPtrOwner::Heap(h) => {
+                                let obj = h.borrow();
+                                if let HeapStorage::Obj(o) = &obj.storage {
+                                    o.instance_storage.get().as_ptr() as usize
+                                } else {
+                                    0
+                                }
+                            }
+                            ManagedPtrOwner::Stack(s) => {
+                                let o = unsafe { s.as_ref() };
+                                o.instance_storage.get().as_ptr() as usize
+                            }
+                        };
+
+                        let offset = (ptr as usize).wrapping_sub(base_ptr);
+                        if let Some(m) = side_table.get(offset) {
+                            metadata = (m.recover_owner(), m.pinned);
+                        }
+                    }
+                }
+
+                StackValue::ManagedPtr(ManagedPtr::new(ptr_val, target_type, metadata.0, metadata.1))
+            }
         },
+        LayoutManager::FieldLayoutManager(f) => {
+            // T is a struct, allocate an Object to represent it on the stack as ValueType
+            let mut o = ObjectInstance::new(stack.loader().find_concrete_type(target.clone()), &ctx);
+
+            // Copy raw data from source pointer
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    ptr,
+                    o.instance_storage.get_mut().as_mut_ptr(),
+                    f.size(),
+                );
+            }
+
+            // If source has an owner, copy relevant metadata side-table entries
+            if let Some(owner) = owner {
+                let side_table = match owner {
+                    ManagedPtrOwner::Heap(h) => {
+                        let src_obj = h.borrow();
+                        if let HeapStorage::Obj(src_o) = &src_obj.storage {
+                            src_o.managed_ptr_metadata.clone()
+                        } else {
+                            None
+                        }
+                    }
+                    ManagedPtrOwner::Stack(s) => {
+                        let src_o = unsafe { s.as_ref() };
+                        src_o.managed_ptr_metadata.clone()
+                    }
+                };
+
+                if let Some(side_table) = side_table {
+                    let src_base = match owner {
+                        ManagedPtrOwner::Heap(h) => {
+                            let src_obj = h.borrow();
+                            if let HeapStorage::Obj(src_o) = &src_obj.storage {
+                                src_o.instance_storage.get().as_ptr() as usize
+                            } else {
+                                0
+                            }
+                        }
+                        ManagedPtrOwner::Stack(s) => {
+                            let src_o = unsafe { s.as_ref() };
+                            src_o.instance_storage.get().as_ptr() as usize
+                        }
+                    };
+                    let src_offset = (ptr as usize).wrapping_sub(src_base);
+
+                    for (&offset, metadata) in &side_table.metadata {
+                        // If the metadata offset falls within the range we just read
+                        if offset >= src_offset && offset < src_offset + f.size() {
+                            let target_offset = offset - src_offset;
+                            o.managed_ptr_metadata
+                                .get_or_insert_with(ManagedPtrSideTable::new)
+                                .insert(target_offset, metadata.clone());
+                        }
+                    }
+                }
+            }
+
+            StackValue::ValueType(Box::new(o))
+        }
         _ => panic!("unsupported layout for read unaligned"),
     };
     vm_push!(stack, gc, v);
@@ -342,7 +460,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
 
 /// System.Runtime.CompilerServices.Unsafe::WriteUnaligned<T>(void* ptr, T value)
 pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
-    _gc: GCHandle<'gc>,
+    gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
     method: MethodDescription,
     generics: &GenericLookup,
@@ -351,7 +469,13 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
     let value = vm_pop!(stack);
-    pop_args!(stack, [NativeInt(ptr)]);
+
+    let dest = vm_pop!(stack);
+    let (ptr, owner) = match dest {
+        StackValue::NativeInt(p) => (p as *mut u8, None),
+        StackValue::ManagedPtr(m) => (m.value.as_ptr(), m.owner),
+        rest => panic!("invalid destination for write unaligned: {:?}", rest),
+    };
 
     macro_rules! write_ua {
         ($variant:ident, $t:ty) => {{
@@ -372,8 +496,90 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
             Scalar::NativeInt => write_ua!(NativeInt, isize),
             Scalar::Float32 => write_ua!(NativeFloat, f32),
             Scalar::Float64 => write_ua!(NativeFloat, f64),
-            Scalar::ManagedPtr => write_ua!(ManagedPtr, ManagedPtr<'gc>),
+            Scalar::ManagedPtr => {
+                // Write only the pointer value (8 bytes) to memory.
+                // ManagedPtr is now stored pointer-sized per ECMA-335.
+                vm_expect_stack!(let ManagedPtr(m) = value);
+                unsafe {
+                    ptr::write_unaligned(ptr as *mut usize, m.value.as_ptr() as usize);
+                }
+
+            // If destination has an owner, update its side-table
+            if let Some(owner) = owner {
+                match owner {
+                    ManagedPtrOwner::Heap(h) => {
+                        let mut dest_obj = h.borrow_mut(gc);
+                        if let HeapStorage::Obj(dest_o) = &mut dest_obj.storage {
+                            dest_o.register_managed_ptr(
+                                (ptr as usize)
+                                    .wrapping_sub(dest_o.instance_storage.get().as_ptr() as usize),
+                                &m,
+                            );
+                        }
+                    }
+                    ManagedPtrOwner::Stack(mut s) => {
+                        let dest_o = unsafe { s.as_mut() };
+                        dest_o.register_managed_ptr(
+                            (ptr as usize)
+                                .wrapping_sub(dest_o.instance_storage.get().as_ptr() as usize),
+                            &m,
+                        );
+                    }
+                }
+            }
+            }
         },
+        LayoutManager::FieldLayoutManager(f) => {
+            // T is a struct, extract its Object from ValueType
+            vm_expect_stack!(let ValueType(o) = value);
+
+            // Copy raw data to destination pointer
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    o.instance_storage.get().as_ptr(),
+                    ptr,
+                    f.size(),
+                );
+            }
+
+            // If destination has an owner, update its side-table
+            if let Some(owner) = owner {
+                match owner {
+                    ManagedPtrOwner::Heap(h) => {
+                        let mut dest_obj = h.borrow_mut(gc);
+                        if let HeapStorage::Obj(dest_o) = &mut dest_obj.storage {
+                            if let Some(side_table) = &o.managed_ptr_metadata {
+                                let dest_base = dest_o.instance_storage.get().as_ptr() as usize;
+                                let dest_offset = (ptr as usize).wrapping_sub(dest_base);
+
+                                for (&offset, metadata) in &side_table.metadata {
+                                    // Map source side-table entries to destination offsets
+                                    dest_o
+                                        .managed_ptr_metadata
+                                        .get_or_insert_with(ManagedPtrSideTable::new)
+                                        .insert(dest_offset + offset, metadata.clone());
+                                }
+                            }
+                        }
+                    }
+                    ManagedPtrOwner::Stack(mut s) => {
+                        let dest_o = unsafe { s.as_mut() };
+                        if let Some(side_table) = &o.managed_ptr_metadata {
+                            let dest_base = dest_o.instance_storage.get().as_ptr() as usize;
+                            let dest_offset = (ptr as usize).wrapping_sub(dest_base);
+
+                            for (&offset, metadata) in &side_table.metadata {
+                                // Map source side-table entries to destination offsets
+                                dest_o
+                                    .managed_ptr_metadata
+                                    .get_or_insert_with(ManagedPtrSideTable::new)
+                                    .insert(dest_offset + offset, metadata.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
         _ => panic!("unsupported layout for write unaligned"),
     }
     StepResult::InstructionStepped

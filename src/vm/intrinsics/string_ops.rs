@@ -6,6 +6,7 @@ use crate::{
     },
     value::{
         object::{Object, ObjectRef},
+        pointer::ManagedPtrOwner,
         string::{with_string, CLRString},
         StackValue,
     },
@@ -165,8 +166,9 @@ pub fn intrinsic_string_get_raw_data<'gc, 'm: 'gc>(
         None
     };
     let ptr = with_string!(stack, gc, val, |s| s.as_ptr() as *mut u8);
+    let owner = obj_h.map(ManagedPtrOwner::Heap);
     let value =
-        StackValue::managed_ptr(ptr, stack.loader().corlib_type("System.Char"), obj_h, false);
+        StackValue::managed_ptr(ptr, stack.loader().corlib_type("System.Char"), owner, false);
     vm_push!(stack, gc, value);
     StepResult::InstructionStepped
 }

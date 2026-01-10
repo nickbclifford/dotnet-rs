@@ -4,7 +4,7 @@ use crate::{
     value::{
         layout::{type_layout, FieldLayoutManager, HasLayout},
         object::{CTSValue, HeapStorage, Object, ObjectRef, ValueType, Vector},
-        pointer::{ManagedPtr, UnmanagedPtr},
+        pointer::{ManagedPtr, ManagedPtrOwner, UnmanagedPtr},
         string::CLRString,
         StackValue,
     },
@@ -707,10 +707,17 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     LocalVariable::Variable { pinned, .. } => *pinned,
                     _ => false,
                 };
+
+                let owner = if let StackValue::ValueType(ref obj) = local {
+                    Some(ManagedPtrOwner::Stack(ptr::NonNull::from(&**obj)))
+                } else {
+                    None
+                };
+
                 push!(managed_ptr(
                     self.get_local_address(*i as usize).as_ptr() as *mut _,
                     live_type,
-                    None,
+                    owner,
                     pinned
                 ));
             }
@@ -1223,7 +1230,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     _ => panic!("ldelema on non-vector"),
                 };
                 let target_type = self.loader().find_concrete_type(concrete_t);
-                push!(managed_ptr(ptr, target_type, Some(h), false));
+                push!(managed_ptr(ptr, target_type, Some(ManagedPtrOwner::Heap(h)), false));
             }
             LoadField {
                 param0: source,
@@ -1367,7 +1374,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     .current_context()
                     .for_type_with_generics(field.parent, &lookup);
 
-                let (source_ptr, owner, pinned) = match parent {
+                let (source_ptr, owner, pinned): (*mut u8, _, _) = match parent {
                     StackValue::ObjectRef(ObjectRef(None)) => {
                         return self.throw_by_name(gc, "System.NullReferenceException")
                     }
@@ -1389,16 +1396,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             HeapStorage::Str(_) => todo!("field on string"),
                             HeapStorage::Boxed(_) => todo!("field on boxed value type"),
                         };
-                        (source_ptr, Some(h), false)
+                        (source_ptr, Some(ManagedPtrOwner::Heap(h)), false)
                     }
                     StackValue::NativeInt(i) => (i as *mut u8, None, false),
                     StackValue::UnmanagedPtr(UnmanagedPtr(ptr)) => (ptr.as_ptr(), None, false),
-                    StackValue::ManagedPtr(ManagedPtr {
-                        value: ptr,
-                        owner,
-                        pinned,
-                        ..
-                    }) => (ptr.as_ptr(), owner, pinned),
+                    StackValue::ManagedPtr(m) => (m.value.as_ptr(), m.owner, m.pinned),
+                    StackValue::ValueType(ref o) => (
+                        o.instance_storage.get().as_ptr() as *mut u8,
+                        Some(ManagedPtrOwner::Stack(ptr::NonNull::from(&**o))),
+                        false,
+                    ),
                     rest => panic!("cannot load field address from stack value {:?}", rest),
                 };
                 debug_assert!(
@@ -1506,6 +1513,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let value = statics!(|s| {
                     let storage = s.get(field.parent);
                     let field_data = storage.storage.get_field_local(field.parent, name);
+                    // Static fields are rooted by the assembly's static storage.
+                    // ManagedPtr metadata for static fields would need its own side-table if supported.
                     StackValue::managed_ptr(field_data.as_ptr() as *mut _, field_type, None, true)
                 });
 
@@ -1781,7 +1790,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     AtomicOrdering::Release
                 };
 
-                let cts_value = CTSValue::new(&t, &ctx, value);
+                let cts_value = CTSValue::new(&t, &ctx, value.clone());
                 let write_data = |dest: &mut [u8]| cts_value.write(dest);
                 let slice_from_pointer = |dest: *mut u8| {
                     let layout = FieldLayoutManager::instance_field_layout_cached(
@@ -1857,9 +1866,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         match &mut data.storage {
                             HeapStorage::Vec(_) => todo!("field on array"),
                             HeapStorage::Obj(o) => {
-                                let layout = o.instance_storage.layout();
-                                let field_layout = layout
+                                let field_layout = o.instance_storage.layout()
                                     .get_field(field.parent, name.as_ref())
+                                    .cloned()
                                     .unwrap_or_else(|| {
                                         panic!(
                                             "field {}::{} not found in layout for type {}",
@@ -1868,6 +1877,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                             object_type.type_name()
                                         )
                                     });
+
+                                // Register managed pointer metadata in side-table if needed
+                                if let StackValue::ManagedPtr(m) = &value {
+                                    o.register_managed_ptr(field_layout.position, m);
+                                }
+
                                 let mut val_bytes = vec![0u8; field_layout.layout.size()];
                                 write_data(&mut val_bytes);
                                 o.instance_storage.set_field_atomic(
