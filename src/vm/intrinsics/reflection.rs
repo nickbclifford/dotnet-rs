@@ -12,7 +12,9 @@ use crate::{
         object::{HeapStorage, Object, ObjectRef, Vector},
         StackValue,
     },
-    vm::{context::ResolutionContext, CallStack, GCHandle, MethodInfo, StepResult},
+    vm::{
+        context::ResolutionContext, sync::Ordering, CallStack, GCHandle, MethodInfo, StepResult,
+    },
     vm_pop, vm_push,
 };
 use dotnetdll::prelude::{BaseType, Kind, MemberType, MethodType, TypeSource};
@@ -255,25 +257,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             return *obj;
         }
 
-        // Use the global reflection lock to prevent races during creation
-        let shared = self.shared.clone();
-        let _lock = shared.reflection_init_lock.lock();
-
-        // Check cache again after acquiring lock
-        if let Some(obj) = self.runtime_types_read().get(&target) {
-            return *obj;
-        }
-
         #[cfg(feature = "multithreaded-gc")]
-        let index = if let Some(entry) = self.shared.shared_runtime_types.get(&target) {
-            *entry
-        } else {
-            let mut list = self.runtime_types_list_write();
-            let index = list.len();
-            list.push(target.clone());
-            self.shared.shared_runtime_types.insert(target.clone(), index);
-            index
-        };
+        let index = *self
+            .shared
+            .shared_runtime_types
+            .entry(target.clone())
+            .or_insert_with(|| {
+                let idx = self
+                    .shared
+                    .next_runtime_type_index
+                    .fetch_add(1, Ordering::SeqCst);
+                self.shared
+                    .shared_runtime_types_rev
+                    .insert(idx, target.clone());
+                idx
+            });
 
         #[cfg(not(feature = "multithreaded-gc"))]
         let index = {
@@ -296,17 +294,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 .copy_from_slice(&index.to_ne_bytes());
         });
 
-        #[cfg(feature = "multithreaded-gc")]
-        {
-            // Ensure our local list has the right type at this index
-            let mut list = self.runtime_types_list_write();
-            if index >= list.len() {
-                list.resize(index + 1, target.clone());
-            } else {
-                list[index] = target.clone();
-            }
-        }
-
         self.runtime_types_write().insert(target, obj_ref);
         obj_ref
     }
@@ -317,6 +304,15 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 .instance_storage
                 .get_field_local(instance.description, "index");
             let index = usize::from_ne_bytes(ct.try_into().unwrap());
+            #[cfg(feature = "multithreaded-gc")]
+            return self
+                .shared
+                .shared_runtime_types_rev
+                .get(&index)
+                .map(|e| e.clone())
+                .expect("invalid runtime type index");
+
+            #[cfg(not(feature = "multithreaded-gc"))]
             self.runtime_types_list_read()[index].clone()
         })
     }
@@ -330,6 +326,15 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 .instance_storage
                 .get_field_local(instance.description, "index");
             let index = usize::from_ne_bytes(data.try_into().unwrap());
+            #[cfg(feature = "multithreaded-gc")]
+            return self
+                .shared
+                .shared_runtime_methods_rev
+                .get(&index)
+                .map(|e| e.clone())
+                .expect("invalid runtime method index");
+
+            #[cfg(not(feature = "multithreaded-gc"))]
             self.runtime_methods_read()[index].clone()
         })
     }
@@ -340,6 +345,15 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 .instance_storage
                 .get_field_local(instance.description, "index");
             let index = usize::from_ne_bytes(data.try_into().unwrap());
+            #[cfg(feature = "multithreaded-gc")]
+            return self
+                .shared
+                .shared_runtime_fields_rev
+                .get(&index)
+                .map(|e| e.clone())
+                .expect("invalid runtime field index");
+
+            #[cfg(not(feature = "multithreaded-gc"))]
             self.runtime_fields_read()[index].clone()
         })
     }
@@ -447,27 +461,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             return *obj;
         }
 
-        let shared = self.shared.clone();
-        let _lock = shared.reflection_init_lock.lock();
-
-        // Check cache again after acquiring lock
-        if let Some(obj) = self
-            .runtime_method_objs_read()
-            .get(&(method, lookup.clone()))
-        {
-            return *obj;
-        }
-
         #[cfg(feature = "multithreaded-gc")]
-        let shared_index = self.shared.shared_runtime_methods.get(&(method, lookup.clone())).map(|e| *e);
-        #[cfg(feature = "multithreaded-gc")]
-        let index = if let Some(idx) = shared_index {
-            idx
-        } else {
-            let index = self.get_runtime_method_index(method, lookup.clone()) as usize;
-            self.shared.shared_runtime_methods.insert((method, lookup.clone()), index);
-            index
-        };
+        let index = *self
+            .shared
+            .shared_runtime_methods
+            .entry((method, lookup.clone()))
+            .or_insert_with(|| {
+                let idx = self
+                    .shared
+                    .next_runtime_method_index
+                    .fetch_add(1, Ordering::SeqCst);
+                self.shared
+                    .shared_runtime_methods_rev
+                    .insert(idx, (method, lookup.clone()));
+                idx
+            });
 
         #[cfg(not(feature = "multithreaded-gc"))]
         let index = self.get_runtime_method_index(method, lookup.clone()) as usize;
@@ -492,17 +500,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 .copy_from_slice(&index.to_ne_bytes());
         });
 
-        #[cfg(feature = "multithreaded-gc")]
-        {
-            // Ensure our local list has the right method at this index
-            let mut list = self.runtime_methods_write();
-            if index >= list.len() {
-                list.resize(index + 1, (method, lookup.clone()));
-            } else {
-                list[index] = (method, lookup.clone());
-            }
-        }
-
         self.runtime_method_objs_write()
             .insert((method, lookup), obj_ref);
         obj_ref
@@ -518,24 +515,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             return *obj;
         }
 
-        let shared = self.shared.clone();
-        let _lock = shared.reflection_init_lock.lock();
-
-        // Check cache again after acquiring lock
-        if let Some(obj) = self.runtime_field_objs_read().get(&(field, lookup.clone())) {
-            return *obj;
-        }
-
         #[cfg(feature = "multithreaded-gc")]
-        let shared_index = self.shared.shared_runtime_fields.get(&(field, lookup.clone())).map(|e| *e);
-        #[cfg(feature = "multithreaded-gc")]
-        let index = if let Some(idx) = shared_index {
-            idx
-        } else {
-            let index = self.get_runtime_field_index(field, lookup.clone()) as usize;
-            self.shared.shared_runtime_fields.insert((field, lookup.clone()), index);
-            index
-        };
+        let index = *self
+            .shared
+            .shared_runtime_fields
+            .entry((field, lookup.clone()))
+            .or_insert_with(|| {
+                let idx = self
+                    .shared
+                    .next_runtime_field_index
+                    .fetch_add(1, Ordering::SeqCst);
+                self.shared
+                    .shared_runtime_fields_rev
+                    .insert(idx, (field, lookup.clone()));
+                idx
+            });
 
         #[cfg(not(feature = "multithreaded-gc"))]
         let index = self.get_runtime_field_index(field, lookup.clone()) as usize;
@@ -550,19 +544,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             instance
                 .instance_storage
                 .get_field_mut_local(rt, "index")
-                .copy_from_slice(&(index as usize).to_ne_bytes());
+                .copy_from_slice(&index.to_ne_bytes());
         });
-
-        #[cfg(feature = "multithreaded-gc")]
-        {
-            // Ensure our local list has the right field at this index
-            let mut list = self.runtime_fields_write();
-            if index >= list.len() {
-                list.resize(index + 1, (field, lookup.clone()));
-            } else {
-                list[index] = (field, lookup.clone());
-            }
-        }
 
         self.runtime_field_objs_write()
             .insert((field, lookup), obj_ref);

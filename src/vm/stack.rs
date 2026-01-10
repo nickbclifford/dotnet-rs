@@ -137,16 +137,24 @@ pub struct SharedGlobalState<'m> {
     /// Cache for shared reflection objects: RuntimeType -> index
     #[cfg(feature = "multithreaded-gc")]
     pub shared_runtime_types: DashMap<RuntimeType, usize>,
-    /// Cache for shared assembly reflection objects: ResolutionS -> index
     #[cfg(feature = "multithreaded-gc")]
-    pub shared_runtime_asms: DashMap<ResolutionS, usize>,
+    pub shared_runtime_types_rev: DashMap<usize, RuntimeType>,
+    #[cfg(feature = "multithreaded-gc")]
+    pub next_runtime_type_index: std::sync::atomic::AtomicUsize,
     /// Cache for shared method reflection objects: (Method, Lookup) -> index
     #[cfg(feature = "multithreaded-gc")]
     pub shared_runtime_methods: DashMap<(MethodDescription, GenericLookup), usize>,
+    #[cfg(feature = "multithreaded-gc")]
+    pub shared_runtime_methods_rev: DashMap<usize, (MethodDescription, GenericLookup)>,
+    #[cfg(feature = "multithreaded-gc")]
+    pub next_runtime_method_index: std::sync::atomic::AtomicUsize,
     /// Cache for shared field reflection objects: (Field, Lookup) -> index
     #[cfg(feature = "multithreaded-gc")]
     pub shared_runtime_fields: DashMap<(FieldDescription, GenericLookup), usize>,
-    pub reflection_init_lock: Mutex<()>,
+    #[cfg(feature = "multithreaded-gc")]
+    pub shared_runtime_fields_rev: DashMap<usize, (FieldDescription, GenericLookup)>,
+    #[cfg(feature = "multithreaded-gc")]
+    pub next_runtime_field_index: std::sync::atomic::AtomicUsize,
 }
 
 impl<'m> SharedGlobalState<'m> {
@@ -202,12 +210,21 @@ impl<'m> SharedGlobalState<'m> {
             #[cfg(feature = "multithreaded-gc")]
             shared_runtime_types: DashMap::new(),
             #[cfg(feature = "multithreaded-gc")]
-            shared_runtime_asms: DashMap::new(),
+            shared_runtime_types_rev: DashMap::new(),
+            #[cfg(feature = "multithreaded-gc")]
+            next_runtime_type_index: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(feature = "multithreaded-gc")]
             shared_runtime_methods: DashMap::new(),
             #[cfg(feature = "multithreaded-gc")]
+            shared_runtime_methods_rev: DashMap::new(),
+            #[cfg(feature = "multithreaded-gc")]
+            next_runtime_method_index: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(feature = "multithreaded-gc")]
             shared_runtime_fields: DashMap::new(),
-            reflection_init_lock: Mutex::new(()),
+            #[cfg(feature = "multithreaded-gc")]
+            shared_runtime_fields_rev: DashMap::new(),
+            #[cfg(feature = "multithreaded-gc")]
+            next_runtime_field_index: std::sync::atomic::AtomicUsize::new(0),
         };
 
         this
