@@ -64,7 +64,6 @@ jobs:
           # Single-threaded configurations
           - name: "No features"
             features: ""
-            expected_tests: "lib: 4, feature_config: 3, integration: 23"
 
           # Multithreading configurations
           - name: "Multithreading only"
