@@ -1880,7 +1880,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                                 // Register managed pointer metadata in side-table if needed
                                 if let StackValue::ManagedPtr(m) = &value {
-                                    o.register_managed_ptr(field_layout.position, m);
+                                    o.register_managed_ptr(field_layout.position, m, gc);
                                 }
 
                                 let mut val_bytes = vec![0u8; field_layout.layout.size()];

@@ -184,7 +184,7 @@ pub fn intrinsic_string_as_span<'gc, 'm: 'gc>(
         Some(&stack.shared.metrics),
     );
     let reference_field = span_layout.get_field_by_name("_reference").unwrap();
-    span.register_managed_ptr(reference_field.position, &managed);
+    span.register_managed_ptr(reference_field.position, &managed, gc);
 
     span.instance_storage
         .get_field_mut_local(span_type, "_length")
@@ -281,7 +281,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
         Some(&stack.shared.metrics),
     );
     let reference_field = span_layout.get_field_by_name("_reference").unwrap();
-    span_instance.register_managed_ptr(reference_field.position, &managed);
+    span_instance.register_managed_ptr(reference_field.position, &managed, gc);
 
     vm_push!(stack, gc, ValueType(Box::new(span_instance)));
         StepResult::InstructionStepped

@@ -73,3 +73,20 @@ pub fn intrinsic_numeric_create_truncating<'gc, 'm: 'gc>(
 
     StepResult::InstructionStepped
 }
+
+pub fn intrinsic_math_min_double<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let b = vm_pop!(stack);
+    let a = vm_pop!(stack);
+    match (&a, &b) {
+        (StackValue::NativeFloat(av), StackValue::NativeFloat(bv)) => {
+            vm_push!(stack, gc, NativeFloat(av.min(*bv)));
+        }
+        _ => panic!("Math.Min(double, double) called with non-double arguments: {:?}, {:?}", a, b),
+    }
+    StepResult::InstructionStepped
+}

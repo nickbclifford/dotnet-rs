@@ -6,11 +6,13 @@ use crate::{
     },
     value::{
         layout::{type_layout, HasLayout, LayoutManager, Scalar},
-        object::{HeapStorage, ManagedPtrSideTable, Object as ObjectInstance, ObjectRef},
+        object::{HeapStorage, Object as ObjectInstance, ObjectRef},
         pointer::{ManagedPtr, ManagedPtrOwner},
         StackValue,
     },
-    vm::{context::ResolutionContext, CallStack, GCHandle, StepResult},
+    vm::{
+        context::ResolutionContext, CallStack, GCHandle, StepResult,
+    },
     vm_expect_stack, vm_pop, vm_push,
 };
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
@@ -350,41 +352,29 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
                 // Try to find metadata from owner's side-table if it's a managed pointer
                 let mut metadata = (None, false);
                 if let Some(owner) = owner {
-                    let side_table = match owner {
+                    let m_metadata = match owner {
                         ManagedPtrOwner::Heap(h) => {
                             let obj = h.borrow();
                             if let HeapStorage::Obj(o) = &obj.storage {
-                                o.managed_ptr_metadata.clone()
+                                let side_table = o.managed_ptr_metadata.borrow();
+                                let base_ptr = o.instance_storage.get().as_ptr() as usize;
+                                let offset = (ptr as usize).wrapping_sub(base_ptr);
+                                side_table.get(offset).cloned()
                             } else {
                                 None
                             }
                         }
                         ManagedPtrOwner::Stack(s) => {
                             let o = unsafe { s.as_ref() };
-                            o.managed_ptr_metadata.clone()
+                            let side_table = o.managed_ptr_metadata.borrow();
+                            let base_ptr = o.instance_storage.get().as_ptr() as usize;
+                            let offset = (ptr as usize).wrapping_sub(base_ptr);
+                            side_table.get(offset).cloned()
                         }
                     };
 
-                    if let Some(side_table) = side_table {
-                        let base_ptr = match owner {
-                            ManagedPtrOwner::Heap(h) => {
-                                let obj = h.borrow();
-                                if let HeapStorage::Obj(o) = &obj.storage {
-                                    o.instance_storage.get().as_ptr() as usize
-                                } else {
-                                    0
-                                }
-                            }
-                            ManagedPtrOwner::Stack(s) => {
-                                let o = unsafe { s.as_ref() };
-                                o.instance_storage.get().as_ptr() as usize
-                            }
-                        };
-
-                        let offset = (ptr as usize).wrapping_sub(base_ptr);
-                        if let Some(m) = side_table.get(offset) {
-                            metadata = (m.recover_owner(), m.pinned);
-                        }
+                    if let Some(m) = m_metadata {
+                        metadata = (m.recover_owner(), m.pinned);
                     }
                 }
 
@@ -406,45 +396,35 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
 
             // If source has an owner, copy relevant metadata side-table entries
             if let Some(owner) = owner {
-                let side_table = match owner {
+                match owner {
                     ManagedPtrOwner::Heap(h) => {
                         let src_obj = h.borrow();
                         if let HeapStorage::Obj(src_o) = &src_obj.storage {
-                            src_o.managed_ptr_metadata.clone()
-                        } else {
-                            None
+                            let side_table = src_o.managed_ptr_metadata.borrow();
+                            let src_base = src_o.instance_storage.get().as_ptr() as usize;
+                            let src_offset = (ptr as usize).wrapping_sub(src_base);
+
+                            for (&offset, metadata) in &side_table.metadata {
+                                // If the metadata offset falls within the range we just read
+                                if offset >= src_offset && offset < src_offset + f.size() {
+                                    let target_offset = offset - src_offset;
+                                    o.register_metadata(target_offset, metadata.clone(), gc);
+                                }
+                            }
                         }
                     }
                     ManagedPtrOwner::Stack(s) => {
                         let src_o = unsafe { s.as_ref() };
-                        src_o.managed_ptr_metadata.clone()
-                    }
-                };
+                        let side_table = src_o.managed_ptr_metadata.borrow();
+                        let src_base = src_o.instance_storage.get().as_ptr() as usize;
+                        let src_offset = (ptr as usize).wrapping_sub(src_base);
 
-                if let Some(side_table) = side_table {
-                    let src_base = match owner {
-                        ManagedPtrOwner::Heap(h) => {
-                            let src_obj = h.borrow();
-                            if let HeapStorage::Obj(src_o) = &src_obj.storage {
-                                src_o.instance_storage.get().as_ptr() as usize
-                            } else {
-                                0
+                        for (&offset, metadata) in &side_table.metadata {
+                            // If the metadata offset falls within the range we just read
+                            if offset >= src_offset && offset < src_offset + f.size() {
+                                let target_offset = offset - src_offset;
+                                o.register_metadata(target_offset, metadata.clone(), gc);
                             }
-                        }
-                        ManagedPtrOwner::Stack(s) => {
-                            let src_o = unsafe { s.as_ref() };
-                            src_o.instance_storage.get().as_ptr() as usize
-                        }
-                    };
-                    let src_offset = (ptr as usize).wrapping_sub(src_base);
-
-                    for (&offset, metadata) in &side_table.metadata {
-                        // If the metadata offset falls within the range we just read
-                        if offset >= src_offset && offset < src_offset + f.size() {
-                            let target_offset = offset - src_offset;
-                            o.managed_ptr_metadata
-                                .get_or_insert_with(ManagedPtrSideTable::new)
-                                .insert(target_offset, metadata.clone());
                         }
                     }
                 }
@@ -504,29 +484,33 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
                     ptr::write_unaligned(ptr as *mut usize, m.value.as_ptr() as usize);
                 }
 
-            // If destination has an owner, update its side-table
-            if let Some(owner) = owner {
-                match owner {
-                    ManagedPtrOwner::Heap(h) => {
-                        let mut dest_obj = h.borrow_mut(gc);
-                        if let HeapStorage::Obj(dest_o) = &mut dest_obj.storage {
+                // If destination has an owner, update its side-table
+                if let Some(owner) = owner {
+                    match owner {
+                        ManagedPtrOwner::Heap(h) => {
+                            let mut dest_obj = h.borrow_mut(gc);
+                            if let HeapStorage::Obj(dest_o) = &mut dest_obj.storage {
+                                dest_o.register_managed_ptr(
+                                    (ptr as usize).wrapping_sub(
+                                        dest_o.instance_storage.get().as_ptr() as usize,
+                                    ),
+                                    &m,
+                                    gc,
+                                );
+                            }
+                        }
+                        ManagedPtrOwner::Stack(s) => {
+                            let dest_o = unsafe { s.as_ref() };
                             dest_o.register_managed_ptr(
-                                (ptr as usize)
-                                    .wrapping_sub(dest_o.instance_storage.get().as_ptr() as usize),
+                                (ptr as usize).wrapping_sub(
+                                    dest_o.instance_storage.get().as_ptr() as usize,
+                                ),
                                 &m,
+                                gc,
                             );
                         }
                     }
-                    ManagedPtrOwner::Stack(mut s) => {
-                        let dest_o = unsafe { s.as_mut() };
-                        dest_o.register_managed_ptr(
-                            (ptr as usize)
-                                .wrapping_sub(dest_o.instance_storage.get().as_ptr() as usize),
-                            &m,
-                        );
-                    }
                 }
-            }
             }
         },
         LayoutManager::FieldLayoutManager(f) => {
@@ -535,46 +519,33 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
 
             // Copy raw data to destination pointer
             unsafe {
-                ptr::copy_nonoverlapping(
-                    o.instance_storage.get().as_ptr(),
-                    ptr,
-                    f.size(),
-                );
+                ptr::copy_nonoverlapping(o.instance_storage.get().as_ptr(), ptr, f.size());
             }
 
             // If destination has an owner, update its side-table
             if let Some(owner) = owner {
+                let side_table = o.managed_ptr_metadata.borrow();
                 match owner {
                     ManagedPtrOwner::Heap(h) => {
                         let mut dest_obj = h.borrow_mut(gc);
                         if let HeapStorage::Obj(dest_o) = &mut dest_obj.storage {
-                            if let Some(side_table) = &o.managed_ptr_metadata {
-                                let dest_base = dest_o.instance_storage.get().as_ptr() as usize;
-                                let dest_offset = (ptr as usize).wrapping_sub(dest_base);
-
-                                for (&offset, metadata) in &side_table.metadata {
-                                    // Map source side-table entries to destination offsets
-                                    dest_o
-                                        .managed_ptr_metadata
-                                        .get_or_insert_with(ManagedPtrSideTable::new)
-                                        .insert(dest_offset + offset, metadata.clone());
-                                }
-                            }
-                        }
-                    }
-                    ManagedPtrOwner::Stack(mut s) => {
-                        let dest_o = unsafe { s.as_mut() };
-                        if let Some(side_table) = &o.managed_ptr_metadata {
                             let dest_base = dest_o.instance_storage.get().as_ptr() as usize;
                             let dest_offset = (ptr as usize).wrapping_sub(dest_base);
 
                             for (&offset, metadata) in &side_table.metadata {
                                 // Map source side-table entries to destination offsets
-                                dest_o
-                                    .managed_ptr_metadata
-                                    .get_or_insert_with(ManagedPtrSideTable::new)
-                                    .insert(dest_offset + offset, metadata.clone());
+                                dest_o.register_metadata(dest_offset + offset, metadata.clone(), gc);
                             }
+                        }
+                    }
+                    ManagedPtrOwner::Stack(s) => {
+                        let dest_o = unsafe { s.as_ref() };
+                        let dest_base = dest_o.instance_storage.get().as_ptr() as usize;
+                        let dest_offset = (ptr as usize).wrapping_sub(dest_base);
+
+                        for (&offset, metadata) in &side_table.metadata {
+                            // Map source side-table entries to destination offsets
+                            dest_o.register_metadata(dest_offset + offset, metadata.clone(), gc);
                         }
                     }
                 }

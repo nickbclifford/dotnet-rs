@@ -16,7 +16,7 @@ use crate::{
     },
     vm_expect_stack,
 };
-use gc_arena::{Collect, Collection, Gc};
+use gc_arena::{Collect, Collection, Gc, Mutation};
 use std::{
     any,
     cmp::Ordering,
@@ -41,6 +41,14 @@ pub enum MetadataOwner<'gc> {
     Stack(NonNull<Object<'gc>>), // Stack pointers are traced separately, don't reconstruct
 }
 
+unsafe impl<'gc> Collect for MetadataOwner<'gc> {
+    fn trace(&self, cc: &Collection) {
+        if let MetadataOwner::Heap(h) = self {
+            h.trace(cc);
+        }
+    }
+}
+
 /// Metadata for managed pointers stored in object fields.
 /// Since managed pointers in memory are pointer-sized (8 bytes), we store
 /// the GC and type metadata in a side-table indexed by byte offset.
@@ -49,6 +57,12 @@ pub struct ManagedPtrMetadata<'gc> {
     pub inner_type: TypeDescription,
     pub owner: MetadataOwner<'gc>,
     pub pinned: bool,
+}
+
+unsafe impl<'gc> Collect for ManagedPtrMetadata<'gc> {
+    fn trace(&self, cc: &Collection) {
+        self.owner.trace(cc);
+    }
 }
 
 impl<'gc> PartialEq for ManagedPtrMetadata<'gc> {
@@ -93,6 +107,14 @@ impl<'gc> ManagedPtrMetadata<'gc> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ManagedPtrSideTable<'gc> {
     pub metadata: HashMap<usize, ManagedPtrMetadata<'gc>>,
+}
+
+unsafe impl<'gc> Collect for ManagedPtrSideTable<'gc> {
+    fn trace(&self, cc: &Collection) {
+        for m in self.metadata.values() {
+            m.trace(cc);
+        }
+    }
 }
 
 impl<'gc> ManagedPtrSideTable<'gc> {
@@ -842,7 +864,6 @@ impl Debug for Vector<'_> {
     }
 }
 
-#[derive(Clone, PartialEq)]
 pub struct Object<'gc> {
     pub description: TypeDescription,
     pub instance_storage: FieldStorage,
@@ -852,8 +873,31 @@ pub struct Object<'gc> {
     pub sync_block_index: Option<usize>,
     /// Side-table for managed pointer metadata.
     /// Only allocated when the object contains managed pointer fields.
-    pub managed_ptr_metadata: Option<ManagedPtrSideTable<'gc>>,
+    pub managed_ptr_metadata: ThreadSafeLock<ManagedPtrSideTable<'gc>>,
     pub _phantom: PhantomData<&'gc ()>,
+}
+
+impl<'gc> Clone for Object<'gc> {
+    fn clone(&self) -> Self {
+        Self {
+            description: self.description,
+            instance_storage: self.instance_storage.clone(),
+            finalizer_suppressed: self.finalizer_suppressed,
+            sync_block_index: self.sync_block_index,
+            managed_ptr_metadata: ThreadSafeLock::new(self.managed_ptr_metadata.borrow().clone()),
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<'gc> PartialEq for Object<'gc> {
+    fn eq(&self, other: &Self) -> bool {
+        self.description == other.description
+            && self.instance_storage == other.instance_storage
+            && self.finalizer_suppressed == other.finalizer_suppressed
+            && self.sync_block_index == other.sync_block_index
+            && *self.managed_ptr_metadata.borrow() == *other.managed_ptr_metadata.borrow()
+    }
 }
 
 unsafe impl<'gc> Collect for Object<'gc> {
@@ -862,14 +906,7 @@ unsafe impl<'gc> Collect for Object<'gc> {
 
         // Trace managed pointer owners from side-table
         // Now that we store actual Gc handles, tracing is safe!
-        if let Some(ref side_table) = self.managed_ptr_metadata {
-            for metadata in side_table.metadata.values() {
-                if let MetadataOwner::Heap(handle) = metadata.owner {
-                    handle.trace(cc);
-                }
-                // Stack owners are traced separately through the VM stack
-            }
-        }
+        self.managed_ptr_metadata.trace(cc);
     }
 }
 
@@ -882,14 +919,13 @@ impl<'gc> Object<'gc> {
         self.instance_storage.resurrect(fc, visited);
 
         // Resurrect managed pointer owners from side-table
-        if let Some(ref side_table) = self.managed_ptr_metadata {
-            for metadata in side_table.metadata.values() {
-                if let MetadataOwner::Heap(handle) = metadata.owner {
-                    let ptr = Gc::as_ptr(handle) as usize;
-                    if visited.insert(ptr) {
-                        Gc::resurrect(fc, handle);
-                        handle.borrow().storage.resurrect(fc, visited);
-                    }
+        let side_table = self.managed_ptr_metadata.borrow();
+        for metadata in side_table.metadata.values() {
+            if let MetadataOwner::Heap(handle) = metadata.owner {
+                let ptr = Gc::as_ptr(handle) as usize;
+                if visited.insert(ptr) {
+                    Gc::resurrect(fc, handle);
+                    handle.borrow().storage.resurrect(fc, visited);
                 }
             }
         }
@@ -900,17 +936,21 @@ impl<'gc> Object<'gc> {
             instance_storage: FieldStorage::instance_fields(description, context),
             finalizer_suppressed: false,
             sync_block_index: None,
-            managed_ptr_metadata: None,
+            managed_ptr_metadata: ThreadSafeLock::new(ManagedPtrSideTable::new()),
             _phantom: PhantomData,
         }
     }
 
     /// Register a managed pointer's metadata in the side-table.
-    pub fn register_managed_ptr(&mut self, offset: usize, m: &ManagedPtr<'gc>) {
-        let side_table = self
-            .managed_ptr_metadata
-            .get_or_insert_with(ManagedPtrSideTable::new);
+    pub fn register_managed_ptr(&self, offset: usize, m: &ManagedPtr<'gc>, mc: &Mutation<'gc>) {
+        let mut side_table = self.managed_ptr_metadata.borrow_mut(mc);
         side_table.insert(offset, ManagedPtrMetadata::from_managed_ptr(m));
+    }
+
+    /// Register metadata directly in the side-table.
+    pub fn register_metadata(&self, offset: usize, metadata: ManagedPtrMetadata<'gc>, mc: &Mutation<'gc>) {
+        let mut side_table = self.managed_ptr_metadata.borrow_mut(mc);
+        side_table.insert(offset, metadata);
     }
 }
 

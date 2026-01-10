@@ -134,18 +134,18 @@ pub struct SharedGlobalState<'m> {
     pub statics: StaticStorageManager,
     #[cfg(feature = "multithreaded-gc")]
     pub gc_coordinator: Arc<GCCoordinator>,
-    /// Cache for shared reflection objects: RuntimeType -> (ObjectPtr, owner_id)
+    /// Cache for shared reflection objects: RuntimeType -> index
     #[cfg(feature = "multithreaded-gc")]
-    pub shared_runtime_types: DashMap<RuntimeType, (ObjectPtr, u64)>,
-    /// Cache for shared assembly reflection objects: ResolutionS -> (ObjectPtr, owner_id)
+    pub shared_runtime_types: DashMap<RuntimeType, usize>,
+    /// Cache for shared assembly reflection objects: ResolutionS -> index
     #[cfg(feature = "multithreaded-gc")]
-    pub shared_runtime_asms: DashMap<ResolutionS, (ObjectPtr, u64)>,
-    /// Cache for shared method reflection objects: (Method, Lookup) -> (ObjectPtr, owner_id)
+    pub shared_runtime_asms: DashMap<ResolutionS, usize>,
+    /// Cache for shared method reflection objects: (Method, Lookup) -> index
     #[cfg(feature = "multithreaded-gc")]
-    pub shared_runtime_methods: DashMap<(MethodDescription, GenericLookup), (ObjectPtr, u64)>,
-    /// Cache for shared field reflection objects: (Field, Lookup) -> (ObjectPtr, owner_id)
+    pub shared_runtime_methods: DashMap<(MethodDescription, GenericLookup), usize>,
+    /// Cache for shared field reflection objects: (Field, Lookup) -> index
     #[cfg(feature = "multithreaded-gc")]
-    pub shared_runtime_fields: DashMap<(FieldDescription, GenericLookup), (ObjectPtr, u64)>,
+    pub shared_runtime_fields: DashMap<(FieldDescription, GenericLookup), usize>,
     pub reflection_init_lock: Mutex<()>,
 }
 
@@ -1177,7 +1177,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     /// Get the layout of a type (with caching and metrics).
-    pub fn type_layout_cached(&self, t: ConcreteType) -> Arc<crate::value::layout::LayoutManager> {
+    pub fn type_layout_cached(&self, t: ConcreteType) -> Arc<LayoutManager> {
         crate::value::layout::type_layout_with_metrics(
             t,
             &self.current_context(),

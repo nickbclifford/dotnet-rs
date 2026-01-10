@@ -47,6 +47,7 @@ use crate::{
     vm::{context::ResolutionContext, tracer::Tracer, CallStack, GCHandle, StepResult},
     vm_trace_intrinsic,
 };
+use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use phf::phf_set;
 use std::{collections::HashMap, sync::Arc};
 
@@ -67,19 +68,19 @@ pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttri
 
 /// PHF set of types that are known to contain intrinsic methods.
 /// This allows for a very fast negative check in is_intrinsic.
-/// Returns a static intrinsic handler for the given method by name and parameter count.
+/// Returns a static intrinsic handler for the given method.
 /// This allows for compile-time resolution of intrinsics without runtime registration.
-pub fn get_static_method_handler(
-    type_name: &str,
-    method_name: &str,
-    param_count: usize,
-) -> Option<IntrinsicHandler> {
-    if !INTRINSIC_TYPES.contains(type_name) {
+pub fn get_static_method_handler(method: &MethodDescription) -> Option<IntrinsicHandler> {
+    let type_name = method.parent.type_name();
+    let method_name = &method.method.name;
+    let param_count = method.method.signature.parameters.len();
+
+    if !INTRINSIC_TYPES.contains(type_name.as_ref()) {
         return None;
     }
 
-    match type_name {
-        "System.GC" => match method_name {
+    match type_name.as_ref() {
+        "System.GC" => match method_name.as_ref() {
             "KeepAlive" if param_count == 1 => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     gc::intrinsic_gc_keep_alive as fn(_, _, _, _) -> _,
@@ -120,7 +121,7 @@ pub fn get_static_method_handler(
             }),
             _ => None,
         },
-        "System.Runtime.InteropServices.GCHandle" => match method_name {
+        "System.Runtime.InteropServices.GCHandle" => match method_name.as_ref() {
             "InternalAlloc" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     gc::intrinsic_gchandle_internal_alloc as fn(_, _, _, _) -> _,
@@ -148,7 +149,7 @@ pub fn get_static_method_handler(
             }),
             _ => None,
         },
-        "System.Environment" => match method_name {
+        "System.Environment" => match method_name.as_ref() {
             "GetEnvironmentVariableCore" if param_count == 1 => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     gc::intrinsic_environment_get_variable_core as fn(_, _, _, _) -> _,
@@ -156,7 +157,7 @@ pub fn get_static_method_handler(
             }),
             _ => None,
         },
-        "System.ArgumentNullException" => match method_name {
+        "System.ArgumentNullException" => match method_name.as_ref() {
             "ThrowIfNull" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     gc::intrinsic_argument_null_exception_throw_if_null as fn(_, _, _, _) -> _,
@@ -164,7 +165,7 @@ pub fn get_static_method_handler(
             }),
             _ => None,
         },
-        "System.Threading.Monitor" => match method_name {
+        "System.Threading.Monitor" => match method_name.as_ref() {
             "Exit" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     threading::intrinsic_monitor_exit as fn(_, _, _, _) -> _,
@@ -195,7 +196,7 @@ pub fn get_static_method_handler(
             },
             _ => None,
         },
-        "System.Threading.Interlocked" => match method_name {
+        "System.Threading.Interlocked" => match method_name.as_ref() {
             "CompareExchange" if param_count == 3 => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     threading::intrinsic_interlocked_compare_exchange as fn(_, _, _, _) -> _,
@@ -203,7 +204,7 @@ pub fn get_static_method_handler(
             }),
             _ => None,
         },
-        "System.Threading.Volatile" => match method_name {
+        "System.Threading.Volatile" => match method_name.as_ref() {
             "Read" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     threading::intrinsic_volatile_read as fn(_, _, _, _) -> _,
@@ -216,7 +217,7 @@ pub fn get_static_method_handler(
             }),
             _ => None,
         },
-        "System.String" => match method_name {
+        "System.String" => match method_name.as_ref() {
             "Equals" if param_count == 1 || param_count == 2 => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     string_ops::intrinsic_string_equals as fn(_, _, _, _) -> _,
@@ -275,7 +276,7 @@ pub fn get_static_method_handler(
             }),
             _ => None,
         },
-        "System.Runtime.InteropServices.Marshal" => match method_name {
+        "System.Runtime.InteropServices.Marshal" => match method_name.as_ref() {
             "GetLastPInvokeError" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     unsafe_ops::intrinsic_marshal_get_last_pinvoke_error as fn(_, _, _, _) -> _,
@@ -298,7 +299,7 @@ pub fn get_static_method_handler(
             }),
             _ => None,
         },
-        "System.Buffer" => match method_name {
+        "System.Buffer" => match method_name.as_ref() {
             "Memmove" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     unsafe_ops::intrinsic_buffer_memmove as fn(_, _, _, _) -> _,
@@ -306,7 +307,7 @@ pub fn get_static_method_handler(
             }),
             _ => None,
         },
-        "System.Runtime.InteropServices.MemoryMarshal" => match method_name {
+        "System.Runtime.InteropServices.MemoryMarshal" => match method_name.as_ref() {
             "GetArrayDataReference" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     unsafe_ops::intrinsic_memory_marshal_get_array_data_reference
@@ -315,7 +316,7 @@ pub fn get_static_method_handler(
             }),
             _ => None,
         },
-        "System.Runtime.CompilerServices.RuntimeHelpers" => match method_name {
+        "System.Runtime.CompilerServices.RuntimeHelpers" => match method_name.as_ref() {
             "GetMethodTable" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     reflection::intrinsic_runtime_helpers_get_method_table as fn(_, _, _, _) -> _,
@@ -346,7 +347,7 @@ pub fn get_static_method_handler(
             }),
             _ => None,
         },
-        "System.MemoryExtensions" => match method_name {
+        "System.MemoryExtensions" => match method_name.as_ref() {
             "Equals" if param_count == 3 => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     span::intrinsic_memory_extensions_equals_span_char as fn(_, _, _, _) -> _,
@@ -359,7 +360,7 @@ pub fn get_static_method_handler(
             }),
             _ => None,
         },
-        "System.ReadOnlySpan`1" | "System.Span`1" => match method_name {
+        "System.ReadOnlySpan`1" | "System.Span`1" => match method_name.as_ref() {
             "get_Item" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     span::intrinsic_span_get_item as fn(_, _, _, _) -> _,
@@ -372,7 +373,7 @@ pub fn get_static_method_handler(
             }),
             _ => None,
         },
-        "System.Runtime.CompilerServices.Unsafe" => match method_name {
+        "System.Runtime.CompilerServices.Unsafe" => match method_name.as_ref() {
             "Add" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     unsafe_ops::intrinsic_unsafe_add as fn(_, _, _, _) -> _,
@@ -425,7 +426,7 @@ pub fn get_static_method_handler(
         },
         "System.Runtime.Intrinsics.Vector128"
         | "System.Runtime.Intrinsics.Vector256"
-        | "System.Runtime.Intrinsics.Vector512" => match method_name {
+        | "System.Runtime.Intrinsics.Vector512" => match method_name.as_ref() {
             "get_IsHardwareAccelerated" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     math::intrinsic_vector_is_hardware_accelerated as fn(_, _, _, _) -> _,
@@ -435,7 +436,7 @@ pub fn get_static_method_handler(
         },
         "System.Byte" | "System.SByte" | "System.UInt16" | "System.Int16" | "System.UInt32"
         | "System.Int32" | "System.UInt64" | "System.Int64" | "System.UIntPtr"
-        | "System.IntPtr" => match method_name {
+        | "System.IntPtr" => match method_name.as_ref() {
             "CreateTruncating" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     math::intrinsic_numeric_create_truncating as fn(_, _, _, _) -> _,
@@ -443,7 +444,7 @@ pub fn get_static_method_handler(
             }),
             _ => None,
         },
-        "System.Activator" => match method_name {
+        "System.Activator" => match method_name.as_ref() {
             "CreateInstance" if param_count == 0 => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     reflection::intrinsic_activator_create_instance as fn(_, _, _, _) -> _,
@@ -451,7 +452,7 @@ pub fn get_static_method_handler(
             }),
             _ => None,
         },
-        "System.Collections.Generic.EqualityComparer`1" => match method_name {
+        "System.Collections.Generic.EqualityComparer`1" => match method_name.as_ref() {
             "get_Default" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     math::intrinsic_equality_comparer_get_default as fn(_, _, _, _) -> _,
@@ -459,7 +460,7 @@ pub fn get_static_method_handler(
             }),
             _ => None,
         },
-        "System.Type" => match method_name {
+        "System.Type" => match method_name.as_ref() {
             "GetTypeFromHandle" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     reflection::intrinsic_get_from_handle as fn(_, _, _, _) -> _,
@@ -497,7 +498,7 @@ pub fn get_static_method_handler(
             }),
             _ => None,
         },
-        "System.Reflection.MethodBase" => match method_name {
+        "System.Reflection.MethodBase" => match method_name.as_ref() {
             "GetMethodFromHandle" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     reflection::intrinsic_get_from_handle as fn(_, _, _, _) -> _,
@@ -505,7 +506,7 @@ pub fn get_static_method_handler(
             }),
             _ => None,
         },
-        "System.Reflection.FieldInfo" => match method_name {
+        "System.Reflection.FieldInfo" => match method_name.as_ref() {
             "GetFieldFromHandle" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     reflection::intrinsic_get_from_handle as fn(_, _, _, _) -> _,
@@ -513,7 +514,7 @@ pub fn get_static_method_handler(
             }),
             _ => None,
         },
-        "System.RuntimeTypeHandle" => match method_name {
+        "System.RuntimeTypeHandle" => match method_name.as_ref() {
             "ToIntPtr" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     reflection::intrinsic_type_handle_to_int_ptr as fn(_, _, _, _) -> _,
@@ -521,12 +522,35 @@ pub fn get_static_method_handler(
             }),
             _ => None,
         },
-        "System.RuntimeMethodHandle" => match method_name {
+        "System.RuntimeMethodHandle" => match method_name.as_ref() {
             "GetFunctionPointer" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     reflection::intrinsic_method_handle_get_function_pointer as fn(_, _, _, _) -> _,
                 )
             }),
+            _ => None,
+        },
+        "System.Math" => match method_name.as_ref() {
+            "Min" if param_count == 2 => {
+                let sig = &method.method.signature;
+                let is_double = match (&sig.parameters[0].1, &sig.parameters[1].1) {
+                    (
+                        ParameterType::Value(MethodType::Base(b1)),
+                        ParameterType::Value(MethodType::Base(b2)),
+                    ) => matches!(**b1, BaseType::Float64) && matches!(**b2, BaseType::Float64),
+                    _ => false,
+                };
+
+                if is_double {
+                    Some(unsafe {
+                        std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                            math::intrinsic_math_min_double as fn(_, _, _, _) -> _,
+                        )
+                    })
+                } else {
+                    None
+                }
+            }
             _ => None,
         },
         _ => None,
@@ -784,11 +808,7 @@ impl IntrinsicRegistry {
     /// Looks up an intrinsic handler for the given method.
     pub fn get(&self, method: &MethodDescription) -> Option<IntrinsicHandler> {
         // First check static handlers
-        if let Some(handler) = get_static_method_handler(
-            method.parent.type_name().as_ref(),
-            &method.method.name,
-            method.method.signature.parameters.len(),
-        ) {
+        if let Some(handler) = get_static_method_handler(method) {
             return Some(handler);
         }
 
@@ -860,13 +880,7 @@ pub fn is_intrinsic(
     }
 
     // Check static handlers first (compile-time resolution)
-    if get_static_method_handler(
-        method.parent.type_name().as_ref(),
-        &method.method.name,
-        method.method.signature.parameters.len(),
-    )
-    .is_some()
-    {
+    if get_static_method_handler(&method).is_some() {
         return true;
     }
 
