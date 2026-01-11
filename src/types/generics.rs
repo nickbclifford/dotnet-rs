@@ -60,13 +60,13 @@ impl ConcreteType {
 
 impl Debug for ConcreteType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ConcreteType")
+        write!(f, "{}", self.show(&self.source))
     }
 }
 
 impl ResolvedDebug for ConcreteType {
-    fn show(&self, _res: &Resolution) -> String {
-        format!("{:?}", self)
+    fn show(&self, res: &Resolution) -> String {
+        self.base.show(res)
     }
 }
 
@@ -94,8 +94,28 @@ impl GenericLookup {
     pub fn make_concrete(&self, res: ResolutionS, t: impl Into<MethodType>) -> ConcreteType {
         match t.into() {
             MethodType::Base(b) => ConcreteType::new(res, b.map(|t| self.make_concrete(res, t))),
-            MethodType::TypeGeneric(i) => self.type_generics[i].clone(),
-            MethodType::MethodGeneric(i) => self.method_generics[i].clone(),
+            MethodType::TypeGeneric(i) => self
+                .type_generics
+                .get(i)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Type generic index !{} out of bounds (current context only has {})",
+                        i,
+                        self.type_generics.len()
+                    );
+                })
+                .clone(),
+            MethodType::MethodGeneric(i) => self
+                .method_generics
+                .get(i)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Method generic index !!{} out of bounds (current context only has {})",
+                        i,
+                        self.method_generics.len()
+                    );
+                })
+                .clone(),
         }
     }
 }

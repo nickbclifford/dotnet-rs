@@ -1,7 +1,10 @@
 #[cfg(feature = "multithreaded-gc")]
 use crate::{
     value::object::ObjectPtr,
-    vm::sync::{Arc, AtomicBool, AtomicUsize, Condvar, Mutex, Ordering},
+    vm::{
+        sync::{Arc, AtomicBool, AtomicUsize, Condvar, Mutex, Ordering},
+        threading::execute_gc_command_for_current_thread,
+    },
 };
 #[cfg(feature = "multithreaded-gc")]
 use std::{
@@ -326,7 +329,7 @@ impl GCCoordinator {
         }
 
         // The initiating thread performs its own collection directly
-        crate::vm::threading::execute_gc_command_for_current_thread(GCCommand::CollectAll, self);
+        execute_gc_command_for_current_thread(GCCommand::CollectAll, self);
 
         // Wait for all OTHER arenas to finish initial marking
         self.wait_on_other_arenas(initiating_thread_id);
@@ -365,10 +368,7 @@ impl GCCoordinator {
 
             // Execute MarkObjects for the initiating thread directly
             if let Some(ptrs) = initiator_mark_objs {
-                crate::vm::threading::execute_gc_command_for_current_thread(
-                    GCCommand::MarkObjects(ptrs),
-                    self,
-                );
+                execute_gc_command_for_current_thread(GCCommand::MarkObjects(ptrs), self);
             }
 
             // Wait for all MarkObjects commands to complete (excluding initiating thread)

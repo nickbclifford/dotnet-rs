@@ -5,9 +5,9 @@ use crate::{
         members::{FieldDescription, MethodDescription},
     },
     value::{
-        object::{Object, ObjectRef},
+        object::{HeapStorage, Object, ObjectRef},
         pointer::ManagedPtrOwner,
-        string::{with_string, CLRString},
+        string::{with_string, with_string_mut, CLRString},
         StackValue,
     },
     vm::{intrinsics::span::span_to_slice, CallStack, GCHandle, StepResult},
@@ -25,10 +25,30 @@ pub fn intrinsic_string_equals<'gc, 'm: 'gc>(
 ) -> StepResult {
     let b_val = vm_pop!(stack);
     let a_val = vm_pop!(stack);
-    let b = with_string!(stack, gc, b_val, |b| b.to_vec());
-    let a = with_string!(stack, gc, a_val, |a| a.to_vec());
 
-    vm_push!(stack, gc, Int32(if a == b { 1 } else { 0 }));
+    let res = match (a_val, b_val) {
+        (StackValue::ObjectRef(ObjectRef(None)), StackValue::ObjectRef(ObjectRef(None))) => true,
+        (StackValue::ObjectRef(ObjectRef(None)), _)
+        | (_, StackValue::ObjectRef(ObjectRef(None))) => false,
+        (
+            StackValue::ObjectRef(ObjectRef(Some(a_handle))),
+            StackValue::ObjectRef(ObjectRef(Some(b_handle))),
+        ) => {
+            if unsafe { std::ptr::eq(a_handle.as_ptr(), b_handle.as_ptr()) } {
+                true
+            } else {
+                let a_heap = a_handle.borrow();
+                let b_heap = b_handle.borrow();
+                match (&a_heap.storage, &b_heap.storage) {
+                    (HeapStorage::Str(a), HeapStorage::Str(b)) => a == b,
+                    _ => false,
+                }
+            }
+        }
+        _ => false,
+    };
+
+    vm_push!(stack, gc, Int32(if res { 1 } else { 0 }));
     StepResult::InstructionStepped
 }
 
@@ -243,4 +263,24 @@ pub fn intrinsic_field_string_empty<'gc, 'm: 'gc>(
     _type_generics: Vec<ConcreteType>,
 ) {
     vm_push!(stack, gc, string(gc, CLRString::new(vec![])));
+}
+
+/// System.String::CopyStringContent(string, int, string)
+pub fn intrinsic_string_copy_string_content<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    pop_args!(
+        stack,
+        [ObjectRef(src_val), Int32(dest_pos), ObjectRef(dest_val)]
+    );
+    let src = with_string!(stack, gc, StackValue::ObjectRef(src_val), |s| s.to_vec());
+    with_string_mut!(stack, gc, StackValue::ObjectRef(dest_val), |dest| {
+        let dest_pos = dest_pos as usize;
+        let len = src.len();
+        dest.as_mut_slice()[dest_pos..dest_pos + len].copy_from_slice(&src);
+    });
+    StepResult::InstructionStepped
 }

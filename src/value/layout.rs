@@ -369,6 +369,7 @@ impl FieldLayoutManager {
 
             let t = context.get_field_type(FieldDescription {
                 parent: td,
+                field_resolution: td.resolution,
                 field: f,
             });
             let layout = type_layout_with_metrics(t, context, metrics);

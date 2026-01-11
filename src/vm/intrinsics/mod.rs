@@ -51,11 +51,13 @@ use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use phf::phf_set;
 use std::{collections::HashMap, sync::Arc};
 
+pub mod array_ops;
 pub mod gc;
 pub mod math;
 pub mod reflection;
 pub mod span;
 pub mod string_ops;
+pub mod text_ops;
 pub mod threading;
 pub mod unsafe_ops;
 
@@ -80,6 +82,32 @@ pub fn get_static_method_handler(method: &MethodDescription) -> Option<Intrinsic
     }
 
     match type_name.as_ref() {
+        "DotnetRs.RuntimeTypeHandle" | "System.RuntimeTypeHandle" => match method_name.as_ref() {
+            "GetActivationInfo" => Some(unsafe {
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    reflection::runtime_type_handle_intrinsic_call as fn(_, _, _, _) -> _,
+                )
+            }),
+            "ToIntPtr" => Some(unsafe {
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    reflection::intrinsic_type_handle_to_int_ptr as fn(_, _, _, _) -> _,
+                )
+            }),
+            _ => None,
+        },
+        "DotnetRs.RuntimeType" | "System.RuntimeType" => match method_name.as_ref() {
+            "CreateInstanceDefaultCtor" => Some(unsafe {
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    runtime_type_intrinsic_call as fn(_, _, _, _) -> _,
+                )
+            }),
+            "CreateInstanceCheckThis" => Some(unsafe {
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    runtime_type_intrinsic_call as fn(_, _, _, _) -> _,
+                )
+            }),
+            _ => None,
+        },
         "System.GC" => match method_name.as_ref() {
             "KeepAlive" if param_count == 1 => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
@@ -238,6 +266,11 @@ pub fn get_static_method_handler(method: &MethodDescription) -> Option<Intrinsic
                     string_ops::intrinsic_string_get_length as fn(_, _, _, _) -> _,
                 )
             }),
+            "CopyStringContent" if param_count == 3 => Some(unsafe {
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    string_ops::intrinsic_string_copy_string_content as fn(_, _, _, _) -> _,
+                )
+            }),
             "Concat" if param_count == 3 => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     string_ops::intrinsic_string_concat_three_spans as fn(_, _, _, _) -> _,
@@ -271,7 +304,7 @@ pub fn get_static_method_handler(method: &MethodDescription) -> Option<Intrinsic
             }),
             "op_Implicit" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
-                    span::intrinsic_string_as_span as fn(_, _, _, _) -> _,
+                    span::intrinsic_as_span as fn(_, _, _, _) -> _,
                 )
             }),
             _ => None,
@@ -355,7 +388,7 @@ pub fn get_static_method_handler(method: &MethodDescription) -> Option<Intrinsic
             }),
             "AsSpan" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
-                    span::intrinsic_string_as_span as fn(_, _, _, _) -> _,
+                    span::intrinsic_as_span as fn(_, _, _, _) -> _,
                 )
             }),
             _ => None,
@@ -374,6 +407,11 @@ pub fn get_static_method_handler(method: &MethodDescription) -> Option<Intrinsic
             _ => None,
         },
         "System.Runtime.CompilerServices.Unsafe" => match method_name.as_ref() {
+            "AsPointer" => Some(unsafe {
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    unsafe_ops::intrinsic_unsafe_as_pointer as fn(_, _, _, _) -> _,
+                )
+            }),
             "Add" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     unsafe_ops::intrinsic_unsafe_add as fn(_, _, _, _) -> _,
@@ -426,7 +464,8 @@ pub fn get_static_method_handler(method: &MethodDescription) -> Option<Intrinsic
         },
         "System.Runtime.Intrinsics.Vector128"
         | "System.Runtime.Intrinsics.Vector256"
-        | "System.Runtime.Intrinsics.Vector512" => match method_name.as_ref() {
+        | "System.Runtime.Intrinsics.Vector512"
+        | "System.Numerics.Vector" => match method_name.as_ref() {
             "get_IsHardwareAccelerated" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     math::intrinsic_vector_is_hardware_accelerated as fn(_, _, _, _) -> _,
@@ -498,6 +537,22 @@ pub fn get_static_method_handler(method: &MethodDescription) -> Option<Intrinsic
             }),
             _ => None,
         },
+        "System.Reflection.Assembly" => match method_name.as_ref() {
+            "GetCustomAttributes" => Some(unsafe {
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    reflection::intrinsic_assembly_get_custom_attributes as fn(_, _, _, _) -> _,
+                )
+            }),
+            _ => None,
+        },
+        "System.Attribute" => match method_name.as_ref() {
+            "GetCustomAttributes" => Some(unsafe {
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    reflection::intrinsic_attribute_get_custom_attributes as fn(_, _, _, _) -> _,
+                )
+            }),
+            _ => None,
+        },
         "System.Reflection.MethodBase" => match method_name.as_ref() {
             "GetMethodFromHandle" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
@@ -514,18 +569,52 @@ pub fn get_static_method_handler(method: &MethodDescription) -> Option<Intrinsic
             }),
             _ => None,
         },
-        "System.RuntimeTypeHandle" => match method_name.as_ref() {
-            "ToIntPtr" => Some(unsafe {
-                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
-                    reflection::intrinsic_type_handle_to_int_ptr as fn(_, _, _, _) -> _,
-                )
-            }),
-            _ => None,
-        },
         "System.RuntimeMethodHandle" => match method_name.as_ref() {
             "GetFunctionPointer" => Some(unsafe {
                 std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
                     reflection::intrinsic_method_handle_get_function_pointer as fn(_, _, _, _) -> _,
+                )
+            }),
+            _ => None,
+        },
+        "System.Text.UnicodeUtility" => match method_name.as_ref() {
+            "IsAsciiCodePoint" if param_count == 1 => Some(unsafe {
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    text_ops::intrinsic_unicode_utility_is_ascii_code_point as fn(_, _, _, _) -> _,
+                )
+            }),
+            "IsInRangeInclusive" if param_count == 3 => Some(unsafe {
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    text_ops::intrinsic_unicode_utility_is_in_range_inclusive
+                        as fn(_, _, _, _) -> _,
+                )
+            }),
+            _ => None,
+        },
+        "System.Array" | "DotnetRs.Array" => match method_name.as_ref() {
+            "GetLength" | "get_Length" if param_count == 1 || param_count == 0 => Some(unsafe {
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    array_ops::intrinsic_array_get_length as fn(_, _, _, _) -> _,
+                )
+            }),
+            "get_Rank" if param_count == 0 => Some(unsafe {
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    array_ops::intrinsic_array_get_rank as fn(_, _, _, _) -> _,
+                )
+            }),
+            "GetValue" if param_count == 1 => Some(unsafe {
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    array_ops::intrinsic_array_get_value as fn(_, _, _, _) -> _,
+                )
+            }),
+            "SetValue" if param_count == 2 => Some(unsafe {
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    array_ops::intrinsic_array_set_value as fn(_, _, _, _) -> _,
+                )
+            }),
+            "get_Count" if param_count == 0 => Some(unsafe {
+                std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
+                    array_ops::intrinsic_array_get_length as fn(_, _, _, _) -> _,
                 )
             }),
             _ => None,
@@ -596,6 +685,8 @@ static INTRINSIC_TYPES: phf::Set<&'static str> = phf_set! {
     "System.Buffer",
     "System.Runtime.InteropServices.MemoryMarshal",
     "System.Runtime.CompilerServices.RuntimeHelpers",
+    "System.RuntimeType",
+    "System.RuntimeTypeHandle",
     "System.MemoryExtensions",
     "System.ReadOnlySpan`1",
     "System.Span`1",
@@ -603,6 +694,9 @@ static INTRINSIC_TYPES: phf::Set<&'static str> = phf_set! {
     "System.Runtime.Intrinsics.Vector128",
     "System.Runtime.Intrinsics.Vector256",
     "System.Runtime.Intrinsics.Vector512",
+    "System.Numerics.Vector",
+    "System.Collections.Generic.EqualityComparer`1",
+    "System.RuntimeMethodHandle",
     "System.Byte",
     "System.SByte",
     "System.UInt16",
@@ -617,19 +711,26 @@ static INTRINSIC_TYPES: phf::Set<&'static str> = phf_set! {
     "System.Double",
     "System.Math",
     "System.MathF",
+    "System.Activator",
+    "System.Array",
+    "System.Attribute",
+    "DotnetRs.Array",
     "System.Runtime.Serialization.FormatterServices",
     "System.Type",
     "System.Reflection.MethodBase",
     "System.Reflection.MethodInfo",
     "System.Reflection.ConstructorInfo",
     "System.Reflection.FieldInfo",
+    "System.Reflection.Assembly",
     "System.Reflection.RuntimeMethodInfo",
     "System.Reflection.RuntimeConstructorInfo",
     "System.Reflection.RuntimeFieldInfo",
+    "System.Text.UnicodeUtility",
     "DotnetRs.RuntimeType",
     "DotnetRs.MethodInfo",
     "DotnetRs.ConstructorInfo",
     "DotnetRs.FieldInfo",
+    "DotnetRs.RuntimeTypeHandle",
 };
 
 // ============================================================================

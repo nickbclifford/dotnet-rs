@@ -358,6 +358,14 @@ impl<'gc> ObjectRef<'gc> {
 
         op(instance)
     }
+
+    pub fn as_heap_storage<T>(&self, op: impl FnOnce(&HeapStorage<'gc>) -> T) -> T {
+        let ObjectRef(Some(o)) = &self else {
+            panic!("NullReferenceException: called ObjectRef::as_heap_storage on NULL object reference")
+        };
+        let inner = o.borrow();
+        op(&inner.storage)
+    }
 }
 
 impl Debug for ObjectRef<'_> {
@@ -948,7 +956,12 @@ impl<'gc> Object<'gc> {
     }
 
     /// Register metadata directly in the side-table.
-    pub fn register_metadata(&self, offset: usize, metadata: ManagedPtrMetadata<'gc>, mc: &Mutation<'gc>) {
+    pub fn register_metadata(
+        &self,
+        offset: usize,
+        metadata: ManagedPtrMetadata<'gc>,
+        mc: &Mutation<'gc>,
+    ) {
         let mut side_table = self.managed_ptr_metadata.borrow_mut(mc);
         side_table.insert(offset, metadata);
     }

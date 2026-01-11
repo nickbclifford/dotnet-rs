@@ -49,16 +49,18 @@ pub fn intrinsic_numeric_create_truncating<'gc, 'm: 'gc>(
     macro_rules! convert {
         ($val:expr) => {
             match target_type.as_str() {
-                "Byte" => vm_push!(stack, gc, Int32(($val as u8) as i32)),
-                "SByte" => vm_push!(stack, gc, Int32(($val as i8) as i32)),
-                "UInt16" => vm_push!(stack, gc, Int32(($val as u16) as i32)),
-                "Int16" => vm_push!(stack, gc, Int32(($val as i16) as i32)),
-                "UInt32" => vm_push!(stack, gc, Int32(($val as u32) as i32)),
-                "Int32" => vm_push!(stack, gc, Int32($val as i32)),
-                "UInt64" => vm_push!(stack, gc, Int64(($val as u64) as i64)),
-                "Int64" => vm_push!(stack, gc, Int64($val as i64)),
-                "UIntPtr" => vm_push!(stack, gc, NativeInt(($val as usize) as isize)),
-                "IntPtr" => vm_push!(stack, gc, NativeInt($val as isize)),
+                "Byte" | "System.Byte" => vm_push!(stack, gc, Int32(($val as u8) as i32)),
+                "SByte" | "System.SByte" => vm_push!(stack, gc, Int32(($val as i8) as i32)),
+                "UInt16" | "System.UInt16" => vm_push!(stack, gc, Int32(($val as u16) as i32)),
+                "Int16" | "System.Int16" => vm_push!(stack, gc, Int32(($val as i16) as i32)),
+                "UInt32" | "System.UInt32" => vm_push!(stack, gc, Int32(($val as u32) as i32)),
+                "Int32" | "System.Int32" => vm_push!(stack, gc, Int32($val as i32)),
+                "UInt64" | "System.UInt64" => vm_push!(stack, gc, Int64(($val as u64) as i64)),
+                "Int64" | "System.Int64" => vm_push!(stack, gc, Int64($val as i64)),
+                "UIntPtr" | "System.UIntPtr" => {
+                    vm_push!(stack, gc, NativeInt(($val as usize) as isize))
+                }
+                "IntPtr" | "System.IntPtr" => vm_push!(stack, gc, NativeInt($val as isize)),
                 _ => panic!("unsupported CreateTruncating target type: {}", target_type),
             }
         };
@@ -86,7 +88,10 @@ pub fn intrinsic_math_min_double<'gc, 'm: 'gc>(
         (StackValue::NativeFloat(av), StackValue::NativeFloat(bv)) => {
             vm_push!(stack, gc, NativeFloat(av.min(*bv)));
         }
-        _ => panic!("Math.Min(double, double) called with non-double arguments: {:?}, {:?}", a, b),
+        _ => panic!(
+            "Math.Min(double, double) called with non-double arguments: {:?}, {:?}",
+            a, b
+        ),
     }
     StepResult::InstructionStepped
 }

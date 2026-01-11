@@ -90,6 +90,7 @@ impl AssemblyLoader {
                             NamedArg::Field(name, FixedArg::String(Some(target)))
                                 if name == "InPlaceOf" =>
                             {
+                                println!("Registering stub: {} -> {}", target, t.type_name());
                                 this.stubs.insert(
                                     target.to_string(),
                                     TypeDescription::new(ResolutionS::new(support_res), t),
@@ -690,6 +691,7 @@ impl AssemblyLoader {
             {
                 return Some(MethodDescription {
                     parent: desc,
+                    method_resolution: desc.resolution,
                     method,
                 });
             }
@@ -713,7 +715,8 @@ impl AssemblyLoader {
         self.method_cache_misses.fetch_add(1, Ordering::Relaxed);
         let result = match handle {
             UserMethod::Definition(d) => MethodDescription {
-                parent: TypeDescription::new(resolution, &resolution.definition()[d.parent_type()]),
+                parent: self.locate_type(resolution, d.parent_type().into()),
+                method_resolution: resolution,
                 method: &resolution.definition()[d],
             },
             UserMethod::Reference(r) => {
@@ -766,10 +769,8 @@ impl AssemblyLoader {
         match field {
             FieldSource::Definition(d) => (
                 FieldDescription {
-                    parent: TypeDescription::new(
-                        resolution,
-                        &resolution.definition()[d.parent_type()],
-                    ),
+                    parent: self.locate_type(resolution, d.parent_type().into()),
+                    field_resolution: resolution,
                     field: &resolution.definition()[d],
                 },
                 generic_inst.clone(),
@@ -798,6 +799,7 @@ impl AssemblyLoader {
                                 return (
                                     FieldDescription {
                                         parent: parent_type,
+                                        field_resolution: parent_type.resolution,
                                         field,
                                     },
                                     GenericLookup::new(type_generics),

@@ -12,14 +12,11 @@ use crate::{
         object::{HeapStorage, Object, ObjectRef, Vector},
         StackValue,
     },
-    vm::{
-        context::ResolutionContext, sync::Ordering, CallStack, GCHandle, MethodInfo, StepResult,
-    },
+    vm::{context::ResolutionContext, sync::Ordering, CallStack, GCHandle, MethodInfo, StepResult},
     vm_pop, vm_push,
 };
 use dotnetdll::prelude::{BaseType, Kind, MemberType, MethodType, TypeSource};
 use std::{fmt::Debug, hash::Hash};
-
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct RuntimeMethodSignature; // TODO
@@ -553,6 +550,58 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 }
 
+pub fn intrinsic_assembly_get_custom_attributes<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let num_args = method.method.signature.parameters.len()
+        + if method.method.signature.instance {
+            1
+        } else {
+            0
+        };
+    for _ in 0..num_args {
+        stack.pop_stack();
+    }
+
+    // Return an empty array of Attribute
+    let attribute_type = stack.loader().corlib_type("System.Attribute");
+    let array = Vector::new(attribute_type.into(), 0, &stack.current_context());
+    let obj = ObjectRef::new(gc, HeapStorage::Vec(array));
+    stack.register_new_object(&obj);
+    vm_push!(stack, gc, ObjectRef(obj));
+
+    StepResult::InstructionStepped
+}
+
+pub fn intrinsic_attribute_get_custom_attributes<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let num_args = method.method.signature.parameters.len()
+        + if method.method.signature.instance {
+            1
+        } else {
+            0
+        };
+    for _ in 0..num_args {
+        stack.pop_stack();
+    }
+
+    // Return an empty array of Attribute
+    let attribute_type = stack.loader().corlib_type("System.Attribute");
+    let array = Vector::new(attribute_type.into(), 0, &stack.current_context());
+    let obj = ObjectRef::new(gc, HeapStorage::Vec(array));
+    stack.register_new_object(&obj);
+    vm_push!(stack, gc, ObjectRef(obj));
+
+    StepResult::InstructionStepped
+}
+
 pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -574,6 +623,12 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
     let param_count = method.method.signature.parameters.len();
 
     let result = match (method_name, param_count) {
+        ("CreateInstanceCheckThis", 0) => {
+            pop_args!(stack, [ObjectRef(_obj)]);
+            // For now, we don't perform any actual checks.
+            // In a real VM, this would check if the type is abstract, has a ctor, etc.
+            Some(StepResult::InstructionStepped)
+        }
         ("GetAssembly", 0) => {
             pop_args!(stack, [ObjectRef(obj)]);
 
@@ -642,6 +697,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                     if td.definition().extends.is_some() {
                         // Get the first ancestor (the direct parent)
                         let mut ancestors = stack.loader().ancestors(td);
+                        ancestors.next(); // skip self
                         if let Some((base_td, base_generics)) = ancestors.next() {
                             let _ctx = ResolutionContext::for_method(
                                 method,
@@ -649,7 +705,11 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                                 generics,
                                 stack.shared.clone(),
                             );
-                            let base_rt = if base_generics.is_empty() {
+                            let base_rt = if base_td.definition().extends.is_none()
+                                && base_td.type_name() == "System.Object"
+                            {
+                                RuntimeType::Object
+                            } else if base_generics.is_empty() {
                                 RuntimeType::Type(base_td)
                             } else {
                                 // Convert member type generic parameters to runtime types
@@ -847,6 +907,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 {
                     let desc = MethodDescription {
                         parent: td,
+                        method_resolution: td.resolution,
                         method: m,
                     };
 
@@ -866,6 +927,118 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
     };
 
     result.unwrap_or_else(|| panic!("unimplemented runtime type intrinsic: {:?}", method))
+}
+
+pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let method_name = &*method.method.name;
+    let param_count = method.method.signature.parameters.len();
+
+    match (method_name, param_count) {
+        ("GetActivationInfo", 5) => {
+            // static extern void GetActivationInfo(RuntimeTypeHandle type, out IntPtr pfnAllocator, out IntPtr allocatorFirstArg, out IntPtr pfnCtor, out bool ctorIsPublic);
+            pop_args!(
+                stack,
+                [
+                    ManagedPtr(ctor_is_public),
+                    ManagedPtr(pfn_ctor),
+                    ManagedPtr(allocator_first_arg),
+                    ManagedPtr(pfn_allocator)
+                ]
+            );
+
+            let rt_obj = match stack.pop_stack() {
+                StackValue::ValueType(rth_handle) => {
+                    ObjectRef::read(rth_handle.instance_storage.get_field_local(rth_handle.description, "_value"))
+                }
+                StackValue::ObjectRef(rt_obj) => rt_obj,
+                v => panic!("invalid type on stack ({:?}), expected ValueType(RuntimeTypeHandle) or ObjectRef(RuntimeType)", v),
+            };
+
+            let rt = stack.resolve_runtime_type(rt_obj);
+            let td = match rt {
+                RuntimeType::Type(td) => td,
+                RuntimeType::Generic(td, _) => td,
+                _ => panic!("GetActivationInfo called on non-type: {:?}", rt),
+            };
+
+            // pfnAllocator = IntPtr.Zero
+            stack.push_stack(gc, StackValue::NativeInt(0));
+            unsafe {
+                stack.pop_stack().store(
+                    pfn_allocator.value.as_ptr(),
+                    dotnetdll::prelude::StoreType::IntPtr,
+                )
+            };
+
+            // allocatorFirstArg = IntPtr.Zero
+            stack.push_stack(gc, StackValue::NativeInt(0));
+            unsafe {
+                stack.pop_stack().store(
+                    allocator_first_arg.value.as_ptr(),
+                    dotnetdll::prelude::StoreType::IntPtr,
+                )
+            };
+
+            // Find default ctor
+            let mut found_ctor = false;
+            for m in td.definition().methods.iter() {
+                if m.name == ".ctor" && m.signature.instance && m.signature.parameters.is_empty() {
+                    let method_idx = stack.get_runtime_method_index(
+                        MethodDescription {
+                            parent: td,
+                            method_resolution: td.resolution,
+                            method: m,
+                        },
+                        if let RuntimeType::Generic(_, type_generics) = rt {
+                            GenericLookup {
+                                type_generics: type_generics
+                                    .iter()
+                                    .map(|t| t.to_concrete(stack.loader()))
+                                    .collect(),
+                                method_generics: vec![],
+                            }
+                        } else {
+                            stack.empty_generics().clone()
+                        },
+                    );
+
+                    stack.push_stack(gc, StackValue::NativeInt(method_idx as isize));
+                    unsafe {
+                        stack.pop_stack().store(
+                            pfn_ctor.value.as_ptr(),
+                            dotnetdll::prelude::StoreType::IntPtr,
+                        )
+                    };
+
+                    stack.push_stack(gc, StackValue::Int32(1));
+                    unsafe {
+                        stack.pop_stack().store(
+                            ctor_is_public.value.as_ptr(),
+                            dotnetdll::prelude::StoreType::Int8,
+                        )
+                    };
+                    found_ctor = true;
+                    break;
+                }
+            }
+
+            if !found_ctor {
+                panic!("Could not find default constructor for {}", td.type_name());
+            }
+
+            StepResult::InstructionStepped
+        }
+        _ => panic!(
+            "Unknown RuntimeTypeHandle intrinsic: {}.{}",
+            method.parent.type_name(),
+            method_name
+        ),
+    }
 }
 
 pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
@@ -1018,7 +1191,14 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc>(
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, [ValueType(handle)]);
+    let arg = stack.peek_stack();
+    let StackValue::ValueType(handle) = arg else {
+        panic!(
+            "RunClassConstructor expects a RuntimeTypeHandle, received {:?}",
+            arg
+        )
+    };
+
     let target_obj = ObjectRef::read(
         handle
             .instance_storage
@@ -1028,7 +1208,12 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc>(
     let target_ct = target_type.to_concrete(stack.loader());
     let target_desc = stack.loader().find_concrete_type(target_ct);
 
-    stack.initialize_static_storage(_gc, target_desc, generics.clone());
+    if stack.initialize_static_storage(_gc, target_desc, generics.clone()) {
+        return StepResult::InstructionStepped;
+    }
+
+    // Initialization complete, pop the argument
+    stack.pop_stack();
     StepResult::InstructionStepped
 }
 
@@ -1061,6 +1246,7 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
             if m.name == ".ctor" && m.signature.instance && m.signature.parameters.is_empty() {
                 let desc = MethodDescription {
                     parent: target_td,
+                    method_resolution: target_td.resolution,
                     method: m,
                 };
 

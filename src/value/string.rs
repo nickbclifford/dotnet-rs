@@ -19,6 +19,21 @@ macro_rules! with_string {
 }
 pub(crate) use with_string;
 
+macro_rules! with_string_mut {
+    ($stack:expr, $gc:expr, $value:expr, |$s:ident| $code:expr) => {{
+        $crate::vm_expect_stack!(let ObjectRef(obj) = $value);
+        let $crate::value::object::ObjectRef(Some(obj)) = obj else {
+            return $stack.throw_by_name($gc, "System.NullReferenceException");
+        };
+        let mut heap = obj.borrow_mut($gc);
+        let $crate::value::object::HeapStorage::Str($s) = &mut heap.storage else {
+            panic!("invalid type on stack, expected string, received {:?}", heap.storage)
+        };
+        $code
+    }};
+}
+pub(crate) use with_string_mut;
+
 #[derive(Clone, PartialEq)]
 pub struct CLRString(Vec<u16>);
 unsafe_empty_collect!(CLRString);
@@ -42,6 +57,10 @@ impl CLRString {
 
     pub fn as_string(&self) -> String {
         String::from_utf16(&self.0).unwrap()
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [u16] {
+        &mut self.0
     }
 }
 

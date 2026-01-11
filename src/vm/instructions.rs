@@ -74,7 +74,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
         }
 
-        (ctx.locate_method(method, &new_lookup), new_lookup)
+        (ctx.locate_method(method, ctx.generics), new_lookup)
     }
 
     fn dispatch_method(
@@ -1230,7 +1230,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     _ => panic!("ldelema on non-vector"),
                 };
                 let target_type = self.loader().find_concrete_type(concrete_t);
-                push!(managed_ptr(ptr, target_type, Some(ManagedPtrOwner::Heap(h)), false));
+                push!(managed_ptr(
+                    ptr,
+                    target_type,
+                    Some(ManagedPtrOwner::Heap(h)),
+                    false
+                ));
             }
             LoadField {
                 param0: source,
@@ -1330,6 +1335,18 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         match &data.storage {
                             HeapStorage::Vec(_) => todo!("field on array"),
                             HeapStorage::Obj(o) => {
+                                if !o.instance_storage.has_field(field.parent, name) {
+                                    let current_method =
+                                        self.current_frame().state.info_handle.source;
+                                    panic!(
+                                        "field {}::{} not found in object of type {} while executing method {}::{}",
+                                        field.parent.type_name(),
+                                        name,
+                                        object_type.type_name(),
+                                        current_method.parent.type_name(),
+                                        current_method.method.name
+                                    );
+                                }
                                 let field_data = o.instance_storage.get_field_atomic(
                                     field.parent,
                                     name,
@@ -1393,7 +1410,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         let source_ptr: *mut u8 = match &data.storage {
                             HeapStorage::Vec(_) => todo!("field on array"),
                             HeapStorage::Obj(o) => o.instance_storage.get().as_ptr() as *mut u8,
-                            HeapStorage::Str(_) => todo!("field on string"),
+                            HeapStorage::Str(_) => {
+                                panic!("field on string: {}::{}", field.parent.type_name(), name);
+                            }
                             HeapStorage::Boxed(_) => todo!("field on boxed value type"),
                         };
                         (source_ptr, Some(ManagedPtrOwner::Heap(h)), false)
@@ -1614,6 +1633,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         let base = self.loader().corlib_type(&type_name);
                         method = MethodDescription {
                             parent: base,
+                            method_resolution: base.resolution,
                             method: base
                                 .definition()
                                 .methods
@@ -1866,7 +1886,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         match &mut data.storage {
                             HeapStorage::Vec(_) => todo!("field on array"),
                             HeapStorage::Obj(o) => {
-                                let field_layout = o.instance_storage.layout()
+                                let field_layout = o
+                                    .instance_storage
+                                    .layout()
                                     .get_field(field.parent, name.as_ref())
                                     .cloned()
                                     .unwrap_or_else(|| {
@@ -1908,7 +1930,28 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 }
             }
             StoreFieldSkipNullCheck(_) => todo!("no.nullcheck stfld"),
-            StoreObject { .. } => todo!("stobj"),
+            StoreObject { param0: t, .. } => {
+                let value = pop!();
+                let addr = pop!();
+
+                let ctx = self.current_context();
+                let concrete_t = ctx.make_concrete(t);
+
+                let dest_ptr = match addr {
+                    StackValue::NativeInt(i) => i as *mut u8,
+                    StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
+                    StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => p.as_ptr(),
+                    _ => panic!("stobj: expected pointer on stack, got {:?}", addr),
+                };
+
+                let layout = self.type_layout_cached(concrete_t.clone());
+                let mut bytes = vec![0u8; layout.size()];
+                CTSValue::new(&concrete_t, &ctx, value).write(&mut bytes);
+
+                unsafe {
+                    ptr::copy_nonoverlapping(bytes.as_ptr(), dest_ptr, bytes.len());
+                }
+            }
             StoreStaticField {
                 param0: source,
                 volatile,
@@ -1962,7 +2005,60 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 return self.handle_exception(gc);
             }
             UnboxIntoAddress { .. } => todo!("unbox"),
-            UnboxIntoValue(_) => todo!("unbox.any"),
+            UnboxIntoValue(target) => {
+                let val = pop!();
+                let ctx = self.current_context();
+                let target_ct = ctx.make_concrete(target);
+
+                let is_vt = match target_ct.get() {
+                    BaseType::Type { .. } => {
+                        let td = self.loader().find_concrete_type(target_ct.clone());
+                        td.is_value_type(&ctx)
+                    }
+                    BaseType::Vector(_, _)
+                    | BaseType::Array(_, _)
+                    | BaseType::Object
+                    | BaseType::String => false,
+                    _ => true, // Primitives, IntPtr, etc are value types
+                };
+
+                if is_vt {
+                    // If it's a value type, unbox it.
+                    let StackValue::ObjectRef(obj) = val else {
+                        panic!("unbox.any: expected object on stack, got {:?}", val);
+                    };
+                    if obj.0.is_none() {
+                        // unbox.any on null value type throws NullReferenceException (III.4.33)
+                        return self.throw_by_name(gc, "System.NullReferenceException");
+                    }
+
+                    push!(obj.as_heap_storage(|storage| {
+                        match storage {
+                            HeapStorage::Boxed(v) => CTSValue::Value(v.clone()).into_stack(),
+                            HeapStorage::Obj(o) => {
+                                // Boxed struct is just an Object of that struct type.
+                                StackValue::ValueType(Box::new(o.clone()))
+                            }
+                            _ => panic!("unbox.any: expected boxed value, got {:?}", storage),
+                        }
+                    }));
+                } else {
+                    // Reference type: identical to castclass.
+                    let StackValue::ObjectRef(target_obj) = val else {
+                        panic!("unbox.any: expected object on stack, got {:?}", val);
+                    };
+                    if let ObjectRef(Some(o)) = target_obj {
+                        let obj_type = ctx.get_heap_description(o);
+                        if ctx.is_a(obj_type.into(), target_ct) {
+                            push!(ObjectRef(target_obj));
+                        } else {
+                            return self.throw_by_name(gc, "System.InvalidCastException");
+                        }
+                    } else {
+                        push!(null());
+                    }
+                }
+            }
         }
         if !moved_ip && initial_frame_count == self.execution.frames.len() {
             self.increment_ip();

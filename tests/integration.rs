@@ -130,6 +130,7 @@ impl TestHarness {
                 resolution,
                 &resolution.definition()[entry_method.parent_type()],
             ),
+            method_resolution: resolution,
             method: &resolution.definition()[entry_method],
         };
         executor.entrypoint(entrypoint);
@@ -174,8 +175,8 @@ include!(concat!(env!("OUT_DIR"), "/tests.rs"));
 #[test]
 fn test_cache_observability() {
     let harness = TestHarness::get();
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/gc_finalization_42.cs");
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gc_finalization_42.cs");
     let dll = harness.build(&fixture);
 
     let dll_path_str = dll.to_str().unwrap().to_string();
@@ -207,6 +208,7 @@ fn test_cache_observability() {
             resolution,
             &resolution.definition()[entry_method.parent_type()],
         ),
+        method_resolution: resolution,
         method: &resolution.definition()[entry_method],
     };
     executor.entrypoint(entrypoint);
@@ -664,7 +666,10 @@ fn test_managed_ptr_size() {
     let fixture_path = Path::new("tests/fixtures/managed_ptr_size_0.cs");
     let dll_path = harness.build(fixture_path);
     let exit_code = harness.run(&dll_path);
-    assert_eq!(exit_code, 0, "ManagedPtr size test failed (incorrect size or memory corruption)");
+    assert_eq!(
+        exit_code, 0,
+        "ManagedPtr size test failed (incorrect size or memory corruption)"
+    );
 }
 
 #[test]

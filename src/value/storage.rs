@@ -1,6 +1,6 @@
 use crate::{
     types::{generics::GenericLookup, members::MethodDescription, TypeDescription},
-    utils::DebugStr,
+    utils::{is_ptr_aligned_to_field, DebugStr},
     value::{
         layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
         object::ObjectRef,
@@ -143,22 +143,14 @@ impl FieldStorage {
         let layout = self
             .layout
             .get_field(owner, field)
-            .expect("field not found");
+            .unwrap_or_else(|| panic!("field {}::{} not found", owner.type_name(), field));
         let size = layout.layout.size();
         let offset = layout.position;
         let ptr = unsafe { self.storage.as_ptr().add(offset) };
 
         // Check alignment before attempting atomic operations
         // Unaligned atomic operations are UB in Rust
-        let is_aligned = match size {
-            1 => true, // u8 is always aligned
-            2 => (ptr as usize).is_multiple_of(std::mem::align_of::<u16>()),
-            4 => (ptr as usize).is_multiple_of(std::mem::align_of::<u32>()),
-            8 => (ptr as usize).is_multiple_of(std::mem::align_of::<u64>()),
-            _ => false,
-        };
-
-        if !is_aligned {
+        if !is_ptr_aligned_to_field(ptr, size) {
             // Fall back to non-atomic read if not aligned
             // This can happen with ExplicitLayout types
             return self.get_field_local(owner, field).to_vec();
@@ -189,7 +181,7 @@ impl FieldStorage {
         let layout = self
             .layout
             .get_field(owner, field)
-            .expect("field not found");
+            .unwrap_or_else(|| panic!("field {}::{} not found", owner.type_name(), field));
         let size = layout.layout.size();
         let offset = layout.position;
         let ptr = unsafe { self.storage.as_ptr().add(offset) as *mut u8 };
@@ -206,15 +198,7 @@ impl FieldStorage {
 
         // Check alignment before attempting atomic operations
         // Unaligned atomic operations are UB in Rust
-        let is_aligned = match size {
-            1 => true, // u8 is always aligned
-            2 => (ptr as usize).is_multiple_of(std::mem::align_of::<u16>()),
-            4 => (ptr as usize).is_multiple_of(std::mem::align_of::<u32>()),
-            8 => (ptr as usize).is_multiple_of(std::mem::align_of::<u64>()),
-            _ => false,
-        };
-
-        if !is_aligned {
+        if !is_ptr_aligned_to_field(ptr, size) {
             // Fall back to non-atomic write if not aligned
             // This can happen with ExplicitLayout types
             // NOTE: This violates ECMA-335 atomicity requirements, but it's

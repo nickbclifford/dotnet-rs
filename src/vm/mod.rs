@@ -53,15 +53,19 @@ pub struct MethodInfo<'a> {
 }
 unsafe_empty_collect!(MethodInfo<'_>);
 impl MethodInfo<'static> {
-    pub fn new<'c, 'm>(
+    pub fn new(
         method: MethodDescription,
-        generics: &'c GenericLookup,
-        shared: Arc<crate::vm::stack::SharedGlobalState<'m>>,
+        generics: &GenericLookup,
+        shared: Arc<SharedGlobalState>,
     ) -> Self {
         let loader = shared.loader;
         let body = match &method.method.body {
             Some(b) => b,
-            None => panic!("no body in executing method"),
+            None => panic!(
+                "no body in executing method: {}.{}",
+                method.parent.type_name(),
+                method.method.name
+            ),
         };
         let mut exceptions: &[body::Exception] = &[];
         for sec in &body.data_sections {

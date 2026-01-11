@@ -171,14 +171,22 @@ impl<'m> SharedGlobalState<'m> {
             for type_def in &assembly.definition().type_definitions {
                 let td = TypeDescription::new(assembly, type_def);
                 for method in &type_def.methods {
-                    let md = MethodDescription { parent: td, method };
+                    let md = MethodDescription {
+                        parent: td,
+                        method_resolution: td.resolution,
+                        method,
+                    };
                     intrinsic_cache.insert(
                         md,
                         crate::vm::intrinsics::is_intrinsic(md, loader, &intrinsic_registry),
                     );
                 }
                 for field in &type_def.fields {
-                    let fd = FieldDescription { parent: td, field };
+                    let fd = FieldDescription {
+                        parent: td,
+                        field_resolution: td.resolution,
+                        field,
+                    };
                     intrinsic_field_cache.insert(
                         fd,
                         crate::vm::intrinsics::is_intrinsic_field(fd, loader, &intrinsic_registry),
@@ -605,6 +613,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 })
                 .map(|m| MethodDescription {
                     parent: object_type,
+                    method_resolution: object_type.resolution,
                     method: m,
                 })
                 .expect("could not find System.Object::Finalize");
@@ -1068,6 +1077,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
         self.current_frame_mut().stack_height -= 1;
         value
+    }
+
+    pub fn peek_stack(&self) -> StackValue<'gc> {
+        self.peek_stack_at(0)
+    }
+
+    pub fn peek_stack_at(&self, offset: usize) -> StackValue<'gc> {
+        let top = self.top_of_stack();
+        if top <= offset {
+            panic!(
+                "stack underflow in peek_stack_at: top={}, offset={}",
+                top, offset
+            );
+        }
+        self.get_slot(&self.execution.stack[top - 1 - offset])
     }
 
     pub fn top_of_stack_address(&self) -> NonNull<u8> {

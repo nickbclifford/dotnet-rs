@@ -57,6 +57,7 @@ pub fn run_cli() -> ExitCode {
             resolution,
             &resolution.definition()[entry_method.parent_type()],
         ),
+        method_resolution: resolution,
         method: &resolution.definition()[entry_method],
     };
     executor.entrypoint(entrypoint);

@@ -12,7 +12,10 @@ use crate::{
 
 #[cfg(feature = "multithreaded-gc")]
 use crate::{
-    vm::gc::{arena::THREAD_ARENA, coordinator::ArenaHandle},
+    vm::gc::{
+        arena::THREAD_ARENA,
+        coordinator::{clear_thread_local_state, ArenaHandle},
+    },
     vm_debug,
 };
 
@@ -376,10 +379,10 @@ impl Drop for Executor {
             self.shared.gc_coordinator.unregister_arena(self.thread_id);
 
             // Clear thread-local GC state to prevent leakage across tests
-            crate::vm::gc::arena::THREAD_ARENA.with(|cell| {
+            THREAD_ARENA.with(|cell| {
                 *cell.borrow_mut() = None;
             });
-            crate::vm::gc::coordinator::clear_thread_local_state();
+            clear_thread_local_state();
         }
     }
 }

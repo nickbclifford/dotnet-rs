@@ -8,12 +8,13 @@ use std::{
 #[derive(Clone, Copy)]
 pub struct MethodDescription {
     pub parent: TypeDescription,
+    pub method_resolution: ResolutionS,
     pub method: &'static Method<'static>,
 }
 
 impl MethodDescription {
     pub fn resolution(&self) -> ResolutionS {
-        self.parent.resolution
+        self.method_resolution
     }
 }
 
@@ -47,7 +48,14 @@ impl Hash for MethodDescription {
 #[derive(Clone, Copy)]
 pub struct FieldDescription {
     pub parent: TypeDescription,
+    pub field_resolution: ResolutionS,
     pub field: &'static Field<'static>,
+}
+
+impl FieldDescription {
+    pub fn resolution(&self) -> ResolutionS {
+        self.field_resolution
+    }
 }
 
 impl Debug for FieldDescription {
@@ -59,9 +67,7 @@ impl Debug for FieldDescription {
         write!(
             f,
             "{} {}::{}",
-            self.field
-                .return_type
-                .show(self.parent.resolution.definition()),
+            self.field.return_type.show(self.resolution().definition()),
             self.parent.type_name(),
             self.field.name
         )?;

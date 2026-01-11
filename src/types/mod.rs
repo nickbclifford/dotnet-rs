@@ -97,6 +97,7 @@ impl TypeDescription {
             {
                 Some(MethodDescription {
                     parent: *self,
+                    method_resolution: self.resolution,
                     method: m,
                 })
             } else {
