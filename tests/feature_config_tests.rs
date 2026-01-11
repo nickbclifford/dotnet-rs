@@ -5,6 +5,7 @@ use dotnet_rs::vm;
 #[cfg(feature = "multithreading")]
 use dotnet_rs::vm::threading::ThreadManagerOps;
 
+use dotnet_rs::vm::state;
 use std::{path::PathBuf, sync::Arc};
 
 // ============================================================================
@@ -16,7 +17,7 @@ use std::{path::PathBuf, sync::Arc};
 fn test_single_threaded_stub_thread_manager() {
     // In single-threaded mode, thread manager should exist but be a stub
     let loader = create_test_loader();
-    let _shared = Arc::new(vm::SharedGlobalState::new(loader));
+    let _shared = Arc::new(state::SharedGlobalState::new(loader));
 
     // Thread manager should provide a consistent thread ID (always 1)
     assert_eq!(vm::threading::get_current_thread_id(), 1);
@@ -27,7 +28,7 @@ fn test_single_threaded_stub_thread_manager() {
 fn test_single_threaded_sync_block_manager() {
     // In single-threaded mode, sync blocks should work but without actual locking
     let loader = create_test_loader();
-    let shared = Arc::new(vm::SharedGlobalState::new(loader));
+    let shared = Arc::new(state::SharedGlobalState::new(loader));
 
     // Sync block manager should exist and be usable
     let manager = &shared.sync_blocks;
@@ -43,7 +44,7 @@ fn test_single_threaded_sync_block_manager() {
 #[cfg(all(feature = "multithreading", not(feature = "multithreaded-gc")))]
 fn test_multithreading_thread_registration() {
     let loader = create_test_loader();
-    let shared = Arc::new(vm::SharedGlobalState::new(loader));
+    let shared = Arc::new(state::SharedGlobalState::new(loader));
 
     // Thread manager should support multiple threads
     let id1 = shared.thread_manager.register_thread();
@@ -63,7 +64,7 @@ fn test_multithreading_thread_registration() {
 #[cfg(all(feature = "multithreading", not(feature = "multithreaded-gc")))]
 fn test_multithreading_no_gc_coordinator() {
     let loader = create_test_loader();
-    let shared = Arc::new(vm::SharedGlobalState::new(loader));
+    let shared = Arc::new(state::SharedGlobalState::new(loader));
 
     // In multithreading-only mode, gc_coordinator field should not exist
     // This is a compile-time test - if this compiles, the test passes
@@ -73,10 +74,11 @@ fn test_multithreading_no_gc_coordinator() {
 #[test]
 #[cfg(feature = "multithreading")]
 fn test_multithreading_sync_blocks() {
+    use dotnet_rs::vm::state;
     use std::thread;
 
     let loader = create_test_loader();
-    let shared = Arc::new(vm::SharedGlobalState::new(loader));
+    let shared = Arc::new(state::SharedGlobalState::new(loader));
     let _manager = &shared.sync_blocks;
 
     // Test that sync blocks work across threads
@@ -97,7 +99,7 @@ fn test_multithreading_sync_blocks() {
 #[cfg(feature = "multithreaded-gc")]
 fn test_multithreaded_gc_coordinator_exists() {
     let loader = create_test_loader();
-    let shared = Arc::new(vm::SharedGlobalState::new(loader));
+    let shared = Arc::new(state::SharedGlobalState::new(loader));
 
     // GC coordinator should exist - just accessing it verifies compilation
     let _gc_coord = &shared.gc_coordinator;
@@ -107,7 +109,7 @@ fn test_multithreaded_gc_coordinator_exists() {
 #[cfg(feature = "multithreaded-gc")]
 fn test_multithreaded_gc_arena_handle() {
     let loader = create_test_loader();
-    let shared = Arc::new(vm::SharedGlobalState::new(loader));
+    let shared = Arc::new(state::SharedGlobalState::new(loader));
 
     // Create an arena handle
     let handle = vm::gc::coordinator::ArenaHandle::new(1);
@@ -138,7 +140,7 @@ fn test_multithreaded_gc_cross_arena_value() {
 fn test_multithreaded_gc_implies_multithreading() {
     // If multithreaded-gc is enabled, multithreading should also be available
     let loader = create_test_loader();
-    let shared = Arc::new(vm::SharedGlobalState::new(loader));
+    let shared = Arc::new(state::SharedGlobalState::new(loader));
 
     // Thread manager should support multiple threads
     let id = shared.thread_manager.register_thread();
@@ -154,7 +156,7 @@ fn test_multithreaded_gc_implies_multithreading() {
 fn test_basic_functionality_exists() {
     // This test should pass in all configurations
     let loader = create_test_loader();
-    let shared = Arc::new(vm::SharedGlobalState::new(loader));
+    let shared = Arc::new(state::SharedGlobalState::new(loader));
 
     // Basic shared state should always be available
     assert!(!shared.loader.get_root().is_empty());

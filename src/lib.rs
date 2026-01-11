@@ -21,6 +21,7 @@ pub mod value;
 pub mod vm;
 
 use types::{members::MethodDescription, TypeDescription};
+use vm::state;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -49,7 +50,7 @@ pub fn run_cli() -> ExitCode {
     let loader = assemblies::AssemblyLoader::new(args.assemblies);
     let loader = Box::leak(Box::new(loader));
 
-    let shared = Arc::new(vm::SharedGlobalState::new(loader));
+    let shared = Arc::new(state::SharedGlobalState::new(loader));
     let mut executor = vm::Executor::new(shared);
 
     let entrypoint = MethodDescription {

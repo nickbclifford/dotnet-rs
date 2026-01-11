@@ -7,6 +7,7 @@ use crate::{
     },
     utils::{decompose_type_source, ResolutionS},
     value::object::ObjectHandle,
+    vm::state::SharedGlobalState,
 };
 use dotnetdll::prelude::{
     BaseType, FieldSource, MemberType, MethodType, TypeSource, UserMethod, UserType, ValueKind,
@@ -23,7 +24,7 @@ pub struct ResolutionContext<'a, 'm> {
     pub resolution: ResolutionS,
     pub type_owner: Option<TypeDescription>,
     pub method_owner: Option<MethodDescription>,
-    pub shared: Arc<crate::vm::stack::SharedGlobalState<'m>>,
+    pub shared: Arc<SharedGlobalState<'m>>,
 }
 
 impl<'a, 'm> ResolutionContext<'a, 'm> {
@@ -31,7 +32,7 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
         generics: &'a GenericLookup,
         loader: &'m AssemblyLoader,
         resolution: ResolutionS,
-        shared: Arc<crate::vm::stack::SharedGlobalState<'m>>,
+        shared: Arc<SharedGlobalState<'m>>,
     ) -> Self {
         Self {
             generics,
@@ -47,7 +48,7 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
         method: MethodDescription,
         loader: &'m AssemblyLoader,
         generics: &'a GenericLookup,
-        shared: Arc<crate::vm::stack::SharedGlobalState<'m>>,
+        shared: Arc<SharedGlobalState<'m>>,
     ) -> Self {
         Self {
             generics,

@@ -13,7 +13,6 @@ pub mod coordinator;
 #[cfg(feature = "multithreaded-gc")]
 pub use arena::THREAD_ARENA;
 
-pub use crate::vm::tracer::{TraceStats, Tracer};
 pub use coordinator::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Collect)]

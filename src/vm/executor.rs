@@ -2,7 +2,9 @@ use crate::{
     types::members::MethodDescription,
     value::StackValue,
     vm::{
-        stack::{ArenaLocalState, CallStack, GCArena, SharedGlobalState},
+        metrics::CacheStats,
+        stack::{CallStack, GCArena},
+        state::{ArenaLocalState, SharedGlobalState},
         sync::{Arc, MutexGuard, Ordering},
         threading::ThreadManagerOps,
         tracer::Tracer,
@@ -12,10 +14,7 @@ use crate::{
 
 #[cfg(feature = "multithreaded-gc")]
 use crate::{
-    vm::gc::{
-        arena::THREAD_ARENA,
-        coordinator::{clear_thread_local_state, ArenaHandle},
-    },
+    vm::gc::{arena::THREAD_ARENA, coordinator::*},
     vm_debug,
 };
 
@@ -76,7 +75,7 @@ impl Executor {
         0
     }
 
-    pub fn get_cache_stats(&self) -> crate::vm::metrics::CacheStats {
+    pub fn get_cache_stats(&self) -> CacheStats {
         self.shared.get_cache_stats()
     }
 
@@ -94,7 +93,7 @@ impl Executor {
         {
             let handle = ArenaHandle::new(thread_id);
             shared.gc_coordinator.register_arena(handle.clone());
-            crate::vm::gc::coordinator::set_current_arena_handle(handle);
+            set_current_arena_handle(handle);
         }
 
         // Set thread id in arena and pre-initialize reflection
@@ -153,15 +152,14 @@ impl Executor {
             });
 
             #[cfg(feature = "multithreaded-gc")]
-            let collection_requested =
-                full_collect || crate::vm::gc::coordinator::is_current_arena_collection_requested();
+            let collection_requested = full_collect || is_current_arena_collection_requested();
             #[cfg(not(feature = "multithreaded-gc"))]
             let collection_requested = full_collect;
 
             if collection_requested {
                 self.perform_full_gc();
                 #[cfg(feature = "multithreaded-gc")]
-                crate::vm::gc::coordinator::reset_current_arena_collection_requested();
+                reset_current_arena_collection_requested();
             }
 
             // Reach a safe point between instructions if requested
@@ -269,10 +267,7 @@ impl Executor {
 
                 #[cfg(feature = "multithreaded-gc")]
                 {
-                    crate::vm::gc::coordinator::update_current_arena_metrics(
-                        gc_bytes,
-                        external_bytes,
-                    );
+                    update_current_arena_metrics(gc_bytes, external_bytes);
 
                     // Update global metrics from aggregated values
                     let total_gc = self.shared.gc_coordinator.total_gc_allocation();

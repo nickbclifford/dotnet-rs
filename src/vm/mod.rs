@@ -14,22 +14,23 @@ mod macros;
 pub mod metrics;
 mod pinvoke;
 mod stack;
+pub mod state;
 pub mod sync;
 pub mod threading;
-pub mod threadsafe_lock;
 pub mod tracer;
 
 pub use executor::*;
 pub use stack::*;
 
 use context::ResolutionContext;
+use state::SharedGlobalState;
 
 // I.12.3.2
 #[derive(Clone)]
 pub struct MethodState<'m> {
-    ip: usize,
-    info_handle: MethodInfo<'m>,
-    memory_pool: Vec<u8>,
+    pub ip: usize,
+    pub info_handle: MethodInfo<'m>,
+    pub memory_pool: Vec<u8>,
 }
 impl<'m> MethodState<'m> {
     pub fn new(info_handle: MethodInfo<'m>) -> Self {

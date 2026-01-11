@@ -2,7 +2,7 @@ use dotnet_rs::{
     assemblies,
     types::{members::MethodDescription, TypeDescription},
     utils::{static_res_from_file, ResolutionS},
-    vm,
+    vm::{self, state},
 };
 use dotnetdll::prelude::*;
 use std::{
@@ -109,14 +109,14 @@ impl TestHarness {
     pub fn run(&self, dll_path: &Path) -> u8 {
         let dll_path_str = dll_path.to_str().unwrap().to_string();
         let resolution = static_res_from_file(&dll_path_str);
-        let shared = std::sync::Arc::new(vm::SharedGlobalState::new(self.loader));
+        let shared = std::sync::Arc::new(state::SharedGlobalState::new(self.loader));
         self.run_with_shared(resolution, shared)
     }
 
     pub fn run_with_shared(
         &self,
         resolution: ResolutionS,
-        shared: std::sync::Arc<vm::SharedGlobalState<'static>>,
+        shared: std::sync::Arc<state::SharedGlobalState<'static>>,
     ) -> u8 {
         let entry_method = match resolution.entry_point {
             Some(EntryPoint::Method(m)) => m,
@@ -181,7 +181,7 @@ fn test_cache_observability() {
 
     let dll_path_str = dll.to_str().unwrap().to_string();
     let resolution = static_res_from_file(&dll_path_str);
-    let shared = std::sync::Arc::new(vm::SharedGlobalState::new(harness.loader));
+    let shared = std::sync::Arc::new(state::SharedGlobalState::new(harness.loader));
 
     // Get initial stats
     let stats = shared.get_cache_stats();
@@ -388,7 +388,7 @@ fn test_arena_local_state_isolation() {
 #[cfg(feature = "multithreading")]
 fn test_thread_manager_lifecycle() {
     let harness = TestHarness::get();
-    let shared = std::sync::Arc::new(vm::SharedGlobalState::new(harness.loader));
+    let shared = std::sync::Arc::new(state::SharedGlobalState::new(harness.loader));
     let thread_manager = &shared.thread_manager;
 
     assert_eq!(thread_manager.thread_count(), 0);
@@ -411,6 +411,7 @@ fn test_thread_manager_lifecycle() {
 #[test]
 #[cfg(feature = "multithreading")]
 fn test_multiple_arenas_simple() {
+    use dotnet_rs::vm::state;
     use std::sync::Arc;
     use std::thread;
 
@@ -418,7 +419,7 @@ fn test_multiple_arenas_simple() {
     let fixture_path = Path::new("tests/fixtures/threading_simple_0.cs");
     let dll_path = harness.build(fixture_path);
 
-    let shared = Arc::new(vm::SharedGlobalState::new(harness.loader));
+    let shared = Arc::new(state::SharedGlobalState::new(harness.loader));
     let resolution = static_res_from_file(dll_path.to_str().unwrap());
     shared.loader.register_assembly(resolution);
 
@@ -500,6 +501,7 @@ fn test_multiple_arenas_simple() {
 #[test]
 #[cfg(feature = "multithreaded-gc")]
 fn test_reflection_race_condition() {
+    use dotnet_rs::vm::state;
     use std::sync::Arc;
     use std::thread;
 
@@ -507,7 +509,7 @@ fn test_reflection_race_condition() {
     let fixture_path = Path::new("tests/fixtures/reflection_stress_0.cs");
     let dll_path = harness.build(fixture_path);
 
-    let shared = Arc::new(vm::SharedGlobalState::new(harness.loader));
+    let shared = Arc::new(state::SharedGlobalState::new(harness.loader));
     let resolution = static_res_from_file(dll_path.to_str().unwrap());
     shared.loader.register_assembly(resolution);
 
@@ -551,9 +553,10 @@ fn test_reflection_race_condition() {
 #[test]
 #[cfg(feature = "multithreaded-gc")]
 fn test_gc_coordinator_multi_arena_tracking() {
+    use dotnet_rs::vm::state;
     use std::sync::Arc;
 
-    let shared = Arc::new(vm::SharedGlobalState::new(TestHarness::get().loader));
+    let shared = Arc::new(state::SharedGlobalState::new(TestHarness::get().loader));
 
     // Simulate multiple arenas being registered
     let handle1 = vm::gc::coordinator::ArenaHandle::new(1);
@@ -580,12 +583,13 @@ fn test_gc_coordinator_multi_arena_tracking() {
 #[test]
 #[cfg(feature = "multithreading")]
 fn test_volatile_sharing() {
+    use dotnet_rs::vm::state;
     use std::thread;
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/volatile_sharing_42.cs");
     let dll_path = harness.build(fixture_path);
 
-    let shared = std::sync::Arc::new(vm::SharedGlobalState::new(harness.loader));
+    let shared = std::sync::Arc::new(state::SharedGlobalState::new(harness.loader));
 
     let handles: Vec<_> = (0..2)
         .map(|_| {
@@ -610,9 +614,10 @@ fn test_volatile_sharing() {
 #[test]
 #[cfg(feature = "multithreaded-gc")]
 fn test_cross_arena_reference_tracking() {
+    use dotnet_rs::vm::state;
     use std::sync::Arc;
 
-    let shared = Arc::new(vm::SharedGlobalState::new(TestHarness::get().loader));
+    let shared = Arc::new(state::SharedGlobalState::new(TestHarness::get().loader));
 
     // Create a mock arena handle
     let handle = vm::gc::coordinator::ArenaHandle::new(1);
@@ -637,9 +642,10 @@ fn test_cross_arena_reference_tracking() {
 #[test]
 #[cfg(feature = "multithreaded-gc")]
 fn test_allocation_pressure_triggers_collection() {
+    use dotnet_rs::vm::state;
     use std::sync::Arc;
 
-    let shared = Arc::new(vm::SharedGlobalState::new(TestHarness::get().loader));
+    let shared = Arc::new(state::SharedGlobalState::new(TestHarness::get().loader));
 
     let handle = vm::gc::coordinator::ArenaHandle::new(1);
 

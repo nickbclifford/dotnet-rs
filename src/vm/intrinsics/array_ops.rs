@@ -3,7 +3,7 @@ use crate::{
     types::{generics::GenericLookup, members::MethodDescription},
     value::{
         layout::HasLayout,
-        object::{HeapStorage, ObjectRef},
+        object::{CTSValue, HeapStorage, ObjectRef},
         StackValue,
     },
     vm::{CallStack, GCHandle, StepResult},
@@ -96,8 +96,7 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
     let start = index * elem_size;
     let end = start + elem_size;
     let ctx = stack.current_context();
-    let val =
-        crate::value::object::CTSValue::read(&v.element, &ctx, &v.get()[start..end]).into_stack();
+    let val = CTSValue::read(&v.element, &ctx, &v.get()[start..end]).into_stack();
 
     vm_push!(stack, _gc, val);
     StepResult::InstructionStepped
@@ -147,8 +146,7 @@ pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
     let start = index * elem_size;
     let end = start + elem_size;
     let ctx = stack.current_context();
-    crate::value::object::CTSValue::new(&v.element, &ctx, value)
-        .write(&mut v.get_mut()[start..end]);
+    CTSValue::new(&v.element, &ctx, value).write(&mut v.get_mut()[start..end]);
 
     StepResult::InstructionStepped
 }

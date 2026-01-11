@@ -1,6 +1,6 @@
 use crate::{
-    types::{generics::GenericLookup, members::MethodDescription, TypeDescription},
-    utils::decompose_type_source,
+    types::{generics::GenericLookup, members::MethodDescription},
+    utils::{decompose_type_source, is_ptr_aligned_to_field},
     value::{
         layout::{type_layout, FieldLayoutManager, HasLayout},
         object::{CTSValue, HeapStorage, Object, ObjectRef, ValueType, Vector},
@@ -9,7 +9,6 @@ use crate::{
         StackValue,
     },
     vm::{
-        context::ResolutionContext,
         exceptions::{ExceptionState, HandlerAddress, UnwindTarget},
         intrinsics::*,
         sync::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering as AtomicOrdering},
@@ -96,85 +95,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             );
             StepResult::InstructionStepped
         }
-    }
-
-    /// Initialize static storage for a type and invoke its .cctor if needed.
-    /// This method is thread-safe.
-    ///
-    /// Returns `true` if a .cctor was invoked (caller should return early),
-    /// or `false` if initialization is complete or not needed.
-    pub fn initialize_static_storage(
-        &mut self,
-        gc: GCHandle<'gc>,
-        description: TypeDescription,
-        generics: GenericLookup,
-    ) -> bool {
-        // Check GC safe point before potentially running static constructors
-        // which may allocate many objects
-        self.check_gc_safe_point();
-
-        let ctx = ResolutionContext {
-            resolution: description.resolution,
-            generics: &generics,
-            loader: self.loader(),
-            type_owner: Some(description),
-            method_owner: None,
-            shared: self.shared.clone(),
-        };
-
-        loop {
-            let tid = self.thread_id.get();
-            let init_result = {
-                // Thread-safe path: use StaticStorageManager's internal locking
-                self.shared
-                    .statics
-                    .init(description, &ctx, tid, Some(&self.shared.metrics))
-            };
-
-            use crate::value::storage::StaticInitResult::*;
-            match init_result {
-                Execute(m) => {
-                    vm_trace!(
-                        self,
-                        "-- calling static constructor (will return to ip {}) --",
-                        self.current_frame().state.ip
-                    );
-                    self.call_frame(
-                        gc,
-                        MethodInfo::new(m, &generics, self.shared.clone()),
-                        generics,
-                    );
-                    return true;
-                }
-                Initialized | Recursive => {
-                    return false;
-                }
-                Waiting => {
-                    // If INITIALIZING on another thread, we wait using the condition variable.
-                    // wait_for_init now checks for GC safe points internally
-                    #[cfg(feature = "multithreaded-gc")]
-                    self.shared.statics.wait_for_init(
-                        description,
-                        self.shared.thread_manager.as_ref(),
-                        self.thread_id.get(),
-                        &self.shared.gc_coordinator,
-                    );
-                    #[cfg(not(feature = "multithreaded-gc"))]
-                    self.shared.statics.wait_for_init(
-                        description,
-                        self.shared.thread_manager.as_ref(),
-                        self.thread_id.get(),
-                        &Default::default(),
-                    );
-                }
-            }
-        }
-    }
-
-    /// Mark a type's static initialization as complete after its .cctor returns.
-    /// This should be called when a .cctor method returns normally.
-    pub fn mark_type_initialized(&mut self, description: TypeDescription) {
-        self.shared.statics.mark_initialized(description);
     }
 
     pub fn step(&mut self, gc: GCHandle<'gc>) -> StepResult {
@@ -1276,7 +1196,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     // as required by ECMA-335.
                     if size <= size_of::<usize>() {
                         // Check alignment before attempting atomic operations
-                        if !crate::utils::is_ptr_aligned_to_field(field_ptr, size) {
+                        if !is_ptr_aligned_to_field(field_ptr, size) {
                             // Fall back to non-atomic read if not aligned
                             let slice = unsafe { slice::from_raw_parts(field_ptr, size) };
                             return read_data(slice);
@@ -1842,7 +1762,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                     if size <= size_of::<usize>() {
                         // Check alignment before attempting atomic operations
-                        if !crate::utils::is_ptr_aligned_to_field(field_ptr, size) {
+                        if !is_ptr_aligned_to_field(field_ptr, size) {
                             // Fall back to non-atomic write if not aligned
                             write_data(slice_from_pointer(ptr));
                             return;

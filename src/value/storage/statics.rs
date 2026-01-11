@@ -1,234 +1,23 @@
 use crate::{
     types::{generics::GenericLookup, members::MethodDescription, TypeDescription},
-    utils::{is_ptr_aligned_to_field, DebugStr},
-    value::{
-        layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
-        object::ObjectRef,
-    },
+    utils::DebugStr,
+    value::{layout::FieldLayoutManager, storage::FieldStorage},
     vm::{
-        context::ResolutionContext,
-        metrics::RuntimeMetrics,
-        sync::{Arc, AtomicU16, AtomicU32, AtomicU64, AtomicU8, Condvar, Mutex, Ordering, RwLock},
+        context::ResolutionContext, gc::GCCoordinator, metrics::RuntimeMetrics,
+        threading::ThreadManagerOps, CallStack, GCHandle, MethodInfo,
     },
+    vm_trace,
 };
 use gc_arena::{Collect, Collection};
+use parking_lot::{Condvar, Mutex, RwLock};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fmt::{Debug, Formatter},
-    ops::Range,
+    sync::{
+        atomic::{AtomicU64, AtomicU8, Ordering},
+        Arc,
+    },
 };
-
-#[derive(Clone, PartialEq)]
-pub struct FieldStorage {
-    layout: Arc<FieldLayoutManager>,
-    storage: Vec<u8>,
-}
-
-impl Debug for FieldStorage {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let mut fs: Vec<(_, _)> = self
-            .layout
-            .fields
-            .iter()
-            .map(|(k, v)| {
-                let data = &self.storage[v.as_range()];
-                let data_rep = match &*v.layout {
-                    LayoutManager::Scalar(Scalar::ObjectRef) => {
-                        format!("{:?}", ObjectRef::read(data))
-                    }
-                    LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                        // Skip reading ManagedPtr to avoid transmute issues
-                        let bytes: Vec<_> = data.iter().map(|b| format!("{:02x}", b)).collect();
-                        format!("ptr({})", bytes.join(" "))
-                    }
-                    _ => {
-                        let bytes: Vec<_> = data.iter().map(|b| format!("{:02x}", b)).collect();
-                        bytes.join(" ")
-                    }
-                };
-
-                (
-                    v.position,
-                    DebugStr(format!("{} {}: {}", v.layout.type_tag(), k, data_rep)),
-                )
-            })
-            .collect();
-
-        fs.sort_by_key(|(p, _)| *p);
-
-        f.debug_list()
-            .entries(fs.into_iter().map(|(_, r)| r))
-            .finish()
-    }
-}
-
-unsafe impl Collect for FieldStorage {
-    #[inline]
-    fn trace(&self, cc: &Collection) {
-        self.layout.trace(&self.storage, cc);
-    }
-}
-
-impl FieldStorage {
-    pub fn new(layout: Arc<FieldLayoutManager>) -> Self {
-        let size = layout.size();
-        // Defensive check: ensure the total allocation size is reasonable.
-        if size > 0x1000_0000 {
-            // 256MB limit for a single object instance
-            panic!("massive field storage allocation: {} bytes", size);
-        }
-        Self {
-            storage: vec![0; size],
-            layout,
-        }
-    }
-
-    pub fn instance_fields(description: TypeDescription, context: &ResolutionContext) -> Self {
-        Self::new(FieldLayoutManager::instance_field_layout_cached(
-            description,
-            context,
-            None,
-        ))
-    }
-
-    pub fn resurrect<'gc>(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
-        self.layout.resurrect(&self.storage, fc, visited);
-    }
-
-    pub fn static_fields(description: TypeDescription, context: &ResolutionContext) -> Self {
-        Self::new(Arc::new(FieldLayoutManager::static_fields(
-            description,
-            context,
-        )))
-    }
-
-    pub fn get(&self) -> &[u8] {
-        &self.storage
-    }
-
-    pub fn get_mut(&mut self) -> &mut [u8] {
-        &mut self.storage
-    }
-
-    pub fn layout(&self) -> &Arc<FieldLayoutManager> {
-        &self.layout
-    }
-
-    fn get_field_range(&self, owner: TypeDescription, field: &str) -> Range<usize> {
-        match self.layout.get_field(owner, field) {
-            None => panic!("field {}::{} not found", owner.type_name(), field),
-            Some(l) => l.as_range(),
-        }
-    }
-
-    pub fn get_field_local(&self, owner: TypeDescription, field: &str) -> &[u8] {
-        &self.storage[self.get_field_range(owner, field)]
-    }
-
-    pub fn get_field_mut_local(&mut self, owner: TypeDescription, field: &str) -> &mut [u8] {
-        let r = self.get_field_range(owner, field);
-        &mut self.storage[r]
-    }
-
-    pub fn has_field(&self, owner: TypeDescription, field: &str) -> bool {
-        self.layout.get_field(owner, field).is_some()
-    }
-
-    pub fn get_field_atomic(
-        &self,
-        owner: TypeDescription,
-        field: &str,
-        ordering: Ordering,
-    ) -> Vec<u8> {
-        let layout = self
-            .layout
-            .get_field(owner, field)
-            .unwrap_or_else(|| panic!("field {}::{} not found", owner.type_name(), field));
-        let size = layout.layout.size();
-        let offset = layout.position;
-        let ptr = unsafe { self.storage.as_ptr().add(offset) };
-
-        // Check alignment before attempting atomic operations
-        // Unaligned atomic operations are UB in Rust
-        if !is_ptr_aligned_to_field(ptr, size) {
-            // Fall back to non-atomic read if not aligned
-            // This can happen with ExplicitLayout types
-            return self.get_field_local(owner, field).to_vec();
-        }
-
-        match size {
-            1 => vec![unsafe { (*(ptr as *const AtomicU8)).load(ordering) }],
-            2 => unsafe { (*(ptr as *const AtomicU16)).load(ordering) }
-                .to_ne_bytes()
-                .to_vec(),
-            4 => unsafe { (*(ptr as *const AtomicU32)).load(ordering) }
-                .to_ne_bytes()
-                .to_vec(),
-            8 => unsafe { (*(ptr as *const AtomicU64)).load(ordering) }
-                .to_ne_bytes()
-                .to_vec(),
-            _ => self.get_field_local(owner, field).to_vec(),
-        }
-    }
-
-    pub fn set_field_atomic(
-        &self,
-        owner: TypeDescription,
-        field: &str,
-        value: &[u8],
-        ordering: Ordering,
-    ) {
-        let layout = self
-            .layout
-            .get_field(owner, field)
-            .unwrap_or_else(|| panic!("field {}::{} not found", owner.type_name(), field));
-        let size = layout.layout.size();
-        let offset = layout.position;
-        let ptr = unsafe { self.storage.as_ptr().add(offset) as *mut u8 };
-
-        if size != value.len() {
-            panic!(
-                "size mismatch for field {}::{} (expected {}, got {})",
-                owner.type_name(),
-                field,
-                size,
-                value.len()
-            );
-        }
-
-        // Check alignment before attempting atomic operations
-        // Unaligned atomic operations are UB in Rust
-        if !is_ptr_aligned_to_field(ptr, size) {
-            // Fall back to non-atomic write if not aligned
-            // This can happen with ExplicitLayout types
-            // NOTE: This violates ECMA-335 atomicity requirements, but it's
-            // better than UB. A proper implementation would need to lock.
-            unsafe {
-                std::ptr::copy_nonoverlapping(value.as_ptr(), ptr, size.min(value.len()));
-            }
-            return;
-        }
-
-        match size {
-            1 => unsafe { (*(ptr as *const AtomicU8)).store(value[0], ordering) },
-            2 => unsafe {
-                let val = u16::from_ne_bytes(value.try_into().unwrap());
-                (*(ptr as *const AtomicU16)).store(val, ordering)
-            },
-            4 => unsafe {
-                let val = u32::from_ne_bytes(value.try_into().unwrap());
-                (*(ptr as *const AtomicU32)).store(val, ordering)
-            },
-            8 => unsafe {
-                let val = u64::from_ne_bytes(value.try_into().unwrap());
-                (*(ptr as *const AtomicU64)).store(val, ordering)
-            },
-            _ => unsafe {
-                std::ptr::copy_nonoverlapping(value.as_ptr(), ptr, size);
-            },
-        }
-    }
-}
 
 /// Initialization states for type static constructors (.cctor).
 /// This is an atomic state machine for thread-safe type initialization.
@@ -278,6 +67,7 @@ unsafe impl Collect for StaticStorage {
         self.storage.trace(cc);
     }
 }
+
 impl Debug for StaticStorage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self.init_state.load(Ordering::Acquire) {
@@ -306,6 +96,7 @@ unsafe impl Collect for StaticStorageManager {
         }
     }
 }
+
 impl Debug for StaticStorageManager {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let types = self.types.read();
@@ -491,9 +282,9 @@ impl StaticStorageManager {
     pub fn wait_for_init(
         &self,
         description: TypeDescription,
-        thread_manager: &impl crate::vm::threading::ThreadManagerOps,
+        thread_manager: &impl ThreadManagerOps,
         thread_id: u64,
-        gc_coordinator: &crate::vm::gc::coordinator::GCCoordinator,
+        gc_coordinator: &GCCoordinator,
     ) {
         let storage = self.get(description);
 
@@ -529,5 +320,86 @@ impl StaticStorageManager {
                 storage.init_cond.wait(&mut lock);
             }
         }
+    }
+}
+
+impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
+    /// Initialize static storage for a type and invoke its .cctor if needed.
+    /// This method is thread-safe.
+    ///
+    /// Returns `true` if a .cctor was invoked (caller should return early),
+    /// or `false` if initialization is complete or not needed.
+    pub fn initialize_static_storage(
+        &mut self,
+        gc: GCHandle<'gc>,
+        description: TypeDescription,
+        generics: GenericLookup,
+    ) -> bool {
+        // Check GC safe point before potentially running static constructors
+        // which may allocate many objects
+        self.check_gc_safe_point();
+
+        let ctx = ResolutionContext {
+            resolution: description.resolution,
+            generics: &generics,
+            loader: self.loader(),
+            type_owner: Some(description),
+            method_owner: None,
+            shared: self.shared.clone(),
+        };
+
+        loop {
+            let tid = self.thread_id.get();
+            let init_result = {
+                // Thread-safe path: use StaticStorageManager's internal locking
+                self.shared
+                    .statics
+                    .init(description, &ctx, tid, Some(&self.shared.metrics))
+            };
+
+            use StaticInitResult::*;
+            match init_result {
+                Execute(m) => {
+                    vm_trace!(
+                        self,
+                        "-- calling static constructor (will return to ip {}) --",
+                        self.current_frame().state.ip
+                    );
+                    self.call_frame(
+                        gc,
+                        MethodInfo::new(m, &generics, self.shared.clone()),
+                        generics,
+                    );
+                    return true;
+                }
+                Initialized | Recursive => {
+                    return false;
+                }
+                Waiting => {
+                    // If INITIALIZING on another thread, we wait using the condition variable.
+                    // wait_for_init now checks for GC safe points internally
+                    #[cfg(feature = "multithreaded-gc")]
+                    self.shared.statics.wait_for_init(
+                        description,
+                        self.shared.thread_manager.as_ref(),
+                        self.thread_id.get(),
+                        &self.shared.gc_coordinator,
+                    );
+                    #[cfg(not(feature = "multithreaded-gc"))]
+                    self.shared.statics.wait_for_init(
+                        description,
+                        self.shared.thread_manager.as_ref(),
+                        self.thread_id.get(),
+                        &Default::default(),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Mark a type's static initialization as complete after its .cctor returns.
+    /// This should be called when a .cctor method returns normally.
+    pub fn mark_type_initialized(&mut self, description: TypeDescription) {
+        self.shared.statics.mark_initialized(description);
     }
 }

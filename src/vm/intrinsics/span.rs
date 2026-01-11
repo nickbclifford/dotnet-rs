@@ -5,8 +5,8 @@ use crate::{
         members::{FieldDescription, MethodDescription},
     },
     value::{
-        layout::{type_layout, HasLayout},
-        object::{Object, ObjectRef},
+        layout::{type_layout, FieldLayoutManager, HasLayout},
+        object::{HeapStorage, Object, ObjectRef},
         pointer::{ManagedPtr, ManagedPtrOwner},
         StackValue,
     },
@@ -74,7 +74,7 @@ pub fn intrinsic_span_get_item<'gc, 'm: 'gc>(
     }
 
     let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
-    let span_layout = crate::value::layout::FieldLayoutManager::instance_field_layout_cached(
+    let span_layout = FieldLayoutManager::instance_field_layout_cached(
         m.inner_type,
         &ctx,
         Some(&stack.shared.metrics),
@@ -124,7 +124,7 @@ pub fn intrinsic_span_get_length<'gc, 'm: 'gc>(
     }
 
     let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
-    let layout = crate::value::layout::FieldLayoutManager::instance_field_layout_cached(
+    let layout = FieldLayoutManager::instance_field_layout_cached(
         m.inner_type,
         &ctx,
         Some(&stack.shared.metrics),
@@ -187,7 +187,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
         StackValue::ObjectRef(ObjectRef(Some(h))) => {
             let heap = h.borrow();
             match &heap.storage {
-                crate::value::object::HeapStorage::Str(s) => {
+                HeapStorage::Str(s) => {
                     (
                         s.as_ptr() as *mut u8,
                         s.len(),
@@ -196,7 +196,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
                         2, // char is 2 bytes in .NET
                     )
                 }
-                crate::value::object::HeapStorage::Vec(a) => {
+                HeapStorage::Vec(a) => {
                     let elem_type = a.element.clone();
                     let elem_size = a.layout.element_layout.size();
                     (
@@ -278,7 +278,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
                 .get_field_mut_local(span_type, "_reference"),
         );
         // Register metadata in Span's side-table
-        let span_layout = crate::value::layout::FieldLayoutManager::instance_field_layout_cached(
+        let span_layout = FieldLayoutManager::instance_field_layout_cached(
             span_type,
             &ctx,
             Some(&stack.shared.metrics),
@@ -362,7 +362,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
             .copy_from_slice(&element_count.to_ne_bytes());
 
         // Register metadata in Span's side-table
-        let span_layout = crate::value::layout::FieldLayoutManager::instance_field_layout_cached(
+        let span_layout = FieldLayoutManager::instance_field_layout_cached(
             span_type,
             &ctx,
             Some(&stack.shared.metrics),

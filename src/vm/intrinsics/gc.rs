@@ -3,10 +3,11 @@ use crate::{
     types::{generics::GenericLookup, members::MethodDescription},
     value::{
         object::{HeapStorage, ObjectRef},
+        string::with_string,
         StackValue,
     },
     vm::{gc::GCHandleType, CallStack, GCHandle, StepResult},
-    vm_push,
+    vm_pop, vm_push,
 };
 
 /// System.ArgumentNullException::ThrowIfNull(object, string)
@@ -30,12 +31,7 @@ pub fn intrinsic_environment_get_variable_core<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    use crate::value::string::with_string;
-    use std::env;
-
-    let value = with_string!(stack, gc, crate::vm_pop!(stack), |s| env::var(
-        s.as_string()
-    ));
+    let value = with_string!(stack, gc, vm_pop!(stack), |s| std::env::var(s.as_string()));
     match value.ok() {
         Some(s) => vm_push!(stack, gc, string(s)),
         None => vm_push!(stack, gc, StackValue::null()),

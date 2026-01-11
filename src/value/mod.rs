@@ -1,3 +1,6 @@
+#[cfg(feature = "multithreaded-gc")]
+use crate::vm::gc::coordinator::record_cross_arena_ref;
+
 use crate::{
     types::TypeDescription,
     vm::{
@@ -6,6 +9,7 @@ use crate::{
             AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
             AtomicU64, AtomicU8, AtomicUsize, Ordering as AtomicOrdering,
         },
+        threading::lock::ThreadSafeLock,
         GCHandle,
     },
 };
@@ -55,7 +59,7 @@ unsafe impl<'gc> Collect for StackValue<'gc> {
             Self::ValueType(v) => v.as_ref().trace(cc),
             #[cfg(feature = "multithreaded-gc")]
             Self::CrossArenaObjectRef(ptr, tid) => {
-                crate::vm::gc::coordinator::record_cross_arena_ref(*tid, *ptr);
+                record_cross_arena_ref(*tid, *ptr);
             }
             _ => {}
         }
@@ -355,9 +359,7 @@ impl<'gc> StackValue<'gc> {
             LoadType::IntPtr => Self::NativeInt((*(ptr as *const AtomicIsize)).load(ordering)),
             LoadType::Object => {
                 let val = (*(ptr as *const AtomicUsize)).load(ordering);
-                let ptr = val as *const crate::vm::threadsafe_lock::ThreadSafeLock<
-                    object::ObjectInner<'gc>,
-                >;
+                let ptr = val as *const ThreadSafeLock<object::ObjectInner<'gc>>;
                 if ptr.is_null() {
                     Self::ObjectRef(ObjectRef(None))
                 } else {

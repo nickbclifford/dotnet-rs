@@ -11,7 +11,7 @@ use crate::{
     vm::{
         context::ResolutionContext,
         sync::{AtomicUsize, Ordering as AtomicOrdering},
-        threadsafe_lock::ThreadSafeLock,
+        threading::{get_current_thread_id, lock::ThreadSafeLock},
         GCHandle,
     },
     vm_expect_stack,
@@ -28,6 +28,9 @@ use std::{
     marker::PhantomData,
     ptr::{self, NonNull},
 };
+
+#[cfg(feature = "multithreaded-gc")]
+use crate::vm::gc::coordinator::*;
 
 /// Owner information for managed pointers stored in metadata.
 /// We MUST store actual Gc handles, not raw pointers, because:
@@ -176,7 +179,7 @@ unsafe impl<'gc> Collect for ObjectRef<'gc> {
             #[cfg(feature = "multithreaded-gc")]
             {
                 // Check for cross-arena reference
-                if let Some(tracing_id) = crate::vm::gc::coordinator::get_currently_tracing() {
+                if let Some(tracing_id) = get_currently_tracing() {
                     // SAFETY: During stop-the-world GC, no other threads are running,
                     // so we can safely access the owner_id without acquiring the lock.
                     // This avoids potential deadlock if a thread was stopped while holding a write lock.
@@ -184,7 +187,7 @@ unsafe impl<'gc> Collect for ObjectRef<'gc> {
                     if owner_id != tracing_id {
                         // This is a reference to an object in another arena.
                         // Do not trace it here; instead, record it for coordinated resurrection.
-                        crate::vm::gc::coordinator::record_cross_arena_ref(
+                        record_cross_arena_ref(
                             owner_id,
                             ObjectPtr(NonNull::new(Gc::as_ptr(h) as *mut _).unwrap()),
                         );
@@ -248,11 +251,11 @@ impl<'gc> ObjectRef<'gc> {
     }
 
     pub fn new(gc: GCHandle<'gc>, value: HeapStorage<'gc>) -> Self {
-        let owner_id = crate::vm::threading::get_current_thread_id();
+        let owner_id = get_current_thread_id();
         #[cfg(feature = "multithreaded-gc")]
         {
             let size = size_of::<ObjectInner>() + value.size_bytes();
-            crate::vm::gc::coordinator::record_allocation(size);
+            record_allocation(size);
         }
 
         Self(Some(Gc::new(

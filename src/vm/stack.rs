@@ -7,26 +7,24 @@ use crate::{
     },
     utils::{decompose_type_source, ResolutionS},
     value::{
-        layout::{FieldLayoutManager, HasLayout, LayoutManager},
+        layout::{type_layout_with_metrics, HasLayout, LayoutManager},
         object::{HeapStorage, Object as ObjectInstance, ObjectRef},
         pointer::ManagedPtrOwner,
-        storage::StaticStorageManager,
         StackValue,
     },
     vm::{
         context::ResolutionContext,
         exceptions::ExceptionState,
         gc::GCHandleType,
-        intrinsics::reflection::RuntimeType,
-        metrics::RuntimeMetrics,
+        intrinsics::{is_intrinsic, is_intrinsic_field, reflection::RuntimeType},
         pinvoke::NativeLibraries,
-        sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, SyncBlockManager},
-        threading::ThreadManager,
-        tracer::Tracer,
+        state::{ArenaLocalState, SharedGlobalState},
+        sync::{MutexGuard, RwLockReadGuard, RwLockWriteGuard},
+        threading::lock::ThreadSafeLock,
+        tracer::{TraceLevel, Tracer},
         MethodInfo, MethodState, StepResult,
     },
 };
-use dashmap::DashMap;
 use dotnetdll::prelude::*;
 use gc_arena::{Arena, Collect, Collection, Gc, Mutation, Rootable};
 use std::{
@@ -34,17 +32,18 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::{self, Debug},
     ptr::NonNull,
-    sync::Arc,
+    sync::{atomic::Ordering, Arc},
 };
 
 #[cfg(feature = "multithreaded-gc")]
-use crate::{value::object::ObjectPtr, vm::gc::coordinator::GCCoordinator};
+use crate::{
+    value::{object::ObjectPtr, storage::StaticStorageManager},
+    vm::gc::coordinator::record_allocation,
+};
 
 #[derive(Collect)]
 #[collect(no_drop)]
-pub struct StackSlotHandle<'gc>(
-    Gc<'gc, crate::vm::threadsafe_lock::ThreadSafeLock<StackValue<'gc>>>,
-);
+pub struct StackSlotHandle<'gc>(Gc<'gc, ThreadSafeLock<StackValue<'gc>>>);
 
 /// Thread-local execution state for a single .NET thread.
 /// Contains the evaluation stack, call frames, and exception state.
@@ -103,231 +102,6 @@ unsafe impl<'gc> Collect for HeapManager<'gc> {
 
         // - self.finalization_queue: Traced by finalize_check (resurrection).
         // - self._all_objs: Debugging handles (untraced).
-    }
-}
-
-/// Thread-safe shared state that does not contain any GC-managed pointers.
-/// This state is shared across all execution threads and arenas.
-pub struct SharedGlobalState<'m> {
-    pub loader: &'m AssemblyLoader,
-    pub pinvoke: RwLock<NativeLibraries>,
-    pub sync_blocks: SyncBlockManager,
-    pub thread_manager: Arc<ThreadManager>,
-    pub metrics: RuntimeMetrics,
-    pub tracer: Mutex<Tracer>,
-    pub tracer_enabled: Arc<std::sync::atomic::AtomicBool>,
-    pub empty_generics: GenericLookup,
-    /// Cache for type layouts: ConcreteType -> Arc<LayoutManager>
-    pub layout_cache: DashMap<ConcreteType, Arc<LayoutManager>>,
-    /// Cache for instance field layouts: (TypeDescription, GenericLookup) -> FieldLayoutManager
-    pub instance_field_layout_cache:
-        DashMap<(TypeDescription, GenericLookup), Arc<FieldLayoutManager>>,
-    /// Cache for virtual method resolution: (base_method, this_type, generics) -> resolved_method
-    pub vmt_cache: DashMap<(MethodDescription, TypeDescription, GenericLookup), MethodDescription>,
-    /// Cache for intrinsic checks: method -> is_intrinsic
-    pub intrinsic_cache: DashMap<MethodDescription, bool>,
-    /// Cache for intrinsic field checks: field -> is_intrinsic
-    pub intrinsic_field_cache: DashMap<FieldDescription, bool>,
-    /// Cache for type hierarchy checks: (child, parent) -> is_a result
-    pub hierarchy_cache: DashMap<(ConcreteType, ConcreteType), bool>,
-    pub intrinsic_registry: crate::vm::intrinsics::IntrinsicRegistry,
-    pub statics: StaticStorageManager,
-    #[cfg(feature = "multithreaded-gc")]
-    pub gc_coordinator: Arc<GCCoordinator>,
-    /// Cache for shared reflection objects: RuntimeType -> index
-    #[cfg(feature = "multithreaded-gc")]
-    pub shared_runtime_types: DashMap<RuntimeType, usize>,
-    #[cfg(feature = "multithreaded-gc")]
-    pub shared_runtime_types_rev: DashMap<usize, RuntimeType>,
-    #[cfg(feature = "multithreaded-gc")]
-    pub next_runtime_type_index: std::sync::atomic::AtomicUsize,
-    /// Cache for shared method reflection objects: (Method, Lookup) -> index
-    #[cfg(feature = "multithreaded-gc")]
-    pub shared_runtime_methods: DashMap<(MethodDescription, GenericLookup), usize>,
-    #[cfg(feature = "multithreaded-gc")]
-    pub shared_runtime_methods_rev: DashMap<usize, (MethodDescription, GenericLookup)>,
-    #[cfg(feature = "multithreaded-gc")]
-    pub next_runtime_method_index: std::sync::atomic::AtomicUsize,
-    /// Cache for shared field reflection objects: (Field, Lookup) -> index
-    #[cfg(feature = "multithreaded-gc")]
-    pub shared_runtime_fields: DashMap<(FieldDescription, GenericLookup), usize>,
-    #[cfg(feature = "multithreaded-gc")]
-    pub shared_runtime_fields_rev: DashMap<usize, (FieldDescription, GenericLookup)>,
-    #[cfg(feature = "multithreaded-gc")]
-    pub next_runtime_field_index: std::sync::atomic::AtomicUsize,
-}
-
-impl<'m> SharedGlobalState<'m> {
-    pub fn new(loader: &'m AssemblyLoader) -> Self {
-        let mut tracer = Tracer::new();
-        let intrinsic_registry =
-            crate::vm::intrinsics::IntrinsicRegistry::initialize(loader, Some(&mut tracer));
-
-        let intrinsic_cache = DashMap::new();
-        let intrinsic_field_cache = DashMap::new();
-
-        // Pre-populate intrinsic caches
-        for assembly in loader.assemblies() {
-            for type_def in &assembly.definition().type_definitions {
-                let td = TypeDescription::new(assembly, type_def);
-                for method in &type_def.methods {
-                    let md = MethodDescription {
-                        parent: td,
-                        method_resolution: td.resolution,
-                        method,
-                    };
-                    intrinsic_cache.insert(
-                        md,
-                        crate::vm::intrinsics::is_intrinsic(md, loader, &intrinsic_registry),
-                    );
-                }
-                for field in &type_def.fields {
-                    let fd = FieldDescription {
-                        parent: td,
-                        field_resolution: td.resolution,
-                        field,
-                    };
-                    intrinsic_field_cache.insert(
-                        fd,
-                        crate::vm::intrinsics::is_intrinsic_field(fd, loader, &intrinsic_registry),
-                    );
-                }
-            }
-        }
-
-        let tracer_enabled = Arc::new(std::sync::atomic::AtomicBool::new(tracer.is_enabled()));
-        let this = Self {
-            loader,
-            pinvoke: RwLock::new(NativeLibraries::new(loader.get_root())),
-            sync_blocks: SyncBlockManager::new(),
-            thread_manager: ThreadManager::new(),
-            metrics: RuntimeMetrics::new(),
-            tracer: Mutex::new(tracer),
-            tracer_enabled,
-            empty_generics: GenericLookup::default(),
-            layout_cache: DashMap::new(),
-            instance_field_layout_cache: DashMap::new(),
-            vmt_cache: DashMap::new(),
-            intrinsic_cache,
-            intrinsic_field_cache,
-            hierarchy_cache: DashMap::new(),
-            intrinsic_registry,
-            statics: StaticStorageManager::new(),
-            #[cfg(feature = "multithreaded-gc")]
-            gc_coordinator: Arc::new(GCCoordinator::new()),
-            #[cfg(feature = "multithreaded-gc")]
-            shared_runtime_types: DashMap::new(),
-            #[cfg(feature = "multithreaded-gc")]
-            shared_runtime_types_rev: DashMap::new(),
-            #[cfg(feature = "multithreaded-gc")]
-            next_runtime_type_index: std::sync::atomic::AtomicUsize::new(0),
-            #[cfg(feature = "multithreaded-gc")]
-            shared_runtime_methods: DashMap::new(),
-            #[cfg(feature = "multithreaded-gc")]
-            shared_runtime_methods_rev: DashMap::new(),
-            #[cfg(feature = "multithreaded-gc")]
-            next_runtime_method_index: std::sync::atomic::AtomicUsize::new(0),
-            #[cfg(feature = "multithreaded-gc")]
-            shared_runtime_fields: DashMap::new(),
-            #[cfg(feature = "multithreaded-gc")]
-            shared_runtime_fields_rev: DashMap::new(),
-            #[cfg(feature = "multithreaded-gc")]
-            next_runtime_field_index: std::sync::atomic::AtomicUsize::new(0),
-        };
-
-        this
-    }
-
-    pub fn get_cache_stats(&self) -> crate::vm::metrics::CacheStats {
-        self.metrics
-            .cache_statistics(crate::vm::metrics::CacheSizes {
-                layout_size: self.layout_cache.len(),
-                vmt_size: self.vmt_cache.len(),
-                intrinsic_size: self.intrinsic_cache.len(),
-                intrinsic_field_size: self.intrinsic_field_cache.len(),
-                hierarchy_size: self.hierarchy_cache.len(),
-                static_field_layout_size: self.statics.field_layout_cache.len(),
-                instance_field_layout_size: self.instance_field_layout_cache.len(),
-                assembly_type_info: (
-                    self.loader
-                        .type_cache_hits
-                        .load(std::sync::atomic::Ordering::Relaxed),
-                    self.loader
-                        .type_cache_misses
-                        .load(std::sync::atomic::Ordering::Relaxed),
-                    self.loader.type_cache_size(),
-                ),
-                assembly_method_info: (
-                    self.loader
-                        .method_cache_hits
-                        .load(std::sync::atomic::Ordering::Relaxed),
-                    self.loader
-                        .method_cache_misses
-                        .load(std::sync::atomic::Ordering::Relaxed),
-                    self.loader.method_cache_size(),
-                ),
-            })
-    }
-}
-
-/// GC-managed state local to a single thread's arena.
-pub struct ArenaLocalState<'gc> {
-    pub heap: HeapManager<'gc>,
-    pub runtime_asms: RefCell<HashMap<ResolutionS, ObjectRef<'gc>>>,
-    pub runtime_types: RefCell<HashMap<RuntimeType, ObjectRef<'gc>>>,
-    pub runtime_types_list: RefCell<Vec<RuntimeType>>,
-    pub runtime_methods: RefCell<Vec<(MethodDescription, GenericLookup)>>,
-    pub runtime_method_objs: RefCell<HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>>,
-    pub runtime_fields: RefCell<Vec<(FieldDescription, GenericLookup)>>,
-    pub runtime_field_objs: RefCell<HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>>,
-}
-
-unsafe impl<'gc> Collect for ArenaLocalState<'gc> {
-    fn trace(&self, cc: &Collection) {
-        self.heap.trace(cc);
-        for o in self.runtime_asms.borrow().values() {
-            o.trace(cc);
-        }
-        for o in self.runtime_types.borrow().values() {
-            o.trace(cc);
-        }
-        for o in self.runtime_method_objs.borrow().values() {
-            o.trace(cc);
-        }
-        for o in self.runtime_field_objs.borrow().values() {
-            o.trace(cc);
-        }
-    }
-}
-
-impl<'gc> Default for ArenaLocalState<'gc> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<'gc> ArenaLocalState<'gc> {
-    pub fn new() -> Self {
-        Self {
-            heap: HeapManager {
-                _all_objs: RefCell::new(HashSet::new()),
-                finalization_queue: RefCell::new(vec![]),
-                pending_finalization: RefCell::new(vec![]),
-                pinned_objects: RefCell::new(HashSet::new()),
-                gchandles: RefCell::new(vec![]),
-                processing_finalizer: Cell::new(false),
-                needs_full_collect: Cell::new(false),
-                #[cfg(feature = "multithreaded-gc")]
-                cross_arena_roots: RefCell::new(HashSet::new()),
-            },
-            runtime_asms: RefCell::new(HashMap::new()),
-            runtime_types: RefCell::new(HashMap::new()),
-            runtime_types_list: RefCell::new(vec![]),
-            runtime_methods: RefCell::new(vec![]),
-            runtime_method_objs: RefCell::new(HashMap::new()),
-            runtime_fields: RefCell::new(vec![]),
-            runtime_field_objs: RefCell::new(HashMap::new()),
-        }
     }
 }
 
@@ -416,8 +190,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     // careful with this, it always allocates a new slot
     fn insert_value(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {
         #[cfg(feature = "multithreaded-gc")]
-        crate::vm::gc::coordinator::record_allocation(value.size_bytes() + 16); // +16 for Gc/ThreadSafeLock overhead
-        let handle = Gc::new(gc, crate::vm::threadsafe_lock::ThreadSafeLock::new(value));
+        record_allocation(value.size_bytes() + 16); // +16 for Gc/ThreadSafeLock overhead
+        let handle = Gc::new(gc, ThreadSafeLock::new(value));
         self.execution.stack.push(StackSlotHandle(handle));
     }
 
@@ -1109,9 +883,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn tracer_enabled(&self) -> bool {
-        self.shared
-            .tracer_enabled
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.shared.tracer_enabled.load(Ordering::Relaxed)
     }
 
     pub fn indent(&self) -> usize {
@@ -1122,7 +894,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
     }
 
-    pub fn msg(&self, level: crate::vm::tracer::TraceLevel, fmt: fmt::Arguments) {
+    pub fn msg(&self, level: TraceLevel, fmt: fmt::Arguments) {
         self.shared.tracer.lock().msg(level, self.indent(), fmt);
     }
 
@@ -1185,11 +957,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         // Cache miss - perform check
         self.shared.metrics.record_intrinsic_cache_miss();
-        let result = crate::vm::intrinsics::is_intrinsic(
-            method,
-            self.shared.loader,
-            &self.shared.intrinsic_registry,
-        );
+        let result = is_intrinsic(method, self.shared.loader, &self.shared.intrinsic_registry);
 
         // Cache the result
         self.shared.intrinsic_cache.insert(method, result);
@@ -1206,11 +974,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         // Cache miss - perform check
         self.shared.metrics.record_intrinsic_field_cache_miss();
-        let result = crate::vm::intrinsics::is_intrinsic_field(
-            field,
-            self.shared.loader,
-            &self.shared.intrinsic_registry,
-        );
+        let result = is_intrinsic_field(field, self.shared.loader, &self.shared.intrinsic_registry);
 
         // Cache the result
         self.shared.intrinsic_field_cache.insert(field, result);
@@ -1219,11 +983,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     /// Get the layout of a type (with caching and metrics).
     pub fn type_layout_cached(&self, t: ConcreteType) -> Arc<LayoutManager> {
-        crate::value::layout::type_layout_with_metrics(
-            t,
-            &self.current_context(),
-            Some(&self.shared.metrics),
-        )
+        type_layout_with_metrics(t, &self.current_context(), Some(&self.shared.metrics))
     }
 
     // ========================================================================
