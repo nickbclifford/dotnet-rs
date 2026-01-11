@@ -111,10 +111,9 @@ impl SyncManagerOps for SyncBlockManager {
 
     fn get_or_create_sync_block(
         &self,
-        _object: &ObjectRef<'_>,
         get_index: impl FnOnce() -> Option<usize>,
         set_index: impl FnOnce(usize),
-    ) -> (usize, Arc<SyncBlock>) {
+    ) -> (usize, Arc<Self::Block>) {
         if let Some(index) = get_index() {
             let blocks = self.blocks.lock();
             if let Some(block) = blocks.get(&index) {

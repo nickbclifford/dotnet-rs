@@ -11,7 +11,7 @@
 use crate::{utils::static_res_from_file, vm::ExecutorResult};
 use clap::Parser;
 use dotnetdll::prelude::*;
-use std::{process::ExitCode, sync::Arc};
+use std::process::ExitCode;
 
 pub mod assemblies;
 pub mod types;
@@ -21,7 +21,7 @@ pub mod value;
 pub mod vm;
 
 use types::{members::MethodDescription, TypeDescription};
-use vm::state;
+use vm::{state, sync::Arc};
 
 #[derive(Parser, Debug)]
 #[command(

@@ -5,7 +5,7 @@ use crate::{
         TypeDescription,
     },
     value::object::ObjectRef,
-    vm::{context::ResolutionContext, metrics::RuntimeMetrics},
+    vm::{context::ResolutionContext, metrics::RuntimeMetrics, sync::Arc},
 };
 use dotnetdll::prelude::*;
 use enum_dispatch::enum_dispatch;
@@ -13,7 +13,6 @@ use gc_arena::{Collect, Collection};
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
-    sync::Arc,
 };
 
 #[enum_dispatch]

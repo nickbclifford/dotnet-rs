@@ -1,7 +1,7 @@
 use crate::types::{generics::GenericLookup, members::MethodDescription};
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
-use std::{rc::Rc, sync::Arc};
+use std::rc::Rc;
 
 pub mod context;
 mod exceptions;
@@ -24,6 +24,7 @@ pub use stack::*;
 
 use context::ResolutionContext;
 use state::SharedGlobalState;
+use sync::Arc;
 
 // I.12.3.2
 #[derive(Clone)]

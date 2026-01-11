@@ -1,6 +1,5 @@
-use crate::{
-    value::object::ObjectRef,
-    vm::{gc::coordinator::GCCoordinator, metrics::RuntimeMetrics, threading::ThreadManagerOps},
+use crate::vm::{
+    gc::coordinator::GCCoordinator, metrics::RuntimeMetrics, threading::ThreadManagerOps,
 };
 
 #[cfg(not(feature = "multithreading"))]
@@ -45,7 +44,6 @@ pub trait SyncManagerOps {
 
     fn get_or_create_sync_block(
         &self,
-        object: &ObjectRef<'_>,
         get_index: impl FnOnce() -> Option<usize>,
         set_index: impl FnOnce(usize),
     ) -> (usize, Arc<Self::Block>);

@@ -3,8 +3,12 @@ use crate::{
     utils::DebugStr,
     value::{layout::FieldLayoutManager, storage::FieldStorage},
     vm::{
-        context::ResolutionContext, gc::GCCoordinator, metrics::RuntimeMetrics,
-        threading::ThreadManagerOps, CallStack, GCHandle, MethodInfo,
+        context::ResolutionContext,
+        gc::GCCoordinator,
+        metrics::RuntimeMetrics,
+        sync::{Arc, AtomicU64, AtomicU8, Ordering},
+        threading::ThreadManagerOps,
+        CallStack, GCHandle, MethodInfo,
     },
     vm_trace,
 };
@@ -13,10 +17,6 @@ use parking_lot::{Condvar, Mutex, RwLock};
 use std::{
     collections::HashMap,
     fmt::{Debug, Formatter},
-    sync::{
-        atomic::{AtomicU64, AtomicU8, Ordering},
-        Arc,
-    },
 };
 
 /// Initialization states for type static constructors (.cctor).

@@ -436,7 +436,8 @@ pub type MutexGuard<'a, T> = crate::vm::sync::MutexGuard<'a, T>;
 #[cfg(not(feature = "multithreaded-gc"))]
 pub mod stubs {
     use crate::value::object::ObjectPtr;
-    use std::{collections::HashSet, sync::MutexGuard};
+    use crate::vm::sync::MutexGuard;
+    use std::collections::HashSet;
 
     #[derive(Debug, Clone)]
     pub enum GCCommand {

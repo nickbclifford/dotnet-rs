@@ -5,21 +5,12 @@ use crate::{
         TypeDescription,
     },
     utils::{decompose_type_source, static_res_from_file, ResolutionS},
+    vm::sync::{AtomicU64, Ordering, RwLock},
 };
 use dashmap::DashMap;
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
-use std::{
-    collections::HashMap,
-    error::Error,
-    fmt, fs,
-    path::PathBuf,
-    ptr,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        RwLock,
-    },
-};
+use std::{collections::HashMap, error::Error, fmt, fs, path::PathBuf, ptr};
 
 pub struct AssemblyLoader {
     assembly_root: String,
@@ -111,7 +102,7 @@ impl AssemblyLoader {
     }
 
     pub fn get_assembly(&self, name: &str) -> ResolutionS {
-        let res = { self.external.read().unwrap().get(name).copied() };
+        let res = { self.external.read().get(name).copied() };
         match res {
             None => {
                 let mut file = PathBuf::from(&self.assembly_root);
@@ -128,7 +119,6 @@ impl AssemblyLoader {
                     Some(a) => {
                         self.external
                             .write()
-                            .unwrap()
                             .insert(a.name.to_string(), Some(resolution));
                     }
                 }
@@ -143,7 +133,6 @@ impl AssemblyLoader {
                     Some(a) => {
                         self.external
                             .write()
-                            .unwrap()
                             .insert(a.name.to_string(), Some(resolution));
                     }
                 }
@@ -154,13 +143,7 @@ impl AssemblyLoader {
     }
 
     pub fn assemblies(&self) -> Vec<ResolutionS> {
-        self.external
-            .read()
-            .unwrap()
-            .values()
-            .flatten()
-            .copied()
-            .collect()
+        self.external.read().values().flatten().copied().collect()
     }
 
     pub fn type_cache_size(&self) -> usize {
@@ -175,7 +158,6 @@ impl AssemblyLoader {
         if let Some(a) = &resolution.assembly {
             self.external
                 .write()
-                .unwrap()
                 .insert(a.name.to_string(), Some(resolution));
         }
     }
@@ -224,7 +206,7 @@ impl AssemblyLoader {
         }
 
         let mut tried_mscorlib = false;
-        if self.external.read().unwrap().contains_key("mscorlib") {
+        if self.external.read().contains_key("mscorlib") {
             let res = self.get_assembly("mscorlib");
             if let Some(t) = self.try_find_in_assembly(res, name) {
                 return t;
@@ -232,19 +214,14 @@ impl AssemblyLoader {
             tried_mscorlib = true;
         }
 
-        if self
-            .external
-            .read()
-            .unwrap()
-            .contains_key("System.Private.CoreLib")
-        {
+        if self.external.read().contains_key("System.Private.CoreLib") {
             let res = self.get_assembly("System.Private.CoreLib");
             if let Some(t) = self.try_find_in_assembly(res, name) {
                 return t;
             }
         }
 
-        if self.external.read().unwrap().contains_key(SUPPORT_ASSEMBLY) {
+        if self.external.read().contains_key(SUPPORT_ASSEMBLY) {
             let res = self.get_assembly(SUPPORT_ASSEMBLY);
             if let Some(t) = self.try_find_in_assembly(res, name) {
                 return t;

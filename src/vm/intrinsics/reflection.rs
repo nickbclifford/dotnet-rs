@@ -693,84 +693,67 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             pop_args!(stack, [ObjectRef(obj)]);
             let target_type = stack.resolve_runtime_type(obj);
             match target_type {
-                RuntimeType::Type(td) | RuntimeType::Generic(td, _) => {
-                    if td.definition().extends.is_some() {
-                        // Get the first ancestor (the direct parent)
-                        let mut ancestors = stack.loader().ancestors(td);
-                        ancestors.next(); // skip self
-                        if let Some((base_td, base_generics)) = ancestors.next() {
-                            let _ctx = ResolutionContext::for_method(
-                                method,
-                                stack.loader(),
-                                generics,
-                                stack.shared.clone(),
-                            );
-                            let base_rt = if base_td.definition().extends.is_none()
-                                && base_td.type_name() == "System.Object"
-                            {
-                                RuntimeType::Object
-                            } else if base_generics.is_empty() {
-                                RuntimeType::Type(base_td)
-                            } else {
-                                // Convert member type generic parameters to runtime types
-                                let runtime_generics: Vec<RuntimeType> = base_generics
-                                    .iter()
-                                    .map(|mt| {
-                                        // Wrap MemberType in MethodType::Base to convert it
-                                        let method_type = match mt {
-                                            MemberType::Base(b) => {
-                                                // We need to convert BaseType<MemberType> to a RuntimeType
-                                                // For now, let's use decompose_type_source approach on the base type
-                                                match &**b {
-                                                    BaseType::Type { source, .. } => {
-                                                        let (ut, sub_generics) =
-                                                            decompose_type_source(source);
-                                                        let sub_td = stack
-                                                            .loader()
-                                                            .locate_type(td.resolution, ut);
-                                                        if sub_generics.is_empty() {
-                                                            RuntimeType::Type(sub_td)
-                                                        } else {
-                                                            // Recursively handle generics - for now, just use Type
-                                                            RuntimeType::Type(sub_td)
-                                                        }
-                                                    }
-                                                    BaseType::Object => RuntimeType::Object,
-                                                    BaseType::String => RuntimeType::String,
-                                                    BaseType::Boolean => RuntimeType::Boolean,
-                                                    BaseType::Char => RuntimeType::Char,
-                                                    BaseType::Int8 => RuntimeType::Int8,
-                                                    BaseType::UInt8 => RuntimeType::UInt8,
-                                                    BaseType::Int16 => RuntimeType::Int16,
-                                                    BaseType::UInt16 => RuntimeType::UInt16,
-                                                    BaseType::Int32 => RuntimeType::Int32,
-                                                    BaseType::UInt32 => RuntimeType::UInt32,
-                                                    BaseType::Int64 => RuntimeType::Int64,
-                                                    BaseType::UInt64 => RuntimeType::UInt64,
-                                                    BaseType::Float32 => RuntimeType::Float32,
-                                                    BaseType::Float64 => RuntimeType::Float64,
-                                                    BaseType::IntPtr => RuntimeType::IntPtr,
-                                                    BaseType::UIntPtr => RuntimeType::UIntPtr,
-                                                    _ => RuntimeType::Object, // Fallback
-                                                }
-                                            }
-                                            MemberType::TypeGeneric(i) => {
-                                                RuntimeType::TypeParameter {
-                                                    owner: td,
-                                                    index: *i as u16,
-                                                }
-                                            }
-                                        };
-                                        method_type
-                                    })
-                                    .collect();
-                                RuntimeType::Generic(base_td, runtime_generics)
-                            };
-                            let rt_obj = stack.get_runtime_type(gc, base_rt);
-                            push!(ObjectRef(rt_obj));
+                RuntimeType::Type(td) | RuntimeType::Generic(td, _)
+                    if td.definition().extends.is_some() =>
+                {
+                    // Get the first ancestor (the direct parent)
+                    let mut ancestors = stack.loader().ancestors(td);
+                    ancestors.next(); // skip self
+                    if let Some((base_td, base_generics)) = ancestors.next() {
+                        let base_rt = if base_td.definition().extends.is_none()
+                            && base_td.type_name() == "System.Object"
+                        {
+                            RuntimeType::Object
+                        } else if base_generics.is_empty() {
+                            RuntimeType::Type(base_td)
                         } else {
-                            push!(null());
-                        }
+                            // Convert member type generic parameters to runtime types
+                            let runtime_generics: Vec<RuntimeType> = base_generics
+                                .iter()
+                                .map(|mt| match mt {
+                                    MemberType::Base(b) => {
+                                        match &**b {
+                                            BaseType::Type { source, .. } => {
+                                                let (ut, sub_generics) =
+                                                    decompose_type_source(source);
+                                                let sub_td =
+                                                    stack.loader().locate_type(td.resolution, ut);
+                                                if sub_generics.is_empty() {
+                                                    RuntimeType::Type(sub_td)
+                                                } else {
+                                                    // TODO: properly handle generic types
+                                                    RuntimeType::Type(sub_td)
+                                                }
+                                            }
+                                            BaseType::Object => RuntimeType::Object,
+                                            BaseType::String => RuntimeType::String,
+                                            BaseType::Boolean => RuntimeType::Boolean,
+                                            BaseType::Char => RuntimeType::Char,
+                                            BaseType::Int8 => RuntimeType::Int8,
+                                            BaseType::UInt8 => RuntimeType::UInt8,
+                                            BaseType::Int16 => RuntimeType::Int16,
+                                            BaseType::UInt16 => RuntimeType::UInt16,
+                                            BaseType::Int32 => RuntimeType::Int32,
+                                            BaseType::UInt32 => RuntimeType::UInt32,
+                                            BaseType::Int64 => RuntimeType::Int64,
+                                            BaseType::UInt64 => RuntimeType::UInt64,
+                                            BaseType::Float32 => RuntimeType::Float32,
+                                            BaseType::Float64 => RuntimeType::Float64,
+                                            BaseType::IntPtr => RuntimeType::IntPtr,
+                                            BaseType::UIntPtr => RuntimeType::UIntPtr,
+                                            _ => RuntimeType::Object, // Fallback
+                                        }
+                                    }
+                                    MemberType::TypeGeneric(i) => RuntimeType::TypeParameter {
+                                        owner: td,
+                                        index: *i as u16,
+                                    },
+                                })
+                                .collect();
+                            RuntimeType::Generic(base_td, runtime_generics)
+                        };
+                        let rt_obj = stack.get_runtime_type(gc, base_rt);
+                        push!(ObjectRef(rt_obj));
                     } else {
                         push!(null());
                     }

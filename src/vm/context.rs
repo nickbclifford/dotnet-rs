@@ -7,15 +7,12 @@ use crate::{
     },
     utils::{decompose_type_source, ResolutionS},
     value::object::ObjectHandle,
-    vm::state::SharedGlobalState,
+    vm::{state::SharedGlobalState, sync::Arc},
 };
 use dotnetdll::prelude::{
     BaseType, FieldSource, MemberType, MethodType, TypeSource, UserMethod, UserType, ValueKind,
 };
-use std::{
-    collections::{HashSet, VecDeque},
-    sync::Arc,
-};
+use std::collections::{HashSet, VecDeque};
 
 #[derive(Clone)]
 pub struct ResolutionContext<'a, 'm> {

@@ -18,7 +18,7 @@ use crate::{
         },
         metrics::{CacheSizes, CacheStats, RuntimeMetrics},
         pinvoke::NativeLibraries,
-        sync::SyncBlockManager,
+        sync::{Arc, AtomicBool, AtomicUsize, Ordering, SyncBlockManager},
         threading::ThreadManager,
         tracer::Tracer,
         HeapManager,
@@ -30,10 +30,6 @@ use parking_lot::{Mutex, RwLock};
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
-    sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc,
-    },
 };
 
 /// Thread-safe shared state that does not contain any GC-managed pointers.

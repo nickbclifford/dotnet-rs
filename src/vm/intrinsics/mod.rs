@@ -44,12 +44,12 @@ use crate::{
         members::{FieldDescription, MethodDescription},
     },
     value::{object::ObjectRef, StackValue},
-    vm::{context::ResolutionContext, tracer::Tracer, CallStack, GCHandle, StepResult},
+    vm::{context::ResolutionContext, sync::Arc, tracer::Tracer, CallStack, GCHandle, StepResult},
     vm_trace_intrinsic,
 };
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use phf::phf_set;
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 pub mod array_ops;
 pub mod gc;

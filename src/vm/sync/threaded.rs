@@ -1,11 +1,8 @@
-use crate::{
-    value::object::ObjectRef,
-    vm::{
-        gc::coordinator::GCCoordinator,
-        metrics::RuntimeMetrics,
-        sync::{SyncBlockOps, SyncManagerOps},
-        threading::ThreadManagerOps,
-    },
+use crate::vm::{
+    gc::coordinator::GCCoordinator,
+    metrics::RuntimeMetrics,
+    sync::{SyncBlockOps, SyncManagerOps},
+    threading::ThreadManagerOps,
 };
 use parking_lot::{Condvar, Mutex};
 use std::{collections::HashMap, sync::Arc};
@@ -276,10 +273,9 @@ impl SyncManagerOps for SyncBlockManager {
 
     fn get_or_create_sync_block(
         &self,
-        _object: &ObjectRef<'_>,
         get_index: impl FnOnce() -> Option<usize>,
         set_index: impl FnOnce(usize),
-    ) -> (usize, Arc<SyncBlock>) {
+    ) -> (usize, Arc<Self::Block>) {
         let mut blocks = self.blocks.lock();
 
         if let Some(index) = get_index() {

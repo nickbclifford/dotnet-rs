@@ -3,7 +3,7 @@ use crate::{
     types::{generics::GenericLookup, members::MethodDescription},
     value::object::ObjectRef,
     vm::{
-        sync::{AtomicI32, Ordering, SyncBlockOps, SyncManagerOps},
+        sync::{Arc, AtomicI32, Ordering, SyncBlockOps, SyncManagerOps},
         CallStack, GCHandle, StepResult,
     },
     vm_pop, vm_push,
@@ -77,6 +77,22 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+fn get_or_create_sync_block<'gc, T: SyncManagerOps>(
+    manager: &T,
+    obj_ref: ObjectRef<'gc>,
+    gc: GCHandle<'gc>,
+) -> Arc<T::Block> {
+    let (_index, result) = manager.get_or_create_sync_block(
+        || obj_ref.as_object(|o| o.sync_block_index),
+        |new_index| {
+            obj_ref.as_object_mut(gc, |o| {
+                o.sync_block_index = Some(new_index);
+            });
+        },
+    );
+    result
+}
+
 /// System.Threading.Monitor::ReliableEnter(object, ref bool)
 pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
@@ -94,15 +110,7 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
             "Monitor.ReliableEnter called from unregistered thread"
         );
 
-        let (_index, sync_block) = stack.shared.sync_blocks.get_or_create_sync_block(
-            &obj_ref,
-            || obj_ref.as_object(|o| o.sync_block_index),
-            |new_index| {
-                obj_ref.as_object_mut(gc, |o| {
-                    o.sync_block_index = Some(new_index);
-                });
-            },
-        );
+        let sync_block = get_or_create_sync_block(&stack.shared.sync_blocks, obj_ref, gc);
 
         while !stack.shared.sync_blocks.try_enter_block(
             sync_block.clone(),
@@ -139,15 +147,7 @@ pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc>(
             "Monitor.TryEnter_FastPath called from unregistered thread"
         );
 
-        let (_index, sync_block) = stack.shared.sync_blocks.get_or_create_sync_block(
-            &obj_ref,
-            || obj_ref.as_object(|o| o.sync_block_index),
-            |new_index| {
-                obj_ref.as_object_mut(gc, |o| {
-                    o.sync_block_index = Some(new_index);
-                });
-            },
-        );
+        let sync_block = get_or_create_sync_block(&stack.shared.sync_blocks, obj_ref, gc);
         let success = sync_block.try_enter(thread_id);
         vm_push!(stack, gc, Int32(if success { 1 } else { 0 }));
     } else {
@@ -174,15 +174,7 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
             "Monitor.TryEnter called from unregistered thread"
         );
 
-        let (_index, sync_block) = stack.shared.sync_blocks.get_or_create_sync_block(
-            &obj_ref,
-            || obj_ref.as_object(|o| o.sync_block_index),
-            |new_index| {
-                obj_ref.as_object_mut(gc, |o| {
-                    o.sync_block_index = Some(new_index);
-                });
-            },
-        );
+        let sync_block = get_or_create_sync_block(&stack.shared.sync_blocks, obj_ref, gc);
 
         #[cfg(feature = "multithreaded-gc")]
         let success = sync_block.enter_with_timeout_safe(
@@ -222,15 +214,7 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
             "Monitor.TryEnter called from unregistered thread"
         );
 
-        let (_index, sync_block) = stack.shared.sync_blocks.get_or_create_sync_block(
-            &obj_ref,
-            || obj_ref.as_object(|o| o.sync_block_index),
-            |new_index| {
-                obj_ref.as_object_mut(gc, |o| {
-                    o.sync_block_index = Some(new_index);
-                });
-            },
-        );
+        let sync_block = get_or_create_sync_block(&stack.shared.sync_blocks, obj_ref, gc);
 
         #[cfg(feature = "multithreaded-gc")]
         let success = sync_block.enter_with_timeout_safe(

@@ -19,7 +19,7 @@ use crate::{
         intrinsics::{is_intrinsic, is_intrinsic_field, reflection::RuntimeType},
         pinvoke::NativeLibraries,
         state::{ArenaLocalState, SharedGlobalState},
-        sync::{MutexGuard, RwLockReadGuard, RwLockWriteGuard},
+        sync::{Arc, MutexGuard, Ordering, RwLockReadGuard, RwLockWriteGuard},
         threading::lock::ThreadSafeLock,
         tracer::{TraceLevel, Tracer},
         MethodInfo, MethodState, StepResult,
@@ -32,7 +32,6 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::{self, Debug},
     ptr::NonNull,
-    sync::{atomic::Ordering, Arc},
 };
 
 #[cfg(feature = "multithreaded-gc")]
