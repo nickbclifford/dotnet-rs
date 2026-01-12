@@ -159,17 +159,19 @@ impl FieldStorage {
             return self.get_field_local(owner, field).to_vec();
         }
 
+        macro_rules! load_atomic {
+            ($ty:ty) => {
+                unsafe { (*(ptr as *const $ty)).load(ordering) }
+                    .to_ne_bytes()
+                    .to_vec()
+            };
+        }
+
         match size {
-            1 => vec![unsafe { (*(ptr as *const AtomicU8)).load(ordering) }],
-            2 => unsafe { (*(ptr as *const AtomicU16)).load(ordering) }
-                .to_ne_bytes()
-                .to_vec(),
-            4 => unsafe { (*(ptr as *const AtomicU32)).load(ordering) }
-                .to_ne_bytes()
-                .to_vec(),
-            8 => unsafe { (*(ptr as *const AtomicU64)).load(ordering) }
-                .to_ne_bytes()
-                .to_vec(),
+            1 => load_atomic!(AtomicU8),
+            2 => load_atomic!(AtomicU16),
+            4 => load_atomic!(AtomicU32),
+            8 => load_atomic!(AtomicU64),
             _ => self.get_field_local(owner, field).to_vec(),
         }
     }
@@ -211,21 +213,19 @@ impl FieldStorage {
             }
             return;
         }
-
+        
+        macro_rules! store_atomic {
+            ($t:ty as $atomic_t:ty) => {{
+                let val = <$t>::from_ne_bytes(value.try_into().unwrap());
+                unsafe { (*(ptr as *mut $atomic_t)).store(val, ordering) }
+            }};
+        }
+        
         match size {
-            1 => unsafe { (*(ptr as *const AtomicU8)).store(value[0], ordering) },
-            2 => unsafe {
-                let val = u16::from_ne_bytes(value.try_into().unwrap());
-                (*(ptr as *const AtomicU16)).store(val, ordering)
-            },
-            4 => unsafe {
-                let val = u32::from_ne_bytes(value.try_into().unwrap());
-                (*(ptr as *const AtomicU32)).store(val, ordering)
-            },
-            8 => unsafe {
-                let val = u64::from_ne_bytes(value.try_into().unwrap());
-                (*(ptr as *const AtomicU64)).store(val, ordering)
-            },
+            1 => store_atomic!(u8 as AtomicU8),
+            2 => store_atomic!(u16 as AtomicU16),
+            4 => store_atomic!(u32 as AtomicU32),
+            8 => store_atomic!(u64 as AtomicU64),
             _ => unsafe {
                 std::ptr::copy_nonoverlapping(value.as_ptr(), ptr, size);
             },

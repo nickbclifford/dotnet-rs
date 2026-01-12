@@ -5,10 +5,7 @@ use dotnet_rs::{
     vm::{self, state},
 };
 use dotnetdll::prelude::*;
-use std::{
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::{io, path::{Path, PathBuf}, process::Command};
 
 #[cfg(feature = "multithreading")]
 use dotnet_rs::vm::threading::ThreadManagerOps;
@@ -65,21 +62,21 @@ impl TestHarness {
             .path()
     }
 
-    pub fn build(&self, fixture_path: &Path) -> PathBuf {
+    pub fn build(&self, fixture_path: &Path) -> io::Result<PathBuf> {
         let file_name = fixture_path.file_stem().unwrap().to_str().unwrap();
         let output_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("target")
             .join("dotnet-fixtures")
             .join(file_name);
 
-        let absolute_file = std::fs::canonicalize(fixture_path).unwrap();
+        let absolute_file = std::fs::canonicalize(fixture_path)?;
         let dll_path = output_dir.join("SingleFile.dll");
 
         if dll_path.exists() {
-            let source_mtime = std::fs::metadata(fixture_path).unwrap().modified().unwrap();
-            let dll_mtime = std::fs::metadata(&dll_path).unwrap().modified().unwrap();
+            let source_mtime = std::fs::metadata(fixture_path)?.modified()?;
+            let dll_mtime = std::fs::metadata(&dll_path)?.modified()?;
             if source_mtime <= dll_mtime {
-                return dll_path;
+                return Ok(dll_path);
             }
         }
 
@@ -95,15 +92,14 @@ impl TestHarness {
                     output_dir.join("obj").display()
                 ),
             ])
-            .status()
-            .expect("failed to run dotnet build");
+            .status()?;
         assert!(
             status.success(),
             "dotnet build failed for {:?}",
             fixture_path
         );
 
-        dll_path
+        Ok(dll_path)
     }
 
     pub fn run(&self, dll_path: &Path) -> u8 {
@@ -177,7 +173,7 @@ fn test_cache_observability() {
     let harness = TestHarness::get();
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gc_finalization_42.cs");
-    let dll = harness.build(&fixture);
+    let dll = harness.build(&fixture).unwrap();
 
     let dll_path_str = dll.to_str().unwrap().to_string();
     let resolution = static_res_from_file(&dll_path_str);
@@ -235,7 +231,7 @@ fn test_cache_observability() {
 fn hello_world() {
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/debug_fixtures/hello_world_0.cs");
-    let dll_path = harness.build(fixture_path);
+    let dll_path = harness.build(fixture_path).unwrap();
     let exit_code = harness.run(&dll_path);
     assert_eq!(exit_code, 0);
 }
@@ -253,7 +249,7 @@ fn test_multiple_arenas_basic() {
 
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/basic_42.cs");
-    let dll_path = harness.build(fixture_path);
+    let dll_path = harness.build(fixture_path).unwrap();
 
     // Spawn multiple threads, each creating its own arena and running the same program
     let handles: Vec<_> = (0..3)
@@ -280,7 +276,7 @@ fn test_multiple_arenas_with_gc() {
 
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/gc_finalization_42.cs");
-    let dll_path = harness.build(fixture_path);
+    let dll_path = harness.build(fixture_path).unwrap();
 
     // Run GC tests in parallel threads to test cross-arena coordination
     let handles: Vec<_> = (0..3)
@@ -307,7 +303,7 @@ fn test_multiple_arenas_static_fields() {
 
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/static_field_42.cs");
-    let dll_path = harness.build(fixture_path);
+    let dll_path = harness.build(fixture_path).unwrap();
 
     // Test that static fields work correctly across multiple arenas
     let handles: Vec<_> = (0..3)
@@ -334,7 +330,7 @@ fn test_multiple_arenas_allocation_stress() {
 
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/array_0.cs");
-    let dll_path = harness.build(fixture_path);
+    let dll_path = harness.build(fixture_path).unwrap();
 
     // Stress test allocation across multiple arenas simultaneously
     let handles: Vec<_> = (0..5)
@@ -364,7 +360,7 @@ fn test_arena_local_state_isolation() {
 
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/generic_0.cs");
-    let dll_path = harness.build(fixture_path);
+    let dll_path = harness.build(fixture_path).unwrap();
 
     // Test that arena-local state (reflection caches, etc.) is properly isolated
     let handles: Vec<_> = (0..4)
@@ -417,7 +413,7 @@ fn test_multiple_arenas_simple() {
 
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/threading_simple_0.cs");
-    let dll_path = harness.build(fixture_path);
+    let dll_path = harness.build(fixture_path).unwrap();
 
     let shared = Arc::new(state::SharedGlobalState::new(harness.loader));
     let resolution = static_res_from_file(dll_path.to_str().unwrap());
@@ -507,7 +503,7 @@ fn test_reflection_race_condition() {
 
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/reflection_stress_0.cs");
-    let dll_path = harness.build(fixture_path);
+    let dll_path = harness.build(fixture_path).unwrap();
 
     let shared = Arc::new(state::SharedGlobalState::new(harness.loader));
     let resolution = static_res_from_file(dll_path.to_str().unwrap());
@@ -587,7 +583,7 @@ fn test_volatile_sharing() {
     use std::thread;
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/volatile_sharing_42.cs");
-    let dll_path = harness.build(fixture_path);
+    let dll_path = harness.build(fixture_path).unwrap();
 
     let shared = std::sync::Arc::new(state::SharedGlobalState::new(harness.loader));
 
@@ -670,7 +666,7 @@ fn test_allocation_pressure_triggers_collection() {
 fn test_managed_ptr_size() {
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/managed_ptr_size_0.cs");
-    let dll_path = harness.build(fixture_path);
+    let dll_path = harness.build(fixture_path).unwrap();
     let exit_code = harness.run(&dll_path);
     assert_eq!(
         exit_code, 0,
@@ -682,7 +678,7 @@ fn test_managed_ptr_size() {
 fn test_managed_ptr_unsafe_ops() {
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/managed_ptr_unsafe_ops_0.cs");
-    let dll_path = harness.build(fixture_path);
+    let dll_path = harness.build(fixture_path).unwrap();
     let exit_code = harness.run(&dll_path);
     assert_eq!(exit_code, 0, "ManagedPtr unsafe ops test failed");
 }
