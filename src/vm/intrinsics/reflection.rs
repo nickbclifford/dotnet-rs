@@ -629,7 +629,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             // In a real VM, this would check if the type is abstract, has a ctor, etc.
             Some(StepResult::InstructionStepped)
         }
-        ("GetAssembly", 0) => {
+        ("GetAssembly" | "get_Assembly", 0) => {
             pop_args!(stack, [ObjectRef(obj)]);
 
             let target_type = stack.resolve_runtime_type(obj);
@@ -669,7 +669,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             push!(ObjectRef(v));
             Some(StepResult::InstructionStepped)
         }
-        ("GetNamespace", 0) => {
+        ("GetNamespace" | "get_Namespace", 0) => {
             pop_args!(stack, [ObjectRef(obj)]);
             let target_type = stack.resolve_runtime_type(obj);
             match target_type {
@@ -683,13 +683,13 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             }
             Some(StepResult::InstructionStepped)
         }
-        ("GetName", 0) => {
+        ("GetName" | "get_Name", 0) => {
             pop_args!(stack, [ObjectRef(obj)]);
             let target_type = stack.resolve_runtime_type(obj);
             push!(string(target_type.get_name()));
             Some(StepResult::InstructionStepped)
         }
-        ("GetBaseType", 0) => {
+        ("GetBaseType" | "get_BaseType", 0) => {
             pop_args!(stack, [ObjectRef(obj)]);
             let target_type = stack.resolve_runtime_type(obj);
             match target_type {
@@ -762,14 +762,14 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             }
             Some(StepResult::InstructionStepped)
         }
-        ("GetIsGenericType", 0) => {
+        ("GetIsGenericType" | "get_IsGenericType", 0) => {
             pop_args!(stack, [ObjectRef(obj)]);
             let target_type = stack.resolve_runtime_type(obj);
             let is_generic = matches!(target_type, RuntimeType::Generic(_, _));
             push!(Int32(if is_generic { 1 } else { 0 }));
             Some(StepResult::InstructionStepped)
         }
-        ("GetGenericTypeDefinition", 0) => {
+        ("GetGenericTypeDefinition" | "get_GenericTypeDefinition", 0) => {
             pop_args!(stack, [ObjectRef(obj)]);
             let target_type = stack.resolve_runtime_type(obj);
             match target_type {
@@ -790,7 +790,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             }
             Some(StepResult::InstructionStepped)
         }
-        ("GetGenericArguments", 0) => {
+        ("GetGenericArguments" | "get_GenericArguments", 0) => {
             pop_args!(stack, [ObjectRef(obj)]);
             let target_type = stack.resolve_runtime_type(obj);
             let args = match target_type {
@@ -818,7 +818,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             push!(ObjectRef(obj));
             Some(StepResult::InstructionStepped)
         }
-        ("GetTypeHandle", 0) => {
+        ("GetTypeHandle" | "get_TypeHandle", 0) => {
             pop_args!(stack, [ObjectRef(obj)]);
 
             let rth = stack.loader().corlib_type("System.RuntimeTypeHandle");
@@ -1040,20 +1040,20 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
     let param_count = method.method.signature.parameters.len();
 
     let result = match (method_name, param_count) {
-        ("GetName", 0) => {
+        ("GetName" | "get_Name", 0) => {
             pop_args!(stack, [ObjectRef(obj)]);
             let (method, _) = stack.resolve_runtime_method(obj);
             push!(string(&method.method.name));
             Some(StepResult::InstructionStepped)
         }
-        ("GetDeclaringType", 0) => {
+        ("GetDeclaringType" | "get_DeclaringType", 0) => {
             pop_args!(stack, [ObjectRef(obj)]);
             let (method, _) = stack.resolve_runtime_method(obj);
             let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(method.parent));
             push!(ObjectRef(rt_obj));
             Some(StepResult::InstructionStepped)
         }
-        ("GetMethodHandle", 0) => {
+        ("GetMethodHandle" | "get_MethodHandle", 0) => {
             pop_args!(stack, [ObjectRef(obj)]);
 
             let rmh = stack.loader().corlib_type("System.RuntimeMethodHandle");
@@ -1086,20 +1086,20 @@ pub fn runtime_field_info_intrinsic_call<'gc, 'm: 'gc>(
     let param_count = method.method.signature.parameters.len();
 
     let result = match (method_name, param_count) {
-        ("GetName", 0) => {
+        ("GetName" | "get_Name", 0) => {
             pop_args!(stack, [ObjectRef(obj)]);
             let (field, _) = stack.resolve_runtime_field(obj);
             push!(string(&field.field.name));
             Some(StepResult::InstructionStepped)
         }
-        ("GetDeclaringType", 0) => {
+        ("GetDeclaringType" | "get_DeclaringType", 0) => {
             pop_args!(stack, [ObjectRef(obj)]);
             let (field, _) = stack.resolve_runtime_field(obj);
             let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(field.parent));
             push!(ObjectRef(rt_obj));
             Some(StepResult::InstructionStepped)
         }
-        ("GetFieldHandle", 0) => {
+        ("GetFieldHandle" | "get_FieldHandle", 0) => {
             pop_args!(stack, [ObjectRef(obj)]);
 
             let rfh = stack.loader().corlib_type("System.RuntimeFieldHandle");

@@ -227,15 +227,30 @@ pub fn intrinsic_string_index_of<'gc, 'm: 'gc>(
 }
 
 /// System.String::Substring(int)
+/// System.String::Substring(int, int)
 pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
-    _method: MethodDescription,
+    method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, [Int32(start_at)]);
+    let (start_at, length) = if method.method.signature.parameters.len() == 1 {
+        pop_args!(stack, [Int32(start_at)]);
+        (start_at as usize, None)
+    } else {
+        pop_args!(stack, [Int32(length), Int32(start_at)]);
+        (start_at as usize, Some(length as usize))
+    };
+
     let val = vm_pop!(stack);
-    let value = with_string!(stack, gc, val, |s| s.split_at(start_at as usize).0.to_vec());
+    let value = with_string!(stack, gc, val, |s| {
+        let sub = &s[start_at..];
+        match length {
+            None => sub.to_vec(),
+            Some(l) => sub[..l].to_vec(),
+        }
+    });
+
     vm_push!(stack, gc, string(gc, CLRString::new(value)));
     StepResult::InstructionStepped
 }
@@ -256,13 +271,37 @@ pub fn intrinsic_string_is_null_or_empty<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+/// System.String::IsNullOrWhiteSpace(string)
+pub fn intrinsic_string_is_null_or_white_space<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let str_val = vm_pop!(stack);
+    let is_null_or_white_space = match &str_val {
+        StackValue::ObjectRef(ObjectRef(None)) => true,
+        _ => with_string!(stack, gc, str_val, |s| {
+            s.iter().all(|&c| {
+                char::from_u32(c as u32)
+                    .map(|c| c.is_whitespace())
+                    .unwrap_or(false)
+            })
+        }),
+    };
+    vm_push!(stack, gc, Int32(is_null_or_white_space as i32));
+    StepResult::InstructionStepped
+}
+
 pub fn intrinsic_field_string_empty<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
     _field: FieldDescription,
     _type_generics: Vec<ConcreteType>,
-) {
+    _is_address: bool,
+) -> StepResult {
     vm_push!(stack, gc, string(gc, CLRString::new(vec![])));
+    StepResult::InstructionStepped
 }
 
 /// System.String::CopyStringContent(string, int, string)

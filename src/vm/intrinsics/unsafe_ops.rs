@@ -591,6 +591,8 @@ pub fn intrinsic_field_intptr_zero<'gc, 'm: 'gc>(
     stack: &mut CallStack<'gc, 'm>,
     _field: FieldDescription,
     _type_generics: Vec<ConcreteType>,
-) {
+    _is_address: bool,
+) -> StepResult {
     stack.push_stack(_gc, StackValue::NativeInt(0));
+    StepResult::InstructionStepped
 }

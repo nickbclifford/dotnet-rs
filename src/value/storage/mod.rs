@@ -213,14 +213,14 @@ impl FieldStorage {
             }
             return;
         }
-        
+
         macro_rules! store_atomic {
             ($t:ty as $atomic_t:ty) => {{
                 let val = <$t>::from_ne_bytes(value.try_into().unwrap());
                 unsafe { (*(ptr as *mut $atomic_t)).store(val, ordering) }
             }};
         }
-        
+
         match size {
             1 => store_atomic!(u8 as AtomicU8),
             2 => store_atomic!(u16 as AtomicU16),

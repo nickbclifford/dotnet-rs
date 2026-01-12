@@ -5,7 +5,11 @@ use dotnet_rs::{
     vm::{self, state},
 };
 use dotnetdll::prelude::*;
-use std::{io, path::{Path, PathBuf}, process::Command};
+use std::{
+    io,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 #[cfg(feature = "multithreading")]
 use dotnet_rs::vm::threading::ThreadManagerOps;
@@ -186,11 +190,11 @@ fn test_cache_observability() {
     // Some basic checks
     assert!(
         stats.intrinsic.size > 0,
-        "Intrinsic cache should be pre-populated (Phase 2 optimization)"
+        "Intrinsic cache should be pre-populated"
     );
     assert!(
         stats.intrinsic_field.size > 0,
-        "Intrinsic field cache should be pre-populated (Phase 2 optimization)"
+        "Intrinsic field cache should be pre-populated"
     );
 
     // Run it to see hit rates improve

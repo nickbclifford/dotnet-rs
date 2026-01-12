@@ -928,6 +928,31 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         self.shared.metrics.record_vmt_cache_miss();
 
+        // Check if the base method is a VirtualOverride intrinsic.
+        // If the runtime type (this_type) has an intrinsic override, prefer it.
+        use crate::vm::intrinsics::{classify_intrinsic, IntrinsicKind};
+
+        // First, check if this_type itself has an intrinsic method matching base_method
+        if let Some(this_method) = self.shared.loader.find_method_in_type(
+            this_type,
+            &base_method.method.name,
+            &base_method.method.signature,
+            base_method.resolution(),
+        ) {
+            // Check if this method is a VirtualOverride intrinsic
+            if let Some(metadata) = classify_intrinsic(
+                this_method,
+                self.shared.loader,
+                Some(&self.shared.intrinsic_registry),
+            ) {
+                if matches!(metadata.kind, IntrinsicKind::VirtualOverride) {
+                    self.shared.vmt_cache.insert(cache_key, this_method);
+                    return this_method;
+                }
+            }
+        }
+
+        // Standard virtual method resolution: search ancestors
         for (parent, _) in ctx.get_ancestors(this_type) {
             if let Some(method) = self.shared.loader.find_method_in_type(
                 parent,

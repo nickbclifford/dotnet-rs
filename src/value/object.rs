@@ -107,7 +107,7 @@ impl<'gc> ManagedPtrMetadata<'gc> {
 }
 
 /// Side-table for managed pointer metadata, indexed by byte offset in storage.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct ManagedPtrSideTable<'gc> {
     pub metadata: HashMap<usize, ManagedPtrMetadata<'gc>>,
 }
@@ -122,9 +122,7 @@ unsafe impl<'gc> Collect for ManagedPtrSideTable<'gc> {
 
 impl<'gc> ManagedPtrSideTable<'gc> {
     pub fn new() -> Self {
-        Self {
-            metadata: HashMap::new(),
-        }
+        Self::default()
     }
 
     pub fn insert(&mut self, offset: usize, metadata: ManagedPtrMetadata<'gc>) {
@@ -507,6 +505,13 @@ where
     }
 }
 
+fn reinterpret_i64_as_u64(data: StackValue) -> u64 {
+    match data {
+        StackValue::Int64(i) => i as u64, // Reinterpret bits, don't convert
+        other => panic!("invalid stack value {:?} for u64 reinterpretation", other),
+    }
+}
+
 impl<'gc> ValueType<'gc> {
     pub fn size_bytes(&self) -> usize {
         match self {
@@ -587,7 +592,7 @@ impl<'gc> CTSValue<'gc> {
             BaseType::Int32 => Self::Value(Int32(convert_num(data))),
             BaseType::UInt32 => Self::Value(UInt32(convert_num(data))),
             BaseType::Int64 => Self::Value(Int64(convert_i64(data))),
-            BaseType::UInt64 => Self::Value(UInt64(convert_i64(data))),
+            BaseType::UInt64 => Self::Value(UInt64(reinterpret_i64_as_u64(data))),
             BaseType::Float32 => Self::Value(Float32(match data {
                 StackValue::NativeFloat(f) => f as f32,
                 other => panic!("invalid stack value {:?} for float conversion", other),

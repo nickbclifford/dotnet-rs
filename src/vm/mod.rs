@@ -104,7 +104,7 @@ impl MethodInfo<'static> {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum StepResult {
     MethodReturned,
     MethodThrew,

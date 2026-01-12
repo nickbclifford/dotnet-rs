@@ -1,5 +1,5 @@
 use crate::{
-    types::{generics::GenericLookup, members::MethodDescription},
+    types::{generics::GenericLookup, members::MethodDescription, TypeDescription},
     utils::{decompose_type_source, is_ptr_aligned_to_field},
     value::{
         layout::{type_layout, FieldLayoutManager, HasLayout},
@@ -13,7 +13,7 @@ use crate::{
         intrinsics::*,
         sync::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering as AtomicOrdering},
         threading::ThreadManagerOps,
-        CallStack, GCHandle, MethodInfo, StepResult,
+        CallStack, GCHandle, MethodInfo, ResolutionContext, StepResult,
     },
     vm_expect_stack, vm_pop, vm_push, vm_trace, vm_trace_branch, vm_trace_field,
     vm_trace_instruction,
@@ -76,12 +76,23 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         (ctx.locate_method(method, ctx.generics), new_lookup)
     }
 
+    /// Dispatches a method call through the appropriate mechanism.
+    ///
+    /// Call priority order:
+    /// 1. Intrinsics (including DirectIntercept) - VM implementation always wins
+    /// 2. P/Invoke - External native methods
+    /// 3. Managed - CIL bytecode execution
+    ///
+    /// Note: DirectIntercept intrinsics are checked first, ensuring VM
+    /// implementation is used even when BCL implementation exists.
     fn dispatch_method(
         &mut self,
         gc: GCHandle<'gc>,
         method: MethodDescription,
         lookup: GenericLookup,
     ) -> StepResult {
+        // Check intrinsics first - this includes DirectIntercept methods
+        // that MUST bypass any BCL implementation
         if self.is_intrinsic_cached(method) {
             intrinsic_call(gc, self, method, &lookup)
         } else if method.method.pinvoke.is_some() {
@@ -95,6 +106,47 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             );
             StepResult::InstructionStepped
         }
+    }
+
+    /// Unified dispatch pipeline for method calls.
+    ///
+    /// This function provides a single, predictable entry point for all method
+    /// dispatch operations.
+    ///
+    /// Pipeline stages:
+    /// 1. Generic method resolution
+    /// 2. Virtual dispatch (if needed) - integrates with VirtualOverride intrinsics
+    /// 3. Final dispatch - intrinsics (DirectIntercept included) → P/Invoke → managed
+    ///
+    /// Parameters:
+    /// - `source`: The method source from the instruction
+    /// - `this_type`: Optional runtime type for virtual dispatch
+    /// - `ctx`: Optional resolution context (for constrained calls)
+    ///
+    /// Returns: StepResult indicating the outcome of the dispatch
+    fn unified_dispatch(
+        &mut self,
+        gc: GCHandle<'gc>,
+        source: &MethodSource,
+        this_type: Option<TypeDescription>,
+        ctx: Option<&ResolutionContext<'gc, 'm>>,
+    ) -> StepResult {
+        // Stage 1: Resolve generic method from instruction operand
+        let (base_method, lookup) = self.find_generic_method(source);
+
+        // Stage 2: Virtual dispatch if needed
+        let method = if let Some(runtime_type) = this_type {
+            // Virtual call: resolve based on runtime type
+            // resolve_virtual_method checks for VirtualOverride intrinsics
+            self.resolve_virtual_method(base_method, runtime_type, ctx)
+        } else {
+            // Static call: use method as-is
+            base_method
+        };
+
+        // Stage 3: Final dispatch through the standard pipeline
+        // DirectIntercept intrinsics are prioritized here
+        self.dispatch_method(gc, method, lookup)
     }
 
     pub fn step(&mut self, gc: GCHandle<'gc>) -> StepResult {
@@ -174,7 +226,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
 
         macro_rules! check_special_fields {
-            ($field:ident) => {
+            ($field:ident, $is_address:expr) => {
                 if $field.field.literal {
                     todo!(
                         "field {}::{} has literal",
@@ -191,14 +243,17 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     );
                 }
                 if self.is_intrinsic_field_cached($field) {
-                    intrinsic_field(
+                    let result = intrinsic_field(
                         gc,
                         self,
                         $field,
                         self.current_context().generics.type_generics.clone(),
+                        $is_address,
                     );
-                    self.increment_ip();
-                    return StepResult::InstructionStepped;
+                    if result == StepResult::InstructionStepped {
+                        self.increment_ip();
+                    }
+                    return result;
                 }
             };
         }
@@ -273,8 +328,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 conditional_branch!(!is_nullish!(pop!()), i)
             }
             Call { param0: source, .. } => {
-                let (method, lookup) = self.find_generic_method(source);
-                let result = self.dispatch_method(gc, method, lookup);
+                // Use unified dispatch pipeline for static calls
+                let result = self.unified_dispatch(gc, source, None, None);
 
                 if let StepResult::InstructionStepped = result {
                     if initial_frame_count != self.execution.frames.len() {
@@ -301,6 +356,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let declaration = self.current_context().locate_method(o.declaration, &lookup);
                     if method == declaration {
                         vm_trace!(self, "-- dispatching to {:?} --", target);
+                        // Note: Uses dispatch_method directly since method is already resolved
+                        // via explicit override lookup (static interface dispatch pattern)
                         let result = self.dispatch_method(gc, target, lookup);
                         if let StepResult::InstructionStepped = result {
                             if initial_frame_count == self.execution.frames.len() {
@@ -850,8 +907,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 }
             }
             CallVirtual { param0: source, .. } => {
-                let (base_method, lookup) = self.find_generic_method(source);
+                // Use unified dispatch pipeline for virtual calls
+                // Note: We still need to pop args to extract this_type before dispatch
 
+                // Determine number of arguments to extract this_type
+                let (base_method, _) = self.find_generic_method(source);
                 let num_args = 1 + base_method.method.signature.parameters.len();
                 let mut args = Vec::new();
                 for _ in 0..num_args {
@@ -859,7 +919,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 }
                 args.reverse();
 
-                // value types are passed as managed pointers (I.8.9.7)
+                // Extract runtime type from this argument (value types are passed as managed pointers - I.8.9.7)
                 let this_value = args[0].clone();
                 let this_type = match this_value {
                     StackValue::ObjectRef(ObjectRef(None)) => {
@@ -874,12 +934,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 // TODO: check explicit overrides
 
-                let method = self.resolve_virtual_method(base_method, this_type, None);
-
+                // Push arguments back and dispatch
                 for a in args {
                     push!(a);
                 }
-                let result = self.dispatch_method(gc, method, lookup);
+                let result = self.unified_dispatch(gc, source, Some(this_type), None);
 
                 if let StepResult::InstructionStepped = result {
                     if initial_frame_count != self.execution.frames.len() {
@@ -974,6 +1033,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 for arg in args {
                     push!(arg);
                 }
+
+                // Note: CallVirtualConstrained uses dispatch_method directly
+                // instead of unified_dispatch because it performs custom method resolution
+                // (boxing value types, constraint-specific lookup) that doesn't fit the
+                // standard virtual dispatch pattern. The method is already fully resolved here.
                 let result = self.dispatch_method(gc, method, lookup);
 
                 if let StepResult::InstructionStepped = result {
@@ -1162,10 +1226,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 volatile,
                 ..
             } => {
-                let parent = pop!();
                 let (field, lookup) = self.locate_field(*source);
 
-                check_special_fields!(field);
+                check_special_fields!(field, false);
+
+                let parent = pop!();
 
                 let ctx = self
                     .current_context()
@@ -1306,7 +1371,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadFieldAddress(source) => {
                 let (field, lookup) = self.locate_field(*source);
                 let name = &field.field.name;
+
+                check_special_fields!(field, true);
+
                 let parent = pop!();
+
                 let ctx = self
                     .current_context()
                     .for_type_with_generics(field.parent, &lookup);
@@ -1380,10 +1449,22 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadFieldSkipNullCheck(_) => todo!("no.nullcheck ldfld"),
             LoadLength => {
                 vm_expect_stack!(let ObjectRef(obj) = pop!());
-                if obj.0.is_none() {
+                let h = if let Some(h) = obj.0 {
+                    h
+                } else {
                     return self.throw_by_name(gc, "System.NullReferenceException");
-                }
-                let len = obj.as_vector(|a| a.layout.length as isize);
+                };
+                let inner = h.borrow();
+                let len = match &inner.storage {
+                    HeapStorage::Vec(v) => v.layout.length as isize,
+                    HeapStorage::Str(s) => s.len() as isize,
+                    HeapStorage::Obj(o) => {
+                        panic!("ldlen called on Obj: {:?}", o.description.type_name());
+                    }
+                    HeapStorage::Boxed(_) => {
+                        panic!("ldlen called on Boxed value (expected Vec or Str)");
+                    }
+                };
                 push!(NativeInt(len));
             }
             LoadObject {
@@ -1413,7 +1494,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     return StepResult::InstructionStepped;
                 }
 
-                check_special_fields!(field);
+                check_special_fields!(field, false);
                 let ctx = self
                     .current_context()
                     .for_type_with_generics(field.parent, &lookup);
@@ -1573,6 +1654,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     vm_expect_stack!(let Int32(i) = pop!());
                     push!(NativeInt(i as isize));
                 } else {
+                    if self.is_intrinsic_cached(method) {
+                        return intrinsic_call(gc, self, method, &lookup);
+                    }
+
                     if self.initialize_static_storage(gc, parent, lookup.clone()) {
                         return StepResult::InstructionStepped;
                     }
