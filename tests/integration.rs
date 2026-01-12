@@ -152,7 +152,7 @@ macro_rules! fixture_test {
         #[test]
         fn $name() {
             let harness = TestHarness::get();
-            let dll_path = harness.build(Path::new($path));
+            let dll_path = harness.build(Path::new($path)).unwrap();
             let exit_code = harness.run(&dll_path);
             assert_eq!(
                 exit_code,
