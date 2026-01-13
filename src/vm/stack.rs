@@ -866,7 +866,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         if top == 0 {
             panic!("empty call stack");
         }
-        let handle = self.execution.stack[top - 1].clone();
+        let handle = self.execution.stack[top - 1];
         let value = self.get_slot(&handle);
         if self.tracer_enabled() {
             self.shared
