@@ -175,7 +175,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
         macro_rules! pop {
             () => {
-                vm_pop!(self)
+                vm_pop!(self, gc)
             };
         }
 

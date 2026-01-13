@@ -12,12 +12,12 @@ use std::{ptr, sync::atomic, thread};
 
 /// System.Threading.Monitor::Exit(object) - Releases the lock on an object.
 pub fn intrinsic_monitor_exit<'gc, 'm: 'gc>(
-    _gc: GCHandle<'gc>,
+    gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, [ObjectRef(obj_ref)]);
+    pop_args!(stack, gc, [ObjectRef(obj_ref)]);
 
     if obj_ref.0.is_some() {
         // Get the current thread ID from the call stack
@@ -57,6 +57,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
 ) -> StepResult {
     pop_args!(
         stack,
+        gc,
         [Int32(comparand), Int32(value), ManagedPtr(target_ptr)]
     );
 
@@ -100,8 +101,8 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let success_flag = vm_pop!(stack).as_ptr();
-    pop_args!(stack, [ObjectRef(obj_ref)]);
+    let success_flag = vm_pop!(stack, gc).as_ptr();
+    pop_args!(stack, gc, [ObjectRef(obj_ref)]);
 
     if obj_ref.0.is_some() {
         let thread_id = stack.thread_id.get();
@@ -138,7 +139,7 @@ pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, [ObjectRef(obj_ref)]);
+    pop_args!(stack, gc, [ObjectRef(obj_ref)]);
 
     if obj_ref.0.is_some() {
         let thread_id = stack.thread_id.get();
@@ -164,8 +165,8 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let success_flag = vm_pop!(stack).as_ptr();
-    pop_args!(stack, [Int32(timeout_ms), ObjectRef(obj_ref)]);
+    let success_flag = vm_pop!(stack, gc).as_ptr();
+    pop_args!(stack, gc, [Int32(timeout_ms), ObjectRef(obj_ref)]);
 
     if obj_ref.0.is_some() {
         let thread_id = stack.thread_id.get();
@@ -205,7 +206,7 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, [Int32(timeout_ms), ObjectRef(obj_ref)]);
+    pop_args!(stack, gc, [Int32(timeout_ms), ObjectRef(obj_ref)]);
 
     if obj_ref.0.is_some() {
         let thread_id = stack.thread_id.get();
@@ -243,7 +244,7 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let ptr = vm_pop!(stack).as_ptr() as *const ObjectRef<'gc>;
+    let ptr = vm_pop!(stack, gc).as_ptr() as *const ObjectRef<'gc>;
 
     let value = unsafe { ptr::read_volatile(ptr) };
     // Ensure acquire semantics to match .NET memory model
@@ -255,14 +256,14 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
 
 /// System.Threading.Volatile::Write(ref bool location, bool value)
 pub fn intrinsic_volatile_write_bool<'gc, 'm: 'gc>(
-    _gc: GCHandle<'gc>,
+    gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, [Int32(value)]);
+    pop_args!(stack, gc, [Int32(value)]);
     let as_bool = value as u8;
-    let src = vm_pop!(stack).as_ptr();
+    let src = vm_pop!(stack, gc).as_ptr();
 
     // Ensure release semantics to match .NET memory model
     atomic::fence(Ordering::Release);

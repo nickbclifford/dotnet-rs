@@ -1,7 +1,7 @@
 #[macro_export]
 macro_rules! vm_pop {
-    ($stack:expr) => {
-        $stack.pop_stack()
+    ($stack:expr, $gc:expr) => {
+        $stack.pop_stack($gc)
     };
 }
 
@@ -254,9 +254,9 @@ macro_rules! vm_trace_heap_snapshot {
 /// descriptive message if the stack value doesn't match the expected type.
 #[macro_export]
 macro_rules! pop_args {
-    ($stack:expr, [ $($variant:ident($name:ident)),+ $(,)? ]) => {
+    ($stack:expr, $gc:expr, [ $($variant:ident($name:ident)),+ $(,)? ]) => {
         $(
-            $crate::vm_expect_stack!(let $variant($name) = $crate::vm_pop!($stack));
+            $crate::vm_expect_stack!(let $variant($name) = $crate::vm_pop!($stack, $gc));
         )+
     };
 }

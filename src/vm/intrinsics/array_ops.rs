@@ -11,14 +11,14 @@ use crate::{
 };
 
 pub fn intrinsic_array_get_length<'gc, 'm: 'gc>(
-    _gc: GCHandle<'gc>,
+    gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, [ObjectRef(obj)]);
+    pop_args!(stack, gc, [ObjectRef(obj)]);
     let ObjectRef(Some(handle)) = obj else {
-        return stack.throw_by_name(_gc, "System.NullReferenceException");
+        return stack.throw_by_name(gc, "System.NullReferenceException");
     };
 
     let heap = handle.borrow();
@@ -27,19 +27,19 @@ pub fn intrinsic_array_get_length<'gc, 'm: 'gc>(
         _ => panic!("Not an array"),
     };
 
-    vm_push!(stack, _gc, Int32(len as i32));
+    vm_push!(stack, gc, Int32(len as i32));
     StepResult::InstructionStepped
 }
 
 pub fn intrinsic_array_get_rank<'gc, 'm: 'gc>(
-    _gc: GCHandle<'gc>,
+    gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, [ObjectRef(obj)]);
+    pop_args!(stack, gc, [ObjectRef(obj)]);
     let ObjectRef(Some(handle)) = obj else {
-        return stack.throw_by_name(_gc, "System.NullReferenceException");
+        return stack.throw_by_name(gc, "System.NullReferenceException");
     };
 
     let heap = handle.borrow();
@@ -48,21 +48,21 @@ pub fn intrinsic_array_get_rank<'gc, 'm: 'gc>(
         _ => panic!("Not an array"),
     };
 
-    vm_push!(stack, _gc, Int32(rank));
+    vm_push!(stack, gc, Int32(rank));
     StepResult::InstructionStepped
 }
 
 pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
-    _gc: GCHandle<'gc>,
+    gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
     // This handles GetValue(int index) or GetValue(params int[] indices) depending on which one is called
-    let arg = stack.pop_stack();
-    let this_val = stack.pop_stack();
+    let arg = stack.pop_stack(gc);
+    let this_val = stack.pop_stack(gc);
     let StackValue::ObjectRef(ObjectRef(Some(handle))) = this_val else {
-        return stack.throw_by_name(_gc, "System.NullReferenceException");
+        return stack.throw_by_name(gc, "System.NullReferenceException");
     };
 
     let index = match arg {
@@ -74,7 +74,7 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
                 panic!("Expected int array for indices");
             };
             if v.layout.length == 0 {
-                return stack.throw_by_name(_gc, "System.ArgumentException");
+                return stack.throw_by_name(gc, "System.ArgumentException");
             }
             // For now only support 1D access via the first index in the array
             let bytes = &v.get()[0..4];
@@ -89,7 +89,7 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
     };
 
     if index >= v.layout.length {
-        return stack.throw_by_name(_gc, "System.IndexOutOfRangeException");
+        return stack.throw_by_name(gc, "System.IndexOutOfRangeException");
     }
 
     let elem_size = v.layout.element_layout.size();
@@ -98,22 +98,22 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
     let ctx = stack.current_context();
     let val = CTSValue::read(&v.element, &ctx, &v.get()[start..end]).into_stack();
 
-    vm_push!(stack, _gc, val);
+    vm_push!(stack, gc, val);
     StepResult::InstructionStepped
 }
 
 pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
-    _gc: GCHandle<'gc>,
+    gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let index_arg = stack.pop_stack();
-    let value = stack.pop_stack();
-    let this_val = stack.pop_stack();
+    let index_arg = stack.pop_stack(gc);
+    let value = stack.pop_stack(gc);
+    let this_val = stack.pop_stack(gc);
 
     let StackValue::ObjectRef(ObjectRef(Some(handle))) = this_val else {
-        return stack.throw_by_name(_gc, "System.NullReferenceException");
+        return stack.throw_by_name(gc, "System.NullReferenceException");
     };
 
     let index = match index_arg {
@@ -125,7 +125,7 @@ pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
                 panic!("Expected int array for indices");
             };
             if v.layout.length == 0 {
-                return stack.throw_by_name(_gc, "System.ArgumentException");
+                return stack.throw_by_name(gc, "System.ArgumentException");
             }
             let bytes = &v.get()[0..4];
             i32::from_ne_bytes(bytes.try_into().unwrap()) as usize
@@ -133,13 +133,13 @@ pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
         _ => panic!("Invalid index type for SetValue: {:?}", index_arg),
     };
 
-    let mut heap = handle.borrow_mut(_gc);
+    let mut heap = handle.borrow_mut(gc);
     let HeapStorage::Vec(v) = &mut heap.storage else {
         panic!("Not an array");
     };
 
     if index >= v.layout.length {
-        return stack.throw_by_name(_gc, "System.IndexOutOfRangeException");
+        return stack.throw_by_name(gc, "System.IndexOutOfRangeException");
     }
 
     let elem_size = v.layout.element_layout.size();

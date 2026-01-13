@@ -40,7 +40,7 @@ use crate::{
     vm::gc::coordinator::record_allocation,
 };
 
-#[derive(Collect)]
+#[derive(Collect, Clone, Copy)]
 #[collect(no_drop)]
 pub struct StackSlotHandle<'gc>(Gc<'gc, ThreadSafeLock<StackValue<'gc>>>);
 
@@ -270,6 +270,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     fn set_slot(&self, gc: GCHandle<'gc>, handle: &StackSlotHandle<'gc>, value: StackValue<'gc>) {
+        #[cfg(feature = "multithreaded-gc")]
+        if matches!(value, StackValue::ValueType(_)) {
+            record_allocation(value.size_bytes());
+        }
         *handle.0.borrow_mut(gc) = value;
     }
 
@@ -439,17 +443,23 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         let mut args = vec![];
         for _ in 0..method.signature.parameters.len() {
-            args.push(self.pop_stack());
+            args.push(self.pop_stack(gc));
         }
 
         // first pushing the NewObject 'return value', then the value of the 'this' parameter
         if desc.is_value_type(&self.current_context()) {
-            self.push_stack(gc, value.clone());
+            self.push_stack(gc, value);
 
-            let owner = if let StackValue::ValueType(ref obj) = value {
-                Some(ManagedPtrOwner::Stack(NonNull::from(&**obj)))
-            } else {
-                None
+            // We need a pointer to the Object inside the ValueType on the stack.
+            // This is stable because it's behind a Gc-managed ThreadSafeLock.
+            let owner = unsafe {
+                let handle = &self.execution.stack[self.top_of_stack() - 1];
+                let stack_val_ptr = (*Gc::as_ptr(handle.0)).as_ptr();
+                if let StackValue::ValueType(ref stack_obj) = *stack_val_ptr {
+                    Some(ManagedPtrOwner::Stack(NonNull::from(&**stack_obj)))
+                } else {
+                    None
+                }
             };
 
             self.push_stack(
@@ -584,6 +594,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             None
         };
 
+        for i in frame.base.arguments..self.execution.stack.len() {
+            let handle = self.execution.stack[i];
+            self.set_slot(gc, &handle, StackValue::null());
+        }
         self.execution.stack.truncate(frame.base.arguments);
 
         if let Some(return_value) = return_value {
@@ -596,7 +610,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
     }
 
-    pub fn unwind_frame(&mut self, _gc: GCHandle<'gc>) {
+    pub fn unwind_frame(&mut self, gc: GCHandle<'gc>) {
         let frame = self
             .execution
             .frames
@@ -604,6 +618,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             .expect("unwind_frame called with empty stack");
         if frame.is_finalizer {
             self.local.heap.processing_finalizer.set(false);
+        }
+        for i in frame.base.arguments..self.execution.stack.len() {
+            let handle = self.execution.stack[i];
+            self.set_slot(gc, &handle, StackValue::null());
         }
         self.execution.stack.truncate(frame.base.arguments);
     }
@@ -766,7 +784,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     fn get_handle_location(&self, handle: &StackSlotHandle<'gc>) -> NonNull<u8> {
-        handle.0.borrow().data_location()
+        // SAFETY: We use as_ptr() to get a stable pointer to the StackValue.
+        // The StackValue is stable in memory because it's inside a Gc-managed ThreadSafeLock.
+        // However, the variant inside the lock could be changed if another thread (or this thread)
+        // calls borrow_mut(). CIL safety should prevent this for active byrefs.
+        unsafe {
+            let lock_ptr = Gc::as_ptr(handle.0);
+            (*(*lock_ptr).as_ptr()).data_location()
+        }
     }
 
     fn get_arg_handle(&self, index: usize) -> &StackSlotHandle<'gc> {
@@ -836,18 +861,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.current_frame_mut().stack_height += 1;
     }
 
-    pub fn pop_stack(&mut self) -> StackValue<'gc> {
+    pub fn pop_stack(&mut self, gc: GCHandle<'gc>) -> StackValue<'gc> {
         let top = self.top_of_stack();
         if top == 0 {
             panic!("empty call stack");
         }
-        let value = self.get_slot(&self.execution.stack[top - 1]);
+        let handle = self.execution.stack[top - 1].clone();
+        let value = self.get_slot(&handle);
         if self.tracer_enabled() {
             self.shared
                 .tracer
                 .lock()
                 .trace_stack_op(self.indent(), "POP", &format!("{:?}", value));
         }
+        // Zap the slot to avoid GC leaks
+        self.set_slot(gc, &handle, StackValue::null());
         self.current_frame_mut().stack_height -= 1;
         value
     }

@@ -51,6 +51,7 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
 ) -> StepResult {
     pop_args!(
         stack,
+        gc,
         [Int32(_culture_comparison), ValueType(b), ValueType(a)]
     );
 
@@ -67,7 +68,7 @@ pub fn intrinsic_span_get_item<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, [Int32(index), ManagedPtr(m)]);
+    pop_args!(stack, gc, [Int32(index), ManagedPtr(m)]);
 
     if !m.inner_type.type_name().contains("Span") {
         panic!("invalid type on stack");
@@ -118,7 +119,7 @@ pub fn intrinsic_span_get_length<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, [ManagedPtr(m)]);
+    pop_args!(stack, gc, [ManagedPtr(m)]);
     if !m.inner_type.type_name().contains("Span") {
         panic!("invalid type on stack");
     }
@@ -159,18 +160,18 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
     let (start, length_override) = match param_count {
         1 => (0, None),
         2 => {
-            let start = match stack.pop_stack() {
+            let start = match stack.pop_stack(gc) {
                 StackValue::Int32(i) => i as usize,
                 v => panic!("AsSpan: expected Int32 for start parameter, got {:?}", v),
             };
             (start, None)
         }
         3 => {
-            let length = match stack.pop_stack() {
+            let length = match stack.pop_stack(gc) {
                 StackValue::Int32(i) => i as usize,
                 v => panic!("AsSpan: expected Int32 for length parameter, got {:?}", v),
             };
-            let start = match stack.pop_stack() {
+            let start = match stack.pop_stack(gc) {
                 StackValue::Int32(i) => i as usize,
                 v => panic!("AsSpan: expected Int32 for start parameter, got {:?}", v),
             };
@@ -179,7 +180,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
         _ => panic!("AsSpan: unexpected parameter count {}", param_count),
     };
 
-    let obj_val = stack.pop_stack();
+    let obj_val = stack.pop_stack(gc);
 
     let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
 
@@ -305,7 +306,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
     let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
     let element_size = type_layout(element_type.clone(), &ctx).size();
 
-    pop_args!(stack, [ValueType(field_handle)]);
+    pop_args!(stack, gc, [ValueType(field_handle)]);
 
     let (FieldDescription { field, .. }, lookup) = {
         let mut ptr_buf = [0u8; ObjectRef::SIZE];

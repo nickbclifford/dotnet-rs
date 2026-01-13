@@ -330,6 +330,9 @@ impl<'gc> StackValue<'gc> {
 
     /// # Safety
     /// `ptr` must be a valid, aligned pointer to a value of the type specified by `t`.
+    /// Loads a value from a raw pointer using atomic operations.
+    /// UNSOUND: This casts non-atomic types to atomic types, which is technically UB in Rust.
+    /// Also, it does not ensure that the appropriate locks are held for the memory being accessed.
     pub unsafe fn load_atomic(ptr: *const u8, t: LoadType, ordering: AtomicOrdering) -> Self {
         debug_assert!(!ptr.is_null(), "Attempted to load from a null pointer");
         let alignment = load_type_alignment(t);
@@ -377,6 +380,9 @@ impl<'gc> StackValue<'gc> {
 
     /// # Safety
     /// `ptr` must be a valid, aligned pointer to a location with sufficient space for the type specified by `t`.
+    /// Stores a value to a raw pointer using atomic operations.
+    /// UNSOUND: This casts non-atomic types to atomic types, which is technically UB in Rust.
+    /// Also, it does not ensure that the appropriate locks are held for the memory being accessed.
     pub unsafe fn store_atomic(self, ptr: *mut u8, t: StoreType, ordering: AtomicOrdering) {
         debug_assert!(!ptr.is_null(), "Attempted to store to a null pointer");
         let alignment = store_type_alignment(t);

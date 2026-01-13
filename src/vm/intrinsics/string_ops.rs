@@ -23,8 +23,8 @@ pub fn intrinsic_string_equals<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let b_val = vm_pop!(stack);
-    let a_val = vm_pop!(stack);
+    let b_val = vm_pop!(stack, gc);
+    let a_val = vm_pop!(stack, gc);
 
     let res = match (a_val, b_val) {
         (StackValue::ObjectRef(ObjectRef(None)), StackValue::ObjectRef(ObjectRef(None))) => true,
@@ -60,15 +60,15 @@ pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let len = if method.method.signature.parameters.len() == 1 {
-        pop_args!(stack, [Int32(i)]);
+        pop_args!(stack, gc, [Int32(i)]);
         if i < 0 {
             return stack.throw_by_name(gc, "System.OverflowException");
         }
         i as usize
     } else {
         // Overload with MethodTable* as first param
-        pop_args!(stack, [NativeInt(i)]);
-        vm_pop!(stack); // pop method table pointer
+        pop_args!(stack, gc, [NativeInt(i)]);
+        vm_pop!(stack, gc); // pop method table pointer
         if i < 0 {
             return stack.throw_by_name(gc, "System.OverflowException");
         }
@@ -98,8 +98,8 @@ pub fn intrinsic_string_get_chars<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, [Int32(index)]);
-    let val = vm_pop!(stack);
+    pop_args!(stack, gc, [Int32(index)]);
+    let val = vm_pop!(stack, gc);
     let value = with_string!(stack, gc, val, |s| s[index as usize]);
     vm_push!(stack, gc, Int32(value as i32));
     StepResult::InstructionStepped
@@ -112,7 +112,7 @@ pub fn intrinsic_string_get_length<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let val = vm_pop!(stack);
+    let val = vm_pop!(stack, gc);
     let len = with_string!(stack, gc, val, |s| s.len());
     vm_push!(stack, gc, Int32(len as i32));
     StepResult::InstructionStepped
@@ -127,6 +127,7 @@ pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
 ) -> StepResult {
     pop_args!(
         stack,
+        gc,
         [ValueType(span2), ValueType(span1), ValueType(span0),]
     );
 
@@ -159,7 +160,7 @@ pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let val = vm_pop!(stack);
+    let val = vm_pop!(stack, gc);
     let mut h = DefaultHasher::new();
     let value = with_string!(stack, gc, val, |s| String::from_utf16_lossy(s)
         .to_uppercase()
@@ -179,7 +180,7 @@ pub fn intrinsic_string_get_raw_data<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let val = vm_pop!(stack);
+    let val = vm_pop!(stack, gc);
     let obj_h = if let StackValue::ObjectRef(ObjectRef(Some(h))) = &val {
         Some(*h)
     } else {
@@ -202,14 +203,14 @@ pub fn intrinsic_string_index_of<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let (c, start_at) = if method.method.signature.parameters.len() == 1 {
-        pop_args!(stack, [Int32(c)]);
+        pop_args!(stack, gc, [Int32(c)]);
         (c as u16, 0usize)
     } else {
-        pop_args!(stack, [Int32(start_at), Int32(c)]);
+        pop_args!(stack, gc, [Int32(start_at), Int32(c)]);
         (c as u16, start_at as usize)
     };
 
-    let val = vm_pop!(stack);
+    let val = vm_pop!(stack, gc);
     let index = with_string!(stack, gc, val, |s| s
         .iter()
         .skip(start_at)
@@ -235,14 +236,14 @@ pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let (start_at, length) = if method.method.signature.parameters.len() == 1 {
-        pop_args!(stack, [Int32(start_at)]);
+        pop_args!(stack, gc, [Int32(start_at)]);
         (start_at as usize, None)
     } else {
-        pop_args!(stack, [Int32(length), Int32(start_at)]);
+        pop_args!(stack, gc, [Int32(length), Int32(start_at)]);
         (start_at as usize, Some(length as usize))
     };
 
-    let val = vm_pop!(stack);
+    let val = vm_pop!(stack, gc);
     let value = with_string!(stack, gc, val, |s| {
         let sub = &s[start_at..];
         match length {
@@ -262,7 +263,7 @@ pub fn intrinsic_string_is_null_or_empty<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let str_val = vm_pop!(stack);
+    let str_val = vm_pop!(stack, gc);
     let is_null_or_empty = match &str_val {
         StackValue::ObjectRef(ObjectRef(None)) => true,
         _ => with_string!(stack, gc, str_val, |s| s.is_empty()),
@@ -278,7 +279,7 @@ pub fn intrinsic_string_is_null_or_white_space<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let str_val = vm_pop!(stack);
+    let str_val = vm_pop!(stack, gc);
     let is_null_or_white_space = match &str_val {
         StackValue::ObjectRef(ObjectRef(None)) => true,
         _ => with_string!(stack, gc, str_val, |s| {
@@ -313,6 +314,7 @@ pub fn intrinsic_string_copy_string_content<'gc, 'm: 'gc>(
 ) -> StepResult {
     pop_args!(
         stack,
+        gc,
         [ObjectRef(src_val), Int32(dest_pos), ObjectRef(dest_val)]
     );
     let src = with_string!(stack, gc, StackValue::ObjectRef(src_val), |s| s.to_vec());

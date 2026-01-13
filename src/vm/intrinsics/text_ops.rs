@@ -11,7 +11,7 @@ pub fn intrinsic_unicode_utility_is_ascii_code_point<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let val = vm_pop!(stack);
+    let val = vm_pop!(stack, gc);
     let is_ascii = match val {
         StackValue::Int32(i) => (0..=0x7F).contains(&i),
         StackValue::Int64(i) => (0..=0x7F).contains(&i),
@@ -28,9 +28,9 @@ pub fn intrinsic_unicode_utility_is_in_range_inclusive<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let high = vm_pop!(stack);
-    let low = vm_pop!(stack);
-    let value = vm_pop!(stack);
+    let high = vm_pop!(stack, gc);
+    let low = vm_pop!(stack, gc);
+    let value = vm_pop!(stack, gc);
 
     let result = match (value, low, high) {
         (StackValue::Int32(v), StackValue::Int32(l), StackValue::Int32(h)) => v >= l && v <= h,

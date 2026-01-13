@@ -133,7 +133,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         let mut stack_values = vec![];
         for _ in 0..method.method.signature.parameters.len() {
-            stack_values.push(self.pop_stack());
+            stack_values.push(self.pop_stack(gc));
         }
         stack_values.reverse();
 

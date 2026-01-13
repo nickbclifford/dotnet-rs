@@ -43,7 +43,7 @@ pub fn intrinsic_numeric_create_truncating<'gc, 'm: 'gc>(
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let value = vm_pop!(stack);
+    let value = vm_pop!(stack, gc);
     let target_type = method.parent.definition().type_name();
 
     macro_rules! convert {
@@ -82,8 +82,8 @@ pub fn intrinsic_math_min_double<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let b = vm_pop!(stack);
-    let a = vm_pop!(stack);
+    let b = vm_pop!(stack, gc);
+    let a = vm_pop!(stack, gc);
     match (&a, &b) {
         (StackValue::NativeFloat(av), StackValue::NativeFloat(bv)) => {
             vm_push!(stack, gc, NativeFloat(av.min(*bv)));
