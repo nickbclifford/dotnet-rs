@@ -10,14 +10,13 @@ multithreaded-gc = ["multithreading"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
+crossbeam-channel = "0.5"
+dashmap = "6.1"
 dotnetdll = "0.1.1"
 enum_dispatch = "0.3"
 gc-arena = "0.5"
 libffi = "5.0.0"
 libloading = "0.9.0"
-dashmap = "6.1"
-phf = { version = "0.13.1", features = ["macros"] }
 parking_lot = { version = "0.12", optional = true }
-crossbeam-channel = "0.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
