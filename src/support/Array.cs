@@ -122,6 +122,38 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
         return -1;
     }
 
+    public static int IndexOf<T>(T[] array, T value)
+    {
+        return IndexOf((Array)(object)array, (object?)value, 0, array.Length);
+    }
+
+    public static int IndexOf<T>(T[] array, T value, int startIndex)
+    {
+        return IndexOf((Array)(object)array, (object?)value, startIndex, array.Length - startIndex);
+    }
+
+    public static int IndexOf<T>(T[] array, T value, int startIndex, int count)
+    {
+        return IndexOf((Array)(object)array, (object?)value, startIndex, count);
+    }
+
+    public static int LastIndexOf<T>(T[] array, T value)
+    {
+        if (array == null) throw new ArgumentNullException(nameof(array));
+        return LastIndexOf((Array)(object)array, (object?)value, array.Length - 1, array.Length);
+    }
+
+    public static int LastIndexOf<T>(T[] array, T value, int startIndex)
+    {
+        if (array == null) throw new ArgumentNullException(nameof(array));
+        return LastIndexOf((Array)(object)array, (object?)value, startIndex, startIndex + 1);
+    }
+
+    public static int LastIndexOf<T>(T[] array, T value, int startIndex, int count)
+    {
+        return LastIndexOf((Array)(object)array, (object?)value, startIndex, count);
+    }
+
     public static void Copy(Array sourceArray, Array destinationArray, int length)
     {
         Copy(sourceArray, 0, destinationArray, 0, length);
