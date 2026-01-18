@@ -1,10 +1,10 @@
 use crate::{
     types::{generics::GenericLookup, members::MethodDescription},
     value::{
-        object::{HeapStorage, Object, ObjectRef},
+        object::{HeapStorage, ObjectRef},
         StackValue,
     },
-    vm::{context::ResolutionContext, CallStack, GCHandle, StepResult},
+    vm::{context::ResolutionContext, resolution::ValueResolution, CallStack, GCHandle, StepResult},
     vm_pop, vm_push,
 };
 
@@ -29,9 +29,9 @@ pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc>(
     let comparer_td = stack.loader().corlib_type(comparer_type_name);
 
     let new_lookup = GenericLookup::new(vec![target_type]);
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone())
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone())
         .with_generics(&new_lookup);
-    let instance = ObjectRef::new(gc, HeapStorage::Obj(Object::new(comparer_td, &ctx)));
+    let instance = ObjectRef::new(gc, HeapStorage::Obj(ctx.new_object(comparer_td)));
 
     vm_push!(stack, gc, ObjectRef(instance));
     StepResult::InstructionStepped

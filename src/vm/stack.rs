@@ -7,15 +7,19 @@ use crate::{
     },
     utils::{decompose_type_source, ResolutionS},
     value::{
-        layout::{type_layout_with_metrics, HasLayout, LayoutManager},
+        layout::{HasLayout, LayoutManager},
         object::{HeapStorage, Object as ObjectInstance, ObjectRef},
         pointer::ManagedPtrOwner,
         StackValue,
     },
     vm::{
         context::ResolutionContext,
+        layout::type_layout_with_metrics,
         exceptions::ExceptionState,
+        common::GCHandle,
         gc::GCHandleType,
+        statics::StaticStorageManager,
+        resolution::{TypeResolutionExt, ValueResolution},
         intrinsics::{is_intrinsic, is_intrinsic_field, reflection::RuntimeType},
         pinvoke::NativeLibraries,
         state::{ArenaLocalState, SharedGlobalState},
@@ -26,7 +30,7 @@ use crate::{
     },
 };
 use dotnetdll::prelude::*;
-use gc_arena::{Arena, Collect, Collection, Gc, Mutation, Rootable};
+use gc_arena::{Arena, Collect, Collection, Gc, Rootable};
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     collections::{HashMap, HashSet},
@@ -36,7 +40,7 @@ use std::{
 
 #[cfg(feature = "multithreaded-gc")]
 use crate::{
-    value::{object::ObjectPtr, storage::StaticStorageManager},
+    value::{object::ObjectPtr},
     vm::gc::coordinator::record_allocation,
 };
 
@@ -166,8 +170,6 @@ pub struct BasePointer {
 
 pub type GCArena = Arena<Rootable!['gc => CallStack<'gc, 'static>]>;
 
-pub type GCHandle<'gc> = &'gc Mutation<'gc>;
-
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     pub fn new(shared: Arc<SharedGlobalState<'m>>, local: ArenaLocalState<'gc>) -> Self {
         Self {
@@ -228,7 +230,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         resolution: method.resolution(),
                         type_owner: Some(method.parent),
                         method_owner: Some(method),
-                        shared: self.shared.clone(),
+                        caches: self.shared.caches.clone(),
                     };
 
                     let v = match ctx.make_concrete(var_type).get() {
@@ -242,7 +244,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                     ..generics.clone()
                                 };
                                 let new_ctx = ctx.with_generics(&new_lookup);
-                                let instance = ObjectInstance::new(desc, &new_ctx);
+                                let instance = new_ctx.new_object(desc);
                                 StackValue::ValueType(Box::new(instance))
                             } else {
                                 StackValue::null()
@@ -403,7 +405,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 resolution: obj_type.resolution,
                 type_owner: Some(obj_type),
                 method_owner: None,
-                shared: self.shared.clone(),
+                caches: self.shared.caches.clone(),
             };
             let target_method = self.resolve_virtual_method(base_finalize, obj_type, Some(&ctx));
 
@@ -573,7 +575,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         // If this was a static constructor (.cctor), mark the type as initialized
         if frame.state.info_handle.is_cctor {
             let type_desc = frame.state.info_handle.source.parent;
-            self.shared.statics.mark_initialized(type_desc);
+            self.shared.statics.mark_initialized(type_desc, &frame.generic_inst);
         }
 
         if frame.is_finalizer {
@@ -645,7 +647,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 resolution: f.source_resolution,
                 type_owner: Some(f.state.info_handle.source.parent),
                 method_owner: Some(f.state.info_handle.source),
-                shared: self.shared.clone(),
+                caches: self.shared.caches.clone(),
             }
         } else {
             ResolutionContext {
@@ -654,7 +656,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 resolution: self.shared.loader.corlib_type("System.Object").resolution,
                 type_owner: None,
                 method_owner: None,
-                shared: self.shared.clone(),
+                caches: self.shared.caches.clone(),
             }
         }
     }
@@ -680,13 +682,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn is_a(&self, value: ConcreteType, ancestor: ConcreteType) -> bool {
         let cache_key = (value.clone(), ancestor.clone());
-        if let Some(cached) = self.shared.hierarchy_cache.get(&cache_key) {
+        if let Some(cached) = self.shared.caches.hierarchy_cache.get(&cache_key) {
             return *cached;
         }
 
         self.shared.metrics.record_hierarchy_cache_miss();
         let result = self.current_context().is_a(value, ancestor);
-        self.shared.hierarchy_cache.insert(cache_key, result);
+        self.shared.caches.hierarchy_cache.insert(cache_key, result);
         result
     }
 
@@ -927,7 +929,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn throw_by_name(&mut self, gc: GCHandle<'gc>, name: &str) -> StepResult {
         let rt = self.shared.loader.corlib_type(name);
-        let rt_obj = ObjectInstance::new(rt, &self.current_context());
+        let rt_obj = self.current_context().new_object(rt);
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
         self.register_new_object(&obj_ref);
 
@@ -950,7 +952,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         };
 
         let cache_key = (base_method, this_type, ctx.generics.clone());
-        if let Some(cached) = self.shared.vmt_cache.get(&cache_key) {
+        if let Some(cached) = self.shared.caches.vmt_cache.get(&cache_key) {
             return *cached;
         }
 
@@ -971,10 +973,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             if let Some(metadata) = classify_intrinsic(
                 this_method,
                 self.shared.loader,
-                Some(&self.shared.intrinsic_registry),
+                Some(&self.shared.caches.intrinsic_registry),
             ) {
                 if matches!(metadata.kind, IntrinsicKind::VirtualOverride) {
-                    self.shared.vmt_cache.insert(cache_key, this_method);
+                    self.shared.caches.vmt_cache.insert(cache_key, this_method);
                     return this_method;
                 }
             }
@@ -988,7 +990,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 &base_method.method.signature,
                 base_method.resolution(),
             ) {
-                self.shared.vmt_cache.insert(cache_key, method);
+                self.shared.caches.vmt_cache.insert(cache_key, method);
                 return method;
             }
         }
@@ -1002,34 +1004,34 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     /// This is called on every method invocation, so caching is critical for performance.
     pub fn is_intrinsic_cached(&self, method: MethodDescription) -> bool {
         // Check cache first
-        if let Some(cached) = self.shared.intrinsic_cache.get(&method) {
+        if let Some(cached) = self.shared.caches.intrinsic_cache.get(&method) {
             self.shared.metrics.record_intrinsic_cache_hit();
             return *cached;
         }
 
         // Cache miss - perform check
         self.shared.metrics.record_intrinsic_cache_miss();
-        let result = is_intrinsic(method, self.shared.loader, &self.shared.intrinsic_registry);
+        let result = is_intrinsic(method, self.shared.loader, &self.shared.caches.intrinsic_registry);
 
         // Cache the result
-        self.shared.intrinsic_cache.insert(method, result);
+        self.shared.caches.intrinsic_cache.insert(method, result);
         result
     }
 
     /// Check if a field is an intrinsic (with caching).
     pub fn is_intrinsic_field_cached(&self, field: FieldDescription) -> bool {
         // Check cache first
-        if let Some(cached) = self.shared.intrinsic_field_cache.get(&field) {
+        if let Some(cached) = self.shared.caches.intrinsic_field_cache.get(&field) {
             self.shared.metrics.record_intrinsic_field_cache_hit();
             return *cached;
         }
 
         // Cache miss - perform check
         self.shared.metrics.record_intrinsic_field_cache_miss();
-        let result = is_intrinsic_field(field, self.shared.loader, &self.shared.intrinsic_registry);
+        let result = is_intrinsic_field(field, self.shared.loader, &self.shared.caches.intrinsic_registry);
 
         // Cache the result
-        self.shared.intrinsic_field_cache.insert(field, result);
+        self.shared.caches.intrinsic_field_cache.insert(field, result);
         result
     }
 

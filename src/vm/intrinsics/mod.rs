@@ -1865,7 +1865,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let _ctx =
-        ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
+        ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
 
     vm_trace_intrinsic!(
         stack,
@@ -1876,7 +1876,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
     if let Some(metadata) = classify_intrinsic(
         method,
         stack.loader(),
-        Some(&stack.shared.intrinsic_registry),
+        Some(&stack.shared.caches.intrinsic_registry),
     ) {
         return (metadata.handler)(gc, stack, method, generics);
     }
@@ -1896,7 +1896,7 @@ pub fn intrinsic_field<'gc, 'm: 'gc>(
         "FIELD-LOAD",
         &format!("{}.{}", field.parent.type_name(), field.field.name)
     );
-    if let Some(handler) = stack.shared.intrinsic_registry.get_field(&field) {
+    if let Some(handler) = stack.shared.caches.intrinsic_registry.get_field(&field) {
         handler(gc, stack, field, type_generics, is_address)
     } else {
         panic!("unsupported load from intrinsic field: {:?}", field);

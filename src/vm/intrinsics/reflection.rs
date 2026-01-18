@@ -8,11 +8,17 @@ use crate::{
     },
     utils::{decompose_type_source, ResolutionS},
     value::{
-        layout::{type_layout, LayoutManager, Scalar},
-        object::{HeapStorage, Object, ObjectRef, Vector},
+        layout::{LayoutManager, Scalar},
+        object::{HeapStorage, Object, ObjectRef},
         StackValue,
     },
-    vm::{context::ResolutionContext, sync::Ordering, CallStack, GCHandle, MethodInfo, StepResult},
+    vm::{
+        context::ResolutionContext,
+        layout::type_layout,
+        resolution::{TypeResolutionExt, ValueResolution},
+        sync::Ordering,
+        CallStack, GCHandle, MethodInfo, StepResult,
+    },
     vm_pop, vm_push,
 };
 use dotnetdll::prelude::{BaseType, Kind, MemberType, MethodType, TypeSource};
@@ -279,7 +285,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         };
 
         let rt = self.loader().corlib_type("DotnetRs.RuntimeType");
-        let rt_obj = Object::new(rt, &self.current_context());
+        let rt_obj = self.current_context().new_object(rt);
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
         self.register_new_object(&obj_ref);
 
@@ -419,7 +425,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn get_handle_for_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> Object<'gc> {
         let rth = self.loader().corlib_type("System.RuntimeTypeHandle");
-        let mut instance = Object::new(rth, &self.current_context());
+        let mut instance = self.current_context().new_object(rth);
         let handle_location = instance.instance_storage.get_field_mut_local(rth, "_value");
         self.get_runtime_type(gc, target).write(handle_location);
         instance
@@ -485,7 +491,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         };
 
         let rt = self.loader().corlib_type(class_name);
-        let rt_obj = Object::new(rt, &self.current_context());
+        let rt_obj = self.current_context().new_object(rt);
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
         self.register_new_object(&obj_ref);
 
@@ -532,7 +538,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let index = self.get_runtime_field_index(field, lookup.clone()) as usize;
 
         let rt = self.loader().corlib_type("DotnetRs.FieldInfo");
-        let rt_obj = Object::new(rt, &self.current_context());
+        let rt_obj = self.current_context().new_object(rt);
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
         self.register_new_object(&obj_ref);
 
@@ -568,7 +574,7 @@ pub fn intrinsic_assembly_get_custom_attributes<'gc, 'm: 'gc>(
 
     // Return an empty array of Attribute
     let attribute_type = stack.loader().corlib_type("System.Attribute");
-    let array = Vector::new(attribute_type.into(), 0, &stack.current_context());
+    let array = stack.current_context().new_vector(attribute_type.into(), 0);
     let obj = ObjectRef::new(gc, HeapStorage::Vec(array));
     stack.register_new_object(&obj);
     vm_push!(stack, gc, ObjectRef(obj));
@@ -594,7 +600,7 @@ pub fn intrinsic_attribute_get_custom_attributes<'gc, 'm: 'gc>(
 
     // Return an empty array of Attribute
     let attribute_type = stack.loader().corlib_type("System.Attribute");
-    let array = Vector::new(attribute_type.into(), 0, &stack.current_context());
+    let array = stack.current_context().new_vector(attribute_type.into(), 0);
     let obj = ObjectRef::new(gc, HeapStorage::Vec(array));
     stack.register_new_object(&obj);
     vm_push!(stack, gc, ObjectRef(obj));
@@ -648,15 +654,13 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 .iter()
                 .find(|a| a.type_name() == "DotnetRs.Assembly")
                 .expect("could find DotnetRs.Assembly in support library");
-            let mut asm_handle = Object::new(
-                TypeDescription::new(support_res, definition),
-                &ResolutionContext::new(
-                    generics,
-                    stack.loader(),
-                    support_res,
-                    stack.shared.clone(),
-                ),
+            let ctx = ResolutionContext::new(
+                generics,
+                stack.loader(),
+                support_res,
+                stack.shared.caches.clone(),
             );
+            let mut asm_handle = ctx.new_object(TypeDescription::new(support_res, definition));
             let data = (resolution.as_raw() as usize).to_ne_bytes();
             asm_handle
                 .instance_storage
@@ -803,7 +807,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
 
             let type_type_td = stack.loader().corlib_type("System.Type");
             let type_type = ConcreteType::from(type_type_td);
-            let mut vector = Vector::new(type_type, args.len(), &stack.current_context());
+            let mut vector = stack.current_context().new_vector(type_type, args.len());
             for (i, arg) in args.into_iter().enumerate() {
                 // Check GC safe point periodically during loops with allocations
                 // Check every 16 iterations
@@ -822,7 +826,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             pop_args!(stack, gc, [ObjectRef(obj)]);
 
             let rth = stack.loader().corlib_type("System.RuntimeTypeHandle");
-            let mut instance = Object::new(rth, &stack.current_context());
+            let mut instance = stack.current_context().new_object(rth);
             obj.write(instance.instance_storage.get_field_mut_local(rth, "_value"));
 
             push!(ValueType(Box::new(instance)));
@@ -880,7 +884,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             let new_lookup = GenericLookup::new(type_generics_concrete);
             let new_ctx = stack.current_context().with_generics(&new_lookup);
 
-            let instance = Object::new(td, &new_ctx);
+            let instance = new_ctx.new_object(td);
 
             for m in &td.definition().methods {
                 if m.runtime_special_name
@@ -1058,7 +1062,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
             pop_args!(stack, gc, [ObjectRef(obj)]);
 
             let rmh = stack.loader().corlib_type("System.RuntimeMethodHandle");
-            let mut instance = Object::new(rmh, &stack.current_context());
+            let mut instance = stack.current_context().new_object(rmh);
             obj.write(instance.instance_storage.get_field_mut_local(rmh, "_value"));
 
             push!(ValueType(Box::new(instance)));
@@ -1104,7 +1108,7 @@ pub fn runtime_field_info_intrinsic_call<'gc, 'm: 'gc>(
             pop_args!(stack, gc, [ObjectRef(obj)]);
 
             let rfh = stack.loader().corlib_type("System.RuntimeFieldHandle");
-            let mut instance = Object::new(rfh, &stack.current_context());
+            let mut instance = stack.current_context().new_object(rfh);
             obj.write(instance.instance_storage.get_field_mut_local(rfh, "_value"));
 
             push!(ValueType(Box::new(instance)));
@@ -1123,7 +1127,7 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
     let obj = vm_pop!(stack, gc);
     let object_type = match obj {
         StackValue::ObjectRef(ObjectRef(Some(h))) => ctx.get_heap_description(h),
@@ -1144,7 +1148,7 @@ pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
     let value = match &*layout {
@@ -1162,7 +1166,7 @@ pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<'gc, 'm: 'g
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
     vm_push!(stack, gc, Int32(layout.is_or_contains_refs() as i32));
@@ -1209,14 +1213,14 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
 ) -> StepResult {
     let target_ct = generics.method_generics[0].clone();
     let target_td = stack.loader().find_concrete_type(target_ct.clone());
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
 
     if target_td.is_value_type(&ctx) {
-        let instance = Object::new(target_td, &ctx);
+        let instance = ctx.new_object(target_td);
         vm_push!(stack, gc, ValueType(Box::new(instance)));
         StepResult::InstructionStepped
     } else {
-        let instance = Object::new(target_td, &ctx);
+        let instance = ctx.new_object(target_td);
         let mut new_lookup = GenericLookup::default();
         if let BaseType::Type {
             source: TypeSource::Generic { parameters, .. },
@@ -1311,7 +1315,7 @@ pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc>(
     let target_ct = target.to_concrete(stack.loader());
     let target_desc = stack.loader().find_concrete_type(target_ct);
     let ctx =
-        ResolutionContext::for_method(_method, stack.loader(), generics, stack.shared.clone());
+        ResolutionContext::for_method(_method, stack.loader(), generics, stack.shared.caches.clone());
     let value = target_desc.is_value_type(&ctx);
     vm_push!(stack, gc, Int32(value as i32));
     StepResult::InstructionStepped
@@ -1383,8 +1387,8 @@ pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc>(
 
     let rth = stack.loader().corlib_type("System.RuntimeTypeHandle");
     let ctx =
-        ResolutionContext::for_method(_method, stack.loader(), generics, stack.shared.clone());
-    let mut instance = Object::new(rth, &ctx);
+        ResolutionContext::for_method(_method, stack.loader(), generics, stack.shared.caches.clone());
+    let mut instance = ctx.new_object(rth);
     obj.write(instance.instance_storage.get_field_mut_local(rth, "_value"));
 
     vm_push!(stack, gc, ValueType(Box::new(instance)));

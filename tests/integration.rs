@@ -480,7 +480,7 @@ fn test_multiple_arenas_simple() {
         .unwrap();
     let type_desc = TypeDescription::new(resolution, type_def);
 
-    let storage_arc = shared.statics.get(type_desc);
+    let storage_arc = shared.statics.get(type_desc, &shared.empty_generics);
     let storage = &storage_arc.storage;
 
     let counter_bytes = storage.get_field_local(type_desc, "Counter");

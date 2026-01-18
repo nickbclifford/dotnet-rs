@@ -3,18 +3,23 @@ use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
 use std::rc::Rc;
 
+pub mod common;
+pub use common::GCHandle;
 pub mod context;
 mod exceptions;
 mod executor;
 pub mod gc;
 mod instructions;
 pub(crate) mod intrinsics;
+pub mod layout;
 #[macro_use]
 mod macros;
 pub mod metrics;
 mod pinvoke;
+pub mod resolution;
 mod stack;
 pub mod state;
+pub mod statics;
 pub mod sync;
 pub mod threading;
 pub mod tracer;
@@ -85,7 +90,7 @@ impl MethodInfo<'static> {
             None => panic!("cannot call method with empty body"),
         };
 
-        let ctx = ResolutionContext::for_method(method, loader, generics, shared);
+        let ctx = ResolutionContext::for_method(method, loader, generics, shared.caches.clone());
 
         Self {
             is_cctor: method.method.runtime_special_name

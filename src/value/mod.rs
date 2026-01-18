@@ -4,13 +4,12 @@ use crate::vm::gc::coordinator::record_cross_arena_ref;
 use crate::{
     types::TypeDescription,
     vm::{
-        context::ResolutionContext,
+        common::GCHandle,
         sync::{
             AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
             AtomicU64, AtomicU8, AtomicUsize, Ordering as AtomicOrdering,
         },
         threading::lock::ThreadSafeLock,
-        GCHandle,
     },
 };
 use dotnetdll::prelude::*;
@@ -208,21 +207,6 @@ impl<'gc> StackValue<'gc> {
             }
             #[cfg(feature = "multithreaded-gc")]
             Self::CrossArenaObjectRef(_, _) => todo!("handle CrossArenaObjectRef in data_location"),
-        }
-    }
-
-    pub fn contains_type(&self, ctx: &ResolutionContext) -> TypeDescription {
-        match self {
-            Self::Int32(_) => ctx.loader.corlib_type("System.Int32"),
-            Self::Int64(_) => ctx.loader.corlib_type("System.Int64"),
-            Self::NativeInt(_) | Self::UnmanagedPtr(_) => ctx.loader.corlib_type("System.IntPtr"),
-            Self::NativeFloat(_) => ctx.loader.corlib_type("System.Double"),
-            Self::ObjectRef(ObjectRef(Some(o))) => ctx.get_heap_description(*o),
-            Self::ObjectRef(ObjectRef(None)) => ctx.loader.corlib_type("System.Object"),
-            Self::ManagedPtr(m) => m.inner_type,
-            Self::ValueType(o) => o.description,
-            #[cfg(feature = "multithreaded-gc")]
-            Self::CrossArenaObjectRef(_, _) => todo!("handle CrossArenaObjectRef in contains_type"),
         }
     }
 
@@ -599,3 +583,4 @@ impl<'gc> Neg for StackValue<'gc> {
         }
     }
 }
+

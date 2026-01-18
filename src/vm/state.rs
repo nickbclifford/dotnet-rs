@@ -9,10 +9,10 @@ use crate::{
     value::{
         layout::{FieldLayoutManager, LayoutManager},
         object::ObjectRef,
-        storage::StaticStorageManager,
     },
     vm::{
         gc::GCCoordinator,
+        statics::StaticStorageManager,
         intrinsics::{
             is_intrinsic, is_intrinsic_field, reflection::RuntimeType, IntrinsicRegistry,
         },
@@ -32,6 +32,44 @@ use std::{
     collections::{HashMap, HashSet},
 };
 
+/// Grouped caches for type resolution and layout computation.
+/// This struct reduces the API surface area of ResolutionContext.
+pub struct GlobalCaches {
+    /// Cache for type layouts: ConcreteType -> Arc<LayoutManager>
+    pub layout_cache: DashMap<ConcreteType, Arc<LayoutManager>>,
+    /// Cache for instance field layouts: (TypeDescription, GenericLookup) -> FieldLayoutManager
+    pub instance_field_layout_cache:
+        DashMap<(TypeDescription, GenericLookup), Arc<FieldLayoutManager>>,
+    /// Cache for virtual method resolution: (base_method, this_type, generics) -> resolved_method
+    pub vmt_cache: DashMap<(MethodDescription, TypeDescription, GenericLookup), MethodDescription>,
+    /// Cache for type hierarchy checks: (child, parent) -> is_a result
+    pub hierarchy_cache: DashMap<(ConcreteType, ConcreteType), bool>,
+    /// Cache for intrinsic checks: method -> is_intrinsic
+    pub intrinsic_cache: DashMap<MethodDescription, bool>,
+    /// Cache for intrinsic field checks: field -> is_intrinsic
+    pub intrinsic_field_cache: DashMap<FieldDescription, bool>,
+    /// Cache for static field layouts: (TypeDescription, GenericLookup) -> FieldLayoutManager
+    pub static_field_layout_cache: DashMap<(TypeDescription, GenericLookup), Arc<FieldLayoutManager>>,
+    /// Registry of intrinsic methods
+    pub intrinsic_registry: IntrinsicRegistry,
+}
+
+impl GlobalCaches {
+    pub fn new(loader: &AssemblyLoader, tracer: &mut Tracer) -> Self {
+        let intrinsic_registry = IntrinsicRegistry::initialize(loader, Some(tracer));
+        Self {
+            layout_cache: DashMap::new(),
+            instance_field_layout_cache: DashMap::new(),
+            vmt_cache: DashMap::new(),
+            hierarchy_cache: DashMap::new(),
+            intrinsic_cache: DashMap::new(),
+            intrinsic_field_cache: DashMap::new(),
+            static_field_layout_cache: DashMap::new(),
+            intrinsic_registry,
+        }
+    }
+}
+
 /// Thread-safe shared state that does not contain any GC-managed pointers.
 /// This state is shared across all execution threads and arenas.
 pub struct SharedGlobalState<'m> {
@@ -43,20 +81,8 @@ pub struct SharedGlobalState<'m> {
     pub tracer: Mutex<Tracer>,
     pub tracer_enabled: Arc<AtomicBool>,
     pub empty_generics: GenericLookup,
-    /// Cache for type layouts: ConcreteType -> Arc<LayoutManager>
-    pub layout_cache: DashMap<ConcreteType, Arc<LayoutManager>>,
-    /// Cache for instance field layouts: (TypeDescription, GenericLookup) -> FieldLayoutManager
-    pub instance_field_layout_cache:
-        DashMap<(TypeDescription, GenericLookup), Arc<FieldLayoutManager>>,
-    /// Cache for virtual method resolution: (base_method, this_type, generics) -> resolved_method
-    pub vmt_cache: DashMap<(MethodDescription, TypeDescription, GenericLookup), MethodDescription>,
-    /// Cache for intrinsic checks: method -> is_intrinsic
-    pub intrinsic_cache: DashMap<MethodDescription, bool>,
-    /// Cache for intrinsic field checks: field -> is_intrinsic
-    pub intrinsic_field_cache: DashMap<FieldDescription, bool>,
-    /// Cache for type hierarchy checks: (child, parent) -> is_a result
-    pub hierarchy_cache: DashMap<(ConcreteType, ConcreteType), bool>,
-    pub intrinsic_registry: IntrinsicRegistry,
+    /// Grouped caches for type resolution and layout computation
+    pub caches: Arc<GlobalCaches>,
     pub statics: StaticStorageManager,
     #[cfg(feature = "multithreaded-gc")]
     pub gc_coordinator: Arc<GCCoordinator>,
@@ -86,10 +112,7 @@ pub struct SharedGlobalState<'m> {
 impl<'m> SharedGlobalState<'m> {
     pub fn new(loader: &'m AssemblyLoader) -> Self {
         let mut tracer = Tracer::new();
-        let intrinsic_registry = IntrinsicRegistry::initialize(loader, Some(&mut tracer));
-
-        let intrinsic_cache = DashMap::new();
-        let intrinsic_field_cache = DashMap::new();
+        let caches = Arc::new(GlobalCaches::new(loader, &mut tracer));
 
         // Pre-populate intrinsic caches
         for assembly in loader.assemblies() {
@@ -101,7 +124,10 @@ impl<'m> SharedGlobalState<'m> {
                         method_resolution: td.resolution,
                         method,
                     };
-                    intrinsic_cache.insert(md, is_intrinsic(md, loader, &intrinsic_registry));
+                    caches.intrinsic_cache.insert(
+                        md,
+                        is_intrinsic(md, loader, &caches.intrinsic_registry),
+                    );
                 }
                 for field in &type_def.fields {
                     let fd = FieldDescription {
@@ -109,8 +135,10 @@ impl<'m> SharedGlobalState<'m> {
                         field_resolution: td.resolution,
                         field,
                     };
-                    intrinsic_field_cache
-                        .insert(fd, is_intrinsic_field(fd, loader, &intrinsic_registry));
+                    caches.intrinsic_field_cache.insert(
+                        fd,
+                        is_intrinsic_field(fd, loader, &caches.intrinsic_registry),
+                    );
                 }
             }
         }
@@ -125,13 +153,7 @@ impl<'m> SharedGlobalState<'m> {
             tracer: Mutex::new(tracer),
             tracer_enabled,
             empty_generics: GenericLookup::default(),
-            layout_cache: DashMap::new(),
-            instance_field_layout_cache: DashMap::new(),
-            vmt_cache: DashMap::new(),
-            intrinsic_cache,
-            intrinsic_field_cache,
-            hierarchy_cache: DashMap::new(),
-            intrinsic_registry,
+            caches,
             statics: StaticStorageManager::new(),
             #[cfg(feature = "multithreaded-gc")]
             gc_coordinator: Arc::new(GCCoordinator::new()),
@@ -160,13 +182,13 @@ impl<'m> SharedGlobalState<'m> {
 
     pub fn get_cache_stats(&self) -> CacheStats {
         self.metrics.cache_statistics(CacheSizes {
-            layout_size: self.layout_cache.len(),
-            vmt_size: self.vmt_cache.len(),
-            intrinsic_size: self.intrinsic_cache.len(),
-            intrinsic_field_size: self.intrinsic_field_cache.len(),
-            hierarchy_size: self.hierarchy_cache.len(),
-            static_field_layout_size: self.statics.field_layout_cache.len(),
-            instance_field_layout_size: self.instance_field_layout_cache.len(),
+            layout_size: self.caches.layout_cache.len(),
+            vmt_size: self.caches.vmt_cache.len(),
+            intrinsic_size: self.caches.intrinsic_cache.len(),
+            intrinsic_field_size: self.caches.intrinsic_field_cache.len(),
+            hierarchy_size: self.caches.hierarchy_cache.len(),
+            static_field_layout_size: self.caches.static_field_layout_cache.len(),
+            instance_field_layout_size: self.caches.instance_field_layout_cache.len(),
             assembly_type_info: (
                 self.loader.type_cache_hits.load(Ordering::Relaxed),
                 self.loader.type_cache_misses.load(Ordering::Relaxed),

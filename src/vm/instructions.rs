@@ -2,18 +2,21 @@ use crate::{
     types::{generics::GenericLookup, members::MethodDescription, TypeDescription},
     utils::{decompose_type_source, is_ptr_aligned_to_field},
     value::{
-        layout::{type_layout, FieldLayoutManager, HasLayout},
-        object::{CTSValue, HeapStorage, Object, ObjectRef, ValueType, Vector},
+        layout::{FieldLayoutManager, HasLayout},
+        object::{CTSValue, HeapStorage, ObjectRef},
         pointer::{ManagedPtr, ManagedPtrOwner, UnmanagedPtr},
         string::CLRString,
         StackValue,
     },
     vm::{
+        common::GCHandle,
         exceptions::{ExceptionState, HandlerAddress, UnwindTarget},
         intrinsics::*,
+        layout::type_layout,
+        resolution::{TypeResolutionExt, ValueResolution},
         sync::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering as AtomicOrdering},
         threading::ThreadManagerOps,
-        CallStack, GCHandle, MethodInfo, ResolutionContext, StepResult,
+        CallStack, MethodInfo, ResolutionContext, StepResult,
     },
     vm_expect_stack, vm_pop, vm_push, vm_trace, vm_trace_branch, vm_trace_field,
     vm_trace_instruction,
@@ -652,7 +655,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             LoadArgumentAddress(i) => {
                 let arg = self.get_argument(*i as usize);
-                let live_type = arg.contains_type(&self.current_context());
+                let ctx = self.current_context();
+                let live_type = ctx.stack_value_type(&arg);
                 push!(managed_ptr(
                     self.get_argument_address(*i as usize).as_ptr() as *mut _,
                     live_type,
@@ -679,7 +683,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             LoadLocalAddress(i) => {
                 let local = self.get_local(*i as usize);
-                let live_type = local.contains_type(&self.current_context());
+                let ctx = self.current_context();
+                let live_type = ctx.stack_value_type(&local);
                 let pinned = match state!(|s| &s.info_handle.locals[*i as usize]) {
                     LocalVariable::Variable { pinned, .. } => *pinned,
                     _ => false,
@@ -900,7 +905,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 } else {
                     let obj = ObjectRef::new(
                         gc,
-                        HeapStorage::Boxed(ValueType::new(&t, &self.current_context(), value)),
+                        HeapStorage::Boxed(self.current_context().new_value_type(&t, value)),
                     );
                     self.register_new_object(&obj);
                     push!(ObjectRef(obj));
@@ -982,13 +987,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         let value_size = type_layout(constraint_type_source.clone(), &ctx).size();
                         let value_data =
                             unsafe { slice::from_raw_parts(args[0].as_ptr(), value_size) };
-                        let value = CTSValue::read(&constraint_type_source, &ctx, value_data);
+                        let value = ctx.read_cts_value(&constraint_type_source, value_data);
 
                         let boxed = ObjectRef::new(
                             gc,
-                            HeapStorage::Boxed(ValueType::new(
+                            HeapStorage::Boxed(ctx.new_value_type(
                                 &constraint_type_source,
-                                &ctx,
                                 value.into_stack(),
                             )),
                         );
@@ -1116,7 +1120,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     let elem_size = array.layout.element_layout.size();
                     let target = &array.get()[(elem_size * index)..(elem_size * (index + 1))];
-                    Ok(CTSValue::read(&load_type, &ctx, target).into_stack())
+                    Ok(ctx.read_cts_value(&load_type, target).into_stack())
                 });
                 match value {
                     Ok(v) => push!(v),
@@ -1244,7 +1248,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     AtomicOrdering::Acquire
                 };
 
-                let read_data = |d: &[u8]| -> CTSValue<'gc> { CTSValue::read(&t, &ctx, d) };
+                let read_data = |d: &[u8]| -> CTSValue<'gc> { ctx.read_cts_value(&t, d) };
                 let read_from_pointer = |ptr: *mut u8| {
                     debug_assert!(!ptr.is_null(), "Attempted to read field from null pointer");
                     let layout = FieldLayoutManager::instance_field_layout_cached(
@@ -1479,7 +1483,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 // and layout.size() correctly represents the size of that type.
                 let source = unsafe { slice::from_raw_parts(source_ptr, layout.size()) };
                 let value =
-                    CTSValue::read(&load_type, &self.current_context(), source).into_stack();
+                    self.current_context().read_cts_value(&load_type, source).into_stack();
                 push!(value);
             }
             LoadStaticField {
@@ -1507,12 +1511,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 // Thread-safe path: use GlobalState
                 let value = {
-                    let storage = self.statics().get(field.parent);
+                    let storage = self.statics().get(field.parent, &lookup);
                     let field_data = storage
                         .storage
                         .get_field_atomic(field.parent, name, ordering);
                     let t = ctx.make_concrete(&field.field.return_type);
-                    CTSValue::read(&t, &ctx, &field_data).into_stack()
+                    ctx.read_cts_value(&t, &field_data).into_stack()
                 };
 
                 vm_trace_field!(self, "LOAD_STATIC", name, &value);
@@ -1531,7 +1535,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     .for_type_with_generics(field.parent, &lookup);
                 let field_type = ctx.get_field_desc(field);
                 let value = statics!(|s| {
-                    let storage = s.get(field.parent);
+                    let storage = s.get(field.parent, &lookup);
                     let field_data = storage.storage.get_field_local(field.parent, name);
                     // Static fields are rooted by the assembly's static storage.
                     // ManagedPtr metadata for static fields would need its own side-table if supported.
@@ -1550,7 +1554,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let field_obj = self.get_runtime_field_obj(gc, field, lookup);
 
                 let rfh = self.loader().corlib_type("System.RuntimeFieldHandle");
-                let mut instance = Object::new(rfh, &self.current_context());
+                let mut instance = self.current_context().new_object(rfh);
                 field_obj.write(instance.instance_storage.get_field_mut_local(rfh, "_value"));
 
                 push!(ValueType(Box::new(instance)));
@@ -1560,7 +1564,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let method_obj = self.get_runtime_method_obj(gc, method, lookup);
 
                 let rmh = self.loader().corlib_type("System.RuntimeMethodHandle");
-                let mut instance = Object::new(rmh, &self.current_context());
+                let mut instance = self.current_context().new_object(rmh);
                 method_obj.write(instance.instance_storage.get_field_mut_local(rmh, "_value"));
 
                 push!(ValueType(Box::new(instance)));
@@ -1615,7 +1619,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let ctx = self.current_context();
                 let elem_type = ctx.normalize_type(ctx.make_concrete(elem_type));
 
-                let v = Vector::new(elem_type, length, &ctx);
+                let v = ctx.new_vector(elem_type, length);
                 let o = ObjectRef::new(gc, HeapStorage::Vec(v));
                 self.register_new_object(&o);
                 push!(ObjectRef(o));
@@ -1665,7 +1669,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let new_ctx = self
                         .current_context()
                         .for_type_with_generics(parent, &lookup);
-                    let instance = Object::new(parent, &new_ctx);
+                    let instance = new_ctx.new_object(parent);
 
                     self.constructor_frame(
                         gc,
@@ -1720,7 +1724,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let elem_size = array.layout.element_layout.size();
 
                 let target = &mut array.get_mut()[(elem_size * index)..(elem_size * (index + 1))];
-                let data = CTSValue::new(&store_type, &ctx, value);
+                let data = ctx.new_cts_value(&store_type, value);
                 data.write(target);
             }
             StoreElementPrimitive {
@@ -1815,7 +1819,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     AtomicOrdering::Release
                 };
 
-                let cts_value = CTSValue::new(&t, &ctx, value.clone());
+                let cts_value = ctx.new_cts_value(&t, value.clone());
                 let write_data = |dest: &mut [u8]| cts_value.write(dest);
                 let slice_from_pointer = |dest: *mut u8| {
                     let layout = FieldLayoutManager::instance_field_layout_cached(
@@ -1951,7 +1955,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 let layout = self.type_layout_cached(concrete_t.clone());
                 let mut bytes = vec![0u8; layout.size()];
-                CTSValue::new(&concrete_t, &ctx, value).write(&mut bytes);
+                ctx.new_cts_value(&concrete_t, value).write(&mut bytes);
 
                 unsafe {
                     ptr::copy_nonoverlapping(bytes.as_ptr(), dest_ptr, bytes.len());
@@ -1982,14 +1986,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 // Thread-safe path: use GlobalState
                 {
-                    let storage = self.statics().get(field.parent);
+                    let storage = self.statics().get(field.parent, &lookup);
                     let t = ctx.make_concrete(&field.field.return_type);
                     vm_trace_field!(self, "STORE_STATIC", name, &value);
 
                     let layout = storage.layout();
                     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
                     let mut val_bytes = vec![0u8; field_layout.layout.size()];
-                    CTSValue::new(&t, &ctx, value).write(&mut val_bytes);
+                    ctx.new_cts_value(&t, value).write(&mut val_bytes);
                     storage
                         .storage
                         .set_field_atomic(field.parent, name, &val_bytes, ordering);

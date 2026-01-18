@@ -3,25 +3,21 @@ use crate::{
     utils::DebugStr,
     value::{
         layout::{ArrayLayoutManager, HasLayout, LayoutManager, Scalar},
-        pointer::{ManagedPtr, ManagedPtrOwner, UnmanagedPtr},
+        pointer::{ManagedPtr, ManagedPtrOwner},
         storage::FieldStorage,
         string::CLRString,
         StackValue,
     },
     vm::{
-        context::ResolutionContext,
         sync::{AtomicUsize, Ordering as AtomicOrdering},
         threading::{get_current_thread_id, lock::ThreadSafeLock},
         GCHandle,
     },
-    vm_expect_stack,
 };
 use gc_arena::{Collect, Collection, Gc, Mutation};
 use std::{
-    any,
     cmp::Ordering,
     collections::{HashMap, HashSet},
-    error::Error,
     fmt::{self, Debug, Formatter},
     hash::{Hash, Hasher},
     iter,
@@ -469,48 +465,6 @@ unsafe impl<'gc> Collect for ValueType<'gc> {
     }
 }
 
-fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(data: StackValue) -> T {
-    match data {
-        StackValue::Int32(i) => i
-            .try_into()
-            .unwrap_or_else(|_| panic!("failed to convert from i32")),
-        StackValue::NativeInt(i) => i
-            .try_into()
-            .unwrap_or_else(|_| panic!("failed to convert from isize")),
-        StackValue::UnmanagedPtr(UnmanagedPtr(p))
-        | StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => (p.as_ptr() as usize)
-            .try_into()
-            .unwrap_or_else(|_| panic!("failed to convert from pointer")),
-        other => panic!(
-            "invalid stack value {:?} for conversion into {}",
-            other,
-            any::type_name::<T>()
-        ),
-    }
-}
-
-fn convert_i64<T: TryFrom<i64>>(data: StackValue) -> T
-where
-    T::Error: Error,
-{
-    match data {
-        StackValue::Int64(i) => i.try_into().unwrap_or_else(|e| {
-            panic!(
-                "failed to convert from i64 to {} ({})",
-                any::type_name::<T>(),
-                e
-            )
-        }),
-        other => panic!("invalid stack value {:?} for integer conversion", other),
-    }
-}
-
-fn reinterpret_i64_as_u64(data: StackValue) -> u64 {
-    match data {
-        StackValue::Int64(i) => i as u64, // Reinterpret bits, don't convert
-        other => panic!("invalid stack value {:?} for u64 reinterpretation", other),
-    }
-}
 
 impl<'gc> ValueType<'gc> {
     pub fn size_bytes(&self) -> usize {
@@ -527,47 +481,8 @@ impl<'gc> ValueType<'gc> {
             _ => {}
         }
     }
-    pub fn new(t: &ConcreteType, context: &ResolutionContext, data: StackValue<'gc>) -> Self {
-        match CTSValue::new(t, context, data) {
-            CTSValue::Value(v) => v,
-            CTSValue::Ref(r) => {
-                panic!(
-                    "tried to instantiate value type, received object reference ({:?})",
-                    r
-                )
-            }
-        }
-    }
-
-    pub fn description(&self, context: &ResolutionContext) -> TypeDescription {
-        let asms = &context.loader;
-        match self {
-            ValueType::Bool(_) => asms.corlib_type("System.Boolean"),
-            ValueType::Char(_) => asms.corlib_type("System.Char"),
-            ValueType::Int8(_) => asms.corlib_type("System.SByte"),
-            ValueType::UInt8(_) => asms.corlib_type("System.Byte"),
-            ValueType::Int16(_) => asms.corlib_type("System.Int16"),
-            ValueType::UInt16(_) => asms.corlib_type("System.UInt16"),
-            ValueType::Int32(_) => asms.corlib_type("System.Int32"),
-            ValueType::UInt32(_) => asms.corlib_type("System.UInt32"),
-            ValueType::Int64(_) => asms.corlib_type("System.Int64"),
-            ValueType::UInt64(_) => asms.corlib_type("System.UInt64"),
-            ValueType::NativeInt(_) => asms.corlib_type("System.IntPtr"),
-            ValueType::NativeUInt(_) => asms.corlib_type("System.UIntPtr"),
-            ValueType::Pointer(_) => asms.corlib_type("System.IntPtr"),
-            ValueType::Float32(_) => asms.corlib_type("System.Single"),
-            ValueType::Float64(_) => asms.corlib_type("System.Double"),
-            ValueType::TypedRef => asms.corlib_type("System.TypedReference"),
-            ValueType::Struct(s) => s.description,
-        }
-    }
 }
 
-macro_rules! from_bytes {
-    ($t:ty, $data:expr) => {
-        <$t>::from_ne_bytes($data.try_into().expect("source data was too small"))
-    };
-}
 
 #[derive(Debug)]
 pub enum CTSValue<'gc> {
@@ -576,147 +491,6 @@ pub enum CTSValue<'gc> {
 }
 
 impl<'gc> CTSValue<'gc> {
-    pub fn new(t: &ConcreteType, context: &ResolutionContext, data: StackValue<'gc>) -> Self {
-        use crate::types::generics::GenericLookup;
-        use crate::utils::decompose_type_source;
-        use dotnetdll::prelude::{BaseType, ValueKind};
-        use ValueType::*;
-        let t = context.normalize_type(t.clone());
-        match t.get() {
-            BaseType::Boolean => Self::Value(Bool(convert_num::<u8>(data) != 0)),
-            BaseType::Char => Self::Value(Char(convert_num(data))),
-            BaseType::Int8 => Self::Value(Int8(convert_num(data))),
-            BaseType::UInt8 => Self::Value(UInt8(convert_num(data))),
-            BaseType::Int16 => Self::Value(Int16(convert_num(data))),
-            BaseType::UInt16 => Self::Value(UInt16(convert_num(data))),
-            BaseType::Int32 => Self::Value(Int32(convert_num(data))),
-            BaseType::UInt32 => Self::Value(UInt32(convert_num(data))),
-            BaseType::Int64 => Self::Value(Int64(convert_i64(data))),
-            BaseType::UInt64 => Self::Value(UInt64(reinterpret_i64_as_u64(data))),
-            BaseType::Float32 => Self::Value(Float32(match data {
-                StackValue::NativeFloat(f) => f as f32,
-                other => panic!("invalid stack value {:?} for float conversion", other),
-            })),
-            BaseType::Float64 => Self::Value(Float64(match data {
-                StackValue::NativeFloat(f) => f,
-                other => panic!("invalid stack value {:?} for float conversion", other),
-            })),
-            BaseType::IntPtr => Self::Value(NativeInt(convert_num(data))),
-            BaseType::UIntPtr | BaseType::FunctionPointer(_) => {
-                Self::Value(NativeUInt(convert_num(data)))
-            }
-            BaseType::ValuePointer(_, _) => {
-                vm_expect_stack!(let ManagedPtr(p) = data);
-                Self::Value(Pointer(p))
-            }
-            BaseType::Object | BaseType::String | BaseType::Vector(_, _) => {
-                vm_expect_stack!(let ObjectRef(o) = data);
-                Self::Ref(o)
-            }
-            BaseType::Type {
-                value_kind: Some(ValueKind::Class),
-                ..
-            } => {
-                vm_expect_stack!(let ObjectRef(o) = data);
-                Self::Ref(o)
-            }
-            BaseType::Type {
-                value_kind: None | Some(ValueKind::ValueType),
-                source,
-            } => {
-                let (ut, type_generics) = decompose_type_source(source);
-                let new_lookup = GenericLookup::new(type_generics);
-                let new_ctx = context.with_generics(&new_lookup);
-                let td = new_ctx.locate_type(ut);
-
-                if let Some(e) = td.is_enum() {
-                    let enum_type = new_ctx.make_concrete(e);
-                    return CTSValue::new(&enum_type, context, data);
-                }
-
-                if td.type_name() == "System.TypedReference" {
-                    return Self::Value(TypedRef);
-                }
-
-                vm_expect_stack!(let ValueType(o) = data);
-                if !new_ctx.is_a(o.description.into(), td.into()) {
-                    panic!(
-                        "type mismatch: expected {:?}, found {:?}",
-                        td, o.description
-                    );
-                }
-                Self::Value(Struct(*o))
-            }
-            rest => panic!("tried to deserialize StackValue {:?}", rest),
-        }
-    }
-
-    pub fn read(t: &ConcreteType, context: &ResolutionContext, data: &[u8]) -> CTSValue<'gc> {
-        use crate::types::generics::GenericLookup;
-        use crate::utils::decompose_type_source;
-        use dotnetdll::prelude::{BaseType, ValueKind};
-        use ValueType::*;
-        let t = context.normalize_type(t.clone());
-        match t.get() {
-            BaseType::Boolean => Self::Value(Bool(data[0] != 0)),
-            BaseType::Char => Self::Value(Char(from_bytes!(u16, data))),
-            BaseType::Int8 => Self::Value(Int8(data[0] as i8)),
-            BaseType::UInt8 => Self::Value(UInt8(data[0])),
-            BaseType::Int16 => Self::Value(Int16(from_bytes!(i16, data))),
-            BaseType::UInt16 => Self::Value(UInt16(from_bytes!(u16, data))),
-            BaseType::Int32 => Self::Value(Int32(from_bytes!(i32, data))),
-            BaseType::UInt32 => Self::Value(UInt32(from_bytes!(u32, data))),
-            BaseType::Int64 => Self::Value(Int64(from_bytes!(i64, data))),
-            BaseType::UInt64 => Self::Value(UInt64(from_bytes!(u64, data))),
-            BaseType::Float32 => Self::Value(Float32(from_bytes!(f32, data))),
-            BaseType::Float64 => Self::Value(Float64(from_bytes!(f64, data))),
-            BaseType::IntPtr => Self::Value(NativeInt(from_bytes!(isize, data))),
-            BaseType::UIntPtr | BaseType::FunctionPointer(_) => {
-                Self::Value(NativeUInt(from_bytes!(usize, data)))
-            }
-            BaseType::ValuePointer(_, _) => {
-                // Read only the pointer value (8 bytes) from memory.
-                // Metadata (type, owner, pinned) should be in the Object's side-table,
-                // but CTSValue::read doesn't have access to it.
-                // We create a ManagedPtr with a placeholder type (IntPtr).
-                // The actual type information would need to come from the side-table.
-                let ptr = ManagedPtr::read_ptr_only(data);
-                let placeholder_type = context.loader.corlib_type("System.IntPtr");
-                Self::Value(Pointer(ManagedPtr::new(ptr, placeholder_type, None, false)))
-            }
-            BaseType::Object
-            | BaseType::String
-            | BaseType::Vector(_, _)
-            | BaseType::Array(_, _) => Self::Ref(ObjectRef::read(data)),
-            BaseType::Type {
-                value_kind: Some(ValueKind::Class),
-                ..
-            } => Self::Ref(ObjectRef::read(data)),
-            BaseType::Type {
-                value_kind: None | Some(ValueKind::ValueType),
-                source,
-            } => {
-                let (ut, type_generics) = decompose_type_source(source);
-                let new_lookup = GenericLookup::new(type_generics);
-                let new_ctx = context.with_generics(&new_lookup);
-                let td = new_ctx.locate_type(ut);
-
-                if let Some(e) = td.is_enum() {
-                    let enum_type = new_ctx.make_concrete(e);
-                    return CTSValue::read(&enum_type, context, data);
-                }
-
-                if td.type_name() == "System.TypedReference" {
-                    return Self::Value(TypedRef);
-                }
-
-                let mut instance = Object::new(td, &new_ctx);
-                instance.instance_storage.get_mut().copy_from_slice(data);
-                Self::Value(Struct(instance))
-            }
-        }
-    }
-
     pub fn into_stack(self) -> StackValue<'gc> {
         use CTSValue::*;
         use ValueType::*;
@@ -777,8 +551,8 @@ impl<'gc> CTSValue<'gc> {
 pub struct Vector<'gc> {
     pub element: ConcreteType,
     pub layout: ArrayLayoutManager,
-    storage: Vec<u8>,
-    _contains_gc: PhantomData<fn(&'gc ()) -> &'gc ()>,
+    pub(crate) storage: Vec<u8>,
+    pub(crate) _contains_gc: PhantomData<fn(&'gc ()) -> &'gc ()>,
 }
 
 unsafe impl Collect for Vector<'_> {
@@ -815,26 +589,6 @@ impl<'gc> Vector<'gc> {
 
     pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
         self.layout.resurrect(&self.storage, fc, visited);
-    }
-    pub fn new(element: ConcreteType, size: usize, context: &ResolutionContext) -> Self {
-        let layout = ArrayLayoutManager::new(element.clone(), size, context);
-        // Additional safety check: ensure the total allocation size is reasonable.
-        // ArrayLayoutManager::new already does some checks, but let's be extra safe here.
-        let total_size = layout.size();
-        if total_size > 0x7FFF_FFFF {
-            // 2GB limit (common in .NET)
-            panic!(
-                "attempted to allocate massive vector of {} bytes (element: {:?}, length: {})",
-                total_size, element, size
-            );
-        }
-
-        Self {
-            storage: vec![0; total_size], // TODO: initialize properly
-            layout,
-            element,
-            _contains_gc: PhantomData,
-        }
     }
 
     pub fn get(&self) -> &[u8] {
@@ -946,10 +700,10 @@ impl<'gc> Object<'gc> {
             }
         }
     }
-    pub fn new(description: TypeDescription, context: &ResolutionContext) -> Self {
+    pub fn new(description: TypeDescription, instance_storage: FieldStorage) -> Self {
         Self {
             description,
-            instance_storage: FieldStorage::instance_fields(description, context),
+            instance_storage,
             finalizer_suppressed: false,
             sync_block_index: None,
             managed_ptr_metadata: ThreadSafeLock::new(ManagedPtrSideTable::new()),

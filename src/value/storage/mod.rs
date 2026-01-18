@@ -1,13 +1,13 @@
 use crate::{
     types::TypeDescription,
-    utils::{is_ptr_aligned_to_field, DebugStr},
+    utils::{
+        is_ptr_aligned_to_field,
+        sync::{Arc, AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering},
+        DebugStr,
+    },
     value::{
         layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
         object::ObjectRef,
-    },
-    vm::{
-        context::ResolutionContext,
-        sync::{Arc, AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering},
     },
 };
 use gc_arena::{Collect, Collection};
@@ -17,9 +17,6 @@ use std::{
     ops::Range,
 };
 
-mod statics;
-
-pub use statics::*;
 
 #[derive(Clone, PartialEq)]
 pub struct FieldStorage {
@@ -86,23 +83,8 @@ impl FieldStorage {
         }
     }
 
-    pub fn instance_fields(description: TypeDescription, context: &ResolutionContext) -> Self {
-        Self::new(FieldLayoutManager::instance_field_layout_cached(
-            description,
-            context,
-            None,
-        ))
-    }
-
     pub fn resurrect<'gc>(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
         self.layout.resurrect(&self.storage, fc, visited);
-    }
-
-    pub fn static_fields(description: TypeDescription, context: &ResolutionContext) -> Self {
-        Self::new(Arc::new(FieldLayoutManager::static_fields(
-            description,
-            context,
-        )))
     }
 
     pub fn get(&self) -> &[u8] {

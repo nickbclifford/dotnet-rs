@@ -7,8 +7,9 @@ use crate::{
     },
     utils::{decompose_type_source, ResolutionS},
     value::object::ObjectHandle,
-    vm::{state::SharedGlobalState, sync::Arc},
+    vm::{state::GlobalCaches, sync::Arc},
 };
+use crate::vm::resolution::{TypeResolutionExt, ValueResolution};
 use dotnetdll::prelude::{
     BaseType, FieldSource, MemberType, MethodType, TypeSource, UserMethod, UserType, ValueKind,
 };
@@ -21,7 +22,7 @@ pub struct ResolutionContext<'a, 'm> {
     pub resolution: ResolutionS,
     pub type_owner: Option<TypeDescription>,
     pub method_owner: Option<MethodDescription>,
-    pub shared: Arc<SharedGlobalState<'m>>,
+    pub caches: Arc<GlobalCaches>,
 }
 
 impl<'a, 'm> ResolutionContext<'a, 'm> {
@@ -29,7 +30,7 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
         generics: &'a GenericLookup,
         loader: &'m AssemblyLoader,
         resolution: ResolutionS,
-        shared: Arc<SharedGlobalState<'m>>,
+        caches: Arc<GlobalCaches>,
     ) -> Self {
         Self {
             generics,
@@ -37,7 +38,7 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
             resolution,
             type_owner: None,
             method_owner: None,
-            shared,
+            caches,
         }
     }
 
@@ -45,7 +46,7 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
         method: MethodDescription,
         loader: &'m AssemblyLoader,
         generics: &'a GenericLookup,
-        shared: Arc<SharedGlobalState<'m>>,
+        caches: Arc<GlobalCaches>,
     ) -> Self {
         Self {
             generics,
@@ -53,7 +54,7 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
             resolution: method.resolution(),
             type_owner: Some(method.parent),
             method_owner: Some(method),
-            shared,
+            caches,
         }
     }
 
@@ -64,7 +65,7 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
             resolution: self.resolution,
             type_owner: self.type_owner,
             method_owner: self.method_owner,
-            shared: self.shared.clone(),
+            caches: self.caches.clone(),
         }
     }
 
@@ -83,7 +84,7 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
             loader: self.loader,
             type_owner: Some(td),
             method_owner: None,
-            shared: self.shared.clone(),
+            caches: self.caches.clone(),
         }
     }
 
@@ -121,7 +122,7 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
         }
 
         let cache_key = (value.clone(), ancestor.clone());
-        if let Some(cached) = self.shared.hierarchy_cache.get(&cache_key) {
+        if let Some(cached) = self.caches.hierarchy_cache.get(&cache_key) {
             return *cached;
         }
 
@@ -154,7 +155,7 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
             }
         }
 
-        self.shared.hierarchy_cache.insert(cache_key, result);
+        self.caches.hierarchy_cache.insert(cache_key, result);
         result
     }
 
@@ -164,7 +165,7 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
             Obj(o) => o.description,
             Vec(_) => self.loader.corlib_type("System.Array"),
             Str(_) => self.loader.corlib_type("System.String"),
-            Boxed(v) => v.description(self),
+            Boxed(v) => self.value_type_description(v),
         }
     }
 

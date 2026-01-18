@@ -5,12 +5,12 @@ use crate::{
         members::{FieldDescription, MethodDescription},
     },
     value::{
-        layout::{type_layout, FieldLayoutManager, HasLayout},
+        layout::{FieldLayoutManager, HasLayout},
         object::{HeapStorage, Object, ObjectRef},
         pointer::{ManagedPtr, ManagedPtrOwner},
         StackValue,
     },
-    vm::{context::ResolutionContext, CallStack, GCHandle, StepResult},
+    vm::{context::ResolutionContext, layout::type_layout, resolution::ValueResolution, CallStack, GCHandle, StepResult},
     vm_push,
 };
 use dotnetdll::prelude::ParameterType;
@@ -74,7 +74,7 @@ pub fn intrinsic_span_get_item<'gc, 'm: 'gc>(
         panic!("invalid type on stack");
     }
 
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
     let span_layout = FieldLayoutManager::instance_field_layout_cached(
         m.inner_type,
         &ctx,
@@ -124,7 +124,7 @@ pub fn intrinsic_span_get_length<'gc, 'm: 'gc>(
         panic!("invalid type on stack");
     }
 
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
     let layout = FieldLayoutManager::instance_field_layout_cached(
         m.inner_type,
         &ctx,
@@ -182,7 +182,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
 
     let obj_val = stack.pop_stack(gc);
 
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
 
     let (base_ptr, total_len, h_opt, element_type, element_size) = match obj_val {
         StackValue::ObjectRef(ObjectRef(Some(h))) => {
@@ -263,7 +263,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
     };
     let ctx = ctx.with_generics(&new_lookup);
 
-    let mut span = Object::new(span_type, &ctx);
+    let mut span = ctx.new_object(span_type);
 
     if let Some(h) = h_opt {
         let element_type_desc = stack.loader().find_concrete_type(element_type);
@@ -303,7 +303,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let element_type = &generics.method_generics[0];
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.clone());
+    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
     let element_size = type_layout(element_type.clone(), &ctx).size();
 
     pop_args!(stack, gc, [ValueType(field_handle)]);
@@ -339,7 +339,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
         let span_type = stack.loader().corlib_type("System.ReadOnlySpan`1");
         let span_lookup = GenericLookup::new(vec![element_type.clone()]);
         let ctx = ctx.with_generics(&span_lookup);
-        let mut span_instance = Object::new(span_type, &ctx);
+        let mut span_instance = ctx.new_object(span_type);
 
         let element_desc = stack.loader().find_concrete_type(element_type.clone());
         let managed = ManagedPtr::new(

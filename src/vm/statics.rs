@@ -3,14 +3,14 @@ use crate::{
     utils::DebugStr,
     value::{layout::FieldLayoutManager, storage::FieldStorage},
     vm::{
+        common::GCHandle,
         context::ResolutionContext,
         gc::GCCoordinator,
         metrics::RuntimeMetrics,
         sync::{Arc, AtomicU64, AtomicU8, Ordering},
         threading::ThreadManagerOps,
-        CallStack, GCHandle, MethodInfo,
+        CallStack, MethodInfo,
     },
-    vm_trace,
 };
 use gc_arena::{Collect, Collection};
 use parking_lot::{Condvar, Mutex, RwLock};
@@ -82,10 +82,7 @@ pub struct StaticStorageManager {
     /// Thread-safe map of types to their static storage.
     /// We use a RwLock for the map itself to allow concurrent access to different types,
     /// and each StaticStorage has its own locks for even more granularity.
-    types: RwLock<HashMap<TypeDescription, Arc<StaticStorage>>>,
-    /// Cache for static field layouts to avoid recomputing them on every access.
-    pub(crate) field_layout_cache:
-        dashmap::DashMap<(TypeDescription, GenericLookup), Arc<FieldLayoutManager>>,
+    types: RwLock<HashMap<(TypeDescription, GenericLookup), Arc<StaticStorage>>>,
 }
 
 unsafe impl Collect for StaticStorageManager {
@@ -101,7 +98,7 @@ impl Debug for StaticStorageManager {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let types = self.types.read();
         f.debug_map()
-            .entries(types.iter().map(|(k, v)| (DebugStr(k.type_name()), v)))
+            .entries(types.iter().map(|(k, v)| (DebugStr(k.0.type_name()), v)))
             .finish()
     }
 }
@@ -122,7 +119,6 @@ impl StaticStorageManager {
     pub fn new() -> Self {
         Self {
             types: RwLock::new(HashMap::new()),
-            field_layout_cache: dashmap::DashMap::new(),
         }
     }
 
@@ -134,7 +130,7 @@ impl StaticStorageManager {
     ) -> Arc<FieldLayoutManager> {
         let key = (description, context.generics.clone());
 
-        if let Some(cached) = self.field_layout_cache.get(&key) {
+        if let Some(cached) = context.caches.static_field_layout_cache.get(&key) {
             return Arc::clone(&cached);
         }
 
@@ -146,7 +142,7 @@ impl StaticStorageManager {
             context,
             metrics,
         ));
-        self.field_layout_cache.insert(key, Arc::clone(&result));
+        context.caches.static_field_layout_cache.insert(key, Arc::clone(&result));
         result
     }
 }
@@ -158,19 +154,23 @@ impl Default for StaticStorageManager {
 }
 
 impl StaticStorageManager {
-    pub fn get(&self, description: TypeDescription) -> Arc<StaticStorage> {
+    pub fn get(
+        &self,
+        description: TypeDescription,
+        generics: &GenericLookup,
+    ) -> Arc<StaticStorage> {
         let types = self.types.read();
         types
-            .get(&description)
+            .get(&(description, generics.clone()))
             .cloned()
             .expect("missing type in static storage")
     }
 
     /// Get the current initialization state of a type.
-    pub fn get_init_state(&self, description: TypeDescription) -> u8 {
+    pub fn get_init_state(&self, description: TypeDescription, generics: &GenericLookup) -> u8 {
         let types = self.types.read();
         types
-            .get(&description)
+            .get(&(description, generics.clone()))
             .map(|s| s.init_state.load(Ordering::Acquire))
             .unwrap_or(INIT_STATE_UNINITIALIZED)
     }
@@ -189,10 +189,11 @@ impl StaticStorageManager {
         thread_id: u64,
         metrics: Option<&RuntimeMetrics>,
     ) -> StaticInitResult {
+        let key = (description, context.generics.clone());
         // Ensure the storage exists. We use a write lock on the types map for this.
         {
             let mut types = self.types.write();
-            types.entry(description).or_insert_with(|| {
+            types.entry(key.clone()).or_insert_with(|| {
                 // Use the cached layout if available, or create and cache it
                 let layout = self.get_static_field_layout(description, context, metrics);
                 Arc::new(StaticStorage {
@@ -206,7 +207,7 @@ impl StaticStorageManager {
         }
 
         // Get the storage and check its state.
-        let storage = self.get(description);
+        let storage = self.get(description, context.generics);
         let state = storage.init_state.load(Ordering::Acquire);
 
         if state == INIT_STATE_INITIALIZED {
@@ -265,9 +266,9 @@ impl StaticStorageManager {
 
     /// Mark a type as fully initialized after its .cctor completes.
     /// This must be called after the .cctor returned by `init()` has finished executing.
-    pub fn mark_initialized(&self, description: TypeDescription) {
+    pub fn mark_initialized(&self, description: TypeDescription, generics: &GenericLookup) {
         let types = self.types.read();
-        if let Some(storage) = types.get(&description) {
+        if let Some(storage) = types.get(&(description, generics.clone())) {
             storage
                 .init_state
                 .store(INIT_STATE_INITIALIZED, Ordering::Release);
@@ -282,11 +283,12 @@ impl StaticStorageManager {
     pub fn wait_for_init(
         &self,
         description: TypeDescription,
+        generics: &GenericLookup,
         thread_manager: &impl ThreadManagerOps,
         thread_id: u64,
         gc_coordinator: &GCCoordinator,
     ) {
-        let storage = self.get(description);
+        let storage = self.get(description, generics);
 
         loop {
             // Check state before acquiring lock
@@ -345,7 +347,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             loader: self.loader(),
             type_owner: Some(description),
             method_owner: None,
-            shared: self.shared.clone(),
+            caches: self.shared.caches.clone(),
         };
 
         loop {
@@ -381,6 +383,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     #[cfg(feature = "multithreaded-gc")]
                     self.shared.statics.wait_for_init(
                         description,
+                        &generics,
                         self.shared.thread_manager.as_ref(),
                         self.thread_id.get(),
                         &self.shared.gc_coordinator,
@@ -388,6 +391,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     #[cfg(not(feature = "multithreaded-gc"))]
                     self.shared.statics.wait_for_init(
                         description,
+                        &generics,
                         self.shared.thread_manager.as_ref(),
                         self.thread_id.get(),
                         &Default::default(),
@@ -395,11 +399,5 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 }
             }
         }
-    }
-
-    /// Mark a type's static initialization as complete after its .cctor returns.
-    /// This should be called when a .cctor method returns normally.
-    pub fn mark_type_initialized(&mut self, description: TypeDescription) {
-        self.shared.statics.mark_initialized(description);
     }
 }

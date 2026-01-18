@@ -6,10 +6,9 @@ use crate::{
     utils::decompose_type_source,
     value::{
         layout::{FieldLayoutManager, LayoutManager, Scalar},
-        object::Object,
         StackValue,
     },
-    vm::{context::ResolutionContext, CallStack, GCHandle},
+    vm::{context::ResolutionContext, resolution::ValueResolution, CallStack, GCHandle},
 };
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
@@ -225,7 +224,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         let new_ctx = ctx.with_generics(&new_lookup);
                         let td = new_ctx.locate_type(ut);
 
-                        let mut instance = Object::new(td, &new_ctx);
+                        let mut instance = new_ctx.new_object(td);
 
                         // We need an array of pointers to the arguments for ffi_call.
                         // Since arg_values: Vec<Arg> already contains these pointers,
