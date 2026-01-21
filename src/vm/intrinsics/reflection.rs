@@ -1,12 +1,13 @@
 use crate::{
-    assemblies::{AssemblyLoader, SUPPORT_ASSEMBLY},
+    assemblies::SUPPORT_ASSEMBLY,
     pop_args,
     types::{
         generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
+        runtime::{RuntimeMethodSignature, RuntimeType},
         TypeDescription,
     },
-    utils::{decompose_type_source, ResolutionS},
+    utils::decompose_type_source,
     value::{
         layout::{LayoutManager, Scalar},
         object::{HeapStorage, Object, ObjectRef},
@@ -16,203 +17,14 @@ use crate::{
         context::ResolutionContext,
         layout::type_layout,
         resolution::{TypeResolutionExt, ValueResolution},
-        sync::Ordering,
         CallStack, GCHandle, MethodInfo, StepResult,
     },
     vm_pop, vm_push,
 };
 use dotnetdll::prelude::{BaseType, Kind, MemberType, MethodType, TypeSource};
-use std::{fmt::Debug, hash::Hash};
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct RuntimeMethodSignature; // TODO
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum RuntimeType {
-    Void,
-    Boolean,
-    Char,
-    Int8,
-    UInt8,
-    Int16,
-    UInt16,
-    Int32,
-    UInt32,
-    Int64,
-    UInt64,
-    Float32,
-    Float64,
-    IntPtr,
-    UIntPtr,
-    Object,
-    String,
-    Type(TypeDescription),
-    Generic(TypeDescription, Vec<RuntimeType>),
-    Vector(Box<RuntimeType>),
-    Array(Box<RuntimeType>, u32),
-    Pointer(Box<RuntimeType>),
-    ByRef(Box<RuntimeType>),
-    ValuePointer(Box<RuntimeType>, bool),
-    FunctionPointer(RuntimeMethodSignature),
-    TypeParameter {
-        owner: TypeDescription,
-        index: u16,
-    },
-    MethodParameter {
-        owner: MethodDescription,
-        index: u16,
-    },
-}
-
-impl RuntimeType {
-    pub fn resolution(&self, loader: &AssemblyLoader) -> ResolutionS {
-        match self {
-            RuntimeType::Void
-            | RuntimeType::Boolean
-            | RuntimeType::Char
-            | RuntimeType::Int8
-            | RuntimeType::UInt8
-            | RuntimeType::Int16
-            | RuntimeType::UInt16
-            | RuntimeType::Int32
-            | RuntimeType::UInt32
-            | RuntimeType::Int64
-            | RuntimeType::UInt64
-            | RuntimeType::Float32
-            | RuntimeType::Float64
-            | RuntimeType::IntPtr
-            | RuntimeType::UIntPtr
-            | RuntimeType::Object
-            | RuntimeType::String
-            | RuntimeType::Vector(_)
-            | RuntimeType::Array(_, _)
-            | RuntimeType::Pointer(_)
-            | RuntimeType::ByRef(_)
-            | RuntimeType::ValuePointer(_, _)
-            | RuntimeType::FunctionPointer(_) => loader.corlib_type("System.Object").resolution,
-            RuntimeType::Type(td) => td.resolution,
-            RuntimeType::Generic(td, _) => td.resolution,
-            RuntimeType::TypeParameter { owner, .. } => owner.resolution,
-            RuntimeType::MethodParameter { owner, .. } => owner.resolution(),
-        }
-    }
-
-    pub fn get_name(&self) -> String {
-        match self {
-            RuntimeType::Void => "Void".to_string(),
-            RuntimeType::Boolean => "Boolean".to_string(),
-            RuntimeType::Char => "Char".to_string(),
-            RuntimeType::Int8 => "SByte".to_string(),
-            RuntimeType::UInt8 => "Byte".to_string(),
-            RuntimeType::Int16 => "Int16".to_string(),
-            RuntimeType::UInt16 => "UInt16".to_string(),
-            RuntimeType::Int32 => "Int32".to_string(),
-            RuntimeType::UInt32 => "UInt32".to_string(),
-            RuntimeType::Int64 => "Int64".to_string(),
-            RuntimeType::UInt64 => "UInt64".to_string(),
-            RuntimeType::Float32 => "Single".to_string(),
-            RuntimeType::Float64 => "Double".to_string(),
-            RuntimeType::IntPtr => "IntPtr".to_string(),
-            RuntimeType::UIntPtr => "UIntPtr".to_string(),
-            RuntimeType::Object => "Object".to_string(),
-            RuntimeType::String => "String".to_string(),
-            RuntimeType::Type(td) | RuntimeType::Generic(td, _) => td.definition().name.to_string(),
-            RuntimeType::Vector(t) => format!("{}[]", t.get_name()),
-            RuntimeType::Array(t, rank) => {
-                let commas = if *rank > 1 {
-                    ",".repeat(*rank as usize - 1)
-                } else {
-                    "".to_string()
-                };
-                format!("{}[{}]", t.get_name(), commas)
-            }
-            RuntimeType::Pointer(t) => format!("{}*", t.get_name()),
-            RuntimeType::ByRef(t) => format!("{}&", t.get_name()),
-            RuntimeType::ValuePointer(t, _) => format!("{}*", t.get_name()),
-            RuntimeType::TypeParameter { owner, index } => owner
-                .definition()
-                .generic_parameters
-                .get(*index as usize)
-                .map(|p| p.name.to_string())
-                .unwrap_or_else(|| format!("!{}", index)),
-            RuntimeType::MethodParameter { index, .. } => format!("!!{}", index),
-            RuntimeType::FunctionPointer(_) => "method*".to_string(),
-        }
-    }
-
-    pub fn to_concrete(&self, loader: &AssemblyLoader) -> ConcreteType {
-        let corlib_res = loader.corlib_type("System.Object").resolution;
-        match self {
-            RuntimeType::Void => ConcreteType::from(loader.corlib_type("System.Void")),
-            RuntimeType::Boolean => ConcreteType::new(corlib_res, BaseType::Boolean),
-            RuntimeType::Char => ConcreteType::new(corlib_res, BaseType::Char),
-            RuntimeType::Int8 => ConcreteType::new(corlib_res, BaseType::Int8),
-            RuntimeType::UInt8 => ConcreteType::new(corlib_res, BaseType::UInt8),
-            RuntimeType::Int16 => ConcreteType::new(corlib_res, BaseType::Int16),
-            RuntimeType::UInt16 => ConcreteType::new(corlib_res, BaseType::UInt16),
-            RuntimeType::Int32 => ConcreteType::new(corlib_res, BaseType::Int32),
-            RuntimeType::UInt32 => ConcreteType::new(corlib_res, BaseType::UInt32),
-            RuntimeType::Int64 => ConcreteType::new(corlib_res, BaseType::Int64),
-            RuntimeType::UInt64 => ConcreteType::new(corlib_res, BaseType::UInt64),
-            RuntimeType::Float32 => ConcreteType::new(corlib_res, BaseType::Float32),
-            RuntimeType::Float64 => ConcreteType::new(corlib_res, BaseType::Float64),
-            RuntimeType::IntPtr => ConcreteType::new(corlib_res, BaseType::IntPtr),
-            RuntimeType::UIntPtr => ConcreteType::new(corlib_res, BaseType::UIntPtr),
-            RuntimeType::Object => ConcreteType::new(corlib_res, BaseType::Object),
-            RuntimeType::String => ConcreteType::new(corlib_res, BaseType::String),
-            RuntimeType::Type(td) => ConcreteType::from(*td),
-            RuntimeType::Generic(td, args) => {
-                let index = td
-                    .resolution
-                    .definition()
-                    .type_definitions
-                    .iter()
-                    .position(|t| std::ptr::eq(t, td.definition()))
-                    .unwrap();
-                let source = TypeSource::Generic {
-                    base: dotnetdll::prelude::UserType::Definition(
-                        td.resolution
-                            .definition()
-                            .type_definition_index(index)
-                            .expect("invalid type definition"),
-                    ),
-                    parameters: args.iter().map(|a| a.to_concrete(loader)).collect(),
-                };
-                ConcreteType::new(
-                    td.resolution,
-                    BaseType::Type {
-                        source,
-                        value_kind: None,
-                    },
-                )
-            }
-            RuntimeType::Vector(t) => {
-                ConcreteType::new(corlib_res, BaseType::Vector(vec![], t.to_concrete(loader)))
-            }
-            RuntimeType::Array(t, rank) => ConcreteType::new(
-                corlib_res,
-                BaseType::Array(
-                    t.to_concrete(loader),
-                    dotnetdll::binary::signature::encoded::ArrayShape {
-                        rank: *rank as usize,
-                        sizes: vec![],
-                        lower_bounds: vec![],
-                    },
-                ),
-            ),
-            RuntimeType::Pointer(t) | RuntimeType::ByRef(t) | RuntimeType::ValuePointer(t, _) => {
-                ConcreteType::new(
-                    corlib_res,
-                    BaseType::ValuePointer(vec![], Some(t.to_concrete(loader))),
-                )
-            }
-            RuntimeType::TypeParameter { .. } | RuntimeType::MethodParameter { .. } => {
-                ConcreteType::new(corlib_res, BaseType::Object)
-            }
-            rest => todo!("convert {rest:?} to ConcreteType"),
-        }
-    }
-}
+#[cfg(feature = "multithreaded-gc")]
+use crate::vm::sync::Ordering;
 
 fn get_runtime_member_index<T: PartialEq>(
     members: &mut Vec<(T, GenericLookup)>,
@@ -228,8 +40,33 @@ fn get_runtime_member_index<T: PartialEq>(
         })
 }
 
-impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
-    pub fn pre_initialize_reflection(&mut self, gc: GCHandle<'gc>) {
+pub trait ReflectionExtensions<'gc, 'm> {
+    fn pre_initialize_reflection(&mut self, gc: GCHandle<'gc>);
+    fn get_runtime_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> ObjectRef<'gc>;
+    fn resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> RuntimeType;
+    fn resolve_runtime_method(&self, obj: ObjectRef<'gc>) -> (MethodDescription, GenericLookup);
+    fn resolve_runtime_field(&self, obj: ObjectRef<'gc>) -> (FieldDescription, GenericLookup);
+    fn make_runtime_type(&self, ctx: &ResolutionContext, t: &MethodType) -> RuntimeType;
+    fn get_handle_for_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> Object<'gc>;
+    fn get_runtime_method_index(&mut self, method: MethodDescription, lookup: GenericLookup)
+        -> u16;
+    fn get_runtime_field_index(&mut self, field: FieldDescription, lookup: GenericLookup) -> u16;
+    fn get_runtime_method_obj(
+        &mut self,
+        gc: GCHandle<'gc>,
+        method: MethodDescription,
+        lookup: GenericLookup,
+    ) -> ObjectRef<'gc>;
+    fn get_runtime_field_obj(
+        &mut self,
+        gc: GCHandle<'gc>,
+        field: FieldDescription,
+        lookup: GenericLookup,
+    ) -> ObjectRef<'gc>;
+}
+
+impl<'gc, 'm: 'gc> ReflectionExtensions<'gc, 'm> for CallStack<'gc, 'm> {
+    fn pre_initialize_reflection(&mut self, gc: GCHandle<'gc>) {
         let blessed = [
             RuntimeType::Void,
             RuntimeType::Boolean,
@@ -255,7 +92,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
     }
 
-    pub fn get_runtime_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> ObjectRef<'gc> {
+    fn get_runtime_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> ObjectRef<'gc> {
         if let Some(obj) = self.runtime_types_read().get(&target) {
             return *obj;
         }
@@ -301,7 +138,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         obj_ref
     }
 
-    pub fn resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> RuntimeType {
+    fn resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> RuntimeType {
         obj.as_object(|instance| {
             let ct = instance
                 .instance_storage
@@ -320,10 +157,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         })
     }
 
-    pub fn resolve_runtime_method(
-        &self,
-        obj: ObjectRef<'gc>,
-    ) -> (MethodDescription, GenericLookup) {
+    fn resolve_runtime_method(&self, obj: ObjectRef<'gc>) -> (MethodDescription, GenericLookup) {
         obj.as_object(|instance| {
             let data = instance
                 .instance_storage
@@ -342,7 +176,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         })
     }
 
-    pub fn resolve_runtime_field(&self, obj: ObjectRef<'gc>) -> (FieldDescription, GenericLookup) {
+    fn resolve_runtime_field(&self, obj: ObjectRef<'gc>) -> (FieldDescription, GenericLookup) {
         obj.as_object(|instance| {
             let data = instance
                 .instance_storage
@@ -361,7 +195,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         })
     }
 
-    pub fn make_runtime_type(&self, ctx: &ResolutionContext, t: &MethodType) -> RuntimeType {
+    fn make_runtime_type(&self, ctx: &ResolutionContext, t: &MethodType) -> RuntimeType {
         match t {
             MethodType::Base(b) => match &**b {
                 BaseType::Boolean => RuntimeType::Boolean,
@@ -423,7 +257,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
     }
 
-    pub fn get_handle_for_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> Object<'gc> {
+    fn get_handle_for_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> Object<'gc> {
         let rth = self.loader().corlib_type("System.RuntimeTypeHandle");
         let mut instance = self.current_context().new_object(rth);
         let handle_location = instance.instance_storage.get_field_mut_local(rth, "_value");
@@ -431,7 +265,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         instance
     }
 
-    pub fn get_runtime_method_index(
+    fn get_runtime_method_index(
         &mut self,
         method: MethodDescription,
         lookup: GenericLookup,
@@ -441,17 +275,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         idx as u16
     }
 
-    pub fn get_runtime_field_index(
-        &mut self,
-        field: FieldDescription,
-        lookup: GenericLookup,
-    ) -> u16 {
+    fn get_runtime_field_index(&mut self, field: FieldDescription, lookup: GenericLookup) -> u16 {
         let mut fields = self.runtime_fields_write();
         let idx = get_runtime_member_index(&mut fields, field, lookup);
         idx as u16
     }
 
-    pub fn get_runtime_method_obj(
+    fn get_runtime_method_obj(
         &mut self,
         gc: GCHandle<'gc>,
         method: MethodDescription,
@@ -508,7 +338,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         obj_ref
     }
 
-    pub fn get_runtime_field_obj(
+    fn get_runtime_field_obj(
         &mut self,
         gc: GCHandle<'gc>,
         field: FieldDescription,
@@ -1127,7 +957,12 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
+    let ctx = ResolutionContext::for_method(
+        method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
     let obj = vm_pop!(stack, gc);
     let object_type = match obj {
         StackValue::ObjectRef(ObjectRef(Some(h))) => ctx.get_heap_description(h),
@@ -1148,7 +983,12 @@ pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
+    let ctx = ResolutionContext::for_method(
+        method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
     let value = match &*layout {
@@ -1166,7 +1006,12 @@ pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<'gc, 'm: 'g
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
+    let ctx = ResolutionContext::for_method(
+        method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
     vm_push!(stack, gc, Int32(layout.is_or_contains_refs() as i32));
@@ -1213,7 +1058,12 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
 ) -> StepResult {
     let target_ct = generics.method_generics[0].clone();
     let target_td = stack.loader().find_concrete_type(target_ct.clone());
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
+    let ctx = ResolutionContext::for_method(
+        method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
 
     if target_td.is_value_type(&ctx) {
         let instance = ctx.new_object(target_td);
@@ -1314,8 +1164,12 @@ pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc>(
     let target = stack.resolve_runtime_type(o);
     let target_ct = target.to_concrete(stack.loader());
     let target_desc = stack.loader().find_concrete_type(target_ct);
-    let ctx =
-        ResolutionContext::for_method(_method, stack.loader(), generics, stack.shared.caches.clone());
+    let ctx = ResolutionContext::for_method(
+        _method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
     let value = target_desc.is_value_type(&ctx);
     vm_push!(stack, gc, Int32(value as i32));
     StepResult::InstructionStepped
@@ -1386,8 +1240,12 @@ pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc>(
     pop_args!(stack, gc, [ObjectRef(obj)]);
 
     let rth = stack.loader().corlib_type("System.RuntimeTypeHandle");
-    let ctx =
-        ResolutionContext::for_method(_method, stack.loader(), generics, stack.shared.caches.clone());
+    let ctx = ResolutionContext::for_method(
+        _method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
     let mut instance = ctx.new_object(rth);
     obj.write(instance.instance_storage.get_field_mut_local(rth, "_value"));
 

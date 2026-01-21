@@ -10,11 +10,16 @@ use crate::{
         pointer::{ManagedPtr, ManagedPtrOwner},
         StackValue,
     },
-    vm::{context::ResolutionContext, layout::type_layout, resolution::ValueResolution, CallStack, GCHandle, StepResult},
+    vm::{
+        context::ResolutionContext, layout::type_layout, resolution::ValueResolution, CallStack,
+        GCHandle, StepResult,
+    },
     vm_expect_stack, vm_pop, vm_push,
 };
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use std::ptr;
+
+use super::ReflectionExtensions;
 
 pub fn intrinsic_marshal_get_last_pinvoke_error<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
@@ -50,7 +55,12 @@ pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
     let src = vm_pop!(stack, gc).as_ptr();
     let dst = vm_pop!(stack, gc).as_ptr();
 
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
+    let ctx = ResolutionContext::for_method(
+        method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
     let total_count = len as usize * layout.size();
@@ -105,7 +115,12 @@ pub fn intrinsic_marshal_size_of<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
+    let ctx = ResolutionContext::for_method(
+        method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
     let concrete_type = if method.method.signature.parameters.is_empty() {
         generics.method_generics[0].clone()
     } else {
@@ -129,7 +144,12 @@ pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     use crate::value::string::with_string;
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
+    let ctx = ResolutionContext::for_method(
+        method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
     let field_name_val = vm_pop!(stack, gc);
     let field_name = with_string!(stack, gc, field_name_val, |s| s.as_string());
     let concrete_type = if method.method.signature.parameters.len() == 1 {
@@ -185,7 +205,12 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
+    let ctx = ResolutionContext::for_method(
+        method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
     let target = &generics.method_generics[0];
     let target_type = stack.loader().find_concrete_type(target.clone());
     let layout = type_layout(target.clone(), &ctx);
@@ -305,7 +330,12 @@ pub fn intrinsic_unsafe_size_of<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
+    let ctx = ResolutionContext::for_method(
+        method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
     vm_push!(stack, gc, Int32(layout.size() as i32));
@@ -363,7 +393,12 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
+    let ctx = ResolutionContext::for_method(
+        method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
 
     let source = vm_pop!(stack, gc);
     let (ptr, owner) = match source {
@@ -432,8 +467,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
         },
         LayoutManager::FieldLayoutManager(f) => {
             // T is a struct, allocate an Object to represent it on the stack as ValueType
-            let mut o =
-                ctx.new_object(stack.loader().find_concrete_type(target.clone()));
+            let mut o = ctx.new_object(stack.loader().find_concrete_type(target.clone()));
 
             // Copy raw data from source pointer
             unsafe {
@@ -500,7 +534,12 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
+    let ctx = ResolutionContext::for_method(
+        method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
     let value = vm_pop!(stack, gc);

@@ -1,5 +1,9 @@
 use crate::{
-    types::{generics::GenericLookup, members::MethodDescription, TypeDescription},
+    types::{
+        generics::GenericLookup,
+        members::{FieldDescription, MethodDescription},
+        TypeDescription,
+    },
     utils::{decompose_type_source, is_ptr_aligned_to_field},
     value::{
         layout::{FieldLayoutManager, HasLayout},
@@ -8,21 +12,69 @@ use crate::{
         string::CLRString,
         StackValue,
     },
-    vm::{
-        common::GCHandle,
-        exceptions::{ExceptionState, HandlerAddress, UnwindTarget},
-        intrinsics::*,
-        layout::type_layout,
-        resolution::{TypeResolutionExt, ValueResolution},
-        sync::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering as AtomicOrdering},
-        threading::ThreadManagerOps,
-        CallStack, MethodInfo, ResolutionContext, StepResult,
-    },
     vm_expect_stack, vm_pop, vm_push, vm_trace, vm_trace_branch, vm_trace_field,
     vm_trace_instruction,
 };
 use dotnetdll::prelude::*;
 use std::{cmp::Ordering as CmpOrdering, ptr, slice};
+
+use super::{
+    common::GCHandle,
+    exceptions::{ExceptionState, HandlerAddress, UnwindTarget},
+    intrinsics::*,
+    layout::type_layout,
+    resolution::{TypeResolutionExt, ValueResolution},
+    sync::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering as AtomicOrdering},
+    threading::ThreadManagerOps,
+    CallStack, MethodInfo, ResolutionContext, StepResult,
+};
+
+/// Check if a method is an intrinsic (with caching).
+/// This is called on every method invocation, so caching is critical for performance.
+pub fn is_intrinsic_cached(stack: &CallStack, method: MethodDescription) -> bool {
+    // Check cache first
+    if let Some(cached) = stack.shared.caches.intrinsic_cache.get(&method) {
+        stack.shared.metrics.record_intrinsic_cache_hit();
+        return *cached;
+    }
+
+    // Cache miss - perform check
+    stack.shared.metrics.record_intrinsic_cache_miss();
+    let result = is_intrinsic(
+        method,
+        stack.shared.loader,
+        &stack.shared.caches.intrinsic_registry,
+    );
+
+    // Cache the result
+    stack.shared.caches.intrinsic_cache.insert(method, result);
+    result
+}
+
+/// Check if a field is an intrinsic (with caching).
+pub fn is_intrinsic_field_cached(stack: &CallStack, field: FieldDescription) -> bool {
+    // Check cache first
+    if let Some(cached) = stack.shared.caches.intrinsic_field_cache.get(&field) {
+        stack.shared.metrics.record_intrinsic_field_cache_hit();
+        return *cached;
+    }
+
+    // Cache miss - perform check
+    stack.shared.metrics.record_intrinsic_field_cache_miss();
+    let result = is_intrinsic_field(
+        field,
+        stack.shared.loader,
+        &stack.shared.caches.intrinsic_registry,
+    );
+
+    // Cache the result
+    stack
+        .shared
+        .caches
+        .intrinsic_field_cache
+        .insert(field, result);
+    result
+}
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     /// Check for GC safe point and suspend if stop-the-world is requested.
@@ -96,7 +148,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     ) -> StepResult {
         // Check intrinsics first - this includes DirectIntercept methods
         // that MUST bypass any BCL implementation
-        if self.is_intrinsic_cached(method) {
+        if is_intrinsic_cached(self, method) {
             intrinsic_call(gc, self, method, &lookup)
         } else if method.method.pinvoke.is_some() {
             self.external_call(method, gc);
@@ -245,7 +297,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         c
                     );
                 }
-                if self.is_intrinsic_field_cached($field) {
+                if is_intrinsic_field_cached(self, $field) {
                     let result = intrinsic_field(
                         gc,
                         self,
@@ -991,10 +1043,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                         let boxed = ObjectRef::new(
                             gc,
-                            HeapStorage::Boxed(ctx.new_value_type(
-                                &constraint_type_source,
-                                value.into_stack(),
-                            )),
+                            HeapStorage::Boxed(
+                                ctx.new_value_type(&constraint_type_source, value.into_stack()),
+                            ),
                         );
                         self.register_new_object(&boxed);
 
@@ -1482,8 +1533,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 // SAFETY: source_ptr is a valid pointer to memory containing a value of the given type,
                 // and layout.size() correctly represents the size of that type.
                 let source = unsafe { slice::from_raw_parts(source_ptr, layout.size()) };
-                let value =
-                    self.current_context().read_cts_value(&load_type, source).into_stack();
+                let value = self
+                    .current_context()
+                    .read_cts_value(&load_type, source)
+                    .into_stack();
                 push!(value);
             }
             LoadStaticField {
@@ -1658,7 +1711,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     vm_expect_stack!(let Int32(i) = pop!());
                     push!(NativeInt(i as isize));
                 } else {
-                    if self.is_intrinsic_cached(method) {
+                    if is_intrinsic_cached(self, method) {
                         return intrinsic_call(gc, self, method, &lookup);
                     }
 

@@ -113,7 +113,6 @@ use crate::{
         generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
     },
-    vm::{context::ResolutionContext, sync::Arc, tracer::Tracer, CallStack, GCHandle, StepResult},
     vm_trace_intrinsic,
 };
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
@@ -131,6 +130,11 @@ pub mod threading;
 pub mod unsafe_ops;
 
 pub use metadata::{classify_intrinsic, IntrinsicKind, IntrinsicMetadata};
+pub use reflection::ReflectionExtensions;
+
+use super::{
+    context::ResolutionContext, sync::Arc, tracer::Tracer, CallStack, GCHandle, StepResult,
+};
 
 pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttribute";
 
@@ -1864,8 +1868,12 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _ctx =
-        ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
+    let _ctx = ResolutionContext::for_method(
+        method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
 
     vm_trace_intrinsic!(
         stack,

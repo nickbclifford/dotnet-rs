@@ -583,4 +583,3 @@ impl<'gc> Neg for StackValue<'gc> {
         }
     }
 }
-

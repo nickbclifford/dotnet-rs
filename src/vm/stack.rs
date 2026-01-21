@@ -3,6 +3,7 @@ use crate::{
     types::{
         generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
+        runtime::RuntimeType,
         TypeDescription,
     },
     utils::{decompose_type_source, ResolutionS},
@@ -11,22 +12,6 @@ use crate::{
         object::{HeapStorage, Object as ObjectInstance, ObjectRef},
         pointer::ManagedPtrOwner,
         StackValue,
-    },
-    vm::{
-        context::ResolutionContext,
-        layout::type_layout_with_metrics,
-        exceptions::ExceptionState,
-        common::GCHandle,
-        gc::GCHandleType,
-        statics::StaticStorageManager,
-        resolution::{TypeResolutionExt, ValueResolution},
-        intrinsics::{is_intrinsic, is_intrinsic_field, reflection::RuntimeType},
-        pinvoke::NativeLibraries,
-        state::{ArenaLocalState, SharedGlobalState},
-        sync::{Arc, MutexGuard, Ordering, RwLockReadGuard, RwLockWriteGuard},
-        threading::lock::ThreadSafeLock,
-        tracer::{TraceLevel, Tracer},
-        MethodInfo, MethodState, StepResult,
     },
 };
 use dotnetdll::prelude::*;
@@ -39,10 +24,26 @@ use std::{
 };
 
 #[cfg(feature = "multithreaded-gc")]
-use crate::{
-    value::{object::ObjectPtr},
-    vm::gc::coordinator::record_allocation,
+use crate::value::object::ObjectPtr;
+
+use super::{
+    common::GCHandle,
+    context::ResolutionContext,
+    exceptions::ExceptionState,
+    gc::GCHandleType,
+    layout::type_layout_with_metrics,
+    pinvoke::NativeLibraries,
+    resolution::{TypeResolutionExt, ValueResolution},
+    state::{ArenaLocalState, SharedGlobalState},
+    statics::StaticStorageManager,
+    sync::{Arc, MutexGuard, Ordering, RwLockReadGuard, RwLockWriteGuard},
+    threading::lock::ThreadSafeLock,
+    tracer::{TraceLevel, Tracer},
+    MethodInfo, MethodState, StepResult,
 };
+
+#[cfg(feature = "multithreaded-gc")]
+use super::gc::coordinator::record_allocation;
 
 #[derive(Collect, Clone, Copy)]
 #[collect(no_drop)]
@@ -575,7 +576,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         // If this was a static constructor (.cctor), mark the type as initialized
         if frame.state.info_handle.is_cctor {
             let type_desc = frame.state.info_handle.source.parent;
-            self.shared.statics.mark_initialized(type_desc, &frame.generic_inst);
+            self.shared
+                .statics
+                .mark_initialized(type_desc, &frame.generic_inst);
         }
 
         if frame.is_finalizer {
@@ -998,41 +1001,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             "could not find virtual method implementation of {:?} in {:?}",
             base_method, this_type
         )
-    }
-
-    /// Check if a method is an intrinsic (with caching).
-    /// This is called on every method invocation, so caching is critical for performance.
-    pub fn is_intrinsic_cached(&self, method: MethodDescription) -> bool {
-        // Check cache first
-        if let Some(cached) = self.shared.caches.intrinsic_cache.get(&method) {
-            self.shared.metrics.record_intrinsic_cache_hit();
-            return *cached;
-        }
-
-        // Cache miss - perform check
-        self.shared.metrics.record_intrinsic_cache_miss();
-        let result = is_intrinsic(method, self.shared.loader, &self.shared.caches.intrinsic_registry);
-
-        // Cache the result
-        self.shared.caches.intrinsic_cache.insert(method, result);
-        result
-    }
-
-    /// Check if a field is an intrinsic (with caching).
-    pub fn is_intrinsic_field_cached(&self, field: FieldDescription) -> bool {
-        // Check cache first
-        if let Some(cached) = self.shared.caches.intrinsic_field_cache.get(&field) {
-            self.shared.metrics.record_intrinsic_field_cache_hit();
-            return *cached;
-        }
-
-        // Cache miss - perform check
-        self.shared.metrics.record_intrinsic_field_cache_miss();
-        let result = is_intrinsic_field(field, self.shared.loader, &self.shared.caches.intrinsic_registry);
-
-        // Cache the result
-        self.shared.caches.intrinsic_field_cache.insert(field, result);
-        result
     }
 
     /// Get the layout of a type (with caching and metrics).

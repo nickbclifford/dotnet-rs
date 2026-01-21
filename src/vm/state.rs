@@ -3,25 +3,13 @@ use crate::{
     types::{
         generics::{ConcreteType, GenericLookup},
         members::{FieldDescription, MethodDescription},
+        runtime::RuntimeType,
         TypeDescription,
     },
     utils::ResolutionS,
     value::{
         layout::{FieldLayoutManager, LayoutManager},
         object::ObjectRef,
-    },
-    vm::{
-        gc::GCCoordinator,
-        statics::StaticStorageManager,
-        intrinsics::{
-            is_intrinsic, is_intrinsic_field, reflection::RuntimeType, IntrinsicRegistry,
-        },
-        metrics::{CacheSizes, CacheStats, RuntimeMetrics},
-        pinvoke::NativeLibraries,
-        sync::{Arc, AtomicBool, AtomicUsize, Ordering, SyncBlockManager},
-        threading::ThreadManager,
-        tracer::Tracer,
-        HeapManager,
     },
 };
 use dashmap::DashMap;
@@ -30,6 +18,18 @@ use parking_lot::{Mutex, RwLock};
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
+};
+
+use super::{
+    gc::GCCoordinator,
+    intrinsics::{is_intrinsic, is_intrinsic_field, IntrinsicRegistry},
+    metrics::{CacheSizes, CacheStats, RuntimeMetrics},
+    pinvoke::NativeLibraries,
+    statics::StaticStorageManager,
+    sync::{Arc, AtomicBool, AtomicUsize, Ordering, SyncBlockManager},
+    threading::ThreadManager,
+    tracer::Tracer,
+    HeapManager,
 };
 
 /// Grouped caches for type resolution and layout computation.
@@ -49,7 +49,8 @@ pub struct GlobalCaches {
     /// Cache for intrinsic field checks: field -> is_intrinsic
     pub intrinsic_field_cache: DashMap<FieldDescription, bool>,
     /// Cache for static field layouts: (TypeDescription, GenericLookup) -> FieldLayoutManager
-    pub static_field_layout_cache: DashMap<(TypeDescription, GenericLookup), Arc<FieldLayoutManager>>,
+    pub static_field_layout_cache:
+        DashMap<(TypeDescription, GenericLookup), Arc<FieldLayoutManager>>,
     /// Registry of intrinsic methods
     pub intrinsic_registry: IntrinsicRegistry,
 }
@@ -124,10 +125,9 @@ impl<'m> SharedGlobalState<'m> {
                         method_resolution: td.resolution,
                         method,
                     };
-                    caches.intrinsic_cache.insert(
-                        md,
-                        is_intrinsic(md, loader, &caches.intrinsic_registry),
-                    );
+                    caches
+                        .intrinsic_cache
+                        .insert(md, is_intrinsic(md, loader, &caches.intrinsic_registry));
                 }
                 for field in &type_def.fields {
                     let fd = FieldDescription {

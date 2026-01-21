@@ -4,7 +4,11 @@ use crate::{
         members::{FieldDescription, MethodDescription},
         TypeDescription,
     },
-    utils::{decompose_type_source, static_res_from_file, sync::{AtomicU64, Ordering, RwLock}, ResolutionS},
+    utils::{
+        decompose_type_source, static_res_from_file,
+        sync::{AtomicU64, Ordering, RwLock},
+        ResolutionS,
+    },
 };
 use dashmap::DashMap;
 use dotnetdll::prelude::*;

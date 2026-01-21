@@ -3,23 +3,9 @@
 //! This module provides a unified interface for synchronization primitives
 //! that works across both single-threaded and multi-threaded configurations.
 //! Low-level modules can depend on this without pulling in the entire VM subsystem.
-
-// Re-export Arc (same for both std and parking_lot)
-pub use std::sync::Arc;
-
-// Re-export atomic types (always from std::sync::atomic)
-pub use std::sync::atomic::{
-    AtomicBool, AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
-    AtomicU64, AtomicU8, AtomicUsize, Ordering,
-};
-
-#[cfg(feature = "multithreading")]
-pub use parking_lot::{Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
-
 #[cfg(not(feature = "multithreading"))]
 pub mod compat {
     use std::sync::{self, MutexGuard, RwLockReadGuard, RwLockWriteGuard};
-
     #[derive(Debug)]
     pub struct Mutex<T>(sync::Mutex<T>);
     impl<T> Mutex<T> {
@@ -30,7 +16,6 @@ pub mod compat {
             self.0.lock().unwrap()
         }
     }
-
     #[derive(Debug)]
     pub struct RwLock<T>(sync::RwLock<T>);
     impl<T> RwLock<T> {
@@ -44,7 +29,6 @@ pub mod compat {
             self.0.write().unwrap()
         }
     }
-
     #[derive(Debug, Default)]
     pub struct Condvar(());
     impl Condvar {
@@ -56,6 +40,17 @@ pub mod compat {
         pub fn wait<T>(&self, _guard: &mut MutexGuard<'_, T>) {}
     }
 }
+
+pub use std::sync::{
+    atomic::{
+        AtomicBool, AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
+        AtomicU64, AtomicU8, AtomicUsize, Ordering,
+    },
+    Arc,
+};
+
+#[cfg(feature = "multithreading")]
+pub use parking_lot::{Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[cfg(not(feature = "multithreading"))]
 pub use compat::*;

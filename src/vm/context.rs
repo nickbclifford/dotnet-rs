@@ -7,9 +7,12 @@ use crate::{
     },
     utils::{decompose_type_source, ResolutionS},
     value::object::ObjectHandle,
-    vm::{state::GlobalCaches, sync::Arc},
+    vm::{
+        resolution::{TypeResolutionExt, ValueResolution},
+        state::GlobalCaches,
+        sync::Arc,
+    },
 };
-use crate::vm::resolution::{TypeResolutionExt, ValueResolution};
 use dotnetdll::prelude::{
     BaseType, FieldSource, MemberType, MethodType, TypeSource, UserMethod, UserType, ValueKind,
 };

@@ -10,11 +10,16 @@ use crate::{
         pointer::{ManagedPtr, ManagedPtrOwner},
         StackValue,
     },
-    vm::{context::ResolutionContext, layout::type_layout, resolution::ValueResolution, CallStack, GCHandle, StepResult},
+    vm::{
+        context::ResolutionContext, layout::type_layout, resolution::ValueResolution, CallStack,
+        GCHandle, StepResult,
+    },
     vm_push,
 };
 use dotnetdll::prelude::ParameterType;
 use std::{mem::size_of, ptr::NonNull, slice};
+
+use super::ReflectionExtensions;
 
 pub fn span_to_slice<'gc, 'a>(span: Object<'gc>, element_size: usize) -> &'a [u8] {
     let ptr_data = span
@@ -74,7 +79,12 @@ pub fn intrinsic_span_get_item<'gc, 'm: 'gc>(
         panic!("invalid type on stack");
     }
 
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
+    let ctx = ResolutionContext::for_method(
+        method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
     let span_layout = FieldLayoutManager::instance_field_layout_cached(
         m.inner_type,
         &ctx,
@@ -124,7 +134,12 @@ pub fn intrinsic_span_get_length<'gc, 'm: 'gc>(
         panic!("invalid type on stack");
     }
 
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
+    let ctx = ResolutionContext::for_method(
+        method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
     let layout = FieldLayoutManager::instance_field_layout_cached(
         m.inner_type,
         &ctx,
@@ -182,7 +197,12 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
 
     let obj_val = stack.pop_stack(gc);
 
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
+    let ctx = ResolutionContext::for_method(
+        method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
 
     let (base_ptr, total_len, h_opt, element_type, element_size) = match obj_val {
         StackValue::ObjectRef(ObjectRef(Some(h))) => {
@@ -303,7 +323,12 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let element_type = &generics.method_generics[0];
-    let ctx = ResolutionContext::for_method(method, stack.loader(), generics, stack.shared.caches.clone());
+    let ctx = ResolutionContext::for_method(
+        method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
     let element_size = type_layout(element_type.clone(), &ctx).size();
 
     pop_args!(stack, gc, [ValueType(field_handle)]);

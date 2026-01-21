@@ -1,8 +1,4 @@
-use crate::{
-    types::TypeDescription,
-    utils::sync::Arc,
-    value::object::ObjectRef,
-};
+use crate::{types::TypeDescription, utils::sync::Arc, value::object::ObjectRef};
 use enum_dispatch::enum_dispatch;
 use gc_arena::{Collect, Collection};
 use std::{

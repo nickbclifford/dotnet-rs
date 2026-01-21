@@ -17,7 +17,6 @@ use std::{
     ops::Range,
 };
 
-
 #[derive(Clone, PartialEq)]
 pub struct FieldStorage {
     layout: Arc<FieldLayoutManager>,

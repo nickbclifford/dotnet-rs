@@ -1,17 +1,20 @@
-use crate::value::pointer::ManagedPtr;
-use std::ptr::NonNull;
-use crate::types::generics::{ConcreteType, GenericLookup};
-use crate::types::TypeDescription;
-use crate::utils::decompose_type_source;
-use crate::value::layout::{ArrayLayoutManager, FieldLayoutManager, HasLayout};
-use crate::value::object::{CTSValue, Object, ValueType, Vector};
-use crate::value::storage::FieldStorage;
-use crate::value::StackValue;
-use crate::vm::context::ResolutionContext;
+use crate::{
+    types::{
+        generics::{ConcreteType, GenericLookup},
+        TypeDescription,
+    },
+    utils::decompose_type_source,
+    value::{
+        layout::{ArrayLayoutManager, FieldLayoutManager, HasLayout},
+        object::{CTSValue, Object, ValueType, Vector},
+        pointer::ManagedPtr,
+        storage::FieldStorage,
+        StackValue,
+    },
+    vm::context::ResolutionContext,
+};
 use dotnetdll::prelude::{BaseType, ValueKind};
-use std::any;
-use std::error::Error;
-use std::sync::Arc;
+use std::{any, error::Error, ptr::NonNull, sync::Arc};
 
 pub trait TypeResolutionExt {
     fn is_value_type(&self, ctx: &ResolutionContext) -> bool;
@@ -126,25 +129,23 @@ impl<'a, 'm> ValueResolution for ResolutionContext<'a, 'm> {
             BaseType::UIntPtr | BaseType::FunctionPointer(_) => {
                 CTSValue::Value(NativeUInt(convert_num(data)))
             }
-            BaseType::ValuePointer(_modifiers, inner) => {
-                match data {
-                    StackValue::ManagedPtr(p) => CTSValue::Value(Pointer(p)),
-                    _ => {
-                        let ptr = convert_num::<usize>(data);
-                        let inner_type = if let Some(source) = inner {
-                            self.loader.find_concrete_type(source.clone())
-                        } else {
-                            self.loader.corlib_type("System.Void")
-                        };
-                        CTSValue::Value(Pointer(ManagedPtr::new(
-                            NonNull::new(ptr as *mut u8).expect("ValuePointer cannot be null"),
-                            inner_type,
-                            None,
-                            false,
-                        )))
-                    }
+            BaseType::ValuePointer(_modifiers, inner) => match data {
+                StackValue::ManagedPtr(p) => CTSValue::Value(Pointer(p)),
+                _ => {
+                    let ptr = convert_num::<usize>(data);
+                    let inner_type = if let Some(source) = inner {
+                        self.loader.find_concrete_type(source.clone())
+                    } else {
+                        self.loader.corlib_type("System.Void")
+                    };
+                    CTSValue::Value(Pointer(ManagedPtr::new(
+                        NonNull::new(ptr as *mut u8).expect("ValuePointer cannot be null"),
+                        inner_type,
+                        None,
+                        false,
+                    )))
                 }
-            }
+            },
             BaseType::Object | BaseType::String | BaseType::Vector(_, _) => {
                 if let StackValue::ObjectRef(o) = data {
                     CTSValue::Ref(o)
@@ -234,12 +235,10 @@ impl<'a, 'm> ValueResolution for ResolutionContext<'a, 'm> {
             BaseType::Float64 => {
                 CTSValue::Value(Float64(f64::from_ne_bytes(data.try_into().unwrap())))
             }
-            BaseType::IntPtr => CTSValue::Value(NativeInt(isize::from_ne_bytes(
-                data.try_into().unwrap(),
-            ))),
-            BaseType::UIntPtr
-            | BaseType::FunctionPointer(_)
-            | BaseType::ValuePointer(_, _) => {
+            BaseType::IntPtr => {
+                CTSValue::Value(NativeInt(isize::from_ne_bytes(data.try_into().unwrap())))
+            }
+            BaseType::UIntPtr | BaseType::FunctionPointer(_) | BaseType::ValuePointer(_, _) => {
                 CTSValue::Value(NativeUInt(usize::from_ne_bytes(data.try_into().unwrap())))
             }
             BaseType::Object | BaseType::String | BaseType::Vector(_, _) => {

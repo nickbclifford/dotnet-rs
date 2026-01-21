@@ -2,7 +2,6 @@
 //!
 //! This module contains fundamental types that need to be shared
 //! between different VM components without creating circular dependencies.
-
 use gc_arena::{Collect, Mutation};
 
 /// A handle to the GC mutation context.

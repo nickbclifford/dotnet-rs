@@ -465,7 +465,6 @@ unsafe impl<'gc> Collect for ValueType<'gc> {
     }
 }
 
-
 impl<'gc> ValueType<'gc> {
     pub fn size_bytes(&self) -> usize {
         match self {
@@ -482,7 +481,6 @@ impl<'gc> ValueType<'gc> {
         }
     }
 }
-
 
 #[derive(Debug)]
 pub enum CTSValue<'gc> {

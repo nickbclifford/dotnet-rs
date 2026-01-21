@@ -142,7 +142,10 @@ impl StaticStorageManager {
             context,
             metrics,
         ));
-        context.caches.static_field_layout_cache.insert(key, Arc::clone(&result));
+        context
+            .caches
+            .static_field_layout_cache
+            .insert(key, Arc::clone(&result));
         result
     }
 }
