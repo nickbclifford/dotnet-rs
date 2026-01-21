@@ -5,7 +5,6 @@ use crate::vm::{
 
 #[cfg(feature = "multithreading")]
 mod basic;
-pub mod lock;
 #[cfg(not(feature = "multithreading"))]
 mod stub;
 

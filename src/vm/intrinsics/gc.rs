@@ -6,7 +6,8 @@ use crate::{
         string::with_string,
         StackValue,
     },
-    vm::{gc::GCHandleType, CallStack, GCHandle, StepResult},
+    utils::gc::{GCHandle, GCHandleType},
+    vm::{CallStack, StepResult},
     vm_pop, vm_push,
 };
 

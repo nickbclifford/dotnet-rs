@@ -4,7 +4,7 @@ use crate::{
         members::{FieldDescription, MethodDescription},
         TypeDescription,
     },
-    utils::{decompose_type_source, is_ptr_aligned_to_field},
+    utils::{decompose_type_source, gc::GCHandle, is_ptr_aligned_to_field},
     value::{
         layout::{FieldLayoutManager, HasLayout},
         object::{CTSValue, HeapStorage, ObjectRef},
@@ -19,7 +19,6 @@ use dotnetdll::prelude::*;
 use std::{cmp::Ordering as CmpOrdering, ptr, slice};
 
 use super::{
-    common::GCHandle,
     exceptions::{ExceptionState, HandlerAddress, UnwindTarget},
     intrinsics::*,
     layout::type_layout,

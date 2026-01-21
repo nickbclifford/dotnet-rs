@@ -2,9 +2,10 @@ use crate::{
     pop_args,
     types::{generics::GenericLookup, members::MethodDescription},
     value::object::ObjectRef,
+    utils::gc::GCHandle,
     vm::{
         sync::{Arc, AtomicI32, Ordering, SyncBlockOps, SyncManagerOps},
-        CallStack, GCHandle, StepResult,
+        CallStack, StepResult,
     },
     vm_pop, vm_push,
 };

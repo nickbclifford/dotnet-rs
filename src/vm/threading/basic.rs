@@ -1,8 +1,13 @@
-use crate::vm::{
-    gc::coordinator::{GCCommand, GCCoordinator},
-    sync::{Arc, AtomicU64, Mutex, Ordering},
-    threading::{STWGuardOps, ThreadManagerOps, ThreadState},
-    tracer::Tracer,
+use crate::{
+    utils::sync::{Arc, AtomicU64, Mutex, Ordering, get_current_thread_id, MANAGED_THREAD_ID},
+    value::object::ObjectPtr,
+    vm::{
+        gc::{
+            set_currently_tracing, take_found_cross_arena_refs, coordinator::{GCCommand, GCCoordinator},
+        },
+        threading::{STWGuardOps, ThreadManagerOps, ThreadState},
+        tracer::Tracer,
+    },
 };
 use std::{
     cell::Cell,
@@ -12,10 +17,7 @@ use std::{
 };
 
 #[cfg(feature = "multithreaded-gc")]
-use crate::vm::{
-    gc::coordinator::*,
-    sync::{AtomicBool, AtomicUsize, Condvar, MutexGuard},
-};
+use crate::utils::sync::{AtomicBool, AtomicUsize, Condvar, MutexGuard};
 #[cfg(feature = "multithreaded-gc")]
 use std::{
     mem,
@@ -23,8 +25,6 @@ use std::{
 };
 
 thread_local! {
-    /// Cached managed thread ID for the current thread
-    pub(super) static MANAGED_THREAD_ID: Cell<Option<u64>> = const { Cell::new(None) };
     /// Flag indicating if this thread is currently performing GC
     pub(super) static IS_PERFORMING_GC: Cell<bool> = const { Cell::new(false) };
 }
@@ -87,10 +87,6 @@ pub struct ThreadManager {
     pub(super) gc_coordination: Mutex<()>,
 }
 
-/// Get the current thread's managed ID from thread-local storage.
-pub fn get_current_thread_id() -> u64 {
-    MANAGED_THREAD_ID.with(|id| id.get().unwrap_or(0))
-}
 
 impl ThreadManager {
     pub fn new() -> Arc<Self> {
@@ -462,7 +458,8 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                             arena.collect_all();
                             set_currently_tracing(None);
 
-                            for (target_id, ptr) in take_found_cross_arena_refs() {
+                            for (target_id, ptr_usize) in take_found_cross_arena_refs() {
+                                let ptr = unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
                                 coordinator.record_cross_arena_ref(target_id, ptr);
                             }
                         }
@@ -478,7 +475,8 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
 
                             arena.mutate(|_, c| {
                                 let mut roots = c.heap().cross_arena_roots.borrow_mut();
-                                for ptr in ptrs {
+                                for ptr_usize in ptrs {
+                                    let ptr = unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
                                     roots.insert(ptr);
                                 }
                             });
@@ -493,7 +491,8 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                             arena.collect_all();
 
                             set_currently_tracing(None);
-                            for (target_id, ptr) in take_found_cross_arena_refs() {
+                            for (target_id, ptr_usize) in take_found_cross_arena_refs() {
+                                let ptr = unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
                                 coordinator.record_cross_arena_ref(target_id, ptr);
                             }
                         }

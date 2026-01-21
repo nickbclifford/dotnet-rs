@@ -132,9 +132,8 @@ pub mod unsafe_ops;
 pub use metadata::{classify_intrinsic, IntrinsicKind, IntrinsicMetadata};
 pub use reflection::ReflectionExtensions;
 
-use super::{
-    context::ResolutionContext, sync::Arc, tracer::Tracer, CallStack, GCHandle, StepResult,
-};
+use crate::utils::gc::GCHandle;
+use super::{context::ResolutionContext, sync::Arc, tracer::Tracer, CallStack, StepResult};
 
 pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttribute";
 

@@ -6,7 +6,7 @@ use crate::{
         runtime::RuntimeType,
         TypeDescription,
     },
-    utils::{decompose_type_source, ResolutionS},
+    utils::{decompose_type_source, gc::{GCHandle, GCHandleType, ThreadSafeLock}, ResolutionS},
     value::{
         layout::{HasLayout, LayoutManager},
         object::{HeapStorage, Object as ObjectInstance, ObjectRef},
@@ -27,17 +27,14 @@ use std::{
 use crate::value::object::ObjectPtr;
 
 use super::{
-    common::GCHandle,
     context::ResolutionContext,
     exceptions::ExceptionState,
-    gc::GCHandleType,
     layout::type_layout_with_metrics,
     pinvoke::NativeLibraries,
     resolution::{TypeResolutionExt, ValueResolution},
     state::{ArenaLocalState, SharedGlobalState},
     statics::StaticStorageManager,
     sync::{Arc, MutexGuard, Ordering, RwLockReadGuard, RwLockWriteGuard},
-    threading::lock::ThreadSafeLock,
     tracer::{TraceLevel, Tracer},
     MethodInfo, MethodState, StepResult,
 };

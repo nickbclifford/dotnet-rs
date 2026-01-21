@@ -2,7 +2,8 @@ use crate::{
     types::generics::ConcreteType,
     utils::DebugStr,
     value::object::{HeapStorage, ObjectRef},
-    vm::{context::ResolutionContext, CallStack, GCHandle, StepResult},
+    utils::gc::GCHandle,
+    vm::{context::ResolutionContext, CallStack, StepResult},
     vm_error, vm_push,
 };
 use dotnetdll::prelude::*;

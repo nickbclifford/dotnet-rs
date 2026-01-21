@@ -3,12 +3,12 @@ use crate::{
         generics::{ConcreteType, GenericLookup},
         members::MethodDescription,
     },
-    utils::decompose_type_source,
+    utils::{decompose_type_source, gc::GCHandle},
     value::{
         layout::{FieldLayoutManager, LayoutManager, Scalar},
         StackValue,
     },
-    vm::{context::ResolutionContext, resolution::ValueResolution, CallStack, GCHandle},
+    vm::{context::ResolutionContext, resolution::ValueResolution, CallStack},
 };
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};

@@ -1,4 +1,4 @@
-use crate::vm::sync::{AtomicU64, Ordering};
+use crate::utils::sync::{AtomicU64, Ordering};
 use serde::Serialize;
 use std::time::Duration;
 

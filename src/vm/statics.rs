@@ -1,13 +1,11 @@
 use crate::{
     types::{generics::GenericLookup, members::MethodDescription, TypeDescription},
-    utils::DebugStr,
+    utils::{gc::GCHandle, sync::{Arc, AtomicU64, AtomicU8, Condvar, Mutex, Ordering, RwLock}, DebugStr},
     value::{layout::FieldLayoutManager, storage::FieldStorage},
     vm::{
-        common::GCHandle,
         context::ResolutionContext,
         gc::GCCoordinator,
         metrics::RuntimeMetrics,
-        sync::{Arc, AtomicU64, AtomicU8, Condvar, Mutex, Ordering, RwLock},
         threading::ThreadManagerOps,
         CallStack, MethodInfo,
     },

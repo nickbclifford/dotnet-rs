@@ -1,7 +1,8 @@
 use crate::{
     types::{generics::GenericLookup, members::MethodDescription},
     value::StackValue,
-    vm::{CallStack, GCHandle, StepResult},
+    utils::gc::GCHandle,
+    vm::{CallStack, StepResult},
     vm_pop, vm_push,
 };
 

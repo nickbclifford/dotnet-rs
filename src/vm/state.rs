@@ -6,7 +6,7 @@ use crate::{
         runtime::RuntimeType,
         TypeDescription,
     },
-    utils::ResolutionS,
+    utils::{sync::{Arc, AtomicBool, Mutex, Ordering, RwLock, AtomicUsize}, ResolutionS},
     value::{
         layout::{FieldLayoutManager, LayoutManager},
         object::ObjectRef,
@@ -24,14 +24,14 @@ use super::{
     metrics::{CacheSizes, CacheStats, RuntimeMetrics},
     pinvoke::NativeLibraries,
     statics::StaticStorageManager,
-    sync::{Arc, AtomicBool, Mutex, Ordering, RwLock, SyncBlockManager},
+    sync::SyncBlockManager,
     threading::ThreadManager,
     tracer::Tracer,
     HeapManager,
 };
 
 #[cfg(feature = "multithreaded-gc")]
-use super::{gc::GCCoordinator, sync::AtomicUsize};
+use super::gc::GCCoordinator;
 
 /// Grouped caches for type resolution and layout computation.
 /// This struct reduces the API surface area of ResolutionContext.

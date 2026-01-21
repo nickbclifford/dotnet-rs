@@ -17,14 +17,15 @@ use crate::{
         context::ResolutionContext,
         layout::type_layout,
         resolution::{TypeResolutionExt, ValueResolution},
-        CallStack, GCHandle, MethodInfo, StepResult,
+        CallStack, MethodInfo, StepResult,
     },
+    utils::gc::GCHandle,
     vm_pop, vm_push,
 };
 use dotnetdll::prelude::{BaseType, Kind, MemberType, MethodType, TypeSource};
 
 #[cfg(feature = "multithreaded-gc")]
-use crate::vm::sync::Ordering;
+use crate::utils::sync::Ordering;
 
 fn get_runtime_member_index<T: PartialEq>(
     members: &mut Vec<(T, GenericLookup)>,

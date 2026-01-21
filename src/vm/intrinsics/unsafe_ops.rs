@@ -10,9 +10,10 @@ use crate::{
         pointer::{ManagedPtr, ManagedPtrOwner},
         StackValue,
     },
+    utils::gc::GCHandle,
     vm::{
         context::ResolutionContext, layout::type_layout, resolution::ValueResolution, CallStack,
-        GCHandle, StepResult,
+        StepResult,
     },
     vm_expect_stack, vm_pop, vm_push,
 };

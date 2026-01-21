@@ -3,7 +3,6 @@ use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
 use std::rc::Rc;
 
-pub mod common;
 pub mod context;
 mod exceptions;
 mod executor;
@@ -23,7 +22,6 @@ pub mod sync;
 pub mod threading;
 pub mod tracer;
 
-pub use common::GCHandle;
 pub use executor::*;
 pub use stack::*;
 

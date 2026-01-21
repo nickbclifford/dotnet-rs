@@ -11,5 +11,4 @@ pub mod coordinator;
 #[cfg(feature = "multithreaded-gc")]
 pub use arena::THREAD_ARENA;
 
-pub use crate::vm::common::GCHandleType;
 pub use coordinator::*;

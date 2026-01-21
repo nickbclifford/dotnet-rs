@@ -6,7 +6,8 @@ use crate::{
         object::{HeapStorage, ObjectRef},
         StackValue,
     },
-    vm::{resolution::ValueResolution, CallStack, GCHandle, StepResult},
+    utils::gc::GCHandle,
+    vm::{resolution::ValueResolution, CallStack, StepResult},
     vm_push,
 };
 

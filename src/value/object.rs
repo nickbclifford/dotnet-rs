@@ -1,17 +1,16 @@
 use crate::{
     types::{generics::ConcreteType, TypeDescription},
-    utils::DebugStr,
+    utils::{
+        gc::{GCHandle, ThreadSafeLock},
+        sync::{get_current_thread_id, AtomicUsize, Ordering as AtomicOrdering},
+        DebugStr,
+    },
     value::{
         layout::{ArrayLayoutManager, HasLayout, LayoutManager, Scalar},
         pointer::{ManagedPtr, ManagedPtrOwner},
         storage::FieldStorage,
         string::CLRString,
         StackValue,
-    },
-    vm::{
-        sync::{AtomicUsize, Ordering as AtomicOrdering},
-        threading::{get_current_thread_id, lock::ThreadSafeLock},
-        GCHandle,
     },
 };
 use gc_arena::{Collect, Collection, Gc, Mutation};
@@ -26,7 +25,7 @@ use std::{
 };
 
 #[cfg(feature = "multithreaded-gc")]
-use crate::vm::gc::coordinator::*;
+use crate::utils::gc::{get_currently_tracing, record_allocation, record_cross_arena_ref};
 
 /// Owner information for managed pointers stored in metadata.
 /// We MUST store actual Gc handles, not raw pointers, because:
@@ -181,10 +180,9 @@ unsafe impl<'gc> Collect for ObjectRef<'gc> {
                     if owner_id != tracing_id {
                         // This is a reference to an object in another arena.
                         // Do not trace it here; instead, record it for coordinated resurrection.
-                        record_cross_arena_ref(
-                            owner_id,
-                            ObjectPtr(NonNull::new(Gc::as_ptr(h) as *mut _).unwrap()),
-                        );
+                        // We cast to usize because utilities cannot depend on ObjectPtr.
+                        let ptr = Gc::as_ptr(h) as usize;
+                        record_cross_arena_ref(owner_id, ptr);
                         return;
                     }
                 }

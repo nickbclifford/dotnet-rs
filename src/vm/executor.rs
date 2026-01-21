@@ -1,5 +1,5 @@
 use crate::{
-    types::members::MethodDescription, value::StackValue,
+    types::members::MethodDescription, utils::sync::{Arc, Ordering}, value::StackValue,
     vm::intrinsics::reflection::ReflectionExtensions,
 };
 
@@ -10,7 +10,7 @@ use super::{
     metrics::CacheStats,
     stack::{CallStack, GCArena},
     state::{ArenaLocalState, SharedGlobalState},
-    sync::{Arc, MutexGuard, Ordering},
+    sync::MutexGuard,
     threading::ThreadManagerOps,
     tracer::Tracer,
     MethodInfo, StepResult,
@@ -378,7 +378,7 @@ impl Drop for Executor {
             THREAD_ARENA.with(|cell| {
                 *cell.borrow_mut() = None;
             });
-            clear_thread_local_state();
+            clear_tracing_state();
         }
     }
 }

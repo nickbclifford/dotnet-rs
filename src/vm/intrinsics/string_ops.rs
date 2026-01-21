@@ -10,7 +10,8 @@ use crate::{
         string::{with_string, with_string_mut, CLRString},
         StackValue,
     },
-    vm::{intrinsics::span::span_to_slice, CallStack, GCHandle, StepResult},
+    utils::gc::GCHandle,
+    vm::{intrinsics::span::span_to_slice, CallStack, StepResult},
     vm_pop, vm_push,
 };
 use std::hash::{DefaultHasher, Hash, Hasher};

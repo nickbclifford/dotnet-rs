@@ -50,6 +50,24 @@ pub use std::sync::{
 };
 
 #[cfg(feature = "multithreading")]
+thread_local! {
+    /// Cached managed thread ID for the current thread
+    pub(crate) static MANAGED_THREAD_ID: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Get the current thread's managed ID from thread-local storage.
+pub fn get_current_thread_id() -> u64 {
+    #[cfg(feature = "multithreading")]
+    {
+        MANAGED_THREAD_ID.with(|id| id.get().unwrap_or(0))
+    }
+    #[cfg(not(feature = "multithreading"))]
+    {
+        1
+    }
+}
+
+#[cfg(feature = "multithreading")]
 pub use parking_lot::{Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[cfg(not(feature = "multithreading"))]

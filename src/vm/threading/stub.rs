@@ -1,7 +1,10 @@
-use crate::vm::{
-    gc::coordinator::{GCCommand, GCCoordinator},
-    threading::{STWGuardOps, ThreadManagerOps},
-    tracer::Tracer,
+use crate::{
+    utils::sync::get_current_thread_id,
+    vm::{
+        gc::coordinator::{GCCommand, GCCoordinator},
+        threading::{STWGuardOps, ThreadManagerOps},
+        tracer::Tracer,
+    },
 };
 use std::sync::Arc;
 
@@ -70,6 +73,3 @@ impl STWGuardOps for StopTheWorldGuard {
     }
 }
 
-pub fn get_current_thread_id() -> u64 {
-    1
-}

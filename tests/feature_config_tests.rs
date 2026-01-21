@@ -19,7 +19,7 @@ fn test_single_threaded_stub_thread_manager() {
     let _shared = Arc::new(state::SharedGlobalState::new(loader));
 
     // Thread manager should provide a consistent thread ID (always 1)
-    assert_eq!(dotnet_rs::vm::threading::get_current_thread_id(), 1);
+    assert_eq!(dotnet_rs::utils::sync::get_current_thread_id(), 1);
 }
 
 #[test]

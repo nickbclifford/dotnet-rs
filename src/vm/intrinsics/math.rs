@@ -4,8 +4,9 @@ use crate::{
         object::{HeapStorage, ObjectRef},
         StackValue,
     },
+    utils::gc::GCHandle,
     vm::{
-        context::ResolutionContext, resolution::ValueResolution, CallStack, GCHandle, StepResult,
+        context::ResolutionContext, resolution::ValueResolution, CallStack, StepResult,
     },
     vm_pop, vm_push,
 };

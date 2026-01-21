@@ -631,8 +631,8 @@ fn test_cross_arena_reference_tracking() {
         unsafe { dotnet_rs::value::object::ObjectPtr::from_raw(0x2000 as *const _).unwrap() };
 
     vm::gc::coordinator::set_current_arena_handle(handle.clone());
-    vm::gc::coordinator::record_cross_arena_ref(2, ptr1);
-    vm::gc::coordinator::record_cross_arena_ref(2, ptr2);
+    dotnet_rs::utils::gc::record_cross_arena_ref(2, ptr1.as_ptr() as usize);
+    dotnet_rs::utils::gc::record_cross_arena_ref(2, ptr2.as_ptr() as usize);
 
     // The fact that we can record cross-arena refs without panicking demonstrates the system works
     shared.gc_coordinator.unregister_arena(1);
