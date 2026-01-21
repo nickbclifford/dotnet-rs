@@ -1,6 +1,5 @@
-/// Configuration-specific tests for feature flags
-/// Tests that verify the correct behavior of different feature configurations
-use dotnet_rs::vm;
+//! Configuration-specific tests for feature flags
+//! Tests that verify the correct behavior of different feature configurations
 
 #[cfg(feature = "multithreading")]
 use dotnet_rs::vm::threading::ThreadManagerOps;
@@ -20,7 +19,7 @@ fn test_single_threaded_stub_thread_manager() {
     let _shared = Arc::new(state::SharedGlobalState::new(loader));
 
     // Thread manager should provide a consistent thread ID (always 1)
-    assert_eq!(vm::threading::get_current_thread_id(), 1);
+    assert_eq!(dotnet_rs::vm::threading::get_current_thread_id(), 1);
 }
 
 #[test]
@@ -112,7 +111,7 @@ fn test_multithreaded_gc_arena_handle() {
     let shared = Arc::new(state::SharedGlobalState::new(loader));
 
     // Create an arena handle
-    let handle = vm::gc::coordinator::ArenaHandle::new(1);
+    let handle = dotnet_rs::vm::gc::coordinator::ArenaHandle::new(1);
 
     // Register and unregister the arena
     shared.gc_coordinator.register_arena(handle.clone());

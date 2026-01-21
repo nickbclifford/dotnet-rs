@@ -7,13 +7,12 @@ use crate::{
         context::ResolutionContext,
         gc::GCCoordinator,
         metrics::RuntimeMetrics,
-        sync::{Arc, AtomicU64, AtomicU8, Ordering},
+        sync::{Arc, AtomicU64, AtomicU8, Condvar, Mutex, Ordering, RwLock},
         threading::ThreadManagerOps,
         CallStack, MethodInfo,
     },
 };
 use gc_arena::{Collect, Collection};
-use parking_lot::{Condvar, Mutex, RwLock};
 use std::{
     collections::HashMap,
     fmt::{Debug, Formatter},

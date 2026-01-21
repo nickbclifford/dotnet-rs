@@ -50,6 +50,7 @@ pub trait ReflectionExtensions<'gc, 'm> {
     fn get_handle_for_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> Object<'gc>;
     fn get_runtime_method_index(&mut self, method: MethodDescription, lookup: GenericLookup)
         -> u16;
+    #[cfg(not(feature = "multithreaded-gc"))]
     fn get_runtime_field_index(&mut self, field: FieldDescription, lookup: GenericLookup) -> u16;
     fn get_runtime_method_obj(
         &mut self,
@@ -275,6 +276,7 @@ impl<'gc, 'm: 'gc> ReflectionExtensions<'gc, 'm> for CallStack<'gc, 'm> {
         idx as u16
     }
 
+    #[cfg(not(feature = "multithreaded-gc"))]
     fn get_runtime_field_index(&mut self, field: FieldDescription, lookup: GenericLookup) -> u16 {
         let mut fields = self.runtime_fields_write();
         let idx = get_runtime_member_index(&mut fields, field, lookup);

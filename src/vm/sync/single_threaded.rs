@@ -1,11 +1,8 @@
-use crate::{
-    value::object::ObjectRef,
-    vm::{
-        gc::coordinator::GCCoordinator,
-        metrics::RuntimeMetrics,
-        sync::{Mutex, SyncBlockOps, SyncManagerOps},
-        threading::ThreadManagerOps,
-    },
+use crate::vm::{
+    gc::coordinator::GCCoordinator,
+    metrics::RuntimeMetrics,
+    sync::{Mutex, SyncBlockOps, SyncManagerOps},
+    threading::ThreadManagerOps,
 };
 use std::{
     collections::HashMap,

@@ -14,23 +14,24 @@ use crate::{
 };
 use dashmap::DashMap;
 use gc_arena::{Collect, Collection};
-use parking_lot::{Mutex, RwLock};
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
 };
 
 use super::{
-    gc::GCCoordinator,
     intrinsics::{is_intrinsic, is_intrinsic_field, IntrinsicRegistry},
     metrics::{CacheSizes, CacheStats, RuntimeMetrics},
     pinvoke::NativeLibraries,
     statics::StaticStorageManager,
-    sync::{Arc, AtomicBool, AtomicUsize, Ordering, SyncBlockManager},
+    sync::{Arc, AtomicBool, Mutex, Ordering, RwLock, SyncBlockManager},
     threading::ThreadManager,
     tracer::Tracer,
     HeapManager,
 };
+
+#[cfg(feature = "multithreaded-gc")]
+use super::{gc::GCCoordinator, sync::AtomicUsize};
 
 /// Grouped caches for type resolution and layout computation.
 /// This struct reduces the API surface area of ResolutionContext.
