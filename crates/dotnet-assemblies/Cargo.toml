@@ -4,9 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-dotnet-types = { path = "../dotnet-types" }
-dotnet-utils = { path = "../dotnet-utils", default-features = false }
-dotnetdll = "0.1.1"
-dashmap = "6.1"
-libloading = "0.9.0"
-gc-arena = "0.5"
+dotnet-types = { workspace = true }
+dotnet-utils = { workspace = true, default-features = false }
+dotnetdll = { workspace = true }
+dashmap = { workspace = true }
+gc-arena = { workspace = true }

@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-gc-arena = "0.5"
-parking_lot = { version = "0.12", optional = true }
+gc-arena = { workspace = true }
+parking_lot = { workspace = true, optional = true }
 
 [features]
 default = ["multithreaded-gc"]
