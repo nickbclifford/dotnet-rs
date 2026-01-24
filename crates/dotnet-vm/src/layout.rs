@@ -264,7 +264,7 @@ impl LayoutFactory {
     pub fn create_array_layout(
         element: ConcreteType,
         length: usize,
-        context: &ResolutionContext
+        context: &ResolutionContext,
     ) -> ArrayLayoutManager {
         Self::create_array_layout_with_metrics(element, length, context, None)
     }

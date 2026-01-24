@@ -1,15 +1,15 @@
 use crate::{context::ResolutionContext, layout::LayoutFactory};
 use dotnet_assemblies::decompose_type_source;
+use dotnet_types::{
+    generics::{ConcreteType, GenericLookup},
+    TypeDescription,
+};
 use dotnet_value::{
     layout::HasLayout,
     object::{CTSValue, Object, ValueType, Vector},
     pointer::ManagedPtr,
     storage::FieldStorage,
     StackValue,
-};
-use dotnet_types::{
-    generics::{ConcreteType, GenericLookup},
-    TypeDescription,
 };
 use dotnetdll::prelude::{BaseType, ValueKind};
 use std::{any, error::Error, ptr::NonNull, sync::Arc};
@@ -57,9 +57,7 @@ impl<'a, 'm> ValueResolution for ResolutionContext<'a, 'm> {
     }
 
     fn new_instance_fields(&self, td: TypeDescription) -> FieldStorage {
-        FieldStorage::new(LayoutFactory::instance_field_layout_cached(
-            td, self, None,
-        ))
+        FieldStorage::new(LayoutFactory::instance_field_layout_cached(td, self, None))
     }
 
     fn new_static_fields(&self, td: TypeDescription) -> FieldStorage {

@@ -9,8 +9,8 @@ use std::{
 
 pub mod generics;
 pub mod members;
-pub mod runtime;
 pub mod resolution;
+pub mod runtime;
 
 pub trait TypeResolver {
     fn corlib_type(&self, name: &str) -> TypeDescription;

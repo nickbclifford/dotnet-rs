@@ -1,6 +1,4 @@
-use crate::{
-    gc::coordinator::GCCoordinator, metrics::RuntimeMetrics, threading::ThreadManagerOps,
-};
+use crate::{gc::coordinator::GCCoordinator, metrics::RuntimeMetrics, threading::ThreadManagerOps};
 
 #[cfg(not(feature = "multithreading"))]
 mod single_threaded;

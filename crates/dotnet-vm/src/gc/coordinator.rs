@@ -258,8 +258,8 @@ pub type MutexGuard<'a, T> = crate::sync::MutexGuard<'a, T>;
 
 #[cfg(not(feature = "multithreaded-gc"))]
 pub mod stubs {
-    use dotnet_value::object::ObjectPtr;
     use crate::sync::MutexGuard;
+    use dotnet_value::object::ObjectPtr;
     use std::collections::HashSet;
 
     #[derive(Debug, Clone)]

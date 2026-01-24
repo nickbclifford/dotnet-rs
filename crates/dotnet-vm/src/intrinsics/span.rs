@@ -1,18 +1,17 @@
 use crate::{
     pop_args,
+    utils::gc::GCHandle,
     value::{
         layout::HasLayout,
         object::{HeapStorage, Object, ObjectRef},
         pointer::{ManagedPtr, ManagedPtrOwner},
         StackValue,
     },
-    utils::gc::GCHandle,
     vm::{
         context::ResolutionContext,
         layout::{type_layout, LayoutFactory},
         resolution::ValueResolution,
-        CallStack,
-        StepResult,
+        CallStack, StepResult,
     },
     vm_push,
 };

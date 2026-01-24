@@ -1,6 +1,6 @@
-use dotnet_utils::sync::Arc;
 use crate::object::ObjectRef;
 use dotnet_types::TypeDescription;
+use dotnet_utils::sync::Arc;
 use enum_dispatch::enum_dispatch;
 use gc_arena::{Collect, Collection};
 use std::{

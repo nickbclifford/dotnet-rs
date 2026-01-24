@@ -1,7 +1,7 @@
 use crate::{
+    utils::gc::GCHandle,
     utils::DebugStr,
     value::object::{HeapStorage, ObjectRef},
-    utils::gc::GCHandle,
     vm::{context::ResolutionContext, CallStack, StepResult},
     vm_error, vm_push,
 };

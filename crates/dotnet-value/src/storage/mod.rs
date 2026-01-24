@@ -1,13 +1,13 @@
-use dotnet_utils::{
-    is_ptr_aligned_to_field,
-    sync::{Arc, AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering},
-    DebugStr,
-};
 use crate::{
     layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
     object::ObjectRef,
 };
 use dotnet_types::TypeDescription;
+use dotnet_utils::{
+    is_ptr_aligned_to_field,
+    sync::{Arc, AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering},
+    DebugStr,
+};
 use gc_arena::{Collect, Collection};
 use std::{
     collections::HashSet,

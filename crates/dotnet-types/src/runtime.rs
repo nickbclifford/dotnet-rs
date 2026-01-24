@@ -1,9 +1,6 @@
 use crate::{
+    generics::ConcreteType, members::MethodDescription, resolution::ResolutionS, TypeDescription,
     TypeResolver,
-    generics::ConcreteType,
-    members::MethodDescription,
-    resolution::ResolutionS,
-    TypeDescription,
 };
 use dotnetdll::prelude::{BaseType, TypeSource};
 use std::{fmt::Debug, hash::Hash};

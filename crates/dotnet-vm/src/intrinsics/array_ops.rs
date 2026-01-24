@@ -1,11 +1,11 @@
 use crate::{
     pop_args,
+    utils::gc::GCHandle,
     value::{
         layout::HasLayout,
         object::{HeapStorage, ObjectRef},
         StackValue,
     },
-    utils::gc::GCHandle,
     vm::{resolution::ValueResolution, CallStack, StepResult},
     vm_push,
 };

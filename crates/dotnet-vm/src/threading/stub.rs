@@ -1,9 +1,7 @@
-use crate::{
-    vm::{
-        gc::coordinator::{GCCommand, GCCoordinator},
-        threading::{STWGuardOps, ThreadManagerOps},
-        tracer::Tracer,
-    },
+use crate::vm::{
+    gc::coordinator::{GCCommand, GCCoordinator},
+    threading::{STWGuardOps, ThreadManagerOps},
+    tracer::Tracer,
 };
 use std::sync::Arc;
 
@@ -71,4 +69,3 @@ impl STWGuardOps for StopTheWorldGuard {
         0
     }
 }
-

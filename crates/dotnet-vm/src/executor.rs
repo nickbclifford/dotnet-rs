@@ -1,5 +1,6 @@
 use crate::{
-    utils::sync::{Arc, Ordering}, value::StackValue,
+    utils::sync::{Arc, Ordering},
+    value::StackValue,
     vm::intrinsics::reflection::ReflectionExtensions,
 };
 use dotnet_types::members::MethodDescription;

@@ -1,8 +1,3 @@
-use dotnet_utils::{
-    gc::{GCHandle, ThreadSafeLock},
-    sync::{get_current_thread_id, AtomicUsize, Ordering as AtomicOrdering},
-    DebugStr,
-};
 use crate::{
     layout::{ArrayLayoutManager, HasLayout, LayoutManager, Scalar},
     pointer::{ManagedPtr, ManagedPtrOwner},
@@ -11,6 +6,11 @@ use crate::{
     StackValue,
 };
 use dotnet_types::{generics::ConcreteType, TypeDescription};
+use dotnet_utils::{
+    gc::{GCHandle, ThreadSafeLock},
+    sync::{get_current_thread_id, AtomicUsize, Ordering as AtomicOrdering},
+    DebugStr,
+};
 use gc_arena::{Collect, Collection, Gc, Mutation};
 use std::{
     cmp::Ordering,

@@ -107,10 +107,7 @@
 //!   ├─→ external_call() [if P/Invoke]
 //!   └─→ call_frame() [managed CIL]
 //! ```
-use crate::{
-    assemblies::AssemblyLoader,
-    vm_trace_intrinsic,
-};
+use crate::{assemblies::AssemblyLoader, vm_trace_intrinsic};
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
@@ -132,8 +129,8 @@ pub mod unsafe_ops;
 pub use metadata::{classify_intrinsic, IntrinsicKind, IntrinsicMetadata};
 pub use reflection::ReflectionExtensions;
 
-use dotnet_utils::gc::GCHandle;
 use super::{context::ResolutionContext, sync::Arc, tracer::Tracer, CallStack, StepResult};
+use dotnet_utils::gc::GCHandle;
 
 pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttribute";
 

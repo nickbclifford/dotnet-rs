@@ -4,13 +4,13 @@ use gc_arena::{barrier::Unlock, Collect, Collection, Mutation};
 use std::ops::{Deref, DerefMut};
 
 #[cfg(feature = "multithreaded-gc")]
-use std::cell::{Cell, RefCell};
+use crate::sync::{Arc, AtomicBool, AtomicUsize, Condvar, Mutex, Ordering};
 #[cfg(feature = "multithreaded-gc")]
-use std::mem;
+use std::cell::{Cell, RefCell};
 #[cfg(feature = "multithreaded-gc")]
 use std::collections::HashSet;
 #[cfg(feature = "multithreaded-gc")]
-use crate::sync::{Arc, AtomicBool, AtomicUsize, Condvar, Mutex, Ordering};
+use std::mem;
 
 #[cfg(feature = "multithreading")]
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -108,10 +108,7 @@ impl<T> ThreadSafeLock<T> {
     /// Try to borrow the contents mutably without blocking.
     ///
     /// Returns `None` if any locks (read or write) are currently held.
-    pub fn try_borrow_mut<'gc>(
-        &self,
-        _gc: &Mutation<'gc>,
-    ) -> Option<ThreadSafeWriteGuard<'_, T>> {
+    pub fn try_borrow_mut<'gc>(&self, _gc: &Mutation<'gc>) -> Option<ThreadSafeWriteGuard<'_, T>> {
         #[cfg(feature = "multithreading")]
         {
             let _ = _gc;

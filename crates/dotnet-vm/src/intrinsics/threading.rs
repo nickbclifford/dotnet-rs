@@ -1,7 +1,7 @@
 use crate::{
     pop_args,
-    value::object::ObjectRef,
     utils::gc::GCHandle,
+    value::object::ObjectRef,
     vm::{
         sync::{Arc, AtomicI32, Ordering, SyncBlockOps, SyncManagerOps},
         CallStack, StepResult,

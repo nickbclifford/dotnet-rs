@@ -1,6 +1,6 @@
 use crate::{
-    value::StackValue,
     utils::gc::GCHandle,
+    value::StackValue,
     vm::{CallStack, StepResult},
     vm_pop, vm_push,
 };

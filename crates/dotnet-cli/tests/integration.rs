@@ -1,6 +1,6 @@
 use dotnet_cli::{
     assemblies::{self, static_res_from_file},
-    dotnet_types::{members::MethodDescription, TypeDescription, resolution::ResolutionS},
+    dotnet_types::{members::MethodDescription, resolution::ResolutionS, TypeDescription},
     vm::{self, state},
 };
 use dotnetdll::prelude::*;

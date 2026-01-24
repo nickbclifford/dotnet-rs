@@ -1,15 +1,21 @@
+use dashmap::DashMap;
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     resolution::ResolutionS,
-    TypeDescription,
-    TypeResolver,
+    TypeDescription, TypeResolver,
 };
 use dotnet_utils::sync::{AtomicU64, Ordering, RwLock};
-use dashmap::DashMap;
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
-use std::{collections::HashMap, error::Error, fmt, fs, path::{Path, PathBuf}, ptr, io::Read};
+use std::{
+    collections::HashMap,
+    error::Error,
+    fmt, fs,
+    io::Read,
+    path::{Path, PathBuf},
+    ptr,
+};
 
 pub struct AssemblyLoader {
     assembly_root: String,

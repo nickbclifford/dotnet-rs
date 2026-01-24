@@ -115,8 +115,10 @@ pub enum StepResult {
     YieldForGC,
 }
 
-pub mod vm { pub use super::*; }
+pub mod vm {
+    pub use super::*;
+}
+pub use dotnet_assemblies as assemblies;
+pub use dotnet_types as types;
 pub use dotnet_utils as utils;
 pub use dotnet_value as value;
-pub use dotnet_types as types;
-pub use dotnet_assemblies as assemblies;

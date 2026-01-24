@@ -1,15 +1,15 @@
-use dotnet_types::{
-    generics::{ConcreteType, GenericLookup},
-    members::{FieldDescription, MethodDescription},
-    runtime::RuntimeType,
-    resolution::ResolutionS,
-    TypeDescription,
-};
 use crate::{
     assemblies::AssemblyLoader,
     utils::gc::{GCHandle, GCHandleType, ThreadSafeLock},
 };
 use dotnet_assemblies::decompose_type_source;
+use dotnet_types::{
+    generics::{ConcreteType, GenericLookup},
+    members::{FieldDescription, MethodDescription},
+    resolution::ResolutionS,
+    runtime::RuntimeType,
+    TypeDescription,
+};
 use dotnet_value::{
     layout::{HasLayout, LayoutManager},
     object::{HeapStorage, Object as ObjectInstance, ObjectRef},

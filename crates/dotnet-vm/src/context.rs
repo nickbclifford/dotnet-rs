@@ -1,17 +1,17 @@
-use dotnet_assemblies::{Ancestor, AssemblyLoader};
 use crate::{
     resolution::{TypeResolutionExt, ValueResolution},
     state::GlobalCaches,
     sync::Arc,
 };
 use dotnet_assemblies::decompose_type_source;
-use dotnet_value::object::ObjectHandle;
+use dotnet_assemblies::{Ancestor, AssemblyLoader};
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     resolution::ResolutionS,
     TypeDescription,
 };
+use dotnet_value::object::ObjectHandle;
 use dotnetdll::prelude::{
     BaseType, FieldSource, MemberType, MethodType, TypeSource, UserMethod, UserType, ValueKind,
 };

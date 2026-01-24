@@ -10,9 +10,9 @@
 //!   multiple thread-local arenas. Depends on `multithreading`.
 use crate::vm::ExecutorResult;
 use clap::Parser;
+use dotnet_assemblies::static_res_from_file;
 use dotnetdll::prelude::*;
 use std::process::ExitCode;
-use dotnet_assemblies::static_res_from_file;
 
 pub use dotnet_assemblies as assemblies;
 pub use dotnet_types;

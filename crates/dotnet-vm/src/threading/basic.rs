@@ -91,7 +91,6 @@ pub struct ThreadManager {
     pub(super) gc_coordination: Mutex<()>,
 }
 
-
 impl ThreadManager {
     pub fn new() -> Arc<Self> {
         let manager = Arc::new(Self {
@@ -463,7 +462,8 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                             set_currently_tracing(None);
 
                             for (target_id, ptr_usize) in take_found_cross_arena_refs() {
-                                let ptr = unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
+                                let ptr =
+                                    unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
                                 coordinator.record_cross_arena_ref(target_id, ptr);
                             }
                         }
@@ -480,7 +480,8 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                             arena.mutate(|_, c| {
                                 let mut roots = c.heap().cross_arena_roots.borrow_mut();
                                 for ptr_usize in ptrs {
-                                    let ptr = unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
+                                    let ptr = unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }
+                                        .unwrap();
                                     roots.insert(ptr);
                                 }
                             });
@@ -496,7 +497,8 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
 
                             set_currently_tracing(None);
                             for (target_id, ptr_usize) in take_found_cross_arena_refs() {
-                                let ptr = unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
+                                let ptr =
+                                    unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
                                 coordinator.record_cross_arena_ref(target_id, ptr);
                             }
                         }

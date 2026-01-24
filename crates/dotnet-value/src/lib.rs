@@ -1,14 +1,14 @@
 #[cfg(feature = "multithreaded-gc")]
 use dotnet_utils::gc::record_cross_arena_ref;
 
+use dotnet_types::TypeDescription;
 use dotnet_utils::{
     gc::{GCHandle, ThreadSafeLock},
     sync::{
-        AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32,
-        AtomicU64, AtomicU8, AtomicUsize, Ordering as AtomicOrdering,
+        AtomicI16, AtomicI32, AtomicI64, AtomicI8, AtomicIsize, AtomicU16, AtomicU32, AtomicU64,
+        AtomicU8, AtomicUsize, Ordering as AtomicOrdering,
     },
 };
-use dotnet_types::TypeDescription;
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, Collection, Gc};
 use std::{
@@ -606,7 +606,7 @@ mod tests {
     fn test_stack_value_arithmetic() {
         let v1 = StackValue::Int32(10);
         let v2 = StackValue::Int32(20);
-        
+
         let sum = v1.clone() + v2.clone();
         assert_eq!(sum, StackValue::Int32(30));
 

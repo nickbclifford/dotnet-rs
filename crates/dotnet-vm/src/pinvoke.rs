@@ -4,7 +4,9 @@ use crate::{
         layout::{FieldLayoutManager, LayoutManager, Scalar},
         StackValue,
     },
-    vm::{context::ResolutionContext, layout::LayoutFactory, resolution::ValueResolution, CallStack},
+    vm::{
+        context::ResolutionContext, layout::LayoutFactory, resolution::ValueResolution, CallStack,
+    },
 };
 use dotnet_assemblies::decompose_type_source;
 use dotnet_types::{

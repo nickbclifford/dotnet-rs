@@ -7,15 +7,15 @@ use crate::{
     },
     vm_expect_stack, vm_pop, vm_push,
 };
+use dotnet_types::{
+    generics::{ConcreteType, GenericLookup},
+    members::{FieldDescription, MethodDescription},
+};
 use dotnet_value::{
     layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
     object::{HeapStorage, ManagedPtrMetadata, Object as ObjectInstance, ObjectRef},
     pointer::{ManagedPtr, ManagedPtrOwner},
     StackValue,
-};
-use dotnet_types::{
-    generics::{ConcreteType, GenericLookup},
-    members::{FieldDescription, MethodDescription},
 };
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use std::ptr;

@@ -1,6 +1,7 @@
 use crate::{
     assemblies::SUPPORT_ASSEMBLY,
     pop_args,
+    utils::gc::GCHandle,
     value::{
         layout::{LayoutManager, Scalar},
         object::{HeapStorage, Object, ObjectRef},
@@ -12,7 +13,6 @@ use crate::{
         resolution::{TypeResolutionExt, ValueResolution},
         CallStack, MethodInfo, StepResult,
     },
-    utils::gc::GCHandle,
     vm_pop, vm_push,
 };
 use dotnet_assemblies::decompose_type_source;
@@ -170,7 +170,11 @@ impl<'gc, 'm: 'gc> ReflectionExtensions<'gc, 'm> for CallStack<'gc, 'm> {
                 .shared
                 .shared_runtime_methods_rev
                 .get(&index)
-                .map(|e: dashmap::mapref::one::Ref<usize, (MethodDescription, GenericLookup)>| e.clone())
+                .map(
+                    |e: dashmap::mapref::one::Ref<usize, (MethodDescription, GenericLookup)>| {
+                        e.clone()
+                    },
+                )
                 .expect("invalid runtime method index");
 
             #[cfg(not(feature = "multithreaded-gc"))]
@@ -189,7 +193,11 @@ impl<'gc, 'm: 'gc> ReflectionExtensions<'gc, 'm> for CallStack<'gc, 'm> {
                 .shared
                 .shared_runtime_fields_rev
                 .get(&index)
-                .map(|e: dashmap::mapref::one::Ref<usize, (FieldDescription, GenericLookup)>| e.clone())
+                .map(
+                    |e: dashmap::mapref::one::Ref<usize, (FieldDescription, GenericLookup)>| {
+                        e.clone()
+                    },
+                )
                 .expect("invalid runtime field index");
 
             #[cfg(not(feature = "multithreaded-gc"))]

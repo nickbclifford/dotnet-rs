@@ -8,14 +8,14 @@ use crate::{
         object::ObjectRef,
     },
 };
+use dashmap::DashMap;
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
-    runtime::RuntimeType,
     resolution::ResolutionS,
+    runtime::RuntimeType,
     TypeDescription,
 };
-use dashmap::DashMap;
 use gc_arena::{Collect, Collection};
 use std::{
     cell::{Cell, RefCell},

@@ -1,15 +1,15 @@
 use crate::{
     pop_args,
+    utils::gc::{GCHandle, GCHandleType},
     value::{
         object::{HeapStorage, ObjectRef},
         StackValue,
     },
-    utils::gc::{GCHandle, GCHandleType},
     vm::{CallStack, StepResult},
     vm_pop, vm_push,
 };
-use dotnet_value::with_string;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+use dotnet_value::with_string;
 
 /// System.ArgumentNullException::ThrowIfNull(object, string)
 pub fn intrinsic_argument_null_exception_throw_if_null<'gc, 'm: 'gc>(
