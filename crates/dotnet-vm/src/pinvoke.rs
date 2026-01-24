@@ -1,12 +1,10 @@
+use dotnet_utils::gc::GCHandle;
+use dotnet_value::{
+    layout::{FieldLayoutManager, LayoutManager, Scalar},
+    StackValue,
+};
 use crate::{
-    utils::gc::GCHandle,
-    value::{
-        layout::{FieldLayoutManager, LayoutManager, Scalar},
-        StackValue,
-    },
-    vm::{
-        context::ResolutionContext, layout::LayoutFactory, resolution::ValueResolution, CallStack,
-    },
+    context::ResolutionContext, layout::LayoutFactory, resolution::ValueResolution, CallStack,
 };
 use dotnet_assemblies::decompose_type_source;
 use dotnet_types::{

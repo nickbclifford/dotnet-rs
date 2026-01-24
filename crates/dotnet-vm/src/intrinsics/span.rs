@@ -1,19 +1,17 @@
 use crate::{
     pop_args,
-    utils::gc::GCHandle,
-    value::{
-        layout::HasLayout,
-        object::{HeapStorage, Object, ObjectRef},
-        pointer::{ManagedPtr, ManagedPtrOwner},
-        StackValue,
-    },
-    vm::{
-        context::ResolutionContext,
-        layout::{type_layout, LayoutFactory},
-        resolution::ValueResolution,
-        CallStack, StepResult,
-    },
+    context::ResolutionContext,
+    layout::{type_layout, LayoutFactory},
+    resolution::ValueResolution,
+    CallStack, StepResult,
     vm_push,
+};
+use dotnet_utils::gc::GCHandle;
+use dotnet_value::{
+    layout::HasLayout,
+    object::{HeapStorage, Object, ObjectRef},
+    pointer::{ManagedPtr, ManagedPtrOwner},
+    StackValue,
 };
 use dotnet_types::{
     generics::GenericLookup,

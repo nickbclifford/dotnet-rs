@@ -1,7 +1,5 @@
-use crate::{
-    assemblies::AssemblyLoader,
-    utils::gc::{GCHandle, GCHandleType, ThreadSafeLock},
-};
+use dotnet_assemblies::AssemblyLoader;
+use dotnet_utils::gc::{GCHandle, GCHandleType, ThreadSafeLock};
 use dotnet_assemblies::decompose_type_source;
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},

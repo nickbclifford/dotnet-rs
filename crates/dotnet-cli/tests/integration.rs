@@ -1,8 +1,6 @@
-use dotnet_cli::{
-    assemblies::{self, static_res_from_file},
-    dotnet_types::{members::MethodDescription, resolution::ResolutionS, TypeDescription},
-    vm::{self, state},
-};
+use dotnet_assemblies::{self as assemblies, static_res_from_file};
+use dotnet_types::{members::MethodDescription, resolution::ResolutionS, TypeDescription};
+use dotnet_vm::{self as vm, state};
 use dotnetdll::prelude::*;
 use std::{
     io,
@@ -11,7 +9,7 @@ use std::{
 };
 
 #[cfg(feature = "multithreading")]
-use dotnet_cli::vm::threading::ThreadManagerOps;
+use dotnet_vm::threading::ThreadManagerOps;
 
 pub struct TestHarness {
     pub loader: &'static assemblies::AssemblyLoader,
@@ -410,7 +408,7 @@ fn test_thread_manager_lifecycle() {
 #[test]
 #[cfg(feature = "multithreading")]
 fn test_multiple_arenas_simple() {
-    use dotnet_cli::vm::state;
+    use dotnet_vm::state;
     use std::sync::Arc;
     use std::thread;
 
@@ -500,7 +498,7 @@ fn test_multiple_arenas_simple() {
 #[test]
 #[cfg(feature = "multithreaded-gc")]
 fn test_reflection_race_condition() {
-    use dotnet_cli::vm::state;
+    use dotnet_vm::state;
     use std::sync::Arc;
     use std::thread;
 
@@ -552,7 +550,7 @@ fn test_reflection_race_condition() {
 #[test]
 #[cfg(feature = "multithreaded-gc")]
 fn test_gc_coordinator_multi_arena_tracking() {
-    use dotnet_cli::vm::state;
+    use dotnet_vm::state;
     use std::sync::Arc;
 
     let shared = Arc::new(state::SharedGlobalState::new(TestHarness::get().loader));
@@ -582,7 +580,7 @@ fn test_gc_coordinator_multi_arena_tracking() {
 #[test]
 #[cfg(feature = "multithreading")]
 fn test_volatile_sharing() {
-    use dotnet_cli::vm::state;
+    use dotnet_vm::state;
     use std::thread;
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/volatile_sharing_42.cs");
@@ -613,7 +611,7 @@ fn test_volatile_sharing() {
 #[test]
 #[cfg(feature = "multithreaded-gc")]
 fn test_cross_arena_reference_tracking() {
-    use dotnet_cli::vm::state;
+    use dotnet_vm::state;
     use std::sync::Arc;
 
     let shared = Arc::new(state::SharedGlobalState::new(TestHarness::get().loader));
@@ -625,13 +623,13 @@ fn test_cross_arena_reference_tracking() {
 
     // Record some cross-arena references
     let ptr1 =
-        unsafe { dotnet_cli::value::object::ObjectPtr::from_raw(0x1000 as *const _).unwrap() };
+        unsafe { dotnet_value::object::ObjectPtr::from_raw(0x1000 as *const _).unwrap() };
     let ptr2 =
-        unsafe { dotnet_cli::value::object::ObjectPtr::from_raw(0x2000 as *const _).unwrap() };
+        unsafe { dotnet_value::object::ObjectPtr::from_raw(0x2000 as *const _).unwrap() };
 
     vm::gc::coordinator::set_current_arena_handle(handle.clone());
-    dotnet_cli::utils::gc::record_cross_arena_ref(2, ptr1.as_ptr() as usize);
-    dotnet_cli::utils::gc::record_cross_arena_ref(2, ptr2.as_ptr() as usize);
+    dotnet_utils::gc::record_cross_arena_ref(2, ptr1.as_ptr() as usize);
+    dotnet_utils::gc::record_cross_arena_ref(2, ptr2.as_ptr() as usize);
 
     // The fact that we can record cross-arena refs without panicking demonstrates the system works
     shared.gc_coordinator.unregister_arena(1);
@@ -641,7 +639,7 @@ fn test_cross_arena_reference_tracking() {
 #[test]
 #[cfg(feature = "multithreaded-gc")]
 fn test_allocation_pressure_triggers_collection() {
-    use dotnet_cli::vm::state;
+    use dotnet_vm::state;
     use std::sync::Arc;
 
     let shared = Arc::new(state::SharedGlobalState::new(TestHarness::get().loader));

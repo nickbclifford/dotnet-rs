@@ -2,9 +2,9 @@
 //! Tests that verify the correct behavior of different feature configurations
 
 #[cfg(feature = "multithreading")]
-use dotnet_cli::vm::threading::ThreadManagerOps;
+use dotnet_vm::threading::ThreadManagerOps;
 
-use dotnet_cli::vm::state;
+use dotnet_vm::state;
 use std::{path::PathBuf, sync::Arc};
 
 // ============================================================================
@@ -19,7 +19,7 @@ fn test_single_threaded_stub_thread_manager() {
     let _shared = Arc::new(state::SharedGlobalState::new(loader));
 
     // Thread manager should provide a consistent thread ID (always 1)
-    assert_eq!(dotnet_cli::utils::sync::get_current_thread_id(), 1);
+    assert_eq!(dotnet_utils::sync::get_current_thread_id(), 1);
 }
 
 #[test]
@@ -73,7 +73,7 @@ fn test_multithreading_no_gc_coordinator() {
 #[test]
 #[cfg(feature = "multithreading")]
 fn test_multithreading_sync_blocks() {
-    use dotnet_cli::vm::state;
+    use dotnet_vm::state;
     use std::thread;
 
     let loader = create_test_loader();
@@ -111,7 +111,7 @@ fn test_multithreaded_gc_arena_handle() {
     let shared = Arc::new(state::SharedGlobalState::new(loader));
 
     // Create an arena handle
-    let handle = dotnet_cli::vm::gc::coordinator::ArenaHandle::new(1);
+    let handle = dotnet_vm::gc::coordinator::ArenaHandle::new(1);
 
     // Register and unregister the arena
     shared.gc_coordinator.register_arena(handle.clone());
@@ -121,11 +121,11 @@ fn test_multithreaded_gc_arena_handle() {
 #[test]
 #[cfg(feature = "multithreaded-gc")]
 fn test_multithreaded_gc_cross_arena_value() {
-    use dotnet_cli::value::StackValue;
+    use dotnet_value::StackValue;
 
     // Test that CrossArenaObjectRef variant exists
     // We create a simple ObjectPtr by transmuting a pointer value
-    let ptr = unsafe { std::mem::transmute::<usize, dotnet_cli::value::object::ObjectPtr>(0x1000) };
+    let ptr = unsafe { std::mem::transmute::<usize, dotnet_value::object::ObjectPtr>(0x1000) };
     let _value = StackValue::CrossArenaObjectRef(ptr, 1);
     // If this compiles, the variant exists and works
 }
@@ -165,11 +165,11 @@ fn test_basic_functionality_exists() {
 // Helper Functions
 // ============================================================================
 
-fn create_test_loader() -> &'static dotnet_cli::assemblies::AssemblyLoader {
+fn create_test_loader() -> &'static dotnet_assemblies::AssemblyLoader {
     thread_local! {
-        static LOADER: &'static dotnet_cli::assemblies::AssemblyLoader = {
+        static LOADER: &'static dotnet_assemblies::AssemblyLoader = {
             let assemblies_path = find_dotnet_app_path().to_str().unwrap().to_string();
-            let loader = dotnet_cli::assemblies::AssemblyLoader::new(assemblies_path);
+            let loader = dotnet_assemblies::AssemblyLoader::new(assemblies_path);
             Box::leak(Box::new(loader))
         };
     }

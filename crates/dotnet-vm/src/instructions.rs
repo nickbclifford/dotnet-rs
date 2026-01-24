@@ -1,12 +1,12 @@
+use dotnet_utils::{gc::GCHandle, is_ptr_aligned_to_field};
+use dotnet_value::{
+    layout::HasLayout,
+    object::{CTSValue, HeapStorage, ObjectRef},
+    pointer::{ManagedPtr, ManagedPtrOwner, UnmanagedPtr},
+    string::CLRString,
+    StackValue,
+};
 use crate::{
-    utils::{gc::GCHandle, is_ptr_aligned_to_field},
-    value::{
-        layout::HasLayout,
-        object::{CTSValue, HeapStorage, ObjectRef},
-        pointer::{ManagedPtr, ManagedPtrOwner, UnmanagedPtr},
-        string::CLRString,
-        StackValue,
-    },
     vm_expect_stack, vm_pop, vm_push, vm_trace, vm_trace_branch, vm_trace_field,
     vm_trace_instruction,
 };

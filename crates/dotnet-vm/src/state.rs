@@ -1,12 +1,10 @@
 #[cfg(feature = "multithreaded-gc")]
-use crate::utils::sync::AtomicUsize;
-use crate::{
-    assemblies::AssemblyLoader,
-    utils::sync::{Arc, AtomicBool, Mutex, Ordering, RwLock},
-    value::{
-        layout::{FieldLayoutManager, LayoutManager},
-        object::ObjectRef,
-    },
+use dotnet_utils::sync::AtomicUsize;
+use dotnet_assemblies::AssemblyLoader;
+use dotnet_utils::sync::{Arc, AtomicBool, Mutex, Ordering, RwLock};
+use dotnet_value::{
+    layout::{FieldLayoutManager, LayoutManager},
+    object::ObjectRef,
 };
 use dashmap::DashMap;
 use dotnet_types::{

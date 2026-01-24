@@ -1,10 +1,8 @@
-use crate::{
-    value::layout::{
-        align_up, ArrayLayoutManager, FieldKey, FieldLayout, FieldLayoutManager, HasLayout,
-        LayoutManager, Scalar,
-    },
-    vm::{context::ResolutionContext, metrics::RuntimeMetrics, sync::Arc},
+use dotnet_value::layout::{
+    align_up, ArrayLayoutManager, FieldKey, FieldLayout, FieldLayoutManager, HasLayout,
+    LayoutManager, Scalar,
 };
+use crate::{context::ResolutionContext, metrics::RuntimeMetrics, sync::Arc};
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::FieldDescription,

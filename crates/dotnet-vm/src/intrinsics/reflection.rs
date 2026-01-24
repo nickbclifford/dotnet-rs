@@ -1,19 +1,17 @@
 use crate::{
-    assemblies::SUPPORT_ASSEMBLY,
     pop_args,
-    utils::gc::GCHandle,
-    value::{
-        layout::{LayoutManager, Scalar},
-        object::{HeapStorage, Object, ObjectRef},
-        StackValue,
-    },
-    vm::{
-        context::ResolutionContext,
-        layout::type_layout,
-        resolution::{TypeResolutionExt, ValueResolution},
-        CallStack, MethodInfo, StepResult,
-    },
+    context::ResolutionContext,
+    layout::type_layout,
+    resolution::{TypeResolutionExt, ValueResolution},
+    CallStack, MethodInfo, StepResult,
     vm_pop, vm_push,
+};
+use dotnet_assemblies::SUPPORT_ASSEMBLY;
+use dotnet_utils::gc::GCHandle;
+use dotnet_value::{
+    layout::{LayoutManager, Scalar},
+    object::{HeapStorage, Object, ObjectRef},
+    StackValue,
 };
 use dotnet_assemblies::decompose_type_source;
 use dotnet_types::{

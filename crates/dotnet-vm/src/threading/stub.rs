@@ -1,4 +1,4 @@
-use crate::vm::{
+use crate::{
     gc::coordinator::{GCCommand, GCCoordinator},
     threading::{STWGuardOps, ThreadManagerOps},
     tracer::Tracer,

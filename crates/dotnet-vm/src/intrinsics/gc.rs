@@ -1,12 +1,8 @@
-use crate::{
-    pop_args,
-    utils::gc::{GCHandle, GCHandleType},
-    value::{
-        object::{HeapStorage, ObjectRef},
-        StackValue,
-    },
-    vm::{CallStack, StepResult},
-    vm_pop, vm_push,
+use crate::{pop_args, vm_pop, vm_push, CallStack, StepResult};
+use dotnet_utils::gc::{GCHandle, GCHandleType};
+use dotnet_value::{
+    object::{HeapStorage, ObjectRef},
+    StackValue,
 };
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_value::with_string;

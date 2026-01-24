@@ -8,17 +8,13 @@
 //!   and `Monitor` synchronization primitives. Pulls in `parking_lot`.
 //! - `multithreaded-gc`: Enables stop-the-world coordinated garbage collection across
 //!   multiple thread-local arenas. Depends on `multithreading`.
-use crate::vm::ExecutorResult;
+use dotnet_vm::ExecutorResult;
 use clap::Parser;
 use dotnet_assemblies::static_res_from_file;
 use dotnetdll::prelude::*;
 use std::process::ExitCode;
 
-pub use dotnet_assemblies as assemblies;
-pub use dotnet_types;
-pub use dotnet_utils as utils;
-pub use dotnet_value as value;
-pub use dotnet_vm as vm;
+use dotnet_vm as vm;
 
 use dotnet_types::{members::MethodDescription, TypeDescription};
 use vm::{state, sync::Arc};
@@ -47,7 +43,7 @@ pub fn run_cli() -> ExitCode {
         None => panic!("expected input module to have an entry point, received one without"),
     };
 
-    let loader = assemblies::AssemblyLoader::new(args.assemblies);
+    let loader = dotnet_assemblies::AssemblyLoader::new(args.assemblies);
     let loader = Box::leak(Box::new(loader));
 
     let shared = Arc::new(state::SharedGlobalState::new(loader));

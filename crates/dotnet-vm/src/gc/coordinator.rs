@@ -7,10 +7,9 @@ pub use dotnet_utils::gc::{
 };
 
 #[cfg(feature = "multithreaded-gc")]
-use crate::{
-    utils::sync::{AtomicBool, Mutex, Ordering},
-    vm::threading::execute_gc_command_for_current_thread,
-};
+use dotnet_utils::sync::{AtomicBool, Mutex, Ordering};
+#[cfg(feature = "multithreaded-gc")]
+use crate::threading::execute_gc_command_for_current_thread;
 #[cfg(feature = "multithreaded-gc")]
 use dotnet_value::object::ObjectPtr;
 #[cfg(feature = "multithreaded-gc")]

@@ -1,11 +1,11 @@
 use crate::{
-    utils::gc::GCHandle,
-    value::{
-        object::{HeapStorage, ObjectRef},
-        StackValue,
-    },
-    vm::{context::ResolutionContext, resolution::ValueResolution, CallStack, StepResult},
+    context::ResolutionContext, resolution::ValueResolution, CallStack, StepResult,
     vm_pop, vm_push,
+};
+use dotnet_utils::gc::GCHandle;
+use dotnet_value::{
+    object::{HeapStorage, ObjectRef},
+    StackValue,
 };
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 

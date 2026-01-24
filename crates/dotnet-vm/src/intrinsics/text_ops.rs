@@ -1,7 +1,7 @@
+use dotnet_utils::gc::GCHandle;
+use dotnet_value::StackValue;
 use crate::{
-    utils::gc::GCHandle,
-    value::StackValue,
-    vm::{CallStack, StepResult},
+    CallStack, StepResult,
     vm_pop, vm_push,
 };
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};

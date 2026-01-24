@@ -1,8 +1,10 @@
+use dotnet_utils::gc::GCHandle;
+use dotnet_utils::DebugStr;
+use dotnet_value::object::{HeapStorage, ObjectRef};
 use crate::{
-    utils::gc::GCHandle,
-    utils::DebugStr,
-    value::object::{HeapStorage, ObjectRef},
-    vm::{context::ResolutionContext, CallStack, StepResult},
+    context::ResolutionContext,
+    stack::CallStack,
+    StepResult,
     vm_error, vm_push,
 };
 use dotnet_types::generics::ConcreteType;

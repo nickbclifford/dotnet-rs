@@ -1,7 +1,7 @@
+use dotnet_utils::sync::{Arc, Ordering};
+use dotnet_value::StackValue;
 use crate::{
-    utils::sync::{Arc, Ordering},
-    value::StackValue,
-    vm::intrinsics::reflection::ReflectionExtensions,
+    intrinsics::reflection::ReflectionExtensions,
 };
 use dotnet_types::members::MethodDescription;
 

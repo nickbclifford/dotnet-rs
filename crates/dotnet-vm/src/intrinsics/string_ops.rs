@@ -1,14 +1,14 @@
 use crate::{
     pop_args,
-    utils::gc::GCHandle,
-    value::{
-        object::{HeapStorage, Object, ObjectRef},
-        pointer::ManagedPtrOwner,
-        string::CLRString,
-        StackValue,
-    },
-    vm::{intrinsics::span::span_to_slice, CallStack, StepResult},
+    intrinsics::span::span_to_slice, CallStack, StepResult,
     vm_pop, vm_push,
+};
+use dotnet_utils::gc::GCHandle;
+use dotnet_value::{
+    object::{HeapStorage, Object, ObjectRef},
+    pointer::ManagedPtrOwner,
+    string::CLRString,
+    StackValue,
 };
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},

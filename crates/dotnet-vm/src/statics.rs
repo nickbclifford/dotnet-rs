@@ -1,14 +1,12 @@
+use dotnet_utils::{
+    gc::GCHandle,
+    sync::{Arc, AtomicU64, AtomicU8, Condvar, Mutex, Ordering, RwLock},
+    DebugStr,
+};
+use dotnet_value::{layout::FieldLayoutManager, storage::FieldStorage};
 use crate::{
-    utils::{
-        gc::GCHandle,
-        sync::{Arc, AtomicU64, AtomicU8, Condvar, Mutex, Ordering, RwLock},
-        DebugStr,
-    },
-    value::{layout::FieldLayoutManager, storage::FieldStorage},
-    vm::{
-        context::ResolutionContext, gc::GCCoordinator, layout::LayoutFactory,
-        metrics::RuntimeMetrics, threading::ThreadManagerOps, CallStack, MethodInfo,
-    },
+    context::ResolutionContext, gc::coordinator::GCCoordinator, layout::LayoutFactory,
+    metrics::RuntimeMetrics, threading::ThreadManagerOps, CallStack, MethodInfo,
 };
 use dotnet_types::{generics::GenericLookup, members::MethodDescription, TypeDescription};
 use gc_arena::{Collect, Collection};

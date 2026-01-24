@@ -107,7 +107,8 @@
 //!   ├─→ external_call() [if P/Invoke]
 //!   └─→ call_frame() [managed CIL]
 //! ```
-use crate::{assemblies::AssemblyLoader, vm_trace_intrinsic};
+use dotnet_assemblies::AssemblyLoader;
+use crate::vm_trace_intrinsic;
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},

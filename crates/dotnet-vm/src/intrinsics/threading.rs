@@ -1,13 +1,11 @@
 use crate::{
     pop_args,
-    utils::gc::GCHandle,
-    value::object::ObjectRef,
-    vm::{
-        sync::{Arc, AtomicI32, Ordering, SyncBlockOps, SyncManagerOps},
-        CallStack, StepResult,
-    },
+    sync::{Arc, AtomicI32, Ordering, SyncBlockOps, SyncManagerOps},
+    CallStack, StepResult,
     vm_pop, vm_push,
 };
+use dotnet_utils::gc::GCHandle;
+use dotnet_value::object::ObjectRef;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use std::{ptr, sync::atomic, thread};
 
