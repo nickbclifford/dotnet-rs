@@ -1,0 +1,27 @@
+[package]
+name = "dotnet-cli"
+version = "0.2.0"
+edition = "2021"
+
+[features]
+default = ["multithreaded-gc"]
+multithreading = ["dep:parking_lot", "dotnet-utils/multithreading", "dotnet-vm/multithreading"]
+multithreaded-gc = ["multithreading", "dotnet-utils/multithreaded-gc", "dotnet-value/multithreaded-gc", "dotnet-vm/multithreaded-gc"]
+
+[dependencies]
+dotnet-types = { path = "../dotnet-types" }
+dotnet-utils = { path = "../dotnet-utils", default-features = false }
+dotnet-value = { path = "../dotnet-value", default-features = false }
+dotnet-assemblies = { path = "../dotnet-assemblies" }
+dotnet-vm = { path = "../dotnet-vm", default-features = false }
+clap = { version = "4.5", features = ["derive"] }
+crossbeam-channel = "0.5"
+dashmap = "6.1"
+dotnetdll = "0.1.1"
+enum_dispatch = "0.3"
+gc-arena = "0.5"
+libffi = "5.0.0"
+libloading = "0.9.0"
+parking_lot = { version = "0.12", optional = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

@@ -1,0 +1,34 @@
+use std::{fs::File, io::Write, path::Path};
+
+fn main() {
+    println!("cargo:rerun-if-changed=tests/fixtures");
+
+    let out_dir = std::env::var("OUT_DIR").unwrap();
+    let destination = Path::new(&out_dir).join("tests.rs");
+    let mut f = File::create(&destination).unwrap();
+
+    let fixtures_dir = Path::new("tests/fixtures");
+    for entry in std::fs::read_dir(fixtures_dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.extension().map(|s| s == "cs").unwrap_or(false) {
+            let file_name = path.file_stem().unwrap().to_str().unwrap();
+            let expected_exit_code: u8 = file_name
+                .split('_')
+                .next_back()
+                .unwrap()
+                .parse()
+                .expect("fixture file name must end with _<exit_code>.cs");
+
+            writeln!(
+                f,
+                "fixture_test!({}, {:?}, {});",
+                file_name,
+                path.to_str().unwrap(),
+                expected_exit_code
+            )
+            .unwrap();
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+    }
+}

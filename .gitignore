@@ -9,7 +9,9 @@ statics.txt
 # .NET artifacts
 bin/
 obj/
-!src/bin/
+# Rust entry points (don't ignore src/bin inside crates)
+!crates/*/src/bin/
+crates/*/target
 
 # Junie
 .junie/

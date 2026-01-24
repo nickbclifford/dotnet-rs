@@ -1,0 +1,213 @@
+use dotnet_utils::{
+    is_ptr_aligned_to_field,
+    sync::{Arc, AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering},
+    DebugStr,
+};
+use crate::{
+    layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
+    object::ObjectRef,
+};
+use dotnet_types::TypeDescription;
+use gc_arena::{Collect, Collection};
+use std::{
+    collections::HashSet,
+    fmt::{Debug, Formatter},
+    ops::Range,
+};
+
+#[derive(Clone, PartialEq)]
+pub struct FieldStorage {
+    layout: Arc<FieldLayoutManager>,
+    storage: Vec<u8>,
+}
+
+impl Debug for FieldStorage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut fs: Vec<(_, _)> = self
+            .layout
+            .fields
+            .iter()
+            .map(|(k, v)| {
+                let data = &self.storage[v.as_range()];
+                let data_rep = match &*v.layout {
+                    LayoutManager::Scalar(Scalar::ObjectRef) => {
+                        format!("{:?}", ObjectRef::read(data))
+                    }
+                    LayoutManager::Scalar(Scalar::ManagedPtr) => {
+                        // Skip reading ManagedPtr to avoid transmute issues
+                        let bytes: Vec<_> = data.iter().map(|b| format!("{:02x}", b)).collect();
+                        format!("ptr({})", bytes.join(" "))
+                    }
+                    _ => {
+                        let bytes: Vec<_> = data.iter().map(|b| format!("{:02x}", b)).collect();
+                        bytes.join(" ")
+                    }
+                };
+
+                (
+                    v.position,
+                    DebugStr(format!("{} {}: {}", v.layout.type_tag(), k, data_rep)),
+                )
+            })
+            .collect();
+
+        fs.sort_by_key(|(p, _)| *p);
+
+        f.debug_list()
+            .entries(fs.into_iter().map(|(_, r)| r))
+            .finish()
+    }
+}
+
+unsafe impl Collect for FieldStorage {
+    #[inline]
+    fn trace(&self, cc: &Collection) {
+        self.layout.trace(&self.storage, cc);
+    }
+}
+
+impl FieldStorage {
+    pub fn new(layout: Arc<FieldLayoutManager>) -> Self {
+        let size = layout.size();
+        // Defensive check: ensure the total allocation size is reasonable.
+        if size > 0x1000_0000 {
+            // 256MB limit for a single object instance
+            panic!("massive field storage allocation: {} bytes", size);
+        }
+        Self {
+            storage: vec![0; size],
+            layout,
+        }
+    }
+
+    pub fn resurrect<'gc>(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+        self.layout.resurrect(&self.storage, fc, visited);
+    }
+
+    pub fn get(&self) -> &[u8] {
+        &self.storage
+    }
+
+    pub fn get_mut(&mut self) -> &mut [u8] {
+        &mut self.storage
+    }
+
+    pub fn layout(&self) -> &Arc<FieldLayoutManager> {
+        &self.layout
+    }
+
+    fn get_field_range(&self, owner: TypeDescription, field: &str) -> Range<usize> {
+        match self.layout.get_field(owner, field) {
+            None => panic!("field {}::{} not found", owner.type_name(), field),
+            Some(l) => l.as_range(),
+        }
+    }
+
+    pub fn get_field_local(&self, owner: TypeDescription, field: &str) -> &[u8] {
+        &self.storage[self.get_field_range(owner, field)]
+    }
+
+    pub fn get_field_mut_local(&mut self, owner: TypeDescription, field: &str) -> &mut [u8] {
+        let r = self.get_field_range(owner, field);
+        &mut self.storage[r]
+    }
+
+    pub fn has_field(&self, owner: TypeDescription, field: &str) -> bool {
+        self.layout.get_field(owner, field).is_some()
+    }
+
+    pub fn get_field_atomic(
+        &self,
+        owner: TypeDescription,
+        field: &str,
+        ordering: Ordering,
+    ) -> Vec<u8> {
+        let layout = self
+            .layout
+            .get_field(owner, field)
+            .unwrap_or_else(|| panic!("field {}::{} not found", owner.type_name(), field));
+        let size = layout.layout.size();
+        let offset = layout.position;
+        let ptr = unsafe { self.storage.as_ptr().add(offset) };
+
+        // Check alignment before attempting atomic operations
+        // Unaligned atomic operations are UB in Rust
+        if !is_ptr_aligned_to_field(ptr, size) {
+            // Fall back to non-atomic read if not aligned
+            // This can happen with ExplicitLayout types
+            return self.get_field_local(owner, field).to_vec();
+        }
+
+        macro_rules! load_atomic {
+            ($ty:ty) => {
+                unsafe { (*(ptr as *const $ty)).load(ordering) }
+                    .to_ne_bytes()
+                    .to_vec()
+            };
+        }
+
+        match size {
+            1 => load_atomic!(AtomicU8),
+            2 => load_atomic!(AtomicU16),
+            4 => load_atomic!(AtomicU32),
+            8 => load_atomic!(AtomicU64),
+            _ => self.get_field_local(owner, field).to_vec(),
+        }
+    }
+
+    pub fn set_field_atomic(
+        &self,
+        owner: TypeDescription,
+        field: &str,
+        value: &[u8],
+        ordering: Ordering,
+    ) {
+        let layout = self
+            .layout
+            .get_field(owner, field)
+            .unwrap_or_else(|| panic!("field {}::{} not found", owner.type_name(), field));
+        let size = layout.layout.size();
+        let offset = layout.position;
+        let ptr = unsafe { self.storage.as_ptr().add(offset) as *mut u8 };
+
+        if size != value.len() {
+            panic!(
+                "size mismatch for field {}::{} (expected {}, got {})",
+                owner.type_name(),
+                field,
+                size,
+                value.len()
+            );
+        }
+
+        // Check alignment before attempting atomic operations
+        // Unaligned atomic operations are UB in Rust
+        if !is_ptr_aligned_to_field(ptr, size) {
+            // Fall back to non-atomic write if not aligned
+            // This can happen with ExplicitLayout types
+            // NOTE: This violates ECMA-335 atomicity requirements, but it's
+            // better than UB. A proper implementation would need to lock.
+            unsafe {
+                std::ptr::copy_nonoverlapping(value.as_ptr(), ptr, size.min(value.len()));
+            }
+            return;
+        }
+
+        macro_rules! store_atomic {
+            ($t:ty as $atomic_t:ty) => {{
+                let val = <$t>::from_ne_bytes(value.try_into().unwrap());
+                unsafe { (*(ptr as *mut $atomic_t)).store(val, ordering) }
+            }};
+        }
+
+        match size {
+            1 => store_atomic!(u8 as AtomicU8),
+            2 => store_atomic!(u16 as AtomicU16),
+            4 => store_atomic!(u32 as AtomicU32),
+            8 => store_atomic!(u64 as AtomicU64),
+            _ => unsafe {
+                std::ptr::copy_nonoverlapping(value.as_ptr(), ptr, size);
+            },
+        }
+    }
+}

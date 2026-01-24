@@ -97,52 +97,10 @@ jobs:
             cargo build --verbose --no-default-features --features ${{ matrix.features }}
           fi
 
-      - name: Run lib tests (${{ matrix.name }})
+      - name: Run tests (${{ matrix.name }})
         run: |
           if [ -z "${{ matrix.features }}" ]; then
-            cargo test --verbose --no-default-features --lib
+            cargo test --verbose --no-default-features
           else
-            cargo test --verbose --no-default-features --features ${{ matrix.features }} --lib
+            cargo test --verbose --no-default-features --features ${{ matrix.features }}
           fi
-
-      - name: Run feature config tests (${{ matrix.name }})
-        run: |
-          if [ -z "${{ matrix.features }}" ]; then
-            cargo test --verbose --no-default-features --test feature_config_tests
-          else
-            cargo test --verbose --no-default-features --features ${{ matrix.features }} --test feature_config_tests
-          fi
-
-      - name: Run integration tests (${{ matrix.name }})
-        run: |
-          if [ -z "${{ matrix.features }}" ]; then
-            cargo test --verbose --no-default-features --test integration
-          else
-            cargo test --verbose --no-default-features --features ${{ matrix.features }} --test integration
-          fi
-
-  # Ensure default features still work as expected
-  test-default:
-    name: Test with Default Features
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libffi-dev
-
-      - name: Build with default features
-        run: cargo build --verbose
-
-      - name: Test with default features
-        run: cargo test --verbose
