@@ -3,8 +3,7 @@ use crate::{
     state::GlobalCaches,
     sync::Arc,
 };
-use dotnet_assemblies::decompose_type_source;
-use dotnet_assemblies::{Ancestor, AssemblyLoader};
+use dotnet_assemblies::{decompose_type_source, Ancestor, AssemblyLoader};
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},

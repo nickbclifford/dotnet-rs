@@ -107,12 +107,13 @@
 //!   ├─→ external_call() [if P/Invoke]
 //!   └─→ call_frame() [managed CIL]
 //! ```
-use dotnet_assemblies::AssemblyLoader;
 use crate::vm_trace_intrinsic;
+use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
 };
+use dotnet_utils::gc::GCHandle;
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use std::collections::HashMap;
 
@@ -131,7 +132,6 @@ pub use metadata::{classify_intrinsic, IntrinsicKind, IntrinsicMetadata};
 pub use reflection::ReflectionExtensions;
 
 use super::{context::ResolutionContext, sync::Arc, tracer::Tracer, CallStack, StepResult};
-use dotnet_utils::gc::GCHandle;
 
 pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttribute";
 

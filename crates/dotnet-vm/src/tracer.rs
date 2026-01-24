@@ -79,12 +79,9 @@
 //! vm_trace_stack_snapshot!(ctx);        // Just the stack
 //! vm_trace_heap_snapshot!(ctx);         // Just the heap
 //! ```
-use dotnet_value::object::HeapStorage;
-use crate::{
-    metrics::RuntimeMetrics,
-    stack::CallStack,
-};
+use crate::{metrics::RuntimeMetrics, stack::CallStack};
 use crossbeam_channel::{bounded, Sender};
+use dotnet_value::object::HeapStorage;
 use gc_arena::{unsafe_empty_collect, Collect, Gc};
 use serde::{Deserialize, Serialize};
 use std::{

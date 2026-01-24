@@ -1,16 +1,11 @@
-use crate::{
-    pop_args,
-    resolution::ValueResolution,
-    CallStack, StepResult,
-    vm_push,
-};
+use crate::{pop_args, resolution::ValueResolution, vm_push, CallStack, StepResult};
+use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     layout::HasLayout,
     object::{HeapStorage, ObjectRef},
     StackValue,
 };
-use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 
 pub fn intrinsic_array_get_length<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,

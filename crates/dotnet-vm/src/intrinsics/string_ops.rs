@@ -1,20 +1,15 @@
-use crate::{
-    pop_args,
-    intrinsics::span::span_to_slice, CallStack, StepResult,
-    vm_pop, vm_push,
+use crate::{intrinsics::span::span_to_slice, pop_args, vm_pop, vm_push, CallStack, StepResult};
+use dotnet_types::{
+    generics::{ConcreteType, GenericLookup},
+    members::{FieldDescription, MethodDescription},
 };
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     object::{HeapStorage, Object, ObjectRef},
     pointer::ManagedPtrOwner,
     string::CLRString,
-    StackValue,
+    with_string, with_string_mut, StackValue,
 };
-use dotnet_types::{
-    generics::{ConcreteType, GenericLookup},
-    members::{FieldDescription, MethodDescription},
-};
-use dotnet_value::{with_string, with_string_mut};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 /// System.String::Equals(string, string)

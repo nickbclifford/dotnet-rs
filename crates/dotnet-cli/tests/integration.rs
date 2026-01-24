@@ -622,10 +622,8 @@ fn test_cross_arena_reference_tracking() {
     shared.gc_coordinator.register_arena(handle.clone());
 
     // Record some cross-arena references
-    let ptr1 =
-        unsafe { dotnet_value::object::ObjectPtr::from_raw(0x1000 as *const _).unwrap() };
-    let ptr2 =
-        unsafe { dotnet_value::object::ObjectPtr::from_raw(0x2000 as *const _).unwrap() };
+    let ptr1 = unsafe { dotnet_value::object::ObjectPtr::from_raw(0x1000 as *const _).unwrap() };
+    let ptr2 = unsafe { dotnet_value::object::ObjectPtr::from_raw(0x2000 as *const _).unwrap() };
 
     vm::gc::coordinator::set_current_arena_handle(handle.clone());
     dotnet_utils::gc::record_cross_arena_ref(2, ptr1.as_ptr() as usize);

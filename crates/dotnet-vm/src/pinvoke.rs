@@ -1,8 +1,3 @@
-use dotnet_utils::gc::GCHandle;
-use dotnet_value::{
-    layout::{FieldLayoutManager, LayoutManager, Scalar},
-    StackValue,
-};
 use crate::{
     context::ResolutionContext, layout::LayoutFactory, resolution::ValueResolution, CallStack,
 };
@@ -10,6 +5,11 @@ use dotnet_assemblies::decompose_type_source;
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
+};
+use dotnet_utils::gc::GCHandle;
+use dotnet_value::{
+    layout::{FieldLayoutManager, LayoutManager, Scalar},
+    StackValue,
 };
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};

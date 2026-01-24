@@ -1,24 +1,22 @@
 use crate::{
-    pop_args,
     context::ResolutionContext,
     layout::type_layout,
+    pop_args,
     resolution::{TypeResolutionExt, ValueResolution},
-    CallStack, MethodInfo, StepResult,
-    vm_pop, vm_push,
+    vm_pop, vm_push, CallStack, MethodInfo, StepResult,
 };
-use dotnet_assemblies::SUPPORT_ASSEMBLY;
-use dotnet_utils::gc::GCHandle;
-use dotnet_value::{
-    layout::{LayoutManager, Scalar},
-    object::{HeapStorage, Object, ObjectRef},
-    StackValue,
-};
-use dotnet_assemblies::decompose_type_source;
+use dotnet_assemblies::{decompose_type_source, SUPPORT_ASSEMBLY};
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     runtime::{RuntimeMethodSignature, RuntimeType},
     TypeDescription,
+};
+use dotnet_utils::gc::GCHandle;
+use dotnet_value::{
+    layout::{LayoutManager, Scalar},
+    object::{HeapStorage, Object, ObjectRef},
+    StackValue,
 };
 use dotnetdll::prelude::{BaseType, Kind, MemberType, MethodType, TypeSource};
 

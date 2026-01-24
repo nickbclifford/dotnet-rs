@@ -1,16 +1,12 @@
 use crate::{
-    pop_args,
-    context::ResolutionContext,
-    layout::type_layout,
-    resolution::ValueResolution,
-    CallStack, StepResult,
-    vm_expect_stack, vm_pop, vm_push,
+    context::ResolutionContext, layout::type_layout, pop_args, resolution::ValueResolution,
+    vm_expect_stack, vm_pop, vm_push, CallStack, StepResult,
 };
-use dotnet_utils::gc::GCHandle;
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
 };
+use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
     object::{HeapStorage, ManagedPtrMetadata, Object as ObjectInstance, ObjectRef},

@@ -1,6 +1,4 @@
-use dotnet_assemblies::AssemblyLoader;
-use dotnet_utils::gc::{GCHandle, GCHandleType, ThreadSafeLock};
-use dotnet_assemblies::decompose_type_source;
+use dotnet_assemblies::{decompose_type_source, AssemblyLoader};
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
@@ -8,6 +6,7 @@ use dotnet_types::{
     runtime::RuntimeType,
     TypeDescription,
 };
+use dotnet_utils::gc::{GCHandle, GCHandleType, ThreadSafeLock};
 use dotnet_value::{
     layout::{HasLayout, LayoutManager},
     object::{HeapStorage, Object as ObjectInstance, ObjectRef},

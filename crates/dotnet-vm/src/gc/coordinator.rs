@@ -1,19 +1,19 @@
 #[cfg(feature = "multithreaded-gc")]
+use crate::threading::execute_gc_command_for_current_thread;
+#[cfg(feature = "multithreaded-gc")]
+use dotnet_utils::sync::{AtomicBool, Mutex, Ordering};
+#[cfg(feature = "multithreaded-gc")]
+use dotnet_value::object::ObjectPtr;
+#[cfg(feature = "multithreaded-gc")]
+use std::collections::{HashMap, HashSet};
+
+#[cfg(feature = "multithreaded-gc")]
 pub use dotnet_utils::gc::{
     clear_tracing_state, get_currently_tracing, is_current_arena_collection_requested,
     record_allocation, reset_current_arena_collection_requested, set_current_arena_handle,
     set_currently_tracing, take_found_cross_arena_refs, update_current_arena_metrics, ArenaHandle,
     GCCommand, ALLOCATION_THRESHOLD,
 };
-
-#[cfg(feature = "multithreaded-gc")]
-use dotnet_utils::sync::{AtomicBool, Mutex, Ordering};
-#[cfg(feature = "multithreaded-gc")]
-use crate::threading::execute_gc_command_for_current_thread;
-#[cfg(feature = "multithreaded-gc")]
-use dotnet_value::object::ObjectPtr;
-#[cfg(feature = "multithreaded-gc")]
-use std::collections::{HashMap, HashSet};
 
 #[cfg(feature = "multithreaded-gc")]
 /// Coordinates stop-the-world collections across multiple thread-local arenas.

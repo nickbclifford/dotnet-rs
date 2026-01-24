@@ -1,16 +1,15 @@
 //! Garbage collection utility types.
-
 use gc_arena::{barrier::Unlock, Collect, Collection, Mutation};
 use std::ops::{Deref, DerefMut};
 
 #[cfg(feature = "multithreaded-gc")]
 use crate::sync::{Arc, AtomicBool, AtomicUsize, Condvar, Mutex, Ordering};
 #[cfg(feature = "multithreaded-gc")]
-use std::cell::{Cell, RefCell};
-#[cfg(feature = "multithreaded-gc")]
-use std::collections::HashSet;
-#[cfg(feature = "multithreaded-gc")]
-use std::mem;
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashSet,
+    mem,
+};
 
 #[cfg(feature = "multithreading")]
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};

@@ -1,9 +1,7 @@
+use crate::intrinsics::reflection::ReflectionExtensions;
+use dotnet_types::members::MethodDescription;
 use dotnet_utils::sync::{Arc, Ordering};
 use dotnet_value::StackValue;
-use crate::{
-    intrinsics::reflection::ReflectionExtensions,
-};
-use dotnet_types::members::MethodDescription;
 
 #[cfg(feature = "multithreaded-gc")]
 use crate::vm_debug;

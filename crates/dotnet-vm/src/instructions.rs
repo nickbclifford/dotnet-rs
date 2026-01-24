@@ -1,11 +1,3 @@
-use dotnet_utils::{gc::GCHandle, is_ptr_aligned_to_field};
-use dotnet_value::{
-    layout::HasLayout,
-    object::{CTSValue, HeapStorage, ObjectRef},
-    pointer::{ManagedPtr, ManagedPtrOwner, UnmanagedPtr},
-    string::CLRString,
-    StackValue,
-};
 use crate::{
     vm_expect_stack, vm_pop, vm_push, vm_trace, vm_trace_branch, vm_trace_field,
     vm_trace_instruction,
@@ -15,6 +7,14 @@ use dotnet_types::{
     generics::GenericLookup,
     members::{FieldDescription, MethodDescription},
     TypeDescription,
+};
+use dotnet_utils::{gc::GCHandle, is_ptr_aligned_to_field};
+use dotnet_value::{
+    layout::HasLayout,
+    object::{CTSValue, HeapStorage, ObjectRef},
+    pointer::{ManagedPtr, ManagedPtrOwner, UnmanagedPtr},
+    string::CLRString,
+    StackValue,
 };
 use dotnetdll::prelude::*;
 use std::{cmp::Ordering as CmpOrdering, ptr, slice};

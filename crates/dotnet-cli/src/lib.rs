@@ -8,15 +8,12 @@
 //!   and `Monitor` synchronization primitives. Pulls in `parking_lot`.
 //! - `multithreaded-gc`: Enables stop-the-world coordinated garbage collection across
 //!   multiple thread-local arenas. Depends on `multithreading`.
-use dotnet_vm::ExecutorResult;
 use clap::Parser;
 use dotnet_assemblies::static_res_from_file;
+use dotnet_types::{members::MethodDescription, TypeDescription};
+use dotnet_vm::{self as vm, ExecutorResult};
 use dotnetdll::prelude::*;
 use std::process::ExitCode;
-
-use dotnet_vm as vm;
-
-use dotnet_types::{members::MethodDescription, TypeDescription};
 use vm::{state, sync::Arc};
 
 #[derive(Parser, Debug)]

@@ -1,13 +1,7 @@
-use dotnet_utils::gc::GCHandle;
-use dotnet_utils::DebugStr;
-use dotnet_value::object::{HeapStorage, ObjectRef};
-use crate::{
-    context::ResolutionContext,
-    stack::CallStack,
-    StepResult,
-    vm_error, vm_push,
-};
+use crate::{context::ResolutionContext, stack::CallStack, vm_error, vm_push, StepResult};
 use dotnet_types::generics::ConcreteType;
+use dotnet_utils::{gc::GCHandle, DebugStr};
+use dotnet_value::object::{HeapStorage, ObjectRef};
 use dotnetdll::prelude::*;
 use gc_arena::Collect;
 use std::{

@@ -114,4 +114,3 @@ pub enum StepResult {
     InstructionStepped,
     YieldForGC,
 }
-

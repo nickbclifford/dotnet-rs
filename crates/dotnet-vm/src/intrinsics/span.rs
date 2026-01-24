@@ -1,10 +1,13 @@
 use crate::{
-    pop_args,
     context::ResolutionContext,
     layout::{type_layout, LayoutFactory},
+    pop_args,
     resolution::ValueResolution,
-    CallStack, StepResult,
-    vm_push,
+    vm_push, CallStack, StepResult,
+};
+use dotnet_types::{
+    generics::GenericLookup,
+    members::{FieldDescription, MethodDescription},
 };
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
@@ -12,10 +15,6 @@ use dotnet_value::{
     object::{HeapStorage, Object, ObjectRef},
     pointer::{ManagedPtr, ManagedPtrOwner},
     StackValue,
-};
-use dotnet_types::{
-    generics::GenericLookup,
-    members::{FieldDescription, MethodDescription},
 };
 use dotnetdll::prelude::ParameterType;
 use std::{mem::size_of, ptr::NonNull, slice};

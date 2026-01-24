@@ -1,13 +1,12 @@
 use crate::{
-    context::ResolutionContext, resolution::ValueResolution, CallStack, StepResult,
-    vm_pop, vm_push,
+    context::ResolutionContext, resolution::ValueResolution, vm_pop, vm_push, CallStack, StepResult,
 };
+use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     object::{HeapStorage, ObjectRef},
     StackValue,
 };
-use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 
 pub fn intrinsic_vector_is_hardware_accelerated<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,

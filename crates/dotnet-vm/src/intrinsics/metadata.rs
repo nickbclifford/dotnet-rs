@@ -20,8 +20,9 @@
 //! The VM intercepts these calls even when a BCL implementation exists.
 //! Examples: String.Length (internal representation differs), Math functions (performance)
 use dotnet_assemblies::AssemblyLoader;
-use super::{IntrinsicHandler, IntrinsicRegistry, INTRINSIC_ATTR};
 use dotnet_types::members::MethodDescription;
+
+use super::{IntrinsicHandler, IntrinsicRegistry, INTRINSIC_ATTR};
 
 /// Classification of intrinsic methods based on their dispatch behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

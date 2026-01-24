@@ -1,6 +1,5 @@
 //! Configuration-specific tests for feature flags
 //! Tests that verify the correct behavior of different feature configurations
-
 #[cfg(feature = "multithreading")]
 use dotnet_vm::threading::ThreadManagerOps;
 

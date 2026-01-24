@@ -1,18 +1,19 @@
 #[cfg(feature = "multithreaded-gc")]
 use dotnet_utils::sync::AtomicUsize;
-use dotnet_assemblies::AssemblyLoader;
-use dotnet_utils::sync::{Arc, AtomicBool, Mutex, Ordering, RwLock};
-use dotnet_value::{
-    layout::{FieldLayoutManager, LayoutManager},
-    object::ObjectRef,
-};
+
 use dashmap::DashMap;
+use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     resolution::ResolutionS,
     runtime::RuntimeType,
     TypeDescription,
+};
+use dotnet_utils::sync::{Arc, AtomicBool, Mutex, Ordering, RwLock};
+use dotnet_value::{
+    layout::{FieldLayoutManager, LayoutManager},
+    object::ObjectRef,
 };
 use gc_arena::{Collect, Collection};
 use std::{

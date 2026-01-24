@@ -1,12 +1,11 @@
 use crate::{
     pop_args,
     sync::{Arc, AtomicI32, Ordering, SyncBlockOps, SyncManagerOps},
-    CallStack, StepResult,
-    vm_pop, vm_push,
+    vm_pop, vm_push, CallStack, StepResult,
 };
+use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::object::ObjectRef;
-use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use std::{ptr, sync::atomic, thread};
 
 /// System.Threading.Monitor::Exit(object) - Releases the lock on an object.

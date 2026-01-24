@@ -1,16 +1,9 @@
-use dotnet_utils::sync::{Arc, AtomicU64, Mutex, Ordering, MANAGED_THREAD_ID};
 use crate::{
     gc::coordinator::{GCCommand, GCCoordinator},
     threading::{STWGuardOps, ThreadManagerOps, ThreadState},
     tracer::Tracer,
 };
-
-#[cfg(feature = "multithreaded-gc")]
-use dotnet_utils::sync::get_current_thread_id;
-#[cfg(feature = "multithreaded-gc")]
-use dotnet_value::object::ObjectPtr;
-#[cfg(feature = "multithreaded-gc")]
-use crate::gc::{set_currently_tracing, take_found_cross_arena_refs};
+use dotnet_utils::sync::{Arc, AtomicU64, Mutex, Ordering, MANAGED_THREAD_ID};
 use std::{
     cell::Cell,
     collections::HashMap,
@@ -19,7 +12,11 @@ use std::{
 };
 
 #[cfg(feature = "multithreaded-gc")]
-use dotnet_utils::sync::{AtomicBool, AtomicUsize, Condvar, MutexGuard};
+use crate::gc::{set_currently_tracing, take_found_cross_arena_refs};
+#[cfg(feature = "multithreaded-gc")]
+use dotnet_utils::sync::{get_current_thread_id, AtomicBool, AtomicUsize, Condvar, MutexGuard};
+#[cfg(feature = "multithreaded-gc")]
+use dotnet_value::object::ObjectPtr;
 #[cfg(feature = "multithreaded-gc")]
 use std::{
     mem,

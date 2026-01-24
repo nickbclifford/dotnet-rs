@@ -1,8 +1,10 @@
+use std::{
+    fmt::{Debug, Formatter},
+    mem::align_of,
+};
+
 pub mod gc;
 pub mod sync;
-
-use std::fmt::{Debug, Formatter};
-use std::mem::align_of;
 
 pub struct DebugStr(pub String);
 
