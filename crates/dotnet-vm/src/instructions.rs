@@ -154,6 +154,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             self.external_call(method, gc);
             StepResult::InstructionStepped
         } else {
+            if method.method.internal_call {
+                panic!("intrinsic not found: {:?}", method);
+            }
             self.call_frame(
                 gc,
                 MethodInfo::new(method, &lookup, self.shared.clone()),
