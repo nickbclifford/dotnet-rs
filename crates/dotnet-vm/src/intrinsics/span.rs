@@ -29,7 +29,7 @@ pub fn span_to_slice<'gc, 'a>(span: Object<'gc>, element_size: usize) -> &'a [u8
 
     // Read only the pointer value (8 bytes) from memory.
     // Managed pointers in Span fields are stored pointer-sized.
-    let ptr = ManagedPtr::read_ptr_only(ptr_data);
+    let ptr = ManagedPtr::read_raw_ptr_unsafe(ptr_data);
     len_data.copy_from_slice(
         span.instance_storage
             .get_field_local(span.description, "_length"),
@@ -45,7 +45,8 @@ pub fn span_to_slice<'gc, 'a>(span: Object<'gc>, element_size: usize) -> &'a [u8
         );
     }
 
-    unsafe { slice::from_raw_parts(ptr.as_ptr() as *const u8, len * element_size) }
+    let raw_ptr = ptr.map(|p| p.as_ptr()).unwrap_or(std::ptr::null_mut());
+    unsafe { slice::from_raw_parts(raw_ptr as *const u8, len * element_size) }
 }
 
 pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
@@ -67,95 +68,6 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
-pub fn intrinsic_span_get_item<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    method: MethodDescription,
-    generics: &GenericLookup,
-) -> StepResult {
-    pop_args!(stack, gc, [Int32(index), ManagedPtr(m)]);
-
-    if !m.inner_type.type_name().contains("Span") {
-        panic!("invalid type on stack");
-    }
-
-    let ctx = ResolutionContext::for_method(
-        method,
-        stack.loader(),
-        generics,
-        stack.shared.caches.clone(),
-    );
-    let span_layout = LayoutFactory::instance_field_layout_cached(
-        m.inner_type,
-        &ctx,
-        Some(&stack.shared.metrics),
-    );
-
-    let value_type = &generics.type_generics[0];
-    let value_layout = type_layout(value_type.clone(), &ctx);
-
-    let reference_field = span_layout.get_field_by_name("_reference").unwrap();
-    let ptr_data = unsafe { m.value.as_ptr().add(reference_field.position) };
-    let base_ptr = ManagedPtr::read_ptr_only(unsafe {
-        slice::from_raw_parts(ptr_data, ManagedPtr::MEMORY_SIZE)
-    });
-
-    // NOTE: We don't recover metadata from side-table because:
-    // 1. The Span's _reference field points into an array (or other memory)
-    // 2. The owner we have (m.owner) points to the Span object itself, not the array
-    // 3. Trying to lookup side-table metadata causes panics when m.owner is a Vec
-    // 4. For Span element access, we just need the raw pointer - the array is
-    //    independently GC-rooted, so we don't need owner tracking here.
-    // 5. The returned ManagedPtr will have no owner, which is fine for Span elements.
-
-    let ptr = unsafe { base_ptr.add(value_layout.size() * index as usize) };
-
-    vm_push!(
-        stack,
-        gc,
-        ManagedPtr(ManagedPtr::new(
-            ptr,
-            stack.loader().find_concrete_type(value_type.clone()),
-            None,  // No owner needed - array is independently rooted
-            false  // Not pinned
-        ))
-    );
-    StepResult::InstructionStepped
-}
-
-pub fn intrinsic_span_get_length<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    method: MethodDescription,
-    generics: &GenericLookup,
-) -> StepResult {
-    pop_args!(stack, gc, [ManagedPtr(m)]);
-    if !m.inner_type.type_name().contains("Span") {
-        panic!("invalid type on stack");
-    }
-
-    let ctx = ResolutionContext::for_method(
-        method,
-        stack.loader(),
-        generics,
-        stack.shared.caches.clone(),
-    );
-    let layout = LayoutFactory::instance_field_layout_cached(
-        m.inner_type,
-        &ctx,
-        Some(&stack.shared.metrics),
-    );
-    let value = unsafe {
-        let target = m
-            .value
-            .as_ptr()
-            .add(layout.get_field_by_name("_length").unwrap().position)
-            as *const i32;
-        *target
-    };
-    vm_push!(stack, gc, Int32(value));
-    StepResult::InstructionStepped
-}
 
 pub fn intrinsic_as_span<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
@@ -172,6 +84,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
     // - AsSpan(T[]) - whole array
     // - AsSpan(T[], int start) - array slice from start
     // - AsSpan(T[], int start, int length) - array slice with length
+    println!("DEBUG: intrinsic_as_span called with {} params", param_count);
     let (start, length_override) = match param_count {
         1 => (0, None),
         2 => {
@@ -284,11 +197,13 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
     let ctx = ctx.with_generics(&new_lookup);
 
     let mut span = ctx.new_object(span_type);
+    println!("DEBUG: intrinsic_as_span created span object");
 
     if let Some(h) = h_opt {
+        println!("DEBUG: intrinsic_as_span setting managed ptr");
         let element_type_desc = stack.loader().find_concrete_type(element_type);
         let managed = ManagedPtr::new(
-            NonNull::new(ptr).expect("Object pointer should not be null"),
+            Some(NonNull::new(ptr).expect("Object pointer should not be null")),
             element_type_desc,
             Some(ManagedPtrOwner::Heap(h)),
             false,
@@ -298,20 +213,26 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
             span.instance_storage
                 .get_field_mut_local(span_type, "_reference"),
         );
+        println!("DEBUG: intrinsic_as_span registering managed ptr");
         // Register metadata in Span's side-table
         let span_layout = LayoutFactory::instance_field_layout_cached(
             span_type,
             &ctx,
             Some(&stack.shared.metrics),
         );
+        println!("DEBUG: intrinsic_as_span span type: {}, size: {}", span_type.type_name(), span_layout.total_size);
+        
         let reference_field = span_layout.get_field_by_name("_reference").unwrap();
+        println!("DEBUG: intrinsic_as_span registering managed ptr at offset {}", reference_field.position);
         span.register_managed_ptr(reference_field.position, &managed, gc);
     }
-
+    
+    println!("DEBUG: intrinsic_as_span setting length");
     span.instance_storage
         .get_field_mut_local(span_type, "_length")
         .copy_from_slice(&(len as i32).to_ne_bytes());
 
+    println!("DEBUG: intrinsic_as_span pushing result");
     vm_push!(stack, gc, ValueType(Box::new(span)));
     StepResult::InstructionStepped
 }
@@ -368,8 +289,8 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
 
         let element_desc = stack.loader().find_concrete_type(element_type.clone());
         let managed = ManagedPtr::new(
-            NonNull::new(data_slice.as_ptr() as *mut u8)
-                .expect("Static data pointer should not be null"),
+            Some(NonNull::new(data_slice.as_ptr() as *mut u8)
+                .expect("Static data pointer should not be null")),
             element_desc,
             None,
             false,
@@ -394,6 +315,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
             Some(&stack.shared.metrics),
         );
         let reference_field = span_layout.get_field_by_name("_reference").unwrap();
+        eprintln!("DEBUG: intrinsic_as_span registering managed ptr at offset {}", reference_field.position);
         span_instance.register_managed_ptr(reference_field.position, &managed, gc);
 
         vm_push!(stack, gc, ValueType(Box::new(span_instance)));
@@ -401,4 +323,119 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
     } else {
         todo!("initial field data for {:?}", field_desc);
     }
+}
+
+pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    pop_args!(stack, gc, [ManagedPtr(length_ref), ValueType(type_handle), ValueType(field_handle)]);
+
+    // Resolve field
+    let (FieldDescription { field, .. }, _) = {
+        let mut ptr_buf = [0u8; ObjectRef::SIZE];
+        ptr_buf.copy_from_slice(
+            field_handle
+                .instance_storage
+                .get_field_local(field_handle.description, "_value"),
+        );
+        let obj_ref = ObjectRef::read(&ptr_buf);
+        stack.resolve_runtime_field(obj_ref)
+    };
+
+    // Resolve type
+    let element_type_runtime = {
+        let mut ptr_buf = [0u8; ObjectRef::SIZE];
+        ptr_buf.copy_from_slice(
+            type_handle
+                .instance_storage
+                .get_field_local(type_handle.description, "_value"),
+        );
+        let obj_ref = ObjectRef::read(&ptr_buf);
+        stack.resolve_runtime_type(obj_ref)
+    };
+    
+    let element_type: dotnet_types::generics::ConcreteType = element_type_runtime.to_concrete(stack.loader());
+    
+    let ctx = ResolutionContext::for_method(
+        _method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
+    let element_size = type_layout(element_type, &ctx).size();
+
+    let Some(initial_data) = &field.initial_value else {
+         vm_push!(stack, gc, NativeInt(0));
+         return StepResult::InstructionStepped;
+    };
+
+    if field.name.starts_with("__StaticArrayInitTypeSize=") {
+        let prefix = "__StaticArrayInitTypeSize=";
+        let size_str = &field.name[prefix.len()..];
+        let size_end = size_str.find('_').unwrap_or(size_str.len());
+        let array_size = size_str[..size_end].parse::<usize>().unwrap();
+        
+        let element_count = (array_size / element_size) as i32;
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                element_count.to_ne_bytes().as_ptr(),
+                length_ref.value.expect("System.NullReferenceException").as_ptr(),
+                size_of::<i32>()
+            );
+        }
+        
+        let ptr = initial_data.as_ptr() as usize;
+        vm_push!(stack, gc, NativeInt(ptr as isize));
+    } else {
+        vm_push!(stack, gc, NativeInt(0));
+    }
+    StepResult::InstructionStepped
+}
+
+pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    println!("DEBUG: intrinsic_internal_get_array_data called");
+    pop_args!(stack, gc, [ObjectRef(array_ref)]);
+    
+    let element_type = if !generics.method_generics.is_empty() {
+        generics.method_generics[0].clone()
+    } else {
+        panic!("GetArrayData expected generic argument");
+    };
+    
+    let element_type_desc = stack.loader().find_concrete_type(element_type);
+
+    if let Some(handle) = array_ref.0 {
+         let inner = handle.borrow();
+         if let HeapStorage::Vec(v) = &inner.storage {
+             let ptr = v.get().as_ptr();
+             println!("DEBUG: GetArrayData: found vector, ptr: {:?}, length: {}", ptr, v.layout.length);
+             let managed = ManagedPtr::new(
+                 NonNull::new(ptr as *mut u8),
+                 element_type_desc,
+                 Some(ManagedPtrOwner::Heap(handle.clone())),
+                 false,
+             );
+             vm_push!(stack, gc, ManagedPtr(managed));
+         } else {
+             panic!("GetArrayData called on non-vector object");
+         }
+    } else {
+         println!("DEBUG: GetArrayData: called on null");
+         let managed = ManagedPtr::new(
+             None,
+             element_type_desc,
+             None,
+             false,
+         );
+         vm_push!(stack, gc, ManagedPtr(managed));
+    }
+    StepResult::InstructionStepped
 }

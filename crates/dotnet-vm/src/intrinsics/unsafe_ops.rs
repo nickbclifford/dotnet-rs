@@ -212,7 +212,13 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     let target_type = stack.loader().find_concrete_type(target.clone());
     let layout = type_layout(target.clone(), &ctx);
 
-    pop_args!(stack, gc, [NativeInt(offset)]);
+    let offset_val = vm_pop!(stack, gc);
+    let offset = match offset_val {
+        StackValue::Int32(i) => i as isize,
+        StackValue::NativeInt(i) => i,
+        _ => panic!("Unsafe.Add expected Int32 or NativeInt offset, got {:?}", offset_val),
+    };
+
     let m_val = vm_pop!(stack, gc);
     let (owner, pinned) = if let StackValue::ManagedPtr(m) = &m_val {
         (m.owner, m.pinned)
@@ -400,7 +406,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
     let source = vm_pop!(stack, gc);
     let (ptr, owner) = match source {
         StackValue::NativeInt(p) => (p as *mut u8, None),
-        StackValue::ManagedPtr(m) => (m.value.as_ptr(), m.owner),
+        StackValue::ManagedPtr(m) => (m.value.expect("Unsafe.ReadUnaligned null").as_ptr(), m.owner),
         rest => panic!("invalid source for read unaligned: {:?}", rest),
     };
 
@@ -455,7 +461,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
                 }
 
                 StackValue::ManagedPtr(ManagedPtr::new(
-                    ptr_val,
+                    Some(ptr_val),
                     target_type,
                     metadata.0,
                     metadata.1,
@@ -544,7 +550,7 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
     let dest = vm_pop!(stack, gc);
     let (ptr, owner) = match dest {
         StackValue::NativeInt(p) => (p as *mut u8, None),
-        StackValue::ManagedPtr(m) => (m.value.as_ptr(), m.owner),
+        StackValue::ManagedPtr(m) => (m.value.expect("Unsafe.WriteUnaligned null").as_ptr(), m.owner),
         rest => panic!("invalid destination for write unaligned: {:?}", rest),
     };
 
@@ -572,7 +578,7 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
                 // ManagedPtr is now stored pointer-sized per ECMA-335.
                 vm_expect_stack!(let ManagedPtr(m) = value);
                 unsafe {
-                    ptr::write_unaligned(ptr as *mut usize, m.value.as_ptr() as usize);
+                    ptr::write_unaligned(ptr as *mut usize, m.value.expect("Unsafe.WriteUnaligned val null").as_ptr() as usize);
                 }
 
                 // If destination has an owner, update its side-table

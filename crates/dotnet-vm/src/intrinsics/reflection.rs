@@ -795,7 +795,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
             stack.push_stack(gc, StackValue::NativeInt(0));
             unsafe {
                 stack.pop_stack(gc).store(
-                    pfn_allocator.value.as_ptr(),
+                    pfn_allocator.value.expect("pfn_allocator null").as_ptr(),
                     dotnetdll::prelude::StoreType::IntPtr,
                 )
             };
@@ -804,7 +804,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
             stack.push_stack(gc, StackValue::NativeInt(0));
             unsafe {
                 stack.pop_stack(gc).store(
-                    allocator_first_arg.value.as_ptr(),
+                    allocator_first_arg.value.expect("allocator_first_arg null").as_ptr(),
                     dotnetdll::prelude::StoreType::IntPtr,
                 )
             };
@@ -835,7 +835,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
                     stack.push_stack(gc, StackValue::NativeInt(method_idx as isize));
                     unsafe {
                         stack.pop_stack(gc).store(
-                            pfn_ctor.value.as_ptr(),
+                            pfn_ctor.value.expect("pfn_ctor null").as_ptr(),
                             dotnetdll::prelude::StoreType::IntPtr,
                         )
                     };
@@ -843,7 +843,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
                     stack.push_stack(gc, StackValue::Int32(1));
                     unsafe {
                         stack.pop_stack(gc).store(
-                            ctor_is_public.value.as_ptr(),
+                            ctor_is_public.value.expect("ctor_is_public null").as_ptr(),
                             dotnetdll::prelude::StoreType::Int8,
                         )
                     };

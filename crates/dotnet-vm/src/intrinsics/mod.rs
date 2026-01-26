@@ -1423,6 +1423,13 @@ impl IntrinsicRegistry {
             reflection::intrinsic_runtime_helpers_run_class_constructor,
             "Internal reflection helper"
         );
+        register_static!(
+            "System.Runtime.CompilerServices.RuntimeHelpers",
+            "GetSpanDataFrom",
+            3,
+            span::intrinsic_runtime_helpers_get_span_data_from,
+            "Internal span support"
+        );
 
         // MemoryExtensions & Span
         register_static!(
@@ -1439,33 +1446,26 @@ impl IntrinsicRegistry {
             span::intrinsic_as_span,
             "Performance-optimized span conversion"
         );
-        register_intercept!(
-            "System.ReadOnlySpan`1",
-            "get_Item",
+        register_static!(
+            "System.MemoryExtensions",
+            "AsSpan",
             2,
-            span::intrinsic_span_get_item,
-            "Span implementation uses VM-specific representation"
+            span::intrinsic_as_span,
+            "Performance-optimized span conversion"
         );
-        register_intercept!(
-            "System.ReadOnlySpan`1",
-            "get_Length",
+        register_static!(
+            "System.MemoryExtensions",
+            "AsSpan",
+            3,
+            span::intrinsic_as_span,
+            "Performance-optimized span conversion"
+        );
+        register_static!(
+            "DotnetRs.Internal",
+            "GetArrayData",
             1,
-            span::intrinsic_span_get_length,
-            "Span implementation uses VM-specific representation"
-        );
-        register_intercept!(
-            "System.Span`1",
-            "get_Item",
-            2,
-            span::intrinsic_span_get_item,
-            "Span implementation uses VM-specific representation"
-        );
-        register_intercept!(
-            "System.Span`1",
-            "get_Length",
-            1,
-            span::intrinsic_span_get_length,
-            "Span implementation uses VM-specific representation"
+            span::intrinsic_internal_get_array_data,
+            "Internal array support"
         );
 
         // Unsafe - Direct Intercepts

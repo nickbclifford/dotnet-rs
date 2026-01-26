@@ -50,7 +50,7 @@ impl Debug for ManagedPtrOwner<'_> {
 
 #[derive(Copy, Clone)]
 pub struct ManagedPtr<'gc> {
-    pub value: NonNull<u8>,
+    pub value: Option<NonNull<u8>>,
     pub inner_type: TypeDescription,
     pub owner: Option<ManagedPtrOwner<'gc>>,
     pub pinned: bool,
@@ -86,7 +86,7 @@ impl<'gc> ManagedPtr<'gc> {
     pub const MEMORY_SIZE: usize = size_of::<usize>();
 
     pub fn new(
-        value: NonNull<u8>,
+        value: Option<NonNull<u8>>,
         inner_type: TypeDescription,
         owner: Option<ManagedPtrOwner<'gc>>,
         pinned: bool,
@@ -101,21 +101,22 @@ impl<'gc> ManagedPtr<'gc> {
 
     /// Read just the pointer value from memory (8 bytes).
     /// This is the new memory format. Metadata must be retrieved from the Object's side-table.
-    pub fn read_ptr_only(source: &[u8]) -> NonNull<u8> {
+    pub fn read_raw_ptr_unsafe(source: &[u8]) -> Option<NonNull<u8>> {
         let mut value_bytes = [0u8; size_of::<usize>()];
         value_bytes.copy_from_slice(&source[0..size_of::<usize>()]);
         let value_ptr = usize::from_ne_bytes(value_bytes) as *mut u8;
-        NonNull::new(value_ptr).expect("ManagedPtr value should not be null")
+        NonNull::new(value_ptr)
     }
 
     /// Write just the pointer value to memory (8 bytes).
     /// Metadata should be stored in the Object's side-table separately.
     pub fn write_ptr_only(&self, dest: &mut [u8]) {
-        let value_bytes = (self.value.as_ptr() as usize).to_ne_bytes();
+        let val = self.value.map(|p| p.as_ptr() as usize).unwrap_or(0);
+        let value_bytes = val.to_ne_bytes();
         dest[0..size_of::<usize>()].copy_from_slice(&value_bytes);
     }
 
-    pub fn map_value(self, transform: impl FnOnce(NonNull<u8>) -> NonNull<u8>) -> Self {
+    pub fn map_value(self, transform: impl FnOnce(Option<NonNull<u8>>) -> Option<NonNull<u8>>) -> Self {
         ManagedPtr {
             value: transform(self.value),
             inner_type: self.inner_type,
@@ -129,7 +130,9 @@ impl<'gc> ManagedPtr<'gc> {
     /// The caller must ensure that the resulting pointer is within the bounds of the same
     /// allocated object as the original pointer.
     pub unsafe fn offset(self, bytes: isize) -> Self {
-        self.map_value(|p| NonNull::new_unchecked(p.as_ptr().offset(bytes)))
+        self.map_value(|p| {
+             p.map(|ptr| NonNull::new_unchecked(ptr.as_ptr().offset(bytes)))
+        })
     }
 }
 

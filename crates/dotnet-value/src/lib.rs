@@ -182,7 +182,7 @@ impl<'gc> StackValue<'gc> {
         pinned: bool,
     ) -> Self {
         Self::ManagedPtr(ManagedPtr {
-            value: NonNull::new(ptr).expect("ManagedPtr should not be null"),
+            value: NonNull::new(ptr),
             inner_type: target_type,
             owner,
             pinned,
@@ -215,7 +215,7 @@ impl<'gc> StackValue<'gc> {
             Self::NativeFloat(f) => ref_to_ptr(f),
             Self::ObjectRef(ObjectRef(o)) => ref_to_ptr(o),
             Self::UnmanagedPtr(UnmanagedPtr(u)) => *u,
-            Self::ManagedPtr(m) => m.value,
+            Self::ManagedPtr(m) => m.value.unwrap_or(NonNull::dangling()),
             Self::ValueType(o) => {
                 NonNull::new(o.instance_storage.get().as_ptr() as *mut u8).unwrap()
             }
@@ -228,7 +228,7 @@ impl<'gc> StackValue<'gc> {
         match self {
             Self::NativeInt(i) => *i as *mut u8,
             Self::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-            Self::ManagedPtr(m) => m.value.as_ptr(),
+            Self::ManagedPtr(m) => m.value.map(|p| p.as_ptr()).unwrap_or(std::ptr::null_mut()),
             v => panic!("expected pointer on stack, received {:?}", v),
         }
     }
@@ -458,8 +458,12 @@ impl<'gc> PartialEq for StackValue<'gc> {
             (NativeInt(l), NativeInt(r)) => l == r,
             (NativeFloat(l), NativeFloat(r)) => l == r,
             (ManagedPtr(l), ManagedPtr(r)) => l == r,
-            (ManagedPtr(l), NativeInt(r)) => (l.value.as_ptr() as isize) == *r,
-            (NativeInt(l), ManagedPtr(r)) => *l == (r.value.as_ptr() as isize),
+            (ManagedPtr(l), NativeInt(r)) => {
+                (l.value.map(|p| p.as_ptr() as isize).unwrap_or(0)) == *r
+            }
+            (NativeInt(l), ManagedPtr(r)) => {
+                *l == (r.value.map(|p| p.as_ptr() as isize).unwrap_or(0))
+            }
             (ObjectRef(l), ObjectRef(r)) => l == r,
             (ValueType(l), ValueType(r)) => l == r,
             _ => false,
@@ -478,8 +482,12 @@ impl PartialOrd for StackValue<'_> {
             (NativeInt(l), NativeInt(r)) => l.partial_cmp(r),
             (NativeFloat(l), NativeFloat(r)) => l.partial_cmp(r),
             (ManagedPtr(l), ManagedPtr(r)) => l.partial_cmp(r),
-            (ManagedPtr(l), NativeInt(r)) => (l.value.as_ptr() as isize).partial_cmp(r),
-            (NativeInt(l), ManagedPtr(r)) => l.partial_cmp(&(r.value.as_ptr() as isize)),
+            (ManagedPtr(l), NativeInt(r)) => {
+                (l.value.map(|p| p.as_ptr() as isize).unwrap_or(0)).partial_cmp(r)
+            }
+            (NativeInt(l), ManagedPtr(r)) => {
+                l.partial_cmp(&(r.value.map(|p| p.as_ptr() as isize).unwrap_or(0)))
+            }
             (ObjectRef(l), ObjectRef(r)) => l.partial_cmp(r),
             _ => None,
         }
@@ -519,7 +527,9 @@ impl<'gc> Sub for StackValue<'gc> {
                 unsafe { ManagedPtr(m.offset(-i)) }
             }
             (ManagedPtr(m1), ManagedPtr(m2)) => {
-                NativeInt((m1.value.as_ptr() as isize) - (m2.value.as_ptr() as isize))
+                let v1 = m1.value.map(|p| p.as_ptr() as isize).unwrap_or(0);
+                let v2 = m2.value.map(|p| p.as_ptr() as isize).unwrap_or(0);
+                NativeInt(v1 - v2)
             }
             (l, r) => wrapping_arithmetic_op!(l, r, wrapping_sub, -),
         }

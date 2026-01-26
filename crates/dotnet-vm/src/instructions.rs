@@ -489,8 +489,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             StackValue::Int32(i) => (i as u32) as $t,
                             StackValue::Int64(i) => (i as u64) as $t,
                             StackValue::NativeInt(i) => (i as usize) as $t,
-                            StackValue::UnmanagedPtr(UnmanagedPtr(p)) |
-                            StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => (p.as_ptr() as usize) as $t,
+                            StackValue::UnmanagedPtr(UnmanagedPtr(p)) => (p.as_ptr() as usize) as $t,
+                            StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => (p.map_or(0, |ptr| ptr.as_ptr() as usize)) as $t,
                             StackValue::NativeFloat(f) => {
                                 todo!("truncate {} towards zero for conversion to {}", f, stringify!($t))
                             }
@@ -564,7 +564,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let src = match pop!() {
                     StackValue::NativeInt(i) => i as *const u8,
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr() as *const u8,
-                    StackValue::ManagedPtr(m) => m.value.as_ptr() as *const u8,
+                    StackValue::ManagedPtr(m) => m.value.map_or(ptr::null(), |p| p.as_ptr()) as *const u8,
                     rest => panic!(
                         "invalid type for src in cpblk (expected pointer, received {:?})",
                         rest
@@ -573,7 +573,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let dest = match pop!() {
                     StackValue::NativeInt(i) => i as *mut u8,
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-                    StackValue::ManagedPtr(m) => m.value.as_ptr(),
+                    StackValue::ManagedPtr(m) => m.value.map_or(ptr::null_mut(), |p| p.as_ptr()),
                     rest => panic!(
                         "invalid type for dest in cpblk (expected pointer, received {:?})",
                         rest
@@ -693,7 +693,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let addr = match pop!() {
                     StackValue::NativeInt(i) => i as *mut u8,
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-                    StackValue::ManagedPtr(m) => m.value.as_ptr(),
+                    StackValue::ManagedPtr(m) => m.value.map_or(ptr::null_mut(), |p| p.as_ptr()),
                     rest => panic!(
                         "invalid type for address in initblk (expected pointer, received {:?})",
                         rest
@@ -745,14 +745,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     _ => false,
                 };
 
-                let owner = if let StackValue::ValueType(ref obj) = local {
-                    Some(ManagedPtrOwner::Stack(ptr::NonNull::from(&**obj)))
-                } else {
-                    None
-                };
+                let (ptr, owner, _) = self.get_local_info_for_managed_ptr(*i as usize);
 
                 push!(managed_ptr(
-                    self.get_local_address(*i as usize).as_ptr() as *mut _,
+                    ptr.as_ptr() as *mut _,
                     live_type,
                     owner,
                     pinned
@@ -1059,11 +1055,15 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 } else {
                     // Reference type: dereference the managed pointer
                     vm_expect_stack!(let ManagedPtr(m) = args[0].clone());
+                    let ptr = match m.value {
+                        Some(p) => p.as_ptr(),
+                        None => return self.throw_by_name(gc, "System.NullReferenceException"),
+                    };
                     debug_assert!(
-                        (m.value.as_ptr() as usize).is_multiple_of(align_of::<ObjectRef>()),
+                        (ptr as usize).is_multiple_of(align_of::<ObjectRef>()),
                         "ManagedPtr value is not aligned for ObjectRef"
                     );
-                    let obj_ref = unsafe { *(m.value.as_ptr() as *const ObjectRef) };
+                    let obj_ref = unsafe { *(ptr as *const ObjectRef) };
 
                     if obj_ref.0.is_none() {
                         return self.throw_by_name(gc, "System.NullReferenceException");
@@ -1284,6 +1284,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 volatile,
                 ..
             } => {
+                eprintln!("DEBUG: LoadField executed for field token {:?}", source);
                 let (field, lookup) = self.locate_field(*source);
 
                 check_special_fields!(field, false);
@@ -1395,7 +1396,24 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                     name,
                                     ordering,
                                 );
-                                read_data(&field_data)
+                                let mut val = read_data(&field_data);
+                                // Metadata recovery
+                                if let CTSValue::Value(dotnet_value::object::ValueType::Pointer(
+                                    ref mut mp,
+                                )) = val
+                                {
+                                    let field_layout = o
+                                        .instance_storage
+                                        .layout()
+                                        .get_field(field.parent, name.as_ref())
+                                        .unwrap();
+                                    if let Some(metadata) =
+                                        o.managed_ptr_metadata.borrow().get(field_layout.position)
+                                    {
+                                        mp.owner = metadata.recover_owner();
+                                    }
+                                }
+                                val
                             }
                             HeapStorage::Str(_) => todo!("field on string"),
                             HeapStorage::Boxed(_) => todo!("field on boxed value type"),
@@ -1413,12 +1431,85 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                 o.description.type_name()
                             )
                         }
-                        read_data(o.instance_storage.get_field_local(field.parent, name))
+                        let mut val =
+                            read_data(o.instance_storage.get_field_local(field.parent, name));
+                        // Metadata recovery
+                        if let CTSValue::Value(dotnet_value::object::ValueType::Pointer(
+                            ref mut mp,
+                        )) = val
+                        {
+                            let field_layout = o
+                                .instance_storage
+                                .layout()
+                                .get_field(field.parent, name.as_ref())
+                                .unwrap();
+                            if let Some(metadata) =
+                                o.managed_ptr_metadata.borrow().get(field_layout.position)
+                            {
+                                println!("DEBUG: LoadField recovered metadata at offset {}", field_layout.position);
+                                mp.owner = metadata.recover_owner();
+                            } else {
+                                println!("DEBUG: LoadField failed to recover metadata at offset {}", field_layout.position);
+                            }
+                        }
+                        val
                     }
                     StackValue::NativeInt(i) => read_from_pointer(i as *mut u8),
-                    StackValue::UnmanagedPtr(UnmanagedPtr(ptr))
-                    | StackValue::ManagedPtr(ManagedPtr { value: ptr, .. }) => {
-                        read_from_pointer(ptr.as_ptr())
+                    StackValue::UnmanagedPtr(UnmanagedPtr(ptr)) => read_from_pointer(ptr.as_ptr()),
+                    StackValue::ManagedPtr(m) => {
+                        let mut val = read_from_pointer(m.value.expect("System.NullReferenceException").as_ptr());
+                        // Metadata recovery
+                        if let CTSValue::Value(dotnet_value::object::ValueType::Pointer(
+                            ref mut mp,
+                        )) = val
+                        {
+                            if let Some(owner) = m.owner {
+                                let target_addr = m.value.expect("System.NullReferenceException").as_ptr() as usize;
+                                let layout = LayoutFactory::instance_field_layout_cached(
+                                    field.parent,
+                                    &ctx,
+                                    Some(&self.shared.metrics),
+                                );
+                                let field_layout =
+                                    layout.get_field(field.parent, name.as_ref()).unwrap();
+                                let final_addr = target_addr + field_layout.position;
+
+                                match owner {
+                                    ManagedPtrOwner::Heap(h) => {
+                                        let borrow = h.borrow();
+                                        if let Some(o) = borrow.storage.as_obj() {
+                                            let base = o.instance_storage.get().as_ptr() as usize;
+                                            let offset = final_addr - base;
+                                            if let Some(metadata) =
+                                                o.managed_ptr_metadata.borrow().get(offset)
+                                            {
+                                                println!("DEBUG: LoadField (Stack) recovered metadata at offset {}", offset);
+                                                mp.owner = metadata.recover_owner();
+                                            } else {
+                                                println!("DEBUG: LoadField (Stack) FAILED to recover metadata at offset {}", offset);
+                                            }
+                                        }
+                                    }
+                                    ManagedPtrOwner::Stack(s) => {
+                                        let o = unsafe { s.as_ref() };
+                                        let base = o.instance_storage.get().as_ptr() as usize;
+                                        let offset = final_addr - base;
+                                        eprintln!("DEBUG: LoadField (Stack) offset calculation: final_addr={}, base={}, offset={}", final_addr, base, offset);
+                                        if let Some(metadata) =
+                                            o.managed_ptr_metadata.borrow().get(offset)
+                                        {
+                                            eprintln!("DEBUG: LoadField (Stack) recovered metadata at offset {}", offset);
+                                            mp.owner = metadata.recover_owner();
+                                        } else {
+                                            eprintln!("DEBUG: LoadField (Stack) FAILED to recover metadata at offset {}. Keys: {:?}", offset, o.managed_ptr_metadata.borrow().metadata.keys().collect::<Vec<_>>());
+                                        }
+                                    }
+                                }
+                            } else {
+                                eprintln!("DEBUG: LoadField (Stack) ManagedPtr has NO OWNER");
+                            }
+                        }
+                        val
                     }
                     rest => panic!("stack value {:?} has no fields", rest),
                 };
@@ -1466,7 +1557,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     StackValue::NativeInt(i) => (i as *mut u8, None, false),
                     StackValue::UnmanagedPtr(UnmanagedPtr(ptr)) => (ptr.as_ptr(), None, false),
-                    StackValue::ManagedPtr(m) => (m.value.as_ptr(), m.owner, m.pinned),
+                    StackValue::ManagedPtr(m) => (
+                        m.value.map_or(ptr::null_mut(), |p| p.as_ptr()),
+                        m.owner,
+                        m.pinned,
+                    ),
                     StackValue::ValueType(ref o) => (
                         o.instance_storage.get().as_ptr() as *mut u8,
                         Some(ManagedPtrOwner::Stack(ptr::NonNull::from(&**o))),
@@ -1506,6 +1601,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             LoadFieldSkipNullCheck(_) => todo!("no.nullcheck ldfld"),
             LoadLength => {
+                println!("DEBUG: LoadLength executing");
                 vm_expect_stack!(let ObjectRef(obj) = pop!());
                 let h = if let Some(h) = obj.0 {
                     h
@@ -1519,7 +1615,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     HeapStorage::Obj(o) => {
                         panic!("ldlen called on Obj: {:?}", o.description.type_name());
                     }
-                    HeapStorage::Boxed(_) => {
+                    HeapStorage::Boxed(b) => {
+                        println!("DEBUG: ldlen called on Boxed value: {:?}", b);
                         panic!("ldlen called on Boxed value (expected Vec or Str)");
                     }
                 };
@@ -1812,7 +1909,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => {
                         (p.as_ptr() as usize).to_ne_bytes().to_vec()
                     }
-                    StackValue::ManagedPtr(m) => (m.value.as_ptr() as usize).to_ne_bytes().to_vec(),
+                    StackValue::ManagedPtr(m) => (
+                        m.value.map_or(0, |p| p.as_ptr() as usize)
+                    )
+                    .to_ne_bytes()
+                    .to_vec(),
                     StackValue::ValueType(_) => {
                         panic!("received valuetype for StoreElementPrimitive")
                     }
@@ -1984,9 +2085,44 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         }
                     }
                     StackValue::NativeInt(i) => write_to_pointer_atomic(i as *mut u8),
-                    StackValue::UnmanagedPtr(UnmanagedPtr(ptr))
-                    | StackValue::ManagedPtr(ManagedPtr { value: ptr, .. }) => {
+                    StackValue::UnmanagedPtr(UnmanagedPtr(ptr)) => {
                         write_to_pointer_atomic(ptr.as_ptr())
+                    }
+                    StackValue::ManagedPtr(target_ptr) => {
+                        if let StackValue::ManagedPtr(value_ptr) = &value {
+                            if let Some(owner) = target_ptr.owner {
+                                let layout = LayoutFactory::instance_field_layout_cached(
+                                    field.parent,
+                                    &ctx,
+                                    Some(&self.shared.metrics),
+                                );
+                                let field_layout = layout
+                                    .get_field(field.parent, name.as_ref())
+                                    .unwrap();
+
+                                let target_addr = target_ptr.value.expect("System.NullReferenceException").as_ptr() as usize;
+                                let final_addr = target_addr + field_layout.position;
+
+                                match owner {
+                                    ManagedPtrOwner::Heap(h) => {
+                                        let borrow = h.borrow();
+                                        if let Some(o) = borrow.storage.as_obj() {
+                                            let base = o.instance_storage.get().as_ptr() as usize;
+                                            let offset = final_addr - base;
+                                            o.register_managed_ptr(offset, value_ptr, gc);
+                                        }
+                                    }
+                                    ManagedPtrOwner::Stack(s) => {
+                                        let o = unsafe { s.as_ref() };
+                                        let base = o.instance_storage.get().as_ptr() as usize;
+                                        let offset = final_addr - base;
+                                        o.register_managed_ptr(offset, value_ptr, gc);
+                                    }
+                                }
+                            }
+                        }
+
+                        write_to_pointer_atomic(target_ptr.value.expect("System.NullReferenceException").as_ptr())
                     }
                     rest => panic!(
                         "invalid type on stack (expected object or pointer, received {:?})",
@@ -2005,7 +2141,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let dest_ptr = match addr {
                     StackValue::NativeInt(i) => i as *mut u8,
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-                    StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => p.as_ptr(),
+                    StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => p.expect("System.NullReferenceException").as_ptr(),
                     _ => panic!("stobj: expected pointer on stack, got {:?}", addr),
                 };
 

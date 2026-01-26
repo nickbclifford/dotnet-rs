@@ -135,7 +135,7 @@ impl<'a, 'm> ValueResolution for ResolutionContext<'a, 'm> {
                         self.loader.corlib_type("System.Void")
                     };
                     CTSValue::Value(Pointer(ManagedPtr::new(
-                        NonNull::new(ptr as *mut u8).expect("ValuePointer cannot be null"),
+                        NonNull::new(ptr as *mut u8),
                         inner_type,
                         None,
                         false,
@@ -295,7 +295,7 @@ fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(data: StackVal
         StackValue::UnmanagedPtr(p) => (p.0.as_ptr() as usize)
             .try_into()
             .unwrap_or_else(|_| panic!("failed to convert from pointer")),
-        StackValue::ManagedPtr(p) => (p.value.as_ptr() as usize)
+        StackValue::ManagedPtr(p) => (p.value.map_or(0, |x| x.as_ptr() as usize))
             .try_into()
             .unwrap_or_else(|_| panic!("failed to convert from pointer")),
         other => panic!(

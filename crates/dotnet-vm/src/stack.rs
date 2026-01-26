@@ -838,6 +838,33 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.get_handle_location(self.get_local_handle_at(self.current_frame(), index))
     }
 
+    pub fn get_local_info_for_managed_ptr(
+        &self,
+        index: usize,
+    ) -> (NonNull<u8>, Option<ManagedPtrOwner<'gc>>, bool) {
+        let frame = self.current_frame();
+        let handle = self.get_local_handle_at(frame, index);
+        let pinned = if index < frame.pinned_locals.len() {
+            frame.pinned_locals[index]
+        } else {
+            false
+        };
+
+        unsafe {
+            let lock_ptr = Gc::as_ptr(handle.0);
+            let val = &*(*lock_ptr).as_ptr();
+
+            match val {
+                StackValue::ValueType(obj) => (
+                    NonNull::new(obj.instance_storage.get().as_ptr() as *mut u8).unwrap(),
+                    Some(ManagedPtrOwner::Stack(NonNull::from(&**obj))),
+                    pinned,
+                ),
+                _ => (val.data_location(), None, pinned),
+            }
+        }
+    }
+
     pub fn set_local(&self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
         let frame = self.current_frame();
         if index < frame.pinned_locals.len() && frame.pinned_locals[index] {
