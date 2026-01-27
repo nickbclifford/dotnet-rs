@@ -534,24 +534,51 @@ impl<'gc> CTSValue<'gc> {
                 Float32(f) => dest.copy_from_slice(&f.to_ne_bytes()),
                 Float64(f) => dest.copy_from_slice(&f.to_ne_bytes()),
                 TypedRef => todo!("typedref implementation"),
-                Struct(o) => dest.copy_from_slice(o.instance_storage.get()),
+                Struct(o) => dest.copy_from_slice(&o.instance_storage.get()),
             },
             CTSValue::Ref(o) => o.write(dest),
         }
     }
 }
 
-#[derive(Clone, PartialEq)]
+// Manual implementation of Clone and PartialEq to handle ThreadSafeLock
 pub struct Vector<'gc> {
     pub element: ConcreteType,
     pub layout: ArrayLayoutManager,
     pub(crate) storage: Vec<u8>,
+    /// Side-table for managed pointer metadata (and dynamic roots).
+    pub managed_ptr_metadata: ThreadSafeLock<ManagedPtrSideTable<'gc>>,
     pub(crate) _contains_gc: PhantomData<fn(&'gc ()) -> &'gc ()>,
+}
+
+impl<'gc> Clone for Vector<'gc> {
+    fn clone(&self) -> Self {
+        let metadata = self.managed_ptr_metadata.borrow().clone();
+        Self {
+            element: self.element.clone(),
+            layout: self.layout.clone(),
+            storage: self.storage.clone(),
+            managed_ptr_metadata: ThreadSafeLock::new(metadata),
+            _contains_gc: PhantomData,
+        }
+    }
+}
+
+impl<'gc> PartialEq for Vector<'gc> {
+    fn eq(&self, other: &Self) -> bool {
+        self.element == other.element
+            && self.layout == other.layout
+            && self.storage == other.storage
+            && *self.managed_ptr_metadata.borrow() == *other.managed_ptr_metadata.borrow()
+    }
 }
 
 unsafe impl Collect for Vector<'_> {
     #[inline]
     fn trace(&self, cc: &Collection) {
+        // Trace managed pointer owners from side-table
+        self.managed_ptr_metadata.trace(cc);
+
         let element = &self.layout.element_layout;
         match element.as_ref() {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
@@ -582,8 +609,19 @@ impl<'gc> Vector<'gc> {
             element,
             layout,
             storage,
+            managed_ptr_metadata: ThreadSafeLock::new(ManagedPtrSideTable::new()),
             _contains_gc: PhantomData,
         }
+    }
+
+    pub fn register_metadata(
+        &self,
+        offset: usize,
+        metadata: ManagedPtrMetadata<'gc>,
+        mc: &Mutation<'gc>,
+    ) {
+        let mut side_table = self.managed_ptr_metadata.borrow_mut(mc);
+        side_table.insert(offset, metadata);
     }
 
     pub fn size_bytes(&self) -> usize {
@@ -592,6 +630,18 @@ impl<'gc> Vector<'gc> {
 
     pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
         self.layout.resurrect(&self.storage, fc, visited);
+
+        // Resurrect managed pointer owners from side-table
+        let side_table = self.managed_ptr_metadata.borrow();
+        for metadata in side_table.metadata.values() {
+            if let MetadataOwner::Heap(handle) = metadata.owner {
+                let ptr = Gc::as_ptr(handle) as usize;
+                if visited.insert(ptr) {
+                    Gc::resurrect(fc, handle);
+                    handle.borrow().storage.resurrect(fc, visited);
+                }
+            }
+        }
     }
 
     pub fn get(&self) -> &[u8] {
@@ -654,7 +704,10 @@ impl<'gc> Clone for Object<'gc> {
     fn clone(&self) -> Self {
         let metadata = self.managed_ptr_metadata.borrow().clone();
         if !metadata.metadata.is_empty() {
-            eprintln!("DEBUG: Object::clone copying side-table with {} entries", metadata.metadata.len());
+            eprintln!(
+                "DEBUG: Object::clone copying side-table with {} entries",
+                metadata.metadata.len()
+            );
         }
         Self {
             description: self.description,
@@ -685,7 +738,10 @@ unsafe impl<'gc> Collect for Object<'gc> {
         // Now that we store actual Gc handles, tracing is safe!
         // DEBUG: check if we are tracing a span
         if !self.managed_ptr_metadata.borrow().metadata.is_empty() {
-             eprintln!("DEBUG: Object::trace tracing object with {} side-table entries", self.managed_ptr_metadata.borrow().metadata.len());
+            eprintln!(
+                "DEBUG: Object::trace tracing object with {} side-table entries",
+                self.managed_ptr_metadata.borrow().metadata.len()
+            );
         }
         self.managed_ptr_metadata.trace(cc);
     }

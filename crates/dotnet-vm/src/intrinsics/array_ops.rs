@@ -132,14 +132,21 @@ pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
         _ => panic!("Invalid index type for SetValue: {:?}", index_arg),
     };
 
+    {
+        let heap = handle.borrow();
+        let HeapStorage::Vec(v) = &heap.storage else {
+            panic!("Not an array");
+        };
+
+        if index >= v.layout.length {
+            drop(heap);
+            return stack.throw_by_name(gc, "System.IndexOutOfRangeException");
+        }
+    }
     let mut heap = handle.borrow_mut(gc);
     let HeapStorage::Vec(v) = &mut heap.storage else {
         panic!("Not an array");
     };
-
-    if index >= v.layout.length {
-        return stack.throw_by_name(gc, "System.IndexOutOfRangeException");
-    }
 
     let elem_size = v.layout.element_layout.size();
     let start = index * elem_size;

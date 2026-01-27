@@ -1,3 +1,4 @@
+#![allow(clippy::arc_with_non_send_sync)]
 use dotnet_assemblies::{self as assemblies, static_res_from_file};
 use dotnet_types::{members::MethodDescription, resolution::ResolutionS, TypeDescription};
 use dotnet_vm::{self as vm, state};
@@ -85,6 +86,7 @@ impl TestHarness {
             .args([
                 "build",
                 "tests/SingleFile.csproj",
+                "-p:AllowUnsafeBlocks=true",
                 &format!("-p:TestFile={}", absolute_file.display()),
                 "-o",
                 output_dir.to_str().unwrap(),
@@ -481,7 +483,7 @@ fn test_multiple_arenas_simple() {
     let storage = &storage_arc.storage;
 
     let counter_bytes = storage.get_field_local(type_desc, "Counter");
-    let counter = i32::from_ne_bytes(counter_bytes.try_into().unwrap());
+    let counter = i32::from_ne_bytes((&*counter_bytes).try_into().unwrap());
 
     // Note: Without synchronization, the counter value is not guaranteed to be 5
     // due to race conditions. The important thing is that all threads completed.
@@ -659,25 +661,4 @@ fn test_allocation_pressure_triggers_collection() {
     println!("Should collect after 100 allocations: {}", should_collect);
 
     shared.gc_coordinator.unregister_arena(1);
-}
-
-#[test]
-fn test_managed_ptr_size() {
-    let harness = TestHarness::get();
-    let fixture_path = Path::new("tests/fixtures/managed_ptr_size_0.cs");
-    let dll_path = harness.build(fixture_path).unwrap();
-    let exit_code = harness.run(&dll_path);
-    assert_eq!(
-        exit_code, 0,
-        "ManagedPtr size test failed (incorrect size or memory corruption)"
-    );
-}
-
-#[test]
-fn test_managed_ptr_unsafe_ops() {
-    let harness = TestHarness::get();
-    let fixture_path = Path::new("tests/fixtures/managed_ptr_unsafe_ops_0.cs");
-    let dll_path = harness.build(fixture_path).unwrap();
-    let exit_code = harness.run(&dll_path);
-    assert_eq!(exit_code, 0, "ManagedPtr unsafe ops test failed");
 }

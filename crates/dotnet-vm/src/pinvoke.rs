@@ -225,7 +225,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         let new_ctx = ctx.with_generics(&new_lookup);
                         let td = new_ctx.locate_type(ut);
 
-                        let mut instance = new_ctx.new_object(td);
+                        let instance = new_ctx.new_object(td);
 
                         // We need an array of pointers to the arguments for ffi_call.
                         // Since arg_values: Vec<Arg> already contains these pointers,

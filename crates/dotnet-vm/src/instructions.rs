@@ -564,7 +564,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let src = match pop!() {
                     StackValue::NativeInt(i) => i as *const u8,
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr() as *const u8,
-                    StackValue::ManagedPtr(m) => m.value.map_or(ptr::null(), |p| p.as_ptr()) as *const u8,
+                    StackValue::ManagedPtr(m) => m.value.map_or(ptr::null(), |p| p.as_ptr()),
                     rest => panic!(
                         "invalid type for src in cpblk (expected pointer, received {:?})",
                         rest
@@ -1432,7 +1432,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             )
                         }
                         let mut val =
-                            read_data(o.instance_storage.get_field_local(field.parent, name));
+                            read_data(&o.instance_storage.get_field_local(field.parent, name));
                         // Metadata recovery
                         if let CTSValue::Value(dotnet_value::object::ValueType::Pointer(
                             ref mut mp,
@@ -1446,10 +1446,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             if let Some(metadata) =
                                 o.managed_ptr_metadata.borrow().get(field_layout.position)
                             {
-                                println!("DEBUG: LoadField recovered metadata at offset {}", field_layout.position);
+                                println!(
+                                    "DEBUG: LoadField recovered metadata at offset {}",
+                                    field_layout.position
+                                );
                                 mp.owner = metadata.recover_owner();
                             } else {
-                                println!("DEBUG: LoadField failed to recover metadata at offset {}", field_layout.position);
+                                println!(
+                                    "DEBUG: LoadField failed to recover metadata at offset {}",
+                                    field_layout.position
+                                );
                             }
                         }
                         val
@@ -1457,14 +1463,18 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::NativeInt(i) => read_from_pointer(i as *mut u8),
                     StackValue::UnmanagedPtr(UnmanagedPtr(ptr)) => read_from_pointer(ptr.as_ptr()),
                     StackValue::ManagedPtr(m) => {
-                        let mut val = read_from_pointer(m.value.expect("System.NullReferenceException").as_ptr());
+                        let mut val = read_from_pointer(
+                            m.value.expect("System.NullReferenceException").as_ptr(),
+                        );
                         // Metadata recovery
                         if let CTSValue::Value(dotnet_value::object::ValueType::Pointer(
                             ref mut mp,
                         )) = val
                         {
                             if let Some(owner) = m.owner {
-                                let target_addr = m.value.expect("System.NullReferenceException").as_ptr() as usize;
+                                let target_addr =
+                                    m.value.expect("System.NullReferenceException").as_ptr()
+                                        as usize;
                                 let layout = LayoutFactory::instance_field_layout_cached(
                                     field.parent,
                                     &ctx,
@@ -1601,7 +1611,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             LoadFieldSkipNullCheck(_) => todo!("no.nullcheck ldfld"),
             LoadLength => {
-                println!("DEBUG: LoadLength executing");
                 vm_expect_stack!(let ObjectRef(obj) = pop!());
                 let h = if let Some(h) = obj.0 {
                     h
@@ -1707,8 +1716,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let field_obj = self.get_runtime_field_obj(gc, field, lookup);
 
                 let rfh = self.loader().corlib_type("System.RuntimeFieldHandle");
-                let mut instance = self.current_context().new_object(rfh);
-                field_obj.write(instance.instance_storage.get_field_mut_local(rfh, "_value"));
+                let instance = self.current_context().new_object(rfh);
+                field_obj.write(&mut instance.instance_storage.get_field_mut_local(rfh, "_value"));
 
                 push!(ValueType(Box::new(instance)));
             }
@@ -1717,8 +1726,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let method_obj = self.get_runtime_method_obj(gc, method, lookup);
 
                 let rmh = self.loader().corlib_type("System.RuntimeMethodHandle");
-                let mut instance = self.current_context().new_object(rmh);
-                method_obj.write(instance.instance_storage.get_field_mut_local(rmh, "_value"));
+                let instance = self.current_context().new_object(rmh);
+                method_obj.write(&mut instance.instance_storage.get_field_mut_local(rmh, "_value"));
 
                 push!(ValueType(Box::new(instance)));
             }
@@ -1863,14 +1872,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let ObjectRef(Some(heap)) = obj else {
                     return self.throw_by_name(gc, "System.NullReferenceException");
                 };
+                {
+                    let inner = heap.borrow();
+                    let HeapStorage::Vec(array) = &inner.storage else {
+                        panic!("expected array for stelem, received {:?}", inner.storage)
+                    };
+
+                    if index >= array.layout.length {
+                        drop(inner);
+                        return self.throw_by_name(gc, "System.IndexOutOfRangeException");
+                    }
+                }
                 let mut inner = heap.borrow_mut(gc);
                 let HeapStorage::Vec(array) = &mut inner.storage else {
                     panic!("expected array for stelem, received {:?}", inner.storage)
                 };
-
-                if index >= array.layout.length {
-                    return self.throw_by_name(gc, "System.IndexOutOfRangeException");
-                }
 
                 let ctx = self.current_context();
                 let store_type = ctx.make_concrete(source);
@@ -1909,11 +1925,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => {
                         (p.as_ptr() as usize).to_ne_bytes().to_vec()
                     }
-                    StackValue::ManagedPtr(m) => (
-                        m.value.map_or(0, |p| p.as_ptr() as usize)
-                    )
-                    .to_ne_bytes()
-                    .to_vec(),
+                    StackValue::ManagedPtr(m) => (m.value.map_or(0, |p| p.as_ptr() as usize))
+                        .to_ne_bytes()
+                        .to_vec(),
                     StackValue::ValueType(_) => {
                         panic!("received valuetype for StoreElementPrimitive")
                     }
@@ -1929,14 +1943,20 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let ObjectRef(Some(heap)) = obj else {
                     return self.throw_by_name(gc, "System.NullReferenceException");
                 };
+                {
+                    let inner = heap.borrow();
+                    let HeapStorage::Vec(array) = &inner.storage else {
+                        panic!("expected array for stelem, received {:?}", inner.storage)
+                    };
+                    if index >= array.layout.length {
+                        drop(inner);
+                        return self.throw_by_name(gc, "System.IndexOutOfRangeException");
+                    }
+                }
                 let mut inner = heap.borrow_mut(gc);
                 let HeapStorage::Vec(array) = &mut inner.storage else {
                     panic!("expected array for stelem, received {:?}", inner.storage)
                 };
-
-                if index >= array.layout.length {
-                    return self.throw_by_name(gc, "System.IndexOutOfRangeException");
-                }
 
                 let elem_size: usize = match store_type {
                     Int8 => 1,
@@ -2096,11 +2116,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                     &ctx,
                                     Some(&self.shared.metrics),
                                 );
-                                let field_layout = layout
-                                    .get_field(field.parent, name.as_ref())
-                                    .unwrap();
+                                let field_layout =
+                                    layout.get_field(field.parent, name.as_ref()).unwrap();
 
-                                let target_addr = target_ptr.value.expect("System.NullReferenceException").as_ptr() as usize;
+                                let target_addr = target_ptr
+                                    .value
+                                    .expect("System.NullReferenceException")
+                                    .as_ptr()
+                                    as usize;
                                 let final_addr = target_addr + field_layout.position;
 
                                 match owner {
@@ -2122,7 +2145,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             }
                         }
 
-                        write_to_pointer_atomic(target_ptr.value.expect("System.NullReferenceException").as_ptr())
+                        write_to_pointer_atomic(
+                            target_ptr
+                                .value
+                                .expect("System.NullReferenceException")
+                                .as_ptr(),
+                        )
                     }
                     rest => panic!(
                         "invalid type on stack (expected object or pointer, received {:?})",
@@ -2141,7 +2169,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let dest_ptr = match addr {
                     StackValue::NativeInt(i) => i as *mut u8,
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-                    StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => p.expect("System.NullReferenceException").as_ptr(),
+                    StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => {
+                        p.expect("System.NullReferenceException").as_ptr()
+                    }
                     _ => panic!("stobj: expected pointer on stack, got {:?}", addr),
                 };
 

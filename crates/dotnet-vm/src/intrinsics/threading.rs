@@ -61,7 +61,10 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
 
     // Ensure we are pointing to an Int32
     // TODO: support other types (long, IntPtr, object, etc.) via overloads
-    let target = target_ptr.value.expect("Target pointer should not be null").as_ptr() as *mut i32;
+    let target = target_ptr
+        .value
+        .expect("Target pointer should not be null")
+        .as_ptr() as *mut i32;
 
     let prev = match unsafe { AtomicI32::from_ptr(target) }.compare_exchange(
         comparand,

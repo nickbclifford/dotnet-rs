@@ -141,7 +141,7 @@ impl<'gc, 'm: 'gc> ReflectionExtensions<'gc, 'm> for CallStack<'gc, 'm> {
             let ct = instance
                 .instance_storage
                 .get_field_local(instance.description, "index");
-            let index = usize::from_ne_bytes(ct.try_into().unwrap());
+            let index = usize::from_ne_bytes((&*ct).try_into().unwrap());
             #[cfg(feature = "multithreaded-gc")]
             return self
                 .shared
@@ -160,7 +160,7 @@ impl<'gc, 'm: 'gc> ReflectionExtensions<'gc, 'm> for CallStack<'gc, 'm> {
             let data = instance
                 .instance_storage
                 .get_field_local(instance.description, "index");
-            let index = usize::from_ne_bytes(data.try_into().unwrap());
+            let index = usize::from_ne_bytes((*data).try_into().unwrap());
             #[cfg(feature = "multithreaded-gc")]
             return self
                 .shared
@@ -183,7 +183,7 @@ impl<'gc, 'm: 'gc> ReflectionExtensions<'gc, 'm> for CallStack<'gc, 'm> {
             let data = instance
                 .instance_storage
                 .get_field_local(instance.description, "index");
-            let index = usize::from_ne_bytes(data.try_into().unwrap());
+            let index = usize::from_ne_bytes((*data).try_into().unwrap());
             #[cfg(feature = "multithreaded-gc")]
             return self
                 .shared
@@ -265,9 +265,12 @@ impl<'gc, 'm: 'gc> ReflectionExtensions<'gc, 'm> for CallStack<'gc, 'm> {
 
     fn get_handle_for_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> Object<'gc> {
         let rth = self.loader().corlib_type("System.RuntimeTypeHandle");
-        let mut instance = self.current_context().new_object(rth);
-        let handle_location = instance.instance_storage.get_field_mut_local(rth, "_value");
-        self.get_runtime_type(gc, target).write(handle_location);
+        let instance = self.current_context().new_object(rth);
+        {
+            let mut handle_location = instance.instance_storage.get_field_mut_local(rth, "_value");
+            self.get_runtime_type(gc, target)
+                .write(&mut handle_location);
+        }
         instance
     }
 
@@ -497,7 +500,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 support_res,
                 stack.shared.caches.clone(),
             );
-            let mut asm_handle = ctx.new_object(TypeDescription::new(support_res, definition));
+            let asm_handle = ctx.new_object(TypeDescription::new(support_res, definition));
             let data = (resolution.as_raw() as usize).to_ne_bytes();
             asm_handle
                 .instance_storage
@@ -663,8 +666,8 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             pop_args!(stack, gc, [ObjectRef(obj)]);
 
             let rth = stack.loader().corlib_type("System.RuntimeTypeHandle");
-            let mut instance = stack.current_context().new_object(rth);
-            obj.write(instance.instance_storage.get_field_mut_local(rth, "_value"));
+            let instance = stack.current_context().new_object(rth);
+            obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 
             push!(ValueType(Box::new(instance)));
             Some(StepResult::InstructionStepped)
@@ -778,7 +781,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
 
             let rt_obj = match stack.pop_stack(gc) {
                 StackValue::ValueType(rth_handle) => {
-                    ObjectRef::read(rth_handle.instance_storage.get_field_local(rth_handle.description, "_value"))
+                    ObjectRef::read(&rth_handle.instance_storage.get_field_local(rth_handle.description, "_value"))
                 }
                 StackValue::ObjectRef(rt_obj) => rt_obj,
                 v => panic!("invalid type on stack ({:?}), expected ValueType(RuntimeTypeHandle) or ObjectRef(RuntimeType)", v),
@@ -804,7 +807,10 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
             stack.push_stack(gc, StackValue::NativeInt(0));
             unsafe {
                 stack.pop_stack(gc).store(
-                    allocator_first_arg.value.expect("allocator_first_arg null").as_ptr(),
+                    allocator_first_arg
+                        .value
+                        .expect("allocator_first_arg null")
+                        .as_ptr(),
                     dotnetdll::prelude::StoreType::IntPtr,
                 )
             };
@@ -899,8 +905,8 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
             pop_args!(stack, gc, [ObjectRef(obj)]);
 
             let rmh = stack.loader().corlib_type("System.RuntimeMethodHandle");
-            let mut instance = stack.current_context().new_object(rmh);
-            obj.write(instance.instance_storage.get_field_mut_local(rmh, "_value"));
+            let instance = stack.current_context().new_object(rmh);
+            obj.write(&mut instance.instance_storage.get_field_mut_local(rmh, "_value"));
 
             push!(ValueType(Box::new(instance)));
             Some(StepResult::InstructionStepped)
@@ -945,8 +951,8 @@ pub fn runtime_field_info_intrinsic_call<'gc, 'm: 'gc>(
             pop_args!(stack, gc, [ObjectRef(obj)]);
 
             let rfh = stack.loader().corlib_type("System.RuntimeFieldHandle");
-            let mut instance = stack.current_context().new_object(rfh);
-            obj.write(instance.instance_storage.get_field_mut_local(rfh, "_value"));
+            let instance = stack.current_context().new_object(rfh);
+            obj.write(&mut instance.instance_storage.get_field_mut_local(rfh, "_value"));
 
             push!(ValueType(Box::new(instance)));
             Some(StepResult::InstructionStepped)
@@ -1040,7 +1046,7 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc>(
     };
 
     let target_obj = ObjectRef::read(
-        handle
+        &handle
             .instance_storage
             .get_field_local(handle.description, "_value"),
     );
@@ -1120,7 +1126,7 @@ pub fn intrinsic_get_from_handle<'gc, 'm: 'gc>(
 ) -> StepResult {
     pop_args!(stack, gc, [ValueType(handle)]);
     let target = ObjectRef::read(
-        handle
+        &handle
             .instance_storage
             .get_field_local(handle.description, "_value"),
     );
@@ -1138,7 +1144,7 @@ pub fn intrinsic_type_handle_to_int_ptr<'gc, 'm: 'gc>(
     let target = handle
         .instance_storage
         .get_field_local(handle.description, "_value");
-    let val = usize::from_ne_bytes(target.try_into().unwrap());
+    let val = usize::from_ne_bytes((&*target).try_into().unwrap());
     vm_push!(stack, gc, NativeInt(val as isize));
     StepResult::InstructionStepped
 }
@@ -1151,7 +1157,7 @@ pub fn intrinsic_method_handle_get_function_pointer<'gc, 'm: 'gc>(
 ) -> StepResult {
     pop_args!(stack, gc, [ValueType(handle)]);
     let method_obj = ObjectRef::read(
-        handle
+        &handle
             .instance_storage
             .get_field_local(handle.description, "_value"),
     );
@@ -1253,8 +1259,8 @@ pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc>(
         generics,
         stack.shared.caches.clone(),
     );
-    let mut instance = ctx.new_object(rth);
-    obj.write(instance.instance_storage.get_field_mut_local(rth, "_value"));
+    let instance = ctx.new_object(rth);
+    obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 
     vm_push!(stack, gc, ValueType(Box::new(instance)));
     StepResult::InstructionStepped

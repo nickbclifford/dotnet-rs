@@ -57,11 +57,15 @@ impl<'a, 'm> ValueResolution for ResolutionContext<'a, 'm> {
     }
 
     fn new_instance_fields(&self, td: TypeDescription) -> FieldStorage {
-        FieldStorage::new(LayoutFactory::instance_field_layout_cached(td, self, None))
+        let layout = LayoutFactory::instance_field_layout_cached(td, self, None);
+        let size = layout.size();
+        FieldStorage::new(layout, vec![0; size])
     }
 
     fn new_static_fields(&self, td: TypeDescription) -> FieldStorage {
-        FieldStorage::new(Arc::new(LayoutFactory::static_fields(td, self)))
+        let layout = Arc::new(LayoutFactory::static_fields(td, self));
+        let size = layout.size();
+        FieldStorage::new(layout, vec![0; size])
     }
 
     fn new_value_type<'gc>(&self, t: &ConcreteType, data: StackValue<'gc>) -> ValueType<'gc> {
@@ -262,7 +266,7 @@ impl<'a, 'm> ValueResolution for ResolutionContext<'a, 'm> {
                     return CTSValue::Value(TypedRef);
                 }
 
-                let mut instance = self.new_object(td);
+                let instance = self.new_object(td);
                 instance.instance_storage.get_mut().copy_from_slice(data);
                 CTSValue::Value(Struct(instance))
             }

@@ -8,7 +8,10 @@ use dotnet_utils::{
     sync::{Arc, AtomicU64, AtomicU8, Condvar, Mutex, Ordering, RwLock},
     DebugStr,
 };
-use dotnet_value::{layout::FieldLayoutManager, storage::FieldStorage};
+use dotnet_value::{
+    layout::{FieldLayoutManager, HasLayout},
+    storage::FieldStorage,
+};
 use gc_arena::{Collect, Collection};
 use std::{
     collections::HashMap,
@@ -195,10 +198,12 @@ impl StaticStorageManager {
             types.entry(key.clone()).or_insert_with(|| {
                 // Use the cached layout if available, or create and cache it
                 let layout = self.get_static_field_layout(description, context, metrics);
+                let size = layout.size();
+                #[allow(clippy::arc_with_non_send_sync)]
                 Arc::new(StaticStorage {
                     init_state: AtomicU8::new(INIT_STATE_UNINITIALIZED),
                     initializing_thread: AtomicU64::new(0),
-                    storage: FieldStorage::new(layout),
+                    storage: FieldStorage::new(layout, vec![0; size]),
                     init_cond: Arc::new(Condvar::new()),
                     init_mutex: Arc::new(Mutex::new(())),
                 })

@@ -868,7 +868,7 @@ impl Resolver<'static> for AssemblyLoader {
 }
 
 pub fn static_res_from_file(path: impl AsRef<Path>) -> ResolutionS {
-    let mut file = std::fs::File::open(&path)
+    let mut file = fs::File::open(&path)
         .unwrap_or_else(|e| panic!("could not open file {} ({:?})", path.as_ref().display(), e));
     let mut buf = vec![];
     file.read_to_end(&mut buf).expect("failed to read file");
@@ -898,7 +898,7 @@ pub fn find_dotnet_sdk_path() -> Option<PathBuf> {
             continue;
         }
 
-        let mut versions: Vec<_> = std::fs::read_dir(base_path)
+        let mut versions: Vec<_> = fs::read_dir(base_path)
             .ok()?
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))

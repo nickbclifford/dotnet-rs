@@ -39,6 +39,20 @@ pub mod compat {
         pub fn notify_all(&self) {}
         pub fn wait<T>(&self, _guard: &mut MutexGuard<'_, T>) {}
     }
+    pub struct MappedRwLockReadGuard<'a, T: ?Sized>(std::cell::Ref<'a, T>);
+    impl<'a, T: ?Sized> std::ops::Deref for MappedRwLockReadGuard<'a, T> {
+        type Target = T;
+        fn deref(&self) -> &T {
+            &self.0
+        }
+    }
+    pub struct MappedRwLockWriteGuard<'a, T: ?Sized>(std::cell::RefMut<'a, T>);
+    impl<'a, T: ?Sized> std::ops::Deref for MappedRwLockWriteGuard<'a, T> {
+        type Target = T;
+        fn deref(&self) -> &T {
+            &self.0
+        }
+    }
 }
 
 pub use std::sync::{
@@ -68,9 +82,14 @@ pub fn get_current_thread_id() -> u64 {
 }
 
 #[cfg(feature = "multithreading")]
-pub use parking_lot::{Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+pub use parking_lot::{
+    Condvar, MappedRwLockReadGuard, MappedRwLockWriteGuard, Mutex, MutexGuard, RwLock,
+    RwLockReadGuard, RwLockWriteGuard,
+};
 
 #[cfg(not(feature = "multithreading"))]
 pub use compat::*;
+#[cfg(not(feature = "multithreading"))]
+pub use std::cell::{Ref as MappedRwLockReadGuard, RefMut as MappedRwLockWriteGuard};
 #[cfg(not(feature = "multithreading"))]
 pub use std::sync::{MutexGuard, RwLockReadGuard, RwLockWriteGuard};

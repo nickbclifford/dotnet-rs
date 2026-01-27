@@ -9,7 +9,7 @@ use dotnet_types::{
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
-    object::{HeapStorage, ManagedPtrMetadata, Object as ObjectInstance, ObjectRef},
+    object::{HeapStorage, ManagedPtrMetadata, MetadataOwner, Object as ObjectInstance, ObjectRef},
     pointer::{ManagedPtr, ManagedPtrOwner},
     StackValue,
 };
@@ -216,7 +216,10 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     let offset = match offset_val {
         StackValue::Int32(i) => i as isize,
         StackValue::NativeInt(i) => i,
-        _ => panic!("Unsafe.Add expected Int32 or NativeInt offset, got {:?}", offset_val),
+        _ => panic!(
+            "Unsafe.Add expected Int32 or NativeInt offset, got {:?}",
+            offset_val
+        ),
     };
 
     let m_val = vm_pop!(stack, gc);
@@ -406,7 +409,10 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
     let source = vm_pop!(stack, gc);
     let (ptr, owner) = match source {
         StackValue::NativeInt(p) => (p as *mut u8, None),
-        StackValue::ManagedPtr(m) => (m.value.expect("Unsafe.ReadUnaligned null").as_ptr(), m.owner),
+        StackValue::ManagedPtr(m) => (
+            m.value.expect("Unsafe.ReadUnaligned null").as_ptr(),
+            m.owner,
+        ),
         rest => panic!("invalid source for read unaligned: {:?}", rest),
     };
 
@@ -470,7 +476,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
         },
         LayoutManager::FieldLayoutManager(f) => {
             // T is a struct, allocate an Object to represent it on the stack as ValueType
-            let mut o = ctx.new_object(stack.loader().find_concrete_type(target.clone()));
+            let o = ctx.new_object(stack.loader().find_concrete_type(target.clone()));
 
             // Copy raw data from source pointer
             unsafe {
@@ -550,7 +556,10 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
     let dest = vm_pop!(stack, gc);
     let (ptr, owner) = match dest {
         StackValue::NativeInt(p) => (p as *mut u8, None),
-        StackValue::ManagedPtr(m) => (m.value.expect("Unsafe.WriteUnaligned null").as_ptr(), m.owner),
+        StackValue::ManagedPtr(m) => (
+            m.value.expect("Unsafe.WriteUnaligned null").as_ptr(),
+            m.owner,
+        ),
         rest => panic!("invalid destination for write unaligned: {:?}", rest),
     };
 
@@ -565,7 +574,49 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
 
     match &*layout {
         LayoutManager::Scalar(s) => match s {
-            Scalar::ObjectRef => write_ua!(ObjectRef, ObjectRef),
+            Scalar::ObjectRef => {
+                vm_expect_stack!(let ObjectRef(o) = value);
+                unsafe {
+                    ptr::write_unaligned(ptr as *mut _, o);
+                }
+
+                // Register dynamic root if we are writing a valid object reference
+                if let Some(ref_handle) = o.0 {
+                    if let Some(owner) = owner {
+                        let inner_type = stack.loader().find_concrete_type(target.clone());
+                        let metadata = ManagedPtrMetadata {
+                            inner_type,
+                            owner: MetadataOwner::Heap(ref_handle),
+                            pinned: false,
+                        };
+
+                        match owner {
+                            ManagedPtrOwner::Heap(h) => {
+                                let dest_obj = h.borrow();
+                                match &dest_obj.storage {
+                                    HeapStorage::Obj(dest_o) => {
+                                        let base = dest_o.instance_storage.get().as_ptr() as usize;
+                                        let offset = (ptr as usize).wrapping_sub(base);
+                                        dest_o.register_metadata(offset, metadata, gc);
+                                    }
+                                    HeapStorage::Vec(dest_v) => {
+                                        let base = dest_v.get().as_ptr() as usize;
+                                        let offset = (ptr as usize).wrapping_sub(base);
+                                        dest_v.register_metadata(offset, metadata, gc);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            ManagedPtrOwner::Stack(s) => {
+                                let dest_o = unsafe { s.as_ref() };
+                                let base = dest_o.instance_storage.get().as_ptr() as usize;
+                                let offset = (ptr as usize).wrapping_sub(base);
+                                dest_o.register_metadata(offset, metadata, gc);
+                            }
+                        }
+                    }
+                }
+            }
             Scalar::Int8 => write_ua!(Int32, i8),
             Scalar::Int16 => write_ua!(Int32, i16),
             Scalar::Int32 => write_ua!(Int32, i32),
@@ -578,16 +629,29 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
                 // ManagedPtr is now stored pointer-sized per ECMA-335.
                 vm_expect_stack!(let ManagedPtr(m) = value);
                 unsafe {
-                    ptr::write_unaligned(ptr as *mut usize, m.value.expect("Unsafe.WriteUnaligned val null").as_ptr() as usize);
+                    ptr::write_unaligned(
+                        ptr as *mut usize,
+                        m.value.expect("Unsafe.WriteUnaligned val null").as_ptr() as usize,
+                    );
                 }
 
                 // If destination has an owner, update its side-table
                 if let Some(owner) = owner {
                     match owner {
                         ManagedPtrOwner::Heap(h) => {
-                            let mut dest_obj = h.borrow_mut(gc);
-                            if let HeapStorage::Obj(dest_o) = &mut dest_obj.storage {
-                                register_managed_ptr(dest_o, m, ptr, gc);
+                            let dest_obj = h.borrow();
+                            match &dest_obj.storage {
+                                HeapStorage::Obj(dest_o) => register_managed_ptr(dest_o, m, ptr, gc),
+                                HeapStorage::Vec(dest_v) => {
+                                    let base = dest_v.get().as_ptr() as usize;
+                                    let offset = (ptr as usize).wrapping_sub(base);
+                                    dest_v.register_metadata(
+                                        offset,
+                                        ManagedPtrMetadata::from_managed_ptr(&m),
+                                        gc,
+                                    );
+                                }
+                                _ => {}
                             }
                         }
                         ManagedPtrOwner::Stack(s) => {

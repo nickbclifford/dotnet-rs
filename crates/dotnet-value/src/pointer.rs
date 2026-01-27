@@ -116,7 +116,10 @@ impl<'gc> ManagedPtr<'gc> {
         dest[0..size_of::<usize>()].copy_from_slice(&value_bytes);
     }
 
-    pub fn map_value(self, transform: impl FnOnce(Option<NonNull<u8>>) -> Option<NonNull<u8>>) -> Self {
+    pub fn map_value(
+        self,
+        transform: impl FnOnce(Option<NonNull<u8>>) -> Option<NonNull<u8>>,
+    ) -> Self {
         ManagedPtr {
             value: transform(self.value),
             inner_type: self.inner_type,
@@ -130,9 +133,7 @@ impl<'gc> ManagedPtr<'gc> {
     /// The caller must ensure that the resulting pointer is within the bounds of the same
     /// allocated object as the original pointer.
     pub unsafe fn offset(self, bytes: isize) -> Self {
-        self.map_value(|p| {
-             p.map(|ptr| NonNull::new_unchecked(ptr.as_ptr().offset(bytes)))
-        })
+        self.map_value(|p| p.map(|ptr| NonNull::new_unchecked(ptr.as_ptr().offset(bytes))))
     }
 }
 

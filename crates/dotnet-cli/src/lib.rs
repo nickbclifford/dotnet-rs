@@ -43,6 +43,7 @@ pub fn run_cli() -> ExitCode {
     let loader = dotnet_assemblies::AssemblyLoader::new(args.assemblies);
     let loader = Box::leak(Box::new(loader));
 
+    #[allow(clippy::arc_with_non_send_sync)]
     let shared = Arc::new(state::SharedGlobalState::new(loader));
     let mut executor = vm::Executor::new(shared);
 

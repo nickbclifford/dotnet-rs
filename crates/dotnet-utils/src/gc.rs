@@ -12,12 +12,17 @@ use std::{
 };
 
 #[cfg(feature = "multithreading")]
-use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::{
+    MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
+};
 
 #[cfg(not(feature = "multithreading"))]
 use gc_arena::lock::RefLock as RwLock;
 #[cfg(not(feature = "multithreading"))]
-use std::cell::{Ref as RwLockReadGuard, RefMut as RwLockWriteGuard};
+use std::cell::{
+    Ref::{self as MappedRwLockReadGuard},
+    RefMut::{self as MappedRwLockWriteGuard},
+};
 
 /// A handle to the GC mutation context.
 pub type GCHandle<'gc> = &'gc Mutation<'gc>;
@@ -53,13 +58,16 @@ impl From<i32> for GCHandleType {
 /// In multi-threaded mode, this uses `parking_lot::RwLock` internally.
 /// In single-threaded mode, this uses `gc_arena::lock::RefLock`.
 #[derive(Debug)]
-pub struct ThreadSafeLock<T> {
+pub struct ThreadSafeLock<T: ?Sized> {
     inner: RwLock<T>,
 }
 
-impl<T> ThreadSafeLock<T> {
+impl<T: ?Sized> ThreadSafeLock<T> {
     /// Create a new `ThreadSafeLock` wrapping the given value.
-    pub fn new(value: T) -> Self {
+    pub fn new(value: T) -> Self
+    where
+        T: Sized,
+    {
         Self {
             inner: RwLock::new(value),
         }
@@ -69,7 +77,7 @@ impl<T> ThreadSafeLock<T> {
     pub fn borrow(&self) -> ThreadSafeReadGuard<'_, T> {
         ThreadSafeReadGuard {
             #[cfg(feature = "multithreading")]
-            guard: self.inner.read(),
+            guard: RwLockReadGuard::map(self.inner.read(), |x| x),
             #[cfg(not(feature = "multithreading"))]
             guard: self.inner.borrow(),
         }
@@ -79,7 +87,7 @@ impl<T> ThreadSafeLock<T> {
     pub fn borrow_mut<'gc>(&self, _gc: &Mutation<'gc>) -> ThreadSafeWriteGuard<'_, T> {
         ThreadSafeWriteGuard {
             #[cfg(feature = "multithreading")]
-            guard: self.inner.write(),
+            guard: RwLockWriteGuard::map(self.inner.write(), |x| x),
             #[cfg(not(feature = "multithreading"))]
             guard: unsafe { self.inner.unlock_unchecked().borrow_mut() },
         }
@@ -91,9 +99,9 @@ impl<T> ThreadSafeLock<T> {
     pub fn try_borrow(&self) -> Option<ThreadSafeReadGuard<'_, T>> {
         #[cfg(feature = "multithreading")]
         {
-            self.inner
-                .try_read()
-                .map(|guard| ThreadSafeReadGuard { guard })
+            self.inner.try_read().map(|guard| ThreadSafeReadGuard {
+                guard: RwLockReadGuard::map(guard, |x| x),
+            })
         }
         #[cfg(not(feature = "multithreading"))]
         {
@@ -111,9 +119,9 @@ impl<T> ThreadSafeLock<T> {
         #[cfg(feature = "multithreading")]
         {
             let _ = _gc;
-            self.inner
-                .try_write()
-                .map(|guard| ThreadSafeWriteGuard { guard })
+            self.inner.try_write().map(|guard| ThreadSafeWriteGuard {
+                guard: RwLockWriteGuard::map(guard, |x| x),
+            })
         }
         #[cfg(not(feature = "multithreading"))]
         {
@@ -173,11 +181,25 @@ impl<T> Unlock for ThreadSafeLock<T> {
 }
 
 /// RAII guard for immutable borrows.
-pub struct ThreadSafeReadGuard<'a, T> {
-    guard: RwLockReadGuard<'a, T>,
+pub struct ThreadSafeReadGuard<'a, T: ?Sized> {
+    guard: MappedRwLockReadGuard<'a, T>,
 }
 
-impl<T> Deref for ThreadSafeReadGuard<'_, T> {
+impl<'a, T: ?Sized> ThreadSafeReadGuard<'a, T> {
+    pub fn map<U: ?Sized, F>(this: Self, f: F) -> ThreadSafeReadGuard<'a, U>
+    where
+        F: FnOnce(&T) -> &U,
+    {
+        ThreadSafeReadGuard {
+            #[cfg(feature = "multithreading")]
+            guard: MappedRwLockReadGuard::map(this.guard, f),
+            #[cfg(not(feature = "multithreading"))]
+            guard: std::cell::Ref::map(this.guard, f),
+        }
+    }
+}
+
+impl<T: ?Sized> Deref for ThreadSafeReadGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -186,11 +208,25 @@ impl<T> Deref for ThreadSafeReadGuard<'_, T> {
 }
 
 /// RAII guard for mutable borrows.
-pub struct ThreadSafeWriteGuard<'a, T> {
-    guard: RwLockWriteGuard<'a, T>,
+pub struct ThreadSafeWriteGuard<'a, T: ?Sized> {
+    guard: MappedRwLockWriteGuard<'a, T>,
 }
 
-impl<T> Deref for ThreadSafeWriteGuard<'_, T> {
+impl<'a, T: ?Sized> ThreadSafeWriteGuard<'a, T> {
+    pub fn map<U: ?Sized, F>(this: Self, f: F) -> ThreadSafeWriteGuard<'a, U>
+    where
+        F: FnOnce(&mut T) -> &mut U,
+    {
+        ThreadSafeWriteGuard {
+            #[cfg(feature = "multithreading")]
+            guard: MappedRwLockWriteGuard::map(this.guard, f),
+            #[cfg(not(feature = "multithreading"))]
+            guard: std::cell::RefMut::map(this.guard, f),
+        }
+    }
+}
+
+impl<T: ?Sized> Deref for ThreadSafeWriteGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -198,7 +234,7 @@ impl<T> Deref for ThreadSafeWriteGuard<'_, T> {
     }
 }
 
-impl<T> DerefMut for ThreadSafeWriteGuard<'_, T> {
+impl<T: ?Sized> DerefMut for ThreadSafeWriteGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.guard
     }

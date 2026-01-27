@@ -117,6 +117,12 @@ use dotnet_utils::gc::GCHandle;
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use std::collections::HashMap;
 
+use dotnet_value::{
+    object::{HeapStorage, ObjectRef},
+    string::CLRString,
+    StackValue,
+};
+use crate::{vm_pop, vm_push};
 pub mod array_ops;
 pub mod gc;
 pub mod math;
@@ -1810,6 +1816,16 @@ impl IntrinsicRegistry {
             "Empty",
             string_ops::intrinsic_field_string_empty
         );
+
+        // System.Object
+        register_virtual!(
+            "System.Object",
+            "ToString",
+            0,
+            object_to_string,
+            "Basic ToString implementation"
+        );
+
         if let Some(tracer) = tracer {
             tracer.trace_intrinsic(
                 0,
@@ -1920,4 +1936,34 @@ fn math_min_double_filter(method: &MethodDescription) -> bool {
         ) => matches!(**b1, BaseType::Float64) && matches!(**b2, BaseType::Float64),
         _ => false,
     }
+}
+
+fn object_to_string<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let this = vm_pop!(stack, gc);
+    
+    let type_name = if let StackValue::ObjectRef(obj_ref) = this {
+        if obj_ref.0.is_some() {
+            obj_ref.as_heap_storage(|storage| match storage {
+                HeapStorage::Obj(o) => o.description.type_name(),
+                HeapStorage::Str(_) => "System.String".to_string(),
+                HeapStorage::Vec(_) => "System.Array".to_string(),
+                HeapStorage::Boxed(_) => "System.ValueType".to_string(),
+            })
+        } else {
+             return stack.throw_by_name(gc, "System.NullReferenceException");
+        }
+    } else {
+        "System.Object".to_string()
+    };
+    
+    let str_val = CLRString::from(type_name);
+    let storage = HeapStorage::Str(str_val);
+    let obj_ref = ObjectRef::new(gc, storage);
+    vm_push!(stack, gc, StackValue::ObjectRef(obj_ref));
+    StepResult::InstructionStepped
 }
