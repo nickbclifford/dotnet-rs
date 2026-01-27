@@ -7,6 +7,7 @@ use dotnet_types::{
     members::MethodDescription,
 };
 use dotnet_utils::gc::GCHandle;
+use dotnet_utils::sync::MappedRwLockReadGuard;
 use dotnet_value::{
     layout::{FieldLayoutManager, LayoutManager, Scalar},
     StackValue,
@@ -15,7 +16,7 @@ use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
 use libffi::middle::*;
 use libloading::{Library, Symbol};
-use std::{collections::HashMap, ffi::c_void, mem, path::PathBuf};
+use std::{collections::HashMap, ffi::c_void, mem, path::PathBuf, io::Write};
 
 pub static mut LAST_ERROR: i32 = 0;
 
@@ -58,6 +59,10 @@ fn type_to_layout(t: &TypeSource<ConcreteType>, ctx: &ResolutionContext) -> Fiel
     let new_lookup = GenericLookup::new(type_generics);
     let new_ctx = ctx.with_generics(&new_lookup);
     let td = new_ctx.locate_type(ut);
+
+    if td.is_null() {
+        panic!("P/Invoke marshalling error: Could not resolve type {:?} when calculating layout.", ut);
+    }
 
     LayoutFactory::instance_fields(td, &new_ctx)
 }
@@ -138,17 +143,25 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         stack_values.reverse();
 
         let res = method.resolution();
-        let module = res.definition()[p.import_scope].name.as_ref();
+        let module = if !res.is_null() {
+            res.definition()[p.import_scope].name.as_ref()
+        } else {
+            "UNKNOWN_MODULE"
+        };
         let function = p.import_name.as_ref();
 
-        vm_trace!(
-            self,
-            "-- calling P/Invoke {} with arguments {stack_values:?} --",
-            method
-                .method
-                .signature
-                .show_with_name(res.definition(), format!("{module}::{function}"))
-        );
+        // Step 4: Add P/Invoke Tracing (replacing vm_trace! which was crashing)
+        println!("Invoking [{}] function [{}]", module, function);
+        let _ = std::io::stdout().flush();
+
+        let arg_types: Vec<String> = method.method.signature.parameters.iter()
+            .map(|p| format!("{:?}", p.1))
+            .collect();
+        println!("  Args (Signature): {:?}", arg_types);
+        let _ = std::io::stdout().flush();
+
+        println!("  Args (Values):    {:?}", stack_values);
+        let _ = std::io::stdout().flush();
 
         let target = self.pinvoke_write().get_function(module, function);
 
@@ -157,29 +170,67 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         for Parameter(_, p) in &method.method.signature.parameters {
             args.push(param_to_type(p, &ctx));
         }
+        
+        println!("  Preparing return type...");
         let return_type = match &method.method.signature.return_type.1 {
             None => Type::void(),
-            Some(s) => param_to_type(s, &ctx),
+            Some(s) => {
+                println!("  Resolving return type: {:?}", s);
+                let t = param_to_type(s, &ctx);
+                println!("  Resolved return type to FFI type.");
+                t
+            },
         };
         let cif = Cif::new(args, return_type);
 
-        let arg_values: Vec<_> = stack_values
-            .iter()
-            .map(|v| match v {
+        let mut storage_guards: Vec<MappedRwLockReadGuard<'_, [u8]>> = vec![];
+        let mut ptr_args: Vec<*mut c_void> = vec![];
+
+        // First pass: collect ManagedPtr values to ensure stable storage
+        for v in &stack_values {
+            if let StackValue::ManagedPtr(p) = v {
+                let ptr = p
+                    .value
+                    .map(|x| x.as_ptr() as *mut c_void)
+                    .unwrap_or(std::ptr::null_mut());
+                ptr_args.push(ptr);
+            }
+        }
+
+        let mut ptr_args_iter = ptr_args.iter();
+        let mut arg_values: Vec<Arg> = vec![];
+
+        for v in &stack_values {
+            let arg = match v {
                 StackValue::Int32(i) => Arg::new(i),
                 StackValue::Int64(i) => Arg::new(i),
                 StackValue::NativeInt(i) => Arg::new(i),
                 StackValue::NativeFloat(f) => Arg::new(f),
                 StackValue::UnmanagedPtr(p) => Arg::new(&p.0),
-                StackValue::ManagedPtr(p) => Arg::new(&p.value),
-                StackValue::ValueType(o) => unsafe {
-                    // SAFETY: Arg is a transparent wrapper around a *mut c_void in libffi-rs.
-                    // We are passing a pointer to the start of the value type's storage.
-                    mem::transmute::<*mut c_void, Arg>(o.instance_storage.get().as_ptr() as _)
-                },
-                rest => todo!("marshalling not yet supported for {:?}", rest),
-            })
-            .collect();
+                StackValue::ManagedPtr(p) => {
+                    // TODO: Step 2 - If passing a pointer-to-pointer (by ref), we should ensure the stack slot is pinned.
+                    // Currently we rely on the caller/VM to have pinned the object if necessary.
+                    if let Some(dotnet_value::pointer::ManagedPtrOwner::Heap(_)) = p.owner {
+                        // In the future, we might want to: assert!(p.pinned, "ManagedPtr to heap must be pinned for P/Invoke");
+                    }
+                    
+                    let ptr_ref = ptr_args_iter.next().unwrap();
+                    Arg::new(ptr_ref)
+                }
+                StackValue::ValueType(o) => {
+                    let guard = o.instance_storage.get();
+                    let ptr = guard.as_ptr();
+                    storage_guards.push(guard);
+                    unsafe {
+                        // SAFETY: Arg is a transparent wrapper around a *mut c_void in libffi-rs.
+                        // We are passing a pointer to the start of the value type's storage.
+                        mem::transmute::<*mut c_void, Arg>(ptr as _)
+                    }
+                }
+                rest => panic!("marshalling not yet supported for {:?} in P/Invoke calling {}::{}", rest, module, function),
+            };
+            arg_values.push(arg);
+        }
 
         match &method.method.signature.return_type.1 {
             None => {
