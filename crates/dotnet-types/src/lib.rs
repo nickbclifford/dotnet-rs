@@ -111,6 +111,9 @@ impl TypeDescription {
     }
 
     pub fn type_name(&self) -> String {
+        if self.is_null() {
+            return "UNRESOLVED_TYPE_DEF".to_string();
+        }
         self.definition()
             .nested_type_name(self.resolution.definition())
     }

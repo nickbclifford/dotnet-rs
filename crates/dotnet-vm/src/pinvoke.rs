@@ -16,7 +16,7 @@ use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
 use libffi::middle::*;
 use libloading::{Library, Symbol};
-use std::{collections::HashMap, ffi::c_void, mem, path::PathBuf, io::Write};
+use std::{collections::HashMap, ffi::c_void, mem, path::PathBuf};
 
 pub static mut LAST_ERROR: i32 = 0;
 
@@ -150,18 +150,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         };
         let function = p.import_name.as_ref();
 
-        // Step 4: Add P/Invoke Tracing (replacing vm_trace! which was crashing)
-        println!("Invoking [{}] function [{}]", module, function);
-        let _ = std::io::stdout().flush();
+        vm_trace!(self, "Invoking [{}] function [{}]", module, function);
 
         let arg_types: Vec<String> = method.method.signature.parameters.iter()
             .map(|p| format!("{:?}", p.1))
             .collect();
-        println!("  Args (Signature): {:?}", arg_types);
-        let _ = std::io::stdout().flush();
+        vm_trace!(self, "  Args (Signature): {:?}", arg_types);
 
-        println!("  Args (Values):    {:?}", stack_values);
-        let _ = std::io::stdout().flush();
+        vm_trace!(self, "  Args (Values):    {:?}", stack_values);
 
         let target = self.pinvoke_write().get_function(module, function);
 
@@ -171,13 +167,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             args.push(param_to_type(p, &ctx));
         }
         
-        println!("  Preparing return type...");
+        vm_trace!(self, "  Preparing return type...");
         let return_type = match &method.method.signature.return_type.1 {
             None => Type::void(),
             Some(s) => {
-                println!("  Resolving return type: {:?}", s);
+                vm_trace!(self, "  Resolving return type: {:?}", s);
                 let t = param_to_type(s, &ctx);
-                println!("  Resolved return type to FFI type.");
+                vm_trace!(self, "  Resolved return type to FFI type.");
                 t
             },
         };
