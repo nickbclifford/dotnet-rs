@@ -1361,27 +1361,56 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         return self.throw_by_name(gc, "System.NullReferenceException")
                     }
                     StackValue::ObjectRef(ObjectRef(Some(h))) => {
-                        let object_type = self.current_context().get_heap_description(h);
-                        if !self
-                            .current_context()
-                            .is_a(object_type.into(), field.parent.into())
+                        let intercepted = if field.parent.type_name()
+                            == "System.Runtime.CompilerServices.RawArrayData"
                         {
-                            panic!(
-                                "tried to load field {}::{} from object of type {}",
-                                field.parent.type_name(),
-                                name,
-                                object_type.type_name()
-                            )
-                        }
+                            let data = h.borrow();
+                            if let HeapStorage::Vec(ref vector) = data.storage {
+                                if name == "Length" {
+                                    Some(CTSValue::Value(dotnet_value::object::ValueType::UInt32(
+                                        vector.layout.length as u32,
+                                    )))
+                                } else if name == "Data" {
+                                    let b = if vector.layout.length > 0 {
+                                        vector.get()[0]
+                                    } else {
+                                        0
+                                    };
+                                    Some(CTSValue::Value(dotnet_value::object::ValueType::UInt8(b)))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
 
-                        let data = h.borrow();
-                        match &data.storage {
-                            HeapStorage::Vec(_) => todo!("field on array"),
-                            HeapStorage::Obj(o) => {
-                                if !o.instance_storage.has_field(field.parent, name) {
-                                    let current_method =
-                                        self.current_frame().state.info_handle.source;
-                                    panic!(
+                        if let Some(val) = intercepted {
+                            val
+                        } else {
+                            let object_type = self.current_context().get_heap_description(h);
+                            if !self
+                                .current_context()
+                                .is_a(object_type.into(), field.parent.into())
+                            {
+                                panic!(
+                                    "tried to load field {}::{} from object of type {}",
+                                    field.parent.type_name(),
+                                    name,
+                                    object_type.type_name()
+                                )
+                            }
+
+                            let data = h.borrow();
+                            match &data.storage {
+                                HeapStorage::Vec(_) => todo!("field on array"),
+                                HeapStorage::Obj(o) => {
+                                    if !o.instance_storage.has_field(field.parent, name) {
+                                        let current_method =
+                                            self.current_frame().state.info_handle.source;
+                                        panic!(
                                         "field {}::{} not found in object of type {} while executing method {}::{}",
                                         field.parent.type_name(),
                                         name,
@@ -1389,33 +1418,36 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                         current_method.parent.type_name(),
                                         current_method.method.name
                                     );
-                                }
-                                let field_data = o.instance_storage.get_field_atomic(
-                                    field.parent,
-                                    name,
-                                    ordering,
-                                );
-                                let mut val = read_data(&field_data);
-                                // Metadata recovery
-                                if let CTSValue::Value(dotnet_value::object::ValueType::Pointer(
-                                    ref mut mp,
-                                )) = val
-                                {
-                                    let field_layout = o
-                                        .instance_storage
-                                        .layout()
-                                        .get_field(field.parent, name.as_ref())
-                                        .unwrap();
-                                    if let Some(metadata) =
-                                        o.managed_ptr_metadata.borrow().get(field_layout.position)
-                                    {
-                                        mp.owner = metadata.recover_owner();
                                     }
+                                    let field_data = o.instance_storage.get_field_atomic(
+                                        field.parent,
+                                        name,
+                                        ordering,
+                                    );
+                                    let mut val = read_data(&field_data);
+                                    // Metadata recovery
+                                    if let CTSValue::Value(dotnet_value::object::ValueType::Pointer(
+                                        ref mut mp,
+                                    )) = val
+                                    {
+                                        let field_layout = o
+                                            .instance_storage
+                                            .layout()
+                                            .get_field(field.parent, name.as_ref())
+                                            .unwrap();
+                                        if let Some(metadata) = o
+                                            .managed_ptr_metadata
+                                            .borrow()
+                                            .get(field_layout.position)
+                                        {
+                                            mp.owner = metadata.recover_owner();
+                                        }
+                                    }
+                                    val
                                 }
-                                val
+                                HeapStorage::Str(_) => todo!("field on string"),
+                                HeapStorage::Boxed(_) => todo!("field on boxed value type"),
                             }
-                            HeapStorage::Str(_) => todo!("field on string"),
-                            HeapStorage::Boxed(_) => todo!("field on boxed value type"),
                         }
                     }
                     StackValue::ValueType(ref o) => {
@@ -1525,6 +1557,35 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         return self.throw_by_name(gc, "System.NullReferenceException")
                     }
                     StackValue::ObjectRef(ObjectRef(Some(h))) => {
+                        // Intercept System.Runtime.CompilerServices.RawArrayData access on arrays
+                        // This acts as an intrinsic for Unsafe.As<Array, RawArrayData> usage
+                        if field.parent.type_name() == "System.Runtime.CompilerServices.RawArrayData" {
+                            let data = h.borrow();
+                            if let HeapStorage::Vec(ref vector) = data.storage {
+                                let ptr = if name == "Data" {
+                                    vector.get().as_ptr() as *mut u8
+                                } else if name == "Length" {
+                                    // Pointer to length (usize), compatible with uint (u32) in Little Endian
+                                    (&vector.layout.length as *const usize) as *mut u8
+                                } else {
+                                    ptr::null_mut()
+                                };
+
+                                if !ptr.is_null() {
+                                    let target_type = self.current_context().get_field_desc(field);
+                                    drop(data);
+                                    push!(StackValue::managed_ptr(
+                                        ptr,
+                                        target_type,
+                                        Some(ManagedPtrOwner::Heap(h)),
+                                        false
+                                    ));
+                                    self.increment_ip();
+                                    return StepResult::InstructionStepped;
+                                }
+                            }
+                        }
+
                         let object_type = ctx.get_heap_description(h);
                         if !ctx.is_a(object_type.into(), field.parent.into()) {
                             panic!(
