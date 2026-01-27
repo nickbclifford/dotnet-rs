@@ -1410,7 +1410,7 @@ impl IntrinsicRegistry {
         register_static!(
             "System.Runtime.CompilerServices.RuntimeHelpers",
             "IsBitwiseEquatable",
-            1,
+            0,
             reflection::intrinsic_runtime_helpers_is_bitwise_equatable,
             "Internal reflection helper"
         );

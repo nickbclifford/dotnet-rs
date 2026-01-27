@@ -60,7 +60,7 @@ impl Debug for ManagedPtr<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "[{}] {:#?} (owner: {:?}, pinned: {})",
+            "[{}] {:?} (owner: {:?}, pinned: {})",
             self.inner_type.type_name(),
             self.value,
             self.owner,
