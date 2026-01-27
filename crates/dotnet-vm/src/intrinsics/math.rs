@@ -100,3 +100,17 @@ pub fn intrinsic_math_min_double<'gc, 'm: 'gc>(
     }
     StepResult::InstructionStepped
 }
+
+pub fn intrinsic_math_sqrt<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let val = vm_pop!(stack, gc);
+    match val {
+        StackValue::NativeFloat(f) => vm_push!(stack, gc, NativeFloat(f.sqrt())),
+        _ => panic!("Math.Sqrt called with non-double argument: {:?}", val),
+    }
+    StepResult::InstructionStepped
+}

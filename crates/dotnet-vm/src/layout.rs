@@ -138,11 +138,12 @@ impl LayoutFactory {
         context: &ResolutionContext,
         predicate: &mut dyn FnMut(&Field) -> bool,
         metrics: Option<&RuntimeMetrics>,
+        include_base: bool,
     ) -> FieldLayoutManager {
         let ancestors: Vec<_> = context.get_ancestors(td).collect();
 
         // Build layout hierarchically: first compute base class layout, then add derived fields
-        let base_layout = if ancestors.len() > 1 {
+        let base_layout = if include_base && ancestors.len() > 1 {
             // We have a base class - compute its layout first
             let (base_td, base_generics) = &ancestors[1];
             let base_res = base_td.resolution;
@@ -164,7 +165,7 @@ impl LayoutFactory {
 
             // Recursively compute base layout
             Some(Self::collect_fields(
-                *base_td, &base_ctx, predicate, metrics,
+                *base_td, &base_ctx, predicate, metrics, include_base,
             ))
         } else {
             None
@@ -243,7 +244,7 @@ impl LayoutFactory {
         metrics: Option<&RuntimeMetrics>,
     ) -> FieldLayoutManager {
         let context = context.for_type(td);
-        Self::collect_fields(td, &context, &mut |f| !f.static_member, metrics)
+        Self::collect_fields(td, &context, &mut |f| !f.static_member, metrics, true)
     }
 
     pub fn static_fields(td: TypeDescription, context: &ResolutionContext) -> FieldLayoutManager {
@@ -256,7 +257,7 @@ impl LayoutFactory {
         metrics: Option<&RuntimeMetrics>,
     ) -> FieldLayoutManager {
         let context = context.for_type(td);
-        Self::collect_fields(td, &context, &mut |f| f.static_member, metrics)
+        Self::collect_fields(td, &context, &mut |f| f.static_member, metrics, false)
     }
 
     pub fn create_array_layout(

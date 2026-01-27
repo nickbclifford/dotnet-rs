@@ -149,8 +149,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             "UNKNOWN_MODULE"
         };
         let function = p.import_name.as_ref();
+        let type_name = method.parent.type_name();
 
-        vm_trace!(self, "Invoking [{}] function [{}]", module, function);
+        // vm_trace!(self, "Invoking [{}] function [{}]", module, function);
+        println!("Invoking P/Invoke: [{}] function [{}] in type [{}]", module, function, type_name);
 
         let arg_types: Vec<String> = method.method.signature.parameters.iter()
             .map(|p| format!("{:?}", p.1))

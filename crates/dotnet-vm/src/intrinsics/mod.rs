@@ -132,6 +132,7 @@ pub mod string_ops;
 pub mod text_ops;
 pub mod threading;
 pub mod unsafe_ops;
+pub mod diagnostics;
 
 pub use metadata::{classify_intrinsic, IntrinsicKind, IntrinsicMetadata};
 pub use reflection::ReflectionExtensions;
@@ -1803,6 +1804,13 @@ impl IntrinsicRegistry {
             math_min_double_filter,
             "Performance optimization using native math operations"
         );
+        register_static!(
+            "System.Math",
+            "Sqrt",
+            1,
+            math::intrinsic_math_sqrt,
+            "Performance optimization using native math operations"
+        );
 
         // Fields
         register_field!(
@@ -1823,6 +1831,15 @@ impl IntrinsicRegistry {
             0,
             object_to_string,
             "Basic ToString implementation"
+        );
+
+        // Diagnostics
+        register_intercept!(
+            "System.Diagnostics.Tracing.XplatEventLogger",
+            "IsEventSourceLoggingEnabled",
+            0,
+            diagnostics::intrinsic_is_event_source_logging_enabled,
+            "Prevent QCall lookup"
         );
 
         if let Some(tracer) = tracer {

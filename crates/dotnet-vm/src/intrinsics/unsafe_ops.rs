@@ -320,11 +320,22 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
     let target_type = stack
         .loader()
         .find_concrete_type(generics.method_generics[0].clone());
-    pop_args!(stack, gc, [NativeInt(ptr)]);
+    
+    let val = vm_pop!(stack, gc);
+    let (ptr, owner, pinned) = match val {
+        StackValue::NativeInt(p) => (p as *mut u8, None, false),
+        StackValue::ManagedPtr(m) => (
+            m.value.expect("Unsafe.AsRef null managed ptr").as_ptr(),
+            m.owner,
+            m.pinned
+        ),
+        _ => panic!("Unsafe.AsRef expected pointer, got {:?}", val),
+    };
+
     vm_push!(
         stack,
         gc,
-        StackValue::managed_ptr(ptr as *mut u8, target_type, None, false)
+        StackValue::managed_ptr(ptr, target_type, owner, pinned)
     );
     StepResult::InstructionStepped
 }

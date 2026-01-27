@@ -1063,7 +1063,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         (ptr as usize).is_multiple_of(align_of::<ObjectRef>()),
                         "ManagedPtr value is not aligned for ObjectRef"
                     );
-                    let obj_ref = unsafe { *(ptr as *const ObjectRef) };
+                    // Create a slice from the pointer. We know ObjectRef is pointer-sized.
+                    let value_bytes = unsafe { slice::from_raw_parts(ptr, ObjectRef::SIZE) };
+                    let obj_ref = ObjectRef::read(value_bytes);
 
                     if obj_ref.0.is_none() {
                         return self.throw_by_name(gc, "System.NullReferenceException");
