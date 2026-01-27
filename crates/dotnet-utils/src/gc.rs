@@ -19,10 +19,7 @@ use parking_lot::{
 #[cfg(not(feature = "multithreading"))]
 use gc_arena::lock::RefLock as RwLock;
 #[cfg(not(feature = "multithreading"))]
-use std::cell::{
-    Ref::{self as MappedRwLockReadGuard},
-    RefMut::{self as MappedRwLockWriteGuard},
-};
+use std::cell::{Ref as MappedRwLockReadGuard, RefMut as MappedRwLockWriteGuard};
 
 /// A handle to the GC mutation context.
 pub type GCHandle<'gc> = &'gc Mutation<'gc>;

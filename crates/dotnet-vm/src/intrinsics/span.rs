@@ -84,10 +84,6 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
     // - AsSpan(T[]) - whole array
     // - AsSpan(T[], int start) - array slice from start
     // - AsSpan(T[], int start, int length) - array slice with length
-    println!(
-        "DEBUG: intrinsic_as_span called with {} params",
-        param_count
-    );
     let (start, length_override) = match param_count {
         1 => (0, None),
         2 => {
@@ -200,10 +196,8 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
     let ctx = ctx.with_generics(&new_lookup);
 
     let span = ctx.new_object(span_type);
-    println!("DEBUG: intrinsic_as_span created span object");
 
     if let Some(h) = h_opt {
-        println!("DEBUG: intrinsic_as_span setting managed ptr");
         let element_type_desc = stack.loader().find_concrete_type(element_type);
         let managed = ManagedPtr::new(
             Some(NonNull::new(ptr).expect("Object pointer should not be null")),
@@ -217,33 +211,21 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
                 .instance_storage
                 .get_field_mut_local(span_type, "_reference"),
         );
-        println!("DEBUG: intrinsic_as_span registering managed ptr");
         // Register metadata in Span's side-table
         let span_layout = LayoutFactory::instance_field_layout_cached(
             span_type,
             &ctx,
             Some(&stack.shared.metrics),
         );
-        println!(
-            "DEBUG: intrinsic_as_span span type: {}, size: {}",
-            span_type.type_name(),
-            span_layout.total_size
-        );
 
         let reference_field = span_layout.get_field_by_name("_reference").unwrap();
-        println!(
-            "DEBUG: intrinsic_as_span registering managed ptr at offset {}",
-            reference_field.position
-        );
         span.register_managed_ptr(reference_field.position, &managed, gc);
     }
 
-    println!("DEBUG: intrinsic_as_span setting length");
     span.instance_storage
         .get_field_mut_local(span_type, "_length")
         .copy_from_slice(&(len as i32).to_ne_bytes());
 
-    println!("DEBUG: intrinsic_as_span pushing result");
     vm_push!(stack, gc, ValueType(Box::new(span)));
     StepResult::InstructionStepped
 }
@@ -328,10 +310,6 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
             Some(&stack.shared.metrics),
         );
         let reference_field = span_layout.get_field_by_name("_reference").unwrap();
-        eprintln!(
-            "DEBUG: intrinsic_as_span registering managed ptr at offset {}",
-            reference_field.position
-        );
         span_instance.register_managed_ptr(reference_field.position, &managed, gc);
 
         vm_push!(stack, gc, ValueType(Box::new(span_instance)));
@@ -429,7 +407,6 @@ pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc>(
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    println!("DEBUG: intrinsic_internal_get_array_data called");
     pop_args!(stack, gc, [ObjectRef(array_ref)]);
 
     let element_type = if !generics.method_generics.is_empty() {
@@ -444,10 +421,6 @@ pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc>(
         let inner = handle.borrow();
         if let HeapStorage::Vec(v) = &inner.storage {
             let ptr = v.get().as_ptr();
-            println!(
-                "DEBUG: GetArrayData: found vector, ptr: {:?}, length: {}",
-                ptr, v.layout.length
-            );
             let managed = ManagedPtr::new(
                 NonNull::new(ptr as *mut u8),
                 element_type_desc,
@@ -459,7 +432,6 @@ pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc>(
             panic!("GetArrayData called on non-vector object");
         }
     } else {
-        println!("DEBUG: GetArrayData: called on null");
         let managed = ManagedPtr::new(None, element_type_desc, None, false);
         vm_push!(stack, gc, ManagedPtr(managed));
     }

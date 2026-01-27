@@ -641,7 +641,9 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
                         ManagedPtrOwner::Heap(h) => {
                             let dest_obj = h.borrow();
                             match &dest_obj.storage {
-                                HeapStorage::Obj(dest_o) => register_managed_ptr(dest_o, m, ptr, gc),
+                                HeapStorage::Obj(dest_o) => {
+                                    register_managed_ptr(dest_o, m, ptr, gc)
+                                }
                                 HeapStorage::Vec(dest_v) => {
                                     let base = dest_v.get().as_ptr() as usize;
                                     let offset = (ptr as usize).wrapping_sub(base);

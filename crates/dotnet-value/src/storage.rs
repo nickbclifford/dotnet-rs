@@ -12,7 +12,7 @@ use std::{
 use dotnet_utils::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[cfg(not(feature = "multithreading"))]
-use std::cell::{RefCell as RwLock};
+use std::cell::RefCell as RwLock;
 
 #[derive(Clone)]
 pub struct FieldStorage {

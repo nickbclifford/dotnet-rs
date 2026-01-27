@@ -703,12 +703,6 @@ pub struct Object<'gc> {
 impl<'gc> Clone for Object<'gc> {
     fn clone(&self) -> Self {
         let metadata = self.managed_ptr_metadata.borrow().clone();
-        if !metadata.metadata.is_empty() {
-            eprintln!(
-                "DEBUG: Object::clone copying side-table with {} entries",
-                metadata.metadata.len()
-            );
-        }
         Self {
             description: self.description,
             instance_storage: self.instance_storage.clone(),
@@ -736,13 +730,6 @@ unsafe impl<'gc> Collect for Object<'gc> {
 
         // Trace managed pointer owners from side-table
         // Now that we store actual Gc handles, tracing is safe!
-        // DEBUG: check if we are tracing a span
-        if !self.managed_ptr_metadata.borrow().metadata.is_empty() {
-            eprintln!(
-                "DEBUG: Object::trace tracing object with {} side-table entries",
-                self.managed_ptr_metadata.borrow().metadata.len()
-            );
-        }
         self.managed_ptr_metadata.trace(cc);
     }
 }

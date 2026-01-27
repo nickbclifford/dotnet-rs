@@ -1284,7 +1284,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 volatile,
                 ..
             } => {
-                eprintln!("DEBUG: LoadField executed for field token {:?}", source);
                 let (field, lookup) = self.locate_field(*source);
 
                 check_special_fields!(field, false);
@@ -1446,16 +1445,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             if let Some(metadata) =
                                 o.managed_ptr_metadata.borrow().get(field_layout.position)
                             {
-                                println!(
-                                    "DEBUG: LoadField recovered metadata at offset {}",
-                                    field_layout.position
-                                );
                                 mp.owner = metadata.recover_owner();
-                            } else {
-                                println!(
-                                    "DEBUG: LoadField failed to recover metadata at offset {}",
-                                    field_layout.position
-                                );
                             }
                         }
                         val
@@ -1493,10 +1483,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                             if let Some(metadata) =
                                                 o.managed_ptr_metadata.borrow().get(offset)
                                             {
-                                                println!("DEBUG: LoadField (Stack) recovered metadata at offset {}", offset);
                                                 mp.owner = metadata.recover_owner();
-                                            } else {
-                                                println!("DEBUG: LoadField (Stack) FAILED to recover metadata at offset {}", offset);
                                             }
                                         }
                                     }
@@ -1504,19 +1491,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                         let o = unsafe { s.as_ref() };
                                         let base = o.instance_storage.get().as_ptr() as usize;
                                         let offset = final_addr - base;
-                                        eprintln!("DEBUG: LoadField (Stack) offset calculation: final_addr={}, base={}, offset={}", final_addr, base, offset);
                                         if let Some(metadata) =
                                             o.managed_ptr_metadata.borrow().get(offset)
                                         {
-                                            eprintln!("DEBUG: LoadField (Stack) recovered metadata at offset {}", offset);
                                             mp.owner = metadata.recover_owner();
-                                        } else {
-                                            eprintln!("DEBUG: LoadField (Stack) FAILED to recover metadata at offset {}. Keys: {:?}", offset, o.managed_ptr_metadata.borrow().metadata.keys().collect::<Vec<_>>());
                                         }
                                     }
                                 }
-                            } else {
-                                eprintln!("DEBUG: LoadField (Stack) ManagedPtr has NO OWNER");
                             }
                         }
                         val
@@ -1625,8 +1606,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         panic!("ldlen called on Obj: {:?}", o.description.type_name());
                     }
                     HeapStorage::Boxed(b) => {
-                        println!("DEBUG: ldlen called on Boxed value: {:?}", b);
-                        panic!("ldlen called on Boxed value (expected Vec or Str)");
+                        panic!("ldlen called on Boxed value (expected Vec or Str): {:?}", b);
                     }
                 };
                 push!(NativeInt(len));

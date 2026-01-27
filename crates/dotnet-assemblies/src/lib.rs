@@ -92,7 +92,6 @@ impl AssemblyLoader {
                             NamedArg::Field(name, FixedArg::String(Some(target)))
                                 if name == "InPlaceOf" =>
                             {
-                                println!("Registering stub: {} -> {}", target, t.type_name());
                                 this.stubs.insert(
                                     target.to_string(),
                                     TypeDescription::new(ResolutionS::new(support_res), t),
