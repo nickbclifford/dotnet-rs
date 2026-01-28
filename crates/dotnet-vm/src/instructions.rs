@@ -11,7 +11,7 @@ use dotnet_types::{
 use dotnet_utils::{gc::GCHandle, is_ptr_aligned_to_field};
 use dotnet_value::{
     layout::HasLayout,
-    object::{CTSValue, HeapStorage, ManagedPtrMetadata, ObjectRef, ValueType},
+    object::{CTSValue, HeapStorage, ManagedPtrMetadata, ObjectRef},
     pointer::{ManagedPtr, ManagedPtrOwner, UnmanagedPtr},
     string::CLRString,
     StackValue,
@@ -1003,7 +1003,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                 StoreType::Float32 => 4,
                                 StoreType::Float64 => 8,
                                 StoreType::Object => std::mem::size_of::<usize>(),
-                                _ => 0,
                             };
 
                             if size > 0 && dest_offset.checked_add(size).map_or(true, |end| end > storage_size) {
@@ -1134,7 +1133,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         let value_size = type_layout(constraint_type_source.clone(), &ctx).size();
                         let value_data =
                             unsafe { slice::from_raw_parts(args[0].as_ptr(), value_size) };
-                        let value = ctx.read_cts_value(&constraint_type_source, value_data);
+                        let value = ctx.read_cts_value(&constraint_type_source, value_data, gc);
 
                         let boxed = ObjectRef::new(
                             gc,
@@ -1161,7 +1160,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     );
                     // Create a slice from the pointer. We know ObjectRef is pointer-sized.
                     let value_bytes = unsafe { slice::from_raw_parts(ptr, ObjectRef::SIZE) };
-                    let obj_ref = ObjectRef::read(value_bytes);
+                    let obj_ref = unsafe { ObjectRef::read_branded(value_bytes, gc) };
 
                     if obj_ref.0.is_none() {
                         return self.throw_by_name(gc, "System.NullReferenceException");
@@ -1272,7 +1271,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     let elem_size = array.layout.element_layout.size();
                     let target = &array.get()[(elem_size * index)..(elem_size * (index + 1))];
-                    Ok(ctx.read_cts_value(&load_type, target).into_stack())
+                    Ok(ctx.read_cts_value(&load_type, target, gc).into_stack())
                 });
                 match value {
                     Ok(v) => push!(v),
@@ -1334,7 +1333,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         Float32 => StackValue::NativeFloat(from_bytes!(f32) as f64),
                         Float64 => StackValue::NativeFloat(from_bytes!(f64)),
                         IntPtr => StackValue::NativeInt(from_bytes!(usize) as isize),
-                        Object => StackValue::ObjectRef(ObjectRef::read(target)),
+                        Object => StackValue::ObjectRef(unsafe { ObjectRef::read_branded(target, gc) }),
                     })
                 });
                 match value {
@@ -1400,7 +1399,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     AtomicOrdering::Acquire
                 };
 
-                let read_data = |d: &[u8]| -> CTSValue<'gc> { ctx.read_cts_value(&t, d) };
+                let read_data = |d: &[u8]| -> CTSValue<'gc> { ctx.read_cts_value(&t, d, gc) };
                 let read_from_pointer = |ptr: *mut u8| {
                     debug_assert!(!ptr.is_null(), "Attempted to read field from null pointer");
                     let layout = LayoutFactory::instance_field_layout_cached(
@@ -1418,7 +1417,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     if size <= size_of::<usize>() {
                         // Check alignment before attempting atomic operations
                         if !is_ptr_aligned_to_field(field_ptr, size) {
-                            // Fall back to non-atomic read if not aligned
+                            // Fall back to non-atomic read_unchecked if not aligned
                             let slice = unsafe { slice::from_raw_parts(field_ptr, size) };
                             return read_data(slice);
                         }
@@ -1784,7 +1783,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let source = unsafe { slice::from_raw_parts(source_ptr, layout.size()) };
                 let mut value = self
                     .current_context()
-                    .read_cts_value(&load_type, source)
+                    .read_cts_value(&load_type, source, gc)
                     .into_stack();
 
                 // Recover ManagedPtr metadata from source side-table if the address is a ManagedPtr
@@ -1882,7 +1881,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         .storage
                         .get_field_atomic(field.parent, name, ordering);
                     let t = ctx.make_concrete(&field.field.return_type);
-                    ctx.read_cts_value(&t, &field_data).into_stack()
+                    ctx.read_cts_value(&t, &field_data, gc).into_stack()
                 };
 
                 vm_trace_field!(self, "LOAD_STATIC", name, &value);

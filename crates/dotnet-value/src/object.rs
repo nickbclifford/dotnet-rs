@@ -8,7 +8,7 @@ use crate::{
 use dotnet_types::{generics::ConcreteType, TypeDescription};
 use dotnet_utils::{
     gc::{GCHandle, ThreadSafeLock},
-    sync::{get_current_thread_id, AtomicUsize, Ordering as AtomicOrdering},
+    sync::get_current_thread_id,
     DebugStr,
 };
 use gc_arena::{Collect, Collection, Gc, Mutation};
@@ -257,8 +257,14 @@ impl<'gc> ObjectRef<'gc> {
         )))
     }
 
-    pub fn read(source: &[u8]) -> Self {
-        let ptr_val = unsafe {
+    /// Reads an ObjectRef from a byte slice without lifetime branding.
+    ///
+    /// # Safety
+    /// - `source` must contain a valid, properly aligned `Gc` pointer (or null).
+    /// - The caller must ensure the returned `ObjectRef` does not outlive the
+    ///   arena generation it belongs to.
+    pub unsafe fn read_unchecked(source: &[u8]) -> Self {
+        let ptr_val = {
             // SAFETY: Use read_unaligned to avoid UB on unaligned access.
             // We assume the caller holds a lock (FieldStorage RwLock) to prevent tearing.
             (source.as_ptr() as *const usize).read_unaligned()
@@ -275,8 +281,17 @@ impl<'gc> ObjectRef<'gc> {
             // the object is guaranteed to be alive (as it is traced by the caller),
             // it is safe to reconstruct the Gc pointer.
             // Note: We don't assert alignment of the Gc pointer itself here, but Gc ptrs are always aligned.
-            ObjectRef(Some(unsafe { Gc::from_ptr(ptr) }))
+            ObjectRef(Some(Gc::from_ptr(ptr)))
         }
+    }
+
+    /// Reads an ObjectRef from a byte slice and brands it with the GC lifetime.
+    ///
+    /// # Safety
+    /// - `source` must contain a valid `Gc` pointer.
+    /// - The pointer must belong to the arena associated with `gc`.
+    pub unsafe fn read_branded(source: &[u8], _gc: GCHandle<'gc>) -> Self {
+        Self::read_unchecked(source)
     }
 
     pub fn write(&self, dest: &mut [u8]) {
@@ -584,7 +599,8 @@ unsafe impl Collect for Vector<'_> {
         match element.as_ref() {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
                 for i in 0..self.layout.length {
-                    ObjectRef::read(&self.storage[(i * element.size())..]).trace(cc);
+                    unsafe { ObjectRef::read_unchecked(&self.storage[(i * element.size())..]) }
+                        .trace(cc);
                 }
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
@@ -665,7 +681,7 @@ impl Debug for Vector<'_> {
                 .chain(self.storage.chunks(self.layout.element_layout.size()).map(
                     match self.layout.element_layout.as_ref() {
                         LayoutManager::Scalar(Scalar::ObjectRef) => {
-                            |chunk: &[u8]| format!("{:?}", ObjectRef::read(chunk))
+                            |chunk: &[u8]| format!("{:?}", unsafe { ObjectRef::read_unchecked(chunk) })
                         }
                         LayoutManager::Scalar(Scalar::ManagedPtr) => {
                             |chunk: &[u8]| {

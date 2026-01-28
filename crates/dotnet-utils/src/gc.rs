@@ -111,7 +111,7 @@ impl<T: ?Sized> ThreadSafeLock<T> {
 
     /// Try to borrow the contents mutably without blocking.
     ///
-    /// Returns `None` if any locks (read or write) are currently held.
+    /// Returns `None` if any locks (read_unchecked or write) are currently held.
     pub fn try_borrow_mut<'gc>(&self, _gc: &Mutation<'gc>) -> Option<ThreadSafeWriteGuard<'_, T>> {
         #[cfg(feature = "multithreading")]
         {

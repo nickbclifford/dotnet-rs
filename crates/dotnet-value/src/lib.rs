@@ -24,6 +24,9 @@ pub mod pointer;
 pub mod storage;
 pub mod string;
 
+#[cfg(test)]
+mod object_tests;
+
 #[macro_export]
 macro_rules! vm_expect_stack {
     (let $variant:ident ( $inner:ident $(as $t:ty)? ) = $v:expr) => {

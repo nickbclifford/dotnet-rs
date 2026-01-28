@@ -8,7 +8,7 @@ use dotnet_types::{
 };
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
-    layout::{ArrayLayoutManager, FieldLayoutManager, HasLayout, LayoutManager, Scalar},
+    layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
     object::{HeapStorage, ManagedPtrMetadata, MetadataOwner, Object as ObjectInstance, ObjectRef, ValueType},
     pointer::{ManagedPtr, ManagedPtrOwner},
     StackValue,
@@ -245,15 +245,9 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
 pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
-    method: MethodDescription,
+    _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let ctx = ResolutionContext::for_method(
-        method,
-        stack.loader(),
-        generics,
-        stack.shared.caches.clone(),
-    );
     let target = &generics.method_generics[0];
     let target_type = stack.loader().find_concrete_type(target.clone());
 
@@ -522,7 +516,7 @@ fn copy_owner_side_table<'gc>(
     let src_offset = (ptr as usize).wrapping_sub(src_base);
 
     for (&offset, metadata) in &side_table.metadata {
-        // If the metadata offset falls within the range we just read
+        // If the metadata offset falls within the range we just read_unchecked
         if offset >= src_offset && offset < src_offset + layout.size() {
             let target_offset = offset - src_offset;
             obj.register_metadata(target_offset, metadata.clone(), gc);
@@ -551,7 +545,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
             m.value.expect("Unsafe.ReadUnaligned null").as_ptr(),
             m.owner,
         ),
-        rest => panic!("invalid source for read unaligned: {:?}", rest),
+        rest => panic!("invalid source for read_unchecked unaligned: {:?}", rest),
     };
 
     let target = &generics.method_generics[0];
@@ -696,7 +690,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
 
             StackValue::ValueType(Box::new(o))
         }
-        _ => panic!("unsupported layout for read unaligned"),
+        _ => panic!("unsupported layout for read_unchecked unaligned"),
     };
     vm_push!(stack, gc, v);
     StepResult::InstructionStepped

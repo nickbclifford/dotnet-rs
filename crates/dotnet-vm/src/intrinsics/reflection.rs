@@ -684,7 +684,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 let param_objs = parameters.as_vector(|v| {
                     let mut result = vec![];
                     for i in 0..v.layout.length {
-                        result.push(ObjectRef::read(&v.get()[(i * ObjectRef::SIZE)..]));
+                        result.push(unsafe { ObjectRef::read_branded(&v.get()[(i * ObjectRef::SIZE)..], gc) });
                     }
                     result
                 });
@@ -781,7 +781,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
 
             let rt_obj = match stack.pop_stack(gc) {
                 StackValue::ValueType(rth_handle) => {
-                    ObjectRef::read(&rth_handle.instance_storage.get_field_local(rth_handle.description, "_value"))
+                    unsafe { ObjectRef::read_branded(&rth_handle.instance_storage.get_field_local(rth_handle.description, "_value"), gc) }
                 }
                 StackValue::ObjectRef(rt_obj) => rt_obj,
                 v => panic!("invalid type on stack ({:?}), expected ValueType(RuntimeTypeHandle) or ObjectRef(RuntimeType)", v),
@@ -1045,11 +1045,12 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc>(
         )
     };
 
-    let target_obj = ObjectRef::read(
+    let target_obj = unsafe { ObjectRef::read_branded(
         &handle
             .instance_storage
             .get_field_local(handle.description, "_value"),
-    );
+        gc
+    ) };
     let target_type = stack.resolve_runtime_type(target_obj);
     let target_ct = target_type.to_concrete(stack.loader());
     let target_desc = stack.loader().find_concrete_type(target_ct);
@@ -1125,11 +1126,12 @@ pub fn intrinsic_get_from_handle<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     pop_args!(stack, gc, [ValueType(handle)]);
-    let target = ObjectRef::read(
+    let target = unsafe { ObjectRef::read_branded(
         &handle
             .instance_storage
             .get_field_local(handle.description, "_value"),
-    );
+        gc
+    ) };
     vm_push!(stack, gc, ObjectRef(target));
     StepResult::InstructionStepped
 }
@@ -1156,11 +1158,12 @@ pub fn intrinsic_method_handle_get_function_pointer<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     pop_args!(stack, gc, [ValueType(handle)]);
-    let method_obj = ObjectRef::read(
+    let method_obj = unsafe { ObjectRef::read_branded(
         &handle
             .instance_storage
             .get_field_local(handle.description, "_value"),
-    );
+        gc
+    ) };
     let (method, lookup) = stack.resolve_runtime_method(method_obj);
     let index = stack.get_runtime_method_index(method, lookup.clone());
     vm_push!(stack, gc, NativeInt(index as isize));

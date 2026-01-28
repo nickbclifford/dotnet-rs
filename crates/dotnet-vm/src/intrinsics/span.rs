@@ -254,7 +254,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
                 .instance_storage
                 .get_field_local(field_handle.description, "_value"),
         );
-        let obj_ref = ObjectRef::read(&ptr_buf);
+        let obj_ref = unsafe { ObjectRef::read_branded(&ptr_buf, gc) };
         stack.resolve_runtime_field(obj_ref)
     };
     let field_type = ctx.with_generics(&lookup).make_concrete(&field.return_type);
@@ -343,7 +343,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
                 .instance_storage
                 .get_field_local(field_handle.description, "_value"),
         );
-        let obj_ref = ObjectRef::read(&ptr_buf);
+        let obj_ref = unsafe { ObjectRef::read_branded(&ptr_buf, gc) };
         stack.resolve_runtime_field(obj_ref)
     };
 
@@ -355,7 +355,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
                 .instance_storage
                 .get_field_local(type_handle.description, "_value"),
         );
-        let obj_ref = ObjectRef::read(&ptr_buf);
+        let obj_ref = unsafe { ObjectRef::read_branded(&ptr_buf, gc) };
         stack.resolve_runtime_type(obj_ref)
     };
 

@@ -94,7 +94,7 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
     let end = start + elem_size;
     let ctx = stack.current_context();
     let val = ctx
-        .read_cts_value(&v.element, &v.get()[start..end])
+        .read_cts_value(&v.element, &v.get()[start..end], gc)
         .into_stack();
 
     vm_push!(stack, gc, val);

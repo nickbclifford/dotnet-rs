@@ -70,7 +70,7 @@ impl LayoutManager {
     pub fn trace(&self, storage: &[u8], cc: &Collection) {
         match self {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
-                ObjectRef::read(storage).trace(cc);
+                unsafe { ObjectRef::read_unchecked(storage) }.trace(cc);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
                 // NOTE: ManagedPtr in memory is now pointer-sized (8 bytes).
@@ -102,7 +102,7 @@ impl LayoutManager {
     ) {
         match self {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
-                ObjectRef::read(storage).resurrect(fc, visited);
+                unsafe { ObjectRef::read_unchecked(storage) }.resurrect(fc, visited);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
                 // NOTE: ManagedPtr resurrection is handled by Object::resurrect

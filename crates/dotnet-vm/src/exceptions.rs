@@ -320,7 +320,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let message_bytes = obj
                     .instance_storage
                     .get_field_local(exception_type, "_message");
-                let message_ref = ObjectRef::read(&message_bytes);
+                let message_ref = unsafe { ObjectRef::read_branded(&message_bytes, gc) };
                 if let Some(msg_inner) = message_ref.0 {
                     let storage = &msg_inner.borrow().storage;
                     if let HeapStorage::Str(clr_str) = storage {

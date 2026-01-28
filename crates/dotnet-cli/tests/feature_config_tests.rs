@@ -199,7 +199,7 @@ fn find_dotnet_app_path() -> PathBuf {
 
     // Find the latest version
     let mut versions: Vec<_> = std::fs::read_dir(&base)
-        .expect("failed to read dotnet directory")
+        .expect("failed to read_unchecked dotnet directory")
         .filter_map(|e| e.ok())
         .filter(|e| e.path().is_dir())
         .filter(|e| {

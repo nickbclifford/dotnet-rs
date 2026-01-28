@@ -107,7 +107,7 @@ impl FieldStorage {
         name: &str,
         _ord: std::sync::atomic::Ordering,
     ) -> Vec<u8> {
-        // With RwLock, simple read is atomic enough regarding tearing vs other writers
+        // With RwLock, simple read_unchecked is atomic enough regarding tearing vs other writers
         self.get_field_local(owner, name).to_vec()
     }
 
@@ -126,7 +126,7 @@ impl FieldStorage {
         // We need to access data to resurrect?
         // trace/resurrect on Vec<u8> is no-op, but layout resurrect is needed.
         // And layout::resurrect takes &[u8] storage!
-        // So we lock for read.
+        // So we lock for read_unchecked.
         #[cfg(feature = "multithreading")]
         let guard = self.data.read();
         #[cfg(not(feature = "multithreading"))]
@@ -138,7 +138,7 @@ impl FieldStorage {
 
 unsafe impl Collect for FieldStorage {
     fn trace(&self, cc: &Collection) {
-        // Lock for read to trace?
+        // Lock for read_unchecked to trace?
         // Layout trace takes &[u8].
         #[cfg(feature = "multithreading")]
         let guard = self.data.read();

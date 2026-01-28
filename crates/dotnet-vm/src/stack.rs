@@ -1076,7 +1076,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     // Reflection Cache Methods
     // ========================================================================
 
-    /// Get access to runtime_asms cache (read-only).
+    /// Get access to runtime_asms cache (read_unchecked-only).
     #[inline]
     pub fn runtime_asms_read(&self) -> Ref<'_, HashMap<ResolutionS, ObjectRef<'gc>>> {
         self.local.runtime_asms.borrow()
@@ -1088,7 +1088,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.local.runtime_asms.borrow_mut()
     }
 
-    /// Get access to runtime_types cache (read-only).
+    /// Get access to runtime_types cache (read_unchecked-only).
     #[inline]
     pub fn runtime_types_read(&self) -> Ref<'_, HashMap<RuntimeType, ObjectRef<'gc>>> {
         self.local.runtime_types.borrow()
@@ -1100,7 +1100,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.local.runtime_types.borrow_mut()
     }
 
-    /// Get access to runtime_types_list (read-only).
+    /// Get access to runtime_types_list (read_unchecked-only).
     #[inline]
     pub fn runtime_types_list_read(&self) -> Ref<'_, Vec<RuntimeType>> {
         self.local.runtime_types_list.borrow()
@@ -1112,7 +1112,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.local.runtime_types_list.borrow_mut()
     }
 
-    /// Get access to runtime_methods list (read-only).
+    /// Get access to runtime_methods list (read_unchecked-only).
     #[inline]
     pub fn runtime_methods_read(&self) -> Ref<'_, Vec<(MethodDescription, GenericLookup)>> {
         self.local.runtime_methods.borrow()
@@ -1124,7 +1124,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.local.runtime_methods.borrow_mut()
     }
 
-    /// Get access to runtime_method_objs cache (read-only).
+    /// Get access to runtime_method_objs cache (read_unchecked-only).
     #[inline]
     pub fn runtime_method_objs_read(
         &self,
@@ -1140,7 +1140,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.local.runtime_method_objs.borrow_mut()
     }
 
-    /// Get access to runtime_fields list (read-only).
+    /// Get access to runtime_fields list (read_unchecked-only).
     #[inline]
     pub fn runtime_fields_read(&self) -> Ref<'_, Vec<(FieldDescription, GenericLookup)>> {
         self.local.runtime_fields.borrow()
@@ -1152,7 +1152,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.local.runtime_fields.borrow_mut()
     }
 
-    /// Get access to runtime_field_objs cache (read-only).
+    /// Get access to runtime_field_objs cache (read_unchecked-only).
     #[inline]
     pub fn runtime_field_objs_read(
         &self,
