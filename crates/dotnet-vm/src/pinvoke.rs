@@ -1,6 +1,8 @@
 use crate::{
-    context::ResolutionContext, exceptions::ExceptionState, layout::LayoutFactory, resolution::ValueResolution, CallStack,
+    context::ResolutionContext, exceptions::ExceptionState, layout::LayoutFactory,
+    resolution::ValueResolution, CallStack,
 };
+use dashmap::DashMap;
 use dotnet_assemblies::decompose_type_source;
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
@@ -18,7 +20,6 @@ use gc_arena::{unsafe_empty_collect, Collect};
 use libffi::middle::*;
 use libloading::{Library, Symbol};
 use std::{ffi::c_void, path::PathBuf};
-use dashmap::DashMap;
 
 pub static mut LAST_ERROR: i32 = 0;
 
@@ -33,8 +34,14 @@ impl std::fmt::Display for PInvokeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PInvokeError::LibraryNotFound(name) => write!(f, "Unable to find library '{}'", name),
-            PInvokeError::SymbolNotFound(lib, sym) => write!(f, "Unable to find entry point '{}' in library '{}'", sym, lib),
-            PInvokeError::LoadError(name, err) => write!(f, "Failed to load library '{}': {}", name, err),
+            PInvokeError::SymbolNotFound(lib, sym) => write!(
+                f,
+                "Unable to find entry point '{}' in library '{}'",
+                sym, lib
+            ),
+            PInvokeError::LoadError(name, err) => {
+                write!(f, "Failed to load library '{}': {}", name, err)
+            }
         }
     }
 }
@@ -91,7 +98,10 @@ impl NativeLibraries {
         None
     }
 
-    pub fn get_library(&self, name: &str) -> Result<dashmap::mapref::one::Ref<'_, String, Library>, PInvokeError> {
+    pub fn get_library(
+        &self,
+        name: &str,
+    ) -> Result<dashmap::mapref::one::Ref<'_, String, Library>, PInvokeError> {
         if let Some(lib) = self.libraries.get(name) {
             return Ok(lib);
         }
@@ -127,7 +137,10 @@ fn type_to_layout(t: &TypeSource<ConcreteType>, ctx: &ResolutionContext) -> Fiel
     let td = new_ctx.locate_type(ut);
 
     if td.is_null() {
-        panic!("P/Invoke marshalling error: Could not resolve type {:?} when calculating layout.", ut);
+        panic!(
+            "P/Invoke marshalling error: Could not resolve type {:?} when calculating layout.",
+            ut
+        );
     }
 
     LayoutFactory::instance_fields(td, &new_ctx)
@@ -218,41 +231,48 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let type_name = method.parent.type_name();
 
         if function == "GlobalizationNative_LoadICU" {
-             println!("STUB: Skipping GlobalizationNative_LoadICU, returning 1");
-             for _ in 0..arg_count {
-                 self.pop_stack(gc);
-             }
-             self.push_stack(gc, StackValue::Int32(1));
-             return;
+            println!("STUB: Skipping GlobalizationNative_LoadICU, returning 1");
+            for _ in 0..arg_count {
+                self.pop_stack(gc);
+            }
+            self.push_stack(gc, StackValue::Int32(1));
+            return;
         }
         if function == "SystemNative_SetErrNo" {
-             println!("STUB: Skipping SystemNative_SetErrNo");
-             for _ in 0..arg_count {
-                 self.pop_stack(gc);
-             }
-             return;
+            println!("STUB: Skipping SystemNative_SetErrNo");
+            for _ in 0..arg_count {
+                self.pop_stack(gc);
+            }
+            return;
         }
         if function == "SystemNative_Dup" {
-             println!("STUB: Skipping SystemNative_Dup, returning 1");
-             for _ in 0..arg_count {
-                 self.pop_stack(gc);
-             }
-             self.push_stack(gc, StackValue::NativeInt(1));
-             return;
+            println!("STUB: Skipping SystemNative_Dup, returning 1");
+            for _ in 0..arg_count {
+                self.pop_stack(gc);
+            }
+            self.push_stack(gc, StackValue::NativeInt(1));
+            return;
         }
         if function == "SystemNative_GetErrNo" {
-             println!("STUB: Skipping SystemNative_GetErrNo, returning 0");
-             for _ in 0..arg_count {
-                 self.pop_stack(gc);
-             }
-             self.push_stack(gc, StackValue::Int32(0));
-             return;
+            println!("STUB: Skipping SystemNative_GetErrNo, returning 0");
+            for _ in 0..arg_count {
+                self.pop_stack(gc);
+            }
+            self.push_stack(gc, StackValue::Int32(0));
+            return;
         }
 
         // vm_trace!(self, "Invoking [{}] function [{}]", module, function);
-        println!("Invoking P/Invoke: [{}] function [{}] in type [{}]", module, function, type_name);
+        println!(
+            "Invoking P/Invoke: [{}] function [{}] in type [{}]",
+            module, function, type_name
+        );
 
-        let arg_types: Vec<String> = method.method.signature.parameters.iter()
+        let arg_types: Vec<String> = method
+            .method
+            .signature
+            .parameters
+            .iter()
             .map(|p| format!("{:?}", p.1))
             .collect();
         println!("  Args (Signature): {:?}", arg_types);
@@ -269,7 +289,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     ),
                     PInvokeError::SymbolNotFound(lib, sym) => (
                         "System.EntryPointNotFoundException",
-                        format!("Unable to find an entry point named '{}' in DLL '{}'.", sym, lib),
+                        format!(
+                            "Unable to find an entry point named '{}' in DLL '{}'.",
+                            sym, lib
+                        ),
                     ),
                     PInvokeError::LoadError(lib, err) => (
                         "System.DllNotFoundException",
@@ -281,11 +304,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let exception_instance = self.current_context().new_object(exception_type);
                 let exception = ObjectRef::new(gc, HeapStorage::Obj(exception_instance));
 
-                let message_ref = StackValue::string(gc, CLRString::from(msg.as_str())).as_object_ref();
+                let message_ref =
+                    StackValue::string(gc, CLRString::from(msg.as_str())).as_object_ref();
                 exception.as_object_mut(gc, |obj| {
                     if obj.instance_storage.has_field(exception_type, "_message") {
-                         let mut field = obj.instance_storage.get_field_mut_local(exception_type, "_message");
-                         message_ref.write(&mut field);
+                        let mut field = obj
+                            .instance_storage
+                            .get_field_mut_local(exception_type, "_message");
+                        message_ref.write(&mut field);
                     }
                 });
 
@@ -301,7 +327,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         for Parameter(_, p) in &method.method.signature.parameters {
             args.push(param_to_type(p, &ctx));
         }
-        
+
         vm_trace!(self, "  Preparing return type...");
         let return_type = match &method.method.signature.return_type.1 {
             None => Type::void(),
@@ -310,7 +336,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let t = param_to_type(s, &ctx);
                 vm_trace!(self, "  Resolved return type to FFI type.");
                 t
-            },
+            }
         };
         let mut ptr_args: Vec<*mut c_void> = vec![];
         let mut temp_buffers: Vec<Vec<u8>> = vec![];
@@ -454,7 +480,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
         };
 
-        println!("P/Invoke: Calling {}::{} with {} args", module, function, arg_values.len());
+        println!(
+            "P/Invoke: Calling {}::{} with {} args",
+            module,
+            function,
+            arg_values.len()
+        );
         match &method.method.signature.return_type.1 {
             None => {
                 println!("P/Invoke: [PRE-CALL] (void) {}::{}", module, function);
@@ -523,16 +554,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             })
                             .collect();
 
-                        println!("P/Invoke: Calling (raw struct return) {}::{} with {} args", module, function, arg_ptrs.len());
+                        println!(
+                            "P/Invoke: Calling (raw struct return) {}::{} with {} args",
+                            module,
+                            function,
+                            arg_ptrs.len()
+                        );
                         println!("P/Invoke: [PRE-CALL] (struct) {}::{}", module, function);
                         let allocated_size = instance.instance_storage.get().len();
                         let ffi_size = unsafe { (*return_type.as_raw_ptr()).size };
 
                         // Check for buffer overflow risk
                         if ffi_size > allocated_size {
-                             println!("P/Invoke: [WARNING] Buffer overflow detected! FFI expects {} bytes, but object has {} bytes. Using temp buffer.", ffi_size, allocated_size);
-                             let mut temp_buffer = vec![0u8; ffi_size];
-                             unsafe {
+                            println!("P/Invoke: [WARNING] Buffer overflow detected! FFI expects {} bytes, but object has {} bytes. Using temp buffer.", ffi_size, allocated_size);
+                            let mut temp_buffer = vec![0u8; ffi_size];
+                            unsafe {
                                 libffi::raw::ffi_call(
                                     cif.as_raw_ptr(),
                                     Some(*target.as_fun()),

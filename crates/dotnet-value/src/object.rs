@@ -276,7 +276,6 @@ impl<'gc> ObjectRef<'gc> {
             // We assume the caller holds a lock (FieldStorage RwLock) to prevent tearing.
             (source.as_ptr() as *const usize).read_unaligned()
         };
-        
 
         let ptr = ptr_val as *const ThreadSafeLock<ObjectInner<'gc>>;
 
@@ -703,9 +702,9 @@ impl Debug for Vector<'_> {
                 ))
                 .chain(self.storage.chunks(self.layout.element_layout.size()).map(
                     match self.layout.element_layout.as_ref() {
-                        LayoutManager::Scalar(Scalar::ObjectRef) => {
-                            |chunk: &[u8]| format!("{:?}", unsafe { ObjectRef::read_unchecked(chunk) })
-                        }
+                        LayoutManager::Scalar(Scalar::ObjectRef) => |chunk: &[u8]| {
+                            format!("{:?}", unsafe { ObjectRef::read_unchecked(chunk) })
+                        },
                         LayoutManager::Scalar(Scalar::ManagedPtr) => {
                             |chunk: &[u8]| {
                                 // Skip reading ManagedPtr to avoid transmute issues

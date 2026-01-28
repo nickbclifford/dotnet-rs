@@ -201,7 +201,7 @@ impl Tracer {
                     Ok(f) => {
                         println!("Tracer: created file successfully");
                         Some(Box::new(f))
-                    },
+                    }
                     Err(e) => {
                         eprintln!("Failed to create trace file {}: {}", val, e);
                         None

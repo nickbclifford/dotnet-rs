@@ -1,10 +1,10 @@
 use crate::{context::ResolutionContext, layout::LayoutFactory};
 use dotnet_assemblies::decompose_type_source;
-use dotnet_utils::gc::GCHandle;
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     TypeDescription,
 };
+use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     layout::HasLayout,
     object::{CTSValue, Object, ValueType, Vector},
@@ -28,7 +28,12 @@ pub trait ValueResolution {
     fn new_value_type<'gc>(&self, t: &ConcreteType, data: StackValue<'gc>) -> ValueType<'gc>;
     fn value_type_description<'gc>(&self, vt: &ValueType<'gc>) -> TypeDescription;
     fn new_cts_value<'gc>(&self, t: &ConcreteType, data: StackValue<'gc>) -> CTSValue<'gc>;
-    fn read_cts_value<'gc>(&self, t: &ConcreteType, data: &[u8], gc: GCHandle<'gc>) -> CTSValue<'gc>;
+    fn read_cts_value<'gc>(
+        &self,
+        t: &ConcreteType,
+        data: &[u8],
+        gc: GCHandle<'gc>,
+    ) -> CTSValue<'gc>;
     fn new_vector<'gc>(&self, element: ConcreteType, size: usize) -> Vector<'gc>;
 }
 
@@ -210,7 +215,12 @@ impl<'a, 'm> ValueResolution for ResolutionContext<'a, 'm> {
         }
     }
 
-    fn read_cts_value<'gc>(&self, t: &ConcreteType, data: &[u8], gc: GCHandle<'gc>) -> CTSValue<'gc> {
+    fn read_cts_value<'gc>(
+        &self,
+        t: &ConcreteType,
+        data: &[u8],
+        gc: GCHandle<'gc>,
+    ) -> CTSValue<'gc> {
         use ValueType::*;
         let t = self.normalize_type(t.clone());
         match t.get() {

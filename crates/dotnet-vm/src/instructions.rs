@@ -589,19 +589,28 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             ManagedPtrOwner::Heap(h) => {
                                 let inner = h.borrow();
                                 match &inner.storage {
-                                    HeapStorage::Obj(o) => (o.instance_storage.get().as_ptr(), o.instance_storage.get().len()),
+                                    HeapStorage::Obj(o) => (
+                                        o.instance_storage.get().as_ptr(),
+                                        o.instance_storage.get().len(),
+                                    ),
                                     HeapStorage::Vec(v) => (v.get().as_ptr(), v.get().len()),
                                     _ => (ptr::null(), 0),
                                 }
                             }
                             ManagedPtrOwner::Stack(s) => unsafe {
-                                (s.as_ref().instance_storage.get().as_ptr(), s.as_ref().instance_storage.get().len())
+                                (
+                                    s.as_ref().instance_storage.get().as_ptr(),
+                                    s.as_ref().instance_storage.get().len(),
+                                )
                             },
                         };
 
                         if !base_addr.is_null() {
                             let dest_offset = (dest as usize).wrapping_sub(base_addr as usize);
-                            if dest_offset.checked_add(size).map_or(true, |end| end > storage_size) {
+                            if dest_offset
+                                .checked_add(size)
+                                .is_none_or(|end| end > storage_size)
+                            {
                                 panic!("Heap corruption detected! Cpblk writing {} bytes at offset {} into storage of size {}", size, dest_offset, storage_size);
                             }
                         }
@@ -736,19 +745,28 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             ManagedPtrOwner::Heap(h) => {
                                 let inner = h.borrow();
                                 match &inner.storage {
-                                    HeapStorage::Obj(o) => (o.instance_storage.get().as_ptr(), o.instance_storage.get().len()),
+                                    HeapStorage::Obj(o) => (
+                                        o.instance_storage.get().as_ptr(),
+                                        o.instance_storage.get().len(),
+                                    ),
                                     HeapStorage::Vec(v) => (v.get().as_ptr(), v.get().len()),
                                     _ => (ptr::null(), 0),
                                 }
                             }
                             ManagedPtrOwner::Stack(s) => unsafe {
-                                (s.as_ref().instance_storage.get().as_ptr(), s.as_ref().instance_storage.get().len())
+                                (
+                                    s.as_ref().instance_storage.get().as_ptr(),
+                                    s.as_ref().instance_storage.get().len(),
+                                )
                             },
                         };
 
                         if !base_addr.is_null() {
                             let dest_offset = (addr as usize).wrapping_sub(base_addr as usize);
-                            if dest_offset.checked_add(size).map_or(true, |end| end > storage_size) {
+                            if dest_offset
+                                .checked_add(size)
+                                .is_none_or(|end| end > storage_size)
+                            {
                                 panic!("Heap corruption detected! Initblk writing {} bytes at offset {} into storage of size {}", size, dest_offset, storage_size);
                             }
                         }
@@ -982,13 +1000,19 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             ManagedPtrOwner::Heap(h) => {
                                 let inner = h.borrow();
                                 match &inner.storage {
-                                    HeapStorage::Obj(o) => (o.instance_storage.get().as_ptr(), o.instance_storage.get().len()),
+                                    HeapStorage::Obj(o) => (
+                                        o.instance_storage.get().as_ptr(),
+                                        o.instance_storage.get().len(),
+                                    ),
                                     HeapStorage::Vec(v) => (v.get().as_ptr(), v.get().len()),
                                     _ => (ptr::null(), 0),
                                 }
                             }
                             ManagedPtrOwner::Stack(s) => unsafe {
-                                (s.as_ref().instance_storage.get().as_ptr(), s.as_ref().instance_storage.get().len())
+                                (
+                                    s.as_ref().instance_storage.get().as_ptr(),
+                                    s.as_ref().instance_storage.get().len(),
+                                )
                             },
                         };
 
@@ -999,13 +1023,17 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                 StoreType::Int16 => 2,
                                 StoreType::Int32 => 4,
                                 StoreType::Int64 => 8,
-                                StoreType::IntPtr => std::mem::size_of::<usize>(),
+                                StoreType::IntPtr => size_of::<usize>(),
                                 StoreType::Float32 => 4,
                                 StoreType::Float64 => 8,
-                                StoreType::Object => std::mem::size_of::<usize>(),
+                                StoreType::Object => size_of::<usize>(),
                             };
 
-                            if size > 0 && dest_offset.checked_add(size).map_or(true, |end| end > storage_size) {
+                            if size > 0
+                                && dest_offset
+                                    .checked_add(size)
+                                    .is_none_or(|end| end > storage_size)
+                            {
                                 panic!("Heap corruption detected! StoreIndirect writing {} bytes at offset {} into storage of size {}", size, dest_offset, storage_size);
                             }
                         }
@@ -1333,7 +1361,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         Float32 => StackValue::NativeFloat(from_bytes!(f32) as f64),
                         Float64 => StackValue::NativeFloat(from_bytes!(f64)),
                         IntPtr => StackValue::NativeInt(from_bytes!(usize) as isize),
-                        Object => StackValue::ObjectRef(unsafe { ObjectRef::read_branded(target, gc) }),
+                        Object => {
+                            StackValue::ObjectRef(unsafe { ObjectRef::read_branded(target, gc) })
+                        }
                     })
                 });
                 match value {
@@ -1523,9 +1553,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                     );
                                     let mut val = read_data(&field_data);
                                     // Metadata recovery
-                                    if let CTSValue::Value(dotnet_value::object::ValueType::Pointer(
-                                        ref mut mp,
-                                    )) = val
+                                    if let CTSValue::Value(
+                                        dotnet_value::object::ValueType::Pointer(ref mut mp),
+                                    ) = val
                                     {
                                         let field_layout = o
                                             .instance_storage
@@ -1656,7 +1686,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::ObjectRef(ObjectRef(Some(h))) => {
                         // Intercept System.Runtime.CompilerServices.RawArrayData access on arrays
                         // This acts as an intrinsic for Unsafe.As<Array, RawArrayData> usage
-                        if field.parent.type_name() == "System.Runtime.CompilerServices.RawArrayData" {
+                        if field.parent.type_name()
+                            == "System.Runtime.CompilerServices.RawArrayData"
+                        {
                             let data = h.borrow();
                             if let HeapStorage::Vec(ref vector) = data.storage {
                                 let ptr = if name == "Data" {
@@ -1830,9 +1862,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                 match &mut value {
                                     StackValue::ValueType(obj) => {
                                         for (offset, meta) in map {
-                                            if offset >= src_offset
-                                                && offset < src_offset + size
-                                            {
+                                            if offset >= src_offset && offset < src_offset + size {
                                                 let rel_offset = offset - src_offset;
                                                 obj.register_metadata(rel_offset, meta, gc);
                                             }
@@ -2380,7 +2410,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 let layout = self.type_layout_cached(concrete_t.clone());
                 let mut bytes = vec![0u8; layout.size()];
-                ctx.new_cts_value(&concrete_t, value.clone()).write(&mut bytes);
+                ctx.new_cts_value(&concrete_t, value.clone())
+                    .write(&mut bytes);
 
                 unsafe {
                     ptr::copy_nonoverlapping(bytes.as_ptr(), dest_ptr, bytes.len());
@@ -2393,19 +2424,28 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             ManagedPtrOwner::Heap(h) => {
                                 let inner = h.borrow();
                                 match &inner.storage {
-                                    HeapStorage::Obj(o) => (o.instance_storage.get().as_ptr(), o.instance_storage.get().len()),
+                                    HeapStorage::Obj(o) => (
+                                        o.instance_storage.get().as_ptr(),
+                                        o.instance_storage.get().len(),
+                                    ),
                                     HeapStorage::Vec(v) => (v.get().as_ptr(), v.get().len()),
                                     _ => (ptr::null(), 0),
                                 }
                             }
                             ManagedPtrOwner::Stack(s) => unsafe {
-                                (s.as_ref().instance_storage.get().as_ptr(), s.as_ref().instance_storage.get().len())
+                                (
+                                    s.as_ref().instance_storage.get().as_ptr(),
+                                    s.as_ref().instance_storage.get().len(),
+                                )
                             },
                         };
 
                         if !base_addr.is_null() {
                             let dest_offset = (dest_ptr as usize).wrapping_sub(base_addr as usize);
-                            if dest_offset.checked_add(bytes.len()).is_none_or(|end| end > storage_size) {
+                            if dest_offset
+                                .checked_add(bytes.len())
+                                .is_none_or(|end| end > storage_size)
+                            {
                                 panic!("Heap corruption detected! StoreObject writing {} bytes at offset {} into storage of size {}", bytes.len(), dest_offset, storage_size);
                             }
 

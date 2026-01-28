@@ -20,12 +20,11 @@ use std::{
 
 pub mod layout;
 pub mod object;
+#[cfg(test)]
+mod object_tests;
 pub mod pointer;
 pub mod storage;
 pub mod string;
-
-#[cfg(test)]
-mod object_tests;
 
 #[macro_export]
 macro_rules! vm_expect_stack {

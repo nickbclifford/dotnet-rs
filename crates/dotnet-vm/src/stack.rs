@@ -7,8 +7,6 @@ use dotnet_types::{
     TypeDescription,
 };
 use dotnet_utils::gc::{GCHandle, GCHandleType, ThreadSafeLock};
-#[cfg(feature = "multithreaded-gc")]
-use dotnet_utils::gc::set_currently_tracing;
 use dotnet_value::{
     layout::{HasLayout, LayoutManager},
     object::{HeapStorage, Object as ObjectInstance, ObjectRef},
@@ -24,6 +22,8 @@ use std::{
     ptr::NonNull,
 };
 
+#[cfg(feature = "multithreaded-gc")]
+use dotnet_utils::gc::set_currently_tracing;
 #[cfg(feature = "multithreaded-gc")]
 use dotnet_value::object::ObjectPtr;
 

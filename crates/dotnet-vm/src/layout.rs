@@ -165,7 +165,11 @@ impl LayoutFactory {
 
             // Recursively compute base layout
             Some(Self::collect_fields(
-                *base_td, &base_ctx, predicate, metrics, include_base,
+                *base_td,
+                &base_ctx,
+                predicate,
+                metrics,
+                include_base,
             ))
         } else {
             None

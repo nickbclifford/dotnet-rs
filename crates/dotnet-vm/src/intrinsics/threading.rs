@@ -277,8 +277,11 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
         matches!(**b, BaseType::Boolean | BaseType::Int8 | BaseType::UInt8)
     } else if let ParameterType::Value(MethodType::MethodGeneric(0)) = val_param {
         // Check generic type
-        if let Some(t) = generics.method_generics.get(0) {
-            matches!(t.get(), BaseType::Boolean | BaseType::Int8 | BaseType::UInt8)
+        if let Some(t) = generics.method_generics.first() {
+            matches!(
+                t.get(),
+                BaseType::Boolean | BaseType::Int8 | BaseType::UInt8
+            )
         } else {
             false
         }
@@ -289,7 +292,7 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
     match value {
         StackValue::Int32(i) => {
             if is_byte {
-                unsafe { ptr::write_volatile(ptr as *mut u8, i as u8) };
+                unsafe { ptr::write_volatile(ptr, i as u8) };
             } else {
                 unsafe { ptr::write_volatile(ptr as *mut i32, i) };
             }

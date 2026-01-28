@@ -123,6 +123,7 @@ use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use std::collections::HashMap;
 
 pub mod array_ops;
+pub mod diagnostics;
 pub mod gc;
 pub mod math;
 pub mod metadata;
@@ -132,7 +133,6 @@ pub mod string_ops;
 pub mod text_ops;
 pub mod threading;
 pub mod unsafe_ops;
-pub mod diagnostics;
 
 pub use metadata::{classify_intrinsic, IntrinsicKind, IntrinsicMetadata};
 pub use reflection::ReflectionExtensions;
