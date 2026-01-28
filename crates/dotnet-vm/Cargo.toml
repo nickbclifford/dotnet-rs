@@ -22,3 +22,4 @@ dashmap = { workspace = true }
 default = ["multithreaded-gc"]
 multithreading = ["dotnet-utils/multithreading"]
 multithreaded-gc = ["multithreading", "dotnet-utils/multithreaded-gc", "dotnet-value/multithreaded-gc"]
+memory-validation = ["dotnet-value/memory-validation"]

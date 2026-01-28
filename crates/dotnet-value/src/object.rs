@@ -131,9 +131,14 @@ impl<'gc> ManagedPtrSideTable<'gc> {
     }
 }
 
+#[cfg(feature = "memory-validation")]
+const OBJECT_MAGIC: u64 = 0x5AFE_0B1E_C700_0000;
+
 #[derive(Collect, Debug)]
 #[collect(no_drop)]
 pub struct ObjectInner<'gc> {
+    #[cfg(feature = "memory-validation")]
+    pub magic: u64,
     pub owner_id: u64,
     pub storage: HeapStorage<'gc>,
 }
@@ -251,6 +256,8 @@ impl<'gc> ObjectRef<'gc> {
         Self(Some(Gc::new(
             gc,
             ThreadSafeLock::new(ObjectInner {
+                #[cfg(feature = "memory-validation")]
+                magic: OBJECT_MAGIC,
                 owner_id,
                 storage: value,
             }),
@@ -276,6 +283,22 @@ impl<'gc> ObjectRef<'gc> {
         if ptr.is_null() {
             ObjectRef(None)
         } else {
+            #[cfg(feature = "memory-validation")]
+            {
+                if ptr_val % std::mem::align_of::<ThreadSafeLock<ObjectInner<'static>>>() != 0 {
+                    panic!("ObjectRef::read: Pointer {:#x} is not aligned", ptr_val);
+                }
+
+                // Verify magic number to ensure we are pointing to a valid object
+                let inner = &*(*ptr).as_ptr();
+                if inner.magic != OBJECT_MAGIC {
+                    panic!(
+                        "ObjectRef::read: Pointer {:#x} points to invalid object (bad magic: {:#x})",
+                        ptr_val, inner.magic
+                    );
+                }
+            }
+
             // SAFETY: The pointer was originally obtained via Gc::as_ptr and stored as bytes.
             // Since this is only called during VM execution where 'gc is valid and
             // the object is guaranteed to be alive (as it is traced by the caller),

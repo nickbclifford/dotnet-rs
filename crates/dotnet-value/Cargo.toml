@@ -14,3 +14,4 @@ enum_dispatch = { workspace = true }
 default = ["multithreaded-gc"]
 multithreading = ["dotnet-utils/multithreading"]
 multithreaded-gc = ["multithreading", "dotnet-utils/multithreaded-gc"]
+memory-validation = []
