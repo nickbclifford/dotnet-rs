@@ -135,6 +135,7 @@ impl Executor {
         let result = loop {
             // Perform incremental GC progress with finalization support
             // In a real VM this would be tuned based on allocation pressure
+            #[cfg(not(feature = "multithreaded-gc"))]
             self.with_arena(|arena| {
                 if let Some(marked) = arena.mark_debt() {
                     marked.finalize(|fc, c| c.finalize_check(fc));

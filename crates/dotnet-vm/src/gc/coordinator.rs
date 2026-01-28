@@ -140,17 +140,17 @@ impl GCCoordinator {
             refs.clear();
         }
 
-        // Send CollectAll command to all OTHER arenas (not the initiating thread)
+        // Send MarkAll command to all OTHER arenas (not the initiating thread)
         for handle in self.get_all_arenas() {
             if handle.thread_id != initiating_thread_id {
                 let mut cmd = handle.current_command.lock();
-                *cmd = Some(GCCommand::CollectAll);
+                *cmd = Some(GCCommand::MarkAll);
                 handle.command_signal.notify_all();
             }
         }
 
         // The initiating thread performs its own collection directly
-        execute_gc_command_for_current_thread(GCCommand::CollectAll, self);
+        execute_gc_command_for_current_thread(GCCommand::MarkAll, self);
 
         // Wait for all OTHER arenas to finish initial marking
         self.wait_on_other_arenas(initiating_thread_id);
@@ -208,7 +208,18 @@ impl GCCoordinator {
             }
         }
 
-        // Phase 3: Sweep completed (already done by collect_all in each arena)
+        // Phase 3: Sweep
+        for handle in self.get_all_arenas() {
+            if handle.thread_id != initiating_thread_id {
+                let mut cmd = handle.current_command.lock();
+                *cmd = Some(GCCommand::Sweep);
+                handle.command_signal.notify_all();
+            }
+        }
+
+        execute_gc_command_for_current_thread(GCCommand::Sweep, self);
+
+        self.wait_on_other_arenas(initiating_thread_id);
     }
 
     /// Check if a thread has a pending GC command.
@@ -263,8 +274,9 @@ pub mod stubs {
 
     #[derive(Debug, Clone)]
     pub enum GCCommand {
-        CollectAll,
+        MarkAll,
         MarkObjects(HashSet<ObjectPtr>),
+        Sweep,
     }
 
     #[derive(Debug, Clone)]

@@ -7,6 +7,8 @@ use dotnet_types::{
     TypeDescription,
 };
 use dotnet_utils::gc::{GCHandle, GCHandleType, ThreadSafeLock};
+#[cfg(feature = "multithreaded-gc")]
+use dotnet_utils::gc::set_currently_tracing;
 use dotnet_value::{
     layout::{HasLayout, LayoutManager},
     object::{HeapStorage, Object as ObjectInstance, ObjectRef},
@@ -114,9 +116,21 @@ pub struct CallStack<'gc, 'm> {
 
 unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
     fn trace(&self, cc: &Collection) {
+        #[cfg(feature = "multithreaded-gc")]
+        {
+            // Set the current thread ID as the tracing ID.
+            // This ensures ObjectRef::trace can correctly identify and skip foreign objects.
+            set_currently_tracing(Some(self.thread_id.get()));
+        }
+
         self.execution.trace(cc);
         self.local.trace(cc);
         self.shared.statics.trace(cc);
+
+        #[cfg(feature = "multithreaded-gc")]
+        {
+            set_currently_tracing(None);
+        }
     }
 }
 

@@ -435,7 +435,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
     {
         use crate::gc::arena::THREAD_ARENA;
         match command {
-            GCCommand::CollectAll => {
+            GCCommand::MarkAll => {
                 THREAD_ARENA.with(|cell| {
                     if let Ok(mut arena_opt) = cell.try_borrow_mut() {
                         if let Some(arena) = arena_opt.as_mut() {
@@ -450,10 +450,8 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                             while marked.is_none() {
                                 marked = arena.mark_all();
                             }
-                            if let Some(marked) = marked {
-                                marked.finalize(|fc, c| c.finalize_check(fc));
-                            }
-                            arena.collect_all();
+                            // Do not finalize or sweep yet.
+
                             set_currently_tracing(None);
 
                             for (target_id, ptr_usize) in take_found_cross_arena_refs() {
@@ -485,10 +483,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                             while marked.is_none() {
                                 marked = arena.mark_all();
                             }
-                            if let Some(marked) = marked {
-                                marked.finalize(|fc, c| c.finalize_check(fc));
-                            }
-                            arena.collect_all();
+                            // Do not finalize or sweep yet.
 
                             set_currently_tracing(None);
                             for (target_id, ptr_usize) in take_found_cross_arena_refs() {
@@ -496,6 +491,16 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                                     unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
                                 coordinator.record_cross_arena_ref(target_id, ptr);
                             }
+                        }
+                    }
+                });
+            }
+            GCCommand::Sweep => {
+                THREAD_ARENA.with(|cell| {
+                    if let Ok(mut arena_opt) = cell.try_borrow_mut() {
+                        if let Some(arena) = arena_opt.as_mut() {
+                            // Finish the collection (finalize and sweep)
+                            arena.collect_all();
                         }
                     }
                 });

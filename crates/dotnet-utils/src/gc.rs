@@ -304,11 +304,13 @@ thread_local! {
 /// GC commands sent from the coordinator to worker threads.
 #[derive(Debug, Clone)]
 pub enum GCCommand {
-    /// Perform a full collection of the local arena.
-    CollectAll,
+    /// Start the marking phase (clear roots, mark local roots).
+    MarkAll,
     /// Mark specific objects in the local arena (for cross-arena resurrection).
     /// Stores opaque pointers (usize) to avoid dependency on ObjectPtr.
     MarkObjects(HashSet<usize>),
+    /// Finish collection (sweep).
+    Sweep,
 }
 
 #[cfg(feature = "multithreaded-gc")]
