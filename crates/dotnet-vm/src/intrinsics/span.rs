@@ -59,7 +59,7 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
     pop_args!(
         stack,
         gc,
-        [Int32(_culture_comparison), ValueType(b), ValueType(a)]
+        [ValueType(a), ValueType(b), Int32(_culture_comparison)]
     );
 
     let a = span_to_slice(*a, 2);
@@ -329,9 +329,9 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
         stack,
         gc,
         [
-            ManagedPtr(length_ref),
+            ValueType(field_handle),
             ValueType(type_handle),
-            ValueType(field_handle)
+            ManagedPtr(length_ref)
         ]
     );
 

@@ -203,7 +203,7 @@ pub fn intrinsic_string_index_of<'gc, 'm: 'gc>(
         pop_args!(stack, gc, [Int32(c)]);
         (c as u16, 0usize)
     } else {
-        pop_args!(stack, gc, [Int32(start_at), Int32(c)]);
+        pop_args!(stack, gc, [Int32(c), Int32(start_at)]);
         (c as u16, start_at as usize)
     };
 
@@ -236,7 +236,7 @@ pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
         pop_args!(stack, gc, [Int32(start_at)]);
         (start_at as usize, None)
     } else {
-        pop_args!(stack, gc, [Int32(length), Int32(start_at)]);
+        pop_args!(stack, gc, [Int32(start_at), Int32(length)]);
         (start_at as usize, Some(length as usize))
     };
 

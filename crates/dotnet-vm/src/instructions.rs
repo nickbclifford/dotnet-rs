@@ -329,6 +329,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             };
         }
 
+        macro_rules! binary_op {
+            ($op:tt) => {{
+                let v2 = pop!();
+                let v1 = pop!();
+                push!(v1 $op v2);
+            }};
+        }
+
+        macro_rules! unary_op {
+            ($op:tt) => {{
+                let v = pop!();
+                push!($op v);
+            }};
+        }
+
         let i = state!(|s| &s.info_handle.instructions[s.ip]);
         let ip = state!(|s| s.ip);
         let i_res = state!(|s| s.info_handle.source.resolution());
@@ -336,11 +351,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         vm_trace_instruction!(self, ip, &i.show(i_res.definition()));
 
         match i {
-            Add => {
-                let v2 = pop!();
-                let v1 = pop!();
-                push!(v1 + v2);
-            }
+            Add => binary_op!(+),
             AddOverflow(sgn) => {
                 let v2 = pop!();
                 let v1 = pop!();
@@ -349,11 +360,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     Err(e) => return self.throw_by_name(gc, e),
                 }
             }
-            And => {
-                let v2 = pop!();
-                let v1 = pop!();
-                push!(v1 & v2);
-            }
+            And => binary_op!(&),
             ArgumentList => todo!("arglist"),
             BranchEqual(i) => {
                 conditional_branch!(equal!(), i)
@@ -888,11 +895,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 });
                 push!(unmanaged_ptr(ptr));
             }
-            Multiply => {
-                let v2 = pop!();
-                let v1 = pop!();
-                push!(v1 * v2);
-            }
+            Multiply => binary_op!(*),
             MultiplyOverflow(sgn) => {
                 let v2 = pop!();
                 let v1 = pop!();
@@ -901,20 +904,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     Err(e) => return self.throw_by_name(gc, e),
                 }
             }
-            Negate => {
-                let v = pop!();
-                push!(-v);
-            }
+            Negate => unary_op!(-),
             NoOperation => {} // :3
-            Not => {
-                let v = pop!();
-                push!(!v);
-            }
-            Or => {
-                let v2 = pop!();
-                let v1 = pop!();
-                push!(v1 | v2);
-            }
+            Not => unary_op!(!),
+            Or => binary_op!(|),
             Pop => {
                 pop!();
             }
@@ -1046,11 +1039,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let val = pop!();
                 self.set_local(gc, *i as usize, val);
             }
-            Subtract => {
-                let v2 = pop!();
-                let v1 = pop!();
-                push!(v1 - v2);
-            }
+            Subtract => binary_op!(-),
             SubtractOverflow(sgn) => {
                 let v2 = pop!();
                 let v1 = pop!();
@@ -1063,11 +1052,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 vm_expect_stack!(let Int32(value as usize) = pop!());
                 conditional_branch!(value < targets.len(), &targets[value]);
             }
-            Xor => {
-                let v2 = pop!();
-                let v1 = pop!();
-                push!(v1 ^ v2);
-            }
+            Xor => binary_op!(^),
             BoxValue(t) => {
                 let t = self.current_context().make_concrete(t);
 

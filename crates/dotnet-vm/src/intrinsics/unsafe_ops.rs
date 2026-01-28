@@ -1,5 +1,5 @@
 use crate::{
-    context::ResolutionContext, layout::type_layout, pop_args, resolution::ValueResolution,
+    context::ResolutionContext, define_intrinsic, layout::type_layout, resolution::ValueResolution,
     vm_expect_stack, vm_pop, vm_push, CallStack, StepResult,
 };
 use dotnet_types::{
@@ -21,37 +21,18 @@ use std::ptr;
 
 use super::ReflectionExtensions;
 
-pub fn intrinsic_marshal_get_last_pinvoke_error<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
+define_intrinsic!(intrinsic_marshal_get_last_pinvoke_error(gc, stack) () {
     let value = unsafe { crate::pinvoke::LAST_ERROR };
     vm_push!(stack, gc, Int32(value));
-    StepResult::InstructionStepped
-}
+});
 
-pub fn intrinsic_marshal_set_last_pinvoke_error<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    pop_args!(stack, gc, [Int32(value)]);
+define_intrinsic!(intrinsic_marshal_set_last_pinvoke_error(gc, stack) (Int32(value)) {
     unsafe {
         crate::pinvoke::LAST_ERROR = value;
     }
-    StepResult::InstructionStepped
-}
+});
 
-pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    method: MethodDescription,
-    generics: &GenericLookup,
-) -> StepResult {
-    pop_args!(stack, gc, [NativeInt(len)]);
+define_intrinsic!(intrinsic_buffer_memmove(gc, stack, method, generics) (NativeInt(len)) {
     let src = vm_pop!(stack, gc).as_ptr();
     let dst = vm_pop!(stack, gc).as_ptr();
 
@@ -74,16 +55,9 @@ pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
     unsafe {
         ptr::copy(src, dst, total_count);
     }
-    StepResult::InstructionStepped
-}
+});
 
-pub fn intrinsic_memory_marshal_get_array_data_reference<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    _method: MethodDescription,
-    generics: &GenericLookup,
-) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(obj)]);
+define_intrinsic!(intrinsic_memory_marshal_get_array_data_reference(gc, stack, method, generics) (ObjectRef(obj)) {
     let Some(array_handle) = obj.0 else {
         return stack.throw_by_name(gc, "System.NullReferenceException");
     };
@@ -106,8 +80,7 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<'gc, 'm: 'gc>(
             false
         )
     );
-    StepResult::InstructionStepped
-}
+});
 
 pub fn intrinsic_marshal_size_of<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
@@ -181,23 +154,12 @@ pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
-/// System.Runtime.CompilerServices.Unsafe::Add<T>(ref T source, nint elementOffset)
-pub fn intrinsic_unsafe_as_pointer<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
-    let val = vm_pop!(stack, gc);
-    match val {
-        StackValue::ManagedPtr(mut ptr) => {
-            ptr.owner = None;
-            vm_push!(stack, gc, ManagedPtr(ptr));
-        }
-        _ => panic!("Unsafe.AsPointer called on non-pointer: {:?}", val),
-    }
-    StepResult::InstructionStepped
-}
+// System.Runtime.CompilerServices.Unsafe::Add<T>(ref T source, nint elementOffset)
+define_intrinsic!(intrinsic_unsafe_as_pointer(gc, stack) (ManagedPtr(ptr)) {
+    let mut ptr = ptr;
+    ptr.owner = None;
+    vm_push!(stack, gc, ManagedPtr(ptr));
+});
 
 pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
@@ -279,7 +241,7 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
-/// System.Runtime.CompilerServices.Unsafe::AreSame<T>(ref T left, ref T right)
+// System.Runtime.CompilerServices.Unsafe::AreSame<T>(ref T left, ref T right)
 pub fn intrinsic_unsafe_are_same<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -292,19 +254,13 @@ pub fn intrinsic_unsafe_are_same<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
-/// System.Runtime.CompilerServices.Unsafe::As<T>(object value)
-/// System.Runtime.CompilerServices.Unsafe::AsRef<T>(ref T source)
-pub fn intrinsic_unsafe_as<'gc, 'm: 'gc>(
-    _gc: GCHandle<'gc>,
-    _stack: &mut CallStack<'gc, 'm>,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
-) -> StepResult {
+// System.Runtime.CompilerServices.Unsafe::As<T>(object value)
+// System.Runtime.CompilerServices.Unsafe::AsRef<T>(ref T source)
+define_intrinsic!(intrinsic_unsafe_as(gc, stack) () {
     // Just leave the value on the stack, it's a no-op at runtime
-    StepResult::InstructionStepped
-}
+});
 
-/// System.Runtime.CompilerServices.Unsafe::As<TFrom, TTo>(ref TFrom source)
+// System.Runtime.CompilerServices.Unsafe::As<TFrom, TTo>(ref TFrom source)
 pub fn intrinsic_unsafe_as_generic<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -346,8 +302,8 @@ pub fn intrinsic_unsafe_as_generic<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
-/// System.Runtime.CompilerServices.Unsafe::AsRef<T>(in T source)
-/// System.Runtime.CompilerServices.Unsafe::AsRef<T>(void* ptr)
+// System.Runtime.CompilerServices.Unsafe::AsRef<T>(in T source)
+// System.Runtime.CompilerServices.Unsafe::AsRef<T>(void* ptr)
 pub fn intrinsic_unsafe_as_ref_any<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -364,7 +320,7 @@ pub fn intrinsic_unsafe_as_ref_any<'gc, 'm: 'gc>(
     intrinsic_unsafe_as(gc, stack, method, generics)
 }
 
-/// System.Runtime.CompilerServices.Unsafe::AsRef<T>(void* ptr)
+// System.Runtime.CompilerServices.Unsafe::AsRef<T>(void* ptr)
 pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -464,13 +420,8 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
-/// System.Runtime.CompilerServices.Unsafe::SizeOf<T>()
-pub fn intrinsic_unsafe_size_of<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    method: MethodDescription,
-    generics: &GenericLookup,
-) -> StepResult {
+// System.Runtime.CompilerServices.Unsafe::SizeOf<T>()
+define_intrinsic!(intrinsic_unsafe_size_of(gc, stack, method, generics) () {
     let ctx = ResolutionContext::for_method(
         method,
         stack.loader(),
@@ -480,10 +431,9 @@ pub fn intrinsic_unsafe_size_of<'gc, 'm: 'gc>(
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
     vm_push!(stack, gc, Int32(layout.size() as i32));
-    StepResult::InstructionStepped
-}
+});
 
-/// System.Runtime.CompilerServices.Unsafe::ByteOffset<T>(ref T origin, ref T target)
+// System.Runtime.CompilerServices.Unsafe::ByteOffset<T>(ref T origin, ref T target)
 pub fn intrinsic_unsafe_byte_offset<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -527,7 +477,7 @@ fn copy_owner_side_table<'gc>(
     }
 }
 
-/// System.Runtime.CompilerServices.Unsafe::ReadUnaligned<T>(void* ptr)
+// System.Runtime.CompilerServices.Unsafe::ReadUnaligned<T>(void* ptr)
 pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -905,7 +855,7 @@ fn check_read_safety(
     });
 }
 
-/// System.Runtime.CompilerServices.Unsafe::WriteUnaligned<T>(void* ptr, T value)
+// System.Runtime.CompilerServices.Unsafe::WriteUnaligned<T>(void* ptr, T value)
 pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,

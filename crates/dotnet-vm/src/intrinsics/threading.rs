@@ -168,7 +168,7 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let success_flag = vm_pop!(stack, gc).as_ptr();
-    pop_args!(stack, gc, [Int32(timeout_ms), ObjectRef(obj_ref)]);
+    pop_args!(stack, gc, [ObjectRef(obj_ref), Int32(timeout_ms)]);
 
     if obj_ref.0.is_some() {
         let thread_id = stack.thread_id.get();
@@ -208,7 +208,7 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [Int32(timeout_ms), ObjectRef(obj_ref)]);
+    pop_args!(stack, gc, [ObjectRef(obj_ref), Int32(timeout_ms)]);
 
     if obj_ref.0.is_some() {
         let thread_id = stack.thread_id.get();

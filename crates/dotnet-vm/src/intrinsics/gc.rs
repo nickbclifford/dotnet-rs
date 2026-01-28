@@ -13,7 +13,7 @@ pub fn intrinsic_argument_null_exception_throw_if_null<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(_param_name_obj), ObjectRef(target)]);
+    pop_args!(stack, gc, [ObjectRef(target), ObjectRef(_param_name_obj)]);
     if target.0.is_none() {
         return stack.throw_by_name(gc, "System.ArgumentNullException");
     }
@@ -117,7 +117,7 @@ pub fn intrinsic_gc_collect_2<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [Int32(_mode), Int32(_generation)]);
+    pop_args!(stack, gc, [Int32(_generation), Int32(_mode)]);
     stack.heap().needs_full_collect.set(true);
     StepResult::InstructionStepped
 }
@@ -145,7 +145,7 @@ pub fn intrinsic_gchandle_internal_alloc<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [Int32(handle_type), ObjectRef(obj)]);
+    pop_args!(stack, gc, [ObjectRef(obj), Int32(handle_type)]);
 
     let handle_type = GCHandleType::from(handle_type);
     let index = {
@@ -255,7 +255,7 @@ pub fn intrinsic_gchandle_internal_set<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(obj), NativeInt(handle)]);
+    pop_args!(stack, gc, [NativeInt(handle), ObjectRef(obj)]);
     if handle != 0 {
         let index = (handle - 1) as usize;
         let mut handles = stack.heap().gchandles.borrow_mut();

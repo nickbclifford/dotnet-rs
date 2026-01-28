@@ -673,7 +673,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             Some(StepResult::InstructionStepped)
         }
         ("MakeGenericType", 1) => {
-            pop_args!(stack, gc, [ObjectRef(parameters), ObjectRef(target)]);
+            pop_args!(stack, gc, [ObjectRef(target), ObjectRef(parameters)]);
 
             // Check GC safe point before potentially allocating generic type objects
             stack.check_gc_safe_point();
@@ -774,10 +774,10 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
                 stack,
                 gc,
                 [
-                    ManagedPtr(ctor_is_public),
-                    ManagedPtr(pfn_ctor),
+                    ManagedPtr(pfn_allocator),
                     ManagedPtr(allocator_first_arg),
-                    ManagedPtr(pfn_allocator)
+                    ManagedPtr(pfn_ctor),
+                    ManagedPtr(ctor_is_public)
                 ]
             );
 
@@ -1239,7 +1239,7 @@ pub fn intrinsic_type_op_equality<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(o2), ObjectRef(o1)]);
+    pop_args!(stack, gc, [ObjectRef(o1), ObjectRef(o2)]);
     vm_push!(stack, gc, Int32((o1 == o2) as i32));
     StepResult::InstructionStepped
 }
@@ -1250,7 +1250,7 @@ pub fn intrinsic_type_op_inequality<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(o2), ObjectRef(o1)]);
+    pop_args!(stack, gc, [ObjectRef(o1), ObjectRef(o2)]);
     vm_push!(stack, gc, Int32((o1 != o2) as i32));
     StepResult::InstructionStepped
 }

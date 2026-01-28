@@ -229,15 +229,15 @@ macro_rules! vm_trace_heap_snapshot {
 /// Pop and validate multiple arguments from the stack in one call.
 ///
 /// This macro simplifies the common pattern of popping multiple arguments
-/// with type validation. Arguments are listed in REVERSE stack order
-/// (i.e., last parameter first, which is how they appear on the stack).
+/// with type validation. Arguments are listed in PARAMETER order
+/// (i.e., first parameter first).
 ///
 /// # Syntax
 /// ```ignore
 /// pop_args!(stack, [
-///     VariantN(nameN),  // last parameter (top of stack)
+///     Variant1(name1),  // first parameter
 ///     ...
-///     Variant1(name1),  // first parameter (bottom of argument block)
+///     VariantN(nameN),  // last parameter
 /// ])
 /// ```
 ///
@@ -245,18 +245,68 @@ macro_rules! vm_trace_heap_snapshot {
 /// ```ignore
 /// // For System.String::Substring(int startIndex, int length)
 /// pop_args!(stack, [
-///     Int32(length),      // popped first (last param)
-///     Int32(start_index)  // popped second (first param)
+///     Int32(start_index), // popped second (first param)
+///     Int32(length)       // popped first (last param)
 /// ]);
 /// ```
 ///
 /// The macro uses vm_expect_stack! internally, so it will panic with a
 /// descriptive message if the stack value doesn't match the expected type.
 #[macro_export]
-macro_rules! pop_args {
-    ($stack:expr, $gc:expr, [ $($variant:ident($name:ident)),+ $(,)? ]) => {
+#[doc(hidden)]
+macro_rules! pop_args_impl {
+    // Base case: input list empty. Accumulator has reversed items.
+    ($stack:expr, $gc:expr, [ $($variant:ident($name:ident)),* $(,)? ], []) => {
         $(
             $crate::vm_expect_stack!(let $variant($name) = $crate::vm_pop!($stack, $gc));
-        )+
+        )*
+    };
+
+    // Recursive: head, rest...
+    ($stack:expr, $gc:expr, [ $($acc:tt)* ], [ $variant:ident($name:ident), $($rest:tt)* ]) => {
+        $crate::pop_args_impl!($stack, $gc, [$variant($name), $($acc)*], [ $($rest)* ])
+    };
+
+    // Recursive: last item (no trailing comma in input list)
+    ($stack:expr, $gc:expr, [ $($acc:tt)* ], [ $variant:ident($name:ident) ]) => {
+        $crate::pop_args_impl!($stack, $gc, [$variant($name), $($acc)*], [])
+    };
+}
+
+#[macro_export]
+macro_rules! pop_args {
+    ($stack:expr, $gc:expr, [ $($args:tt)* ]) => {
+        $crate::pop_args_impl!($stack, $gc, [], [ $($args)* ])
+    };
+}
+
+#[macro_export]
+macro_rules! define_intrinsic {
+    ($name:ident ($gc:ident, $stack:ident) ( $($arg_pat:ident ( $arg_name:ident )),* ) $body:block) => {
+        #[allow(unused_variables)]
+        pub fn $name<'gc, 'm: 'gc>(
+            $gc: dotnet_utils::gc::GCHandle<'gc>,
+            $stack: &mut $crate::CallStack<'gc, 'm>,
+            _method: dotnet_types::members::MethodDescription,
+            _generics: &dotnet_types::generics::GenericLookup,
+        ) -> $crate::StepResult {
+            $crate::pop_args!($stack, $gc, [ $($arg_pat($arg_name)),* ]);
+            $body
+            $crate::StepResult::InstructionStepped
+        }
+    };
+    // Variant for when we need method/generics
+    ($name:ident ($gc:ident, $stack:ident, $method:ident, $generics:ident) ( $($arg_pat:ident ( $arg_name:ident )),* ) $body:block) => {
+        #[allow(unused_variables)]
+        pub fn $name<'gc, 'm: 'gc>(
+            $gc: dotnet_utils::gc::GCHandle<'gc>,
+            $stack: &mut $crate::CallStack<'gc, 'm>,
+            $method: dotnet_types::members::MethodDescription,
+            $generics: &dotnet_types::generics::GenericLookup,
+        ) -> $crate::StepResult {
+            $crate::pop_args!($stack, $gc, [ $($arg_pat($arg_name)),* ]);
+            $body
+            $crate::StepResult::InstructionStepped
+        }
     };
 }

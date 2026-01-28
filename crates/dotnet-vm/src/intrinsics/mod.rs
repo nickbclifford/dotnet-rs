@@ -437,1451 +437,1556 @@ impl IntrinsicRegistry {
     pub fn initialize(loader: &AssemblyLoader, mut tracer: Option<&mut Tracer>) -> Self {
         let mut registry = Self::new();
 
-        macro_rules! register_static {
-            ($type:expr, $name:expr, $params:expr, $handler:path, $reason:expr) => {
-                registry.register_raw_metadata(
-                    $type,
-                    $name,
-                    $params,
-                    IntrinsicMetadata::static_intrinsic(
-                        unsafe {
-                            std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
-                                $handler as fn(_, _, _, _) -> _,
-                            )
-                        },
-                        $reason,
-                    ),
-                    tracer.as_deref_mut(),
-                );
+        macro_rules! register_intrinsics {
+            ($reg:expr, $tr:expr, {
+                $($kind:ident ( $type:expr, $name:expr, $($args:tt)* );)*
+            }) => {
+                $(
+                    register_intrinsics!(@impl $kind, $reg, $tr, $type, $name, $($args)*);
+                )*
             };
-        }
 
-        macro_rules! register_static_filtered {
-            ($type:expr, $name:expr, $params:expr, $handler:path, $filter:path, $reason:expr) => {
-                registry.register_raw_metadata(
-                    $type,
-                    $name,
-                    $params,
-                    IntrinsicMetadata::with_filter(
-                        IntrinsicKind::Static,
-                        unsafe {
-                            std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
-                                $handler as fn(_, _, _, _) -> _,
-                            )
-                        },
-                        $reason,
-                        $filter,
-                    ),
-                    tracer.as_deref_mut(),
-                );
+            (@impl Static, $reg:expr, $tr:expr, $type:expr, $name:expr, $params:expr, $handler:path, $reason:expr$(,)?) => {
+                 $reg.register_raw_metadata(
+                     $type, $name, $params,
+                     IntrinsicMetadata::static_intrinsic(
+                         unsafe { std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>($handler as fn(_, _, _, _) -> _) },
+                         $reason
+                     ),
+                     $tr.as_deref_mut()
+                 );
             };
-        }
 
-        macro_rules! register_virtual {
-            ($type:expr, $name:expr, $params:expr, $handler:path, $reason:expr) => {
-                registry.register_raw_metadata(
-                    $type,
-                    $name,
-                    $params + 1,
-                    IntrinsicMetadata::virtual_override(
-                        unsafe {
-                            std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
-                                $handler as fn(_, _, _, _) -> _,
-                            )
-                        },
-                        $reason,
-                    ),
-                    tracer.as_deref_mut(),
-                );
+            (@impl StaticFiltered, $reg:expr, $tr:expr, $type:expr, $name:expr, $params:expr, $handler:path, $filter:path, $reason:expr$(,)?) => {
+                 $reg.register_raw_metadata(
+                     $type, $name, $params,
+                     IntrinsicMetadata::with_filter(
+                         IntrinsicKind::Static,
+                         unsafe { std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>($handler as fn(_, _, _, _) -> _) },
+                         $reason,
+                         $filter
+                     ),
+                     $tr.as_deref_mut()
+                 );
             };
-        }
 
-        macro_rules! register_intercept {
-            ($type:expr, $name:expr, $params:expr, $handler:path, $reason:expr) => {
-                registry.register_raw_metadata(
-                    $type,
-                    $name,
-                    $params,
-                    IntrinsicMetadata::direct_intercept(
-                        unsafe {
-                            std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>(
-                                $handler as fn(_, _, _, _) -> _,
-                            )
-                        },
-                        $reason,
-                    ),
-                    tracer.as_deref_mut(),
-                );
+            (@impl Virtual, $reg:expr, $tr:expr, $type:expr, $name:expr, $params:expr, $handler:path, $reason:expr$(,)?) => {
+                 $reg.register_raw_metadata(
+                     $type, $name, $params + 1,
+                     IntrinsicMetadata::virtual_override(
+                         unsafe { std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>($handler as fn(_, _, _, _) -> _) },
+                         $reason
+                     ),
+                     $tr.as_deref_mut()
+                 );
             };
-        }
 
-        macro_rules! register_field {
-            ($type:expr, $name:expr, $handler:path) => {
-                registry.register_raw_field(
+            (@impl Intercept, $reg:expr, $tr:expr, $type:expr, $name:expr, $params:expr, $handler:path, $reason:expr$(,)?) => {
+                 $reg.register_raw_metadata(
+                     $type, $name, $params,
+                     IntrinsicMetadata::direct_intercept(
+                         unsafe { std::mem::transmute::<fn(_, _, _, _) -> _, IntrinsicHandler>($handler as fn(_, _, _, _) -> _) },
+                         $reason
+                     ),
+                     $tr.as_deref_mut()
+                 );
+            };
+
+            (@impl Field, $reg:expr, $tr:expr, $type:expr, $name:expr, $handler:path$(,)?) => {
+                $reg.register_raw_field(
                     $type,
                     $name,
                     unsafe { std::mem::transmute::<fn(_, _, _, _, _) -> StepResult, IntrinsicFieldHandler>($handler as fn(_, _, _, _, _) -> StepResult) },
-                    tracer.as_deref_mut()
+                    $tr.as_deref_mut()
                 );
             };
         }
 
-        // Reflection - RuntimeTypeHandle
-        register_static!(
-            "DotnetRs.RuntimeTypeHandle",
-            "GetActivationInfo",
-            5,
-            reflection::runtime_type_handle_intrinsic_call,
-            "Reflection internal activation info"
-        );
-        register_static!(
-            "System.RuntimeTypeHandle",
-            "GetActivationInfo",
-            5,
-            reflection::runtime_type_handle_intrinsic_call,
-            "Reflection internal activation info"
-        );
-        register_static!(
-            "DotnetRs.RuntimeTypeHandle",
-            "ToIntPtr",
-            1,
-            reflection::intrinsic_type_handle_to_int_ptr,
-            "Internal handle conversion"
-        );
-        register_static!(
-            "System.RuntimeTypeHandle",
-            "ToIntPtr",
-            1,
-            reflection::intrinsic_type_handle_to_int_ptr,
-            "Internal handle conversion"
-        );
+        register_intrinsics!(registry, tracer, {
+            // Reflection - RuntimeTypeHandle
+            Static(
+                "DotnetRs.RuntimeTypeHandle",
+                "GetActivationInfo",
+                5,
+                reflection::runtime_type_handle_intrinsic_call,
+                "Reflection internal activation info",
+            );
+            Static(
+                "System.RuntimeTypeHandle",
+                "GetActivationInfo",
+                5,
+                reflection::runtime_type_handle_intrinsic_call,
+                "Reflection internal activation info",
+            );
+            Static(
+                "DotnetRs.RuntimeTypeHandle",
+                "ToIntPtr",
+                1,
+                reflection::intrinsic_type_handle_to_int_ptr,
+                "Internal handle conversion",
+            );
+            Static(
+                "System.RuntimeTypeHandle",
+                "ToIntPtr",
+                1,
+                reflection::intrinsic_type_handle_to_int_ptr,
+                "Internal handle conversion",
+            );
 
-        // Reflection - RuntimeType Virtual Overrides
-        register_virtual!(
-            "System.Type",
-            "get_Name",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "Reflection internal"
-        );
-        register_virtual!(
-            "System.Type",
-            "get_Namespace",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "Reflection internal"
-        );
-        register_virtual!(
-            "System.Type",
-            "get_Assembly",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "Reflection internal"
-        );
-        register_virtual!(
-            "System.Type",
-            "get_BaseType",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "Reflection internal"
-        );
-        register_virtual!(
-            "System.Type",
-            "get_IsGenericType",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "Reflection internal"
-        );
-        register_virtual!(
-            "System.Type",
-            "get_GenericTypeDefinition",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "Reflection internal"
-        );
-        register_virtual!(
-            "System.Type",
-            "GetGenericArguments",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "Reflection internal"
-        );
-        register_virtual!(
-            "System.Type",
-            "get_TypeHandle",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "Reflection internal"
-        );
-        register_virtual!(
-            "System.Type",
-            "MakeGenericType",
-            1,
-            reflection::runtime_type_intrinsic_call,
-            "Reflection internal"
-        );
+            // Reflection - RuntimeType Virtual Overrides
+            Virtual(
+                "System.Type",
+                "get_Name",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "Reflection internal",
+            );
+            Virtual(
+                "System.Type",
+                "get_Namespace",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "Reflection internal",
+            );
+            Virtual(
+                "System.Type",
+                "get_Assembly",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "Reflection internal",
+            );
+            Virtual(
+                "System.Type",
+                "get_BaseType",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "Reflection internal",
+            );
+            Virtual(
+                "System.Type",
+                "get_IsGenericType",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "Reflection internal",
+            );
+            Virtual(
+                "System.Type",
+                "get_GenericTypeDefinition",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "Reflection internal",
+            );
+            Virtual(
+                "System.Type",
+                "GetGenericArguments",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "Reflection internal",
+            );
+            Virtual(
+                "System.Type",
+                "get_TypeHandle",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "Reflection internal",
+            );
+            Virtual(
+                "System.Type",
+                "MakeGenericType",
+                1,
+                reflection::runtime_type_intrinsic_call,
+                "Reflection internal",
+            );
 
-        register_virtual!(
-            "DotnetRs.RuntimeType",
-            "get_Name",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.RuntimeType",
-            "GetName",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.RuntimeType",
-            "get_Namespace",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.RuntimeType",
-            "GetNamespace",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.RuntimeType",
-            "get_Assembly",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.RuntimeType",
-            "GetAssembly",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.RuntimeType",
-            "get_BaseType",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.RuntimeType",
-            "GetBaseType",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.RuntimeType",
-            "get_IsGenericType",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.RuntimeType",
-            "GetIsGenericType",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.RuntimeType",
-            "get_GenericTypeDefinition",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.RuntimeType",
-            "GetGenericTypeDefinition",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.RuntimeType",
-            "get_GenericArguments",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.RuntimeType",
-            "GetGenericArguments",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.RuntimeType",
-            "get_TypeHandle",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.RuntimeType",
-            "GetTypeHandle",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.RuntimeType",
-            "MakeGenericType",
-            1,
-            reflection::runtime_type_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.RuntimeType",
-            "CreateInstanceDefaultCtor",
-            2,
-            reflection::runtime_type_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.RuntimeType",
-            "CreateInstanceCheckThis",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
+            Virtual(
+                "DotnetRs.RuntimeType",
+                "get_Name",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.RuntimeType",
+                "GetName",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.RuntimeType",
+                "get_Namespace",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.RuntimeType",
+                "GetNamespace",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.RuntimeType",
+                "get_Assembly",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.RuntimeType",
+                "GetAssembly",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.RuntimeType",
+                "get_BaseType",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.RuntimeType",
+                "GetBaseType",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.RuntimeType",
+                "get_IsGenericType",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.RuntimeType",
+                "GetIsGenericType",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.RuntimeType",
+                "get_GenericTypeDefinition",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.RuntimeType",
+                "GetGenericTypeDefinition",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.RuntimeType",
+                "get_GenericArguments",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.RuntimeType",
+                "GetGenericArguments",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.RuntimeType",
+                "get_TypeHandle",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.RuntimeType",
+                "GetTypeHandle",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.RuntimeType",
+                "MakeGenericType",
+                1,
+                reflection::runtime_type_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.RuntimeType",
+                "CreateInstanceDefaultCtor",
+                2,
+                reflection::runtime_type_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.RuntimeType",
+                "CreateInstanceCheckThis",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
 
-        register_static!(
-            "System.RuntimeType",
-            "CreateInstanceDefaultCtor",
-            2,
-            reflection::runtime_type_intrinsic_call,
-            "Reflection internal activation"
-        );
-        register_static!(
-            "System.RuntimeType",
-            "CreateInstanceCheckThis",
-            0,
-            reflection::runtime_type_intrinsic_call,
-            "Reflection internal activation"
-        );
+            Static(
+                "System.RuntimeType",
+                "CreateInstanceDefaultCtor",
+                2,
+                reflection::runtime_type_intrinsic_call,
+                "Reflection internal activation",
+            );
+            Static(
+                "System.RuntimeType",
+                "CreateInstanceCheckThis",
+                0,
+                reflection::runtime_type_intrinsic_call,
+                "Reflection internal activation",
+            );
 
-        // Reflection - Other Virtual Overrides
-        register_virtual!(
-            "System.Reflection.MethodInfo",
-            "get_Name",
-            0,
-            reflection::runtime_method_info_intrinsic_call,
-            "Reflection internal"
-        );
-        register_virtual!(
-            "System.Reflection.MethodInfo",
-            "get_DeclaringType",
-            0,
-            reflection::runtime_method_info_intrinsic_call,
-            "Reflection internal"
-        );
-        register_virtual!(
-            "System.Reflection.MethodInfo",
-            "get_MethodHandle",
-            0,
-            reflection::runtime_method_info_intrinsic_call,
-            "Reflection internal"
-        );
-        register_virtual!(
-            "System.Reflection.MethodInfo",
-            "Invoke",
-            5,
-            reflection::runtime_method_info_intrinsic_call,
-            "Reflection internal"
-        );
+            // Reflection - Other Virtual Overrides
+            Virtual(
+                "System.Reflection.MethodInfo",
+                "get_Name",
+                0,
+                reflection::runtime_method_info_intrinsic_call,
+                "Reflection internal",
+            );
+            Virtual(
+                "System.Reflection.MethodInfo",
+                "get_DeclaringType",
+                0,
+                reflection::runtime_method_info_intrinsic_call,
+                "Reflection internal",
+            );
+            Virtual(
+                "System.Reflection.MethodInfo",
+                "get_MethodHandle",
+                0,
+                reflection::runtime_method_info_intrinsic_call,
+                "Reflection internal",
+            );
+            Virtual(
+                "System.Reflection.MethodInfo",
+                "Invoke",
+                5,
+                reflection::runtime_method_info_intrinsic_call,
+                "Reflection internal",
+            );
 
-        register_virtual!(
-            "DotnetRs.MethodInfo",
-            "get_Name",
-            0,
-            reflection::runtime_method_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.MethodInfo",
-            "GetName",
-            0,
-            reflection::runtime_method_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.MethodInfo",
-            "get_DeclaringType",
-            0,
-            reflection::runtime_method_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.MethodInfo",
-            "GetDeclaringType",
-            0,
-            reflection::runtime_method_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.MethodInfo",
-            "get_MethodHandle",
-            0,
-            reflection::runtime_method_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.MethodInfo",
-            "GetMethodHandle",
-            0,
-            reflection::runtime_method_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.MethodInfo",
-            "Invoke",
-            5,
-            reflection::runtime_method_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
+            Virtual(
+                "DotnetRs.MethodInfo",
+                "get_Name",
+                0,
+                reflection::runtime_method_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.MethodInfo",
+                "GetName",
+                0,
+                reflection::runtime_method_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.MethodInfo",
+                "get_DeclaringType",
+                0,
+                reflection::runtime_method_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.MethodInfo",
+                "GetDeclaringType",
+                0,
+                reflection::runtime_method_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.MethodInfo",
+                "get_MethodHandle",
+                0,
+                reflection::runtime_method_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.MethodInfo",
+                "GetMethodHandle",
+                0,
+                reflection::runtime_method_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.MethodInfo",
+                "Invoke",
+                5,
+                reflection::runtime_method_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
 
-        register_virtual!(
-            "System.Reflection.ConstructorInfo",
-            "get_Name",
-            0,
-            reflection::runtime_method_info_intrinsic_call,
-            "Reflection internal"
-        );
-        register_virtual!(
-            "System.Reflection.ConstructorInfo",
-            "get_DeclaringType",
-            0,
-            reflection::runtime_method_info_intrinsic_call,
-            "Reflection internal"
-        );
-        register_virtual!(
-            "System.Reflection.ConstructorInfo",
-            "get_MethodHandle",
-            0,
-            reflection::runtime_method_info_intrinsic_call,
-            "Reflection internal"
-        );
-        register_virtual!(
-            "System.Reflection.ConstructorInfo",
-            "Invoke",
-            5,
-            reflection::runtime_method_info_intrinsic_call,
-            "Reflection internal"
-        );
-        register_virtual!(
-            "System.Reflection.ConstructorInfo",
-            "Invoke",
-            4,
-            reflection::runtime_method_info_intrinsic_call,
-            "Reflection internal"
-        );
+            Virtual(
+                "System.Reflection.ConstructorInfo",
+                "get_Name",
+                0,
+                reflection::runtime_method_info_intrinsic_call,
+                "Reflection internal",
+            );
+            Virtual(
+                "System.Reflection.ConstructorInfo",
+                "get_DeclaringType",
+                0,
+                reflection::runtime_method_info_intrinsic_call,
+                "Reflection internal",
+            );
+            Virtual(
+                "System.Reflection.ConstructorInfo",
+                "get_MethodHandle",
+                0,
+                reflection::runtime_method_info_intrinsic_call,
+                "Reflection internal",
+            );
+            Virtual(
+                "System.Reflection.ConstructorInfo",
+                "Invoke",
+                5,
+                reflection::runtime_method_info_intrinsic_call,
+                "Reflection internal",
+            );
+            Virtual(
+                "System.Reflection.ConstructorInfo",
+                "Invoke",
+                4,
+                reflection::runtime_method_info_intrinsic_call,
+                "Reflection internal",
+            );
 
-        register_virtual!(
-            "DotnetRs.ConstructorInfo",
-            "get_Name",
-            0,
-            reflection::runtime_method_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.ConstructorInfo",
-            "GetName",
-            0,
-            reflection::runtime_method_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.ConstructorInfo",
-            "get_DeclaringType",
-            0,
-            reflection::runtime_method_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.ConstructorInfo",
-            "GetDeclaringType",
-            0,
-            reflection::runtime_method_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.ConstructorInfo",
-            "get_MethodHandle",
-            0,
-            reflection::runtime_method_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.ConstructorInfo",
-            "GetMethodHandle",
-            0,
-            reflection::runtime_method_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.ConstructorInfo",
-            "Invoke",
-            5,
-            reflection::runtime_method_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.ConstructorInfo",
-            "Invoke",
-            4,
-            reflection::runtime_method_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
+            Virtual(
+                "DotnetRs.ConstructorInfo",
+                "get_Name",
+                0,
+                reflection::runtime_method_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.ConstructorInfo",
+                "GetName",
+                0,
+                reflection::runtime_method_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.ConstructorInfo",
+                "get_DeclaringType",
+                0,
+                reflection::runtime_method_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.ConstructorInfo",
+                "GetDeclaringType",
+                0,
+                reflection::runtime_method_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.ConstructorInfo",
+                "get_MethodHandle",
+                0,
+                reflection::runtime_method_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.ConstructorInfo",
+                "GetMethodHandle",
+                0,
+                reflection::runtime_method_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.ConstructorInfo",
+                "Invoke",
+                5,
+                reflection::runtime_method_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.ConstructorInfo",
+                "Invoke",
+                4,
+                reflection::runtime_method_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
 
-        register_virtual!(
-            "System.Reflection.FieldInfo",
-            "get_Name",
-            0,
-            reflection::runtime_field_info_intrinsic_call,
-            "Reflection internal"
-        );
-        register_virtual!(
-            "System.Reflection.FieldInfo",
-            "get_DeclaringType",
-            0,
-            reflection::runtime_field_info_intrinsic_call,
-            "Reflection internal"
-        );
-        register_virtual!(
-            "System.Reflection.FieldInfo",
-            "get_FieldHandle",
-            0,
-            reflection::runtime_field_info_intrinsic_call,
-            "Reflection internal"
-        );
-        register_virtual!(
-            "System.Reflection.FieldInfo",
-            "GetValue",
-            1,
-            reflection::runtime_field_info_intrinsic_call,
-            "Reflection internal"
-        );
-        register_virtual!(
-            "System.Reflection.FieldInfo",
-            "SetValue",
-            2,
-            reflection::runtime_field_info_intrinsic_call,
-            "Reflection internal"
-        );
+            Virtual(
+                "System.Reflection.FieldInfo",
+                "get_Name",
+                0,
+                reflection::runtime_field_info_intrinsic_call,
+                "Reflection internal",
+            );
+            Virtual(
+                "System.Reflection.FieldInfo",
+                "get_DeclaringType",
+                0,
+                reflection::runtime_field_info_intrinsic_call,
+                "Reflection internal",
+            );
+            Virtual(
+                "System.Reflection.FieldInfo",
+                "get_FieldHandle",
+                0,
+                reflection::runtime_field_info_intrinsic_call,
+                "Reflection internal",
+            );
+            Virtual(
+                "System.Reflection.FieldInfo",
+                "GetValue",
+                1,
+                reflection::runtime_field_info_intrinsic_call,
+                "Reflection internal",
+            );
+            Virtual(
+                "System.Reflection.FieldInfo",
+                "SetValue",
+                2,
+                reflection::runtime_field_info_intrinsic_call,
+                "Reflection internal",
+            );
 
-        register_virtual!(
-            "DotnetRs.FieldInfo",
-            "get_Name",
-            0,
-            reflection::runtime_field_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.FieldInfo",
-            "GetName",
-            0,
-            reflection::runtime_field_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.FieldInfo",
-            "get_DeclaringType",
-            0,
-            reflection::runtime_field_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.FieldInfo",
-            "GetDeclaringType",
-            0,
-            reflection::runtime_field_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.FieldInfo",
-            "get_FieldHandle",
-            0,
-            reflection::runtime_field_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.FieldInfo",
-            "GetFieldHandle",
-            0,
-            reflection::runtime_field_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.FieldInfo",
-            "GetValue",
-            1,
-            reflection::runtime_field_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
-        register_virtual!(
-            "DotnetRs.FieldInfo",
-            "SetValue",
-            2,
-            reflection::runtime_field_info_intrinsic_call,
-            "VM-specific implementation overriding BCL reflection types"
-        );
+            Virtual(
+                "DotnetRs.FieldInfo",
+                "get_Name",
+                0,
+                reflection::runtime_field_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.FieldInfo",
+                "GetName",
+                0,
+                reflection::runtime_field_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.FieldInfo",
+                "get_DeclaringType",
+                0,
+                reflection::runtime_field_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.FieldInfo",
+                "GetDeclaringType",
+                0,
+                reflection::runtime_field_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.FieldInfo",
+                "get_FieldHandle",
+                0,
+                reflection::runtime_field_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.FieldInfo",
+                "GetFieldHandle",
+                0,
+                reflection::runtime_field_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.FieldInfo",
+                "GetValue",
+                1,
+                reflection::runtime_field_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
+            Virtual(
+                "DotnetRs.FieldInfo",
+                "SetValue",
+                2,
+                reflection::runtime_field_info_intrinsic_call,
+                "VM-specific implementation overriding BCL reflection types",
+            );
 
-        // System.GC
-        register_static!(
-            "System.GC",
-            "KeepAlive",
-            1,
-            gc::intrinsic_gc_keep_alive,
-            "Managed GC control"
-        );
-        register_static!(
-            "System.GC",
-            "SuppressFinalize",
-            1,
-            gc::intrinsic_gc_suppress_finalize,
-            "Managed GC control"
-        );
-        register_static!(
-            "System.GC",
-            "ReRegisterForFinalize",
-            1,
-            gc::intrinsic_gc_reregister_for_finalize,
-            "Managed GC control"
-        );
-        register_static!(
-            "System.GC",
-            "Collect",
-            0,
-            gc::intrinsic_gc_collect_0,
-            "Managed GC control"
-        );
-        register_static!(
-            "System.GC",
-            "Collect",
-            1,
-            gc::intrinsic_gc_collect_1,
-            "Managed GC control"
-        );
-        register_static!(
-            "System.GC",
-            "Collect",
-            2,
-            gc::intrinsic_gc_collect_2,
-            "Managed GC control"
-        );
-        register_static!(
-            "System.GC",
-            "WaitForPendingFinalizers",
-            0,
-            gc::intrinsic_gc_wait_for_pending_finalizers,
-            "Managed GC control"
-        );
+            // System.GC
+            Static(
+                "System.GC",
+                "KeepAlive",
+                1,
+                gc::intrinsic_gc_keep_alive,
+                "Managed GC control",
+            );
+            Static(
+                "System.GC",
+                "SuppressFinalize",
+                1,
+                gc::intrinsic_gc_suppress_finalize,
+                "Managed GC control",
+            );
+            Static(
+                "System.GC",
+                "ReRegisterForFinalize",
+                1,
+                gc::intrinsic_gc_reregister_for_finalize,
+                "Managed GC control",
+            );
+            Static(
+                "System.GC",
+                "Collect",
+                0,
+                gc::intrinsic_gc_collect_0,
+                "Managed GC control",
+            );
+            Static(
+                "System.GC",
+                "Collect",
+                1,
+                gc::intrinsic_gc_collect_1,
+                "Managed GC control",
+            );
+            Static(
+                "System.GC",
+                "Collect",
+                2,
+                gc::intrinsic_gc_collect_2,
+                "Managed GC control",
+            );
+            Static(
+                "System.GC",
+                "WaitForPendingFinalizers",
+                0,
+                gc::intrinsic_gc_wait_for_pending_finalizers,
+                "Managed GC control",
+            );
 
-        // GCHandle
-        register_static!(
-            "System.Runtime.InteropServices.GCHandle",
-            "InternalAlloc",
-            2,
-            gc::intrinsic_gchandle_internal_alloc,
-            "Direct GC handle manipulation"
-        );
-        register_static!(
-            "System.Runtime.InteropServices.GCHandle",
-            "InternalFree",
-            1,
-            gc::intrinsic_gchandle_internal_free,
-            "Direct GC handle manipulation"
-        );
-        register_static!(
-            "System.Runtime.InteropServices.GCHandle",
-            "InternalGet",
-            1,
-            gc::intrinsic_gchandle_internal_get,
-            "Direct GC handle manipulation"
-        );
-        register_static!(
-            "System.Runtime.InteropServices.GCHandle",
-            "InternalSet",
-            2,
-            gc::intrinsic_gchandle_internal_set,
-            "Direct GC handle manipulation"
-        );
-        register_static!(
-            "System.Runtime.InteropServices.GCHandle",
-            "InternalAddrOfPinnedObject",
-            1,
-            gc::intrinsic_gchandle_internal_addr_of_pinned_object,
-            "Direct GC handle manipulation"
-        );
+            // GCHandle
+            Static(
+                "System.Runtime.InteropServices.GCHandle",
+                "InternalAlloc",
+                2,
+                gc::intrinsic_gchandle_internal_alloc,
+                "Direct GC handle manipulation",
+            );
+            Static(
+                "System.Runtime.InteropServices.GCHandle",
+                "InternalFree",
+                1,
+                gc::intrinsic_gchandle_internal_free,
+                "Direct GC handle manipulation",
+            );
+            Static(
+                "System.Runtime.InteropServices.GCHandle",
+                "InternalGet",
+                1,
+                gc::intrinsic_gchandle_internal_get,
+                "Direct GC handle manipulation",
+            );
+            Static(
+                "System.Runtime.InteropServices.GCHandle",
+                "InternalSet",
+                2,
+                gc::intrinsic_gchandle_internal_set,
+                "Direct GC handle manipulation",
+            );
+            Static(
+                "System.Runtime.InteropServices.GCHandle",
+                "InternalAddrOfPinnedObject",
+                1,
+                gc::intrinsic_gchandle_internal_addr_of_pinned_object,
+                "Direct GC handle manipulation",
+            );
 
-        // Environment & Exceptions
-        register_static!(
-            "System.Environment",
-            "GetEnvironmentVariableCore",
-            1,
-            gc::intrinsic_environment_get_variable_core,
-            "VM environment integration"
-        );
-        register_static!(
-            "System.ArgumentNullException",
-            "ThrowIfNull",
-            1,
-            gc::intrinsic_argument_null_exception_throw_if_null,
-            "Fast-path null check"
-        );
+            // Environment & Exceptions
+            Static(
+                "System.Environment",
+                "GetEnvironmentVariableCore",
+                1,
+                gc::intrinsic_environment_get_variable_core,
+                "VM environment integration",
+            );
+            Static(
+                "System.ArgumentNullException",
+                "ThrowIfNull",
+                1,
+                gc::intrinsic_argument_null_exception_throw_if_null,
+                "Fast-path null check",
+            );
 
-        // Threading
-        register_static!(
-            "System.Threading.Monitor",
-            "Exit",
-            1,
-            threading::intrinsic_monitor_exit,
-            "VM-managed object locking"
-        );
-        register_static!(
-            "System.Threading.Monitor",
-            "ReliableEnter",
-            2,
-            threading::intrinsic_monitor_reliable_enter,
-            "VM-managed object locking"
-        );
-        register_static!(
-            "System.Threading.Monitor",
-            "TryEnter_FastPath",
-            2,
-            threading::intrinsic_monitor_try_enter_fast_path,
-            "VM-managed object locking"
-        );
-        register_static!(
-            "System.Threading.Monitor",
-            "TryEnter",
-            2,
-            threading::intrinsic_monitor_try_enter_timeout,
-            "VM-managed object locking"
-        );
-        register_static!(
-            "System.Threading.Monitor",
-            "TryEnter",
-            3,
-            threading::intrinsic_monitor_try_enter_timeout_ref,
-            "VM-managed object locking"
-        );
-        register_static!(
-            "System.Threading.Interlocked",
-            "CompareExchange",
-            3,
-            threading::intrinsic_interlocked_compare_exchange,
-            "Atomic operations"
-        );
-        register_static!(
-            "System.Threading.Volatile",
-            "Read",
-            1,
-            threading::intrinsic_volatile_read,
-            "Memory barrier operations"
-        );
-        register_static!(
-            "System.Threading.Volatile",
-            "Write",
-            2,
-            threading::intrinsic_volatile_write,
-            "Memory barrier operations"
-        );
+            // Threading
+            Static(
+                "System.Threading.Monitor",
+                "Exit",
+                1,
+                threading::intrinsic_monitor_exit,
+                "VM-managed object locking",
+            );
+            Static(
+                "System.Threading.Monitor",
+                "ReliableEnter",
+                2,
+                threading::intrinsic_monitor_reliable_enter,
+                "VM-managed object locking",
+            );
+            Static(
+                "System.Threading.Monitor",
+                "TryEnter_FastPath",
+                2,
+                threading::intrinsic_monitor_try_enter_fast_path,
+                "VM-managed object locking",
+            );
+            Static(
+                "System.Threading.Monitor",
+                "TryEnter",
+                2,
+                threading::intrinsic_monitor_try_enter_timeout,
+                "VM-managed object locking",
+            );
+            Static(
+                "System.Threading.Monitor",
+                "TryEnter",
+                3,
+                threading::intrinsic_monitor_try_enter_timeout_ref,
+                "VM-managed object locking",
+            );
+            Static(
+                "System.Threading.Interlocked",
+                "CompareExchange",
+                3,
+                threading::intrinsic_interlocked_compare_exchange,
+                "Atomic operations",
+            );
+            Static(
+                "System.Threading.Volatile",
+                "Read",
+                1,
+                threading::intrinsic_volatile_read,
+                "Memory barrier operations",
+            );
+            Static(
+                "System.Threading.Volatile",
+                "Write",
+                2,
+                threading::intrinsic_volatile_write,
+                "Memory barrier operations",
+            );
 
-        // String - Direct Intercepts
-        register_intercept!(
-            "System.String",
-            "get_Length",
-            1,
-            string_ops::intrinsic_string_get_length,
-            "VM internal string representation differs from BCL UTF-16 layout"
-        );
-        register_intercept!(
-            "System.String",
-            "get_Chars",
-            2,
-            string_ops::intrinsic_string_get_chars,
-            "VM internal string representation differs from BCL UTF-16 layout"
-        );
-        register_intercept!(
-            "System.String",
-            "FastAllocateString",
-            1,
-            string_ops::intrinsic_string_fast_allocate_string,
-            "VM internal string representation differs from BCL UTF-16 layout"
-        );
-        register_intercept!(
-            "System.String",
-            "FastAllocateString",
-            2,
-            string_ops::intrinsic_string_fast_allocate_string,
-            "VM internal string representation differs from BCL UTF-16 layout"
-        );
-        register_intercept!(
-            "System.String",
-            "GetRawStringData",
-            1,
-            string_ops::intrinsic_string_get_raw_data,
-            "VM internal string representation differs from BCL UTF-16 layout"
-        );
-        register_intercept!(
-            "System.String",
-            "GetPinnableReference",
-            1,
-            string_ops::intrinsic_string_get_raw_data,
-            "VM internal string representation differs from BCL UTF-16 layout"
-        );
+            // String - Direct Intercepts
+            Intercept(
+                "System.String",
+                "get_Length",
+                1,
+                string_ops::intrinsic_string_get_length,
+                "VM internal string representation differs from BCL UTF-16 layout",
+            );
+            Intercept(
+                "System.String",
+                "get_Chars",
+                2,
+                string_ops::intrinsic_string_get_chars,
+                "VM internal string representation differs from BCL UTF-16 layout",
+            );
+            Intercept(
+                "System.String",
+                "FastAllocateString",
+                1,
+                string_ops::intrinsic_string_fast_allocate_string,
+                "VM internal string representation differs from BCL UTF-16 layout",
+            );
+            Intercept(
+                "System.String",
+                "FastAllocateString",
+                2,
+                string_ops::intrinsic_string_fast_allocate_string,
+                "VM internal string representation differs from BCL UTF-16 layout",
+            );
+            Intercept(
+                "System.String",
+                "GetRawStringData",
+                1,
+                string_ops::intrinsic_string_get_raw_data,
+                "VM internal string representation differs from BCL UTF-16 layout",
+            );
+            Intercept(
+                "System.String",
+                "GetPinnableReference",
+                1,
+                string_ops::intrinsic_string_get_raw_data,
+                "VM internal string representation differs from BCL UTF-16 layout",
+            );
 
-        // String - Performance Optimizations
-        register_static!(
-            "System.String",
-            "Equals",
-            2,
-            string_ops::intrinsic_string_equals,
-            "Performance-optimized string operation"
-        );
-        register_static!(
-            "System.String",
-            "Equals",
-            2,
-            string_ops::intrinsic_string_equals,
-            "Performance-optimized string operation"
-        );
-        register_static!(
-            "System.String",
-            "CopyStringContent",
-            3,
-            string_ops::intrinsic_string_copy_string_content,
-            "Performance-optimized string operation"
-        );
-        register_static!(
-            "System.String",
-            "Concat",
-            3,
-            string_ops::intrinsic_string_concat_three_spans,
-            "Performance-optimized string operation"
-        );
-        register_static!(
-            "System.String",
-            "GetHashCodeOrdinalIgnoreCase",
-            1,
-            string_ops::intrinsic_string_get_hash_code_ordinal_ignore_case,
-            "Performance-optimized string operation"
-        );
-        register_static!(
-            "System.String",
-            "IsNullOrWhiteSpace",
-            1,
-            string_ops::intrinsic_string_is_null_or_white_space,
-            "Performance-optimized string operation"
-        );
-        register_static!(
-            "System.String",
-            "IndexOf",
-            2,
-            string_ops::intrinsic_string_index_of,
-            "Performance-optimized string operation"
-        );
-        register_static!(
-            "System.String",
-            "IndexOf",
-            3,
-            string_ops::intrinsic_string_index_of,
-            "Performance-optimized string operation"
-        );
-        register_static!(
-            "System.String",
-            "Substring",
-            2,
-            string_ops::intrinsic_string_substring,
-            "Performance-optimized string operation"
-        );
-        register_static!(
-            "System.String",
-            "Substring",
-            3,
-            string_ops::intrinsic_string_substring,
-            "Performance-optimized string operation"
-        );
-        register_static!(
-            "System.String",
-            "InternalSubString",
-            3,
-            string_ops::intrinsic_string_substring,
-            "Performance-optimized string operation"
-        );
-        register_static!(
-            "System.String",
-            "IsNullOrEmpty",
-            1,
-            string_ops::intrinsic_string_is_null_or_empty,
-            "Performance-optimized string operation"
-        );
-        register_static!(
-            "System.String",
-            "op_Implicit",
-            1,
-            span::intrinsic_as_span,
-            "Performance-optimized string operation"
-        );
+            // String - Performance Optimizations
+            Static(
+                "System.String",
+                "Equals",
+                2,
+                string_ops::intrinsic_string_equals,
+                "Performance-optimized string operation",
+            );
+            Static(
+                "System.String",
+                "Equals",
+                2,
+                string_ops::intrinsic_string_equals,
+                "Performance-optimized string operation",
+            );
+            Static(
+                "System.String",
+                "CopyStringContent",
+                3,
+                string_ops::intrinsic_string_copy_string_content,
+                "Performance-optimized string operation",
+            );
+            Static(
+                "System.String",
+                "Concat",
+                3,
+                string_ops::intrinsic_string_concat_three_spans,
+                "Performance-optimized string operation",
+            );
+            Static(
+                "System.String",
+                "GetHashCodeOrdinalIgnoreCase",
+                1,
+                string_ops::intrinsic_string_get_hash_code_ordinal_ignore_case,
+                "Performance-optimized string operation",
+            );
+            Static(
+                "System.String",
+                "IsNullOrWhiteSpace",
+                1,
+                string_ops::intrinsic_string_is_null_or_white_space,
+                "Performance-optimized string operation",
+            );
+            Static(
+                "System.String",
+                "IndexOf",
+                2,
+                string_ops::intrinsic_string_index_of,
+                "Performance-optimized string operation",
+            );
+            Static(
+                "System.String",
+                "IndexOf",
+                3,
+                string_ops::intrinsic_string_index_of,
+                "Performance-optimized string operation",
+            );
+            Static(
+                "System.String",
+                "Substring",
+                2,
+                string_ops::intrinsic_string_substring,
+                "Performance-optimized string operation",
+            );
+            Static(
+                "System.String",
+                "Substring",
+                3,
+                string_ops::intrinsic_string_substring,
+                "Performance-optimized string operation",
+            );
+            Static(
+                "System.String",
+                "InternalSubString",
+                3,
+                string_ops::intrinsic_string_substring,
+                "Performance-optimized string operation",
+            );
+            Static(
+                "System.String",
+                "IsNullOrEmpty",
+                1,
+                string_ops::intrinsic_string_is_null_or_empty,
+                "Performance-optimized string operation",
+            );
+            Static(
+                "System.String",
+                "op_Implicit",
+                1,
+                span::intrinsic_as_span,
+                "Performance-optimized string operation",
+            );
 
-        // Marshal & Buffer
-        register_static!(
-            "System.Runtime.InteropServices.Marshal",
-            "GetLastPInvokeError",
-            0,
-            unsafe_ops::intrinsic_marshal_get_last_pinvoke_error,
-            "P/Invoke error handling"
-        );
-        register_static!(
-            "System.Runtime.InteropServices.Marshal",
-            "SetLastPInvokeError",
-            1,
-            unsafe_ops::intrinsic_marshal_set_last_pinvoke_error,
-            "P/Invoke error handling"
-        );
-        register_static!(
-            "System.Runtime.InteropServices.Marshal",
-            "SizeOf",
-            0,
-            unsafe_ops::intrinsic_marshal_size_of,
-            "VM-managed layout info"
-        );
-        register_static!(
-            "System.Runtime.InteropServices.Marshal",
-            "SizeOf",
-            1,
-            unsafe_ops::intrinsic_marshal_size_of,
-            "VM-managed layout info"
-        );
-        register_static!(
-            "System.Runtime.InteropServices.Marshal",
-            "OffsetOf",
-            1,
-            unsafe_ops::intrinsic_marshal_offset_of,
-            "VM-managed layout info"
-        );
-        register_static!(
-            "System.Runtime.InteropServices.Marshal",
-            "OffsetOf",
-            2,
-            unsafe_ops::intrinsic_marshal_offset_of,
-            "VM-managed layout info"
-        );
-        register_intercept!(
-            "System.Buffer",
-            "Memmove",
-            3,
-            unsafe_ops::intrinsic_buffer_memmove,
-            "Memory operations must be GC-safe and respect VM memory layout"
-        );
-        register_intercept!(
-            "System.Runtime.InteropServices.MemoryMarshal",
-            "GetArrayDataReference",
-            1,
-            unsafe_ops::intrinsic_memory_marshal_get_array_data_reference,
-            "Array internal representation differs from BCL, VM-specific layout"
-        );
+            // Marshal & Buffer
+            Static(
+                "System.Runtime.InteropServices.Marshal",
+                "GetLastPInvokeError",
+                0,
+                unsafe_ops::intrinsic_marshal_get_last_pinvoke_error,
+                "P/Invoke error handling",
+            );
+            Static(
+                "System.Runtime.InteropServices.Marshal",
+                "SetLastPInvokeError",
+                1,
+                unsafe_ops::intrinsic_marshal_set_last_pinvoke_error,
+                "P/Invoke error handling",
+            );
+            Static(
+                "System.Runtime.InteropServices.Marshal",
+                "SizeOf",
+                0,
+                unsafe_ops::intrinsic_marshal_size_of,
+                "VM-managed layout info",
+            );
+            Static(
+                "System.Runtime.InteropServices.Marshal",
+                "SizeOf",
+                1,
+                unsafe_ops::intrinsic_marshal_size_of,
+                "VM-managed layout info",
+            );
+            Static(
+                "System.Runtime.InteropServices.Marshal",
+                "OffsetOf",
+                1,
+                unsafe_ops::intrinsic_marshal_offset_of,
+                "VM-managed layout info",
+            );
+            Static(
+                "System.Runtime.InteropServices.Marshal",
+                "OffsetOf",
+                2,
+                unsafe_ops::intrinsic_marshal_offset_of,
+                "VM-managed layout info",
+            );
+            Intercept(
+                "System.Buffer",
+                "Memmove",
+                3,
+                unsafe_ops::intrinsic_buffer_memmove,
+                "Memory operations must be GC-safe and respect VM memory layout",
+            );
+            Intercept(
+                "System.Runtime.InteropServices.MemoryMarshal",
+                "GetArrayDataReference",
+                1,
+                unsafe_ops::intrinsic_memory_marshal_get_array_data_reference,
+                "Array internal representation differs from BCL, VM-specific layout",
+            );
 
-        // RuntimeHelpers
-        register_static!(
-            "System.Runtime.CompilerServices.RuntimeHelpers",
-            "GetMethodTable",
-            1,
-            reflection::intrinsic_runtime_helpers_get_method_table,
-            "Internal reflection helper"
-        );
-        register_static!(
-            "System.Runtime.CompilerServices.RuntimeHelpers",
-            "CreateSpan",
-            2,
-            span::intrinsic_runtime_helpers_create_span,
-            "Internal span factory"
-        );
-        register_static!(
-            "System.Runtime.CompilerServices.RuntimeHelpers",
-            "IsBitwiseEquatable",
-            0,
-            reflection::intrinsic_runtime_helpers_is_bitwise_equatable,
-            "Internal reflection helper"
-        );
-        register_static!(
-            "System.Runtime.CompilerServices.RuntimeHelpers",
-            "IsReferenceOrContainsReferences",
-            0,
-            reflection::intrinsic_runtime_helpers_is_reference_or_contains_references,
-            "Internal reflection helper"
-        );
-        register_static!(
-            "System.Runtime.CompilerServices.RuntimeHelpers",
-            "RunClassConstructor",
-            1,
-            reflection::intrinsic_runtime_helpers_run_class_constructor,
-            "Internal reflection helper"
-        );
-        register_static!(
-            "System.Runtime.CompilerServices.RuntimeHelpers",
-            "GetSpanDataFrom",
-            3,
-            span::intrinsic_runtime_helpers_get_span_data_from,
-            "Internal span support"
-        );
+            // RuntimeHelpers
+            Static(
+                "System.Runtime.CompilerServices.RuntimeHelpers",
+                "GetMethodTable",
+                1,
+                reflection::intrinsic_runtime_helpers_get_method_table,
+                "Internal reflection helper",
+            );
+            Static(
+                "System.Runtime.CompilerServices.RuntimeHelpers",
+                "CreateSpan",
+                2,
+                span::intrinsic_runtime_helpers_create_span,
+                "Internal span factory",
+            );
+            Static(
+                "System.Runtime.CompilerServices.RuntimeHelpers",
+                "IsBitwiseEquatable",
+                0,
+                reflection::intrinsic_runtime_helpers_is_bitwise_equatable,
+                "Internal reflection helper",
+            );
+            Static(
+                "System.Runtime.CompilerServices.RuntimeHelpers",
+                "IsReferenceOrContainsReferences",
+                0,
+                reflection::intrinsic_runtime_helpers_is_reference_or_contains_references,
+                "Internal reflection helper",
+            );
+            Static(
+                "System.Runtime.CompilerServices.RuntimeHelpers",
+                "RunClassConstructor",
+                1,
+                reflection::intrinsic_runtime_helpers_run_class_constructor,
+                "Internal reflection helper",
+            );
+            Static(
+                "System.Runtime.CompilerServices.RuntimeHelpers",
+                "GetSpanDataFrom",
+                3,
+                span::intrinsic_runtime_helpers_get_span_data_from,
+                "Internal span support",
+            );
 
-        // MemoryExtensions & Span
-        register_static!(
-            "System.MemoryExtensions",
-            "Equals",
-            3,
-            span::intrinsic_memory_extensions_equals_span_char,
-            "Performance-optimized span comparison"
-        );
-        register_static!(
-            "System.MemoryExtensions",
-            "AsSpan",
-            1,
-            span::intrinsic_as_span,
-            "Performance-optimized span conversion"
-        );
-        register_static!(
-            "System.MemoryExtensions",
-            "AsSpan",
-            2,
-            span::intrinsic_as_span,
-            "Performance-optimized span conversion"
-        );
-        register_static!(
-            "System.MemoryExtensions",
-            "AsSpan",
-            3,
-            span::intrinsic_as_span,
-            "Performance-optimized span conversion"
-        );
-        register_static!(
-            "DotnetRs.Internal",
-            "GetArrayData",
-            1,
-            span::intrinsic_internal_get_array_data,
-            "Internal array support"
-        );
+            // MemoryExtensions & Span
+            Static(
+                "System.MemoryExtensions",
+                "Equals",
+                3,
+                span::intrinsic_memory_extensions_equals_span_char,
+                "Performance-optimized span comparison",
+            );
+            Static(
+                "System.MemoryExtensions",
+                "AsSpan",
+                1,
+                span::intrinsic_as_span,
+                "Performance-optimized span conversion",
+            );
+            Static(
+                "System.MemoryExtensions",
+                "AsSpan",
+                2,
+                span::intrinsic_as_span,
+                "Performance-optimized span conversion",
+            );
+            Static(
+                "System.MemoryExtensions",
+                "AsSpan",
+                3,
+                span::intrinsic_as_span,
+                "Performance-optimized span conversion",
+            );
+            Static(
+                "DotnetRs.Internal",
+                "GetArrayData",
+                1,
+                span::intrinsic_internal_get_array_data,
+                "Internal array support",
+            );
 
-        // Unsafe - Direct Intercepts
-        register_intercept!(
-            "System.Runtime.CompilerServices.Unsafe",
-            "AsPointer",
-            1,
-            unsafe_ops::intrinsic_unsafe_as_pointer,
-            "Direct memory access must respect VM memory management and GC"
-        );
-        register_intercept!(
-            "System.Runtime.CompilerServices.Unsafe",
-            "Add",
-            2,
-            unsafe_ops::intrinsic_unsafe_add,
-            "Direct memory access must respect VM memory management and GC"
-        );
-        register_intercept!(
-            "System.Runtime.CompilerServices.Unsafe",
-            "AreSame",
-            2,
-            unsafe_ops::intrinsic_unsafe_are_same,
-            "Direct memory access must respect VM memory management and GC"
-        );
-        register_intercept!(
-            "System.Runtime.CompilerServices.Unsafe",
-            "As",
-            1,
-            unsafe_ops::intrinsic_unsafe_as,
-            "Direct memory access must respect VM memory management and GC"
-        );
-        register_intercept!(
-            "System.Runtime.CompilerServices.Unsafe",
-            "As",
-            2,
-            unsafe_ops::intrinsic_unsafe_as_generic,
-            "Direct memory access must respect VM memory management and GC"
-        );
-        register_intercept!(
-            "System.Runtime.CompilerServices.Unsafe",
-            "AsRef",
-            1,
-            unsafe_ops::intrinsic_unsafe_as_ref_any,
-            "Direct memory access must respect VM memory management and GC"
-        );
-        register_intercept!(
-            "System.Runtime.CompilerServices.Unsafe",
-            "SizeOf",
-            0,
-            unsafe_ops::intrinsic_unsafe_size_of,
-            "Direct memory access must respect VM memory management and GC"
-        );
-        register_intercept!(
-            "System.Runtime.CompilerServices.Unsafe",
-            "ByteOffset",
-            2,
-            unsafe_ops::intrinsic_unsafe_byte_offset,
-            "Direct memory access must respect VM memory management and GC"
-        );
-        register_intercept!(
-            "System.Runtime.CompilerServices.Unsafe",
-            "AddByteOffset",
-            2,
-            unsafe_ops::intrinsic_unsafe_add_byte_offset,
-            "Direct memory access must respect VM memory management and GC"
-        );
-        register_intercept!(
-            "System.Runtime.CompilerServices.Unsafe",
-            "ReadUnaligned",
-            1,
-            unsafe_ops::intrinsic_unsafe_read_unaligned,
-            "Direct memory access must respect VM memory management and GC"
-        );
-        register_intercept!(
-            "System.Runtime.CompilerServices.Unsafe",
-            "WriteUnaligned",
-            2,
-            unsafe_ops::intrinsic_unsafe_write_unaligned,
-            "Direct memory access must respect VM memory management and GC"
-        );
+            // Unsafe - Direct Intercepts
+            Intercept(
+                "System.Runtime.CompilerServices.Unsafe",
+                "AsPointer",
+                1,
+                unsafe_ops::intrinsic_unsafe_as_pointer,
+                "Direct memory access must respect VM memory management and GC",
+            );
+            Intercept(
+                "System.Runtime.CompilerServices.Unsafe",
+                "Add",
+                2,
+                unsafe_ops::intrinsic_unsafe_add,
+                "Direct memory access must respect VM memory management and GC",
+            );
+            Intercept(
+                "System.Runtime.CompilerServices.Unsafe",
+                "AreSame",
+                2,
+                unsafe_ops::intrinsic_unsafe_are_same,
+                "Direct memory access must respect VM memory management and GC",
+            );
+            Intercept(
+                "System.Runtime.CompilerServices.Unsafe",
+                "As",
+                1,
+                unsafe_ops::intrinsic_unsafe_as,
+                "Direct memory access must respect VM memory management and GC",
+            );
+            Intercept(
+                "System.Runtime.CompilerServices.Unsafe",
+                "As",
+                2,
+                unsafe_ops::intrinsic_unsafe_as_generic,
+                "Direct memory access must respect VM memory management and GC",
+            );
+            Intercept(
+                "System.Runtime.CompilerServices.Unsafe",
+                "AsRef",
+                1,
+                unsafe_ops::intrinsic_unsafe_as_ref_any,
+                "Direct memory access must respect VM memory management and GC",
+            );
+            Intercept(
+                "System.Runtime.CompilerServices.Unsafe",
+                "SizeOf",
+                0,
+                unsafe_ops::intrinsic_unsafe_size_of,
+                "Direct memory access must respect VM memory management and GC",
+            );
+            Intercept(
+                "System.Runtime.CompilerServices.Unsafe",
+                "ByteOffset",
+                2,
+                unsafe_ops::intrinsic_unsafe_byte_offset,
+                "Direct memory access must respect VM memory management and GC",
+            );
+            Intercept(
+                "System.Runtime.CompilerServices.Unsafe",
+                "AddByteOffset",
+                2,
+                unsafe_ops::intrinsic_unsafe_add_byte_offset,
+                "Direct memory access must respect VM memory management and GC",
+            );
+            Intercept(
+                "System.Runtime.CompilerServices.Unsafe",
+                "ReadUnaligned",
+                1,
+                unsafe_ops::intrinsic_unsafe_read_unaligned,
+                "Direct memory access must respect VM memory management and GC",
+            );
+            Intercept(
+                "System.Runtime.CompilerServices.Unsafe",
+                "WriteUnaligned",
+                2,
+                unsafe_ops::intrinsic_unsafe_write_unaligned,
+                "Direct memory access must respect VM memory management and GC",
+            );
 
-        // Vectors & Numeric
-        register_static!(
-            "System.Runtime.Intrinsics.Vector128",
-            "get_IsHardwareAccelerated",
-            0,
-            math::intrinsic_vector_is_hardware_accelerated,
-            "Performance optimization"
-        );
-        register_static!(
-            "System.Runtime.Intrinsics.Vector256",
-            "get_IsHardwareAccelerated",
-            0,
-            math::intrinsic_vector_is_hardware_accelerated,
-            "Performance optimization"
-        );
-        register_static!(
-            "System.Runtime.Intrinsics.Vector512",
-            "get_IsHardwareAccelerated",
-            0,
-            math::intrinsic_vector_is_hardware_accelerated,
-            "Performance optimization"
-        );
-        register_static!(
-            "System.Numerics.Vector",
-            "get_IsHardwareAccelerated",
-            0,
-            math::intrinsic_vector_is_hardware_accelerated,
-            "Performance optimization"
-        );
+            // Vectors & Numeric
+            Static(
+                "System.Runtime.Intrinsics.Vector128",
+                "get_IsHardwareAccelerated",
+                0,
+                math::intrinsic_vector_is_hardware_accelerated,
+                "Performance optimization",
+            );
+            Static(
+                "System.Runtime.Intrinsics.Vector256",
+                "get_IsHardwareAccelerated",
+                0,
+                math::intrinsic_vector_is_hardware_accelerated,
+                "Performance optimization",
+            );
+            Static(
+                "System.Runtime.Intrinsics.Vector512",
+                "get_IsHardwareAccelerated",
+                0,
+                math::intrinsic_vector_is_hardware_accelerated,
+                "Performance optimization",
+            );
+            Static(
+                "System.Numerics.Vector",
+                "get_IsHardwareAccelerated",
+                0,
+                math::intrinsic_vector_is_hardware_accelerated,
+                "Performance optimization",
+            );
 
-        // X86 Intrinsics Support Checks
-        let x86_intrinsics = [
-            "System.Runtime.Intrinsics.X86.Lzcnt",
-            "System.Runtime.Intrinsics.X86.Popcnt",
-            "System.Runtime.Intrinsics.X86.Bmi1",
-            "System.Runtime.Intrinsics.X86.Bmi2",
-            "System.Runtime.Intrinsics.X86.Pclmulqdq",
-            "System.Runtime.Intrinsics.X86.Aes",
-            "System.Runtime.Intrinsics.X86.Avx",
-            "System.Runtime.Intrinsics.X86.Avx2",
-            "System.Runtime.Intrinsics.X86.Sse",
-            "System.Runtime.Intrinsics.X86.Sse2",
-            "System.Runtime.Intrinsics.X86.Sse3",
-            "System.Runtime.Intrinsics.X86.Sse41",
-            "System.Runtime.Intrinsics.X86.Sse42",
-            "System.Runtime.Intrinsics.X86.Ssse3",
-            "System.Runtime.Intrinsics.X86.X86Base",
-        ];
-
-        for t in x86_intrinsics {
-            register_static!(
-                t,
+            // X86 Intrinsics Support Checks
+            Static(
+                "System.Runtime.Intrinsics.X86.Lzcnt",
                 "get_IsSupported",
                 0,
                 math::intrinsic_vector_is_hardware_accelerated,
-                "Hardware support check"
+                "Hardware support check",
             );
-        }
+            Static(
+                "System.Runtime.Intrinsics.X86.Popcnt",
+                "get_IsSupported",
+                0,
+                math::intrinsic_vector_is_hardware_accelerated,
+                "Hardware support check",
+            );
+            Static(
+                "System.Runtime.Intrinsics.X86.Bmi1",
+                "get_IsSupported",
+                0,
+                math::intrinsic_vector_is_hardware_accelerated,
+                "Hardware support check",
+            );
+            Static(
+                "System.Runtime.Intrinsics.X86.Bmi2",
+                "get_IsSupported",
+                0,
+                math::intrinsic_vector_is_hardware_accelerated,
+                "Hardware support check",
+            );
+            Static(
+                "System.Runtime.Intrinsics.X86.Pclmulqdq",
+                "get_IsSupported",
+                0,
+                math::intrinsic_vector_is_hardware_accelerated,
+                "Hardware support check",
+            );
+            Static(
+                "System.Runtime.Intrinsics.X86.Aes",
+                "get_IsSupported",
+                0,
+                math::intrinsic_vector_is_hardware_accelerated,
+                "Hardware support check",
+            );
+            Static(
+                "System.Runtime.Intrinsics.X86.Avx",
+                "get_IsSupported",
+                0,
+                math::intrinsic_vector_is_hardware_accelerated,
+                "Hardware support check",
+            );
+            Static(
+                "System.Runtime.Intrinsics.X86.Avx2",
+                "get_IsSupported",
+                0,
+                math::intrinsic_vector_is_hardware_accelerated,
+                "Hardware support check",
+            );
+            Static(
+                "System.Runtime.Intrinsics.X86.Sse",
+                "get_IsSupported",
+                0,
+                math::intrinsic_vector_is_hardware_accelerated,
+                "Hardware support check",
+            );
+            Static(
+                "System.Runtime.Intrinsics.X86.Sse2",
+                "get_IsSupported",
+                0,
+                math::intrinsic_vector_is_hardware_accelerated,
+                "Hardware support check",
+            );
+            Static(
+                "System.Runtime.Intrinsics.X86.Sse3",
+                "get_IsSupported",
+                0,
+                math::intrinsic_vector_is_hardware_accelerated,
+                "Hardware support check",
+            );
+            Static(
+                "System.Runtime.Intrinsics.X86.Sse41",
+                "get_IsSupported",
+                0,
+                math::intrinsic_vector_is_hardware_accelerated,
+                "Hardware support check",
+            );
+            Static(
+                "System.Runtime.Intrinsics.X86.Sse42",
+                "get_IsSupported",
+                0,
+                math::intrinsic_vector_is_hardware_accelerated,
+                "Hardware support check",
+            );
+            Static(
+                "System.Runtime.Intrinsics.X86.Ssse3",
+                "get_IsSupported",
+                0,
+                math::intrinsic_vector_is_hardware_accelerated,
+                "Hardware support check",
+            );
+            Static(
+                "System.Runtime.Intrinsics.X86.X86Base",
+                "get_IsSupported",
+                0,
+                math::intrinsic_vector_is_hardware_accelerated,
+                "Hardware support check",
+            );
 
-        let numeric_types = [
-            "System.Byte",
-            "System.SByte",
-            "System.UInt16",
-            "System.Int16",
-            "System.UInt32",
-            "System.Int32",
-            "System.UInt64",
-            "System.Int64",
-            "System.UIntPtr",
-            "System.IntPtr",
-        ];
-        for t in numeric_types {
-            register_static!(
-                t,
+            Static(
+                "System.Byte",
                 "CreateTruncating",
                 1,
                 math::intrinsic_numeric_create_truncating,
-                "Performance optimization"
+                "Performance optimization",
             );
-        }
+            Static(
+                "System.SByte",
+                "CreateTruncating",
+                1,
+                math::intrinsic_numeric_create_truncating,
+                "Performance optimization",
+            );
+            Static(
+                "System.UInt16",
+                "CreateTruncating",
+                1,
+                math::intrinsic_numeric_create_truncating,
+                "Performance optimization",
+            );
+            Static(
+                "System.Int16",
+                "CreateTruncating",
+                1,
+                math::intrinsic_numeric_create_truncating,
+                "Performance optimization",
+            );
+            Static(
+                "System.UInt32",
+                "CreateTruncating",
+                1,
+                math::intrinsic_numeric_create_truncating,
+                "Performance optimization",
+            );
+            Static(
+                "System.Int32",
+                "CreateTruncating",
+                1,
+                math::intrinsic_numeric_create_truncating,
+                "Performance optimization",
+            );
+            Static(
+                "System.UInt64",
+                "CreateTruncating",
+                1,
+                math::intrinsic_numeric_create_truncating,
+                "Performance optimization",
+            );
+            Static(
+                "System.Int64",
+                "CreateTruncating",
+                1,
+                math::intrinsic_numeric_create_truncating,
+                "Performance optimization",
+            );
+            Static(
+                "System.UIntPtr",
+                "CreateTruncating",
+                1,
+                math::intrinsic_numeric_create_truncating,
+                "Performance optimization",
+            );
+            Static(
+                "System.IntPtr",
+                "CreateTruncating",
+                1,
+                math::intrinsic_numeric_create_truncating,
+                "Performance optimization",
+            );
 
-        // Activator & EqualityComparer
-        register_static!(
-            "System.Activator",
-            "CreateInstance",
-            0,
-            reflection::intrinsic_activator_create_instance,
-            "Reflection-based creation"
-        );
-        register_static!(
-            "System.Collections.Generic.EqualityComparer`1",
-            "get_Default",
-            0,
-            math::intrinsic_equality_comparer_get_default,
-            "Generic comparer integration"
-        );
+            // Activator & EqualityComparer
+            Static(
+                "System.Activator",
+                "CreateInstance",
+                0,
+                reflection::intrinsic_activator_create_instance,
+                "Reflection-based creation",
+            );
+            Static(
+                "System.Collections.Generic.EqualityComparer`1",
+                "get_Default",
+                0,
+                math::intrinsic_equality_comparer_get_default,
+                "Generic comparer integration",
+            );
 
-        // Type & Reflection
-        register_static!(
-            "System.Type",
-            "GetTypeFromHandle",
-            1,
-            reflection::intrinsic_get_from_handle,
-            "Reflection internal"
-        );
-        register_static!(
-            "System.Type",
-            "get_IsValueType",
-            0,
-            reflection::intrinsic_type_get_is_value_type,
-            "Reflection internal"
-        );
-        register_static!(
-            "System.Type",
-            "get_IsEnum",
-            0,
-            reflection::intrinsic_type_get_is_enum,
-            "Reflection internal"
-        );
-        register_static!(
-            "System.Type",
-            "get_IsInterface",
-            0,
-            reflection::intrinsic_type_get_is_interface,
-            "Reflection internal"
-        );
-        register_static!(
-            "System.Type",
-            "op_Equality",
-            2,
-            reflection::intrinsic_type_op_equality,
-            "Reflection internal"
-        );
-        register_static!(
-            "System.Type",
-            "op_Inequality",
-            2,
-            reflection::intrinsic_type_op_inequality,
-            "Reflection internal"
-        );
-        register_static!(
-            "System.Type",
-            "get_TypeHandle",
-            0,
-            reflection::intrinsic_type_get_type_handle,
-            "Reflection internal"
-        );
-        register_static!(
-            "System.Reflection.Assembly",
-            "GetCustomAttributes",
-            2,
-            reflection::intrinsic_assembly_get_custom_attributes,
-            "Reflection internal"
-        );
-        register_static!(
-            "System.Attribute",
-            "GetCustomAttributes",
-            2,
-            reflection::intrinsic_attribute_get_custom_attributes,
-            "Reflection internal"
-        );
-        register_static!(
-            "System.Reflection.MethodBase",
-            "GetMethodFromHandle",
-            1,
-            reflection::intrinsic_get_from_handle,
-            "Reflection internal"
-        );
-        register_static!(
-            "System.Reflection.FieldInfo",
-            "GetFieldFromHandle",
-            1,
-            reflection::intrinsic_get_from_handle,
-            "Reflection internal"
-        );
-        register_static!(
-            "System.RuntimeMethodHandle",
-            "GetFunctionPointer",
-            1,
-            reflection::intrinsic_method_handle_get_function_pointer,
-            "Internal method handle conversion"
-        );
+            // Type & Reflection
+            Static(
+                "System.Type",
+                "GetTypeFromHandle",
+                1,
+                reflection::intrinsic_get_from_handle,
+                "Reflection internal",
+            );
+            Static(
+                "System.Type",
+                "get_IsValueType",
+                0,
+                reflection::intrinsic_type_get_is_value_type,
+                "Reflection internal",
+            );
+            Static(
+                "System.Type",
+                "get_IsEnum",
+                0,
+                reflection::intrinsic_type_get_is_enum,
+                "Reflection internal",
+            );
+            Static(
+                "System.Type",
+                "get_IsInterface",
+                0,
+                reflection::intrinsic_type_get_is_interface,
+                "Reflection internal",
+            );
+            Static(
+                "System.Type",
+                "op_Equality",
+                2,
+                reflection::intrinsic_type_op_equality,
+                "Reflection internal",
+            );
+            Static(
+                "System.Type",
+                "op_Inequality",
+                2,
+                reflection::intrinsic_type_op_inequality,
+                "Reflection internal",
+            );
+            Static(
+                "System.Type",
+                "get_TypeHandle",
+                0,
+                reflection::intrinsic_type_get_type_handle,
+                "Reflection internal",
+            );
+            Static(
+                "System.Reflection.Assembly",
+                "GetCustomAttributes",
+                2,
+                reflection::intrinsic_assembly_get_custom_attributes,
+                "Reflection internal",
+            );
+            Static(
+                "System.Attribute",
+                "GetCustomAttributes",
+                2,
+                reflection::intrinsic_attribute_get_custom_attributes,
+                "Reflection internal",
+            );
+            Static(
+                "System.Reflection.MethodBase",
+                "GetMethodFromHandle",
+                1,
+                reflection::intrinsic_get_from_handle,
+                "Reflection internal",
+            );
+            Static(
+                "System.Reflection.FieldInfo",
+                "GetFieldFromHandle",
+                1,
+                reflection::intrinsic_get_from_handle,
+                "Reflection internal",
+            );
+            Static(
+                "System.RuntimeMethodHandle",
+                "GetFunctionPointer",
+                1,
+                reflection::intrinsic_method_handle_get_function_pointer,
+                "Internal method handle conversion",
+            );
 
-        // UnicodeUtility
-        register_static!(
-            "System.Text.UnicodeUtility",
-            "IsAsciiCodePoint",
-            1,
-            text_ops::intrinsic_unicode_utility_is_ascii_code_point,
-            "Performance-optimized text operation"
-        );
-        register_static!(
-            "System.Text.UnicodeUtility",
-            "IsInRangeInclusive",
-            3,
-            text_ops::intrinsic_unicode_utility_is_in_range_inclusive,
-            "Performance-optimized text operation"
-        );
+            // UnicodeUtility
+            Static(
+                "System.Text.UnicodeUtility",
+                "IsAsciiCodePoint",
+                1,
+                text_ops::intrinsic_unicode_utility_is_ascii_code_point,
+                "Performance-optimized text operation",
+            );
+            Static(
+                "System.Text.UnicodeUtility",
+                "IsInRangeInclusive",
+                3,
+                text_ops::intrinsic_unicode_utility_is_in_range_inclusive,
+                "Performance-optimized text operation",
+            );
 
-        // Array - Direct Intercepts
-        register_intercept!(
-            "System.Array",
-            "GetLength",
-            2,
-            array_ops::intrinsic_array_get_length,
-            "Array internal representation differs from BCL"
-        );
-        register_intercept!(
-            "System.Array",
-            "get_Length",
-            1,
-            array_ops::intrinsic_array_get_length,
-            "Array internal representation differs from BCL"
-        );
-        register_intercept!(
-            "System.Array",
-            "get_Rank",
-            1,
-            array_ops::intrinsic_array_get_rank,
-            "Array internal representation differs from BCL"
-        );
-        register_intercept!(
-            "System.Array",
-            "GetValue",
-            2,
-            array_ops::intrinsic_array_get_value,
-            "Array internal representation differs from BCL"
-        );
-        register_intercept!(
-            "System.Array",
-            "SetValue",
-            3,
-            array_ops::intrinsic_array_set_value,
-            "Array internal representation differs from BCL"
-        );
-        register_intercept!(
-            "System.Array",
-            "get_Count",
-            1,
-            array_ops::intrinsic_array_get_length,
-            "Array internal representation differs from BCL"
-        );
-        register_intercept!(
-            "DotnetRs.Array",
-            "GetLength",
-            2,
-            array_ops::intrinsic_array_get_length,
-            "Array internal representation differs from BCL"
-        );
-        register_intercept!(
-            "DotnetRs.Array",
-            "get_Length",
-            1,
-            array_ops::intrinsic_array_get_length,
-            "Array internal representation differs from BCL"
-        );
-        register_intercept!(
-            "DotnetRs.Array",
-            "get_Rank",
-            1,
-            array_ops::intrinsic_array_get_rank,
-            "Array internal representation differs from BCL"
-        );
-        register_intercept!(
-            "DotnetRs.Array",
-            "GetValue",
-            2,
-            array_ops::intrinsic_array_get_value,
-            "Array internal representation differs from BCL"
-        );
-        register_intercept!(
-            "DotnetRs.Array",
-            "SetValue",
-            3,
-            array_ops::intrinsic_array_set_value,
-            "Array internal representation differs from BCL"
-        );
+            // Array - Direct Intercepts
+            Intercept(
+                "System.Array",
+                "GetLength",
+                2,
+                array_ops::intrinsic_array_get_length,
+                "Array internal representation differs from BCL",
+            );
+            Intercept(
+                "System.Array",
+                "get_Length",
+                1,
+                array_ops::intrinsic_array_get_length,
+                "Array internal representation differs from BCL",
+            );
+            Intercept(
+                "System.Array",
+                "get_Rank",
+                1,
+                array_ops::intrinsic_array_get_rank,
+                "Array internal representation differs from BCL",
+            );
+            Intercept(
+                "System.Array",
+                "GetValue",
+                2,
+                array_ops::intrinsic_array_get_value,
+                "Array internal representation differs from BCL",
+            );
+            Intercept(
+                "System.Array",
+                "SetValue",
+                3,
+                array_ops::intrinsic_array_set_value,
+                "Array internal representation differs from BCL",
+            );
+            Intercept(
+                "System.Array",
+                "get_Count",
+                1,
+                array_ops::intrinsic_array_get_length,
+                "Array internal representation differs from BCL",
+            );
+            Intercept(
+                "DotnetRs.Array",
+                "GetLength",
+                2,
+                array_ops::intrinsic_array_get_length,
+                "Array internal representation differs from BCL",
+            );
+            Intercept(
+                "DotnetRs.Array",
+                "get_Length",
+                1,
+                array_ops::intrinsic_array_get_length,
+                "Array internal representation differs from BCL",
+            );
+            Intercept(
+                "DotnetRs.Array",
+                "get_Rank",
+                1,
+                array_ops::intrinsic_array_get_rank,
+                "Array internal representation differs from BCL",
+            );
+            Intercept(
+                "DotnetRs.Array",
+                "GetValue",
+                2,
+                array_ops::intrinsic_array_get_value,
+                "Array internal representation differs from BCL",
+            );
+            Intercept(
+                "DotnetRs.Array",
+                "SetValue",
+                3,
+                array_ops::intrinsic_array_set_value,
+                "Array internal representation differs from BCL",
+            );
 
-        // Math
-        register_static_filtered!(
-            "System.Math",
-            "Min",
-            2,
-            math::intrinsic_math_min_double,
-            math_min_double_filter,
-            "Performance optimization using native math operations"
-        );
-        register_static!(
-            "System.Math",
-            "Sqrt",
-            1,
-            math::intrinsic_math_sqrt,
-            "Performance optimization using native math operations"
-        );
+            // Math
+            StaticFiltered(
+                "System.Math",
+                "Min",
+                2,
+                math::intrinsic_math_min_double,
+                math_min_double_filter,
+                "Performance optimization using native math operations",
+            );
+            Static(
+                "System.Math",
+                "Sqrt",
+                1,
+                math::intrinsic_math_sqrt,
+                "Performance optimization using native math operations",
+            );
 
-        // Fields
-        register_field!(
-            "System.IntPtr",
-            "Zero",
-            unsafe_ops::intrinsic_field_intptr_zero
-        );
-        register_field!(
-            "System.String",
-            "Empty",
-            string_ops::intrinsic_field_string_empty
-        );
-        register_field!(
-            "System.BitConverter",
-            "IsLittleEndian",
-            math::intrinsic_bitconverter_is_little_endian
-        );
+            // Fields
+            Field(
+                "System.IntPtr",
+                "Zero",
+                unsafe_ops::intrinsic_field_intptr_zero,
+            );
+            Field(
+                "System.String",
+                "Empty",
+                string_ops::intrinsic_field_string_empty,
+            );
+            Field(
+                "System.BitConverter",
+                "IsLittleEndian",
+                math::intrinsic_bitconverter_is_little_endian,
+            );
 
-        // System.Object
-        register_virtual!(
-            "System.Object",
-            "ToString",
-            0,
-            object_to_string,
-            "Basic ToString implementation"
-        );
+            // System.Object
+            Virtual(
+                "System.Object",
+                "ToString",
+                0,
+                object_to_string,
+                "Basic ToString implementation",
+            );
 
-        // Diagnostics
-        register_intercept!(
-            "System.Diagnostics.Tracing.XplatEventLogger",
-            "IsEventSourceLoggingEnabled",
-            0,
-            diagnostics::intrinsic_is_event_source_logging_enabled,
-            "Prevent QCall lookup"
-        );
+            // Diagnostics
+            Intercept(
+                "System.Diagnostics.Tracing.XplatEventLogger",
+                "IsEventSourceLoggingEnabled",
+                0,
+                diagnostics::intrinsic_is_event_source_logging_enabled,
+                "Prevent QCall lookup",
+            );
+        });
 
         if let Some(tracer) = tracer {
             tracer.trace_intrinsic(
