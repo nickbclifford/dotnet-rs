@@ -3,9 +3,10 @@ use crate::{
     sync::{Arc, AtomicI32, Ordering, SyncBlockOps, SyncManagerOps},
     vm_pop, vm_push, CallStack, StepResult,
 };
-use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+use dotnet_types::{generics::{ConcreteType, GenericLookup}, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
-use dotnet_value::object::ObjectRef;
+use dotnet_value::{object::ObjectRef, StackValue};
+use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use std::{ptr, sync::atomic, thread};
 
 /// System.Threading.Monitor::Exit(object) - Releases the lock on an object.
@@ -255,19 +256,55 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
-/// System.Threading.Volatile::Write(ref bool location, bool value)
-pub fn intrinsic_volatile_write_bool<'gc, 'm: 'gc>(
+/// System.Threading.Volatile::Write(ref T location, T value)
+pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
+    method: MethodDescription,
+    generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [Int32(value)]);
-    let as_bool = value as u8;
-    let src = vm_pop!(stack, gc).as_ptr();
+    let value = vm_pop!(stack, gc);
+    let ptr_val = vm_pop!(stack, gc);
+    let ptr = ptr_val.as_ptr();
 
     // Ensure release semantics to match .NET memory model
     atomic::fence(Ordering::Release);
-    unsafe { ptr::write_volatile(src, as_bool) };
+
+    let val_param = &method.method.signature.parameters[1].1;
+
+    // Determine if it's a byte-sized type (bool, byte, sbyte)
+    let is_byte = if let ParameterType::Value(MethodType::Base(b)) = val_param {
+        matches!(**b, BaseType::Boolean | BaseType::Int8 | BaseType::UInt8)
+    } else if let ParameterType::Value(MethodType::MethodGeneric(0)) = val_param {
+        // Check generic type
+        if let Some(t) = generics.method_generics.get(0) {
+            matches!(t.get(), BaseType::Boolean | BaseType::Int8 | BaseType::UInt8)
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    match value {
+        StackValue::Int32(i) => {
+            if is_byte {
+                unsafe { ptr::write_volatile(ptr as *mut u8, i as u8) };
+            } else {
+                unsafe { ptr::write_volatile(ptr as *mut i32, i) };
+            }
+        }
+        StackValue::ObjectRef(o) => {
+            unsafe { ptr::write_volatile(ptr as *mut ObjectRef<'gc>, o) };
+        }
+        StackValue::NativeInt(i) => {
+            unsafe { ptr::write_volatile(ptr as *mut isize, i) };
+        }
+        StackValue::Int64(i) => {
+            unsafe { ptr::write_volatile(ptr as *mut i64, i) };
+        }
+        _ => panic!("Volatile.Write not implemented for {:?}", value),
+    }
+
     StepResult::InstructionStepped
 }

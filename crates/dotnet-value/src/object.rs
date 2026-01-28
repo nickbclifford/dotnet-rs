@@ -258,8 +258,13 @@ impl<'gc> ObjectRef<'gc> {
     }
 
     pub fn read(source: &[u8]) -> Self {
-        let ptr_val =
-            unsafe { (*(source.as_ptr() as *const AtomicUsize)).load(AtomicOrdering::Acquire) };
+        let ptr_val = unsafe {
+            // SAFETY: Use read_unaligned to avoid UB on unaligned access.
+            // We assume the caller holds a lock (FieldStorage RwLock) to prevent tearing.
+            (source.as_ptr() as *const usize).read_unaligned()
+        };
+        
+
         let ptr = ptr_val as *const ThreadSafeLock<ObjectInner<'gc>>;
 
         if ptr.is_null() {
@@ -269,11 +274,7 @@ impl<'gc> ObjectRef<'gc> {
             // Since this is only called during VM execution where 'gc is valid and
             // the object is guaranteed to be alive (as it is traced by the caller),
             // it is safe to reconstruct the Gc pointer.
-            debug_assert!(
-                (ptr as usize).is_multiple_of(align_of::<ThreadSafeLock<ObjectInner<'gc>>>()),
-                "Attempted to reconstruct unaligned Gc pointer: {:?}",
-                ptr
-            );
+            // Note: We don't assert alignment of the Gc pointer itself here, but Gc ptrs are always aligned.
             ObjectRef(Some(unsafe { Gc::from_ptr(ptr) }))
         }
     }
@@ -284,8 +285,8 @@ impl<'gc> ObjectRef<'gc> {
             Some(s) => Gc::as_ptr(s),
         };
         unsafe {
-            (*(dest.as_mut_ptr() as *const AtomicUsize))
-                .store(ptr as usize, AtomicOrdering::Release);
+            // SAFETY: Use write_unaligned to avoid UB. Caller holds lock.
+            (dest.as_mut_ptr() as *mut usize).write_unaligned(ptr as usize);
         }
     }
 

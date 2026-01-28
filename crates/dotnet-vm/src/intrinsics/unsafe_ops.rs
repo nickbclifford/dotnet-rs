@@ -8,8 +8,8 @@ use dotnet_types::{
 };
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
-    layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
-    object::{HeapStorage, ManagedPtrMetadata, MetadataOwner, Object as ObjectInstance, ObjectRef},
+    layout::{ArrayLayoutManager, FieldLayoutManager, HasLayout, LayoutManager, Scalar},
+    object::{HeapStorage, ManagedPtrMetadata, MetadataOwner, Object as ObjectInstance, ObjectRef, ValueType},
     pointer::{ManagedPtr, ManagedPtrOwner},
     StackValue,
 };
@@ -242,6 +242,51 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let ctx = ResolutionContext::for_method(
+        method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
+    let target = &generics.method_generics[0];
+    let target_type = stack.loader().find_concrete_type(target.clone());
+
+    let offset_val = vm_pop!(stack, gc);
+    let offset = match offset_val {
+        StackValue::Int32(i) => i as isize,
+        StackValue::NativeInt(i) => i,
+        _ => panic!(
+            "Unsafe.AddByteOffset expected Int32 or NativeInt offset, got {:?}",
+            offset_val
+        ),
+    };
+
+    let m_val = vm_pop!(stack, gc);
+    let (owner, pinned) = if let StackValue::ManagedPtr(m) = &m_val {
+        (m.owner, m.pinned)
+    } else {
+        (None, false)
+    };
+    let m = m_val.as_ptr();
+    vm_push!(
+        stack,
+        gc,
+        StackValue::managed_ptr(
+            unsafe { m.offset(offset) },
+            target_type,
+            owner,
+            pinned
+        )
+    );
+    StepResult::InstructionStepped
+}
+
 /// System.Runtime.CompilerServices.Unsafe::AreSame<T>(ref T left, ref T right)
 pub fn intrinsic_unsafe_are_same<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
@@ -271,9 +316,26 @@ pub fn intrinsic_unsafe_as<'gc, 'm: 'gc>(
 pub fn intrinsic_unsafe_as_generic<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
+    let ctx = ResolutionContext::for_method(
+        method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
+    
+    let src_type_gen = generics.method_generics[0].clone();
+    let dest_type_gen = generics.method_generics[1].clone();
+    
+    let src_layout = type_layout(src_type_gen, &ctx);
+    let dest_layout = type_layout(dest_type_gen, &ctx);
+    
+    // Safety Check: Casting ref TFrom to ref TTo
+    // TTo must be compatible with TFrom's memory layout regarding References
+    check_read_safety(&dest_layout, Some(&src_layout), 0);
+
     let target_type = stack
         .loader()
         .find_concrete_type(generics.method_generics[1].clone());
@@ -314,12 +376,22 @@ pub fn intrinsic_unsafe_as_ref_any<'gc, 'm: 'gc>(
 pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
-    _method: MethodDescription,
+    method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
+    let ctx = ResolutionContext::for_method(
+        method,
+        stack.loader(),
+        generics,
+        stack.shared.caches.clone(),
+    );
+
+    let target_type_gen = generics.method_generics[0].clone();
+    let dest_layout = type_layout(target_type_gen.clone(), &ctx);
+    
     let target_type = stack
         .loader()
-        .find_concrete_type(generics.method_generics[0].clone());
+        .find_concrete_type(target_type_gen);
     
     let val = vm_pop!(stack, gc);
     let (ptr, owner, pinned) = match val {
@@ -331,6 +403,61 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
         ),
         _ => panic!("Unsafe.AsRef expected pointer, got {:?}", val),
     };
+
+    // Safety Check: Casting ptr to ref T
+    let src_layout_obj = if let Some(owner) = owner {
+         match owner {
+               ManagedPtrOwner::Heap(h) => {
+                    let obj = h.borrow();
+                    match &obj.storage {
+                        HeapStorage::Obj(o) => Some(LayoutManager::FieldLayoutManager(o.instance_storage.layout().as_ref().clone())),
+                        HeapStorage::Vec(v) => Some(LayoutManager::ArrayLayoutManager(v.layout.clone())),
+                        HeapStorage::Boxed(v) => match v {
+                            ValueType::Struct(o) => Some(LayoutManager::FieldLayoutManager(o.instance_storage.layout().as_ref().clone())),
+                            ValueType::Pointer(_) => Some(LayoutManager::Scalar(Scalar::ManagedPtr)),
+                            _ => None
+                        },
+                        _ => None
+                    }
+               },
+               ManagedPtrOwner::Stack(s) => {
+                    let o = unsafe { s.as_ref() };
+                    Some(LayoutManager::FieldLayoutManager(o.instance_storage.layout().as_ref().clone()))
+               }
+         }
+    } else {
+        None
+    };
+    
+    let base_addr = if let Some(owner) = owner {
+         match owner {
+             ManagedPtrOwner::Heap(h) => {
+                 let obj = h.borrow();
+                 match &obj.storage {
+                      HeapStorage::Obj(o) => o.instance_storage.get().as_ptr() as usize,
+                      HeapStorage::Vec(v) => v.get().as_ptr() as usize,
+                      HeapStorage::Boxed(v) => match v {
+                          ValueType::Struct(o) => o.instance_storage.get().as_ptr() as usize,
+                          _ => 0 
+                      },
+                      _ => 0
+                 }
+             },
+             ManagedPtrOwner::Stack(s) => {
+                  unsafe { s.as_ref().instance_storage.get().as_ptr() as usize }
+             }
+         }
+    } else {
+        0
+    };
+    
+    if base_addr != 0 {
+         let ptr_addr = ptr as usize;
+         let offset = ptr_addr.wrapping_sub(base_addr);
+         check_read_safety(&dest_layout, src_layout_obj.as_ref(), offset);
+    } else if dest_layout.is_or_contains_refs() {
+         panic!("Heap Corruption: Casting unmanaged pointer to Ref type is unsafe");
+    }
 
     vm_push!(
         stack,
@@ -429,6 +556,63 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
 
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
+
+    // Phase 3: Integrity Check - Prevent reading garbage as GC pointers
+    if owner.is_some() || layout.is_or_contains_refs() {
+         let src_layout_obj = if let Some(owner) = owner {
+              match owner {
+                    ManagedPtrOwner::Heap(h) => {
+                         let obj = h.borrow();
+                         match &obj.storage {
+                             HeapStorage::Obj(o) => Some(LayoutManager::FieldLayoutManager(o.instance_storage.layout().as_ref().clone())),
+                             HeapStorage::Vec(v) => Some(LayoutManager::ArrayLayoutManager(v.layout.clone())),
+                             HeapStorage::Boxed(v) => match v {
+                                 ValueType::Struct(o) => Some(LayoutManager::FieldLayoutManager(o.instance_storage.layout().as_ref().clone())),
+                                 ValueType::Pointer(_) => Some(LayoutManager::Scalar(Scalar::ManagedPtr)),
+                                 _ => None
+                             },
+                             _ => None
+                         }
+                    },
+                    ManagedPtrOwner::Stack(s) => {
+                         let o = unsafe { s.as_ref() };
+                         Some(LayoutManager::FieldLayoutManager(o.instance_storage.layout().as_ref().clone()))
+                    }
+              }
+         } else {
+             None
+         };
+         
+         let base_addr = if let Some(owner) = owner {
+              match owner {
+                  ManagedPtrOwner::Heap(h) => {
+                      let obj = h.borrow();
+                      match &obj.storage {
+                           HeapStorage::Obj(o) => o.instance_storage.get().as_ptr() as usize,
+                           HeapStorage::Vec(v) => v.get().as_ptr() as usize,
+                           HeapStorage::Boxed(v) => match v {
+                               ValueType::Struct(o) => o.instance_storage.get().as_ptr() as usize,
+                               _ => 0 
+                           },
+                           _ => 0
+                      }
+                  },
+                  ManagedPtrOwner::Stack(s) => {
+                       unsafe { s.as_ref().instance_storage.get().as_ptr() as usize }
+                  }
+              }
+         } else {
+             0
+         };
+         
+         if base_addr != 0 {
+              let ptr_addr = ptr as usize;
+              let offset = ptr_addr.wrapping_sub(base_addr);
+              check_read_safety(&layout, src_layout_obj.as_ref(), offset);
+         } else if layout.is_or_contains_refs() {
+              panic!("Heap Corruption: Reading ObjectRef from unmanaged memory is unsafe");
+         }
+    }
 
     macro_rules! read_ua {
         ($t:ty) => {
@@ -547,6 +731,142 @@ fn update_owner_side_table<'gc>(
     }
 }
 
+fn has_ref_at(layout: &LayoutManager, offset: usize) -> bool {
+    match layout {
+        LayoutManager::Scalar(s) => match s {
+            Scalar::ObjectRef | Scalar::ManagedPtr => offset == 0,
+            _ => false,
+        },
+        LayoutManager::FieldLayoutManager(fm) => {
+             for f in fm.fields.values() {
+                 if offset >= f.position && offset < f.position + f.layout.size() {
+                     return has_ref_at(&f.layout, offset - f.position);
+                 }
+             }
+             false
+        }
+        LayoutManager::ArrayLayoutManager(am) => {
+             let elem_size = am.element_layout.size();
+             if elem_size == 0 { return false; }
+             let idx = offset / elem_size;
+             if idx >= am.length { return false; }
+             let rel = offset % elem_size;
+             has_ref_at(&am.element_layout, rel)
+        }
+    }
+}
+
+fn validate_ref_integrity(
+    dest_layout: &LayoutManager,
+    base_offset: usize, 
+    range_start: usize, 
+    range_end: usize,   
+    src_layout: &LayoutManager,
+) {
+     match dest_layout {
+        LayoutManager::Scalar(s) => match s {
+            Scalar::ObjectRef | Scalar::ManagedPtr => {
+                let ref_start = base_offset;
+                let ref_end = base_offset + 8;
+                
+                if ref_start < range_end && ref_end > range_start {
+                    if ref_start < range_start {
+                         panic!("Heap Corruption: Write starts in the middle of an ObjectRef at {}", ref_start);
+                    }
+                    
+                    if ref_end > range_end {
+                        panic!("Heap Corruption: Write ends in the middle of an ObjectRef at {}", ref_start);
+                    }
+                    
+                    let src_offset = ref_start - range_start;
+                    if !has_ref_at(src_layout, src_offset) {
+                        panic!("Heap Corruption: Writing non-ref data over ObjectRef at offset {}", ref_start);
+                    }
+                    
+                    if ref_start % 8 != 0 {
+                        panic!("Heap Corruption: Misaligned ObjectRef in destination at {}", ref_start);
+                    }
+                }
+            }
+            _ => {}
+        },
+        LayoutManager::FieldLayoutManager(fm) => {
+            for f in fm.fields.values() {
+                 let f_start = base_offset + f.position;
+                 let f_end = f_start + f.layout.size();
+                 if f_start < range_end && f_end > range_start {
+                     validate_ref_integrity(&f.layout, f_start, range_start, range_end, src_layout);
+                 }
+            }
+        },
+        LayoutManager::ArrayLayoutManager(am) => {
+             if am.element_layout.is_or_contains_refs() {
+                  let elem_size = am.element_layout.size();
+                  if elem_size == 0 { return; }
+                  
+                  let rel_start = if range_start > base_offset { range_start - base_offset } else { 0 };
+                  let rel_end = if range_end > base_offset { range_end - base_offset } else { 0 };
+                  
+                  let start_idx = rel_start / elem_size;
+                  let end_idx = (rel_end + elem_size - 1) / elem_size;
+                  
+                  for i in start_idx..end_idx {
+                      if i >= am.length { break; }
+                      let elem_abs_start = base_offset + i * elem_size;
+                      validate_ref_integrity(&am.element_layout, elem_abs_start, range_start, range_end, src_layout);
+                  }
+             }
+        }
+    }
+}
+
+fn check_refs_in_layout<F>(layout: &LayoutManager, base: usize, callback: &mut F)
+where
+    F: FnMut(usize) + ?Sized,
+{
+     match layout {
+        LayoutManager::Scalar(s) => match s {
+            Scalar::ObjectRef | Scalar::ManagedPtr => callback(base),
+            _ => {}
+        },
+        LayoutManager::FieldLayoutManager(fm) => {
+             for f in fm.fields.values() {
+                  check_refs_in_layout(&f.layout, base + f.position, callback);
+             }
+        }
+        LayoutManager::ArrayLayoutManager(am) => {
+             if am.element_layout.is_or_contains_refs() {
+                  let sz = am.element_layout.size();
+                  for i in 0..am.length {
+                       check_refs_in_layout(&am.element_layout, base + i * sz, callback);
+                  }
+             }
+        }
+     }
+}
+
+fn check_read_safety(
+    result_layout: &LayoutManager,
+    src_layout: Option<&LayoutManager>,
+    src_ptr_offset: usize,
+) {
+    check_refs_in_layout(result_layout, 0, &mut |ref_offset| {
+         let target_src = src_ptr_offset + ref_offset;
+         
+         if let Some(sl) = src_layout {
+             if !has_ref_at(sl, target_src) {
+                  panic!("Heap Corruption: Reading ObjectRef from non-ref memory at offset {}", target_src);
+             }
+             if target_src % 8 != 0 {
+                  panic!("Heap Corruption: Reading misaligned ObjectRef at {}", target_src);
+             }
+         } else {
+             // Reading Ref from unmanaged memory (src_layout is None)
+             panic!("Heap Corruption: Reading ObjectRef from unmanaged memory is unsafe");
+         }
+    });
+}
+
 /// System.Runtime.CompilerServices.Unsafe::WriteUnaligned<T>(void* ptr, T value)
 pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
@@ -573,6 +893,73 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
         ),
         rest => panic!("invalid destination for write unaligned: {:?}", rest),
     };
+
+    if let Some(owner) = owner {
+        let (base, len) = match owner {
+            ManagedPtrOwner::Heap(h) => {
+                let obj = h.borrow();
+                match &obj.storage {
+                    HeapStorage::Obj(o) | HeapStorage::Boxed(ValueType::Struct(o)) => {
+                        let guard = o.instance_storage.get();
+                        (guard.as_ptr(), guard.len())
+                    }
+                    HeapStorage::Vec(v) => {
+                        let guard = v.get();
+                        (guard.as_ptr(), guard.len())
+                    }
+                    _ => (std::ptr::null(), 0),
+                }
+            }
+            ManagedPtrOwner::Stack(s) => {
+                let o = unsafe { s.as_ref() };
+                let guard = o.instance_storage.get();
+                (guard.as_ptr(), guard.len())
+            }
+        };
+
+        if !base.is_null() {
+            let base_addr = base as usize;
+            let ptr_addr = ptr as usize;
+            let size = layout.size();
+
+            if ptr_addr < base_addr
+                || (ptr_addr - base_addr)
+                    .checked_add(size)
+                    .is_none_or(|end| end > len)
+            {
+                panic!(
+                    "Unsafe.WriteUnaligned: Heap corruption prevented! Access out of bounds. ptr={:p}, base={:p}, offset={}, size={}, len={}",
+                    ptr, base, ptr_addr.wrapping_sub(base_addr), size, len
+                );
+            }
+
+            // Phase 3: Integrity Check - Prevent corrupting GC pointers
+            let offset = ptr_addr.wrapping_sub(base_addr);
+            let dest_layout = match owner {
+                ManagedPtrOwner::Heap(h) => {
+                    let obj = h.borrow();
+                    match &obj.storage {
+                        HeapStorage::Obj(o) => Some(LayoutManager::FieldLayoutManager(o.instance_storage.layout().as_ref().clone())),
+                        HeapStorage::Vec(v) => Some(LayoutManager::ArrayLayoutManager(v.layout.clone())),
+                        HeapStorage::Boxed(v) => match v {
+                            ValueType::Struct(o) => Some(LayoutManager::FieldLayoutManager(o.instance_storage.layout().as_ref().clone())),
+                            ValueType::Pointer(_) => Some(LayoutManager::Scalar(Scalar::ManagedPtr)),
+                            _ => None
+                        },
+                        _ => None
+                    }
+                },
+                ManagedPtrOwner::Stack(s) => {
+                    let o = unsafe { s.as_ref() };
+                    Some(LayoutManager::FieldLayoutManager(o.instance_storage.layout().as_ref().clone()))
+                }
+            };
+
+            if let Some(dl) = dest_layout {
+                validate_ref_integrity(&dl, 0, offset, offset + size, &layout);
+            }
+        }
+    }
 
     macro_rules! write_ua {
         ($variant:ident, $t:ty) => {{

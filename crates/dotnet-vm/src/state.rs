@@ -10,7 +10,7 @@ use dotnet_types::{
     runtime::RuntimeType,
     TypeDescription,
 };
-use dotnet_utils::sync::{Arc, AtomicBool, Mutex, Ordering, RwLock};
+use dotnet_utils::sync::{Arc, AtomicBool, Mutex, Ordering};
 use dotnet_value::{
     layout::{FieldLayoutManager, LayoutManager},
     object::ObjectRef,
@@ -78,7 +78,7 @@ impl GlobalCaches {
 /// This state is shared across all execution threads and arenas.
 pub struct SharedGlobalState<'m> {
     pub loader: &'m AssemblyLoader,
-    pub pinvoke: RwLock<NativeLibraries>,
+    pub pinvoke: NativeLibraries,
     pub sync_blocks: SyncBlockManager,
     pub thread_manager: Arc<ThreadManager>,
     pub metrics: RuntimeMetrics,
@@ -149,7 +149,7 @@ impl<'m> SharedGlobalState<'m> {
         let tracer_enabled = Arc::new(AtomicBool::new(tracer.is_enabled()));
         let this = Self {
             loader,
-            pinvoke: RwLock::new(NativeLibraries::new(loader.get_root())),
+            pinvoke: NativeLibraries::new(loader.get_root()),
             sync_blocks: SyncBlockManager::new(),
             thread_manager: ThreadManager::new(),
             metrics: RuntimeMetrics::new(),

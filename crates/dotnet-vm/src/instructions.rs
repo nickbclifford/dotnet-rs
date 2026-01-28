@@ -11,7 +11,7 @@ use dotnet_types::{
 use dotnet_utils::{gc::GCHandle, is_ptr_aligned_to_field};
 use dotnet_value::{
     layout::HasLayout,
-    object::{CTSValue, HeapStorage, ObjectRef},
+    object::{CTSValue, HeapStorage, ManagedPtrMetadata, ObjectRef, ValueType},
     pointer::{ManagedPtr, ManagedPtrOwner, UnmanagedPtr},
     string::CLRString,
     StackValue,
@@ -561,8 +561,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         rest
                     ),
                 };
-                let src = match pop!() {
-                    StackValue::NativeInt(i) => i as *const u8,
+                let src_val = pop!();
+                let src = match &src_val {
+                    StackValue::NativeInt(i) => *i as *const u8,
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr() as *const u8,
                     StackValue::ManagedPtr(m) => m.value.map_or(ptr::null(), |p| p.as_ptr()),
                     rest => panic!(
@@ -570,8 +571,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         rest
                     ),
                 };
-                let dest = match pop!() {
-                    StackValue::NativeInt(i) => i as *mut u8,
+                let dest_val = pop!();
+                let dest = match &dest_val {
+                    StackValue::NativeInt(i) => *i as *mut u8,
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
                     StackValue::ManagedPtr(m) => m.value.map_or(ptr::null_mut(), |p| p.as_ptr()),
                     rest => panic!(
@@ -579,6 +581,32 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         rest
                     ),
                 };
+
+                // Bounds Check Dest
+                if let StackValue::ManagedPtr(dest_mp) = &dest_val {
+                    if let Some(owner) = dest_mp.owner {
+                        let (base_addr, storage_size) = match owner {
+                            ManagedPtrOwner::Heap(h) => {
+                                let inner = h.borrow();
+                                match &inner.storage {
+                                    HeapStorage::Obj(o) => (o.instance_storage.get().as_ptr(), o.instance_storage.get().len()),
+                                    HeapStorage::Vec(v) => (v.get().as_ptr(), v.get().len()),
+                                    _ => (ptr::null(), 0),
+                                }
+                            }
+                            ManagedPtrOwner::Stack(s) => unsafe {
+                                (s.as_ref().instance_storage.get().as_ptr(), s.as_ref().instance_storage.get().len())
+                            },
+                        };
+
+                        if !base_addr.is_null() {
+                            let dest_offset = (dest as usize).wrapping_sub(base_addr as usize);
+                            if dest_offset.checked_add(size).map_or(true, |end| end > storage_size) {
+                                panic!("Heap corruption detected! Cpblk writing {} bytes at offset {} into storage of size {}", size, dest_offset, storage_size);
+                            }
+                        }
+                    }
+                }
 
                 // Check GC safe point before large memory block copy operations
                 // Threshold: copying more than 4KB of data
@@ -690,8 +718,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         rest
                     ),
                 };
-                let addr = match pop!() {
-                    StackValue::NativeInt(i) => i as *mut u8,
+                let addr_val = pop!();
+                let addr = match &addr_val {
+                    StackValue::NativeInt(i) => *i as *mut u8,
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
                     StackValue::ManagedPtr(m) => m.value.map_or(ptr::null_mut(), |p| p.as_ptr()),
                     rest => panic!(
@@ -699,6 +728,33 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         rest
                     ),
                 };
+
+                // Bounds Check
+                if let StackValue::ManagedPtr(mp) = &addr_val {
+                    if let Some(owner) = mp.owner {
+                        let (base_addr, storage_size) = match owner {
+                            ManagedPtrOwner::Heap(h) => {
+                                let inner = h.borrow();
+                                match &inner.storage {
+                                    HeapStorage::Obj(o) => (o.instance_storage.get().as_ptr(), o.instance_storage.get().len()),
+                                    HeapStorage::Vec(v) => (v.get().as_ptr(), v.get().len()),
+                                    _ => (ptr::null(), 0),
+                                }
+                            }
+                            ManagedPtrOwner::Stack(s) => unsafe {
+                                (s.as_ref().instance_storage.get().as_ptr(), s.as_ref().instance_storage.get().len())
+                            },
+                        };
+
+                        if !base_addr.is_null() {
+                            let dest_offset = (addr as usize).wrapping_sub(base_addr as usize);
+                            if dest_offset.checked_add(size).map_or(true, |end| end > storage_size) {
+                                panic!("Heap corruption detected! Initblk writing {} bytes at offset {} into storage of size {}", size, dest_offset, storage_size);
+                            }
+                        }
+                    }
+                }
+
                 unsafe {
                     ptr::write_bytes(addr, val, size);
                 }
@@ -916,7 +972,47 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 param0: store_type, ..
             } => {
                 let val = pop!();
-                let ptr = pop!().as_ptr();
+                let addr_val = pop!();
+                let ptr = addr_val.as_ptr();
+
+                // Bounds check
+                if let StackValue::ManagedPtr(mp) = &addr_val {
+                    if let Some(owner) = mp.owner {
+                        let (base_addr, storage_size) = match owner {
+                            ManagedPtrOwner::Heap(h) => {
+                                let inner = h.borrow();
+                                match &inner.storage {
+                                    HeapStorage::Obj(o) => (o.instance_storage.get().as_ptr(), o.instance_storage.get().len()),
+                                    HeapStorage::Vec(v) => (v.get().as_ptr(), v.get().len()),
+                                    _ => (ptr::null(), 0),
+                                }
+                            }
+                            ManagedPtrOwner::Stack(s) => unsafe {
+                                (s.as_ref().instance_storage.get().as_ptr(), s.as_ref().instance_storage.get().len())
+                            },
+                        };
+
+                        if !base_addr.is_null() {
+                            let dest_offset = (ptr as usize).wrapping_sub(base_addr as usize);
+                            let size = match store_type {
+                                StoreType::Int8 => 1,
+                                StoreType::Int16 => 2,
+                                StoreType::Int32 => 4,
+                                StoreType::Int64 => 8,
+                                StoreType::IntPtr => std::mem::size_of::<usize>(),
+                                StoreType::Float32 => 4,
+                                StoreType::Float64 => 8,
+                                StoreType::Object => std::mem::size_of::<usize>(),
+                                _ => 0,
+                            };
+
+                            if size > 0 && dest_offset.checked_add(size).map_or(true, |end| end > storage_size) {
+                                panic!("Heap corruption detected! StoreIndirect writing {} bytes at offset {} into storage of size {}", size, dest_offset, storage_size);
+                            }
+                        }
+                    }
+                }
+
                 unsafe { val.store(ptr, *store_type) };
             }
             StoreLocal(i) => {
@@ -1677,7 +1773,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             LoadObject {
                 param0: load_type, ..
             } => {
-                let source_ptr = pop!().as_ptr();
+                let addr = pop!();
+                let source_ptr = addr.as_ptr();
 
                 let ctx = self.current_context();
                 let load_type = ctx.make_concrete(load_type);
@@ -1685,10 +1782,74 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 // SAFETY: source_ptr is a valid pointer to memory containing a value of the given type,
                 // and layout.size() correctly represents the size of that type.
                 let source = unsafe { slice::from_raw_parts(source_ptr, layout.size()) };
-                let value = self
+                let mut value = self
                     .current_context()
                     .read_cts_value(&load_type, source)
                     .into_stack();
+
+                // Recover ManagedPtr metadata from source side-table if the address is a ManagedPtr
+                if let StackValue::ManagedPtr(src_mp) = &addr {
+                    if let Some(owner) = src_mp.owner {
+                        let base_addr = match owner {
+                            ManagedPtrOwner::Heap(h) => {
+                                let inner = h.borrow();
+                                match &inner.storage {
+                                    HeapStorage::Obj(o) => o.instance_storage.get().as_ptr(),
+                                    HeapStorage::Vec(v) => v.get().as_ptr(),
+                                    _ => ptr::null(),
+                                }
+                            }
+                            ManagedPtrOwner::Stack(s) => unsafe {
+                                s.as_ref().instance_storage.get().as_ptr()
+                            },
+                        };
+
+                        if !base_addr.is_null() {
+                            let src_offset = (source_ptr as usize).wrapping_sub(base_addr as usize);
+                            let size = layout.size();
+
+                            // Get metadata from owner
+                            let metadata_map = match owner {
+                                ManagedPtrOwner::Heap(h) => {
+                                    let inner = h.borrow();
+                                    match &inner.storage {
+                                        HeapStorage::Obj(o) => {
+                                            Some(o.managed_ptr_metadata.borrow().metadata.clone())
+                                        }
+                                        HeapStorage::Vec(v) => {
+                                            Some(v.managed_ptr_metadata.borrow().metadata.clone())
+                                        }
+                                        _ => None,
+                                    }
+                                }
+                                ManagedPtrOwner::Stack(s) => unsafe {
+                                    Some(s.as_ref().managed_ptr_metadata.borrow().metadata.clone())
+                                },
+                            };
+
+                            if let Some(map) = metadata_map {
+                                match &mut value {
+                                    StackValue::ValueType(obj) => {
+                                        for (offset, meta) in map {
+                                            if offset >= src_offset
+                                                && offset < src_offset + size
+                                            {
+                                                let rel_offset = offset - src_offset;
+                                                obj.register_metadata(rel_offset, meta, gc);
+                                            }
+                                        }
+                                    }
+                                    StackValue::ManagedPtr(mp) => {
+                                        if let Some(meta) = map.get(&src_offset) {
+                                            mp.owner = meta.recover_owner();
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
                 push!(value);
             }
             LoadStaticField {
@@ -2220,10 +2381,71 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 let layout = self.type_layout_cached(concrete_t.clone());
                 let mut bytes = vec![0u8; layout.size()];
-                ctx.new_cts_value(&concrete_t, value).write(&mut bytes);
+                ctx.new_cts_value(&concrete_t, value.clone()).write(&mut bytes);
 
                 unsafe {
                     ptr::copy_nonoverlapping(bytes.as_ptr(), dest_ptr, bytes.len());
+                }
+
+                // FIX: Propagate ManagedPtr metadata to destination side-table
+                if let StackValue::ManagedPtr(dest_mp) = addr {
+                    if let Some(owner) = dest_mp.owner {
+                        let (base_addr, storage_size) = match owner {
+                            ManagedPtrOwner::Heap(h) => {
+                                let inner = h.borrow();
+                                match &inner.storage {
+                                    HeapStorage::Obj(o) => (o.instance_storage.get().as_ptr(), o.instance_storage.get().len()),
+                                    HeapStorage::Vec(v) => (v.get().as_ptr(), v.get().len()),
+                                    _ => (ptr::null(), 0),
+                                }
+                            }
+                            ManagedPtrOwner::Stack(s) => unsafe {
+                                (s.as_ref().instance_storage.get().as_ptr(), s.as_ref().instance_storage.get().len())
+                            },
+                        };
+
+                        if !base_addr.is_null() {
+                            let dest_offset = (dest_ptr as usize).wrapping_sub(base_addr as usize);
+                            if dest_offset.checked_add(bytes.len()).is_none_or(|end| end > storage_size) {
+                                panic!("Heap corruption detected! StoreObject writing {} bytes at offset {} into storage of size {}", bytes.len(), dest_offset, storage_size);
+                            }
+
+                            let src_metadata: Vec<(usize, ManagedPtrMetadata)> = match &value {
+                                StackValue::ValueType(obj) => obj
+                                    .managed_ptr_metadata
+                                    .borrow()
+                                    .metadata
+                                    .iter()
+                                    .map(|(k, v)| (*k, v.clone()))
+                                    .collect(),
+                                StackValue::ManagedPtr(mp) => {
+                                    vec![(0, ManagedPtrMetadata::from_managed_ptr(mp))]
+                                }
+                                _ => vec![],
+                            };
+
+                            match owner {
+                                ManagedPtrOwner::Heap(h) => {
+                                    let mut inner = h.borrow_mut(gc);
+                                    if let Some(o) = inner.storage.as_obj_mut() {
+                                        for (offset, metadata) in src_metadata {
+                                            o.register_metadata(dest_offset + offset, metadata, gc);
+                                        }
+                                    } else if let HeapStorage::Vec(v) = &mut inner.storage {
+                                        for (offset, metadata) in src_metadata {
+                                            v.register_metadata(dest_offset + offset, metadata, gc);
+                                        }
+                                    }
+                                }
+                                ManagedPtrOwner::Stack(mut s) => {
+                                    let o = unsafe { s.as_mut() };
+                                    for (offset, metadata) in src_metadata {
+                                        o.register_metadata(dest_offset + offset, metadata, gc);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             StoreStaticField {

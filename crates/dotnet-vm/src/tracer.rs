@@ -189,13 +189,19 @@ unsafe_empty_collect!(Tracer);
 impl Tracer {
     pub fn new() -> Self {
         let trace_env = env::var("DOTNET_RS_TRACE");
+        println!("Tracer::new: DOTNET_RS_TRACE={:?}", trace_env);
+
         let writer: Option<Box<dyn Write + Send>> = match trace_env {
             Ok(val) if val == "1" || val == "true" || val == "stdout" => Some(Box::new(stdout())),
             Ok(val) if val == "stderr" => Some(Box::new(stderr())),
             Ok(val) if !val.is_empty() => {
                 // assume it's a file path
+                println!("Tracer: attempting to create file '{}'", val);
                 match File::create(&val) {
-                    Ok(f) => Some(Box::new(f)),
+                    Ok(f) => {
+                        println!("Tracer: created file successfully");
+                        Some(Box::new(f))
+                    },
                     Err(e) => {
                         eprintln!("Failed to create trace file {}: {}", val, e);
                         None

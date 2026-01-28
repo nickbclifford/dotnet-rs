@@ -1194,7 +1194,7 @@ impl IntrinsicRegistry {
             "System.Threading.Volatile",
             "Write",
             2,
-            threading::intrinsic_volatile_write_bool,
+            threading::intrinsic_volatile_write,
             "Memory barrier operations"
         );
 
@@ -1533,6 +1533,13 @@ impl IntrinsicRegistry {
         );
         register_intercept!(
             "System.Runtime.CompilerServices.Unsafe",
+            "AddByteOffset",
+            2,
+            unsafe_ops::intrinsic_unsafe_add_byte_offset,
+            "Direct memory access must respect VM memory management and GC"
+        );
+        register_intercept!(
+            "System.Runtime.CompilerServices.Unsafe",
             "ReadUnaligned",
             1,
             unsafe_ops::intrinsic_unsafe_read_unaligned,
@@ -1575,6 +1582,35 @@ impl IntrinsicRegistry {
             math::intrinsic_vector_is_hardware_accelerated,
             "Performance optimization"
         );
+
+        // X86 Intrinsics Support Checks
+        let x86_intrinsics = [
+            "System.Runtime.Intrinsics.X86.Lzcnt",
+            "System.Runtime.Intrinsics.X86.Popcnt",
+            "System.Runtime.Intrinsics.X86.Bmi1",
+            "System.Runtime.Intrinsics.X86.Bmi2",
+            "System.Runtime.Intrinsics.X86.Pclmulqdq",
+            "System.Runtime.Intrinsics.X86.Aes",
+            "System.Runtime.Intrinsics.X86.Avx",
+            "System.Runtime.Intrinsics.X86.Avx2",
+            "System.Runtime.Intrinsics.X86.Sse",
+            "System.Runtime.Intrinsics.X86.Sse2",
+            "System.Runtime.Intrinsics.X86.Sse3",
+            "System.Runtime.Intrinsics.X86.Sse41",
+            "System.Runtime.Intrinsics.X86.Sse42",
+            "System.Runtime.Intrinsics.X86.Ssse3",
+            "System.Runtime.Intrinsics.X86.X86Base",
+        ];
+
+        for t in x86_intrinsics {
+            register_static!(
+                t,
+                "get_IsSupported",
+                0,
+                math::intrinsic_vector_is_hardware_accelerated,
+                "Hardware support check"
+            );
+        }
 
         let numeric_types = [
             "System.Byte",
@@ -1822,6 +1858,11 @@ impl IntrinsicRegistry {
             "System.String",
             "Empty",
             string_ops::intrinsic_field_string_empty
+        );
+        register_field!(
+            "System.BitConverter",
+            "IsLittleEndian",
+            math::intrinsic_bitconverter_is_little_endian
         );
 
         // System.Object

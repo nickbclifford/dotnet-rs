@@ -33,7 +33,7 @@ use super::{
     resolution::{TypeResolutionExt, ValueResolution},
     state::{ArenaLocalState, SharedGlobalState},
     statics::StaticStorageManager,
-    sync::{Arc, MutexGuard, Ordering, RwLockReadGuard, RwLockWriteGuard},
+    sync::{Arc, MutexGuard, Ordering},
     tracer::{TraceLevel, Tracer},
     MethodInfo, MethodState, StepResult,
 };
@@ -1054,16 +1054,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         &self.shared.statics
     }
 
-    /// Get access to the P/Invoke libraries manager (read-only).
+    /// Get access to the P/Invoke libraries manager.
     #[inline]
-    pub fn pinvoke_read(&self) -> RwLockReadGuard<'_, NativeLibraries> {
-        self.shared.pinvoke.read()
-    }
-
-    /// Get access to the P/Invoke libraries manager (mutable).
-    #[inline]
-    pub fn pinvoke_write(&self) -> RwLockWriteGuard<'_, NativeLibraries> {
-        self.shared.pinvoke.write()
+    pub fn pinvoke(&self) -> &NativeLibraries {
+        &self.shared.pinvoke
     }
 
     /// Get the tracer for debugging output.

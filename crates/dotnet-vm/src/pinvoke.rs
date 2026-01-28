@@ -1,5 +1,5 @@
 use crate::{
-    context::ResolutionContext, layout::LayoutFactory, resolution::ValueResolution, CallStack,
+    context::ResolutionContext, exceptions::ExceptionState, layout::LayoutFactory, resolution::ValueResolution, CallStack,
 };
 use dotnet_assemblies::decompose_type_source;
 use dotnet_types::{
@@ -7,50 +7,116 @@ use dotnet_types::{
     members::MethodDescription,
 };
 use dotnet_utils::gc::GCHandle;
-use dotnet_utils::sync::MappedRwLockReadGuard;
 use dotnet_value::{
     layout::{FieldLayoutManager, LayoutManager, Scalar},
+    object::{HeapStorage, ObjectRef, ValueType},
+    string::CLRString,
     StackValue,
 };
 use dotnetdll::prelude::*;
 use gc_arena::{unsafe_empty_collect, Collect};
 use libffi::middle::*;
 use libloading::{Library, Symbol};
-use std::{collections::HashMap, ffi::c_void, mem, path::PathBuf};
+use std::{ffi::c_void, path::PathBuf};
+use dashmap::DashMap;
 
 pub static mut LAST_ERROR: i32 = 0;
 
+#[derive(Debug)]
+pub enum PInvokeError {
+    LibraryNotFound(String),
+    SymbolNotFound(String, String),
+    LoadError(String, String),
+}
+
+impl std::fmt::Display for PInvokeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PInvokeError::LibraryNotFound(name) => write!(f, "Unable to find library '{}'", name),
+            PInvokeError::SymbolNotFound(lib, sym) => write!(f, "Unable to find entry point '{}' in library '{}'", sym, lib),
+            PInvokeError::LoadError(name, err) => write!(f, "Failed to load library '{}': {}", name, err),
+        }
+    }
+}
+
 pub struct NativeLibraries {
     root: PathBuf,
-    libraries: HashMap<String, Library>,
+    libraries: DashMap<String, Library>,
 }
 unsafe_empty_collect!(NativeLibraries);
 impl NativeLibraries {
     pub fn new(root: impl AsRef<str>) -> Self {
         Self {
             root: PathBuf::from(root.as_ref()),
-            libraries: HashMap::new(),
+            libraries: DashMap::new(),
         }
     }
 
-    pub fn get_library(&mut self, name: &str) -> &Library {
-        self.libraries.entry(name.to_string()).or_insert_with(|| {
-            let mut path = PathBuf::from(name);
-            for d in self.root.read_dir().unwrap() {
-                let d = d.unwrap();
-                if d.file_name().to_str().unwrap().starts_with(name) {
-                    path = d.path();
-                    break;
+    fn find_library_path(&self, name: &str) -> Option<PathBuf> {
+        let exact = self.root.join(name);
+        if exact.exists() {
+            return Some(exact);
+        }
+
+        // Try with platform extension
+        #[cfg(target_os = "linux")]
+        let extensions = &[".so", ".dylib", ".dll"];
+        #[cfg(target_os = "macos")]
+        let extensions = &[".dylib", ".so", ".dll"];
+        #[cfg(target_os = "windows")]
+        let extensions = &[".dll", ".so", ".dylib"];
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        let extensions = &[".so", ".dll", ".dylib"];
+
+        for ext in extensions {
+            let path = self.root.join(format!("{}{}", name, ext));
+            if path.exists() {
+                return Some(path);
+            }
+        }
+
+        // Versioned search
+        if let Ok(entries) = self.root.read_dir() {
+            for entry in entries.filter_map(Result::ok) {
+                let path = entry.path();
+                let file_name = entry.file_name();
+                let s = file_name.to_string_lossy();
+
+                if s.starts_with(name) && (s.contains(".so.") || s.contains(".dylib.")) {
+                    return Some(path);
                 }
             }
-            unsafe { Library::new(path).unwrap() }
-        })
+        }
+
+        None
     }
 
-    pub fn get_function(&mut self, library: &str, name: &str) -> CodePtr {
-        let l = self.get_library(library);
-        let sym: Symbol<unsafe extern "C" fn()> = unsafe { l.get(name.as_bytes()) }.unwrap();
-        CodePtr::from_fun(*sym)
+    pub fn get_library(&self, name: &str) -> Result<dashmap::mapref::one::Ref<'_, String, Library>, PInvokeError> {
+        if let Some(lib) = self.libraries.get(name) {
+            return Ok(lib);
+        }
+
+        let path = self
+            .find_library_path(name)
+            .ok_or_else(|| PInvokeError::LibraryNotFound(name.to_string()))?;
+
+        // Phase 4: Diagnostic logging
+        println!("P/Invoke: Resolving library '{}'...", name);
+        println!("P/Invoke: Loading library from path: {:?}", path);
+
+        let lib = unsafe { Library::new(&path) }
+            .map_err(|e| PInvokeError::LoadError(name.to_string(), e.to_string()))?;
+
+        println!("P/Invoke: Successfully loaded '{}'", name);
+        self.libraries.entry(name.to_string()).or_insert(lib);
+        Ok(self.libraries.get(name).unwrap())
+    }
+
+    pub fn get_function(&self, library: &str, name: &str) -> Result<CodePtr, PInvokeError> {
+        let l = self.get_library(library)?;
+        let sym: Symbol<unsafe extern "C" fn()> = unsafe { l.get(name.as_bytes()) }
+            .map_err(|_| PInvokeError::SymbolNotFound(library.to_string(), name.to_string()))?;
+        Ok(CodePtr::from_fun(*sym))
     }
 }
 
@@ -136,11 +202,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             unreachable!()
         };
 
+        let arg_count = method.method.signature.parameters.len();
         let mut stack_values = vec![];
-        for _ in 0..method.method.signature.parameters.len() {
-            stack_values.push(self.pop_stack(gc));
+        for i in 0..arg_count {
+            stack_values.push(self.peek_stack_at(arg_count - 1 - i));
         }
-        stack_values.reverse();
 
         let res = method.resolution();
         let module = if !res.is_null() {
@@ -151,17 +217,84 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let function = p.import_name.as_ref();
         let type_name = method.parent.type_name();
 
+        if function == "GlobalizationNative_LoadICU" {
+             println!("STUB: Skipping GlobalizationNative_LoadICU, returning 1");
+             for _ in 0..arg_count {
+                 self.pop_stack(gc);
+             }
+             self.push_stack(gc, StackValue::Int32(1));
+             return;
+        }
+        if function == "SystemNative_SetErrNo" {
+             println!("STUB: Skipping SystemNative_SetErrNo");
+             for _ in 0..arg_count {
+                 self.pop_stack(gc);
+             }
+             return;
+        }
+        if function == "SystemNative_Dup" {
+             println!("STUB: Skipping SystemNative_Dup, returning 1");
+             for _ in 0..arg_count {
+                 self.pop_stack(gc);
+             }
+             self.push_stack(gc, StackValue::NativeInt(1));
+             return;
+        }
+        if function == "SystemNative_GetErrNo" {
+             println!("STUB: Skipping SystemNative_GetErrNo, returning 0");
+             for _ in 0..arg_count {
+                 self.pop_stack(gc);
+             }
+             self.push_stack(gc, StackValue::Int32(0));
+             return;
+        }
+
         // vm_trace!(self, "Invoking [{}] function [{}]", module, function);
         println!("Invoking P/Invoke: [{}] function [{}] in type [{}]", module, function, type_name);
 
         let arg_types: Vec<String> = method.method.signature.parameters.iter()
             .map(|p| format!("{:?}", p.1))
             .collect();
-        vm_trace!(self, "  Args (Signature): {:?}", arg_types);
+        println!("  Args (Signature): {:?}", arg_types);
 
-        vm_trace!(self, "  Args (Values):    {:?}", stack_values);
+        println!("  Args (Values):    {:?}", stack_values);
 
-        let target = self.pinvoke_write().get_function(module, function);
+        let target = match self.pinvoke().get_function(module, function) {
+            Ok(t) => t,
+            Err(e) => {
+                let (exc_name, msg) = match e {
+                    PInvokeError::LibraryNotFound(lib) => (
+                        "System.DllNotFoundException",
+                        format!("Unable to load DLL '{}' or one of its dependencies.", lib),
+                    ),
+                    PInvokeError::SymbolNotFound(lib, sym) => (
+                        "System.EntryPointNotFoundException",
+                        format!("Unable to find an entry point named '{}' in DLL '{}'.", sym, lib),
+                    ),
+                    PInvokeError::LoadError(lib, err) => (
+                        "System.DllNotFoundException",
+                        format!("Unable to load DLL '{}': {}", lib, err),
+                    ),
+                };
+
+                let exception_type = self.loader().corlib_type(exc_name);
+                let exception_instance = self.current_context().new_object(exception_type);
+                let exception = ObjectRef::new(gc, HeapStorage::Obj(exception_instance));
+
+                let message_ref = StackValue::string(gc, CLRString::from(msg.as_str())).as_object_ref();
+                exception.as_object_mut(gc, |obj| {
+                    if obj.instance_storage.has_field(exception_type, "_message") {
+                         let mut field = obj.instance_storage.get_field_mut_local(exception_type, "_message");
+                         message_ref.write(&mut field);
+                    }
+                });
+
+                self.execution.exception_mode = ExceptionState::Throwing(exception);
+                return;
+            }
+        };
+
+        // println!("P/Invoke: Resolved function address: {:?}", target);
 
         let ctx = self.current_context();
         let mut args: Vec<Type> = vec![];
@@ -179,60 +312,158 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 t
             },
         };
-        let cif = Cif::new(args, return_type);
-
-        let mut storage_guards: Vec<MappedRwLockReadGuard<'_, [u8]>> = vec![];
         let mut ptr_args: Vec<*mut c_void> = vec![];
+        let mut temp_buffers: Vec<Vec<u8>> = vec![];
+        let mut write_backs: Vec<(std::ptr::NonNull<u8>, usize, usize)> = vec![];
+        let mut arg_buffer_map: Vec<Option<usize>> = vec![None; stack_values.len()];
 
-        // First pass: collect ManagedPtr values to ensure stable storage
-        for v in &stack_values {
-            if let StackValue::ManagedPtr(p) = v {
-                let ptr = p
-                    .value
-                    .map(|x| x.as_ptr() as *mut c_void)
-                    .unwrap_or(std::ptr::null_mut());
-                ptr_args.push(ptr);
+        // Pass 1: Prepare buffers
+        for (i, v) in stack_values.iter().enumerate() {
+            let ffi_size = unsafe { (*args[i].as_raw_ptr()).size };
+            match v {
+                StackValue::ValueType(o) => {
+                    let mut data = o.instance_storage.get().to_vec();
+                    if data.len() < ffi_size {
+                        data.resize(ffi_size, 0);
+                    }
+
+                    if data.is_empty() {
+                        temp_buffers.push(vec![0]);
+                    } else {
+                        temp_buffers.push(data);
+                    }
+                    arg_buffer_map[i] = Some(temp_buffers.len() - 1);
+                }
+                StackValue::ManagedPtr(p) => {
+                    let mut handled = false;
+                    if let Some(val_ptr) = p.value {
+                        if let Some(owner) = p.owner {
+                            match owner {
+                                dotnet_value::pointer::ManagedPtrOwner::Heap(h) => {
+                                    let obj_lock = h.borrow();
+                                    match &obj_lock.storage {
+                                        HeapStorage::Obj(o)
+                                        | HeapStorage::Boxed(ValueType::Struct(o)) => {
+                                            let guard = o.instance_storage.get();
+                                            let base_ptr = guard.as_ptr();
+                                            let total_len = guard.len();
+                                            let current_ptr = val_ptr.as_ptr();
+                                            // SAFETY: We trust the owner to be correct
+                                            let offset =
+                                                unsafe { current_ptr.offset_from(base_ptr) };
+
+                                            if offset >= 0 && (offset as usize) < total_len {
+                                                let rem_len = total_len - (offset as usize);
+                                                let buf_len = std::cmp::max(rem_len, ffi_size);
+                                                let mut buf = vec![0u8; buf_len];
+                                                unsafe {
+                                                    std::ptr::copy_nonoverlapping(
+                                                        current_ptr,
+                                                        buf.as_mut_ptr(),
+                                                        rem_len,
+                                                    );
+                                                }
+                                                temp_buffers.push(buf);
+                                                let buf_idx = temp_buffers.len() - 1;
+                                                arg_buffer_map[i] = Some(buf_idx);
+                                                write_backs.push((val_ptr, buf_idx, rem_len));
+                                                handled = true;
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                dotnet_value::pointer::ManagedPtrOwner::Stack(s) => {
+                                    let o = unsafe { s.as_ref() };
+                                    let guard = o.instance_storage.get();
+                                    let base_ptr = guard.as_ptr();
+                                    let total_len = guard.len();
+                                    let current_ptr = val_ptr.as_ptr();
+                                    let offset = unsafe { current_ptr.offset_from(base_ptr) };
+
+                                    if offset >= 0 && (offset as usize) < total_len {
+                                        let rem_len = total_len - (offset as usize);
+                                        let buf_len = std::cmp::max(rem_len, ffi_size);
+                                        let mut buf = vec![0u8; buf_len];
+                                        unsafe {
+                                            std::ptr::copy_nonoverlapping(
+                                                current_ptr,
+                                                buf.as_mut_ptr(),
+                                                rem_len,
+                                            );
+                                        }
+                                        temp_buffers.push(buf);
+                                        let buf_idx = temp_buffers.len() - 1;
+                                        arg_buffer_map[i] = Some(buf_idx);
+                                        write_backs.push((val_ptr, buf_idx, rem_len));
+                                        handled = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if !handled {
+                        let ptr = p
+                            .value
+                            .map(|x| x.as_ptr() as *mut c_void)
+                            .unwrap_or(std::ptr::null_mut());
+                        ptr_args.push(ptr);
+                    }
+                }
+                _ => {}
             }
         }
+
+        let cif = Cif::new(args, return_type.clone());
 
         let mut ptr_args_iter = ptr_args.iter();
         let mut arg_values: Vec<Arg> = vec![];
 
-        for v in &stack_values {
+        for (i, v) in stack_values.iter().enumerate() {
             let arg = match v {
-                StackValue::Int32(i) => Arg::new(i),
-                StackValue::Int64(i) => Arg::new(i),
-                StackValue::NativeInt(i) => Arg::new(i),
-                StackValue::NativeFloat(f) => Arg::new(f),
-                StackValue::UnmanagedPtr(p) => Arg::new(&p.0),
-                StackValue::ManagedPtr(p) => {
-                    // TODO: Step 2 - If passing a pointer-to-pointer (by ref), we should ensure the stack slot is pinned.
-                    // Currently we rely on the caller/VM to have pinned the object if necessary.
-                    if let Some(dotnet_value::pointer::ManagedPtrOwner::Heap(_)) = p.owner {
-                        // In the future, we might want to: assert!(p.pinned, "ManagedPtr to heap must be pinned for P/Invoke");
-                    }
-                    
-                    let ptr_ref = ptr_args_iter.next().unwrap();
-                    Arg::new(ptr_ref)
-                }
-                StackValue::ValueType(o) => {
-                    let guard = o.instance_storage.get();
-                    let ptr = guard.as_ptr();
-                    storage_guards.push(guard);
-                    unsafe {
-                        // SAFETY: Arg is a transparent wrapper around a *mut c_void in libffi-rs.
-                        // We are passing a pointer to the start of the value type's storage.
-                        mem::transmute::<*mut c_void, Arg>(ptr as _)
+                StackValue::Int32(ref i) => Arg::new(i),
+                StackValue::Int64(ref i) => Arg::new(i),
+                StackValue::NativeInt(ref i) => Arg::new(i),
+                StackValue::NativeFloat(ref f) => Arg::new(f),
+                StackValue::UnmanagedPtr(ref p) => Arg::new(&p.0),
+                StackValue::ManagedPtr(_) => {
+                    if let Some(idx) = arg_buffer_map[i] {
+                        Arg::new(&temp_buffers[idx][0])
+                    } else {
+                        let ptr_ref = ptr_args_iter.next().unwrap();
+                        Arg::new(ptr_ref)
                     }
                 }
-                rest => panic!("marshalling not yet supported for {:?} in P/Invoke calling {}::{}", rest, module, function),
+                StackValue::ValueType(_) => {
+                    let idx = arg_buffer_map[i].unwrap();
+                    Arg::new(&temp_buffers[idx][0])
+                }
+                rest => panic!(
+                    "marshalling not yet supported for {:?} in P/Invoke calling {}::{}",
+                    rest, module, function
+                ),
             };
             arg_values.push(arg);
         }
 
+        let do_write_back = || unsafe {
+            for (dest_ptr, buf_idx, len) in &write_backs {
+                let buf = &temp_buffers[*buf_idx];
+                std::ptr::copy_nonoverlapping(buf.as_ptr(), dest_ptr.as_ptr(), *len);
+            }
+        };
+
+        println!("P/Invoke: Calling {}::{} with {} args", module, function, arg_values.len());
         match &method.method.signature.return_type.1 {
             None => {
+                println!("P/Invoke: [PRE-CALL] (void) {}::{}", module, function);
                 let _: c_void = unsafe { cif.call(target, &arg_values) };
+                do_write_back();
+                println!("P/Invoke: [POST-CALL] (void) {}::{}", module, function);
+                for _ in 0..arg_count {
+                    self.pop_stack(gc);
+                }
             }
             Some(p) => {
                 let ParameterType::Value(t) = p else {
@@ -240,9 +471,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 };
 
                 macro_rules! read_return {
-                    ($t:ty) => {
-                        unsafe { cif.call::<$t>(target, &arg_values) }
-                    };
+                    ($t:ty) => {{
+                        println!("P/Invoke: [PRE-CALL] (ret) {}::{}", module, function);
+                        let res = unsafe { cif.call::<$t>(target, &arg_values) };
+                        do_write_back();
+                        println!("P/Invoke: [POST-CALL] (ret) {}::{}", module, function);
+                        res
+                    }};
                 }
 
                 macro_rules! read_into_i32 {
@@ -288,22 +523,50 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             })
                             .collect();
 
-                        unsafe {
-                            libffi::raw::ffi_call(
-                                cif.as_raw_ptr(),
-                                Some(*target.as_fun()),
-                                instance.instance_storage.get_mut().as_mut_ptr() as *mut c_void,
-                                arg_ptrs.as_mut_ptr(),
-                            );
+                        println!("P/Invoke: Calling (raw struct return) {}::{} with {} args", module, function, arg_ptrs.len());
+                        println!("P/Invoke: [PRE-CALL] (struct) {}::{}", module, function);
+                        let allocated_size = instance.instance_storage.get().len();
+                        let ffi_size = unsafe { (*return_type.as_raw_ptr()).size };
+
+                        // Check for buffer overflow risk
+                        if ffi_size > allocated_size {
+                             println!("P/Invoke: [WARNING] Buffer overflow detected! FFI expects {} bytes, but object has {} bytes. Using temp buffer.", ffi_size, allocated_size);
+                             let mut temp_buffer = vec![0u8; ffi_size];
+                             unsafe {
+                                libffi::raw::ffi_call(
+                                    cif.as_raw_ptr(),
+                                    Some(*target.as_fun()),
+                                    temp_buffer.as_mut_ptr() as *mut c_void,
+                                    arg_ptrs.as_mut_ptr(),
+                                );
+                            }
+                            // Copy valid data back to the object
+                            let mut guard = instance.instance_storage.get_mut();
+                            guard.copy_from_slice(&temp_buffer[..allocated_size]);
+                        } else {
+                            unsafe {
+                                libffi::raw::ffi_call(
+                                    cif.as_raw_ptr(),
+                                    Some(*target.as_fun()),
+                                    instance.instance_storage.get_mut().as_mut_ptr() as *mut c_void,
+                                    arg_ptrs.as_mut_ptr(),
+                                );
+                            }
                         }
+                        do_write_back();
+                        println!("P/Invoke: [POST-CALL] (struct) {}::{}", module, function);
 
                         StackValue::ValueType(Box::new(instance))
                     }
                     rest => todo!("marshalling not yet supported for {:?}", rest),
                 };
                 vm_trace!(self, "-- returning {v:?} --");
+                for _ in 0..arg_count {
+                    self.pop_stack(gc);
+                }
                 self.push_stack(gc, v);
             }
         }
+        println!("P/Invoke: Returned from {}::{}", module, function);
     }
 }

@@ -114,3 +114,14 @@ pub fn intrinsic_math_sqrt<'gc, 'm: 'gc>(
     }
     StepResult::InstructionStepped
 }
+
+pub fn intrinsic_bitconverter_is_little_endian<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _field: dotnet_types::members::FieldDescription,
+    _type_generics: Vec<dotnet_types::generics::ConcreteType>,
+    _is_address: bool,
+) -> StepResult {
+    vm_push!(stack, gc, Int32(1));
+    StepResult::InstructionStepped
+}
