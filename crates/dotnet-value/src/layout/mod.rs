@@ -1,24 +1,45 @@
 use crate::object::ObjectRef;
 use dotnet_types::TypeDescription;
 use dotnet_utils::sync::Arc;
-use enum_dispatch::enum_dispatch;
 use gc_arena::{Collect, Collection};
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
 };
 
-#[enum_dispatch]
 pub trait HasLayout {
     fn size(&self) -> usize;
 }
 
-#[enum_dispatch(HasLayout)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayoutManager {
-    FieldLayoutManager,
-    ArrayLayoutManager,
-    Scalar,
+    FieldLayoutManager(FieldLayoutManager),
+    ArrayLayoutManager(ArrayLayoutManager),
+    Scalar(Scalar),
+}
+impl HasLayout for LayoutManager {
+    fn size(&self) -> usize {
+        match self {
+            LayoutManager::FieldLayoutManager(f) => f.size(),
+            LayoutManager::ArrayLayoutManager(a) => a.size(),
+            LayoutManager::Scalar(s) => s.size(),
+        }
+    }
+}
+impl From<FieldLayoutManager> for LayoutManager {
+    fn from(f: FieldLayoutManager) -> Self {
+        Self::FieldLayoutManager(f)
+    }
+}
+impl From<ArrayLayoutManager> for LayoutManager {
+    fn from(a: ArrayLayoutManager) -> Self {
+        Self::ArrayLayoutManager(a)
+    }
+}
+impl From<Scalar> for LayoutManager {
+    fn from(s: Scalar) -> Self {
+        Self::Scalar(s)
+    }
 }
 
 impl LayoutManager {

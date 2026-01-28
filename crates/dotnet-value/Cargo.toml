@@ -8,7 +8,6 @@ dotnet-types = { workspace = true }
 dotnet-utils = { workspace = true, default-features = false }
 gc-arena = { workspace = true }
 dotnetdll = { workspace = true }
-enum_dispatch = { workspace = true }
 
 [features]
 default = ["multithreaded-gc"]
