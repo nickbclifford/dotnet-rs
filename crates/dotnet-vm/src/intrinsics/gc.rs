@@ -94,6 +94,7 @@ pub fn intrinsic_gc_collect_0<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
+    eprintln!("DEBUG: intrinsic_gc_collect_0 called. Setting needs_full_collect = true");
     stack.heap().needs_full_collect.set(true);
     StepResult::InstructionStepped
 }

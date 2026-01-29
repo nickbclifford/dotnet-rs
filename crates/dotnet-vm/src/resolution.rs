@@ -355,22 +355,26 @@ impl TypeResolutionExt for TypeDescription {
     }
 
     fn has_finalizer(&self, ctx: &ResolutionContext) -> bool {
-        for (ancestor, _) in ctx.get_ancestors(*self) {
-            let ns = ancestor.definition().namespace.as_deref().unwrap_or("");
-            let name = &ancestor.definition().name;
-            if ns == "System" && name == "Object" {
-                continue;
-            }
-            if ns == "System" && name == "ValueType" {
-                continue;
-            }
-            if ns == "System" && name == "Enum" {
-                continue;
+        let check_type = |td: TypeDescription| {
+            let def = td.definition();
+            let ns = def.namespace.as_deref().unwrap_or("");
+            let name = &def.name;
+
+            if ns == "System" && (name == "Object" || name == "ValueType" || name == "Enum") {
+                return false;
             }
 
-            if ancestor.definition().methods.iter().any(|m| {
+            def.methods.iter().any(|m| {
                 m.name == "Finalize" && m.virtual_member && m.signature.parameters.is_empty()
-            }) {
+            })
+        };
+
+        if check_type(*self) {
+            return true;
+        }
+
+        for (ancestor, _) in ctx.get_ancestors(*self) {
+            if check_type(ancestor) {
                 return true;
             }
         }

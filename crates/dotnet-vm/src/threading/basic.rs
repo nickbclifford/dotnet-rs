@@ -495,6 +495,23 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                     }
                 });
             }
+            GCCommand::Finalize => {
+                THREAD_ARENA.with(|cell| {
+                    if let Ok(mut arena_opt) = cell.try_borrow_mut() {
+                        if let Some(arena) = arena_opt.as_mut() {
+                            // Ensure we are in Marked phase
+                            let mut marked = None;
+                            while marked.is_none() {
+                                marked = arena.mark_all();
+                            }
+
+                            if let Some(marked) = marked {
+                                marked.finalize(|fc, c| c.finalize_check(fc));
+                            }
+                        }
+                    }
+                });
+            }
             GCCommand::Sweep => {
                 THREAD_ARENA.with(|cell| {
                     if let Ok(mut arena_opt) = cell.try_borrow_mut() {

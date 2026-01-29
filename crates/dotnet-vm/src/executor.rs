@@ -296,6 +296,7 @@ impl Executor {
 
     /// Perform a full GC collection with stop-the-world coordination.
     fn perform_full_gc(&mut self) {
+        eprintln!("DEBUG: perform_full_gc called");
         use crate::{vm_trace_gc_collection_end, vm_trace_gc_collection_start};
         #[cfg(feature = "multithreaded-gc")]
         {

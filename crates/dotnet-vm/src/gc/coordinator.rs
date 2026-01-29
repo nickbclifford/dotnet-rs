@@ -208,7 +208,20 @@ impl GCCoordinator {
             }
         }
 
-        // Phase 3: Sweep
+        // Phase 3: Finalize
+        for handle in self.get_all_arenas() {
+            if handle.thread_id != initiating_thread_id {
+                let mut cmd = handle.current_command.lock();
+                *cmd = Some(GCCommand::Finalize);
+                handle.command_signal.notify_all();
+            }
+        }
+
+        execute_gc_command_for_current_thread(GCCommand::Finalize, self);
+
+        self.wait_on_other_arenas(initiating_thread_id);
+
+        // Phase 4: Sweep
         for handle in self.get_all_arenas() {
             if handle.thread_id != initiating_thread_id {
                 let mut cmd = handle.current_command.lock();
@@ -408,25 +421,33 @@ mod tests {
         coordinator.register_arena(handle1);
         coordinator.register_arena(handle2.clone());
 
+        let done = Arc::new(AtomicBool::new(false));
+        let done_clone = done.clone();
         let coordinator_clone = coordinator.clone();
-        thread::spawn(move || {
-            // Wait until we actually have a command
-            loop {
-                let cmd = handle2.current_command.lock();
-                if cmd.is_some() {
-                    break;
-                }
-                drop(cmd);
-                thread::sleep(Duration::from_millis(10));
-            }
 
-            // Command received! Now call command_finished.
-            coordinator_clone.command_finished(2);
+        let t = thread::spawn(move || {
+            // Wait until we actually have a command
+            while !done_clone.load(Ordering::Relaxed) {
+                let has_cmd = {
+                    let cmd = handle2.current_command.lock();
+                    cmd.is_some()
+                };
+
+                if has_cmd {
+                    // Command received! Now call command_finished.
+                    coordinator_clone.command_finished(2);
+                } else {
+                    thread::sleep(Duration::from_millis(10));
+                }
+            }
         });
 
         // Initiator (Thread 1) calls collect_all_arenas.
         // This used to deadlock because wait_on_other_arenas held the arenas lock
         // while waiting for command_finished, which also needed the arenas lock.
         coordinator.collect_all_arenas(1);
+
+        done.store(true, Ordering::Relaxed);
+        t.join().unwrap();
     }
 }

@@ -309,6 +309,8 @@ pub enum GCCommand {
     /// Mark specific objects in the local arena (for cross-arena resurrection).
     /// Stores opaque pointers (usize) to avoid dependency on ObjectPtr.
     MarkObjects(HashSet<usize>),
+    /// Run finalizers for dead objects.
+    Finalize,
     /// Finish collection (sweep).
     Sweep,
 }
