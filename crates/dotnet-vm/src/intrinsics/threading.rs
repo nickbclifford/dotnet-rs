@@ -57,7 +57,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
     pop_args!(
         stack,
         gc,
-        [Int32(comparand), Int32(value), ManagedPtr(target_ptr)]
+        [ManagedPtr(target_ptr), Int32(value), Int32(comparand)]
     );
 
     // Ensure we are pointing to an Int32
