@@ -376,7 +376,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         let obj_ref = self.local.heap.pending_finalization.borrow_mut().pop();
         if let Some(obj_ref) = obj_ref {
-            eprintln!("DEBUG: Processing pending finalizer for object {:?}", obj_ref);
             self.local.heap.processing_finalizer.set(true);
             let ptr = obj_ref.0.unwrap();
             let obj_type = match &ptr.borrow().storage {
@@ -420,8 +419,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 caches: self.shared.caches.clone(),
             };
             let target_method = self.resolve_virtual_method(base_finalize, obj_type, Some(&ctx));
-            
-            eprintln!("DEBUG: Resolved Finalize to: {:?} in {:?}", target_method.method.name, target_method.parent.type_name());
 
             self.entrypoint_frame(
                 gc,
@@ -709,10 +706,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn finalize_check(&self, fc: &gc_arena::Finalization<'gc>) {
-        eprintln!("DEBUG: finalize_check called");
         let heap = &self.local.heap;
         let mut queue = heap.finalization_queue.borrow_mut();
-        eprintln!("DEBUG: finalization_queue len: {}", queue.len());
         let mut handles = heap.gchandles.borrow_mut();
         let mut resurrected = HashSet::new();
 
@@ -742,7 +737,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 // Debug print
                 let is_dead = Gc::is_dead(fc, ptr);
-                eprintln!("DEBUG: Checking obj {:?} in finalization queue. is_dead: {}", obj, is_dead);
 
                 let is_suppressed = match &ptr.borrow().storage {
                     HeapStorage::Obj(o) => o.finalizer_suppressed,
