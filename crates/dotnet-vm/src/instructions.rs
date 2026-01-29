@@ -1669,6 +1669,36 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         return self.throw_by_name(gc, "System.NullReferenceException")
                     }
                     StackValue::ObjectRef(ObjectRef(Some(h))) => {
+                        // Intercept System.Runtime.CompilerServices.RawData access
+                        // This acts as an intrinsic for Unsafe.As<T, RawData> usage
+                        if field.parent.type_name() == "System.Runtime.CompilerServices.RawData" {
+                            let data = h.borrow();
+                            let ptr = match &data.storage {
+                                HeapStorage::Obj(o) => o.instance_storage.get().as_ptr() as *mut u8,
+                                HeapStorage::Vec(v) => v.get().as_ptr() as *mut u8,
+                                HeapStorage::Boxed(b) => match b {
+                                    dotnet_value::object::ValueType::Struct(s) => {
+                                        s.instance_storage.get().as_ptr() as *mut u8
+                                    }
+                                    _ => ptr::null_mut(),
+                                },
+                                HeapStorage::Str(_) => ptr::null_mut(),
+                            };
+
+                            if !ptr.is_null() {
+                                let target_type = self.current_context().get_field_desc(field);
+                                drop(data);
+                                push!(StackValue::managed_ptr(
+                                    ptr,
+                                    target_type,
+                                    Some(ManagedPtrOwner::Heap(h)),
+                                    false
+                                ));
+                                self.increment_ip();
+                                return StepResult::InstructionStepped;
+                            }
+                        }
+
                         // Intercept System.Runtime.CompilerServices.RawArrayData access on arrays
                         // This acts as an intrinsic for Unsafe.As<Array, RawArrayData> usage
                         if field.parent.type_name()

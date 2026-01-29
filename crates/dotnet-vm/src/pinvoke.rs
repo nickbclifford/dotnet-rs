@@ -230,39 +230,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let function = p.import_name.as_ref();
         let type_name = method.parent.type_name();
 
-        if function == "GlobalizationNative_LoadICU" {
-            println!("STUB: Skipping GlobalizationNative_LoadICU, returning 1");
-            for _ in 0..arg_count {
-                self.pop_stack(gc);
-            }
-            self.push_stack(gc, StackValue::Int32(1));
-            return;
-        }
-        if function == "SystemNative_SetErrNo" {
-            println!("STUB: Skipping SystemNative_SetErrNo");
-            for _ in 0..arg_count {
-                self.pop_stack(gc);
-            }
-            return;
-        }
-        if function == "SystemNative_Dup" {
-            println!("STUB: Skipping SystemNative_Dup, returning 1");
-            for _ in 0..arg_count {
-                self.pop_stack(gc);
-            }
-            self.push_stack(gc, StackValue::NativeInt(1));
-            return;
-        }
-        if function == "SystemNative_GetErrNo" {
-            println!("STUB: Skipping SystemNative_GetErrNo, returning 0");
-            for _ in 0..arg_count {
-                self.pop_stack(gc);
-            }
-            self.push_stack(gc, StackValue::Int32(0));
-            return;
-        }
-
-        // vm_trace!(self, "Invoking [{}] function [{}]", module, function);
         println!(
             "Invoking P/Invoke: [{}] function [{}] in type [{}]",
             module, function, type_name
