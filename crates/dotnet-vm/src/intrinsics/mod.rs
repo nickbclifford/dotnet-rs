@@ -1986,6 +1986,13 @@ impl IntrinsicRegistry {
                 diagnostics::intrinsic_is_event_source_logging_enabled,
                 "Prevent QCall lookup",
             );
+            Intercept(
+                "System.Diagnostics.Tracing.EventPipeInternal",
+                "CreateProvider",
+                3,
+                diagnostics::intrinsic_eventpipe_create_provider,
+                "Prevent QCall lookup for EventPipe",
+            );
         });
 
         if let Some(tracer) = tracer {

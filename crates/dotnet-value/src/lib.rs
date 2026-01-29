@@ -83,9 +83,9 @@ unsafe impl<'gc> Collect for StackValue<'gc> {
 macro_rules! checked_arithmetic_op {
     ($l:expr, $r:expr, $sgn:expr, $op:ident) => {
         match ($l, $r, $sgn) {
-            (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Signed) => l
-                .$op(r)
-                .map(StackValue::Int32)
+            (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Signed) => (l as u32)
+                .$op(r as u32)
+                .map(|v| StackValue::Int32(v as i32))
                 .ok_or("System.OverflowException"),
             (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Unsigned) => (l as u32)
                 .$op(r as u32)
@@ -108,6 +108,23 @@ macro_rules! checked_arithmetic_op {
                 .$op(r as usize)
                 .map(|v| StackValue::NativeInt(v as isize))
                 .ok_or("System.OverflowException"),
+            // Mixed types (Int32 <-> NativeInt)
+            (StackValue::NativeInt(l), StackValue::Int32(r), NumberSign::Signed) => l
+                .$op(r as isize)
+                .map(StackValue::NativeInt)
+                .ok_or("System.OverflowException"),
+            (StackValue::NativeInt(l), StackValue::Int32(r), NumberSign::Unsigned) => (l as usize)
+                .$op((r as u32) as usize)
+                .map(|v| StackValue::NativeInt(v as isize))
+                .ok_or("System.OverflowException"),
+            (StackValue::Int32(l), StackValue::NativeInt(r), NumberSign::Signed) => (l as isize)
+                .$op(r)
+                .map(StackValue::NativeInt)
+                .ok_or("System.OverflowException"),
+            (StackValue::Int32(l), StackValue::NativeInt(r), NumberSign::Unsigned) => ((l as u32) as usize)
+                .$op(r as usize)
+                .map(|v| StackValue::NativeInt(v as isize))
+                .ok_or("System.OverflowException"),
             (l, r, _) => panic!("invalid types for checked operation: {:?}, {:?}", l, r),
         }
     };
@@ -123,6 +140,11 @@ macro_rules! arithmetic_op {
             (StackValue::NativeInt(l), StackValue::NativeInt(r), NumberSign::Signed) => StackValue::NativeInt(l $op r),
             (StackValue::NativeInt(l), StackValue::NativeInt(r), NumberSign::Unsigned) => StackValue::NativeInt(((l as usize) $op (r as usize)) as isize),
             (StackValue::NativeFloat(l), StackValue::NativeFloat(r), _) => StackValue::NativeFloat(l $op r),
+            // Mixed types (Int32 <-> NativeInt)
+            (StackValue::NativeInt(l), StackValue::Int32(r), NumberSign::Signed) => StackValue::NativeInt(l $op (r as isize)),
+            (StackValue::NativeInt(l), StackValue::Int32(r), NumberSign::Unsigned) => StackValue::NativeInt(((l as usize) $op ((r as u32) as usize)) as isize),
+            (StackValue::Int32(l), StackValue::NativeInt(r), NumberSign::Signed) => StackValue::NativeInt((l as isize) $op r),
+            (StackValue::Int32(l), StackValue::NativeInt(r), NumberSign::Unsigned) => StackValue::NativeInt((((l as u32) as usize) $op (r as usize)) as isize),
             (l, r, _) => panic!("invalid types for arithmetic operation: {:?}, {:?}", l, r),
         }
     };

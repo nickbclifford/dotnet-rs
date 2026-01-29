@@ -42,7 +42,10 @@ impl ResolutionS {
     pub fn definition(&self) -> &'static Resolution<'static> {
         match self.0 {
             Some(p) => unsafe { &*p.as_ptr() },
-            None => panic!("Attempted to access resolution of a null or uninitialized ResolutionS"),
+            None => {
+                eprintln!("DEBUG: ResolutionS NULL");
+                std::process::abort();
+            },
         }
     }
 }

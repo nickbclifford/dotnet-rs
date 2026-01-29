@@ -173,6 +173,7 @@ pub struct TraceStats {
     pub thread_safepoints: usize,
     #[cfg(feature = "multithreading")]
     pub thread_suspensions: usize,
+    pub interop_calls: usize,
 }
 
 pub struct Tracer {
@@ -189,17 +190,14 @@ unsafe_empty_collect!(Tracer);
 impl Tracer {
     pub fn new() -> Self {
         let trace_env = env::var("DOTNET_RS_TRACE");
-        println!("Tracer::new: DOTNET_RS_TRACE={:?}", trace_env);
 
         let writer: Option<Box<dyn Write + Send>> = match trace_env {
             Ok(val) if val == "1" || val == "true" || val == "stdout" => Some(Box::new(stdout())),
             Ok(val) if val == "stderr" => Some(Box::new(stderr())),
             Ok(val) if !val.is_empty() => {
                 // assume it's a file path
-                println!("Tracer: attempting to create file '{}'", val);
                 match File::create(&val) {
                     Ok(f) => {
-                        println!("Tracer: created file successfully");
                         Some(Box::new(f))
                     }
                     Err(e) => {
@@ -510,6 +508,20 @@ impl Tracer {
         );
     }
 
+    pub fn trace_interop(&mut self, indent: usize, operation: &str, details: &str) {
+        if !self.is_enabled() {
+            return;
+        }
+        if self.detailed_stats {
+            self.stats.interop_calls += 1;
+        }
+        self.write_msg(
+            TraceLevel::Debug,
+            indent,
+            format_args!("🔗 INTEROP {} {}", operation, details),
+        );
+    }
+
     // Performance counter helpers
     pub fn get_message_count(&self) -> usize {
         self.message_count.load(Ordering::Relaxed)
@@ -551,6 +563,7 @@ impl Tracer {
         eprintln!("Branches:            {:>12}", stats.branches);
         eprintln!("Stack operations:    {:>12}", stats.stack_ops);
         eprintln!("Field accesses:      {:>12}", stats.field_accesses);
+        eprintln!("Interop calls:       {:>12}", stats.interop_calls);
         eprintln!("========================\n");
     }
 }

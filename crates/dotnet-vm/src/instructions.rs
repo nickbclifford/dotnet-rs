@@ -1744,8 +1744,25 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         let source_ptr: *mut u8 = match &data.storage {
                             HeapStorage::Vec(_) => todo!("field on array"),
                             HeapStorage::Obj(o) => o.instance_storage.get().as_ptr() as *mut u8,
-                            HeapStorage::Str(_) => {
-                                panic!("field on string: {}::{}", field.parent.type_name(), name);
+                            HeapStorage::Str(s) => {
+                                if name == "_firstChar" {
+                                    // Intercept _firstChar access to point to the actual string buffer.
+                                    // We need to return a pointer P such that P + offset(_firstChar) == string_buffer.
+                                    // So P = string_buffer - offset(_firstChar).
+                                    let layout = LayoutFactory::instance_field_layout_cached(
+                                        field.parent,
+                                        &ctx,
+                                        Some(&self.shared.metrics),
+                                    );
+                                    let offset = layout
+                                        .get_field(field.parent, name.as_ref())
+                                        .expect("System.String should have _firstChar field")
+                                        .position;
+
+                                    unsafe { (s.as_ptr() as *const u8).sub(offset) as *mut u8 }
+                                } else {
+                                    panic!("field on string: {}::{}", field.parent.type_name(), name);
+                                }
                             }
                             HeapStorage::Boxed(_) => todo!("field on boxed value type"),
                         };

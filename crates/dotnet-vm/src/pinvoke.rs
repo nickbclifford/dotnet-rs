@@ -1,6 +1,6 @@
 use crate::{
     context::ResolutionContext, exceptions::ExceptionState, layout::LayoutFactory,
-    resolution::ValueResolution, CallStack,
+    resolution::ValueResolution, CallStack, tracer::Tracer,
 };
 use dashmap::DashMap;
 use dotnet_assemblies::decompose_type_source;
@@ -101,6 +101,7 @@ impl NativeLibraries {
     pub fn get_library(
         &self,
         name: &str,
+        mut tracer: Option<&mut Tracer>,
     ) -> Result<dashmap::mapref::one::Ref<'_, String, Library>, PInvokeError> {
         if let Some(lib) = self.libraries.get(name) {
             return Ok(lib);
@@ -110,20 +111,23 @@ impl NativeLibraries {
             .find_library_path(name)
             .ok_or_else(|| PInvokeError::LibraryNotFound(name.to_string()))?;
 
-        // Phase 4: Diagnostic logging
-        println!("P/Invoke: Resolving library '{}'...", name);
-        println!("P/Invoke: Loading library from path: {:?}", path);
+        if let Some(t) = &mut tracer {
+             t.trace_interop(0, "RESOLVE", &format!("Resolving library '{}'...", name));
+             t.trace_interop(0, "RESOLVE", &format!("Loading library from path: {:?}", path));
+        }
 
         let lib = unsafe { Library::new(&path) }
             .map_err(|e| PInvokeError::LoadError(name.to_string(), e.to_string()))?;
 
-        println!("P/Invoke: Successfully loaded '{}'", name);
+        if let Some(t) = tracer {
+             t.trace_interop(0, "RESOLVE", &format!("Successfully loaded '{}'", name));
+        }
         self.libraries.entry(name.to_string()).or_insert(lib);
         Ok(self.libraries.get(name).unwrap())
     }
 
-    pub fn get_function(&self, library: &str, name: &str) -> Result<CodePtr, PInvokeError> {
-        let l = self.get_library(library)?;
+    pub fn get_function(&self, library: &str, name: &str, tracer: Option<&mut Tracer>) -> Result<CodePtr, PInvokeError> {
+        let l = self.get_library(library, tracer)?;
         let sym: Symbol<unsafe extern "C" fn()> = unsafe { l.get(name.as_bytes()) }
             .map_err(|_| PInvokeError::SymbolNotFound(library.to_string(), name.to_string()))?;
         Ok(CodePtr::from_fun(*sym))
@@ -230,7 +234,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let function = p.import_name.as_ref();
         let type_name = method.parent.type_name();
 
-        println!(
+        vm_trace_interop!(
+            self,
+            "CALL",
             "Invoking P/Invoke: [{}] function [{}] in type [{}]",
             module, function, type_name
         );
@@ -242,11 +248,18 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             .iter()
             .map(|p| format!("{:?}", p.1))
             .collect();
-        println!("  Args (Signature): {:?}", arg_types);
+        vm_trace_interop!(self, "ARGS", "Signature: {:?}", arg_types);
 
-        println!("  Args (Values):    {:?}", stack_values);
+        vm_trace_interop!(self, "ARGS", "Values:    {:?}", stack_values);
 
-        let target = match self.pinvoke().get_function(module, function) {
+        let target_res = if self.tracer_enabled() {
+            let mut guard = self.tracer();
+            self.pinvoke().get_function(module, function, Some(&mut *guard))
+        } else {
+            self.pinvoke().get_function(module, function, None)
+        };
+
+        let target = match target_res {
             Ok(t) => t,
             Err(e) => {
                 let (exc_name, msg) = match e {
@@ -447,18 +460,20 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
         };
 
-        println!(
-            "P/Invoke: Calling {}::{} with {} args",
+        vm_trace_interop!(
+            self,
+            "CALLING",
+            "{}::{} with {} args",
             module,
             function,
             arg_values.len()
         );
         match &method.method.signature.return_type.1 {
             None => {
-                println!("P/Invoke: [PRE-CALL] (void) {}::{}", module, function);
+                vm_trace_interop!(self, "PRE-CALL", "(void) {}::{}", module, function);
                 let _: c_void = unsafe { cif.call(target, &arg_values) };
                 do_write_back();
-                println!("P/Invoke: [POST-CALL] (void) {}::{}", module, function);
+                vm_trace_interop!(self, "POST-CALL", "(void) {}::{}", module, function);
                 for _ in 0..arg_count {
                     self.pop_stack(gc);
                 }
@@ -470,10 +485,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 macro_rules! read_return {
                     ($t:ty) => {{
-                        println!("P/Invoke: [PRE-CALL] (ret) {}::{}", module, function);
+                        vm_trace_interop!(self, "PRE-CALL", "(ret) {}::{}", module, function);
                         let res = unsafe { cif.call::<$t>(target, &arg_values) };
                         do_write_back();
-                        println!("P/Invoke: [POST-CALL] (ret) {}::{}", module, function);
+                        vm_trace_interop!(self, "POST-CALL", "(ret) {}::{}", module, function);
                         res
                     }};
                 }
@@ -521,19 +536,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             })
                             .collect();
 
-                        println!(
-                            "P/Invoke: Calling (raw struct return) {}::{} with {} args",
+                        vm_trace_interop!(
+                            self,
+                            "CALLING",
+                            "(raw struct return) {}::{} with {} args",
                             module,
                             function,
                             arg_ptrs.len()
                         );
-                        println!("P/Invoke: [PRE-CALL] (struct) {}::{}", module, function);
+                        vm_trace_interop!(self, "PRE-CALL", "(struct) {}::{}", module, function);
                         let allocated_size = instance.instance_storage.get().len();
                         let ffi_size = unsafe { (*return_type.as_raw_ptr()).size };
 
                         // Check for buffer overflow risk
                         if ffi_size > allocated_size {
-                            println!("P/Invoke: [WARNING] Buffer overflow detected! FFI expects {} bytes, but object has {} bytes. Using temp buffer.", ffi_size, allocated_size);
+                            vm_trace_interop!(self, "WARNING", "Buffer overflow detected! FFI expects {} bytes, but object has {} bytes. Using temp buffer.", ffi_size, allocated_size);
                             let mut temp_buffer = vec![0u8; ffi_size];
                             unsafe {
                                 libffi::raw::ffi_call(
@@ -557,7 +574,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             }
                         }
                         do_write_back();
-                        println!("P/Invoke: [POST-CALL] (struct) {}::{}", module, function);
+                        vm_trace_interop!(self, "POST-CALL", "(struct) {}::{}", module, function);
 
                         StackValue::ValueType(Box::new(instance))
                     }
@@ -570,6 +587,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 self.push_stack(gc, v);
             }
         }
-        println!("P/Invoke: Returned from {}::{}", module, function);
+        vm_trace_interop!(self, "RETURN", "Returned from {}::{}", module, function);
     }
 }

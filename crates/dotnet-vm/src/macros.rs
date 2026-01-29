@@ -120,6 +120,15 @@ macro_rules! vm_trace_intrinsic {
 }
 
 #[macro_export]
+macro_rules! vm_trace_interop {
+    ($src:expr, $op:expr, $($arg:tt)*) => {
+        if $src.tracer_enabled() {
+            $src.tracer().trace_interop($src.indent(), $op, &format!($($arg)*));
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! vm_trace_method_exit {
     ($src:expr, $name:expr) => {
         if $src.tracer_enabled() {

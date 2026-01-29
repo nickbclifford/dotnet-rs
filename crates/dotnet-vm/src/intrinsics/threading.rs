@@ -1,13 +1,14 @@
 use crate::{
     pop_args,
     sync::{Arc, AtomicI32, Ordering, SyncBlockOps, SyncManagerOps},
-    vm_pop, vm_push, CallStack, StepResult,
+    vm_expect_stack, vm_pop, vm_push, CallStack, StepResult,
 };
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{object::ObjectRef, StackValue};
-use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
-use std::{ptr, sync::atomic, thread};
+use dotnetdll::prelude::{BaseType, MethodType, Parameter, ParameterType};
+use gc_arena::Gc;
+use std::{mem, ptr, sync::atomic, thread};
 
 /// System.Threading.Monitor::Exit(object) - Releases the lock on an object.
 pub fn intrinsic_monitor_exit<'gc, 'm: 'gc>(
@@ -45,38 +46,95 @@ pub fn intrinsic_monitor_exit<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
-/// System.Threading.Interlocked::CompareExchange(ref int, int, int) -
+/// System.Threading.Interlocked::CompareExchange(ref T, T, T)
 /// Atomically compares two values for equality and, if they are equal,
 /// replaces one of the values.
 pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
+    method: MethodDescription,
+    generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(
-        stack,
-        gc,
-        [ManagedPtr(target_ptr), Int32(value), Int32(comparand)]
-    );
+    let params = &method.method.signature.parameters;
+    // CompareExchange(ref T, T, T) -> T
+    // params[0] is 'ref T'.
+    let Parameter(_, first_param_type) = &params[0];
 
-    // Ensure we are pointing to an Int32
-    // TODO: support other types (long, IntPtr, object, etc.) via overloads
-    let target = target_ptr
-        .value
-        .expect("Target pointer should not be null")
-        .as_ptr() as *mut i32;
-
-    let prev = match unsafe { AtomicI32::from_ptr(target) }.compare_exchange(
-        comparand,
-        value,
-        Ordering::SeqCst,
-        Ordering::SeqCst,
-    ) {
-        Ok(prev) | Err(prev) => prev,
+    let target_type = if let ParameterType::Ref(inner) = first_param_type {
+        generics.make_concrete(method.resolution(), inner.clone())
+    } else {
+        panic!(
+            "intrinsic_interlocked_compare_exchange: First parameter must be Ref, found {:?}",
+            first_param_type
+        );
     };
 
-    vm_push!(stack, gc, Int32(prev));
+    match target_type.get() {
+        BaseType::Int32 => {
+            pop_args!(
+                stack,
+                gc,
+                [ManagedPtr(target_ptr), Int32(value), Int32(comparand)]
+            );
+
+            let target = target_ptr
+                .value
+                .expect("Target pointer should not be null")
+                .as_ptr() as *mut i32;
+
+            let prev = match unsafe { AtomicI32::from_ptr(target) }.compare_exchange(
+                comparand,
+                value,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(prev) | Err(prev) => prev,
+            };
+
+            vm_push!(stack, gc, Int32(prev));
+        }
+        _ => {
+            // Assume ObjectRef (pointer sized) for all other types for now.
+            pop_args!(
+                stack,
+                gc,
+                [ManagedPtr(target_ptr), ObjectRef(value), ObjectRef(comparand)]
+            );
+
+            let target = target_ptr
+                .value
+                .expect("Target pointer should not be null")
+                .as_ptr() as *mut usize;
+
+            let val_raw = match value.0 {
+                Some(ptr) => Gc::as_ptr(ptr) as usize,
+                None => 0,
+            };
+            let comp_raw = match comparand.0 {
+                Some(ptr) => Gc::as_ptr(ptr) as usize,
+                None => 0,
+            };
+
+            let prev_raw = match unsafe { atomic::AtomicUsize::from_ptr(target) }.compare_exchange(
+                comp_raw,
+                val_raw,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(prev) | Err(prev) => prev,
+            };
+
+            let prev = if prev_raw == 0 {
+                ObjectRef(None)
+            } else {
+                // SAFETY: We just read this from an AtomicUsize where we stored valid Gc payload pointers.
+                // The object is kept alive because we are in an intrinsic call and the stack roots it (or the static field roots it).
+                ObjectRef(Some(unsafe { Gc::from_ptr(prev_raw as *const _) }))
+            };
+            vm_push!(stack, gc, ObjectRef(prev));
+        }
+    }
+
     StepResult::InstructionStepped
 }
 
@@ -246,11 +304,17 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let ptr = vm_pop!(stack, gc).as_ptr() as *const ObjectRef<'gc>;
+    let ptr = vm_pop!(stack, gc).as_ptr() as *const usize;
 
-    let value = unsafe { ptr::read_volatile(ptr) };
+    let raw = unsafe { ptr::read_volatile(ptr) };
     // Ensure acquire semantics to match .NET memory model
     atomic::fence(Ordering::Acquire);
+
+    let value = if raw == 0 {
+        ObjectRef(None)
+    } else {
+        ObjectRef(Some(unsafe { Gc::from_ptr(raw as *const _) }))
+    };
 
     vm_push!(stack, gc, ObjectRef(value));
     StepResult::InstructionStepped
@@ -298,7 +362,11 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
             }
         }
         StackValue::ObjectRef(o) => {
-            unsafe { ptr::write_volatile(ptr as *mut ObjectRef<'gc>, o) };
+            let raw = match o.0 {
+                Some(ptr) => Gc::as_ptr(ptr) as usize,
+                None => 0,
+            };
+            unsafe { ptr::write_volatile(ptr as *mut usize, raw) };
         }
         StackValue::NativeInt(i) => {
             unsafe { ptr::write_volatile(ptr as *mut isize, i) };

@@ -347,6 +347,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
             m.owner,
             m.pinned,
         ),
+        StackValue::UnmanagedPtr(p) => (p.0.as_ptr(), None, false),
         _ => panic!("Unsafe.AsRef expected pointer, got {:?}", val),
     };
 
