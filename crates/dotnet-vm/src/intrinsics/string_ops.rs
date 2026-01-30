@@ -1,4 +1,4 @@
-use crate::{intrinsics::span::span_to_slice, pop_args, vm_pop, vm_push, CallStack, StepResult};
+use crate::{intrinsics::span::span_to_slice, CallStack, StepResult};
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
@@ -11,9 +11,12 @@ use dotnet_value::{
     with_string, with_string_mut, StackValue,
 };
 use std::hash::{DefaultHasher, Hash, Hasher};
+use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 
 /// System.String::Equals(string, string)
 /// System.String::Equals(string)
+#[dotnet_intrinsic("static bool System.String::Equals(string, string)")]
+#[dotnet_intrinsic("bool System.String::Equals(string)")]
 pub fn intrinsic_string_equals<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -50,6 +53,8 @@ pub fn intrinsic_string_equals<'gc, 'm: 'gc>(
 }
 
 /// System.String::FastAllocateString(int)
+#[dotnet_intrinsic("static string System.String::FastAllocateString(int)")]
+#[dotnet_intrinsic("static string System.String::FastAllocateString(int, IntPtr)")]
 pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -88,7 +93,82 @@ pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+/// System.String::.ctor(char[])
+#[dotnet_intrinsic("void System.String::.ctor(char[])")]
+pub fn intrinsic_string_ctor_char_array<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let arg = vm_pop!(stack, gc);
+    let chars: Vec<u16> = match arg {
+        StackValue::ObjectRef(ObjectRef(Some(handle))) => {
+            let obj = handle.borrow();
+            match &obj.storage {
+                HeapStorage::Vec(v) => {
+                    // Assuming u16 data (char is 2 bytes)
+                    // We need to interpret bytes as u16.
+                    // Vector stores data as Vec<u8>.
+                    let bytes = v.get();
+                    bytes
+                        .chunks_exact(2)
+                        .map(|c| u16::from_ne_bytes([c[0], c[1]]))
+                        .collect()
+                }
+                _ => Vec::new(), // Should not happen for char[]
+            }
+        }
+        _ => Vec::new(), // null or invalid
+    };
+
+    let value = CLRString::new(chars);
+    vm_push!(stack, gc, string(gc, value));
+    StepResult::InstructionStepped
+}
+
+/// System.String::.ctor(char*)
+#[dotnet_intrinsic("void System.String::.ctor(char*)")]
+pub fn intrinsic_string_ctor_char_ptr<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let arg = vm_pop!(stack, gc);
+    let ptr = match arg {
+        StackValue::NativeInt(p) => p as *const u16,
+        StackValue::Int32(p) => p as usize as *const u16,
+        StackValue::Int64(p) => p as usize as *const u16,
+        _ => std::ptr::null(),
+    };
+
+    let value = if !ptr.is_null() {
+        let mut chars = Vec::new();
+        let mut i = 0;
+        // SAFETY: We assume the pointer is valid and points to a null-terminated string.
+        // This is a standard assumption for string constructors taking a pointer.
+        unsafe {
+            loop {
+                let c = *ptr.add(i);
+                if c == 0 {
+                    break;
+                }
+                chars.push(c);
+                i += 1;
+            }
+        }
+        CLRString::new(chars)
+    } else {
+        CLRString::new(Vec::new())
+    };
+
+    vm_push!(stack, gc, string(gc, value));
+    StepResult::InstructionStepped
+}
+
 /// System.String::get_Chars(int)
+#[dotnet_intrinsic("char System.String::get_Chars(int)")]
 pub fn intrinsic_string_get_chars<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -103,6 +183,7 @@ pub fn intrinsic_string_get_chars<'gc, 'm: 'gc>(
 }
 
 /// System.String::get_Length()
+#[dotnet_intrinsic("int System.String::get_Length()")]
 pub fn intrinsic_string_get_length<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -116,6 +197,7 @@ pub fn intrinsic_string_get_length<'gc, 'm: 'gc>(
 }
 
 /// System.String::Concat(ReadOnlySpan<char>, ReadOnlySpan<char>, ReadOnlySpan<char>)
+#[dotnet_intrinsic("static string System.String::Concat(System.ReadOnlySpan<char>, System.ReadOnlySpan<char>, System.ReadOnlySpan<char>)")]
 pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -151,6 +233,7 @@ pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
 }
 
 /// System.String::GetHashCodeOrdinalIgnoreCase()
+#[dotnet_intrinsic("int System.String::GetHashCodeOrdinalIgnoreCase()")]
 pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -171,6 +254,8 @@ pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<'gc, 'm: 'gc>(
 
 /// System.String::GetPinnableReference()
 /// System.String::GetRawStringData()
+#[dotnet_intrinsic("char& System.String::GetPinnableReference()")]
+#[dotnet_intrinsic("char& System.String::GetRawStringData()")]
 pub fn intrinsic_string_get_raw_data<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -193,6 +278,8 @@ pub fn intrinsic_string_get_raw_data<'gc, 'm: 'gc>(
 
 /// System.String::IndexOf(char)
 /// System.String::IndexOf(char, int)
+#[dotnet_intrinsic("int System.String::IndexOf(char)")]
+#[dotnet_intrinsic("int System.String::IndexOf(char, int)")]
 pub fn intrinsic_string_index_of<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -226,6 +313,8 @@ pub fn intrinsic_string_index_of<'gc, 'm: 'gc>(
 
 /// System.String::Substring(int)
 /// System.String::Substring(int, int)
+#[dotnet_intrinsic("string System.String::Substring(int)")]
+#[dotnet_intrinsic("string System.String::Substring(int, int)")]
 pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -254,6 +343,7 @@ pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
 }
 
 /// System.String::IsNullOrEmpty(string)
+#[dotnet_intrinsic("static bool System.String::IsNullOrEmpty(string)")]
 pub fn intrinsic_string_is_null_or_empty<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -270,6 +360,7 @@ pub fn intrinsic_string_is_null_or_empty<'gc, 'm: 'gc>(
 }
 
 /// System.String::IsNullOrWhiteSpace(string)
+#[dotnet_intrinsic("static bool System.String::IsNullOrWhiteSpace(string)")]
 pub fn intrinsic_string_is_null_or_white_space<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -291,6 +382,7 @@ pub fn intrinsic_string_is_null_or_white_space<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic_field("static string System.String::Empty")]
 pub fn intrinsic_field_string_empty<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -302,7 +394,27 @@ pub fn intrinsic_field_string_empty<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic_field("int System.String::_stringLength")]
+pub fn intrinsic_field_string_length<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _field: FieldDescription,
+    _type_generics: Vec<ConcreteType>,
+    is_address: bool,
+) -> StepResult {
+    if is_address {
+        panic!("taking address of _stringLength is not supported");
+    }
+
+    let val = vm_pop!(stack, gc);
+    let len = with_string!(stack, gc, val, |s| s.len());
+    
+    vm_push!(stack, gc, StackValue::Int32(len as i32));
+    StepResult::InstructionStepped
+}
+
 /// System.String::CopyStringContent(string, int, string)
+#[dotnet_intrinsic("static void System.String::CopyStringContent(string, int, string)")]
 pub fn intrinsic_string_copy_string_content<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,

@@ -1,6 +1,8 @@
 use crate::{
-    context::ResolutionContext, define_intrinsic, layout::type_layout, resolution::ValueResolution,
-    vm_expect_stack, vm_pop, vm_push, CallStack, StepResult,
+    context::ResolutionContext,
+    layout::type_layout,
+    resolution::ValueResolution,
+    CallStack, StepResult,
 };
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
@@ -18,21 +20,48 @@ use dotnet_value::{
 };
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use std::ptr;
+use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 
 use super::ReflectionExtensions;
 
-define_intrinsic!(intrinsic_marshal_get_last_pinvoke_error(gc, stack) () {
+#[dotnet_intrinsic("static int System.Runtime.InteropServices.Marshal::GetLastPInvokeError()")]
+#[allow(unused_variables)]
+pub fn intrinsic_marshal_get_last_pinvoke_error<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
     let value = unsafe { crate::pinvoke::LAST_ERROR };
     vm_push!(stack, gc, Int32(value));
-});
+    StepResult::InstructionStepped
+}
 
-define_intrinsic!(intrinsic_marshal_set_last_pinvoke_error(gc, stack) (Int32(value)) {
+#[dotnet_intrinsic("static void System.Runtime.InteropServices.Marshal::SetLastPInvokeError(int)")]
+#[allow(unused_variables)]
+pub fn intrinsic_marshal_set_last_pinvoke_error<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    pop_args!(stack, gc, [Int32(value)]);
     unsafe {
         crate::pinvoke::LAST_ERROR = value;
     }
-});
+    StepResult::InstructionStepped
+}
 
-define_intrinsic!(intrinsic_buffer_memmove(gc, stack, method, generics) (NativeInt(len)) {
+#[dotnet_intrinsic("static void System.Buffer::Memmove(byte*, byte*, ulong)")]
+#[dotnet_intrinsic("static void System.Buffer::Memmove<T>(T&, T&, ulong)")]
+#[allow(unused_variables)]
+pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    pop_args!(stack, gc, [NativeInt(len)]);
     let src = vm_pop!(stack, gc).as_ptr();
     let dst = vm_pop!(stack, gc).as_ptr();
 
@@ -59,9 +88,18 @@ define_intrinsic!(intrinsic_buffer_memmove(gc, stack, method, generics) (NativeI
     unsafe {
         ptr::copy(src, dst, total_count);
     }
-});
+    StepResult::InstructionStepped
+}
 
-define_intrinsic!(intrinsic_memory_marshal_get_array_data_reference(gc, stack, method, generics) (ObjectRef(obj)) {
+#[dotnet_intrinsic("static T& System.Runtime.InteropServices.MemoryMarshal::GetArrayDataReference<T>(T[])")]
+#[allow(unused_variables)]
+pub fn intrinsic_memory_marshal_get_array_data_reference<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    pop_args!(stack, gc, [ObjectRef(obj)]);
     let Some(array_handle) = obj.0 else {
         return stack.throw_by_name(gc, "System.NullReferenceException");
     };
@@ -84,8 +122,13 @@ define_intrinsic!(intrinsic_memory_marshal_get_array_data_reference(gc, stack, m
             false
         )
     );
-});
+    StepResult::InstructionStepped
+}
 
+#[dotnet_intrinsic("static int System.Runtime.InteropServices.Marshal::SizeOf(object)")]
+#[dotnet_intrinsic("static int System.Runtime.InteropServices.Marshal::SizeOf(System.Type)")]
+#[dotnet_intrinsic("static int System.Runtime.InteropServices.Marshal::SizeOf<T>(T)")]
+#[dotnet_intrinsic("static int System.Runtime.InteropServices.Marshal::SizeOf<T>()")]
 pub fn intrinsic_marshal_size_of<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -114,6 +157,8 @@ pub fn intrinsic_marshal_size_of<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("static IntPtr System.Runtime.InteropServices.Marshal::OffsetOf(System.Type, string)")]
+#[dotnet_intrinsic("static IntPtr System.Runtime.InteropServices.Marshal::OffsetOf<T>(string)")]
 pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -158,13 +203,24 @@ pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
-// System.Runtime.CompilerServices.Unsafe::Add<T>(ref T source, nint elementOffset)
-define_intrinsic!(intrinsic_unsafe_as_pointer(gc, stack) (ManagedPtr(ptr)) {
+// System.Runtime.CompilerServices.Unsafe::AsPointer<T>(ref T source)
+#[dotnet_intrinsic("static void* System.Runtime.CompilerServices.Unsafe::AsPointer<T>(T&)")]
+#[allow(unused_variables)]
+pub fn intrinsic_unsafe_as_pointer<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    pop_args!(stack, gc, [ManagedPtr(ptr)]);
     let mut ptr = ptr;
     ptr.owner = None;
     vm_push!(stack, gc, ManagedPtr(ptr));
-});
+    StepResult::InstructionStepped
+}
 
+#[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::Add<T>(T&, int)")]
+#[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::Add<T>(T&, IntPtr)")]
 pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -211,6 +267,7 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::AddByteOffset<T>(T&, IntPtr)")]
 pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -246,6 +303,7 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
 }
 
 // System.Runtime.CompilerServices.Unsafe::AreSame<T>(ref T left, ref T right)
+#[dotnet_intrinsic("static bool System.Runtime.CompilerServices.Unsafe::AreSame<T>(T&, T&)")]
 pub fn intrinsic_unsafe_are_same<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -260,11 +318,21 @@ pub fn intrinsic_unsafe_are_same<'gc, 'm: 'gc>(
 
 // System.Runtime.CompilerServices.Unsafe::As<T>(object value)
 // System.Runtime.CompilerServices.Unsafe::AsRef<T>(ref T source)
-define_intrinsic!(intrinsic_unsafe_as(gc, stack) () {
+#[dotnet_intrinsic("static T System.Runtime.CompilerServices.Unsafe::As<T>(object)")]
+#[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::AsRef<T>(T&)")]
+#[allow(unused_variables)]
+pub fn intrinsic_unsafe_as<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
     // Just leave the value on the stack, it's a no-op at runtime
-});
+    StepResult::InstructionStepped
+}
 
 // System.Runtime.CompilerServices.Unsafe::As<TFrom, TTo>(ref TFrom source)
+#[dotnet_intrinsic("static TTo& System.Runtime.CompilerServices.Unsafe::As<TFrom, TTo>(TFrom&)")]
 pub fn intrinsic_unsafe_as_generic<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -308,6 +376,8 @@ pub fn intrinsic_unsafe_as_generic<'gc, 'm: 'gc>(
 
 // System.Runtime.CompilerServices.Unsafe::AsRef<T>(in T source)
 // System.Runtime.CompilerServices.Unsafe::AsRef<T>(void* ptr)
+#[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::AsRef<T>(T&)")] // in T
+#[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::AsRef<T>(void*)")]
 pub fn intrinsic_unsafe_as_ref_any<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -325,6 +395,8 @@ pub fn intrinsic_unsafe_as_ref_any<'gc, 'm: 'gc>(
 }
 
 // System.Runtime.CompilerServices.Unsafe::AsRef<T>(void* ptr)
+// Note: This is a helper, registration is on intrinsic_unsafe_as_ref_any or separate if needed.
+// But as_ref_any handles dispatch.
 pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -426,7 +498,14 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
 }
 
 // System.Runtime.CompilerServices.Unsafe::SizeOf<T>()
-define_intrinsic!(intrinsic_unsafe_size_of(gc, stack, method, generics) () {
+#[dotnet_intrinsic("static int System.Runtime.CompilerServices.Unsafe::SizeOf<T>()")]
+#[allow(unused_variables)]
+pub fn intrinsic_unsafe_size_of<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
     let ctx = ResolutionContext::for_method(
         method,
         stack.loader(),
@@ -436,9 +515,11 @@ define_intrinsic!(intrinsic_unsafe_size_of(gc, stack, method, generics) () {
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
     vm_push!(stack, gc, Int32(layout.size() as i32));
-});
+    StepResult::InstructionStepped
+}
 
 // System.Runtime.CompilerServices.Unsafe::ByteOffset<T>(ref T origin, ref T target)
+#[dotnet_intrinsic("static IntPtr System.Runtime.CompilerServices.Unsafe::ByteOffset<T>(T&, T&)")]
 pub fn intrinsic_unsafe_byte_offset<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -483,6 +564,9 @@ fn copy_owner_side_table<'gc>(
 }
 
 // System.Runtime.CompilerServices.Unsafe::ReadUnaligned<T>(void* ptr)
+// System.Runtime.CompilerServices.Unsafe::ReadUnaligned<T>(ref byte ptr)
+#[dotnet_intrinsic("static T System.Runtime.CompilerServices.Unsafe::ReadUnaligned<T>(void*)")]
+#[dotnet_intrinsic("static T System.Runtime.CompilerServices.Unsafe::ReadUnaligned<T>(byte&)")]
 pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -861,6 +945,9 @@ fn check_read_safety(
 }
 
 // System.Runtime.CompilerServices.Unsafe::WriteUnaligned<T>(void* ptr, T value)
+// System.Runtime.CompilerServices.Unsafe::WriteUnaligned<T>(ref byte ptr, T value)
+#[dotnet_intrinsic("static void System.Runtime.CompilerServices.Unsafe::WriteUnaligned<T>(void*, T)")]
+#[dotnet_intrinsic("static void System.Runtime.CompilerServices.Unsafe::WriteUnaligned<T>(byte&, T)")]
 pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -1095,6 +1182,7 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic_field("static IntPtr System.IntPtr::Zero")]
 pub fn intrinsic_field_intptr_zero<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,

@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Runtime.CompilerServices;
 
 namespace DotnetRs;
 
@@ -8,13 +9,13 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
     // Sentinel for array constructors used by runtime
     internal void CtorArraySentinel() { }
 
-    public int Length => GetLength(0);
+    public extern int Length { [MethodImpl(MethodImplOptions.InternalCall)] get; }
 
     public long LongLength => GetLongLength(0);
 
     public nuint NativeLength => (nuint)Length;
 
-    public int Rank => GetRank();
+    public extern int Rank { [MethodImpl(MethodImplOptions.InternalCall)] get; }
 
     public virtual int GetLength(int dimension) => throw new NotImplementedException();
 
@@ -22,9 +23,23 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
 
     public virtual int GetRank() => throw new NotImplementedException();
 
-    public virtual object? GetValue(params int[] indices) => throw new NotImplementedException();
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    public extern object? GetValue(int index);
 
-    public virtual void SetValue(object? value, params int[] indices) => throw new NotImplementedException();
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    public extern object? GetValue(long index);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    public virtual extern object? GetValue(params int[] indices);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    public extern void SetValue(object? value, int index);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    public extern void SetValue(object? value, long index);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    public virtual extern void SetValue(object? value, params int[] indices);
 
     public object Clone() => MemberwiseClone();
 

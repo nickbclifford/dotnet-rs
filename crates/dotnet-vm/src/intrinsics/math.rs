@@ -1,5 +1,5 @@
 use crate::{
-    context::ResolutionContext, resolution::ValueResolution, vm_pop, vm_push, CallStack, StepResult,
+    context::ResolutionContext, resolution::ValueResolution, CallStack, StepResult,
 };
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
@@ -7,7 +7,11 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
     StackValue,
 };
+use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 
+#[dotnet_intrinsic("static bool System.Runtime.Intrinsics.Vector128::get_IsHardwareAccelerated()")]
+#[dotnet_intrinsic("static bool System.Runtime.Intrinsics.Vector256::get_IsHardwareAccelerated()")]
+#[dotnet_intrinsic("static bool System.Numerics.Vector::get_IsHardwareAccelerated()")]
 pub fn intrinsic_vector_is_hardware_accelerated<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -18,6 +22,7 @@ pub fn intrinsic_vector_is_hardware_accelerated<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("static System.Collections.Generic.EqualityComparer<T> System.Collections.Generic.EqualityComparer<T>::get_Default()")]
 pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -42,6 +47,16 @@ pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("static byte System.Byte::CreateTruncating<T>(T)")]
+#[dotnet_intrinsic("static sbyte System.SByte::CreateTruncating<T>(T)")]
+#[dotnet_intrinsic("static ushort System.UInt16::CreateTruncating<T>(T)")]
+#[dotnet_intrinsic("static short System.Int16::CreateTruncating<T>(T)")]
+#[dotnet_intrinsic("static uint System.UInt32::CreateTruncating<T>(T)")]
+#[dotnet_intrinsic("static int System.Int32::CreateTruncating<T>(T)")]
+#[dotnet_intrinsic("static ulong System.UInt64::CreateTruncating<T>(T)")]
+#[dotnet_intrinsic("static long System.Int64::CreateTruncating<T>(T)")]
+#[dotnet_intrinsic("static nuint System.UIntPtr::CreateTruncating<T>(T)")]
+#[dotnet_intrinsic("static nint System.IntPtr::CreateTruncating<T>(T)")]
 pub fn intrinsic_numeric_create_truncating<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -81,6 +96,7 @@ pub fn intrinsic_numeric_create_truncating<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("static double System.Math::Min(double, double)")]
 pub fn intrinsic_math_min_double<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -101,6 +117,7 @@ pub fn intrinsic_math_min_double<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("static double System.Math::Sqrt(double)")]
 pub fn intrinsic_math_sqrt<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -115,6 +132,7 @@ pub fn intrinsic_math_sqrt<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic_field("static bool System.BitConverter::IsLittleEndian")]
 pub fn intrinsic_bitconverter_is_little_endian<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,

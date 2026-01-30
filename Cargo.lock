@@ -227,6 +227,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dotnet-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.101",
+]
+
+[[package]]
 name = "dotnet-types"
 version = "0.1.0"
 dependencies = [
@@ -239,6 +248,7 @@ name = "dotnet-utils"
 version = "0.1.0"
 dependencies = [
  "gc-arena",
+ "inventory",
  "parking_lot",
 ]
 
@@ -259,11 +269,13 @@ dependencies = [
  "crossbeam-channel",
  "dashmap",
  "dotnet-assemblies",
+ "dotnet-macros",
  "dotnet-types",
  "dotnet-utils",
  "dotnet-value",
  "dotnetdll",
  "gc-arena",
+ "inventory",
  "libffi",
  "libloading",
  "parking_lot",
@@ -387,6 +399,15 @@ checksum = "cea70ddb795996207ad57735b50c5982d8844f38ba9ee5f1aedcfb708a2aa11e"
 dependencies = [
  "equivalent",
  "hashbrown 0.15.3",
+]
+
+[[package]]
+name = "inventory"
+version = "0.3.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc61209c082fbeb19919bee74b176221b27223e27b65d781eb91af24eb1fb46e"
+dependencies = [
+ "rustversion",
 ]
 
 [[package]]
@@ -573,6 +594,12 @@ checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
 dependencies = [
  "bitflags",
 ]
+
+[[package]]
+name = "rustversion"
+version = "1.0.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "ruzstd"

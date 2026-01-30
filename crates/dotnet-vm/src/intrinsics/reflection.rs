@@ -1,10 +1,10 @@
 use crate::{
     context::ResolutionContext,
     layout::type_layout,
-    pop_args,
     resolution::{TypeResolutionExt, ValueResolution},
-    vm_pop, vm_push, CallStack, MethodInfo, StepResult,
+    CallStack, MethodInfo, StepResult,
 };
+use dotnet_macros::dotnet_intrinsic;
 use dotnet_assemblies::{decompose_type_source, SUPPORT_ASSEMBLY};
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
@@ -396,6 +396,7 @@ impl<'gc, 'm: 'gc> ReflectionExtensions<'gc, 'm> for CallStack<'gc, 'm> {
     }
 }
 
+#[dotnet_intrinsic("object[] System.Reflection.Assembly::GetCustomAttributes(System.Type, bool)")]
 pub fn intrinsic_assembly_get_custom_attributes<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -422,6 +423,7 @@ pub fn intrinsic_assembly_get_custom_attributes<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("static System.Attribute[] System.Attribute::GetCustomAttributes(System.Reflection.MemberInfo, System.Type, bool)")]
 pub fn intrinsic_attribute_get_custom_attributes<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -448,6 +450,30 @@ pub fn intrinsic_attribute_get_custom_attributes<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("string System.Type::get_Name()")]
+#[dotnet_intrinsic("string System.Type::get_Namespace()")]
+#[dotnet_intrinsic("System.Reflection.Assembly System.Type::get_Assembly()")]
+#[dotnet_intrinsic("System.Type System.Type::get_BaseType()")]
+#[dotnet_intrinsic("bool System.Type::get_IsGenericType()")]
+#[dotnet_intrinsic("System.Type System.Type::GetGenericTypeDefinition()")]
+#[dotnet_intrinsic("System.Type[] System.Type::GetGenericArguments()")]
+#[dotnet_intrinsic("System.RuntimeTypeHandle System.Type::get_TypeHandle()")]
+#[dotnet_intrinsic("System.Type System.Type::MakeGenericType(System.Type[])")]
+#[dotnet_intrinsic("string DotnetRs.RuntimeType::get_Name()")]
+#[dotnet_intrinsic("string DotnetRs.RuntimeType::GetName()")]
+#[dotnet_intrinsic("string DotnetRs.RuntimeType::get_Namespace()")]
+#[dotnet_intrinsic("string DotnetRs.RuntimeType::GetNamespace()")]
+#[dotnet_intrinsic("System.Reflection.Assembly DotnetRs.RuntimeType::get_Assembly()")]
+#[dotnet_intrinsic("System.Reflection.Assembly DotnetRs.RuntimeType::GetAssembly()")]
+#[dotnet_intrinsic("System.Type DotnetRs.RuntimeType::get_BaseType()")]
+#[dotnet_intrinsic("System.Type DotnetRs.RuntimeType::GetBaseType()")]
+#[dotnet_intrinsic("bool DotnetRs.RuntimeType::get_IsGenericType()")]
+#[dotnet_intrinsic("bool DotnetRs.RuntimeType::GetIsGenericType()")]
+#[dotnet_intrinsic("System.Type DotnetRs.RuntimeType::get_GenericTypeDefinition()")]
+#[dotnet_intrinsic("System.Type DotnetRs.RuntimeType::GetGenericTypeDefinition()")]
+#[dotnet_intrinsic("System.Type[] DotnetRs.RuntimeType::GetGenericArguments()")]
+#[dotnet_intrinsic("System.RuntimeTypeHandle DotnetRs.RuntimeType::get_TypeHandle()")]
+#[dotnet_intrinsic("System.Type DotnetRs.RuntimeType::MakeGenericType(System.Type[])")]
 pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -758,6 +784,8 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
     result.unwrap_or_else(|| panic!("unimplemented runtime type intrinsic: {:?}", method))
 }
 
+#[dotnet_intrinsic("static void System.RuntimeTypeHandle::GetActivationInfo(System.RuntimeTypeHandle, System.IntPtr&, System.IntPtr&, System.IntPtr&, bool&)")]
+#[dotnet_intrinsic("static void DotnetRs.RuntimeTypeHandle::GetActivationInfo(DotnetRs.RuntimeTypeHandle, System.IntPtr&, System.IntPtr&, System.IntPtr&, bool&)")]
 pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -874,6 +902,37 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
     }
 }
 
+#[dotnet_intrinsic("string System.Reflection.MethodInfo::get_Name()")]
+#[dotnet_intrinsic("System.Type System.Reflection.MethodInfo::get_DeclaringType()")]
+#[dotnet_intrinsic("System.Type System.Reflection.MethodInfo::get_ReturnType()")]
+#[dotnet_intrinsic("System.Reflection.MethodAttributes System.Reflection.MethodBase::get_Attributes()")]
+#[dotnet_intrinsic("System.Reflection.CallingConventions System.Reflection.MethodBase::get_CallingConvention()")]
+#[dotnet_intrinsic("bool System.Reflection.MethodBase::get_IsGenericMethod()")]
+#[dotnet_intrinsic("bool System.Reflection.MethodBase::get_IsGenericMethodDefinition()")]
+#[dotnet_intrinsic("bool System.Reflection.MethodBase::get_ContainsGenericParameters()")]
+#[dotnet_intrinsic("System.Type[] System.Reflection.MethodBase::GetGenericArguments()")]
+#[dotnet_intrinsic("System.RuntimeMethodHandle System.Reflection.MethodBase::get_MethodHandle()")]
+#[dotnet_intrinsic("string System.Reflection.MethodInfo::ToString()")]
+#[dotnet_intrinsic("string DotnetRs.RuntimeMethodInfo::get_Name()")]
+#[dotnet_intrinsic("string DotnetRs.RuntimeMethodInfo::GetName()")]
+#[dotnet_intrinsic("System.Type DotnetRs.RuntimeMethodInfo::get_DeclaringType()")]
+#[dotnet_intrinsic("System.Type DotnetRs.RuntimeMethodInfo::GetDeclaringType()")]
+#[dotnet_intrinsic("System.Type DotnetRs.RuntimeMethodInfo::get_ReturnType()")]
+#[dotnet_intrinsic("System.Type DotnetRs.RuntimeMethodInfo::GetReturnType()")]
+#[dotnet_intrinsic("System.Reflection.MethodAttributes DotnetRs.RuntimeMethodInfo::get_Attributes()")]
+#[dotnet_intrinsic("System.Reflection.MethodAttributes DotnetRs.RuntimeMethodInfo::GetAttributes()")]
+#[dotnet_intrinsic("System.Reflection.CallingConventions DotnetRs.RuntimeMethodInfo::get_CallingConvention()")]
+#[dotnet_intrinsic("System.Reflection.CallingConventions DotnetRs.RuntimeMethodInfo::GetCallingConvention()")]
+#[dotnet_intrinsic("bool DotnetRs.RuntimeMethodInfo::get_IsGenericMethod()")]
+#[dotnet_intrinsic("bool DotnetRs.RuntimeMethodInfo::GetIsGenericMethod()")]
+#[dotnet_intrinsic("bool DotnetRs.RuntimeMethodInfo::get_IsGenericMethodDefinition()")]
+#[dotnet_intrinsic("bool DotnetRs.RuntimeMethodInfo::GetIsGenericMethodDefinition()")]
+#[dotnet_intrinsic("bool DotnetRs.RuntimeMethodInfo::get_ContainsGenericParameters()")]
+#[dotnet_intrinsic("bool DotnetRs.RuntimeMethodInfo::GetContainsGenericParameters()")]
+#[dotnet_intrinsic("System.Type[] DotnetRs.RuntimeMethodInfo::GetGenericArguments()")]
+#[dotnet_intrinsic("System.RuntimeMethodHandle DotnetRs.RuntimeMethodInfo::get_MethodHandle()")]
+#[dotnet_intrinsic("System.RuntimeMethodHandle DotnetRs.RuntimeMethodInfo::GetMethodHandle()")]
+#[dotnet_intrinsic("string DotnetRs.RuntimeMethodInfo::ToString()")]
 pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -920,52 +979,63 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
-pub fn runtime_field_info_intrinsic_call<'gc, 'm: 'gc>(
+#[dotnet_intrinsic("string DotnetRs.FieldInfo::GetName()")]
+pub fn intrinsic_field_info_get_name<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
-    method: MethodDescription,
+    _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    macro_rules! push {
-        ($($args:tt)*) => {
-            vm_push!(stack, gc, $($args)*)
-        };
-    }
-
-    let method_name = &*method.method.name;
-    let param_count = method.method.signature.parameters.len();
-
-    let result = match (method_name, param_count) {
-        ("GetName" | "get_Name", 0) => {
-            pop_args!(stack, gc, [ObjectRef(obj)]);
-            let (field, _) = stack.resolve_runtime_field(obj);
-            push!(string(&field.field.name));
-            Some(StepResult::InstructionStepped)
-        }
-        ("GetDeclaringType" | "get_DeclaringType", 0) => {
-            pop_args!(stack, gc, [ObjectRef(obj)]);
-            let (field, _) = stack.resolve_runtime_field(obj);
-            let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(field.parent));
-            push!(ObjectRef(rt_obj));
-            Some(StepResult::InstructionStepped)
-        }
-        ("GetFieldHandle" | "get_FieldHandle", 0) => {
-            pop_args!(stack, gc, [ObjectRef(obj)]);
-
-            let rfh = stack.loader().corlib_type("System.RuntimeFieldHandle");
-            let instance = stack.current_context().new_object(rfh);
-            obj.write(&mut instance.instance_storage.get_field_mut_local(rfh, "_value"));
-
-            push!(ValueType(Box::new(instance)));
-            Some(StepResult::InstructionStepped)
-        }
-        _ => None,
+    let obj = vm_pop!(stack, gc);
+    let obj_ref = match obj {
+        StackValue::ObjectRef(r) => r,
+        _ => panic!("expected ObjectRef"),
     };
-
-    result.expect("unimplemented field info intrinsic");
+    let (field, _) = stack.resolve_runtime_field(obj_ref);
+    vm_push!(stack, gc, string(&field.field.name));
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("System.Type DotnetRs.FieldInfo::GetDeclaringType()")]
+pub fn intrinsic_field_info_get_declaring_type<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let obj = vm_pop!(stack, gc);
+    let obj_ref = match obj {
+        StackValue::ObjectRef(r) => r,
+        _ => panic!("expected ObjectRef"),
+    };
+    let (field, _) = stack.resolve_runtime_field(obj_ref);
+    let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(field.parent));
+    vm_push!(stack, gc, ObjectRef(rt_obj));
+    StepResult::InstructionStepped
+}
+
+#[dotnet_intrinsic("System.RuntimeFieldHandle DotnetRs.FieldInfo::GetFieldHandle()")]
+pub fn intrinsic_field_info_get_field_handle<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let obj = vm_pop!(stack, gc);
+    let obj_ref = match obj {
+        StackValue::ObjectRef(r) => r,
+        _ => panic!("expected ObjectRef"),
+    };
+
+    let rfh = stack.loader().corlib_type("System.RuntimeFieldHandle");
+    let instance = stack.current_context().new_object(rfh);
+    obj_ref.write(&mut instance.instance_storage.get_field_mut_local(rfh, "_value"));
+
+    vm_push!(stack, gc, ValueType(Box::new(instance)));
+    StepResult::InstructionStepped
+}
+
+#[dotnet_intrinsic("static System.RuntimeTypeHandle System.Runtime.CompilerServices.RuntimeHelpers::GetMethodTable(System.RuntimeTypeHandle)")]
 pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -992,6 +1062,7 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("static bool System.Runtime.CompilerServices.RuntimeHelpers::IsBitwiseEquatable(System.RuntimeTypeHandle)")]
 pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -1015,6 +1086,7 @@ pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("static bool System.Runtime.CompilerServices.RuntimeHelpers::IsReferenceOrContainsReferences()")]
 pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -1033,6 +1105,7 @@ pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<'gc, 'm: 'g
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("static void System.Runtime.CompilerServices.RuntimeHelpers::RunClassConstructor(System.RuntimeTypeHandle)")]
 pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -1068,6 +1141,7 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("static object System.Activator::CreateInstance()")]
 pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -1123,6 +1197,7 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
     }
 }
 
+#[dotnet_intrinsic("static System.Type System.Type::GetTypeFromHandle(System.RuntimeTypeHandle)")]
 pub fn intrinsic_get_from_handle<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -1142,6 +1217,8 @@ pub fn intrinsic_get_from_handle<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("static System.IntPtr System.RuntimeTypeHandle::ToIntPtr(System.RuntimeTypeHandle)")]
+#[dotnet_intrinsic("static System.IntPtr DotnetRs.RuntimeTypeHandle::ToIntPtr(DotnetRs.RuntimeTypeHandle)")]
 pub fn intrinsic_type_handle_to_int_ptr<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -1157,6 +1234,8 @@ pub fn intrinsic_type_handle_to_int_ptr<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("static System.IntPtr System.RuntimeMethodHandle::GetFunctionPointer(System.RuntimeMethodHandle)")]
+#[dotnet_intrinsic("static System.IntPtr DotnetRs.RuntimeMethodHandle::GetFunctionPointer(DotnetRs.RuntimeMethodHandle)")]
 pub fn intrinsic_method_handle_get_function_pointer<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -1178,6 +1257,9 @@ pub fn intrinsic_method_handle_get_function_pointer<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("bool System.Type::get_IsValueType()")]
+#[dotnet_intrinsic("bool DotnetRs.RuntimeType::get_IsValueType()")]
+#[dotnet_intrinsic("bool DotnetRs.RuntimeType::GetIsValueType()")]
 pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -1199,6 +1281,9 @@ pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("bool System.Type::get_IsEnum()")]
+#[dotnet_intrinsic("bool DotnetRs.RuntimeType::get_IsEnum()")]
+#[dotnet_intrinsic("bool DotnetRs.RuntimeType::GetIsEnum()")]
 pub fn intrinsic_type_get_is_enum<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -1215,6 +1300,9 @@ pub fn intrinsic_type_get_is_enum<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("bool System.Type::get_IsInterface()")]
+#[dotnet_intrinsic("bool DotnetRs.RuntimeType::get_IsInterface()")]
+#[dotnet_intrinsic("bool DotnetRs.RuntimeType::GetIsInterface()")]
 pub fn intrinsic_type_get_is_interface<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -1233,6 +1321,7 @@ pub fn intrinsic_type_get_is_interface<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("static bool System.Type::op_Equality(System.Type, System.Type)")]
 pub fn intrinsic_type_op_equality<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -1244,6 +1333,7 @@ pub fn intrinsic_type_op_equality<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("static bool System.Type::op_Inequality(System.Type, System.Type)")]
 pub fn intrinsic_type_op_inequality<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -1255,6 +1345,7 @@ pub fn intrinsic_type_op_inequality<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("static System.RuntimeTypeHandle System.Type::GetTypeHandle(object)")]
 pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,

@@ -1,8 +1,10 @@
-use crate::{vm_pop, vm_push, CallStack, StepResult};
+use crate::{CallStack, StepResult};
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::StackValue;
+use dotnet_macros::dotnet_intrinsic;
 
+#[dotnet_intrinsic("static bool System.Text.UnicodeUtility::IsAsciiCodePoint(uint)")]
 pub fn intrinsic_unicode_utility_is_ascii_code_point<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -20,6 +22,7 @@ pub fn intrinsic_unicode_utility_is_ascii_code_point<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("static bool System.Text.UnicodeUtility::IsInRangeInclusive(uint, uint, uint)")]
 pub fn intrinsic_unicode_utility_is_in_range_inclusive<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,

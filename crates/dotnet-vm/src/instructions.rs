@@ -1143,9 +1143,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         overriding_method
                     } else {
                         // No override: box the value and use base implementation
+                        let ptr = args[0].as_ptr();
+                        if ptr.is_null() {
+                            return self.throw_by_name(gc, "System.NullReferenceException");
+                        }
+
                         let value_size = type_layout(constraint_type_source.clone(), &ctx).size();
                         let value_data =
-                            unsafe { slice::from_raw_parts(args[0].as_ptr(), value_size) };
+                            unsafe { slice::from_raw_parts(ptr, value_size) };
                         let value = ctx.read_cts_value(&constraint_type_source, value_data, gc);
 
                         let boxed = ObjectRef::new(
@@ -1240,6 +1245,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let layout = type_layout(ctx.make_concrete(t), &ctx);
                 let target = pop!().as_ptr();
 
+                if target.is_null() {
+                    return self.throw_by_name(gc, "System.NullReferenceException");
+                }
                 debug_assert!(!target.is_null(), "initobj target address is null");
                 let s = unsafe { slice::from_raw_parts_mut(target, layout.size()) };
                 s.fill(0);
@@ -1557,7 +1565,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                     }
                                     val
                                 }
-                                HeapStorage::Str(_) => todo!("field on string"),
+                                HeapStorage::Str(_) => todo!("field on string: {}::{}", field.parent.type_name(), name),
                                 HeapStorage::Boxed(_) => todo!("field on boxed value type"),
                             }
                         }
@@ -1594,12 +1602,19 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         }
                         val
                     }
-                    StackValue::NativeInt(i) => read_from_pointer(i as *mut u8),
+                    StackValue::NativeInt(i) => {
+                        if i == 0 {
+                            return self.throw_by_name(gc, "System.NullReferenceException");
+                        }
+                        read_from_pointer(i as *mut u8)
+                    }
                     StackValue::UnmanagedPtr(UnmanagedPtr(ptr)) => read_from_pointer(ptr.as_ptr()),
                     StackValue::ManagedPtr(m) => {
-                        let mut val = read_from_pointer(
-                            m.value.expect("System.NullReferenceException").as_ptr(),
-                        );
+                        let ptr = match m.value {
+                            Some(p) => p.as_ptr(),
+                            None => return self.throw_by_name(gc, "System.NullReferenceException"),
+                        };
+                        let mut val = read_from_pointer(ptr);
                         // Metadata recovery
                         if let CTSValue::Value(dotnet_value::object::ValueType::Pointer(
                             ref mut mp,
@@ -1782,10 +1797,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     ),
                     rest => panic!("cannot load field address from stack value {:?}", rest),
                 };
-                debug_assert!(
-                    !source_ptr.is_null(),
-                    "Attempted to load field address from null pointer"
-                );
+                if source_ptr.is_null() {
+                    return self.throw_by_name(gc, "System.NullReferenceException");
+                }
 
                 let layout = LayoutFactory::instance_field_layout_cached(
                     field.parent,
@@ -1838,6 +1852,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             } => {
                 let addr = pop!();
                 let source_ptr = addr.as_ptr();
+
+                if source_ptr.is_null() {
+                    return self.throw_by_name(gc, "System.NullReferenceException");
+                }
 
                 let ctx = self.current_context();
                 let load_type = ctx.make_concrete(load_type);
@@ -2138,7 +2156,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     push!(NativeInt(native_val));
                 } else {
                     if is_intrinsic_cached(self, method) {
-                        return intrinsic_call(gc, self, method, &lookup);
+                        let res = intrinsic_call(gc, self, method, &lookup);
+                        if res == StepResult::InstructionStepped {
+                            self.increment_ip();
+                        }
+                        return res;
                     }
 
                     if self.initialize_static_storage(gc, parent, lookup.clone()) {
@@ -2421,11 +2443,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             HeapStorage::Boxed(_) => todo!("field on boxed value type"),
                         }
                     }
-                    StackValue::NativeInt(i) => write_to_pointer_atomic(i as *mut u8),
+                    StackValue::NativeInt(i) => {
+                        if i == 0 {
+                            return self.throw_by_name(gc, "System.NullReferenceException");
+                        }
+                        write_to_pointer_atomic(i as *mut u8)
+                    }
                     StackValue::UnmanagedPtr(UnmanagedPtr(ptr)) => {
                         write_to_pointer_atomic(ptr.as_ptr())
                     }
                     StackValue::ManagedPtr(target_ptr) => {
+                        let ptr = match target_ptr.value {
+                            Some(p) => p.as_ptr(),
+                            None => return self.throw_by_name(gc, "System.NullReferenceException"),
+                        };
+
                         if let StackValue::ManagedPtr(value_ptr) = &value {
                             if let Some(owner) = target_ptr.owner {
                                 let layout = LayoutFactory::instance_field_layout_cached(
@@ -2436,11 +2468,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                 let field_layout =
                                     layout.get_field(field.parent, name.as_ref()).unwrap();
 
-                                let target_addr = target_ptr
-                                    .value
-                                    .expect("System.NullReferenceException")
-                                    .as_ptr()
-                                    as usize;
+                                let target_addr = ptr as usize;
                                 let final_addr = target_addr + field_layout.position;
 
                                 match owner {
@@ -2462,12 +2490,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             }
                         }
 
-                        write_to_pointer_atomic(
-                            target_ptr
-                                .value
-                                .expect("System.NullReferenceException")
-                                .as_ptr(),
-                        )
+                        write_to_pointer_atomic(ptr)
                     }
                     rest => panic!(
                         "invalid type on stack (expected object or pointer, received {:?})",
@@ -2484,10 +2507,18 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let concrete_t = ctx.make_concrete(t);
 
                 let dest_ptr = match addr {
-                    StackValue::NativeInt(i) => i as *mut u8,
+                    StackValue::NativeInt(i) => {
+                        if i == 0 {
+                            return self.throw_by_name(gc, "System.NullReferenceException");
+                        }
+                        i as *mut u8
+                    }
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
                     StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => {
-                        p.expect("System.NullReferenceException").as_ptr()
+                        match p {
+                            Some(ptr) => ptr.as_ptr(),
+                            None => return self.throw_by_name(gc, "System.NullReferenceException"),
+                        }
                     }
                     _ => panic!("stobj: expected pointer on stack, got {:?}", addr),
                 };

@@ -1,16 +1,17 @@
 use crate::{
-    pop_args,
     sync::{Arc, AtomicI32, Ordering, SyncBlockOps, SyncManagerOps},
-    vm_expect_stack, vm_pop, vm_push, CallStack, StepResult,
+    CallStack, StepResult,
 };
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{object::ObjectRef, StackValue};
 use dotnetdll::prelude::{BaseType, MethodType, Parameter, ParameterType};
 use gc_arena::Gc;
-use std::{mem, ptr, sync::atomic, thread};
+use std::{ptr, sync::atomic, thread};
+use dotnet_macros::dotnet_intrinsic;
 
 /// System.Threading.Monitor::Exit(object) - Releases the lock on an object.
+#[dotnet_intrinsic("static void System.Threading.Monitor::Exit(object)")]
 pub fn intrinsic_monitor_exit<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -49,6 +50,11 @@ pub fn intrinsic_monitor_exit<'gc, 'm: 'gc>(
 /// System.Threading.Interlocked::CompareExchange(ref T, T, T)
 /// Atomically compares two values for equality and, if they are equal,
 /// replaces one of the values.
+#[dotnet_intrinsic("static int System.Threading.Interlocked::CompareExchange(int&, int, int)")]
+#[dotnet_intrinsic("static long System.Threading.Interlocked::CompareExchange(long&, long, long)")]
+#[dotnet_intrinsic("static IntPtr System.Threading.Interlocked::CompareExchange(IntPtr&, IntPtr, IntPtr)")]
+#[dotnet_intrinsic("static object System.Threading.Interlocked::CompareExchange(object&, object, object)")]
+#[dotnet_intrinsic("static T System.Threading.Interlocked::CompareExchange<T>(T&, T, T)")]
 pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -164,6 +170,12 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
 
     StepResult::InstructionStepped
 }
+
+#[dotnet_intrinsic("static int System.Threading.Interlocked::Exchange(int&, int)")]
+#[dotnet_intrinsic("static long System.Threading.Interlocked::Exchange(long&, long)")]
+#[dotnet_intrinsic("static IntPtr System.Threading.Interlocked::Exchange(IntPtr&, IntPtr)")]
+#[dotnet_intrinsic("static object System.Threading.Interlocked::Exchange(object&, object)")]
+#[dotnet_intrinsic("static T System.Threading.Interlocked::Exchange<T>(T&, T)")]
 pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -288,6 +300,7 @@ fn get_or_create_sync_block<'gc, T: SyncManagerOps>(
 }
 
 /// System.Threading.Monitor::ReliableEnter(object, ref bool)
+#[dotnet_intrinsic("static void System.Threading.Monitor::ReliableEnter(object, bool&)")]
 pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -326,6 +339,7 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
 }
 
 /// System.Threading.Monitor::TryEnter_FastPath(object)
+#[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter_FastPath(object)")]
 pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -352,6 +366,7 @@ pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc>(
 }
 
 /// System.Threading.Monitor::TryEnter(object, int, ref bool)
+#[dotnet_intrinsic("static void System.Threading.Monitor::TryEnter(object, int, bool&)")]
 pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -393,6 +408,7 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
 }
 
 /// System.Threading.Monitor::TryEnter(object, int)
+#[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter(object, int)")]
 pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -431,6 +447,20 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
 }
 
 /// System.Threading.Volatile::Read<T>(ref T location)
+#[dotnet_intrinsic("static T System.Threading.Volatile::Read<T>(T&)")]
+#[dotnet_intrinsic("static bool System.Threading.Volatile::Read(bool&)")]
+#[dotnet_intrinsic("static sbyte System.Threading.Volatile::Read(sbyte&)")]
+#[dotnet_intrinsic("static byte System.Threading.Volatile::Read(byte&)")]
+#[dotnet_intrinsic("static short System.Threading.Volatile::Read(short&)")]
+#[dotnet_intrinsic("static ushort System.Threading.Volatile::Read(ushort&)")]
+#[dotnet_intrinsic("static int System.Threading.Volatile::Read(int&)")]
+#[dotnet_intrinsic("static uint System.Threading.Volatile::Read(uint&)")]
+#[dotnet_intrinsic("static long System.Threading.Volatile::Read(long&)")]
+#[dotnet_intrinsic("static ulong System.Threading.Volatile::Read(ulong&)")]
+#[dotnet_intrinsic("static IntPtr System.Threading.Volatile::Read(IntPtr&)")]
+#[dotnet_intrinsic("static UIntPtr System.Threading.Volatile::Read(UIntPtr&)")]
+#[dotnet_intrinsic("static float System.Threading.Volatile::Read(float&)")]
+#[dotnet_intrinsic("static double System.Threading.Volatile::Read(double&)")]
 pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -454,6 +484,20 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
 }
 
 /// System.Threading.Volatile::Write(ref T location, T value)
+#[dotnet_intrinsic("static void System.Threading.Volatile::Write<T>(T&, T)")]
+#[dotnet_intrinsic("static void System.Threading.Volatile::Write(bool&, bool)")]
+#[dotnet_intrinsic("static void System.Threading.Volatile::Write(sbyte&, sbyte)")]
+#[dotnet_intrinsic("static void System.Threading.Volatile::Write(byte&, byte)")]
+#[dotnet_intrinsic("static void System.Threading.Volatile::Write(short&, short)")]
+#[dotnet_intrinsic("static void System.Threading.Volatile::Write(ushort&, ushort)")]
+#[dotnet_intrinsic("static void System.Threading.Volatile::Write(int&, int)")]
+#[dotnet_intrinsic("static void System.Threading.Volatile::Write(uint&, uint)")]
+#[dotnet_intrinsic("static void System.Threading.Volatile::Write(long&, long)")]
+#[dotnet_intrinsic("static void System.Threading.Volatile::Write(ulong&, ulong)")]
+#[dotnet_intrinsic("static void System.Threading.Volatile::Write(IntPtr&, IntPtr)")]
+#[dotnet_intrinsic("static void System.Threading.Volatile::Write(UIntPtr&, UIntPtr)")]
+#[dotnet_intrinsic("static void System.Threading.Volatile::Write(float&, float)")]
+#[dotnet_intrinsic("static void System.Threading.Volatile::Write(double&, double)")]
 pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,

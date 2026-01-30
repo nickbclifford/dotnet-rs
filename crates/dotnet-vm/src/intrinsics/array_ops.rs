@@ -1,4 +1,4 @@
-use crate::{pop_args, resolution::ValueResolution, vm_push, CallStack, StepResult};
+use crate::{resolution::ValueResolution, CallStack, StepResult};
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
@@ -6,7 +6,10 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
     StackValue,
 };
+use dotnet_macros::dotnet_intrinsic;
 
+#[dotnet_intrinsic("int System.Array::get_Length()")]
+#[dotnet_intrinsic("int DotnetRs.Array::get_Length()")]
 pub fn intrinsic_array_get_length<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -28,6 +31,8 @@ pub fn intrinsic_array_get_length<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("int System.Array::get_Rank()")]
+#[dotnet_intrinsic("int DotnetRs.Array::get_Rank()")]
 pub fn intrinsic_array_get_rank<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -49,6 +54,12 @@ pub fn intrinsic_array_get_rank<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("object System.Array::GetValue(int)")]
+#[dotnet_intrinsic("object System.Array::GetValue(long)")]
+#[dotnet_intrinsic("object System.Array::GetValue(int[])")]
+#[dotnet_intrinsic("object DotnetRs.Array::GetValue(int)")]
+#[dotnet_intrinsic("object DotnetRs.Array::GetValue(long)")]
+#[dotnet_intrinsic("object DotnetRs.Array::GetValue(int[])")]
 pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -101,6 +112,12 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("void System.Array::SetValue(object, int)")]
+#[dotnet_intrinsic("void System.Array::SetValue(object, long)")]
+#[dotnet_intrinsic("void System.Array::SetValue(object, int[])")]
+#[dotnet_intrinsic("void DotnetRs.Array::SetValue(object, int)")]
+#[dotnet_intrinsic("void DotnetRs.Array::SetValue(object, long)")]
+#[dotnet_intrinsic("void DotnetRs.Array::SetValue(object, int[])")]
 pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,

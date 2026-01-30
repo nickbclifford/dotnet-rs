@@ -67,28 +67,22 @@ internal class RuntimeType : Type
         return targetType?.IsAssignableFrom(this) ?? false;
     }
     
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    private extern Assembly GetAssembly();
-    public override System.Reflection.Assembly Assembly => GetAssembly();
+    public override extern System.Reflection.Assembly Assembly { [MethodImpl(MethodImplOptions.InternalCall)] get; }
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     private extern string? GetQualifiedName();
     public override string? AssemblyQualifiedName => GetQualifiedName();
 
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    private extern Type? GetBaseType();
-    public override Type? BaseType => GetBaseType();
+    public override extern Type? BaseType { [MethodImpl(MethodImplOptions.InternalCall)] get; }
 
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    private extern string GetName();
-    public override string Name => GetName();
+    public override extern string Name { [MethodImpl(MethodImplOptions.InternalCall)] get; }
 
     public override string FullName
     {
         get
         {
-            var name = GetName();
-            var ns = GetNamespace();
+            var name = Name;
+            var ns = Namespace;
             return ns == null ? name : $"{ns}.{name}";
         }
     }
@@ -97,13 +91,9 @@ internal class RuntimeType : Type
     private extern Module GetModule();
     public override System.Reflection.Module Module => GetModule();
 
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    private extern string? GetNamespace();
-    public override string? Namespace => GetNamespace();
+    public override extern string? Namespace { [MethodImpl(MethodImplOptions.InternalCall)] get; }
 
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    private extern bool GetIsGenericType();
-    public override bool IsGenericType => GetIsGenericType();
+    public override extern bool IsGenericType { [MethodImpl(MethodImplOptions.InternalCall)] get; }
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     public override extern Type GetGenericTypeDefinition();
@@ -114,9 +104,7 @@ internal class RuntimeType : Type
     [MethodImpl(MethodImplOptions.InternalCall)]
     internal extern object CreateInstanceDefaultCtor(bool publicOnly, bool skipCheck);
 
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    private extern System.RuntimeTypeHandle GetTypeHandle();
-    public override System.RuntimeTypeHandle TypeHandle => GetTypeHandle();
+    public override extern System.RuntimeTypeHandle TypeHandle { [MethodImpl(MethodImplOptions.InternalCall)] get; }
 
     // shrug
     public override Type UnderlyingSystemType => this;

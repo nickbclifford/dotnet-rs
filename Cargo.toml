@@ -6,6 +6,7 @@ members = [
     "crates/dotnet-assemblies",
     "crates/dotnet-vm",
     "crates/dotnet-cli",
+    "crates/dotnet-macros",
 ]
 resolver = "2"
 

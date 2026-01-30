@@ -1,9 +1,8 @@
 use crate::{
     context::ResolutionContext,
     layout::{type_layout, LayoutFactory},
-    pop_args,
     resolution::ValueResolution,
-    vm_push, CallStack, StepResult,
+    CallStack, StepResult,
 };
 use dotnet_types::{
     generics::GenericLookup,
@@ -47,9 +46,19 @@ pub fn span_to_slice<'gc, 'a>(span: Object<'gc>, element_size: usize) -> &'a [u8
     }
 
     let raw_ptr = ptr.map(|p| p.as_ptr()).unwrap_or(std::ptr::null_mut());
+    if raw_ptr.is_null() {
+        if len == 0 {
+            return &[];
+        } else {
+            panic!("Null pointer in non-empty span");
+        }
+    }
     unsafe { slice::from_raw_parts(raw_ptr as *const u8, len * element_size) }
 }
 
+use dotnet_macros::dotnet_intrinsic;
+
+#[dotnet_intrinsic("static bool System.MemoryExtensions::Equals(System.ReadOnlySpan<char>, System.ReadOnlySpan<char>, System.StringComparison)")]
 pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -69,6 +78,10 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("static System.ReadOnlySpan<char> System.String::op_Implicit(string)")]
+#[dotnet_intrinsic("static System.ReadOnlySpan<char> System.MemoryExtensions::AsSpan(string)")]
+#[dotnet_intrinsic("static System.ReadOnlySpan<char> System.MemoryExtensions::AsSpan(string, int)")]
+#[dotnet_intrinsic("static System.ReadOnlySpan<char> System.MemoryExtensions::AsSpan(string, int, int)")]
 pub fn intrinsic_as_span<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -230,6 +243,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("static System.Span<T> System.Runtime.CompilerServices.RuntimeHelpers::CreateSpan<T>(System.RuntimeFieldHandle)")]
 pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -319,6 +333,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
     }
 }
 
+#[dotnet_intrinsic("static T& System.Runtime.CompilerServices.RuntimeHelpers::GetSpanDataFrom<T>(T&, System.Type, int&)")]
 pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -401,6 +416,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
+#[dotnet_intrinsic("static byte& DotnetRs.Internal::GetArrayData(System.Array)")]
 pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,

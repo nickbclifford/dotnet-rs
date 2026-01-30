@@ -211,7 +211,6 @@ impl<'a, 'm> ValueResolution for ResolutionContext<'a, 'm> {
                     CTSValue::Value(Struct(instance))
                 }
             }
-            _ => panic!("unsupported type for CTSValue: {:?}", t),
         }
     }
 
@@ -281,7 +280,6 @@ impl<'a, 'm> ValueResolution for ResolutionContext<'a, 'm> {
                 instance.instance_storage.get_mut().copy_from_slice(data);
                 CTSValue::Value(Struct(instance))
             }
-            _ => panic!("unsupported type for CTSValue read_unchecked: {:?}", t),
         }
     }
 
