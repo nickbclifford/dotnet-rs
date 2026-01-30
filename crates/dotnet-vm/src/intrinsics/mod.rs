@@ -1161,6 +1161,13 @@ impl IntrinsicRegistry {
                 "Atomic operations",
             );
             Static(
+                "System.Threading.Interlocked",
+                "Exchange",
+                2,
+                threading::intrinsic_interlocked_exchange,
+                "Atomic operations",
+            );
+            Static(
                 "System.Threading.Volatile",
                 "Read",
                 1,

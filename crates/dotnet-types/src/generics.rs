@@ -60,7 +60,11 @@ impl ConcreteType {
 
 impl Debug for ConcreteType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.show(&self.source))
+        if self.source.is_null() {
+            write!(f, "ConcreteType(No Resolution)")
+        } else {
+            write!(f, "{}", self.show(&self.source))
+        }
     }
 }
 

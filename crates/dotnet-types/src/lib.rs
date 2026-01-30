@@ -68,11 +68,17 @@ impl Debug for TypeDescription {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self.definition_ptr {
             None => write!(f, "NULL"),
-            Some(_) => write!(
-                f,
-                "{}",
-                self.definition().show(self.resolution.definition())
-            ),
+            Some(_) => {
+                if self.resolution.is_null() {
+                    write!(f, "TypeDescription(No Resolution)")
+                } else {
+                    write!(
+                        f,
+                        "{}",
+                        self.definition().show(self.resolution.definition())
+                    )
+                }
+            }
         }
     }
 }
@@ -113,6 +119,9 @@ impl TypeDescription {
     pub fn type_name(&self) -> String {
         if self.is_null() {
             return "UNRESOLVED_TYPE_DEF".to_string();
+        }
+        if self.resolution.is_null() {
+            return self.definition().name.to_string();
         }
         self.definition()
             .nested_type_name(self.resolution.definition())

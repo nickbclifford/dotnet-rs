@@ -93,6 +93,33 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
 
             vm_push!(stack, gc, Int32(prev));
         }
+        BaseType::IntPtr | BaseType::UIntPtr => {
+            pop_args!(
+                stack,
+                gc,
+                [
+                    ManagedPtr(target_ptr),
+                    NativeInt(value),
+                    NativeInt(comparand)
+                ]
+            );
+
+            let target = target_ptr
+                .value
+                .expect("Target pointer should not be null")
+                .as_ptr() as *mut usize;
+
+            let prev = match unsafe { atomic::AtomicUsize::from_ptr(target) }.compare_exchange(
+                comparand as usize,
+                value as usize,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(prev) | Err(prev) => prev,
+            };
+
+            vm_push!(stack, gc, NativeInt(prev as isize));
+        }
         _ => {
             // Assume ObjectRef (pointer sized) for all other types for now.
             pop_args!(
@@ -129,6 +156,112 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
             } else {
                 // SAFETY: We just read this from an AtomicUsize where we stored valid Gc payload pointers.
                 // The object is kept alive because we are in an intrinsic call and the stack roots it (or the static field roots it).
+                ObjectRef(Some(unsafe { Gc::from_ptr(prev_raw as *const _) }))
+            };
+            vm_push!(stack, gc, ObjectRef(prev));
+        }
+    }
+
+    StepResult::InstructionStepped
+}
+pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let params = &method.method.signature.parameters;
+    // Exchange(ref T, T) -> T
+    // params[0] is 'ref T'.
+    let Parameter(_, first_param_type) = &params[0];
+
+    let target_type = if let ParameterType::Ref(inner) = first_param_type {
+        generics.make_concrete(method.resolution(), inner.clone())
+    } else {
+        panic!(
+            "intrinsic_interlocked_exchange: First parameter must be Ref, found {:?}",
+            first_param_type
+        );
+    };
+
+    match target_type.get() {
+        BaseType::Int32 => {
+            pop_args!(stack, gc, [ManagedPtr(target_ptr), Int32(value)]);
+
+            let target = target_ptr
+                .value
+                .expect("Target pointer should not be null")
+                .as_ptr() as *mut i32;
+
+            let prev = unsafe { AtomicI32::from_ptr(target) }.swap(value, Ordering::SeqCst);
+
+            vm_push!(stack, gc, Int32(prev));
+        }
+        BaseType::Int64 => {
+            pop_args!(stack, gc, [ManagedPtr(target_ptr), Int64(value)]);
+
+            let target = target_ptr
+                .value
+                .expect("Target pointer should not be null")
+                .as_ptr() as *mut i64;
+
+            let prev = unsafe { atomic::AtomicI64::from_ptr(target) }.swap(value, Ordering::SeqCst);
+
+            vm_push!(stack, gc, Int64(prev));
+        }
+        BaseType::IntPtr | BaseType::UIntPtr => {
+            pop_args!(stack, gc, [ManagedPtr(target_ptr), NativeInt(value)]);
+
+            let target = target_ptr
+                .value
+                .expect("Target pointer should not be null")
+                .as_ptr() as *mut usize;
+
+            let prev = unsafe { atomic::AtomicUsize::from_ptr(target) }.swap(
+                value as usize,
+                Ordering::SeqCst,
+            );
+
+            vm_push!(stack, gc, NativeInt(prev as isize));
+        }
+        _ => {
+            // Assume ObjectRef (pointer sized) for all other types for now.
+            // We use manual popping to handle both ObjectRef and NativeInt (which might be used for null or pointers).
+            let value = vm_pop!(stack, gc);
+            let target_ptr_val = vm_pop!(stack, gc);
+
+            // DEBUG PRINT
+            eprintln!("Interlocked.Exchange (Object): value={:?}, target_ptr={:?}", value, target_ptr_val);
+
+            let target_ptr = match target_ptr_val {
+                StackValue::ManagedPtr(p) => p,
+                _ => panic!("intrinsic_interlocked_exchange: Expected ManagedPtr, got {:?}", target_ptr_val),
+            };
+
+            let target = target_ptr
+                .value
+                .expect("Target pointer should not be null")
+                .as_ptr() as *mut usize;
+
+            let val_raw = match value {
+                StackValue::ObjectRef(ObjectRef(Some(ptr))) => Gc::as_ptr(ptr) as usize,
+                StackValue::ObjectRef(ObjectRef(None)) => 0,
+                StackValue::NativeInt(i) => i as usize,
+                _ => panic!("intrinsic_interlocked_exchange: Expected ObjectRef or NativeInt, got {:?}", value),
+            };
+
+            let prev_raw = unsafe { atomic::AtomicUsize::from_ptr(target) }.swap(
+                val_raw,
+                Ordering::SeqCst,
+            );
+
+            eprintln!("Interlocked.Exchange (Object): prev_raw={:#x}", prev_raw);
+
+            let prev = if prev_raw == 0 {
+                ObjectRef(None)
+            } else {
+                // SAFETY: We just read this from an AtomicUsize where we stored valid Gc payload pointers.
+                // The object is kept alive because we are in an intrinsic call and the stack roots it.
                 ObjectRef(Some(unsafe { Gc::from_ptr(prev_raw as *const _) }))
             };
             vm_push!(stack, gc, ObjectRef(prev));

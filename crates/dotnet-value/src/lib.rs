@@ -170,7 +170,9 @@ macro_rules! bitwise_op {
             (StackValue::Int32(l), StackValue::Int32(r)) => StackValue::Int32(l $op r),
             (StackValue::Int32(l), StackValue::NativeInt(r)) => StackValue::NativeInt((l as isize) $op r),
             (StackValue::Int64(l), StackValue::Int64(r)) => StackValue::Int64(l $op r),
+            (StackValue::Int64(l), StackValue::NativeInt(r)) => StackValue::Int64(l $op (r as i64)),
             (StackValue::NativeInt(l), StackValue::Int32(r)) => StackValue::NativeInt(l $op (r as isize)),
+            (StackValue::NativeInt(l), StackValue::Int64(r)) => StackValue::Int64((l as i64) $op r),
             (StackValue::NativeInt(l), StackValue::NativeInt(r)) => StackValue::NativeInt(l $op r),
             (l, r) => panic!("invalid types for bitwise operation: {:?}, {:?}", l, r),
         }
@@ -183,7 +185,9 @@ macro_rules! wrapping_arithmetic_op {
             (StackValue::Int32(l), StackValue::Int32(r)) => StackValue::Int32(l.$op(r)),
             (StackValue::Int32(l), StackValue::NativeInt(r)) => StackValue::NativeInt((l as isize).$op(r)),
             (StackValue::Int64(l), StackValue::Int64(r)) => StackValue::Int64(l.$op(r)),
+            (StackValue::Int64(l), StackValue::NativeInt(r)) => StackValue::Int64(l.$op(r as i64)),
             (StackValue::NativeInt(l), StackValue::Int32(r)) => StackValue::NativeInt(l.$op(r as isize)),
+            (StackValue::NativeInt(l), StackValue::Int64(r)) => StackValue::Int64((l as i64).$op(r)),
             (StackValue::NativeInt(l), StackValue::NativeInt(r)) => StackValue::NativeInt(l.$op(r)),
             (StackValue::NativeFloat(l), StackValue::NativeFloat(r)) => StackValue::NativeFloat(l $float_op r),
             (l, r) => panic!("invalid types for arithmetic operation: {:?}, {:?}", l, r),
@@ -549,6 +553,10 @@ impl<'gc> Sub for StackValue<'gc> {
             (ManagedPtr(m), NativeInt(i)) => {
                 // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
                 unsafe { ManagedPtr(m.offset(-i)) }
+            }
+            (ManagedPtr(m), Int64(i)) => {
+                // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
+                unsafe { ManagedPtr(m.offset(-(i as isize))) }
             }
             (ManagedPtr(m1), ManagedPtr(m2)) => {
                 let v1 = m1.value.map(|p| p.as_ptr() as isize).unwrap_or(0);

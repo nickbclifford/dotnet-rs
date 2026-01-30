@@ -20,6 +20,14 @@ impl MethodDescription {
 
 impl Debug for MethodDescription {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if self.resolution().is_null() {
+            return write!(
+                f,
+                "{}::{} (No Resolution)",
+                self.parent.type_name(),
+                self.method.name
+            );
+        }
         write!(
             f,
             "{}",
