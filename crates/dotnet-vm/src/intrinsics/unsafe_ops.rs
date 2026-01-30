@@ -42,9 +42,13 @@ define_intrinsic!(intrinsic_buffer_memmove(gc, stack, method, generics) (NativeI
         generics,
         stack.shared.caches.clone(),
     );
-    let target = &generics.method_generics[0];
-    let layout = type_layout(target.clone(), &ctx);
-    let total_count = len as usize * layout.size();
+    let total_count = if generics.method_generics.is_empty() {
+        len as usize
+    } else {
+        let target = &generics.method_generics[0];
+        let layout = type_layout(target.clone(), &ctx);
+        len as usize * layout.size()
+    };
 
     // Check GC safe point before large bulk memory operations
     const LARGE_MEMMOVE_THRESHOLD: usize = 4096;

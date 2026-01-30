@@ -152,7 +152,7 @@ impl<'a, 'm> ValueResolution for ResolutionContext<'a, 'm> {
                     )))
                 }
             },
-            BaseType::Object | BaseType::String | BaseType::Vector(_, _) => {
+            BaseType::Object | BaseType::String | BaseType::Vector(_, _) | BaseType::Array(_, _) => {
                 if let StackValue::ObjectRef(o) = data {
                     CTSValue::Ref(o)
                 } else {
@@ -252,7 +252,7 @@ impl<'a, 'm> ValueResolution for ResolutionContext<'a, 'm> {
             BaseType::UIntPtr | BaseType::FunctionPointer(_) | BaseType::ValuePointer(_, _) => {
                 CTSValue::Value(NativeUInt(usize::from_ne_bytes(data.try_into().unwrap())))
             }
-            BaseType::Object | BaseType::String | BaseType::Vector(_, _) => {
+            BaseType::Object | BaseType::String | BaseType::Vector(_, _) | BaseType::Array(_, _) => {
                 CTSValue::Ref(unsafe { dotnet_value::object::ObjectRef::read_branded(data, gc) })
             }
             BaseType::Type {
@@ -295,7 +295,7 @@ impl<'a, 'm> ValueResolution for ResolutionContext<'a, 'm> {
             );
         }
 
-        Vector::new(element, layout, vec![0; total_size])
+        Vector::new(element, layout, vec![0; total_size], vec![size])
     }
 }
 

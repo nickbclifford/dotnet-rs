@@ -712,8 +712,24 @@ impl AssemblyLoader {
                 use MethodReferenceParent::*;
                 match &method_ref.parent {
                     Type(t) => {
-                        let parent_type = self
-                            .find_concrete_type(generic_inst.make_concrete(resolution, t.clone()));
+                        let concrete = generic_inst.make_concrete(resolution, t.clone());
+                        if method_ref.name == ".ctor" {
+                             if let BaseType::Array(_, _) = concrete.get() {
+                                let array_type = self.corlib_type("DotnetRs.Array");
+                                for method in &array_type.definition().methods {
+                                    if method.name == "CtorArraySentinel" {
+                                        return MethodDescription {
+                                            parent: array_type,
+                                            method_resolution: array_type.resolution,
+                                            method,
+                                        };
+                                    }
+                                }
+                                panic!("CtorArraySentinel not found in DotnetRs.Array");
+                             }
+                        }
+
+                        let parent_type = self.find_concrete_type(concrete);
                         match self.find_method_in_type(
                             parent_type,
                             &method_ref.name,
@@ -721,10 +737,11 @@ impl AssemblyLoader {
                             resolution,
                         ) {
                             None => panic!(
-                                "could not find {}",
+                                "could not find {} in type {}",
                                 method_ref
                                     .signature
-                                    .show_with_name(resolution.definition(), &method_ref.name)
+                                    .show_with_name(resolution.definition(), &method_ref.name),
+                                parent_type.type_name()
                             ),
                             Some(method) => method,
                         }

@@ -584,6 +584,7 @@ pub struct Vector<'gc> {
     pub element: ConcreteType,
     pub layout: ArrayLayoutManager,
     pub(crate) storage: Vec<u8>,
+    pub dims: Box<[usize]>,
     /// Side-table for managed pointer metadata (and dynamic roots).
     pub managed_ptr_metadata: ThreadSafeLock<ManagedPtrSideTable<'gc>>,
     pub(crate) _contains_gc: PhantomData<fn(&'gc ()) -> &'gc ()>,
@@ -596,6 +597,7 @@ impl<'gc> Clone for Vector<'gc> {
             element: self.element.clone(),
             layout: self.layout.clone(),
             storage: self.storage.clone(),
+            dims: self.dims.clone(),
             managed_ptr_metadata: ThreadSafeLock::new(metadata),
             _contains_gc: PhantomData,
         }
@@ -607,6 +609,7 @@ impl<'gc> PartialEq for Vector<'gc> {
         self.element == other.element
             && self.layout == other.layout
             && self.storage == other.storage
+            && self.dims == other.dims
             && *self.managed_ptr_metadata.borrow() == *other.managed_ptr_metadata.borrow()
     }
 }
@@ -643,11 +646,12 @@ unsafe impl Collect for Vector<'_> {
 }
 
 impl<'gc> Vector<'gc> {
-    pub fn new(element: ConcreteType, layout: ArrayLayoutManager, storage: Vec<u8>) -> Self {
+    pub fn new(element: ConcreteType, layout: ArrayLayoutManager, storage: Vec<u8>, dims: Vec<usize>) -> Self {
         Self {
             element,
             layout,
             storage,
+            dims: dims.into_boxed_slice(),
             managed_ptr_metadata: ThreadSafeLock::new(ManagedPtrSideTable::new()),
             _contains_gc: PhantomData,
         }
@@ -664,7 +668,7 @@ impl<'gc> Vector<'gc> {
     }
 
     pub fn size_bytes(&self) -> usize {
-        size_of::<Vector>() + self.storage.len()
+        std::mem::size_of::<Vector>() + self.storage.len() + (self.dims.len() * std::mem::size_of::<usize>())
     }
 
     pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {

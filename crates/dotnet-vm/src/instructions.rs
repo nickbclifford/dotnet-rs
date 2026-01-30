@@ -11,7 +11,7 @@ use dotnet_types::{
 use dotnet_utils::{gc::GCHandle, is_ptr_aligned_to_field};
 use dotnet_value::{
     layout::HasLayout,
-    object::{CTSValue, HeapStorage, ManagedPtrMetadata, ObjectRef},
+    object::{CTSValue, HeapStorage, ManagedPtrMetadata, ObjectRef, Vector},
     pointer::{ManagedPtr, ManagedPtrOwner, UnmanagedPtr},
     string::CLRString,
     StackValue,
@@ -2053,6 +2053,52 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             NewObject(ctor) => {
                 let (mut method, lookup) = self.find_generic_method(&MethodSource::User(*ctor));
+
+                if method.method.name == "CtorArraySentinel" {
+                    if let UserMethod::Reference(r) = ctor {
+                         let resolution = self.current_frame().source_resolution;
+                         let method_ref = &resolution.definition()[*r];
+                         
+                         if let MethodReferenceParent::Type(t) = &method_ref.parent {
+                             let concrete = {
+                                 let ctx = self.current_context();
+                                 // Use generics from context to resolve the MethodType
+                                 ctx.generics.make_concrete(resolution, t.clone())
+                             };
+
+                             if let BaseType::Array(element, shape) = concrete.get() {
+                                 let rank = shape.rank;
+                                 let mut dims: Vec<usize> = (0..rank).map(|_| {
+                                      let v = pop!();
+                                      match v {
+                                          StackValue::Int32(i) => i as usize,
+                                          StackValue::NativeInt(i) => i as usize,
+                                          _ => panic!("Invalid dimension {:?}", v),
+                                      }
+                                 }).collect();
+                                 dims.reverse();
+
+                                 let total_len: usize = dims.iter().product();
+
+                                 let elem_type_concrete = element.clone();
+
+                                 let ctx = self.current_context();
+                                 let elem_type = ctx.normalize_type(elem_type_concrete.clone());
+                                 
+                                 let layout = LayoutFactory::create_array_layout(elem_type.clone(), total_len, &ctx);
+                                 let total_size_bytes = layout.element_layout.size() * total_len;
+                                 
+                                 let vec_obj = Vector::new(elem_type, layout, vec![0; total_size_bytes], dims);
+                                 let o = ObjectRef::new(gc, HeapStorage::Vec(vec_obj));
+                                 self.register_new_object(&o);
+                                 push!(ObjectRef(o));
+                                 self.increment_ip();
+                                 return StepResult::InstructionStepped;
+                             }
+                         }
+                    }
+                }
+
                 let parent = method.parent;
                 if let (None, Some(ts)) = (&method.method.body, &parent.definition().extends) {
                     let (ut, _) = decompose_type_source(ts);

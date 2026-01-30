@@ -5,6 +5,9 @@ namespace DotnetRs;
 [Stub(InPlaceOf = "System.Array")]
 public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquatable
 {
+    // Sentinel for array constructors used by runtime
+    internal void CtorArraySentinel() { }
+
     public int Length => GetLength(0);
 
     public long LongLength => GetLongLength(0);
