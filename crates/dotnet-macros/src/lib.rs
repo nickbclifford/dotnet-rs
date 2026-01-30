@@ -1,31 +1,50 @@
 extern crate proc_macro;
+
 use proc_macro::TokenStream;
-use syn::{parse_macro_input, ItemFn, LitStr};
 use quote::quote;
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+};
+use syn::{parse_macro_input, ItemFn, LitStr};
 
 mod signature;
-use signature::{ParsedSignature, ParsedFieldSignature};
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use signature::{ParsedFieldSignature, ParsedSignature};
 
 fn match_primitive(type_name: &str) -> Option<proc_macro2::TokenStream> {
     match type_name {
         "void" | "Void" | "System.Void" => Some(quote! { dotnetdll::prelude::BaseType::Void }),
-        "bool" | "Boolean" | "System.Boolean" => Some(quote! { dotnetdll::prelude::BaseType::Boolean }),
+        "bool" | "Boolean" | "System.Boolean" => {
+            Some(quote! { dotnetdll::prelude::BaseType::Boolean })
+        }
         "char" | "Char" | "System.Char" => Some(quote! { dotnetdll::prelude::BaseType::Char }),
         "sbyte" | "SByte" | "System.SByte" => Some(quote! { dotnetdll::prelude::BaseType::Int8 }),
         "byte" | "Byte" | "System.Byte" => Some(quote! { dotnetdll::prelude::BaseType::UInt8 }),
         "short" | "Int16" | "System.Int16" => Some(quote! { dotnetdll::prelude::BaseType::Int16 }),
-        "ushort" | "UInt16" | "System.UInt16" => Some(quote! { dotnetdll::prelude::BaseType::UInt16 }),
+        "ushort" | "UInt16" | "System.UInt16" => {
+            Some(quote! { dotnetdll::prelude::BaseType::UInt16 })
+        }
         "int" | "Int32" | "System.Int32" => Some(quote! { dotnetdll::prelude::BaseType::Int32 }),
-        "uint" | "UInt32" | "System.UInt32" => Some(quote! { dotnetdll::prelude::BaseType::UInt32 }),
+        "uint" | "UInt32" | "System.UInt32" => {
+            Some(quote! { dotnetdll::prelude::BaseType::UInt32 })
+        }
         "long" | "Int64" | "System.Int64" => Some(quote! { dotnetdll::prelude::BaseType::Int64 }),
-        "ulong" | "UInt64" | "System.UInt64" => Some(quote! { dotnetdll::prelude::BaseType::UInt64 }),
-        "float" | "Single" | "System.Single" | "Float32" => Some(quote! { dotnetdll::prelude::BaseType::Float32 }),
-        "double" | "Double" | "System.Double" | "Float64" => Some(quote! { dotnetdll::prelude::BaseType::Float64 }),
-        "string" | "String" | "System.String" => Some(quote! { dotnetdll::prelude::BaseType::String }),
-        "object" | "Object" | "System.Object" => Some(quote! { dotnetdll::prelude::BaseType::Object }),
+        "ulong" | "UInt64" | "System.UInt64" => {
+            Some(quote! { dotnetdll::prelude::BaseType::UInt64 })
+        }
+        "float" | "Single" | "System.Single" | "Float32" => {
+            Some(quote! { dotnetdll::prelude::BaseType::Float32 })
+        }
+        "double" | "Double" | "System.Double" | "Float64" => {
+            Some(quote! { dotnetdll::prelude::BaseType::Float64 })
+        }
+        "string" | "String" | "System.String" => {
+            Some(quote! { dotnetdll::prelude::BaseType::String })
+        }
+        "object" | "Object" | "System.Object" => {
+            Some(quote! { dotnetdll::prelude::BaseType::Object })
+        }
         "IntPtr" | "System.IntPtr" => Some(quote! { dotnetdll::prelude::BaseType::IntPtr }),
         "UIntPtr" | "System.UIntPtr" => Some(quote! { dotnetdll::prelude::BaseType::UIntPtr }),
         _ => None,
@@ -43,19 +62,17 @@ pub fn dotnet_intrinsic(attr: TokenStream, item: TokenStream) -> TokenStream {
         Ok(s) => s,
         Err(e) => return e.to_compile_error().into(),
     };
-    
+
     let is_static = parsed.is_static;
 
     // Reconstruct normalized signature string
     // Format: "ReturnType ClassName::MethodName(Param1, Param2)"
     let params_str = parsed.parameters.join(", ");
-    let normalized_sig = format!("{} {}::{}({})", 
-        parsed.return_type, 
-        parsed.class_name, 
-        parsed.method_name, 
-        params_str
+    let normalized_sig = format!(
+        "{} {}::{}({})",
+        parsed.return_type, parsed.class_name, parsed.method_name, params_str
     );
-    
+
     // Calculate hash for unique filter name
     let mut hasher = DefaultHasher::new();
     normalized_sig.hash(&mut hasher);
@@ -76,12 +93,14 @@ pub fn dotnet_intrinsic(attr: TokenStream, item: TokenStream) -> TokenStream {
         if let Some(base_type) = match_primitive(p) {
             quote! {
                 // Check if parameter matches Expected Type.
-                // Assuming dotnetdll::Parameter is a tuple struct (Name, Type).
-                if let Some(dotnetdll::prelude::Parameter(_, dotnetdll::prelude::ParameterType::Value(dotnetdll::prelude::MethodType::Base(b)))) = 
-                    method.method.signature.parameters.get(#i) {
-                    if !matches!(**b, #base_type) { return false; }
-                } else {
-                    return false;
+                {
+                    use dotnetdll::prelude::*;
+                    if let Some(Parameter(_, ParameterType::Value(MethodType::Base(b)))) =
+                        method.method.signature.parameters.get(#i) {
+                        if !matches!(**b, #base_type) { return false; }
+                    } else {
+                        return false;
+                    }
                 }
             }
         } else {
@@ -89,8 +108,11 @@ pub fn dotnet_intrinsic(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     });
 
-    let filter_name = syn::Ident::new(&format!("{}_filter_{:x}", func_name, sig_hash), func_name.span());
-    
+    let filter_name = syn::Ident::new(
+        &format!("{}_filter_{:x}", func_name, sig_hash),
+        func_name.span(),
+    );
+
     let filter_fn = quote! {
         fn #filter_name(method: &dotnet_types::members::MethodDescription) -> bool {
             #(#param_checks)*
@@ -117,7 +139,7 @@ pub fn dotnet_intrinsic(attr: TokenStream, item: TokenStream) -> TokenStream {
         #filter_fn
         #submit
     };
-    
+
     output.into()
 }
 
@@ -132,7 +154,7 @@ pub fn dotnet_intrinsic_field(attr: TokenStream, item: TokenStream) -> TokenStre
         Ok(s) => s,
         Err(e) => return e.to_compile_error().into(),
     };
-    
+
     // We assume the macro is used within dotnet-vm, and IntrinsicFieldEntry is available
     // at crate::intrinsics::IntrinsicFieldEntry.
     let class_name = &parsed.class_name;
@@ -152,6 +174,6 @@ pub fn dotnet_intrinsic_field(attr: TokenStream, item: TokenStream) -> TokenStre
         #func
         #submit
     };
-    
+
     output.into()
 }

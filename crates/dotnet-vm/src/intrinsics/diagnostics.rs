@@ -1,11 +1,13 @@
-use crate::{CallStack, StepResult};
+use crate::{vm_pop, vm_push, CallStack, StepResult};
+use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
-use dotnet_macros::dotnet_intrinsic;
 
 // use dotnet_value::StackValue;
 
-#[dotnet_intrinsic("static bool System.Diagnostics.Tracing.XplatEventLogger::IsEventSourceLoggingEnabled()")]
+#[dotnet_intrinsic(
+    "static bool System.Diagnostics.Tracing.XplatEventLogger::IsEventSourceLoggingEnabled()"
+)]
 pub fn intrinsic_is_event_source_logging_enabled<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -33,6 +35,6 @@ pub fn intrinsic_eventpipe_create_provider<'gc, 'm: 'gc>(
     // Return value: likely ulong (handle).
     // Pushing 0 (invalid handle) to satisfy caller.
     vm_push!(stack, gc, NativeInt(0));
-    
+
     StepResult::InstructionStepped
 }

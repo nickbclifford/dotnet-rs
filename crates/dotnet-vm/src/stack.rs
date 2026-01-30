@@ -69,7 +69,7 @@ pub struct HeapManager<'gc> {
     pub processing_finalizer: Cell<bool>,
     pub needs_full_collect: Cell<bool>,
     /// Roots for objects in this arena that are referenced by other arenas.
-    /// This is populated during coordinated GC marking phase.
+    /// This is populated during the coordinated GC marking phase.
     #[cfg(feature = "multithreaded-gc")]
     pub cross_arena_roots: RefCell<HashSet<ObjectPtr>>,
     // untraced handles to every heap object, used only by the tracer during debugging

@@ -1,6 +1,6 @@
 use crate::{
     context::ResolutionContext, exceptions::ExceptionState, layout::LayoutFactory,
-    resolution::ValueResolution, CallStack, tracer::Tracer,
+    resolution::ValueResolution, tracer::Tracer, CallStack,
 };
 use dashmap::DashMap;
 use dotnet_assemblies::decompose_type_source;
@@ -112,21 +112,30 @@ impl NativeLibraries {
             .ok_or_else(|| PInvokeError::LibraryNotFound(name.to_string()))?;
 
         if let Some(t) = &mut tracer {
-             t.trace_interop(0, "RESOLVE", &format!("Resolving library '{}'...", name));
-             t.trace_interop(0, "RESOLVE", &format!("Loading library from path: {:?}", path));
+            t.trace_interop(0, "RESOLVE", &format!("Resolving library '{}'...", name));
+            t.trace_interop(
+                0,
+                "RESOLVE",
+                &format!("Loading library from path: {:?}", path),
+            );
         }
 
         let lib = unsafe { Library::new(&path) }
             .map_err(|e| PInvokeError::LoadError(name.to_string(), e.to_string()))?;
 
         if let Some(t) = tracer {
-             t.trace_interop(0, "RESOLVE", &format!("Successfully loaded '{}'", name));
+            t.trace_interop(0, "RESOLVE", &format!("Successfully loaded '{}'", name));
         }
         self.libraries.entry(name.to_string()).or_insert(lib);
         Ok(self.libraries.get(name).unwrap())
     }
 
-    pub fn get_function(&self, library: &str, name: &str, tracer: Option<&mut Tracer>) -> Result<CodePtr, PInvokeError> {
+    pub fn get_function(
+        &self,
+        library: &str,
+        name: &str,
+        tracer: Option<&mut Tracer>,
+    ) -> Result<CodePtr, PInvokeError> {
         let l = self.get_library(library, tracer)?;
         let sym: Symbol<unsafe extern "C" fn()> = unsafe { l.get(name.as_bytes()) }
             .map_err(|_| PInvokeError::SymbolNotFound(library.to_string(), name.to_string()))?;
@@ -238,7 +247,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             self,
             "CALL",
             "Invoking P/Invoke: [{}] function [{}] in type [{}]",
-            module, function, type_name
+            module,
+            function,
+            type_name
         );
 
         let arg_types: Vec<String> = method
@@ -254,7 +265,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         let target_res = if self.tracer_enabled() {
             let mut guard = self.tracer();
-            self.pinvoke().get_function(module, function, Some(&mut *guard))
+            self.pinvoke()
+                .get_function(module, function, Some(&mut *guard))
         } else {
             self.pinvoke().get_function(module, function, None)
         };

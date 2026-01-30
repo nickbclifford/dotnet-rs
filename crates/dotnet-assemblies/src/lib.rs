@@ -714,7 +714,7 @@ impl AssemblyLoader {
                     Type(t) => {
                         let concrete = generic_inst.make_concrete(resolution, t.clone());
                         if method_ref.name == ".ctor" {
-                             if let BaseType::Array(_, _) = concrete.get() {
+                            if let BaseType::Array(_, _) = concrete.get() {
                                 let array_type = self.corlib_type("DotnetRs.Array");
                                 for method in &array_type.definition().methods {
                                     if method.name == "CtorArraySentinel" {
@@ -726,7 +726,7 @@ impl AssemblyLoader {
                                     }
                                 }
                                 panic!("CtorArraySentinel not found in DotnetRs.Array");
-                             }
+                            }
                         }
 
                         let parent_type = self.find_concrete_type(concrete);

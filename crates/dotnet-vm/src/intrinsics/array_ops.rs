@@ -1,4 +1,5 @@
-use crate::{resolution::ValueResolution, CallStack, StepResult};
+use crate::{pop_args, resolution::ValueResolution, vm_push, CallStack, StepResult};
+use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
@@ -6,7 +7,6 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
     StackValue,
 };
-use dotnet_macros::dotnet_intrinsic;
 
 #[dotnet_intrinsic("int System.Array::get_Length()")]
 #[dotnet_intrinsic("int DotnetRs.Array::get_Length()")]

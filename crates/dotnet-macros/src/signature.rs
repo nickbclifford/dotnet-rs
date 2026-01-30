@@ -1,6 +1,8 @@
-use syn::parse::{Parse, ParseStream};
-use syn::{Ident, Result, Token};
-use syn::punctuated::Punctuated;
+use syn::{
+    parse::{Parse, ParseStream},
+    punctuated::Punctuated,
+    Ident, Result, Token,
+};
 
 #[derive(Debug)]
 pub struct ParsedSignature {
@@ -24,7 +26,7 @@ impl Parse for ParsedSignature {
         let method_name = if input.peek(Token![.]) {
             input.parse::<Token![.]>()?;
             let id: Ident = input.parse()?;
-            format!(".{}", id.to_string())
+            format!(".{}", id)
         } else {
             input.parse::<Ident>()?.to_string()
         };
@@ -34,10 +36,10 @@ impl Parse for ParsedSignature {
 
         let content;
         syn::parenthesized!(content in input);
-        
-        // Handle empty parameters case explicitly if parse_terminated doesn't? 
+
+        // Handle empty parameters case explicitly if parse_terminated doesn't?
         // parse_terminated handles empty.
-        let params_punctuated: Punctuated<String, Token![,]> = 
+        let params_punctuated: Punctuated<String, Token![,]> =
             content.parse_terminated(parse_type, Token![,])?;
 
         Ok(ParsedSignature {
@@ -69,7 +71,7 @@ impl Parse for ParsedFieldSignature {
         let field_name = input.parse::<Ident>()?.to_string();
 
         // Fields do not have parameters/parentheses
-        
+
         Ok(ParsedFieldSignature {
             class_name,
             field_name,
@@ -79,23 +81,23 @@ impl Parse for ParsedFieldSignature {
 
 fn parse_type(input: ParseStream) -> Result<String> {
     let mut parts = Vec::new();
-    
+
     loop {
         let ident: Ident = input.parse()?;
         let mut part_name = ident.to_string();
-        
+
         // Check for generics <T, U> -> `2
         // We need to look ahead for <
         // Note: We need to handle this carefully to avoid infinite recursion if parse_type calls this.
         // But parse_generic_args_count calls parse_type, which is fine as it consumes tokens.
         let count = parse_generic_args_count(input)?;
         if count > 0 {
-             part_name.push('`');
-             part_name.push_str(&count.to_string());
+            part_name.push('`');
+            part_name.push_str(&count.to_string());
         }
 
         parts.push(part_name);
-        
+
         if input.peek(Token![.]) {
             input.parse::<Token![.]>()?;
             continue;
@@ -112,15 +114,15 @@ fn parse_type(input: ParseStream) -> Result<String> {
             suffix.push_str("[]");
         } else if input.peek(Token![&]) {
             input.parse::<Token![&]>()?;
-            suffix.push_str("&");
+            suffix.push('&');
         } else if input.peek(Token![*]) {
             input.parse::<Token![*]>()?;
-            suffix.push_str("*");
+            suffix.push('*');
         } else {
             break;
         }
     }
-    
+
     // Normalize
     let mut type_name = if parts.len() == 1 {
         match parts[0].as_str() {
@@ -141,10 +143,10 @@ fn parse_type(input: ParseStream) -> Result<String> {
             "object" => String::from("Object"),
             "nint" => String::from("IntPtr"),
             "nuint" => String::from("UIntPtr"),
-             _ => parts[0].clone(),
+            _ => parts[0].clone(),
         }
     } else if parts.len() == 2 && parts[0] == "System" {
-         match parts[1].as_str() {
+        match parts[1].as_str() {
             "Void" => String::from("Void"),
             "Boolean" => String::from("Boolean"),
             "Byte" => String::from("UInt8"),
@@ -162,7 +164,7 @@ fn parse_type(input: ParseStream) -> Result<String> {
             "Object" => String::from("Object"),
             "IntPtr" => String::from("IntPtr"),
             "UIntPtr" => String::from("UIntPtr"),
-             _ => parts.join("."),
+            _ => parts.join("."),
         }
     } else {
         parts.join(".")
@@ -174,20 +176,20 @@ fn parse_type(input: ParseStream) -> Result<String> {
 
 fn parse_class_name(input: ParseStream) -> Result<String> {
     let mut parts = Vec::new();
-    
+
     loop {
         let ident: Ident = input.parse()?;
         let mut part_name = ident.to_string();
-        
+
         // Generics
         let count = parse_generic_args_count(input)?;
         if count > 0 {
-             part_name.push('`');
-             part_name.push_str(&count.to_string());
+            part_name.push('`');
+            part_name.push_str(&count.to_string());
         }
 
         parts.push(part_name);
-        
+
         if input.peek(Token![.]) {
             input.parse::<Token![.]>()?;
             continue;
@@ -204,15 +206,15 @@ fn parse_class_name(input: ParseStream) -> Result<String> {
             suffix.push_str("[]");
         } else if input.peek(Token![&]) {
             input.parse::<Token![&]>()?;
-            suffix.push_str("&");
+            suffix.push('&');
         } else if input.peek(Token![*]) {
             input.parse::<Token![*]>()?;
-            suffix.push_str("*");
+            suffix.push('*');
         } else {
             break;
         }
     }
-    
+
     // No normalization for class name
     let type_name = parts.join(".");
     Ok(type_name + &suffix)
@@ -227,7 +229,7 @@ fn parse_generic_args_count(input: ParseStream) -> Result<usize> {
             // simplest: call parse_type, but ignore result
             parse_type(input)?;
             count += 1;
-            
+
             if input.peek(Token![,]) {
                 input.parse::<Token![,]>()?;
             } else {
@@ -248,7 +250,8 @@ mod tests {
 
     #[test]
     fn test_parse_simple_static() {
-        let sig: ParsedSignature = parse_str("static double System.Math::Min(double, double)").unwrap();
+        let sig: ParsedSignature =
+            parse_str("static double System.Math::Min(double, double)").unwrap();
         assert!(sig.is_static);
         assert_eq!(sig.return_type, "Float64");
         assert_eq!(sig.class_name, "System.Math");
@@ -270,13 +273,13 @@ mod tests {
     fn test_parse_qualified_params() {
         let sig: ParsedSignature = parse_str("System.String System.Console::ReadLine()").unwrap();
         assert_eq!(sig.return_type, "String"); // Normalized
-        // If it was System.String, it normalizes to String? 
-        // My code: "string" -> "String". "System.String" -> "System.String".
-        // Wait, "System.String" matches "String" in base types usually. 
-        // But my normalizer only handles single identifiers.
-        // "System.String" will be returned as "System.String".
-        // This is fine, as long as matching logic handles it.
-        
+                                               // If it was System.String, it normalizes to String?
+                                               // My code: "string" -> "String". "System.String" -> "System.String".
+                                               // Wait, "System.String" matches "String" in base types usually.
+                                               // But my normalizer only handles single identifiers.
+                                               // "System.String" will be returned as "System.String".
+                                               // This is fine, as long as matching logic handles it.
+
         assert_eq!(sig.class_name, "System.Console");
     }
 }

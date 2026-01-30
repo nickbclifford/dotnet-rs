@@ -1,8 +1,9 @@
 use crate::{
     context::ResolutionContext,
     layout::{type_layout, LayoutFactory},
+    pop_args,
     resolution::ValueResolution,
-    CallStack, StepResult,
+    vm_push, CallStack, StepResult,
 };
 use dotnet_types::{
     generics::GenericLookup,
@@ -81,7 +82,9 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static System.ReadOnlySpan<char> System.String::op_Implicit(string)")]
 #[dotnet_intrinsic("static System.ReadOnlySpan<char> System.MemoryExtensions::AsSpan(string)")]
 #[dotnet_intrinsic("static System.ReadOnlySpan<char> System.MemoryExtensions::AsSpan(string, int)")]
-#[dotnet_intrinsic("static System.ReadOnlySpan<char> System.MemoryExtensions::AsSpan(string, int, int)")]
+#[dotnet_intrinsic(
+    "static System.ReadOnlySpan<char> System.MemoryExtensions::AsSpan(string, int, int)"
+)]
 pub fn intrinsic_as_span<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,

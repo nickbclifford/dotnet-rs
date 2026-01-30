@@ -19,6 +19,8 @@ libloading = { workspace = true }
 dashmap = { workspace = true }
 inventory = "0.3"
 dotnet-macros = { path = "../dotnet-macros" }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [features]
 default = ["multithreaded-gc"]

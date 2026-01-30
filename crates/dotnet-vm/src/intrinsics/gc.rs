@@ -1,11 +1,11 @@
-use crate::{CallStack, StepResult};
+use crate::{pop_args, vm_pop, vm_push, CallStack, StepResult};
+use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::{GCHandle, GCHandleType};
 use dotnet_value::{
     object::{HeapStorage, ObjectRef},
     with_string, StackValue,
 };
-use dotnet_macros::dotnet_intrinsic;
 
 /// System.ArgumentNullException::ThrowIfNull(object, string)
 #[dotnet_intrinsic("static void System.ArgumentNullException::ThrowIfNull(object, string)")]
@@ -262,7 +262,9 @@ pub fn intrinsic_gchandle_internal_get<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
-#[dotnet_intrinsic("static void System.Runtime.InteropServices.GCHandle::InternalSet(IntPtr, object)")]
+#[dotnet_intrinsic(
+    "static void System.Runtime.InteropServices.GCHandle::InternalSet(IntPtr, object)"
+)]
 pub fn intrinsic_gchandle_internal_set<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -287,7 +289,9 @@ pub fn intrinsic_gchandle_internal_set<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
-#[dotnet_intrinsic("static IntPtr System.Runtime.InteropServices.GCHandle::InternalAddrOfPinnedObject(IntPtr)")]
+#[dotnet_intrinsic(
+    "static IntPtr System.Runtime.InteropServices.GCHandle::InternalAddrOfPinnedObject(IntPtr)"
+)]
 pub fn intrinsic_gchandle_internal_addr_of_pinned_object<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,

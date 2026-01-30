@@ -8,10 +8,11 @@ mod exceptions;
 mod executor;
 pub mod gc;
 mod instructions;
-#[macro_use]
-mod macros;
 pub(crate) mod intrinsics;
 pub mod layout;
+#[macro_use]
+mod macros;
+pub mod memory;
 pub mod metrics;
 mod pinvoke;
 pub mod resolution;

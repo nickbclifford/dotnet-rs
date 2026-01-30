@@ -1,14 +1,15 @@
 use crate::{
+    pop_args,
     sync::{Arc, AtomicI32, Ordering, SyncBlockOps, SyncManagerOps},
-    CallStack, StepResult,
+    vm_pop, vm_push, CallStack, StepResult,
 };
+use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{object::ObjectRef, StackValue};
 use dotnetdll::prelude::{BaseType, MethodType, Parameter, ParameterType};
 use gc_arena::Gc;
 use std::{ptr, sync::atomic, thread};
-use dotnet_macros::dotnet_intrinsic;
 
 /// System.Threading.Monitor::Exit(object) - Releases the lock on an object.
 #[dotnet_intrinsic("static void System.Threading.Monitor::Exit(object)")]
@@ -52,8 +53,12 @@ pub fn intrinsic_monitor_exit<'gc, 'm: 'gc>(
 /// replaces one of the values.
 #[dotnet_intrinsic("static int System.Threading.Interlocked::CompareExchange(int&, int, int)")]
 #[dotnet_intrinsic("static long System.Threading.Interlocked::CompareExchange(long&, long, long)")]
-#[dotnet_intrinsic("static IntPtr System.Threading.Interlocked::CompareExchange(IntPtr&, IntPtr, IntPtr)")]
-#[dotnet_intrinsic("static object System.Threading.Interlocked::CompareExchange(object&, object, object)")]
+#[dotnet_intrinsic(
+    "static IntPtr System.Threading.Interlocked::CompareExchange(IntPtr&, IntPtr, IntPtr)"
+)]
+#[dotnet_intrinsic(
+    "static object System.Threading.Interlocked::CompareExchange(object&, object, object)"
+)]
 #[dotnet_intrinsic("static T System.Threading.Interlocked::CompareExchange<T>(T&, T, T)")]
 pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
@@ -131,7 +136,11 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
             pop_args!(
                 stack,
                 gc,
-                [ManagedPtr(target_ptr), ObjectRef(value), ObjectRef(comparand)]
+                [
+                    ManagedPtr(target_ptr),
+                    ObjectRef(value),
+                    ObjectRef(comparand)
+                ]
             );
 
             let target = target_ptr
@@ -229,10 +238,8 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
                 .expect("Target pointer should not be null")
                 .as_ptr() as *mut usize;
 
-            let prev = unsafe { atomic::AtomicUsize::from_ptr(target) }.swap(
-                value as usize,
-                Ordering::SeqCst,
-            );
+            let prev = unsafe { atomic::AtomicUsize::from_ptr(target) }
+                .swap(value as usize, Ordering::SeqCst);
 
             vm_push!(stack, gc, NativeInt(prev as isize));
         }
@@ -243,11 +250,17 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
             let target_ptr_val = vm_pop!(stack, gc);
 
             // DEBUG PRINT
-            eprintln!("Interlocked.Exchange (Object): value={:?}, target_ptr={:?}", value, target_ptr_val);
+            eprintln!(
+                "Interlocked.Exchange (Object): value={:?}, target_ptr={:?}",
+                value, target_ptr_val
+            );
 
             let target_ptr = match target_ptr_val {
                 StackValue::ManagedPtr(p) => p,
-                _ => panic!("intrinsic_interlocked_exchange: Expected ManagedPtr, got {:?}", target_ptr_val),
+                _ => panic!(
+                    "intrinsic_interlocked_exchange: Expected ManagedPtr, got {:?}",
+                    target_ptr_val
+                ),
             };
 
             let target = target_ptr
@@ -259,13 +272,14 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
                 StackValue::ObjectRef(ObjectRef(Some(ptr))) => Gc::as_ptr(ptr) as usize,
                 StackValue::ObjectRef(ObjectRef(None)) => 0,
                 StackValue::NativeInt(i) => i as usize,
-                _ => panic!("intrinsic_interlocked_exchange: Expected ObjectRef or NativeInt, got {:?}", value),
+                _ => panic!(
+                    "intrinsic_interlocked_exchange: Expected ObjectRef or NativeInt, got {:?}",
+                    value
+                ),
             };
 
-            let prev_raw = unsafe { atomic::AtomicUsize::from_ptr(target) }.swap(
-                val_raw,
-                Ordering::SeqCst,
-            );
+            let prev_raw =
+                unsafe { atomic::AtomicUsize::from_ptr(target) }.swap(val_raw, Ordering::SeqCst);
 
             eprintln!("Interlocked.Exchange (Object): prev_raw={:#x}", prev_raw);
 

@@ -1,4 +1,5 @@
-use crate::{intrinsics::span::span_to_slice, CallStack, StepResult};
+use crate::{intrinsics::span::span_to_slice, pop_args, vm_pop, vm_push, CallStack, StepResult};
+use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
@@ -11,7 +12,6 @@ use dotnet_value::{
     with_string, with_string_mut, StackValue,
 };
 use std::hash::{DefaultHasher, Hash, Hasher};
-use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 
 /// System.String::Equals(string, string)
 /// System.String::Equals(string)
@@ -408,7 +408,7 @@ pub fn intrinsic_field_string_length<'gc, 'm: 'gc>(
 
     let val = vm_pop!(stack, gc);
     let len = with_string!(stack, gc, val, |s| s.len());
-    
+
     vm_push!(stack, gc, StackValue::Int32(len as i32));
     StepResult::InstructionStepped
 }

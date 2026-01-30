@@ -1,8 +1,8 @@
-use crate::{CallStack, StepResult};
+use crate::{vm_pop, vm_push, CallStack, StepResult};
+use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::StackValue;
-use dotnet_macros::dotnet_intrinsic;
 
 #[dotnet_intrinsic("static bool System.Text.UnicodeUtility::IsAsciiCodePoint(uint)")]
 pub fn intrinsic_unicode_utility_is_ascii_code_point<'gc, 'm: 'gc>(

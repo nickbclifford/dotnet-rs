@@ -18,6 +18,8 @@ dotnet-vm = { workspace = true, default-features = false }
 clap = { workspace = true }
 dotnetdll = { workspace = true }
 parking_lot = { workspace = true, optional = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 dotnet-types = { workspace = true }

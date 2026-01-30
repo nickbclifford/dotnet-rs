@@ -1,13 +1,13 @@
 use crate::{
-    context::ResolutionContext, resolution::ValueResolution, CallStack, StepResult,
+    context::ResolutionContext, resolution::ValueResolution, vm_pop, vm_push, CallStack, StepResult,
 };
+use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     object::{HeapStorage, ObjectRef},
     StackValue,
 };
-use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 
 #[dotnet_intrinsic("static bool System.Runtime.Intrinsics.Vector128::get_IsHardwareAccelerated()")]
 #[dotnet_intrinsic("static bool System.Runtime.Intrinsics.Vector256::get_IsHardwareAccelerated()")]

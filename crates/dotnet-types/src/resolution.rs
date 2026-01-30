@@ -45,7 +45,7 @@ impl ResolutionS {
             None => {
                 eprintln!("DEBUG: ResolutionS NULL");
                 std::process::abort();
-            },
+            }
         }
     }
 }

@@ -53,7 +53,12 @@ pub struct ManagedPtrMetadata<'gc> {
     pub inner_type: TypeDescription,
     pub owner: MetadataOwner<'gc>,
     pub pinned: bool,
+    #[cfg(any(feature = "memory-validation", debug_assertions))]
+    pub magic: u64,
 }
+
+#[cfg(any(feature = "memory-validation", debug_assertions))]
+pub const MANAGED_PTR_MAGIC: u64 = 0x5AFE_CAFE_C0DE_0000;
 
 unsafe impl<'gc> Collect for ManagedPtrMetadata<'gc> {
     fn trace(&self, cc: &Collection) {
@@ -85,6 +90,18 @@ impl<'gc> ManagedPtrMetadata<'gc> {
             inner_type: m.inner_type,
             owner,
             pinned: m.pinned,
+            #[cfg(any(feature = "memory-validation", debug_assertions))]
+            magic: MANAGED_PTR_MAGIC,
+        }
+    }
+
+    pub fn validate(&self) {
+        #[cfg(any(feature = "memory-validation", debug_assertions))]
+        if self.magic != MANAGED_PTR_MAGIC {
+            panic!(
+                "ManagedPtrMetadata corrupted! Expected magic {:#x}, got {:#x}",
+                MANAGED_PTR_MAGIC, self.magic
+            );
         }
     }
 
@@ -131,13 +148,13 @@ impl<'gc> ManagedPtrSideTable<'gc> {
     }
 }
 
-#[cfg(feature = "memory-validation")]
+#[cfg(any(feature = "memory-validation", debug_assertions))]
 const OBJECT_MAGIC: u64 = 0x5AFE_0B1E_C700_0000;
 
 #[derive(Collect, Debug)]
 #[collect(no_drop)]
 pub struct ObjectInner<'gc> {
-    #[cfg(feature = "memory-validation")]
+    #[cfg(any(feature = "memory-validation", debug_assertions))]
     pub magic: u64,
     pub owner_id: u64,
     pub storage: HeapStorage<'gc>,
@@ -256,7 +273,7 @@ impl<'gc> ObjectRef<'gc> {
         Self(Some(Gc::new(
             gc,
             ThreadSafeLock::new(ObjectInner {
-                #[cfg(feature = "memory-validation")]
+                #[cfg(any(feature = "memory-validation", debug_assertions))]
                 magic: OBJECT_MAGIC,
                 owner_id,
                 storage: value,
@@ -282,7 +299,7 @@ impl<'gc> ObjectRef<'gc> {
         if ptr.is_null() {
             ObjectRef(None)
         } else {
-            #[cfg(feature = "memory-validation")]
+            #[cfg(any(feature = "memory-validation", debug_assertions))]
             {
                 if ptr_val % std::mem::align_of::<ThreadSafeLock<ObjectInner<'static>>>() != 0 {
                     panic!("ObjectRef::read: Pointer {:#x} is not aligned", ptr_val);
@@ -646,7 +663,12 @@ unsafe impl Collect for Vector<'_> {
 }
 
 impl<'gc> Vector<'gc> {
-    pub fn new(element: ConcreteType, layout: ArrayLayoutManager, storage: Vec<u8>, dims: Vec<usize>) -> Self {
+    pub fn new(
+        element: ConcreteType,
+        layout: ArrayLayoutManager,
+        storage: Vec<u8>,
+        dims: Vec<usize>,
+    ) -> Self {
         Self {
             element,
             layout,
@@ -668,7 +690,9 @@ impl<'gc> Vector<'gc> {
     }
 
     pub fn size_bytes(&self) -> usize {
-        std::mem::size_of::<Vector>() + self.storage.len() + (self.dims.len() * std::mem::size_of::<usize>())
+        std::mem::size_of::<Vector>()
+            + self.storage.len()
+            + (self.dims.len() * std::mem::size_of::<usize>())
     }
 
     pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {

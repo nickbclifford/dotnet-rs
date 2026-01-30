@@ -102,7 +102,9 @@
 //!   ├─→ external_call() [if P/Invoke]
 //!   └─→ call_frame() [managed CIL]
 //! ```
+use crate::{vm_pop, vm_push, vm_trace_intrinsic};
 use dotnet_assemblies::AssemblyLoader;
+use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
@@ -114,7 +116,6 @@ use dotnet_value::{
     StackValue,
 };
 use std::collections::HashMap;
-use dotnet_macros::dotnet_intrinsic;
 
 pub mod array_ops;
 pub mod diagnostics;
@@ -170,6 +171,7 @@ pub type IntrinsicFieldHandler = for<'gc, 'm> fn(
 pub struct IntrinsicEntry {
     pub class_name: &'static str,
     pub method_name: &'static str,
+    #[allow(dead_code)]
     pub signature: &'static str,
     pub handler: IntrinsicHandler,
     pub is_static: bool,
@@ -456,35 +458,35 @@ impl IntrinsicRegistry {
 
         // Phase 3: Distributed registration via inventory
         for entry in inventory::iter::<IntrinsicEntry> {
-             let metadata = if entry.is_static {
-                 if let Some(filter) = entry.signature_filter {
-                     IntrinsicMetadata::with_filter(
-                         IntrinsicKind::Static,
-                         entry.handler,
-                         "Registered via inventory",
-                         filter
-                     )
-                 } else {
-                     IntrinsicMetadata::static_intrinsic(entry.handler, "Registered via inventory")
-                 }
-             } else if let Some(filter) = entry.signature_filter {
-                  IntrinsicMetadata::with_filter(
-                     IntrinsicKind::VirtualOverride,
-                     entry.handler,
-                     "Registered via inventory",
-                     filter
-                 )
-             } else {
-                 IntrinsicMetadata::virtual_override(entry.handler, "Registered via inventory")
-             };
-             
-             registry.register_raw_metadata(
-                 entry.class_name,
-                 entry.method_name,
-                 entry.param_count,
-                 metadata,
-                 tracer.as_deref_mut()
-             );
+            let metadata = if entry.is_static {
+                if let Some(filter) = entry.signature_filter {
+                    IntrinsicMetadata::with_filter(
+                        IntrinsicKind::Static,
+                        entry.handler,
+                        "Registered via inventory",
+                        filter,
+                    )
+                } else {
+                    IntrinsicMetadata::static_intrinsic(entry.handler, "Registered via inventory")
+                }
+            } else if let Some(filter) = entry.signature_filter {
+                IntrinsicMetadata::with_filter(
+                    IntrinsicKind::VirtualOverride,
+                    entry.handler,
+                    "Registered via inventory",
+                    filter,
+                )
+            } else {
+                IntrinsicMetadata::virtual_override(entry.handler, "Registered via inventory")
+            };
+
+            registry.register_raw_metadata(
+                entry.class_name,
+                entry.method_name,
+                entry.param_count,
+                metadata,
+                tracer.as_deref_mut(),
+            );
         }
 
         for entry in inventory::iter::<IntrinsicFieldEntry> {
@@ -492,7 +494,7 @@ impl IntrinsicRegistry {
                 entry.class_name,
                 entry.field_name,
                 entry.handler,
-                tracer.as_deref_mut()
+                tracer.as_deref_mut(),
             );
 
             // Alias registration for base types
@@ -507,7 +509,7 @@ impl IntrinsicRegistry {
                     alias_name,
                     entry.field_name,
                     entry.handler,
-                    tracer.as_deref_mut()
+                    tracer.as_deref_mut(),
                 );
             }
         }
@@ -594,7 +596,6 @@ pub fn intrinsic_field<'gc, 'm: 'gc>(
         panic!("unsupported load from intrinsic field: {:?}", field);
     }
 }
-
 
 #[dotnet_intrinsic("string System.Object::ToString()")]
 fn object_to_string<'gc, 'm: 'gc>(

@@ -1149,8 +1149,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         }
 
                         let value_size = type_layout(constraint_type_source.clone(), &ctx).size();
-                        let value_data =
-                            unsafe { slice::from_raw_parts(ptr, value_size) };
+                        let value_data = unsafe { slice::from_raw_parts(ptr, value_size) };
                         let value = ctx.read_cts_value(&constraint_type_source, value_data, gc);
 
                         let boxed = ObjectRef::new(
@@ -1565,7 +1564,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                     }
                                     val
                                 }
-                                HeapStorage::Str(_) => todo!("field on string: {}::{}", field.parent.type_name(), name),
+                                HeapStorage::Str(_) => {
+                                    todo!("field on string: {}::{}", field.parent.type_name(), name)
+                                }
                                 HeapStorage::Boxed(_) => todo!("field on boxed value type"),
                             }
                         }
@@ -1776,7 +1777,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                                     unsafe { (s.as_ptr() as *const u8).sub(offset) as *mut u8 }
                                 } else {
-                                    panic!("field on string: {}::{}", field.parent.type_name(), name);
+                                    panic!(
+                                        "field on string: {}::{}",
+                                        field.parent.type_name(),
+                                        name
+                                    );
                                 }
                             }
                             HeapStorage::Boxed(_) => todo!("field on boxed value type"),
@@ -2074,46 +2079,53 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 if method.method.name == "CtorArraySentinel" {
                     if let UserMethod::Reference(r) = ctor {
-                         let resolution = self.current_frame().source_resolution;
-                         let method_ref = &resolution.definition()[*r];
-                         
-                         if let MethodReferenceParent::Type(t) = &method_ref.parent {
-                             let concrete = {
-                                 let ctx = self.current_context();
-                                 // Use generics from context to resolve the MethodType
-                                 ctx.generics.make_concrete(resolution, t.clone())
-                             };
+                        let resolution = self.current_frame().source_resolution;
+                        let method_ref = &resolution.definition()[*r];
 
-                             if let BaseType::Array(element, shape) = concrete.get() {
-                                 let rank = shape.rank;
-                                 let mut dims: Vec<usize> = (0..rank).map(|_| {
-                                      let v = pop!();
-                                      match v {
-                                          StackValue::Int32(i) => i as usize,
-                                          StackValue::NativeInt(i) => i as usize,
-                                          _ => panic!("Invalid dimension {:?}", v),
-                                      }
-                                 }).collect();
-                                 dims.reverse();
+                        if let MethodReferenceParent::Type(t) = &method_ref.parent {
+                            let concrete = {
+                                let ctx = self.current_context();
+                                // Use generics from context to resolve the MethodType
+                                ctx.generics.make_concrete(resolution, t.clone())
+                            };
 
-                                 let total_len: usize = dims.iter().product();
+                            if let BaseType::Array(element, shape) = concrete.get() {
+                                let rank = shape.rank;
+                                let mut dims: Vec<usize> = (0..rank)
+                                    .map(|_| {
+                                        let v = pop!();
+                                        match v {
+                                            StackValue::Int32(i) => i as usize,
+                                            StackValue::NativeInt(i) => i as usize,
+                                            _ => panic!("Invalid dimension {:?}", v),
+                                        }
+                                    })
+                                    .collect();
+                                dims.reverse();
 
-                                 let elem_type_concrete = element.clone();
+                                let total_len: usize = dims.iter().product();
 
-                                 let ctx = self.current_context();
-                                 let elem_type = ctx.normalize_type(elem_type_concrete.clone());
-                                 
-                                 let layout = LayoutFactory::create_array_layout(elem_type.clone(), total_len, &ctx);
-                                 let total_size_bytes = layout.element_layout.size() * total_len;
-                                 
-                                 let vec_obj = Vector::new(elem_type, layout, vec![0; total_size_bytes], dims);
-                                 let o = ObjectRef::new(gc, HeapStorage::Vec(vec_obj));
-                                 self.register_new_object(&o);
-                                 push!(ObjectRef(o));
-                                 self.increment_ip();
-                                 return StepResult::InstructionStepped;
-                             }
-                         }
+                                let elem_type_concrete = element.clone();
+
+                                let ctx = self.current_context();
+                                let elem_type = ctx.normalize_type(elem_type_concrete.clone());
+
+                                let layout = LayoutFactory::create_array_layout(
+                                    elem_type.clone(),
+                                    total_len,
+                                    &ctx,
+                                );
+                                let total_size_bytes = layout.element_layout.size() * total_len;
+
+                                let vec_obj =
+                                    Vector::new(elem_type, layout, vec![0; total_size_bytes], dims);
+                                let o = ObjectRef::new(gc, HeapStorage::Vec(vec_obj));
+                                self.register_new_object(&o);
+                                push!(ObjectRef(o));
+                                self.increment_ip();
+                                return StepResult::InstructionStepped;
+                            }
+                        }
                     }
                 }
 
@@ -2264,7 +2276,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => {
                         (p.as_ptr() as usize).to_ne_bytes().to_vec()
                     }
-                    StackValue::ManagedPtr(m) => (m.value.map_or(0, |p| p.as_ptr() as usize))
+                    StackValue::ManagedPtr(m) => m
+                        .value
+                        .map_or(0, |p| p.as_ptr() as usize)
                         .to_ne_bytes()
                         .to_vec(),
                     StackValue::ValueType(_) => {
@@ -2514,12 +2528,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         i as *mut u8
                     }
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-                    StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => {
-                        match p {
-                            Some(ptr) => ptr.as_ptr(),
-                            None => return self.throw_by_name(gc, "System.NullReferenceException"),
-                        }
-                    }
+                    StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => match p {
+                        Some(ptr) => ptr.as_ptr(),
+                        None => return self.throw_by_name(gc, "System.NullReferenceException"),
+                    },
                     _ => panic!("stobj: expected pointer on stack, got {:?}", addr),
                 };
 

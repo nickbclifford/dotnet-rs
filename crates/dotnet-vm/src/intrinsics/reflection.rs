@@ -1,11 +1,12 @@
 use crate::{
     context::ResolutionContext,
     layout::type_layout,
+    pop_args,
     resolution::{TypeResolutionExt, ValueResolution},
-    CallStack, MethodInfo, StepResult,
+    vm_pop, vm_push, CallStack, MethodInfo, StepResult,
 };
-use dotnet_macros::dotnet_intrinsic;
 use dotnet_assemblies::{decompose_type_source, SUPPORT_ASSEMBLY};
+use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
@@ -905,8 +906,12 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("string System.Reflection.MethodInfo::get_Name()")]
 #[dotnet_intrinsic("System.Type System.Reflection.MethodInfo::get_DeclaringType()")]
 #[dotnet_intrinsic("System.Type System.Reflection.MethodInfo::get_ReturnType()")]
-#[dotnet_intrinsic("System.Reflection.MethodAttributes System.Reflection.MethodBase::get_Attributes()")]
-#[dotnet_intrinsic("System.Reflection.CallingConventions System.Reflection.MethodBase::get_CallingConvention()")]
+#[dotnet_intrinsic(
+    "System.Reflection.MethodAttributes System.Reflection.MethodBase::get_Attributes()"
+)]
+#[dotnet_intrinsic(
+    "System.Reflection.CallingConventions System.Reflection.MethodBase::get_CallingConvention()"
+)]
 #[dotnet_intrinsic("bool System.Reflection.MethodBase::get_IsGenericMethod()")]
 #[dotnet_intrinsic("bool System.Reflection.MethodBase::get_IsGenericMethodDefinition()")]
 #[dotnet_intrinsic("bool System.Reflection.MethodBase::get_ContainsGenericParameters()")]
@@ -919,10 +924,18 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("System.Type DotnetRs.RuntimeMethodInfo::GetDeclaringType()")]
 #[dotnet_intrinsic("System.Type DotnetRs.RuntimeMethodInfo::get_ReturnType()")]
 #[dotnet_intrinsic("System.Type DotnetRs.RuntimeMethodInfo::GetReturnType()")]
-#[dotnet_intrinsic("System.Reflection.MethodAttributes DotnetRs.RuntimeMethodInfo::get_Attributes()")]
-#[dotnet_intrinsic("System.Reflection.MethodAttributes DotnetRs.RuntimeMethodInfo::GetAttributes()")]
-#[dotnet_intrinsic("System.Reflection.CallingConventions DotnetRs.RuntimeMethodInfo::get_CallingConvention()")]
-#[dotnet_intrinsic("System.Reflection.CallingConventions DotnetRs.RuntimeMethodInfo::GetCallingConvention()")]
+#[dotnet_intrinsic(
+    "System.Reflection.MethodAttributes DotnetRs.RuntimeMethodInfo::get_Attributes()"
+)]
+#[dotnet_intrinsic(
+    "System.Reflection.MethodAttributes DotnetRs.RuntimeMethodInfo::GetAttributes()"
+)]
+#[dotnet_intrinsic(
+    "System.Reflection.CallingConventions DotnetRs.RuntimeMethodInfo::get_CallingConvention()"
+)]
+#[dotnet_intrinsic(
+    "System.Reflection.CallingConventions DotnetRs.RuntimeMethodInfo::GetCallingConvention()"
+)]
 #[dotnet_intrinsic("bool DotnetRs.RuntimeMethodInfo::get_IsGenericMethod()")]
 #[dotnet_intrinsic("bool DotnetRs.RuntimeMethodInfo::GetIsGenericMethod()")]
 #[dotnet_intrinsic("bool DotnetRs.RuntimeMethodInfo::get_IsGenericMethodDefinition()")]
@@ -1086,7 +1099,9 @@ pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
-#[dotnet_intrinsic("static bool System.Runtime.CompilerServices.RuntimeHelpers::IsReferenceOrContainsReferences()")]
+#[dotnet_intrinsic(
+    "static bool System.Runtime.CompilerServices.RuntimeHelpers::IsReferenceOrContainsReferences()"
+)]
 pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
@@ -1217,8 +1232,12 @@ pub fn intrinsic_get_from_handle<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
-#[dotnet_intrinsic("static System.IntPtr System.RuntimeTypeHandle::ToIntPtr(System.RuntimeTypeHandle)")]
-#[dotnet_intrinsic("static System.IntPtr DotnetRs.RuntimeTypeHandle::ToIntPtr(DotnetRs.RuntimeTypeHandle)")]
+#[dotnet_intrinsic(
+    "static System.IntPtr System.RuntimeTypeHandle::ToIntPtr(System.RuntimeTypeHandle)"
+)]
+#[dotnet_intrinsic(
+    "static System.IntPtr DotnetRs.RuntimeTypeHandle::ToIntPtr(DotnetRs.RuntimeTypeHandle)"
+)]
 pub fn intrinsic_type_handle_to_int_ptr<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     stack: &mut CallStack<'gc, 'm>,
