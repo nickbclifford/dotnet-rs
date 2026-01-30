@@ -190,6 +190,19 @@ macro_rules! wrapping_arithmetic_op {
             (StackValue::NativeInt(l), StackValue::Int64(r)) => StackValue::Int64((l as i64).$op(r)),
             (StackValue::NativeInt(l), StackValue::NativeInt(r)) => StackValue::NativeInt(l.$op(r)),
             (StackValue::NativeFloat(l), StackValue::NativeFloat(r)) => StackValue::NativeFloat(l $float_op r),
+            (StackValue::ObjectRef(l), StackValue::NativeInt(r)) => {
+                 let ptr = l.0.map(|p| Gc::as_ptr(p) as isize).unwrap_or(0);
+                 StackValue::NativeInt(ptr.$op(r))
+            },
+            (StackValue::ObjectRef(l), StackValue::Int32(r)) => {
+                 let ptr = l.0.map(|p| Gc::as_ptr(p) as isize).unwrap_or(0);
+                 StackValue::NativeInt(ptr.$op(r as isize))
+            },
+            (StackValue::ObjectRef(l), StackValue::ObjectRef(r)) => {
+                 let ptr_l = l.0.map(|p| Gc::as_ptr(p) as isize).unwrap_or(0);
+                 let ptr_r = r.0.map(|p| Gc::as_ptr(p) as isize).unwrap_or(0);
+                 StackValue::NativeInt(ptr_l.$op(ptr_r))
+            },
             (l, r) => panic!("invalid types for arithmetic operation: {:?}, {:?}", l, r),
         }
     };

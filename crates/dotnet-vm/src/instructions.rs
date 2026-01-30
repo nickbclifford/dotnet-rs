@@ -2082,8 +2082,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     && method_name == ".ctor"
                     && method.method.signature.parameters.len() == 1
                 {
-                    vm_expect_stack!(let Int32(i) = pop!());
-                    push!(NativeInt(i as isize));
+                    let val = pop!();
+                    let native_val = match val {
+                        StackValue::Int32(i) => i as isize,
+                        StackValue::Int64(i) => i as isize,
+                        StackValue::NativeInt(i) => i,
+                        _ => panic!("Invalid argument for IntPtr constructor: {:?}", val),
+                    };
+                    push!(NativeInt(native_val));
                 } else {
                     if is_intrinsic_cached(self, method) {
                         return intrinsic_call(gc, self, method, &lookup);
