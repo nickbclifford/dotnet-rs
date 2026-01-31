@@ -1,5 +1,7 @@
-use crate::object::{Object, ObjectHandle};
-use crate::StackValue;
+use crate::{
+    object::{Object, ObjectHandle},
+    StackValue,
+};
 use dotnet_types::TypeDescription;
 use dotnet_utils::gc::ThreadSafeLock;
 use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};

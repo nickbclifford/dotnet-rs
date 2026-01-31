@@ -61,12 +61,15 @@ impl AssemblyLoader {
         let cap = len.div_ceil(8);
         let mut aligned: Vec<u64> = vec![0u64; cap];
         unsafe {
-            ptr::copy_nonoverlapping(SUPPORT_LIBRARY.as_ptr(), aligned.as_mut_ptr() as *mut u8, len);
+            ptr::copy_nonoverlapping(
+                SUPPORT_LIBRARY.as_ptr(),
+                aligned.as_mut_ptr() as *mut u8,
+                len,
+            );
         }
         let aligned_slice = Box::leak(aligned.into_boxed_slice());
-        let byte_slice = unsafe {
-            std::slice::from_raw_parts(aligned_slice.as_ptr() as *const u8, len)
-        };
+        let byte_slice =
+            unsafe { std::slice::from_raw_parts(aligned_slice.as_ptr() as *const u8, len) };
 
         let support_res = Box::leak(Box::new(
             Resolution::parse(byte_slice, ReadOptions::default()).unwrap(),
@@ -115,7 +118,7 @@ impl AssemblyLoader {
                 }
             }
         }
-        
+
         this
     }
 
@@ -913,9 +916,8 @@ pub fn static_res_from_file(path: impl AsRef<Path>) -> ResolutionS {
     // Leak the aligned buffer
     let aligned_slice = Box::leak(aligned.into_boxed_slice());
     // Create the byte slice view
-    let byte_slice = unsafe {
-        std::slice::from_raw_parts(aligned_slice.as_ptr() as *const u8, len)
-    };
+    let byte_slice =
+        unsafe { std::slice::from_raw_parts(aligned_slice.as_ptr() as *const u8, len) };
 
     let resolution = Resolution::parse(byte_slice, ReadOptions::default())
         .expect("failed to parse file as .NET metadata");

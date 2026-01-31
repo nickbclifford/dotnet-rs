@@ -696,9 +696,7 @@ impl<'gc> Vector<'gc> {
     }
 
     pub fn size_bytes(&self) -> usize {
-        size_of::<Vector>()
-            + self.storage.len()
-            + (self.dims.len() * size_of::<usize>())
+        size_of::<Vector>() + self.storage.len() + (self.dims.len() * size_of::<usize>())
     }
 
     pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {

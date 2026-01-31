@@ -360,7 +360,7 @@ pub fn intrinsic_string_is_null_or_empty<'gc, 'm: 'gc>(
                 HeapStorage::Str(s) => s.is_empty(),
                 _ => panic!("System.String::IsNullOrEmpty called on non-string object"),
             }
-        },
+        }
         _ => panic!("System.String::IsNullOrEmpty called on invalid stack value"),
     };
     vm_push!(stack, gc, Int32(is_null_or_empty as i32));

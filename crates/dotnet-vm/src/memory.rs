@@ -436,13 +436,13 @@ impl<'gc> RawMemoryAccess<'gc> {
             ManagedPtrOwner::StackSlot(s) => {
                 let val = s.borrow();
                 if let StackValue::ValueType(o) = &*val {
-                     let table = o.managed_ptr_metadata.borrow();
-                     for (&offset, metadata) in &table.metadata {
-                         if offset >= start_offset && offset < end_offset {
-                             let dest_offset = offset - start_offset;
-                             dest_obj.register_metadata(dest_offset, metadata.clone(), self.gc);
-                         }
-                     }
+                    let table = o.managed_ptr_metadata.borrow();
+                    for (&offset, metadata) in &table.metadata {
+                        if offset >= start_offset && offset < end_offset {
+                            let dest_offset = offset - start_offset;
+                            dest_obj.register_metadata(dest_offset, metadata.clone(), self.gc);
+                        }
+                    }
                 }
             }
         };
@@ -475,13 +475,9 @@ impl<'gc> RawMemoryAccess<'gc> {
             ManagedPtrOwner::StackSlot(s) => {
                 let mut val = s.borrow_mut(self.gc);
                 if let StackValue::ValueType(o) = &mut *val {
-                     let base = o.instance_storage.get().as_ptr() as usize;
-                     let offset = (ptr as usize).wrapping_sub(base);
-                     o.register_metadata(
-                        offset,
-                        ManagedPtrMetadata::from_managed_ptr(&m),
-                        self.gc
-                     );
+                    let base = o.instance_storage.get().as_ptr() as usize;
+                    let offset = (ptr as usize).wrapping_sub(base);
+                    o.register_metadata(offset, ManagedPtrMetadata::from_managed_ptr(&m), self.gc);
                 }
             }
         }
@@ -528,11 +524,7 @@ impl<'gc> RawMemoryAccess<'gc> {
                     let dest_offset = (ptr as usize).wrapping_sub(dest_base);
 
                     for (&offset, metadata) in &side_table.metadata {
-                        o.register_metadata(
-                            dest_offset + offset,
-                            metadata.clone(),
-                            self.gc,
-                        );
+                        o.register_metadata(dest_offset + offset, metadata.clone(), self.gc);
                     }
                 }
             }

@@ -17,7 +17,7 @@ use dotnet_value::{
     StackValue,
 };
 use dotnetdll::prelude::*;
-use std::{cmp::Ordering as CmpOrdering, ptr, slice};
+use std::{cmp::Ordering as CmpOrdering, ptr};
 
 use super::{
     exceptions::{ExceptionState, HandlerAddress, UnwindTarget},
@@ -589,41 +589,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     ),
                 };
 
-                // Bounds Check Dest
-                if let StackValue::ManagedPtr(dest_mp) = &dest_val {
-                    if let Some(owner) = dest_mp.owner {
-                        let (base_addr, storage_size) = match owner {
-                            ManagedPtrOwner::Heap(h) => {
-                                let inner = h.borrow();
-                                match &inner.storage {
-                                    HeapStorage::Obj(o) => (
-                                        o.instance_storage.get().as_ptr(),
-                                        o.instance_storage.get().len(),
-                                    ),
-                                    HeapStorage::Vec(v) => (v.get().as_ptr(), v.get().len()),
-                                    _ => (ptr::null(), 0),
-                                }
-                            }
-                            ManagedPtrOwner::Stack(s) => unsafe {
-                                (
-                                    s.as_ref().instance_storage.get().as_ptr(),
-                                    s.as_ref().instance_storage.get().len(),
-                                )
-                            },
-                            ManagedPtrOwner::StackSlot(s) => {
-                                let val = s.borrow();
-                                match &*val {
-                                    StackValue::ValueType(o) => {
-                                        let guard = o.instance_storage.get();
-                                        (guard.as_ptr(), guard.len())
-                                    }
-                                    _ => (ptr::null(), 0),
-                                }
-                            }
-                        };
-                    }
-                }
-
                 // Check GC safe point before large memory block copy operations
                 // Threshold: copying more than 4KB of data
                 const LARGE_COPY_THRESHOLD: usize = 4096;
@@ -1171,7 +1136,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         let value_size = type_layout(constraint_type_source.clone(), &ctx).size();
 
                         let mut value_vec = vec![0u8; value_size];
-                        unsafe { ptr::copy_nonoverlapping(ptr, value_vec.as_mut_ptr(), value_size) };
+                        unsafe {
+                            ptr::copy_nonoverlapping(ptr, value_vec.as_mut_ptr(), value_size)
+                        };
                         let value_data = &value_vec;
                         let value = ctx.read_cts_value(&constraint_type_source, value_data, gc);
 
@@ -1201,7 +1168,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     // Create a slice from the pointer. We know ObjectRef is pointer-sized.
 
                     let mut value_vec = vec![0u8; ObjectRef::SIZE];
-                    unsafe { ptr::copy_nonoverlapping(ptr, value_vec.as_mut_ptr(), ObjectRef::SIZE) };
+                    unsafe {
+                        ptr::copy_nonoverlapping(ptr, value_vec.as_mut_ptr(), ObjectRef::SIZE)
+                    };
                     let value_bytes = &value_vec;
                     let obj_ref = unsafe { ObjectRef::read_branded(value_bytes, gc) };
 
@@ -1542,7 +1511,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             8 => load_atomic!(AtomicU64),
                             _ => {
                                 let mut buf = vec![0u8; size];
-                                unsafe { ptr::copy_nonoverlapping(field_ptr, buf.as_mut_ptr(), size) };
+                                unsafe {
+                                    ptr::copy_nonoverlapping(field_ptr, buf.as_mut_ptr(), size)
+                                };
                                 read_data(&buf)
                             }
                         }
@@ -1968,7 +1939,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 // SAFETY: source_ptr is a valid pointer to memory containing a value of the given type,
                 // and layout.size() correctly represents the size of that type.
                 let mut source_vec = vec![0u8; layout.size()];
-                unsafe { ptr::copy_nonoverlapping(source_ptr, source_vec.as_mut_ptr(), layout.size()) };
+                unsafe {
+                    ptr::copy_nonoverlapping(source_ptr, source_vec.as_mut_ptr(), layout.size())
+                };
                 let source = &source_vec;
                 let mut value = self
                     .current_context()
@@ -2469,20 +2442,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 let cts_value = ctx.new_cts_value(&t, value.clone());
                 let write_data = |dest: &mut [u8]| cts_value.write(dest);
-                let slice_from_pointer = |dest: *mut u8| {
-                    let layout = LayoutFactory::instance_field_layout_cached(
-                        field.parent,
-                        &ctx,
-                        Some(&self.shared.metrics),
-                    );
-                    let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
-                    unsafe {
-                        slice::from_raw_parts_mut(
-                            dest.add(field_layout.position),
-                            field_layout.layout.size(),
-                        )
-                    }
-                };
 
                 let write_to_pointer_atomic = |ptr: *mut u8| {
                     let layout = LayoutFactory::instance_field_layout_cached(
