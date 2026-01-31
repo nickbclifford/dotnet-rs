@@ -371,7 +371,7 @@ impl<'gc> StackValue<'gc> {
     /// # Safety
     /// `ptr` must be a valid, aligned pointer to a value of the type specified by `t`.
     /// Loads a value from a raw pointer using atomic operations.
-    /// UNSOUND: This casts non-atomic types to atomic types, which is technically UB in Rust.
+    /// Note: This uses `AtomicT::from_ptr` which is supported in recent Rust versions.
     /// Also, it does not ensure that the appropriate locks are held for the memory being accessed.
     pub unsafe fn load_atomic(ptr: *const u8, t: LoadType, ordering: AtomicOrdering) -> Self {
         debug_assert!(!ptr.is_null(), "Attempted to load from a null pointer");
@@ -384,24 +384,24 @@ impl<'gc> StackValue<'gc> {
         );
 
         match t {
-            LoadType::Int8 => Self::Int32((*(ptr as *const AtomicI8)).load(ordering) as i32),
-            LoadType::UInt8 => Self::Int32((*(ptr as *const AtomicU8)).load(ordering) as i32),
-            LoadType::Int16 => Self::Int32((*(ptr as *const AtomicI16)).load(ordering) as i32),
-            LoadType::UInt16 => Self::Int32((*(ptr as *const AtomicU16)).load(ordering) as i32),
-            LoadType::Int32 => Self::Int32((*(ptr as *const AtomicI32)).load(ordering)),
-            LoadType::UInt32 => Self::Int32((*(ptr as *const AtomicU32)).load(ordering) as i32),
-            LoadType::Int64 => Self::Int64((*(ptr as *const AtomicI64)).load(ordering)),
+            LoadType::Int8 => Self::Int32(AtomicI8::from_ptr(ptr as *mut i8).load(ordering) as i32),
+            LoadType::UInt8 => Self::Int32(AtomicU8::from_ptr(ptr as *mut u8).load(ordering) as i32),
+            LoadType::Int16 => Self::Int32(AtomicI16::from_ptr(ptr as *mut i16).load(ordering) as i32),
+            LoadType::UInt16 => Self::Int32(AtomicU16::from_ptr(ptr as *mut u16).load(ordering) as i32),
+            LoadType::Int32 => Self::Int32(AtomicI32::from_ptr(ptr as *mut i32).load(ordering)),
+            LoadType::UInt32 => Self::Int32(AtomicU32::from_ptr(ptr as *mut u32).load(ordering) as i32),
+            LoadType::Int64 => Self::Int64(AtomicI64::from_ptr(ptr as *mut i64).load(ordering)),
             LoadType::Float32 => {
-                let val = (*(ptr as *const AtomicU32)).load(ordering);
+                let val = AtomicU32::from_ptr(ptr as *mut u32).load(ordering);
                 Self::NativeFloat(f32::from_bits(val) as f64)
             }
             LoadType::Float64 => {
-                let val = (*(ptr as *const AtomicU64)).load(ordering);
+                let val = AtomicU64::from_ptr(ptr as *mut u64).load(ordering);
                 Self::NativeFloat(f64::from_bits(val))
             }
-            LoadType::IntPtr => Self::NativeInt((*(ptr as *const AtomicIsize)).load(ordering)),
+            LoadType::IntPtr => Self::NativeInt(AtomicIsize::from_ptr(ptr as *mut isize).load(ordering)),
             LoadType::Object => {
-                let val = (*(ptr as *const AtomicUsize)).load(ordering);
+                let val = AtomicUsize::from_ptr(ptr as *mut usize).load(ordering);
                 let ptr = val as *const ThreadSafeLock<object::ObjectInner<'gc>>;
                 if ptr.is_null() {
                     Self::ObjectRef(ObjectRef(None))
@@ -421,7 +421,7 @@ impl<'gc> StackValue<'gc> {
     /// # Safety
     /// `ptr` must be a valid, aligned pointer to a location with sufficient space for the type specified by `t`.
     /// Stores a value to a raw pointer using atomic operations.
-    /// UNSOUND: This casts non-atomic types to atomic types, which is technically UB in Rust.
+    /// Note: This uses `AtomicT::from_ptr` which is supported in recent Rust versions.
     /// Also, it does not ensure that the appropriate locks are held for the memory being accessed.
     pub unsafe fn store_atomic(self, ptr: *mut u8, t: StoreType, ordering: AtomicOrdering) {
         debug_assert!(!ptr.is_null(), "Attempted to store to a null pointer");
@@ -434,26 +434,26 @@ impl<'gc> StackValue<'gc> {
         );
 
         match t {
-            StoreType::Int8 => (*(ptr as *const AtomicI8)).store(self.as_i32() as i8, ordering),
-            StoreType::Int16 => (*(ptr as *const AtomicI16)).store(self.as_i32() as i16, ordering),
-            StoreType::Int32 => (*(ptr as *const AtomicI32)).store(self.as_i32(), ordering),
-            StoreType::Int64 => (*(ptr as *const AtomicI64)).store(self.as_i64(), ordering),
+            StoreType::Int8 => AtomicI8::from_ptr(ptr as *mut i8).store(self.as_i32() as i8, ordering),
+            StoreType::Int16 => AtomicI16::from_ptr(ptr as *mut i16).store(self.as_i32() as i16, ordering),
+            StoreType::Int32 => AtomicI32::from_ptr(ptr as *mut i32).store(self.as_i32(), ordering),
+            StoreType::Int64 => AtomicI64::from_ptr(ptr as *mut i64).store(self.as_i64(), ordering),
             StoreType::Float32 => {
                 let val = (self.as_f64() as f32).to_bits();
-                (*(ptr as *const AtomicU32)).store(val, ordering);
+                AtomicU32::from_ptr(ptr as *mut u32).store(val, ordering);
             }
             StoreType::Float64 => {
                 let val = self.as_f64().to_bits();
-                (*(ptr as *const AtomicU64)).store(val, ordering);
+                AtomicU64::from_ptr(ptr as *mut u64).store(val, ordering);
             }
-            StoreType::IntPtr => (*(ptr as *const AtomicIsize)).store(self.as_isize(), ordering),
+            StoreType::IntPtr => AtomicIsize::from_ptr(ptr as *mut isize).store(self.as_isize(), ordering),
             StoreType::Object => {
                 let obj = self.as_object_ref();
                 let val = match obj.0 {
                     Some(h) => Gc::as_ptr(h) as usize,
                     None => 0,
                 };
-                (*(ptr as *const AtomicUsize)).store(val, ordering);
+                AtomicUsize::from_ptr(ptr as *mut usize).store(val, ordering);
             }
         }
     }
