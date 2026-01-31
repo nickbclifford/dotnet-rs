@@ -11,10 +11,8 @@ dotnet-utils = { workspace = true, default-features = false }
 dotnetdll = { workspace = true }
 gc-arena = { workspace = true }
 libffi = { workspace = true }
-crossbeam-channel = { workspace = true }
 parking_lot = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 libloading = { workspace = true }
 dashmap = { workspace = true }
 inventory = "0.3"

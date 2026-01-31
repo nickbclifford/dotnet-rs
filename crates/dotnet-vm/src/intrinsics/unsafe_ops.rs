@@ -458,6 +458,15 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
                     o.instance_storage.layout().as_ref().clone(),
                 ))
             }
+            ManagedPtrOwner::StackSlot(s) => {
+                let val = s.borrow();
+                match &*val {
+                    StackValue::ValueType(o) => Some(LayoutManager::FieldLayoutManager(
+                        o.instance_storage.layout().as_ref().clone(),
+                    )),
+                    _ => None,
+                }
+            }
         }
     } else {
         None
@@ -479,6 +488,13 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
             ManagedPtrOwner::Stack(s) => unsafe {
                 s.as_ref().instance_storage.get().as_ptr() as usize
             },
+            ManagedPtrOwner::StackSlot(s) => {
+                let val = s.borrow();
+                match &*val {
+                    StackValue::ValueType(o) => o.instance_storage.get().as_ptr() as usize,
+                    _ => 0,
+                }
+            }
         }
     } else {
         0
@@ -555,7 +571,12 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
 
     let source = vm_pop!(stack, gc);
     let (ptr, owner) = match source {
-        StackValue::NativeInt(p) => (p as *mut u8, None),
+        StackValue::NativeInt(p) => {
+            if p == 0 {
+                return stack.throw_by_name(gc, "System.NullReferenceException");
+            }
+            (p as *mut u8, None)
+        }
         StackValue::ManagedPtr(m) => (
             m.value.expect("Unsafe.ReadUnaligned null").as_ptr(),
             m.owner,
@@ -613,7 +634,12 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
 
     let dest = vm_pop!(stack, gc);
     let (ptr, owner) = match dest {
-        StackValue::NativeInt(p) => (p as *mut u8, None),
+        StackValue::NativeInt(p) => {
+            if p == 0 {
+                return stack.throw_by_name(gc, "System.NullReferenceException");
+            }
+            (p as *mut u8, None)
+        }
         StackValue::ManagedPtr(m) => (
             m.value.expect("Unsafe.WriteUnaligned null").as_ptr(),
             m.owner,

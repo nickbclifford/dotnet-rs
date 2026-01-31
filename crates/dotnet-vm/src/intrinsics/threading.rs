@@ -249,12 +249,6 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
             let value = vm_pop!(stack, gc);
             let target_ptr_val = vm_pop!(stack, gc);
 
-            // DEBUG PRINT
-            eprintln!(
-                "Interlocked.Exchange (Object): value={:?}, target_ptr={:?}",
-                value, target_ptr_val
-            );
-
             let target_ptr = match target_ptr_val {
                 StackValue::ManagedPtr(p) => p,
                 _ => panic!(
@@ -280,8 +274,6 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
 
             let prev_raw =
                 unsafe { atomic::AtomicUsize::from_ptr(target) }.swap(val_raw, Ordering::SeqCst);
-
-            eprintln!("Interlocked.Exchange (Object): prev_raw={:#x}", prev_raw);
 
             let prev = if prev_raw == 0 {
                 ObjectRef(None)

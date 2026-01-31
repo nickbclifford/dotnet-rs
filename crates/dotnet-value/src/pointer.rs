@@ -1,5 +1,7 @@
 use crate::object::{Object, ObjectHandle};
+use crate::StackValue;
 use dotnet_types::TypeDescription;
+use dotnet_utils::gc::ThreadSafeLock;
 use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};
 use std::{
     cmp::Ordering,
@@ -16,6 +18,7 @@ unsafe_empty_collect!(UnmanagedPtr);
 pub enum ManagedPtrOwner<'gc> {
     Heap(ObjectHandle<'gc>),
     Stack(NonNull<Object<'gc>>),
+    StackSlot(Gc<'gc, ThreadSafeLock<StackValue<'gc>>>),
 }
 
 impl<'gc> ManagedPtrOwner<'gc> {
@@ -23,6 +26,7 @@ impl<'gc> ManagedPtrOwner<'gc> {
         match self {
             Self::Heap(h) => Gc::as_ptr(*h) as *const u8,
             Self::Stack(s) => s.as_ptr() as *const u8,
+            Self::StackSlot(s) => Gc::as_ptr(*s) as *const u8,
         }
     }
 }
@@ -35,6 +39,7 @@ unsafe impl<'gc> Collect for ManagedPtrOwner<'gc> {
             // Do NOT trace them here to avoid infinite recursion:
             // Object → StackValue → ManagedPtr → ManagedPtrOwner::Stack → Object (cycle!)
             Self::Stack(_) => {}
+            Self::StackSlot(_) => {}
         }
     }
 }
@@ -44,6 +49,7 @@ impl Debug for ManagedPtrOwner<'_> {
         match self {
             Self::Heap(h) => write!(f, "Heap({:?})", Gc::as_ptr(*h)),
             Self::Stack(s) => write!(f, "Stack({:?})", s.as_ptr()),
+            Self::StackSlot(s) => write!(f, "StackSlot({:?})", Gc::as_ptr(*s)),
         }
     }
 }
@@ -133,7 +139,18 @@ impl<'gc> ManagedPtr<'gc> {
     /// The caller must ensure that the resulting pointer is within the bounds of the same
     /// allocated object as the original pointer.
     pub unsafe fn offset(self, bytes: isize) -> Self {
-        self.map_value(|p| p.map(|ptr| NonNull::new_unchecked(ptr.as_ptr().offset(bytes))))
+        self.map_value(|p| {
+            p.and_then(|ptr| {
+                // SAFETY: generic caller safety invariant regarding object bounds still applies.
+                // We use NonNull::new instead of new_unchecked to prevent creating "poisoned"
+                // NonNull instances that wrap null (0). This can happen if the offset operation
+                // results in a null pointer (e.g. during specific arithmetic in System.Private.CoreLib).
+                // If it becomes null, we want the Option to become None, so that subsequent checks
+                // for validity (like .is_some()) correctly identify it as invalid/null.
+                let new_ptr = unsafe { ptr.as_ptr().offset(bytes) };
+                NonNull::new(new_ptr)
+            })
+        })
     }
 }
 
@@ -159,6 +176,7 @@ impl<'gc> ManagedPtr<'gc> {
                 ManagedPtrOwner::Stack(s) => {
                     unsafe { s.as_ref().resurrect(fc, visited) };
                 }
+                ManagedPtrOwner::StackSlot(_) => {}
             }
         }
     }

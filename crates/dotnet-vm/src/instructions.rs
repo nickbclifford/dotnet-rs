@@ -610,17 +610,17 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                     s.as_ref().instance_storage.get().len(),
                                 )
                             },
-                        };
-
-                        if !base_addr.is_null() {
-                            let dest_offset = (dest as usize).wrapping_sub(base_addr as usize);
-                            if dest_offset
-                                .checked_add(size)
-                                .is_none_or(|end| end > storage_size)
-                            {
-                                panic!("Heap corruption detected! Cpblk writing {} bytes at offset {} into storage of size {}", size, dest_offset, storage_size);
+                            ManagedPtrOwner::StackSlot(s) => {
+                                let val = s.borrow();
+                                match &*val {
+                                    StackValue::ValueType(o) => {
+                                        let guard = o.instance_storage.get();
+                                        (guard.as_ptr(), guard.len())
+                                    }
+                                    _ => (ptr::null(), 0),
+                                }
                             }
-                        }
+                        };
                     }
                 }
 
@@ -766,6 +766,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                     s.as_ref().instance_storage.get().len(),
                                 )
                             },
+                            ManagedPtrOwner::StackSlot(s) => {
+                                let val = s.borrow();
+                                match &*val {
+                                    StackValue::ValueType(o) => {
+                                        let guard = o.instance_storage.get();
+                                        (guard.as_ptr(), guard.len())
+                                    }
+                                    _ => (ptr::null(), 0),
+                                }
+                            }
                         };
 
                         if !base_addr.is_null() {
@@ -986,6 +996,15 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let addr_val = pop!();
                 let ptr = addr_val.as_ptr();
 
+                // FIX: Handle writing to StackSlot (locals) directly to avoid corruption and trigger barrier
+                if let StackValue::ManagedPtr(mp) = &addr_val {
+                    if let Some(ManagedPtrOwner::StackSlot(h)) = mp.owner {
+                        *h.borrow_mut(gc) = val;
+                        self.increment_ip();
+                        return StepResult::InstructionStepped;
+                    }
+                }
+
                 // Bounds check
                 if let StackValue::ManagedPtr(mp) = &addr_val {
                     if let Some(owner) = mp.owner {
@@ -1007,6 +1026,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                     s.as_ref().instance_storage.get().len(),
                                 )
                             },
+                            _ => (ptr::null(), 0),
                         };
 
                         if !base_addr.is_null() {
@@ -1149,7 +1169,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         }
 
                         let value_size = type_layout(constraint_type_source.clone(), &ctx).size();
-                        let value_data = unsafe { slice::from_raw_parts(ptr, value_size) };
+
+                        let mut value_vec = vec![0u8; value_size];
+                        unsafe { ptr::copy_nonoverlapping(ptr, value_vec.as_mut_ptr(), value_size) };
+                        let value_data = &value_vec;
                         let value = ctx.read_cts_value(&constraint_type_source, value_data, gc);
 
                         let boxed = ObjectRef::new(
@@ -1176,7 +1199,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         "ManagedPtr value is not aligned for ObjectRef"
                     );
                     // Create a slice from the pointer. We know ObjectRef is pointer-sized.
-                    let value_bytes = unsafe { slice::from_raw_parts(ptr, ObjectRef::SIZE) };
+
+                    let mut value_vec = vec![0u8; ObjectRef::SIZE];
+                    unsafe { ptr::copy_nonoverlapping(ptr, value_vec.as_mut_ptr(), ObjectRef::SIZE) };
+                    let value_bytes = &value_vec;
                     let obj_ref = unsafe { ObjectRef::read_branded(value_bytes, gc) };
 
                     if obj_ref.0.is_none() {
@@ -1240,16 +1266,72 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
             CopyObject(_) => todo!("cpobj"),
             InitializeForObject(t) => {
-                let ctx = self.current_context();
-                let layout = type_layout(ctx.make_concrete(t), &ctx);
-                let target = pop!().as_ptr();
+                let addr = pop!();
+                let target = match &addr {
+                    StackValue::NativeInt(i) => {
+                        if *i == 0 {
+                            return self.throw_by_name(gc, "System.NullReferenceException");
+                        }
+                        *i as *mut u8
+                    }
+                    StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
+                    StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => match p {
+                        Some(ptr) => ptr.as_ptr(),
+                        None => return self.throw_by_name(gc, "System.NullReferenceException"),
+                    },
+                    _ => panic!("initobj: expected pointer on stack, got {:?}", addr),
+                };
 
-                if target.is_null() {
-                    return self.throw_by_name(gc, "System.NullReferenceException");
+                let ctx = self.current_context();
+                let ct = ctx.make_concrete(t);
+                let layout = type_layout(ct.clone(), &ctx);
+
+                // FIX: Check bounds for ManagedPtr before writing
+                if let StackValue::ManagedPtr(dest_mp) = &addr {
+                    if let Some(owner) = dest_mp.owner {
+                        let (base_addr, storage_size) = match owner {
+                            ManagedPtrOwner::Heap(h) => {
+                                let inner = h.borrow();
+                                match &inner.storage {
+                                    HeapStorage::Obj(o) => (
+                                        o.instance_storage.get().as_ptr(),
+                                        o.instance_storage.get().len(),
+                                    ),
+                                    HeapStorage::Vec(v) => (v.get().as_ptr(), v.get().len()),
+                                    _ => (ptr::null(), 0),
+                                }
+                            }
+                            ManagedPtrOwner::Stack(s) => unsafe {
+                                (
+                                    s.as_ref().instance_storage.get().as_ptr(),
+                                    s.as_ref().instance_storage.get().len(),
+                                )
+                            },
+                            ManagedPtrOwner::StackSlot(s) => {
+                                let val = s.borrow();
+                                match &*val {
+                                    StackValue::ValueType(o) => {
+                                        let guard = o.instance_storage.get();
+                                        (guard.as_ptr(), guard.len())
+                                    }
+                                    _ => (ptr::null(), 0),
+                                }
+                            }
+                        };
+
+                        if !base_addr.is_null() {
+                            let dest_offset = (target as usize).wrapping_sub(base_addr as usize);
+                            if dest_offset
+                                .checked_add(layout.size())
+                                .is_none_or(|end| end > storage_size)
+                            {
+                                panic!("Heap corruption detected! InitObj writing {} bytes at offset {} into storage of size {}", layout.size(), dest_offset, storage_size);
+                            }
+                        }
+                    }
                 }
-                debug_assert!(!target.is_null(), "initobj target address is null");
-                let s = unsafe { slice::from_raw_parts_mut(target, layout.size()) };
-                s.fill(0);
+
+                unsafe { ptr::write_bytes(target, 0, layout.size()) };
             }
             IsInstance(target) => {
                 vm_expect_stack!(let ObjectRef(target_obj) = pop!());
@@ -1440,8 +1522,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         // Check alignment before attempting atomic operations
                         if !is_ptr_aligned_to_field(field_ptr, size) {
                             // Fall back to non-atomic read_unchecked if not aligned
-                            let slice = unsafe { slice::from_raw_parts(field_ptr, size) };
-                            return read_data(slice);
+                            let mut buf = vec![0u8; size];
+                            unsafe { ptr::copy_nonoverlapping(field_ptr, buf.as_mut_ptr(), size) };
+                            return read_data(&buf);
                         }
 
                         macro_rules! load_atomic {
@@ -1458,20 +1541,23 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             4 => load_atomic!(AtomicU32),
                             8 => load_atomic!(AtomicU64),
                             _ => {
-                                let slice = unsafe { slice::from_raw_parts(field_ptr, size) };
-                                read_data(slice)
+                                let mut buf = vec![0u8; size];
+                                unsafe { ptr::copy_nonoverlapping(field_ptr, buf.as_mut_ptr(), size) };
+                                read_data(&buf)
                             }
                         }
                     } else {
                         // SAFETY: ptr is a raw pointer to either heap storage, a stack slot, or unmanaged memory.
                         // The offset is calculated based on the type's field layout, and the size matches the field's type.
-                        let slice = unsafe {
-                            slice::from_raw_parts(
+                        let mut buf = vec![0u8; field_layout.layout.size()];
+                        unsafe {
+                            ptr::copy_nonoverlapping(
                                 ptr.add(field_layout.position),
+                                buf.as_mut_ptr(),
                                 field_layout.layout.size(),
                             )
                         };
-                        read_data(slice)
+                        read_data(&buf)
                     }
                 };
 
@@ -1657,6 +1743,18 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                             mp.owner = metadata.recover_owner();
                                         }
                                     }
+                                    ManagedPtrOwner::StackSlot(s) => {
+                                        let val = s.borrow();
+                                        if let StackValue::ValueType(o) = &*val {
+                                            let base = o.instance_storage.get().as_ptr() as usize;
+                                            let offset = final_addr - base;
+                                            if let Some(metadata) =
+                                                o.managed_ptr_metadata.borrow().get(offset)
+                                            {
+                                                mp.owner = metadata.recover_owner();
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1790,11 +1888,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                     StackValue::NativeInt(i) => (i as *mut u8, None, false),
                     StackValue::UnmanagedPtr(UnmanagedPtr(ptr)) => (ptr.as_ptr(), None, false),
-                    StackValue::ManagedPtr(m) => (
-                        m.value.map_or(ptr::null_mut(), |p| p.as_ptr()),
-                        m.owner,
-                        m.pinned,
-                    ),
+                    StackValue::ManagedPtr(m) => {
+                        let ptr = match m.value {
+                            Some(p) => p.as_ptr(),
+                            None => return self.throw_by_name(gc, "System.NullReferenceException"),
+                        };
+                        (ptr, m.owner, m.pinned)
+                    }
                     StackValue::ValueType(ref o) => (
                         o.instance_storage.get().as_ptr() as *mut u8,
                         Some(ManagedPtrOwner::Stack(ptr::NonNull::from(&**o))),
@@ -1867,7 +1967,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let layout = type_layout(load_type.clone(), &ctx);
                 // SAFETY: source_ptr is a valid pointer to memory containing a value of the given type,
                 // and layout.size() correctly represents the size of that type.
-                let source = unsafe { slice::from_raw_parts(source_ptr, layout.size()) };
+                let mut source_vec = vec![0u8; layout.size()];
+                unsafe { ptr::copy_nonoverlapping(source_ptr, source_vec.as_mut_ptr(), layout.size()) };
+                let source = &source_vec;
                 let mut value = self
                     .current_context()
                     .read_cts_value(&load_type, source, gc)
@@ -1888,6 +1990,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             ManagedPtrOwner::Stack(s) => unsafe {
                                 s.as_ref().instance_storage.get().as_ptr()
                             },
+                            ManagedPtrOwner::StackSlot(s) => {
+                                let val = s.borrow();
+                                match &*val {
+                                    StackValue::ValueType(o) => o.instance_storage.get().as_ptr(),
+                                    _ => ptr::null(),
+                                }
+                            }
                         };
 
                         if !base_addr.is_null() {
@@ -1911,6 +2020,15 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                 ManagedPtrOwner::Stack(s) => unsafe {
                                     Some(s.as_ref().managed_ptr_metadata.borrow().metadata.clone())
                                 },
+                                ManagedPtrOwner::StackSlot(s) => {
+                                    let val = s.borrow();
+                                    match &*val {
+                                        StackValue::ValueType(o) => {
+                                            Some(o.managed_ptr_metadata.borrow().metadata.clone())
+                                        }
+                                        _ => None,
+                                    }
+                                }
                             };
 
                             if let Some(map) = metadata_map {
@@ -2383,7 +2501,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         // Check alignment before attempting atomic operations
                         if !is_ptr_aligned_to_field(field_ptr, size) {
                             // Fall back to non-atomic write if not aligned
-                            write_data(slice_from_pointer(ptr));
+                            unsafe {
+                                ptr::copy_nonoverlapping(val_bytes.as_ptr(), field_ptr, size);
+                            }
                             return;
                         }
 
@@ -2399,10 +2519,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             2 => store_atomic!(u16 as AtomicU16),
                             4 => store_atomic!(u32 as AtomicU32),
                             8 => store_atomic!(u64 as AtomicU64),
-                            _ => write_data(slice_from_pointer(ptr)),
+                            _ => unsafe {
+                                ptr::copy_nonoverlapping(val_bytes.as_ptr(), field_ptr, size);
+                            },
                         }
                     } else {
-                        write_data(slice_from_pointer(ptr));
+                        unsafe {
+                            ptr::copy_nonoverlapping(val_bytes.as_ptr(), field_ptr, size);
+                        }
                     }
                 };
 
@@ -2500,6 +2624,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                         let offset = final_addr - base;
                                         o.register_managed_ptr(offset, value_ptr, gc);
                                     }
+                                    ManagedPtrOwner::StackSlot(s) => {
+                                        let val = s.borrow();
+                                        if let StackValue::ValueType(o) = &*val {
+                                            let base = o.instance_storage.get().as_ptr() as usize;
+                                            let offset = final_addr - base;
+                                            o.register_managed_ptr(offset, value_ptr, gc);
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -2517,15 +2649,26 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let value = pop!();
                 let addr = pop!();
 
+                // FIX: Handle writing to StackSlot (locals) directly to avoid corruption and trigger barrier
+                if let StackValue::ManagedPtr(mp) = &addr {
+                    if let Some(ManagedPtrOwner::StackSlot(h)) = mp.owner {
+                        let ctx = self.current_context();
+                        let concrete_t = ctx.make_concrete(t);
+                        let final_val = ctx.new_cts_value(&concrete_t, value);
+                        *h.borrow_mut(gc) = final_val.into_stack();
+                        return StepResult::InstructionStepped;
+                    }
+                }
+
                 let ctx = self.current_context();
                 let concrete_t = ctx.make_concrete(t);
 
-                let dest_ptr = match addr {
+                let dest_ptr = match &addr {
                     StackValue::NativeInt(i) => {
-                        if i == 0 {
+                        if *i == 0 {
                             return self.throw_by_name(gc, "System.NullReferenceException");
                         }
-                        i as *mut u8
+                        *i as *mut u8
                     }
                     StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
                     StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => match p {
@@ -2540,12 +2683,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 ctx.new_cts_value(&concrete_t, value.clone())
                     .write(&mut bytes);
 
-                unsafe {
-                    ptr::copy_nonoverlapping(bytes.as_ptr(), dest_ptr, bytes.len());
-                }
-
                 // FIX: Propagate ManagedPtr metadata to destination side-table
-                if let StackValue::ManagedPtr(dest_mp) = addr {
+                if let StackValue::ManagedPtr(dest_mp) = &addr {
                     if let Some(owner) = dest_mp.owner {
                         let (base_addr, storage_size) = match owner {
                             ManagedPtrOwner::Heap(h) => {
@@ -2565,6 +2704,16 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                     s.as_ref().instance_storage.get().len(),
                                 )
                             },
+                            ManagedPtrOwner::StackSlot(s) => {
+                                let val = s.borrow();
+                                match &*val {
+                                    StackValue::ValueType(o) => {
+                                        let guard = o.instance_storage.get();
+                                        (guard.as_ptr(), guard.len())
+                                    }
+                                    _ => (ptr::null(), 0),
+                                }
+                            }
                         };
 
                         if !base_addr.is_null() {
@@ -2609,9 +2758,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                         o.register_metadata(dest_offset + offset, metadata, gc);
                                     }
                                 }
+                                ManagedPtrOwner::StackSlot(s) => {
+                                    let mut val = s.borrow_mut(gc);
+                                    if let StackValue::ValueType(o) = &mut *val {
+                                        for (offset, metadata) in src_metadata {
+                                            o.register_metadata(dest_offset + offset, metadata, gc);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
+                }
+
+                unsafe {
+                    ptr::copy_nonoverlapping(bytes.as_ptr(), dest_ptr, bytes.len());
                 }
             }
             StoreStaticField {

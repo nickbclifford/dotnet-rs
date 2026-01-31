@@ -312,8 +312,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
         };
 
-        // println!("P/Invoke: Resolved function address: {:?}", target);
-
         let ctx = self.current_context();
         let mut args: Vec<Type> = vec![];
         for Parameter(_, p) in &method.method.signature.parameters {
@@ -415,6 +413,34 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                         arg_buffer_map[i] = Some(buf_idx);
                                         write_backs.push((val_ptr, buf_idx, rem_len));
                                         handled = true;
+                                    }
+                                }
+                                dotnet_value::pointer::ManagedPtrOwner::StackSlot(s) => {
+                                    let val = s.borrow();
+                                    if let StackValue::ValueType(o) = &*val {
+                                        let guard = o.instance_storage.get();
+                                        let base_ptr = guard.as_ptr();
+                                        let total_len = guard.len();
+                                        let current_ptr = val_ptr.as_ptr();
+                                        let offset = unsafe { current_ptr.offset_from(base_ptr) };
+
+                                        if offset >= 0 && (offset as usize) < total_len {
+                                            let rem_len = total_len - (offset as usize);
+                                            let buf_len = std::cmp::max(rem_len, ffi_size);
+                                            let mut buf = vec![0u8; buf_len];
+                                            unsafe {
+                                                std::ptr::copy_nonoverlapping(
+                                                    current_ptr,
+                                                    buf.as_mut_ptr(),
+                                                    rem_len,
+                                                );
+                                            }
+                                            temp_buffers.push(buf);
+                                            let buf_idx = temp_buffers.len() - 1;
+                                            arg_buffer_map[i] = Some(buf_idx);
+                                            write_backs.push((val_ptr, buf_idx, rem_len));
+                                            handled = true;
+                                        }
                                     }
                                 }
                             }

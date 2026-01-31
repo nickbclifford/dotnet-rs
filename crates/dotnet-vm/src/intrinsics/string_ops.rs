@@ -163,7 +163,8 @@ pub fn intrinsic_string_ctor_char_ptr<'gc, 'm: 'gc>(
         CLRString::new(Vec::new())
     };
 
-    vm_push!(stack, gc, string(gc, value));
+    let sv = StackValue::string(gc, value);
+    stack.push_stack(gc, sv);
     StepResult::InstructionStepped
 }
 
@@ -228,7 +229,7 @@ pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
     }
 
     let value = CLRString::new(data0.into_iter().chain(data1).chain(data2).collect());
-    vm_push!(stack, gc, string(gc, value));
+    vm_push!(stack, gc, StackValue::string(gc, value));
     StepResult::InstructionStepped
 }
 
@@ -353,7 +354,14 @@ pub fn intrinsic_string_is_null_or_empty<'gc, 'm: 'gc>(
     let str_val = vm_pop!(stack, gc);
     let is_null_or_empty = match &str_val {
         StackValue::ObjectRef(ObjectRef(None)) => true,
-        _ => with_string!(stack, gc, str_val, |s| s.is_empty()),
+        StackValue::ObjectRef(ObjectRef(Some(obj))) => {
+            let heap = obj.borrow();
+            match &heap.storage {
+                HeapStorage::Str(s) => s.is_empty(),
+                _ => panic!("System.String::IsNullOrEmpty called on non-string object"),
+            }
+        },
+        _ => panic!("System.String::IsNullOrEmpty called on invalid stack value"),
     };
     vm_push!(stack, gc, Int32(is_null_or_empty as i32));
     StepResult::InstructionStepped

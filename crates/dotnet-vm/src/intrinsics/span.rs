@@ -46,14 +46,15 @@ pub fn span_to_slice<'gc, 'a>(span: Object<'gc>, element_size: usize) -> &'a [u8
         );
     }
 
+    if len == 0 {
+        return &[];
+    }
+
     let raw_ptr = ptr.map(|p| p.as_ptr()).unwrap_or(std::ptr::null_mut());
     if raw_ptr.is_null() {
-        if len == 0 {
-            return &[];
-        } else {
-            panic!("Null pointer in non-empty span");
-        }
+        panic!("Null pointer in non-empty span");
     }
+
     unsafe { slice::from_raw_parts(raw_ptr as *const u8, len * element_size) }
 }
 

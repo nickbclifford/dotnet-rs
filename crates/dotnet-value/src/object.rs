@@ -35,12 +35,15 @@ pub enum MetadataOwner<'gc> {
     None,
     Heap(ObjectHandle<'gc>),
     Stack(NonNull<Object<'gc>>), // Stack pointers are traced separately, don't reconstruct
+    StackSlot(Gc<'gc, ThreadSafeLock<StackValue<'gc>>>),
 }
 
 unsafe impl<'gc> Collect for MetadataOwner<'gc> {
     fn trace(&self, cc: &Collection) {
-        if let MetadataOwner::Heap(h) = self {
-            h.trace(cc);
+        match self {
+            MetadataOwner::Heap(h) => h.trace(cc),
+            MetadataOwner::StackSlot(s) => s.trace(cc),
+            _ => {}
         }
     }
 }
@@ -73,6 +76,7 @@ impl<'gc> PartialEq for ManagedPtrMetadata<'gc> {
                 (MetadataOwner::None, MetadataOwner::None) => true,
                 (MetadataOwner::Heap(a), MetadataOwner::Heap(b)) => Gc::ptr_eq(*a, *b),
                 (MetadataOwner::Stack(a), MetadataOwner::Stack(b)) => a.as_ptr() == b.as_ptr(),
+                (MetadataOwner::StackSlot(a), MetadataOwner::StackSlot(b)) => Gc::ptr_eq(*a, *b),
                 _ => false,
             }
             && self.pinned == other.pinned
@@ -84,6 +88,7 @@ impl<'gc> ManagedPtrMetadata<'gc> {
         let owner = match m.owner {
             Some(ManagedPtrOwner::Heap(h)) => MetadataOwner::Heap(h),
             Some(ManagedPtrOwner::Stack(s)) => MetadataOwner::Stack(s),
+            Some(ManagedPtrOwner::StackSlot(s)) => MetadataOwner::StackSlot(s),
             None => MetadataOwner::None,
         };
         Self {
@@ -111,6 +116,7 @@ impl<'gc> ManagedPtrMetadata<'gc> {
         match self.owner {
             MetadataOwner::Heap(h) => Some(ManagedPtrOwner::Heap(h)),
             MetadataOwner::Stack(s) => Some(ManagedPtrOwner::Stack(s)),
+            MetadataOwner::StackSlot(s) => Some(ManagedPtrOwner::StackSlot(s)),
             MetadataOwner::None => None,
         }
     }
@@ -301,7 +307,7 @@ impl<'gc> ObjectRef<'gc> {
         } else {
             #[cfg(any(feature = "memory-validation", debug_assertions))]
             {
-                if ptr_val % std::mem::align_of::<ThreadSafeLock<ObjectInner<'static>>>() != 0 {
+                if ptr_val % align_of::<ThreadSafeLock<ObjectInner<'static>>>() != 0 {
                     panic!("ObjectRef::read: Pointer {:#x} is not aligned", ptr_val);
                 }
 
@@ -690,9 +696,9 @@ impl<'gc> Vector<'gc> {
     }
 
     pub fn size_bytes(&self) -> usize {
-        std::mem::size_of::<Vector>()
+        size_of::<Vector>()
             + self.storage.len()
-            + (self.dims.len() * std::mem::size_of::<usize>())
+            + (self.dims.len() * size_of::<usize>())
     }
 
     pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {

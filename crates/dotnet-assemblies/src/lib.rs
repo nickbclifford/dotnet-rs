@@ -56,8 +56,20 @@ impl AssemblyLoader {
             })
             .collect();
 
+        // Ensure alignment for SUPPORT_LIBRARY
+        let len = SUPPORT_LIBRARY.len();
+        let cap = len.div_ceil(8);
+        let mut aligned: Vec<u64> = vec![0u64; cap];
+        unsafe {
+            ptr::copy_nonoverlapping(SUPPORT_LIBRARY.as_ptr(), aligned.as_mut_ptr() as *mut u8, len);
+        }
+        let aligned_slice = Box::leak(aligned.into_boxed_slice());
+        let byte_slice = unsafe {
+            std::slice::from_raw_parts(aligned_slice.as_ptr() as *const u8, len)
+        };
+
         let support_res = Box::leak(Box::new(
-            Resolution::parse(SUPPORT_LIBRARY, ReadOptions::default()).unwrap(),
+            Resolution::parse(byte_slice, ReadOptions::default()).unwrap(),
         ));
         resolutions.insert(
             SUPPORT_ASSEMBLY.to_string(),
@@ -103,7 +115,7 @@ impl AssemblyLoader {
                 }
             }
         }
-
+        
         this
     }
 
@@ -889,7 +901,23 @@ pub fn static_res_from_file(path: impl AsRef<Path>) -> ResolutionS {
     let mut buf = vec![];
     file.read_to_end(&mut buf)
         .expect("failed to read_unchecked file");
-    let resolution = Resolution::parse(Box::leak(buf.into_boxed_slice()), ReadOptions::default())
+
+    // Ensure alignment by copying to a Vec<u64> backing (8-byte alignment)
+    let len = buf.len();
+    let cap = len.div_ceil(8);
+    let mut aligned: Vec<u64> = vec![0u64; cap];
+    unsafe {
+        ptr::copy_nonoverlapping(buf.as_ptr(), aligned.as_mut_ptr() as *mut u8, len);
+    }
+
+    // Leak the aligned buffer
+    let aligned_slice = Box::leak(aligned.into_boxed_slice());
+    // Create the byte slice view
+    let byte_slice = unsafe {
+        std::slice::from_raw_parts(aligned_slice.as_ptr() as *const u8, len)
+    };
+
+    let resolution = Resolution::parse(byte_slice, ReadOptions::default())
         .expect("failed to parse file as .NET metadata");
     ResolutionS::new(Box::leak(Box::new(resolution)) as *const _)
 }

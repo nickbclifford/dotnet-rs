@@ -239,12 +239,6 @@ fn hello_world() {
     assert_eq!(exit_code, 0);
 }
 
-// ============================================================================
-// Phase 7: Multi-Arena GC Tests
-// ============================================================================
-// These tests verify the multi-arena garbage collection infrastructure works
-// correctly when multiple Rust threads create their own arenas.
-
 #[test]
 #[cfg(feature = "multithreading")]
 fn test_multiple_arenas_basic() {

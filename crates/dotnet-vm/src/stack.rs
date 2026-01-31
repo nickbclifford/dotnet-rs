@@ -877,7 +877,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     Some(ManagedPtrOwner::Stack(NonNull::from(&**obj))),
                     pinned,
                 ),
-                _ => (val.data_location(), None, pinned),
+                _ => (
+                    val.data_location(),
+                    Some(ManagedPtrOwner::StackSlot(handle.0)),
+                    pinned,
+                ),
             }
         }
     }

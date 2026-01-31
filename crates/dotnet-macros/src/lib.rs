@@ -14,39 +14,23 @@ use signature::{ParsedFieldSignature, ParsedSignature};
 
 fn match_primitive(type_name: &str) -> Option<proc_macro2::TokenStream> {
     match type_name {
-        "void" | "Void" | "System.Void" => Some(quote! { dotnetdll::prelude::BaseType::Void }),
-        "bool" | "Boolean" | "System.Boolean" => {
-            Some(quote! { dotnetdll::prelude::BaseType::Boolean })
-        }
-        "char" | "Char" | "System.Char" => Some(quote! { dotnetdll::prelude::BaseType::Char }),
-        "sbyte" | "SByte" | "System.SByte" => Some(quote! { dotnetdll::prelude::BaseType::Int8 }),
-        "byte" | "Byte" | "System.Byte" => Some(quote! { dotnetdll::prelude::BaseType::UInt8 }),
-        "short" | "Int16" | "System.Int16" => Some(quote! { dotnetdll::prelude::BaseType::Int16 }),
-        "ushort" | "UInt16" | "System.UInt16" => {
-            Some(quote! { dotnetdll::prelude::BaseType::UInt16 })
-        }
-        "int" | "Int32" | "System.Int32" => Some(quote! { dotnetdll::prelude::BaseType::Int32 }),
-        "uint" | "UInt32" | "System.UInt32" => {
-            Some(quote! { dotnetdll::prelude::BaseType::UInt32 })
-        }
-        "long" | "Int64" | "System.Int64" => Some(quote! { dotnetdll::prelude::BaseType::Int64 }),
-        "ulong" | "UInt64" | "System.UInt64" => {
-            Some(quote! { dotnetdll::prelude::BaseType::UInt64 })
-        }
-        "float" | "Single" | "System.Single" | "Float32" => {
-            Some(quote! { dotnetdll::prelude::BaseType::Float32 })
-        }
-        "double" | "Double" | "System.Double" | "Float64" => {
-            Some(quote! { dotnetdll::prelude::BaseType::Float64 })
-        }
-        "string" | "String" | "System.String" => {
-            Some(quote! { dotnetdll::prelude::BaseType::String })
-        }
-        "object" | "Object" | "System.Object" => {
-            Some(quote! { dotnetdll::prelude::BaseType::Object })
-        }
-        "IntPtr" | "System.IntPtr" => Some(quote! { dotnetdll::prelude::BaseType::IntPtr }),
-        "UIntPtr" | "System.UIntPtr" => Some(quote! { dotnetdll::prelude::BaseType::UIntPtr }),
+        "void" | "Void" | "System.Void" => Some(quote! { BaseType::Void }),
+        "bool" | "Boolean" | "System.Boolean" => Some(quote! { BaseType::Boolean }),
+        "char" | "Char" | "System.Char" => Some(quote! { BaseType::Char }),
+        "sbyte" | "SByte" | "System.SByte" => Some(quote! { BaseType::Int8 }),
+        "byte" | "Byte" | "System.Byte" => Some(quote! { BaseType::UInt8 }),
+        "short" | "Int16" | "System.Int16" => Some(quote! { BaseType::Int16 }),
+        "ushort" | "UInt16" | "System.UInt16" => Some(quote! { BaseType::UInt16 }),
+        "int" | "Int32" | "System.Int32" => Some(quote! { BaseType::Int32 }),
+        "uint" | "UInt32" | "System.UInt32" => Some(quote! { BaseType::UInt32 }),
+        "long" | "Int64" | "System.Int64" => Some(quote! { BaseType::Int64 }),
+        "ulong" | "UInt64" | "System.UInt64" => Some(quote! { BaseType::UInt64 }),
+        "float" | "Single" | "System.Single" | "Float32" => Some(quote! { BaseType::Float32 }),
+        "double" | "Double" | "System.Double" | "Float64" => Some(quote! { BaseType::Float64 }),
+        "string" | "String" | "System.String" => Some(quote! { BaseType::String }),
+        "object" | "Object" | "System.Object" => Some(quote! { BaseType::Object }),
+        "IntPtr" | "System.IntPtr" => Some(quote! { BaseType::IntPtr }),
+        "UIntPtr" | "System.UIntPtr" => Some(quote! { BaseType::UIntPtr }),
         _ => None,
     }
 }

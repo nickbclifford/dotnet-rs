@@ -43,8 +43,7 @@ impl ResolutionS {
         match self.0 {
             Some(p) => unsafe { &*p.as_ptr() },
             None => {
-                eprintln!("DEBUG: ResolutionS NULL");
-                std::process::abort();
+                panic!("ResolutionS NULL");
             }
         }
     }

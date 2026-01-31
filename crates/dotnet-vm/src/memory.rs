@@ -109,6 +109,16 @@ impl<'gc> RawMemoryAccess<'gc> {
                 let guard = o.instance_storage.get();
                 (guard.as_ptr(), guard.len())
             }
+            ManagedPtrOwner::StackSlot(s) => {
+                let val = s.borrow();
+                match &*val {
+                    StackValue::ValueType(o) => {
+                        let guard = o.instance_storage.get();
+                        (guard.as_ptr(), guard.len())
+                    }
+                    _ => (ptr::null(), 0),
+                }
+            }
         }
     }
 
@@ -195,6 +205,15 @@ impl<'gc> RawMemoryAccess<'gc> {
                     o.instance_storage.layout().as_ref().clone(),
                 ))
             }
+            ManagedPtrOwner::StackSlot(s) => {
+                let val = s.borrow();
+                match &*val {
+                    StackValue::ValueType(o) => Some(LayoutManager::FieldLayoutManager(
+                        o.instance_storage.layout().as_ref().clone(),
+                    )),
+                    _ => None,
+                }
+            }
         }
     }
 
@@ -205,6 +224,9 @@ impl<'gc> RawMemoryAccess<'gc> {
         value: StackValue<'gc>,
         layout: &LayoutManager,
     ) -> Result<(), String> {
+        if ptr.is_null() {
+            return Err("RawMemoryAccess::perform_write called with null pointer!".to_string());
+        }
         match layout {
             LayoutManager::Scalar(s) => match s {
                 Scalar::Int8 => {
@@ -237,6 +259,9 @@ impl<'gc> RawMemoryAccess<'gc> {
                 }
                 Scalar::ManagedPtr => {
                     if let StackValue::ManagedPtr(m) = value {
+                        if ptr.is_null() {
+                            panic!("perform_write: ptr is null!");
+                        }
                         m.write_ptr_only(std::slice::from_raw_parts_mut(
                             ptr,
                             ManagedPtr::MEMORY_SIZE,
@@ -284,6 +309,9 @@ impl<'gc> RawMemoryAccess<'gc> {
         layout: &LayoutManager,
         type_desc: Option<TypeDescription>,
     ) -> Result<StackValue<'gc>, String> {
+        if ptr.is_null() {
+            return Err("RawMemoryAccess::perform_read called with null pointer!".to_string());
+        }
         match layout {
             LayoutManager::Scalar(s) => match s {
                 Scalar::Int8 => Ok(StackValue::Int32(
@@ -304,8 +332,9 @@ impl<'gc> RawMemoryAccess<'gc> {
                     ptr as *const f64,
                 ))),
                 Scalar::ObjectRef => {
-                    let slice = std::slice::from_raw_parts(ptr, 8);
-                    Ok(StackValue::ObjectRef(ObjectRef::read_unchecked(slice)))
+                    let mut buf = [0u8; 8];
+                    ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), 8);
+                    Ok(StackValue::ObjectRef(ObjectRef::read_unchecked(&buf)))
                 }
                 Scalar::ManagedPtr => {
                     let ptr_value = ptr::read_unaligned(ptr as *const usize);
@@ -404,6 +433,18 @@ impl<'gc> RawMemoryAccess<'gc> {
                     }
                 }
             }
+            ManagedPtrOwner::StackSlot(s) => {
+                let val = s.borrow();
+                if let StackValue::ValueType(o) = &*val {
+                     let table = o.managed_ptr_metadata.borrow();
+                     for (&offset, metadata) in &table.metadata {
+                         if offset >= start_offset && offset < end_offset {
+                             let dest_offset = offset - start_offset;
+                             dest_obj.register_metadata(dest_offset, metadata.clone(), self.gc);
+                         }
+                     }
+                }
+            }
         };
     }
 
@@ -430,6 +471,18 @@ impl<'gc> RawMemoryAccess<'gc> {
             ManagedPtrOwner::Stack(s) => {
                 let dest_o = unsafe { s.as_ref() };
                 register_managed_ptr_helper(dest_o, m, ptr, self.gc);
+            }
+            ManagedPtrOwner::StackSlot(s) => {
+                let mut val = s.borrow_mut(self.gc);
+                if let StackValue::ValueType(o) = &mut *val {
+                     let base = o.instance_storage.get().as_ptr() as usize;
+                     let offset = (ptr as usize).wrapping_sub(base);
+                     o.register_metadata(
+                        offset,
+                        ManagedPtrMetadata::from_managed_ptr(&m),
+                        self.gc
+                     );
+                }
             }
         }
     }
@@ -467,6 +520,22 @@ impl<'gc> RawMemoryAccess<'gc> {
                 let dest_o = unsafe { s.as_ref() };
                 update_owner_side_table_helper(src_obj, dest_o, ptr, self.gc);
             }
+            ManagedPtrOwner::StackSlot(s) => {
+                let mut val = s.borrow_mut(self.gc);
+                if let StackValue::ValueType(o) = &mut *val {
+                    let side_table = src_obj.managed_ptr_metadata.borrow();
+                    let dest_base = o.instance_storage.get().as_ptr() as usize;
+                    let dest_offset = (ptr as usize).wrapping_sub(dest_base);
+
+                    for (&offset, metadata) in &side_table.metadata {
+                        o.register_metadata(
+                            dest_offset + offset,
+                            metadata.clone(),
+                            self.gc,
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -496,6 +565,17 @@ impl<'gc> RawMemoryAccess<'gc> {
             ManagedPtrOwner::Stack(s) => {
                 let o = unsafe { s.as_ref() };
                 check_side_table_helper(o, ptr)
+            }
+            ManagedPtrOwner::StackSlot(s) => {
+                let val = s.borrow();
+                if let StackValue::ValueType(o) = &*val {
+                    let base = o.instance_storage.get().as_ptr() as usize;
+                    let offset = (ptr as usize).wrapping_sub(base);
+                    let table = o.managed_ptr_metadata.borrow();
+                    table.get(offset).cloned()
+                } else {
+                    None
+                }
             }
         }
     }

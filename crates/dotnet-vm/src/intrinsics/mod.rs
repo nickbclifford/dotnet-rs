@@ -456,7 +456,6 @@ impl IntrinsicRegistry {
     pub fn initialize(_loader: &AssemblyLoader, mut tracer: Option<&mut Tracer>) -> Self {
         let mut registry = Self::new();
 
-        // Phase 3: Distributed registration via inventory
         for entry in inventory::iter::<IntrinsicEntry> {
             let metadata = if entry.is_static {
                 if let Some(filter) = entry.signature_filter {
