@@ -212,13 +212,13 @@ impl GcDesc {
             while bits != 0 {
                 let trailing = bits.trailing_zeros();
                 let bit_idx = trailing as usize;
-                
+
                 // Clear the lowest set bit
                 bits &= !(1 << bit_idx);
 
                 let word_index = block_idx * (ptr_size * 8) + bit_idx;
                 let offset = word_index * ptr_size;
-                
+
                 // Safety: layout creation ensures this offset is valid and contains a pointer
                 if offset + ptr_size <= storage.len() {
                     // Use read_unchecked to handle potential unaligned access safely
@@ -339,9 +339,9 @@ impl HasLayout for Scalar {
 
 impl Scalar {
     pub fn alignment(&self) -> usize {
-         match self {
-             Scalar::ManagedPtr => ObjectRef::SIZE,
-             _ => self.size()
-         }
+        match self {
+            Scalar::ManagedPtr => ObjectRef::SIZE,
+            _ => self.size(),
+        }
     }
 }

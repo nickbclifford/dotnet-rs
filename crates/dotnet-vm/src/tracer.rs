@@ -626,7 +626,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             return;
         }
 
-        let objects: Vec<_> = self.local.heap._all_objs.borrow().values().copied().collect(); // access via local.heap
+        let objects: Vec<_> = self
+            .local
+            .heap
+            ._all_objs
+            .borrow()
+            .values()
+            .copied()
+            .collect(); // access via local.heap
         let mut tracer = self.tracer();
         tracer.dump_heap_snapshot_start(objects.len());
 

@@ -83,7 +83,7 @@ impl LayoutFactory {
                     max_alignment = max_alignment.max(field_align);
 
                     let aligned_offset = align_up(offset, field_align);
-                    
+
                     Self::populate_gc_desc(&layout, aligned_offset, &mut gc_desc);
 
                     mapping.insert(
@@ -118,7 +118,7 @@ impl LayoutFactory {
                     max_alignment = max_alignment.max(field_align);
 
                     let aligned_offset = align_up(offset, field_align);
-                    
+
                     Self::populate_gc_desc(&layout, aligned_offset, &mut gc_desc);
 
                     mapping.insert(

@@ -358,11 +358,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         let buf_len = ffi_size;
                         let mut buf = vec![0u8; buf_len];
                         unsafe {
-                            std::ptr::copy_nonoverlapping(
-                                current_ptr,
-                                buf.as_mut_ptr(),
-                                buf_len,
-                            );
+                            std::ptr::copy_nonoverlapping(current_ptr, buf.as_mut_ptr(), buf_len);
                         }
                         temp_buffers.push(buf);
                         let buf_idx = temp_buffers.len() - 1;

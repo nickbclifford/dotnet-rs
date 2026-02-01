@@ -10,7 +10,7 @@ use dotnet_types::{
 };
 use dotnet_utils::{gc::GCHandle, is_ptr_aligned_to_field};
 use dotnet_value::{
-    layout::HasLayout,
+    layout::{HasLayout, LayoutManager, Scalar},
     object::{CTSValue, HeapStorage, ObjectRef, Vector},
     pointer::{ManagedPtr, UnmanagedPtr},
     string::CLRString,
@@ -28,7 +28,6 @@ use super::{
     threading::ThreadManagerOps,
     CallStack, MethodInfo, ResolutionContext, StepResult,
 };
-use dotnet_value::layout::{LayoutManager, Scalar};
 
 /// Check if a method is an intrinsic (with caching).
 /// This is called on every method invocation, so caching is critical for performance.
@@ -713,7 +712,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 // Bounds Check
 
-
                 unsafe {
                     ptr::write_bytes(addr, val, size);
                 }
@@ -916,9 +914,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                 let ptr = match addr_val {
                     StackValue::NativeInt(p) => p as *mut u8,
-                    StackValue::ManagedPtr(m) => {
-                        m.value.map_or(ptr::null_mut(), |p| p.as_ptr())
-                    }
+                    StackValue::ManagedPtr(m) => m.value.map_or(ptr::null_mut(), |p| p.as_ptr()),
                     StackValue::UnmanagedPtr(u) => u.0.as_ptr(),
                     _ => panic!("StoreIndirect: expected pointer, got {:?}", addr_val),
                 };
@@ -935,10 +931,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 };
 
                 let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                let owner = self
-                    .local
-                    .heap
-                    .find_object(ptr as usize);
+                let owner = self.local.heap.find_object(ptr as usize);
                 match unsafe { memory.write_unaligned(ptr, owner, val, &layout) } {
                     Ok(_) => {}
                     Err(e) => panic!("StoreIndirect failed: {}", e),
@@ -1648,7 +1641,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     StackValue::ValueType(ref o) => (
                         o.instance_storage.get().as_ptr() as *mut u8,
                         false,
-                        None // ValueType on stack is covered by conservative scanning
+                        None, // ValueType on stack is covered by conservative scanning
                     ),
                     rest => panic!("cannot load field address from stack value {:?}", rest),
                 };
@@ -1661,7 +1654,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     &ctx,
                     Some(&self.shared.metrics),
                 );
-                
+
                 let ptr = unsafe {
                     source_ptr.add(
                         layout
@@ -1676,7 +1669,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 if let StackValue::UnmanagedPtr(_) | StackValue::NativeInt(_) = parent {
                     push!(unmanaged_ptr(ptr))
                 } else {
-                    push!(StackValue::managed_ptr_with_owner(ptr, target_type, owner, pinned))
+                    push!(StackValue::managed_ptr_with_owner(
+                        ptr,
+                        target_type,
+                        owner,
+                        pinned
+                    ))
                 }
             }
             LoadFieldSkipNullCheck(_) => todo!("no.nullcheck ldfld"),
@@ -2249,7 +2247,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             Some(p) => p.as_ptr(),
                             None => return self.throw_by_name(gc, "System.NullReferenceException"),
                         };
-
 
                         write_to_pointer_atomic(ptr)
                     }

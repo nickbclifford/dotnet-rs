@@ -1,8 +1,5 @@
 use crate::{
-    context::ResolutionContext,
-    layout::type_layout,
-    pop_args,
-    resolution::ValueResolution,
+    context::ResolutionContext, layout::type_layout, pop_args, resolution::ValueResolution,
     vm_push, CallStack, StepResult,
 };
 use dotnet_types::{

@@ -264,8 +264,7 @@ pub fn intrinsic_string_get_raw_data<'gc, 'm: 'gc>(
 ) -> StepResult {
     let val = vm_pop!(stack, gc);
     let ptr = with_string!(stack, gc, val, |s| s.as_ptr() as *mut u8);
-    let value =
-        StackValue::managed_ptr(ptr, stack.loader().corlib_type("System.Char"), false);
+    let value = StackValue::managed_ptr(ptr, stack.loader().corlib_type("System.Char"), false);
     vm_push!(stack, gc, value);
     StepResult::InstructionStepped
 }

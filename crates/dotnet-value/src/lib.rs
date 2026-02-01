@@ -217,11 +217,7 @@ impl<'gc> StackValue<'gc> {
             Self::UnmanagedPtr(UnmanagedPtr(NonNull::new(ptr).unwrap()))
         }
     }
-    pub fn managed_ptr(
-        ptr: *mut u8,
-        target_type: TypeDescription,
-        pinned: bool,
-    ) -> Self {
+    pub fn managed_ptr(ptr: *mut u8, target_type: TypeDescription, pinned: bool) -> Self {
         Self::managed_ptr_with_owner(ptr, target_type, None, pinned)
     }
 
@@ -393,11 +389,19 @@ impl<'gc> StackValue<'gc> {
 
         match t {
             LoadType::Int8 => Self::Int32(AtomicI8::from_ptr(ptr as *mut i8).load(ordering) as i32),
-            LoadType::UInt8 => Self::Int32(AtomicU8::from_ptr(ptr as *mut u8).load(ordering) as i32),
-            LoadType::Int16 => Self::Int32(AtomicI16::from_ptr(ptr as *mut i16).load(ordering) as i32),
-            LoadType::UInt16 => Self::Int32(AtomicU16::from_ptr(ptr as *mut u16).load(ordering) as i32),
+            LoadType::UInt8 => {
+                Self::Int32(AtomicU8::from_ptr(ptr as *mut u8).load(ordering) as i32)
+            }
+            LoadType::Int16 => {
+                Self::Int32(AtomicI16::from_ptr(ptr as *mut i16).load(ordering) as i32)
+            }
+            LoadType::UInt16 => {
+                Self::Int32(AtomicU16::from_ptr(ptr as *mut u16).load(ordering) as i32)
+            }
             LoadType::Int32 => Self::Int32(AtomicI32::from_ptr(ptr as *mut i32).load(ordering)),
-            LoadType::UInt32 => Self::Int32(AtomicU32::from_ptr(ptr as *mut u32).load(ordering) as i32),
+            LoadType::UInt32 => {
+                Self::Int32(AtomicU32::from_ptr(ptr as *mut u32).load(ordering) as i32)
+            }
             LoadType::Int64 => Self::Int64(AtomicI64::from_ptr(ptr as *mut i64).load(ordering)),
             LoadType::Float32 => {
                 let val = AtomicU32::from_ptr(ptr as *mut u32).load(ordering);
@@ -407,7 +411,9 @@ impl<'gc> StackValue<'gc> {
                 let val = AtomicU64::from_ptr(ptr as *mut u64).load(ordering);
                 Self::NativeFloat(f64::from_bits(val))
             }
-            LoadType::IntPtr => Self::NativeInt(AtomicIsize::from_ptr(ptr as *mut isize).load(ordering)),
+            LoadType::IntPtr => {
+                Self::NativeInt(AtomicIsize::from_ptr(ptr as *mut isize).load(ordering))
+            }
             LoadType::Object => {
                 let val = AtomicUsize::from_ptr(ptr as *mut usize).load(ordering);
                 let ptr = val as *const ThreadSafeLock<object::ObjectInner<'gc>>;
@@ -442,8 +448,12 @@ impl<'gc> StackValue<'gc> {
         );
 
         match t {
-            StoreType::Int8 => AtomicI8::from_ptr(ptr as *mut i8).store(self.as_i32() as i8, ordering),
-            StoreType::Int16 => AtomicI16::from_ptr(ptr as *mut i16).store(self.as_i32() as i16, ordering),
+            StoreType::Int8 => {
+                AtomicI8::from_ptr(ptr as *mut i8).store(self.as_i32() as i8, ordering)
+            }
+            StoreType::Int16 => {
+                AtomicI16::from_ptr(ptr as *mut i16).store(self.as_i32() as i16, ordering)
+            }
             StoreType::Int32 => AtomicI32::from_ptr(ptr as *mut i32).store(self.as_i32(), ordering),
             StoreType::Int64 => AtomicI64::from_ptr(ptr as *mut i64).store(self.as_i64(), ordering),
             StoreType::Float32 => {
@@ -454,7 +464,9 @@ impl<'gc> StackValue<'gc> {
                 let val = self.as_f64().to_bits();
                 AtomicU64::from_ptr(ptr as *mut u64).store(val, ordering);
             }
-            StoreType::IntPtr => AtomicIsize::from_ptr(ptr as *mut isize).store(self.as_isize(), ordering),
+            StoreType::IntPtr => {
+                AtomicIsize::from_ptr(ptr as *mut isize).store(self.as_isize(), ordering)
+            }
             StoreType::Object => {
                 let obj = self.as_object_ref();
                 let val = match obj.0 {

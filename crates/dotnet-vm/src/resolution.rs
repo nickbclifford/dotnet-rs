@@ -261,12 +261,7 @@ impl<'a, 'm> ValueResolution for ResolutionContext<'a, 'm> {
                 } else {
                     self.loader.corlib_type("System.Void")
                 };
-                CTSValue::Value(Pointer(ManagedPtr::new(
-                    ptr,
-                    inner_type,
-                    owner,
-                    false,
-                )))
+                CTSValue::Value(Pointer(ManagedPtr::new(ptr, inner_type, owner, false)))
             }
             BaseType::Object
             | BaseType::String

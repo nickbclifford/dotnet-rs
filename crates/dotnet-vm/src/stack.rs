@@ -85,17 +85,17 @@ impl<'gc> HeapManager<'gc> {
             let inner_gc = obj.0.unwrap();
             let inner = inner_gc.borrow();
             match &inner.storage {
-                 HeapStorage::Obj(o) => o.size_bytes(),
-                 HeapStorage::Vec(v) => v.size_bytes(),
-                 HeapStorage::Str(s) => s.size_bytes(),
-                 HeapStorage::Boxed(b) => b.size_bytes(),
+                HeapStorage::Obj(o) => o.size_bytes(),
+                HeapStorage::Vec(v) => v.size_bytes(),
+                HeapStorage::Str(s) => s.size_bytes(),
+                HeapStorage::Boxed(b) => b.size_bytes(),
             }
         };
 
         if ptr < start + size {
-             Some(obj)
+            Some(obj)
         } else {
-             None
+            None
         }
     }
 }
@@ -154,7 +154,7 @@ unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
             let slot_gc = slot_handle.0;
             // Use borrow() to access the StackValue inside the ThreadSafeLock
             let slot_val = slot_gc.borrow();
-            
+
             match &*slot_val {
                 StackValue::ManagedPtr(mp) => {
                     if let Some(ptr) = mp.value {
@@ -163,13 +163,13 @@ unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
                             obj.trace(cc);
                         }
                     }
-                },
+                }
                 StackValue::NativeInt(val) => {
                     let addr = *val as usize;
                     if let Some(obj) = self.local.heap.find_object(addr) {
                         obj.trace(cc);
                     }
-                },
+                }
                 StackValue::ValueType(o) => {
                     let bytes = o.instance_storage.get();
                     for chunk in bytes.chunks_exact(size_of::<usize>()) {
@@ -178,7 +178,7 @@ unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
                             obj.trace(cc);
                         }
                     }
-                },
+                }
                 _ => {}
             }
         }
@@ -524,7 +524,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
             // We need a pointer to the Object inside the ValueType on the stack.
             // This is stable because it's behind a Gc-managed ThreadSafeLock.
-            
+
             self.push_stack(
                 gc,
                 StackValue::managed_ptr(
@@ -850,7 +850,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         f.base.stack + f.stack_height
     }
 
-
     fn get_handle_location(&self, handle: &StackSlotHandle<'gc>) -> NonNull<u8> {
         // SAFETY: We use as_ptr() to get a stable pointer to the StackValue.
         // The StackValue is stable in memory because it's inside a Gc-managed ThreadSafeLock.
@@ -905,10 +904,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.get_handle_location(self.get_local_handle_at(self.current_frame(), index))
     }
 
-    pub fn get_local_info_for_managed_ptr(
-        &self,
-        index: usize,
-    ) -> (NonNull<u8>, bool) {
+    pub fn get_local_info_for_managed_ptr(&self, index: usize) -> (NonNull<u8>, bool) {
         let frame = self.current_frame();
         let handle = self.get_local_handle_at(frame, index);
         let pinned = if index < frame.pinned_locals.len() {
@@ -926,10 +922,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     NonNull::new(obj.instance_storage.get().as_ptr() as *mut u8).unwrap(),
                     pinned,
                 ),
-                _ => (
-                    val.data_location(),
-                    pinned,
-                ),
+                _ => (val.data_location(), pinned),
             }
         }
     }

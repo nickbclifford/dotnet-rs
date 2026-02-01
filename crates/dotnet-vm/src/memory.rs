@@ -30,9 +30,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         value: StackValue<'gc>,
         layout: &LayoutManager,
     ) -> Result<(), String> {
-        let owner = owner.or_else(|| {
-             self.heap.find_object(ptr as usize)
-        });
+        let owner = owner.or_else(|| self.heap.find_object(ptr as usize));
 
         // 1. Bounds Check
         self.check_bounds(ptr, owner, layout.size())?;
@@ -59,9 +57,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         layout: &LayoutManager,
         type_desc: Option<TypeDescription>,
     ) -> Result<StackValue<'gc>, String> {
-        let owner = owner.or_else(|| {
-             self.heap.find_object(ptr as usize)
-        });
+        let owner = owner.or_else(|| self.heap.find_object(ptr as usize));
 
         // 1. Bounds Check
         self.check_bounds(ptr as *mut u8, owner, layout.size())?;
@@ -174,9 +170,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 HeapStorage::Obj(o) => Some(LayoutManager::FieldLayoutManager(
                     o.instance_storage.layout().as_ref().clone(),
                 )),
-                HeapStorage::Vec(v) => {
-                    Some(LayoutManager::ArrayLayoutManager(v.layout.clone()))
-                }
+                HeapStorage::Vec(v) => Some(LayoutManager::ArrayLayoutManager(v.layout.clone())),
                 HeapStorage::Boxed(v) => match v {
                     ValueType::Struct(o) => Some(LayoutManager::FieldLayoutManager(
                         o.instance_storage.layout().as_ref().clone(),
@@ -237,10 +231,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         if ptr.is_null() {
                             panic!("perform_write: ptr is null!");
                         }
-                        m.write(std::slice::from_raw_parts_mut(
-                            ptr,
-                            ManagedPtr::MEMORY_SIZE,
-                        ));
+                        m.write(std::slice::from_raw_parts_mut(ptr, ManagedPtr::MEMORY_SIZE));
                     } else {
                         return Err("Expected ManagedPtr".into());
                     }
@@ -306,7 +297,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 }
                 Scalar::ManagedPtr => {
                     let (ptr_val, owner_ref) = ManagedPtr::read_from_bytes(
-                        std::slice::from_raw_parts(ptr, ManagedPtr::MEMORY_SIZE)
+                        std::slice::from_raw_parts(ptr, ManagedPtr::MEMORY_SIZE),
                     );
 
                     let void_desc = TypeDescription::from_raw(
@@ -336,11 +327,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             _ => Err("Array read not supported".to_string()),
         }
     }
-
-
-
 }
-
 
 fn extract_int(val: StackValue) -> Result<i32, String> {
     match val {

@@ -114,11 +114,7 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<'gc, 'm: 'gc>(
     vm_push!(
         stack,
         gc,
-        StackValue::managed_ptr(
-            data_ptr,
-            element_type,
-            false
-        )
+        StackValue::managed_ptr(data_ptr, element_type, false)
     );
     StepResult::InstructionStepped
 }
@@ -213,7 +209,6 @@ pub fn intrinsic_unsafe_as_pointer<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     pop_args!(stack, gc, [ManagedPtr(ptr)]);
-    let ptr = ptr;
     vm_push!(stack, gc, ManagedPtr(ptr));
     StepResult::InstructionStepped
 }
@@ -367,11 +362,7 @@ pub fn intrinsic_unsafe_as_generic<'gc, 'm: 'gc>(
         _ => false,
     };
     let m = m_val.as_ptr();
-    vm_push!(
-        stack,
-        gc,
-        StackValue::managed_ptr(m, target_type, pinned)
-    );
+    vm_push!(stack, gc, StackValue::managed_ptr(m, target_type, pinned));
     StepResult::InstructionStepped
 }
 
@@ -430,13 +421,13 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
     // Safety Check: Casting ptr to ref T
     let memory = RawMemoryAccess::new(&stack.local.heap);
     let owner = stack.local.heap.find_object(ptr as usize);
-    
+
     let src_layout_obj = if let Some(owner) = owner {
         memory.get_layout_from_owner(owner)
     } else {
         None
     };
-    
+
     let base_addr = if let Some(owner) = owner {
         let (base, _) = memory.get_storage_base(owner);
         base as usize
@@ -452,11 +443,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
         // panic!("Heap Corruption: Casting unmanaged pointer to Ref type is unsafe");
     }
 
-    vm_push!(
-        stack,
-        gc,
-        StackValue::managed_ptr(ptr, target_type, pinned)
-    );
+    vm_push!(stack, gc, StackValue::managed_ptr(ptr, target_type, pinned));
     StepResult::InstructionStepped
 }
 
@@ -521,12 +508,10 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
             }
             (p as *mut u8, None)
         }
-        StackValue::ManagedPtr(m) => {
-            (
-                m.value.expect("Unsafe.ReadUnaligned null").as_ptr(),
-                m.owner,
-            )
-        }
+        StackValue::ManagedPtr(m) => (
+            m.value.expect("Unsafe.ReadUnaligned null").as_ptr(),
+            m.owner,
+        ),
         rest => panic!("invalid source for read_unchecked unaligned: {:?}", rest),
     };
 
@@ -586,12 +571,10 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
             }
             (p as *mut u8, None)
         }
-        StackValue::ManagedPtr(m) => {
-            (
-                m.value.expect("Unsafe.WriteUnaligned null").as_ptr(),
-                m.owner,
-            )
-        }
+        StackValue::ManagedPtr(m) => (
+            m.value.expect("Unsafe.WriteUnaligned null").as_ptr(),
+            m.owner,
+        ),
         rest => panic!("invalid destination for write unaligned: {:?}", rest),
     };
 

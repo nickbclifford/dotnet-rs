@@ -73,9 +73,14 @@ impl<'gc> ManagedPtr<'gc> {
 
     /// Read pointer and owner from memory.
     /// Returns (pointer, owner). Type info must be supplied by caller.
+    ///
+    /// # Safety
+    ///
+    /// The `source` slice must be at least `ManagedPtr::MEMORY_SIZE` bytes long.
+    /// It must contain valid bytes representing a `ManagedPtr`.
     pub unsafe fn read_from_bytes(source: &[u8]) -> (Option<NonNull<u8>>, Option<ObjectRef<'gc>>) {
         let ptr_size = size_of::<usize>();
-        
+
         // Read Pointer (Offset 0)
         let mut value_bytes = [0u8; size_of::<usize>()];
         value_bytes.copy_from_slice(&source[0..ptr_size]);
@@ -84,10 +89,10 @@ impl<'gc> ManagedPtr<'gc> {
 
         // Read Owner (Offset 8)
         let owner = ObjectRef::read_unchecked(&source[ptr_size..]);
-        
+
         (ptr, Some(owner))
     }
-    
+
     // Legacy / Raw read: Reads only the pointer (first word).
     pub fn read_raw_ptr_unsafe(source: &[u8]) -> Option<NonNull<u8>> {
         let ptr_size = size_of::<usize>();
@@ -100,7 +105,7 @@ impl<'gc> ManagedPtr<'gc> {
     /// Write pointer and owner to memory.
     pub fn write(&self, dest: &mut [u8]) {
         let ptr_size = size_of::<usize>();
-        
+
         // Write Pointer (Offset 0)
         let val = self.value.map(|p| p.as_ptr() as usize).unwrap_or(0);
         let value_bytes = val.to_ne_bytes();
@@ -110,8 +115,8 @@ impl<'gc> ManagedPtr<'gc> {
         if let Some(owner) = self.owner {
             owner.write(&mut dest[ptr_size..]);
         } else {
-             // Write null ref
-             ObjectRef(None).write(&mut dest[ptr_size..]);
+            // Write null ref
+            ObjectRef(None).write(&mut dest[ptr_size..]);
         }
     }
 
