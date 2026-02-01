@@ -10,14 +10,13 @@ use dotnet_utils::gc::{GCHandle, GCHandleType, ThreadSafeLock};
 use dotnet_value::{
     layout::{HasLayout, LayoutManager},
     object::{HeapStorage, Object as ObjectInstance, ObjectRef},
-    pointer::ManagedPtrOwner,
     StackValue,
 };
 use dotnetdll::prelude::*;
 use gc_arena::{Arena, Collect, Collection, Gc, Rootable};
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt::{self, Debug},
     ptr::NonNull,
 };
@@ -45,7 +44,7 @@ use super::gc::coordinator::record_allocation;
 
 #[derive(Collect, Clone, Copy)]
 #[collect(no_drop)]
-pub struct StackSlotHandle<'gc>(Gc<'gc, ThreadSafeLock<StackValue<'gc>>>);
+pub struct StackSlotHandle<'gc>(pub Gc<'gc, ThreadSafeLock<StackValue<'gc>>>);
 
 /// Thread-local execution state for a single .NET thread.
 /// Contains the evaluation stack, call frames, and exception state.
@@ -72,8 +71,33 @@ pub struct HeapManager<'gc> {
     /// This is populated during the coordinated GC marking phase.
     #[cfg(feature = "multithreaded-gc")]
     pub cross_arena_roots: RefCell<HashSet<ObjectPtr>>,
-    // untraced handles to every heap object, used only by the tracer during debugging
-    pub(super) _all_objs: RefCell<HashSet<ObjectRef<'gc>>>,
+    /// Untraced handles to every heap object in this arena.
+    /// Used by the tracer during debugging and for conservative stack scanning.
+    pub(super) _all_objs: RefCell<BTreeMap<usize, ObjectRef<'gc>>>,
+}
+
+impl<'gc> HeapManager<'gc> {
+    pub fn find_object(&self, ptr: usize) -> Option<ObjectRef<'gc>> {
+        let all_objs = self._all_objs.borrow();
+        let (&start, &obj) = all_objs.range(..=ptr).next_back()?;
+
+        let size = {
+            let inner_gc = obj.0.unwrap();
+            let inner = inner_gc.borrow();
+            match &inner.storage {
+                 HeapStorage::Obj(o) => o.size_bytes(),
+                 HeapStorage::Vec(v) => v.size_bytes(),
+                 HeapStorage::Str(s) => s.size_bytes(),
+                 HeapStorage::Boxed(b) => b.size_bytes(),
+            }
+        };
+
+        if ptr < start + size {
+             Some(obj)
+        } else {
+             None
+        }
+    }
 }
 
 unsafe impl<'gc> Collect for HeapManager<'gc> {
@@ -101,9 +125,6 @@ unsafe impl<'gc> Collect for HeapManager<'gc> {
             }
         }
         self.pending_finalization.borrow().trace(cc);
-
-        // - self.finalization_queue: Traced by finalize_check (resurrection).
-        // - self._all_objs: Debugging handles (untraced).
     }
 }
 
@@ -126,6 +147,41 @@ unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
         self.execution.trace(cc);
         self.local.trace(cc);
         self.shared.statics.trace(cc);
+
+        // Conservative Stack Scanning:
+        // Iterate over the evaluation stack and check for values that point into the heap.
+        for slot_handle in &self.execution.stack {
+            let slot_gc = slot_handle.0;
+            // Use borrow() to access the StackValue inside the ThreadSafeLock
+            let slot_val = slot_gc.borrow();
+            
+            match &*slot_val {
+                StackValue::ManagedPtr(mp) => {
+                    if let Some(ptr) = mp.value {
+                        let addr = ptr.as_ptr() as usize;
+                        if let Some(obj) = self.local.heap.find_object(addr) {
+                            obj.trace(cc);
+                        }
+                    }
+                },
+                StackValue::NativeInt(val) => {
+                    let addr = *val as usize;
+                    if let Some(obj) = self.local.heap.find_object(addr) {
+                        obj.trace(cc);
+                    }
+                },
+                StackValue::ValueType(o) => {
+                    let bytes = o.instance_storage.get();
+                    for chunk in bytes.chunks_exact(size_of::<usize>()) {
+                        let val = usize::from_ne_bytes(chunk.try_into().unwrap());
+                        if let Some(obj) = self.local.heap.find_object(val) {
+                            obj.trace(cc);
+                        }
+                    }
+                },
+                _ => {}
+            }
+        }
 
         #[cfg(feature = "multithreaded-gc")]
         {
@@ -342,7 +398,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         let heap = &self.local.heap;
 
-        heap._all_objs.borrow_mut().insert(*instance);
+        {
+            let addr = Gc::as_ptr(*ptr) as usize;
+            heap._all_objs.borrow_mut().insert(addr, *instance);
+        }
 
         let ctx = self.current_context();
         let borrowed = ptr.borrow();
@@ -465,22 +524,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
             // We need a pointer to the Object inside the ValueType on the stack.
             // This is stable because it's behind a Gc-managed ThreadSafeLock.
-            let owner = unsafe {
-                let handle = &self.execution.stack[self.top_of_stack() - 1];
-                let stack_val_ptr = (*Gc::as_ptr(handle.0)).as_ptr();
-                if let StackValue::ValueType(ref stack_obj) = *stack_val_ptr {
-                    Some(ManagedPtrOwner::Stack(NonNull::from(&**stack_obj)))
-                } else {
-                    None
-                }
-            };
-
+            
             self.push_stack(
                 gc,
                 StackValue::managed_ptr(
                     self.top_of_stack_address().as_ptr() as *mut _,
                     desc,
-                    owner,
                     false,
                 ),
             );
@@ -790,8 +839,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         zero_out_handles(GCHandleType::WeakTrackResurrection, &resurrected);
 
         // 3. Prune dead objects from the debugging harness
-        heap._all_objs.borrow_mut().retain(|obj| match obj.0 {
-            Some(ptr) => !Gc::is_dead(fc, ptr) || resurrected.contains(&(Gc::as_ptr(ptr) as usize)),
+        heap._all_objs.borrow_mut().retain(|addr, obj| match obj.0 {
+            Some(ptr) => !Gc::is_dead(fc, ptr) || resurrected.contains(addr),
             None => false,
         });
     }
@@ -800,6 +849,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let f = self.current_frame();
         f.base.stack + f.stack_height
     }
+
 
     fn get_handle_location(&self, handle: &StackSlotHandle<'gc>) -> NonNull<u8> {
         // SAFETY: We use as_ptr() to get a stable pointer to the StackValue.
@@ -839,7 +889,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.set_slot(gc, self.get_arg_handle(index), value);
     }
 
-    fn get_local_handle_at(
+    pub(crate) fn get_local_handle_at(
         &self,
         frame: &StackFrame<'gc, 'm>,
         index: usize,
@@ -858,7 +908,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     pub fn get_local_info_for_managed_ptr(
         &self,
         index: usize,
-    ) -> (NonNull<u8>, Option<ManagedPtrOwner<'gc>>, bool) {
+    ) -> (NonNull<u8>, bool) {
         let frame = self.current_frame();
         let handle = self.get_local_handle_at(frame, index);
         let pinned = if index < frame.pinned_locals.len() {
@@ -874,12 +924,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             match val {
                 StackValue::ValueType(obj) => (
                     NonNull::new(obj.instance_storage.get().as_ptr() as *mut u8).unwrap(),
-                    Some(ManagedPtrOwner::Stack(NonNull::from(&**obj))),
                     pinned,
                 ),
                 _ => (
                     val.data_location(),
-                    Some(ManagedPtrOwner::StackSlot(handle.0)),
                     pinned,
                 ),
             }

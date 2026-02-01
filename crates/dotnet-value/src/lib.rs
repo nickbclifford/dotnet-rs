@@ -47,7 +47,7 @@ macro_rules! vm_expect_stack {
 use object::ObjectPtr;
 
 use object::{HeapStorage, Object, ObjectRef};
-use pointer::{ManagedPtr, ManagedPtrOwner, UnmanagedPtr};
+use pointer::{ManagedPtr, UnmanagedPtr};
 use string::CLRString;
 
 #[derive(Clone, Debug)]
@@ -220,15 +220,23 @@ impl<'gc> StackValue<'gc> {
     pub fn managed_ptr(
         ptr: *mut u8,
         target_type: TypeDescription,
-        owner: Option<ManagedPtrOwner<'gc>>,
         pinned: bool,
     ) -> Self {
-        Self::ManagedPtr(ManagedPtr {
-            value: NonNull::new(ptr),
-            inner_type: target_type,
+        Self::managed_ptr_with_owner(ptr, target_type, None, pinned)
+    }
+
+    pub fn managed_ptr_with_owner(
+        ptr: *mut u8,
+        target_type: TypeDescription,
+        owner: Option<ObjectRef<'gc>>,
+        pinned: bool,
+    ) -> Self {
+        Self::ManagedPtr(ManagedPtr::new(
+            NonNull::new(ptr),
+            target_type,
             owner,
             pinned,
-        })
+        ))
     }
     pub fn null() -> Self {
         Self::ObjectRef(ObjectRef(None))

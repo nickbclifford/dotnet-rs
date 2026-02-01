@@ -101,9 +101,7 @@ impl LayoutManager {
                 // the raw pointer value doesn't need tracing.
             }
             LayoutManager::FieldLayoutManager(f) => {
-                for field in f.fields.values() {
-                    field.layout.trace(&storage[field.position..], cc);
-                }
+                f.trace(storage, cc);
             }
             LayoutManager::ArrayLayoutManager(a) => {
                 let elem_size = a.element_layout.size();
@@ -181,11 +179,64 @@ impl std::fmt::Display for FieldKey {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct GcDesc {
+    pub bitmap: Vec<usize>,
+}
+
+impl GcDesc {
+    pub fn set(&mut self, word_index: usize) {
+        let ptr_bits = usize::BITS as usize;
+        let block_idx = word_index / ptr_bits;
+        let bit_idx = word_index % ptr_bits;
+
+        if block_idx >= self.bitmap.len() {
+            self.bitmap.resize(block_idx + 1, 0);
+        }
+        self.bitmap[block_idx] |= 1 << bit_idx;
+    }
+
+    pub fn merge(&mut self, other: &GcDesc) {
+        if other.bitmap.len() > self.bitmap.len() {
+            self.bitmap.resize(other.bitmap.len(), 0);
+        }
+        for (i, &word) in other.bitmap.iter().enumerate() {
+            self.bitmap[i] |= word;
+        }
+    }
+
+    pub fn trace(&self, storage: &[u8], cc: &Collection) {
+        let ptr_size = size_of::<usize>();
+        for (block_idx, &block) in self.bitmap.iter().enumerate() {
+            let mut bits = block;
+            while bits != 0 {
+                let trailing = bits.trailing_zeros();
+                let bit_idx = trailing as usize;
+                
+                // Clear the lowest set bit
+                bits &= !(1 << bit_idx);
+
+                let word_index = block_idx * (ptr_size * 8) + bit_idx;
+                let offset = word_index * ptr_size;
+                
+                // Safety: layout creation ensures this offset is valid and contains a pointer
+                if offset + ptr_size <= storage.len() {
+                    // Use read_unchecked to handle potential unaligned access safely
+                    // and correctly reconstruct the ObjectRef.
+                    let ptr = unsafe { ObjectRef::read_unchecked(&storage[offset..]) };
+                    ptr.trace(cc);
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldLayoutManager {
     pub fields: HashMap<FieldKey, FieldLayout>,
     pub total_size: usize,
     pub alignment: usize,
+    pub gc_desc: GcDesc,
 }
 
 impl HasLayout for FieldLayoutManager {
@@ -196,9 +247,7 @@ impl HasLayout for FieldLayoutManager {
 
 impl FieldLayoutManager {
     pub fn trace(&self, storage: &[u8], cc: &Collection) {
-        for field in self.fields.values() {
-            field.layout.trace(&storage[field.position..], cc);
-        }
+        self.gc_desc.trace(storage, cc);
     }
 
     pub fn resurrect<'gc>(
@@ -280,8 +329,8 @@ impl HasLayout for Scalar {
             Scalar::Int32 => 4,
             Scalar::Int64 => 8,
             Scalar::ObjectRef | Scalar::NativeInt => ObjectRef::SIZE,
-            // ManagedPtr is pointer-sized in memory (metadata stored in side-table)
-            Scalar::ManagedPtr => ObjectRef::SIZE,
+            // ManagedPtr is stored as (ObjectRef, Offset) to eliminate side-tables
+            Scalar::ManagedPtr => 2 * ObjectRef::SIZE,
             Scalar::Float32 => 4,
             Scalar::Float64 => 8,
         }
@@ -290,6 +339,9 @@ impl HasLayout for Scalar {
 
 impl Scalar {
     pub fn alignment(&self) -> usize {
-        self.size()
+         match self {
+             Scalar::ManagedPtr => ObjectRef::SIZE,
+             _ => self.size()
+         }
     }
 }

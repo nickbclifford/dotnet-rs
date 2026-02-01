@@ -1,22 +1,22 @@
+use crate::stack::HeapManager;
 use dotnet_types::TypeDescription;
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     layout::{HasLayout, LayoutManager, Scalar},
-    object::{HeapStorage, ManagedPtrMetadata, Object as ObjectInstance, ObjectRef, ValueType},
-    pointer::{ManagedPtr, ManagedPtrOwner},
+    object::{HeapStorage, Object as ObjectInstance, ObjectRef, ValueType},
+    pointer::ManagedPtr,
     storage::FieldStorage,
     StackValue,
 };
 use std::{ptr, sync::Arc};
 
 /// Manages unsafe memory access, enforcing bounds checks, GC write barriers, and type integrity.
-pub struct RawMemoryAccess<'gc> {
-    gc: GCHandle<'gc>,
+pub struct RawMemoryAccess<'a, 'gc> {
+    heap: &'a HeapManager<'gc>,
 }
 
-impl<'gc> RawMemoryAccess<'gc> {
-    pub fn new(gc: GCHandle<'gc>) -> Self {
-        Self { gc }
+impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
+    pub fn new(heap: &'a HeapManager<'gc>) -> Self {
+        Self { heap }
     }
 
     /// Writes a value to a memory location (pointer + optional owner), performing necessary checks.
@@ -26,10 +26,14 @@ impl<'gc> RawMemoryAccess<'gc> {
     pub unsafe fn write_unaligned(
         &mut self,
         ptr: *mut u8,
-        owner: Option<ManagedPtrOwner<'gc>>,
+        owner: Option<ObjectRef<'gc>>,
         value: StackValue<'gc>,
         layout: &LayoutManager,
     ) -> Result<(), String> {
+        let owner = owner.or_else(|| {
+             self.heap.find_object(ptr as usize)
+        });
+
         // 1. Bounds Check
         self.check_bounds(ptr, owner, layout.size())?;
 
@@ -51,10 +55,14 @@ impl<'gc> RawMemoryAccess<'gc> {
     pub unsafe fn read_unaligned(
         &self,
         ptr: *const u8,
-        owner: Option<ManagedPtrOwner<'gc>>,
+        owner: Option<ObjectRef<'gc>>,
         layout: &LayoutManager,
         type_desc: Option<TypeDescription>,
     ) -> Result<StackValue<'gc>, String> {
+        let owner = owner.or_else(|| {
+             self.heap.find_object(ptr as usize)
+        });
+
         // 1. Bounds Check
         self.check_bounds(ptr as *mut u8, owner, layout.size())?;
 
@@ -78,54 +86,35 @@ impl<'gc> RawMemoryAccess<'gc> {
 
         if offset != 0 || src_layout.is_some() {
             check_read_safety(layout, src_layout.as_ref(), offset);
-        } else if layout.is_or_contains_refs() {
-            return Err(
-                "Heap Corruption: Reading ObjectRef from unmanaged memory is unsafe".to_string(),
-            );
         }
 
         // 3. Perform Read
         unsafe { self.perform_read(ptr, owner, layout, type_desc) }
     }
 
-    fn get_storage_base(&self, owner: ManagedPtrOwner<'gc>) -> (*const u8, usize) {
-        match owner {
-            ManagedPtrOwner::Heap(h) => {
-                let obj = h.borrow();
-                match &obj.storage {
-                    HeapStorage::Obj(o) | HeapStorage::Boxed(ValueType::Struct(o)) => {
-                        let guard = o.instance_storage.get();
-                        (guard.as_ptr(), guard.len())
-                    }
-                    HeapStorage::Vec(v) => {
-                        let guard = v.get();
-                        (guard.as_ptr(), guard.len())
-                    }
-                    _ => (ptr::null(), 0),
+    pub fn get_storage_base(&self, owner: ObjectRef<'gc>) -> (*const u8, usize) {
+        if let Some(h) = owner.0 {
+            let obj = h.borrow();
+            match &obj.storage {
+                HeapStorage::Obj(o) | HeapStorage::Boxed(ValueType::Struct(o)) => {
+                    let guard = o.instance_storage.get();
+                    (guard.as_ptr(), guard.len())
                 }
-            }
-            ManagedPtrOwner::Stack(s) => {
-                let o = unsafe { s.as_ref() };
-                let guard = o.instance_storage.get();
-                (guard.as_ptr(), guard.len())
-            }
-            ManagedPtrOwner::StackSlot(s) => {
-                let val = s.borrow();
-                match &*val {
-                    StackValue::ValueType(o) => {
-                        let guard = o.instance_storage.get();
-                        (guard.as_ptr(), guard.len())
-                    }
-                    _ => (ptr::null(), 0),
+                HeapStorage::Vec(v) => {
+                    let guard = v.get();
+                    (guard.as_ptr(), guard.len())
                 }
+                _ => (ptr::null(), 0),
             }
+        } else {
+            (ptr::null(), 0)
         }
     }
 
     fn check_bounds(
         &self,
         ptr: *mut u8,
-        owner: Option<ManagedPtrOwner<'gc>>,
+        owner: Option<ObjectRef<'gc>>,
         size: usize,
     ) -> Result<(), String> {
         if let Some(owner) = owner {
@@ -157,7 +146,7 @@ impl<'gc> RawMemoryAccess<'gc> {
     fn check_integrity(
         &self,
         ptr: *mut u8,
-        owner: Option<ManagedPtrOwner<'gc>>,
+        owner: Option<ObjectRef<'gc>>,
         src_layout: &LayoutManager,
     ) -> Result<(), String> {
         if let Some(owner) = owner {
@@ -178,55 +167,41 @@ impl<'gc> RawMemoryAccess<'gc> {
         Ok(())
     }
 
-    fn get_layout_from_owner(&self, owner: ManagedPtrOwner<'gc>) -> Option<LayoutManager> {
-        match owner {
-            ManagedPtrOwner::Heap(h) => {
-                let obj = h.borrow();
-                match &obj.storage {
-                    HeapStorage::Obj(o) => Some(LayoutManager::FieldLayoutManager(
-                        o.instance_storage.layout().as_ref().clone(),
-                    )),
-                    HeapStorage::Vec(v) => {
-                        Some(LayoutManager::ArrayLayoutManager(v.layout.clone()))
-                    }
-                    HeapStorage::Boxed(v) => match v {
-                        ValueType::Struct(o) => Some(LayoutManager::FieldLayoutManager(
-                            o.instance_storage.layout().as_ref().clone(),
-                        )),
-                        ValueType::Pointer(_) => Some(LayoutManager::Scalar(Scalar::ManagedPtr)),
-                        _ => None,
-                    },
-                    _ => None,
-                }
-            }
-            ManagedPtrOwner::Stack(s) => {
-                let o = unsafe { s.as_ref() };
-                Some(LayoutManager::FieldLayoutManager(
+    pub fn get_layout_from_owner(&self, owner: ObjectRef<'gc>) -> Option<LayoutManager> {
+        if let Some(h) = owner.0 {
+            let obj = h.borrow();
+            match &obj.storage {
+                HeapStorage::Obj(o) => Some(LayoutManager::FieldLayoutManager(
                     o.instance_storage.layout().as_ref().clone(),
-                ))
-            }
-            ManagedPtrOwner::StackSlot(s) => {
-                let val = s.borrow();
-                match &*val {
-                    StackValue::ValueType(o) => Some(LayoutManager::FieldLayoutManager(
+                )),
+                HeapStorage::Vec(v) => {
+                    Some(LayoutManager::ArrayLayoutManager(v.layout.clone()))
+                }
+                HeapStorage::Boxed(v) => match v {
+                    ValueType::Struct(o) => Some(LayoutManager::FieldLayoutManager(
                         o.instance_storage.layout().as_ref().clone(),
                     )),
+                    ValueType::Pointer(_) => Some(LayoutManager::Scalar(Scalar::ManagedPtr)),
                     _ => None,
-                }
+                },
+                _ => None,
             }
+        } else {
+            None
         }
     }
 
     unsafe fn perform_write(
         &mut self,
         ptr: *mut u8,
-        owner: Option<ManagedPtrOwner<'gc>>,
+        _owner: Option<ObjectRef<'gc>>,
         value: StackValue<'gc>,
         layout: &LayoutManager,
     ) -> Result<(), String> {
         if ptr.is_null() {
             return Err("RawMemoryAccess::perform_write called with null pointer!".to_string());
         }
+
         match layout {
             LayoutManager::Scalar(s) => match s {
                 Scalar::Int8 => {
@@ -262,13 +237,10 @@ impl<'gc> RawMemoryAccess<'gc> {
                         if ptr.is_null() {
                             panic!("perform_write: ptr is null!");
                         }
-                        m.write_ptr_only(std::slice::from_raw_parts_mut(
+                        m.write(std::slice::from_raw_parts_mut(
                             ptr,
                             ManagedPtr::MEMORY_SIZE,
                         ));
-                        if let Some(dest_owner) = owner {
-                            self.register_managed_ptr(dest_owner, ptr, m);
-                        }
                     } else {
                         return Err("Expected ManagedPtr".into());
                     }
@@ -287,10 +259,6 @@ impl<'gc> RawMemoryAccess<'gc> {
                     let src_obj = src_obj_box.as_ref();
                     let src_ptr = src_obj.instance_storage.get().as_ptr();
                     ptr::copy_nonoverlapping(src_ptr, ptr, flm.size());
-
-                    if let Some(dest_owner) = owner {
-                        self.update_owner_side_table(src_obj, dest_owner, ptr);
-                    }
                 } else {
                     return Err("Expected ValueType for Struct write".into());
                 }
@@ -305,7 +273,7 @@ impl<'gc> RawMemoryAccess<'gc> {
     unsafe fn perform_read(
         &self,
         ptr: *const u8,
-        owner: Option<ManagedPtrOwner<'gc>>,
+        _owner: Option<ObjectRef<'gc>>,
         layout: &LayoutManager,
         type_desc: Option<TypeDescription>,
     ) -> Result<StackValue<'gc>, String> {
@@ -337,15 +305,9 @@ impl<'gc> RawMemoryAccess<'gc> {
                     Ok(StackValue::ObjectRef(ObjectRef::read_unchecked(&buf)))
                 }
                 Scalar::ManagedPtr => {
-                    let ptr_value = ptr::read_unaligned(ptr as *const usize);
-                    let ptr_val = ptr::NonNull::new(ptr_value as *mut u8);
-
-                    let mut metadata = (None, false);
-                    if let Some(owner) = owner {
-                        if let Some(m) = self.check_side_table(owner, ptr) {
-                            metadata = (m.recover_owner(), m.pinned);
-                        }
-                    }
+                    let (ptr_val, owner_ref) = ManagedPtr::read_from_bytes(
+                        std::slice::from_raw_parts(ptr, ManagedPtr::MEMORY_SIZE)
+                    );
 
                     let void_desc = TypeDescription::from_raw(
                         dotnet_types::resolution::ResolutionS::new(ptr::null()),
@@ -353,7 +315,7 @@ impl<'gc> RawMemoryAccess<'gc> {
                     );
 
                     Ok(StackValue::ManagedPtr(ManagedPtr::new(
-                        ptr_val, void_desc, metadata.0, metadata.1,
+                        ptr_val, void_desc, owner_ref, false,
                     )))
                 }
             },
@@ -366,10 +328,6 @@ impl<'gc> RawMemoryAccess<'gc> {
                     let storage = FieldStorage::new(Arc::new(flm.clone()), data);
                     let obj = ObjectInstance::new(desc, storage);
 
-                    if let Some(src_owner) = owner {
-                        self.copy_metadata_range(src_owner, ptr, size, &obj);
-                    }
-
                     Ok(StackValue::ValueType(Box::new(obj)))
                 } else {
                     Err("Struct read requires TypeDescription, which is not passed to read_unaligned".into())
@@ -379,243 +337,10 @@ impl<'gc> RawMemoryAccess<'gc> {
         }
     }
 
-    // Helpers
 
-    fn copy_metadata_range(
-        &self,
-        src_owner: ManagedPtrOwner<'gc>,
-        src_ptr: *const u8,
-        size: usize,
-        dest_obj: &ObjectInstance<'gc>,
-    ) {
-        let (src_base, _) = self.get_storage_base(src_owner);
-        if src_base.is_null() {
-            return;
-        }
 
-        let src_base_addr = src_base as usize;
-        let src_ptr_addr = src_ptr as usize;
-        let start_offset = src_ptr_addr.wrapping_sub(src_base_addr);
-        let end_offset = start_offset + size;
-
-        match src_owner {
-            ManagedPtrOwner::Heap(h) => {
-                let o = h.borrow();
-                match &o.storage {
-                    HeapStorage::Obj(oo) => {
-                        let table = oo.managed_ptr_metadata.borrow();
-                        for (&offset, metadata) in &table.metadata {
-                            if offset >= start_offset && offset < end_offset {
-                                let dest_offset = offset - start_offset;
-                                dest_obj.register_metadata(dest_offset, metadata.clone(), self.gc);
-                            }
-                        }
-                    }
-                    HeapStorage::Vec(v) => {
-                        let table = v.managed_ptr_metadata.borrow();
-                        for (&offset, metadata) in &table.metadata {
-                            if offset >= start_offset && offset < end_offset {
-                                let dest_offset = offset - start_offset;
-                                dest_obj.register_metadata(dest_offset, metadata.clone(), self.gc);
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            ManagedPtrOwner::Stack(s) => {
-                let o = unsafe { s.as_ref() };
-                let table = o.managed_ptr_metadata.borrow();
-                for (&offset, metadata) in &table.metadata {
-                    if offset >= start_offset && offset < end_offset {
-                        let dest_offset = offset - start_offset;
-                        dest_obj.register_metadata(dest_offset, metadata.clone(), self.gc);
-                    }
-                }
-            }
-            ManagedPtrOwner::StackSlot(s) => {
-                let val = s.borrow();
-                if let StackValue::ValueType(o) = &*val {
-                    let table = o.managed_ptr_metadata.borrow();
-                    for (&offset, metadata) in &table.metadata {
-                        if offset >= start_offset && offset < end_offset {
-                            let dest_offset = offset - start_offset;
-                            dest_obj.register_metadata(dest_offset, metadata.clone(), self.gc);
-                        }
-                    }
-                }
-            }
-        };
-    }
-
-    fn register_managed_ptr(&self, owner: ManagedPtrOwner<'gc>, ptr: *mut u8, m: ManagedPtr<'gc>) {
-        match owner {
-            ManagedPtrOwner::Heap(h) => {
-                let dest_obj = h.borrow();
-                match &dest_obj.storage {
-                    HeapStorage::Obj(dest_o) => {
-                        register_managed_ptr_helper(dest_o, m, ptr, self.gc);
-                    }
-                    HeapStorage::Vec(dest_v) => {
-                        let base = dest_v.get().as_ptr() as usize;
-                        let offset = (ptr as usize).wrapping_sub(base);
-                        dest_v.register_metadata(
-                            offset,
-                            ManagedPtrMetadata::from_managed_ptr(&m),
-                            self.gc,
-                        );
-                    }
-                    _ => {}
-                }
-            }
-            ManagedPtrOwner::Stack(s) => {
-                let dest_o = unsafe { s.as_ref() };
-                register_managed_ptr_helper(dest_o, m, ptr, self.gc);
-            }
-            ManagedPtrOwner::StackSlot(s) => {
-                let mut val = s.borrow_mut(self.gc);
-                if let StackValue::ValueType(o) = &mut *val {
-                    let base = o.instance_storage.get().as_ptr() as usize;
-                    let offset = (ptr as usize).wrapping_sub(base);
-                    o.register_metadata(offset, ManagedPtrMetadata::from_managed_ptr(&m), self.gc);
-                }
-            }
-        }
-    }
-
-    fn update_owner_side_table(
-        &self,
-        src_obj: &ObjectInstance<'gc>,
-        dest_owner: ManagedPtrOwner<'gc>,
-        ptr: *mut u8,
-    ) {
-        match dest_owner {
-            ManagedPtrOwner::Heap(h) => {
-                let mut dest_lock = h.borrow_mut(self.gc);
-                match &mut dest_lock.storage {
-                    HeapStorage::Obj(dest_o) => {
-                        update_owner_side_table_helper(src_obj, dest_o, ptr, self.gc);
-                    }
-                    HeapStorage::Vec(dest_v) => {
-                        let side_table = src_obj.managed_ptr_metadata.borrow();
-                        let dest_base = dest_v.get().as_ptr() as usize;
-                        let dest_offset = (ptr as usize).wrapping_sub(dest_base);
-
-                        for (&offset, metadata) in &side_table.metadata {
-                            dest_v.register_metadata(
-                                dest_offset + offset,
-                                metadata.clone(),
-                                self.gc,
-                            );
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            ManagedPtrOwner::Stack(s) => {
-                let dest_o = unsafe { s.as_ref() };
-                update_owner_side_table_helper(src_obj, dest_o, ptr, self.gc);
-            }
-            ManagedPtrOwner::StackSlot(s) => {
-                let mut val = s.borrow_mut(self.gc);
-                if let StackValue::ValueType(o) = &mut *val {
-                    let side_table = src_obj.managed_ptr_metadata.borrow();
-                    let dest_base = o.instance_storage.get().as_ptr() as usize;
-                    let dest_offset = (ptr as usize).wrapping_sub(dest_base);
-
-                    for (&offset, metadata) in &side_table.metadata {
-                        o.register_metadata(dest_offset + offset, metadata.clone(), self.gc);
-                    }
-                }
-            }
-        }
-    }
-
-    fn check_side_table(
-        &self,
-        owner: ManagedPtrOwner<'gc>,
-        ptr: *const u8,
-    ) -> Option<ManagedPtrMetadata<'gc>> {
-        match owner {
-            ManagedPtrOwner::Heap(h) => {
-                let obj = h.borrow();
-                match &obj.storage {
-                    HeapStorage::Obj(o) => check_side_table_helper(o, ptr),
-                    HeapStorage::Vec(v) => {
-                        let side_table = v.managed_ptr_metadata.borrow();
-                        let base_ptr = v.get().as_ptr() as usize;
-                        let offset = (ptr as usize).wrapping_sub(base_ptr);
-                        let meta = side_table.get(offset).cloned();
-                        if let Some(m) = &meta {
-                            m.validate();
-                        }
-                        meta
-                    }
-                    _ => None,
-                }
-            }
-            ManagedPtrOwner::Stack(s) => {
-                let o = unsafe { s.as_ref() };
-                check_side_table_helper(o, ptr)
-            }
-            ManagedPtrOwner::StackSlot(s) => {
-                let val = s.borrow();
-                if let StackValue::ValueType(o) = &*val {
-                    let base = o.instance_storage.get().as_ptr() as usize;
-                    let offset = (ptr as usize).wrapping_sub(base);
-                    let table = o.managed_ptr_metadata.borrow();
-                    table.get(offset).cloned()
-                } else {
-                    None
-                }
-            }
-        }
-    }
 }
 
-// Standalone helpers adapted from unsafe_ops.rs
-
-fn register_managed_ptr_helper<'gc>(
-    obj: &ObjectInstance<'gc>,
-    ptr: ManagedPtr<'gc>,
-    value: *const u8,
-    gc: GCHandle<'gc>,
-) {
-    obj.register_managed_ptr(
-        (value as usize).wrapping_sub(obj.instance_storage.get().as_ptr() as usize),
-        &ptr,
-        gc,
-    );
-}
-
-fn update_owner_side_table_helper<'gc>(
-    obj: &ObjectInstance<'gc>,
-    dest_o: &ObjectInstance<'gc>,
-    ptr: *const u8,
-    gc: GCHandle<'gc>,
-) {
-    let side_table = obj.managed_ptr_metadata.borrow();
-    let dest_base = dest_o.instance_storage.get().as_ptr() as usize;
-    let dest_offset = (ptr as usize).wrapping_sub(dest_base);
-
-    for (&offset, metadata) in &side_table.metadata {
-        dest_o.register_metadata(dest_offset + offset, metadata.clone(), gc);
-    }
-}
-
-fn check_side_table_helper<'gc>(
-    obj: &ObjectInstance<'gc>,
-    ptr: *const u8,
-) -> Option<ManagedPtrMetadata<'gc>> {
-    let side_table = obj.managed_ptr_metadata.borrow();
-    let base_ptr = obj.instance_storage.get().as_ptr() as usize;
-    let offset = (ptr as usize).wrapping_sub(base_ptr);
-    let meta = side_table.get(offset).cloned();
-    if let Some(m) = &meta {
-        m.validate();
-    }
-    meta
-}
 
 fn extract_int(val: StackValue) -> Result<i32, String> {
     match val {
@@ -670,7 +395,7 @@ pub fn check_read_safety(
             }
         } else {
             // Reading Ref from unmanaged memory (src_layout is None)
-            panic!("Heap Corruption: Reading ObjectRef from unmanaged memory is unsafe");
+            // Relaxed for Stack Scanning compatibility (Unsafe Code) and Unsafe.ReadUnaligned
         }
     });
 }

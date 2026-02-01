@@ -1,14 +1,11 @@
-use crate::{
-    object::{Object, ObjectHandle},
-    StackValue,
-};
+use crate::object::ObjectRef;
 use dotnet_types::TypeDescription;
-use dotnet_utils::gc::ThreadSafeLock;
-use gc_arena::{unsafe_empty_collect, Collect, Collection, Gc};
+use gc_arena::{unsafe_empty_collect, Collect, Collection};
 use std::{
     cmp::Ordering,
     collections::HashSet,
     fmt::{self, Debug, Formatter},
+    mem::size_of,
     ptr::NonNull,
 };
 
@@ -16,52 +13,18 @@ use std::{
 pub struct UnmanagedPtr(pub NonNull<u8>);
 unsafe_empty_collect!(UnmanagedPtr);
 
-#[derive(Copy, Clone)]
-pub enum ManagedPtrOwner<'gc> {
-    Heap(ObjectHandle<'gc>),
-    Stack(NonNull<Object<'gc>>),
-    StackSlot(Gc<'gc, ThreadSafeLock<StackValue<'gc>>>),
-}
-
-impl<'gc> ManagedPtrOwner<'gc> {
-    pub fn as_ptr(&self) -> *const u8 {
-        match self {
-            Self::Heap(h) => Gc::as_ptr(*h) as *const u8,
-            Self::Stack(s) => s.as_ptr() as *const u8,
-            Self::StackSlot(s) => Gc::as_ptr(*s) as *const u8,
-        }
-    }
-}
-
-unsafe impl<'gc> Collect for ManagedPtrOwner<'gc> {
-    fn trace(&self, cc: &Collection) {
-        match self {
-            Self::Heap(h) => h.trace(cc),
-            // Stack objects are already traced through the VM stack.
-            // Do NOT trace them here to avoid infinite recursion:
-            // Object → StackValue → ManagedPtr → ManagedPtrOwner::Stack → Object (cycle!)
-            Self::Stack(_) => {}
-            Self::StackSlot(_) => {}
-        }
-    }
-}
-
-impl Debug for ManagedPtrOwner<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Heap(h) => write!(f, "Heap({:?})", Gc::as_ptr(*h)),
-            Self::Stack(s) => write!(f, "Stack({:?})", s.as_ptr()),
-            Self::StackSlot(s) => write!(f, "StackSlot({:?})", Gc::as_ptr(*s)),
-        }
-    }
-}
+// Kept for compatibility but effectively replaced by ObjectRef for heap owners
 
 #[derive(Copy, Clone)]
+#[repr(C)]
 pub struct ManagedPtr<'gc> {
     pub value: Option<NonNull<u8>>,
+    /// The object that owns the memory pointed to by this pointer.
+    /// This ensures the object stays alive while the pointer is in use.
+    pub owner: Option<ObjectRef<'gc>>,
     pub inner_type: TypeDescription,
-    pub owner: Option<ManagedPtrOwner<'gc>>,
     pub pinned: bool,
+    pub _marker: std::marker::PhantomData<&'gc ()>,
 }
 
 impl Debug for ManagedPtr<'_> {
@@ -90,13 +53,13 @@ impl PartialOrd for ManagedPtr<'_> {
 }
 
 impl<'gc> ManagedPtr<'gc> {
-    /// the actual value is pointer-sized when moved around inside the runtime
-    pub const MEMORY_SIZE: usize = size_of::<usize>();
+    /// One word for the pointer, one word for the owner.
+    pub const MEMORY_SIZE: usize = size_of::<usize>() * 2;
 
     pub fn new(
         value: Option<NonNull<u8>>,
         inner_type: TypeDescription,
-        owner: Option<ManagedPtrOwner<'gc>>,
+        owner: Option<ObjectRef<'gc>>,
         pinned: bool,
     ) -> Self {
         Self {
@@ -104,24 +67,52 @@ impl<'gc> ManagedPtr<'gc> {
             inner_type,
             owner,
             pinned,
+            _marker: std::marker::PhantomData,
         }
     }
 
-    /// Read just the pointer value from memory (8 bytes).
-    /// This is the new memory format. Metadata must be retrieved from the Object's side-table.
-    pub fn read_raw_ptr_unsafe(source: &[u8]) -> Option<NonNull<u8>> {
+    /// Read pointer and owner from memory.
+    /// Returns (pointer, owner). Type info must be supplied by caller.
+    pub unsafe fn read_from_bytes(source: &[u8]) -> (Option<NonNull<u8>>, Option<ObjectRef<'gc>>) {
+        let ptr_size = size_of::<usize>();
+        
+        // Read Pointer (Offset 0)
         let mut value_bytes = [0u8; size_of::<usize>()];
-        value_bytes.copy_from_slice(&source[0..size_of::<usize>()]);
+        value_bytes.copy_from_slice(&source[0..ptr_size]);
+        let value_ptr = usize::from_ne_bytes(value_bytes) as *mut u8;
+        let ptr = NonNull::new(value_ptr);
+
+        // Read Owner (Offset 8)
+        let owner = ObjectRef::read_unchecked(&source[ptr_size..]);
+        
+        (ptr, Some(owner))
+    }
+    
+    // Legacy / Raw read: Reads only the pointer (first word).
+    pub fn read_raw_ptr_unsafe(source: &[u8]) -> Option<NonNull<u8>> {
+        let ptr_size = size_of::<usize>();
+        let mut value_bytes = [0u8; size_of::<usize>()];
+        value_bytes.copy_from_slice(&source[0..ptr_size]);
         let value_ptr = usize::from_ne_bytes(value_bytes) as *mut u8;
         NonNull::new(value_ptr)
     }
 
-    /// Write just the pointer value to memory (8 bytes).
-    /// Metadata should be stored in the Object's side-table separately.
-    pub fn write_ptr_only(&self, dest: &mut [u8]) {
+    /// Write pointer and owner to memory.
+    pub fn write(&self, dest: &mut [u8]) {
+        let ptr_size = size_of::<usize>();
+        
+        // Write Pointer (Offset 0)
         let val = self.value.map(|p| p.as_ptr() as usize).unwrap_or(0);
         let value_bytes = val.to_ne_bytes();
-        dest[0..size_of::<usize>()].copy_from_slice(&value_bytes);
+        dest[0..ptr_size].copy_from_slice(&value_bytes);
+
+        // Write Owner (Offset 8)
+        if let Some(owner) = self.owner {
+            owner.write(&mut dest[ptr_size..]);
+        } else {
+             // Write null ref
+             ObjectRef(None).write(&mut dest[ptr_size..]);
+        }
     }
 
     pub fn map_value(
@@ -133,6 +124,7 @@ impl<'gc> ManagedPtr<'gc> {
             inner_type: self.inner_type,
             owner: self.owner,
             pinned: self.pinned,
+            _marker: std::marker::PhantomData,
         }
     }
 
@@ -144,11 +136,6 @@ impl<'gc> ManagedPtr<'gc> {
         self.map_value(|p| {
             p.and_then(|ptr| {
                 // SAFETY: generic caller safety invariant regarding object bounds still applies.
-                // We use NonNull::new instead of new_unchecked to prevent creating "poisoned"
-                // NonNull instances that wrap null (0). This can happen if the offset operation
-                // results in a null pointer (e.g. during specific arithmetic in System.Private.CoreLib).
-                // If it becomes null, we want the Option to become None, so that subsequent checks
-                // for validity (like .is_some()) correctly identify it as invalid/null.
                 let new_ptr = unsafe { ptr.as_ptr().offset(bytes) };
                 NonNull::new(new_ptr)
             })
@@ -158,28 +145,16 @@ impl<'gc> ManagedPtr<'gc> {
 
 unsafe impl<'gc> Collect for ManagedPtr<'gc> {
     fn trace(&self, cc: &Collection) {
-        if let Some(o) = self.owner {
-            o.trace(cc);
+        if let Some(owner) = &self.owner {
+            owner.trace(cc);
         }
     }
 }
 
 impl<'gc> ManagedPtr<'gc> {
     pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
-        if let Some(owner) = self.owner {
-            match owner {
-                ManagedPtrOwner::Heap(h) => {
-                    let ptr = Gc::as_ptr(h) as usize;
-                    if visited.insert(ptr) {
-                        Gc::resurrect(fc, h);
-                        h.borrow().storage.resurrect(fc, visited);
-                    }
-                }
-                ManagedPtrOwner::Stack(s) => {
-                    unsafe { s.as_ref().resurrect(fc, visited) };
-                }
-                ManagedPtrOwner::StackSlot(_) => {}
-            }
+        if let Some(owner) = &self.owner {
+            owner.resurrect(fc, visited);
         }
     }
 }

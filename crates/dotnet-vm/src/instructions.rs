@@ -11,8 +11,8 @@ use dotnet_types::{
 use dotnet_utils::{gc::GCHandle, is_ptr_aligned_to_field};
 use dotnet_value::{
     layout::HasLayout,
-    object::{CTSValue, HeapStorage, ManagedPtrMetadata, ObjectRef, Vector},
-    pointer::{ManagedPtr, ManagedPtrOwner, UnmanagedPtr},
+    object::{CTSValue, HeapStorage, ObjectRef, Vector},
+    pointer::{ManagedPtr, UnmanagedPtr},
     string::CLRString,
     StackValue,
 };
@@ -28,6 +28,7 @@ use super::{
     threading::ThreadManagerOps,
     CallStack, MethodInfo, ResolutionContext, StepResult,
 };
+use dotnet_value::layout::{LayoutManager, Scalar};
 
 /// Check if a method is an intrinsic (with caching).
 /// This is called on every method invocation, so caching is critical for performance.
@@ -711,49 +712,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 };
 
                 // Bounds Check
-                if let StackValue::ManagedPtr(mp) = &addr_val {
-                    if let Some(owner) = mp.owner {
-                        let (base_addr, storage_size) = match owner {
-                            ManagedPtrOwner::Heap(h) => {
-                                let inner = h.borrow();
-                                match &inner.storage {
-                                    HeapStorage::Obj(o) => (
-                                        o.instance_storage.get().as_ptr(),
-                                        o.instance_storage.get().len(),
-                                    ),
-                                    HeapStorage::Vec(v) => (v.get().as_ptr(), v.get().len()),
-                                    _ => (ptr::null(), 0),
-                                }
-                            }
-                            ManagedPtrOwner::Stack(s) => unsafe {
-                                (
-                                    s.as_ref().instance_storage.get().as_ptr(),
-                                    s.as_ref().instance_storage.get().len(),
-                                )
-                            },
-                            ManagedPtrOwner::StackSlot(s) => {
-                                let val = s.borrow();
-                                match &*val {
-                                    StackValue::ValueType(o) => {
-                                        let guard = o.instance_storage.get();
-                                        (guard.as_ptr(), guard.len())
-                                    }
-                                    _ => (ptr::null(), 0),
-                                }
-                            }
-                        };
 
-                        if !base_addr.is_null() {
-                            let dest_offset = (addr as usize).wrapping_sub(base_addr as usize);
-                            if dest_offset
-                                .checked_add(size)
-                                .is_none_or(|end| end > storage_size)
-                            {
-                                panic!("Heap corruption detected! Initblk writing {} bytes at offset {} into storage of size {}", size, dest_offset, storage_size);
-                            }
-                        }
-                    }
-                }
 
                 unsafe {
                     ptr::write_bytes(addr, val, size);
@@ -771,7 +730,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 push!(managed_ptr(
                     self.get_argument_address(*i as usize).as_ptr() as *mut _,
                     live_type,
-                    None,
                     true
                 ));
             }
@@ -796,17 +754,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let local = self.get_local(*i as usize);
                 let ctx = self.current_context();
                 let live_type = ctx.stack_value_type(&local);
-                let pinned = match state!(|s| &s.info_handle.locals[*i as usize]) {
-                    LocalVariable::Variable { pinned, .. } => *pinned,
-                    _ => false,
-                };
 
-                let (ptr, owner, _) = self.get_local_info_for_managed_ptr(*i as usize);
+                let (ptr, pinned) = self.get_local_info_for_managed_ptr(*i as usize);
 
-                push!(managed_ptr(
+                push!(StackValue::managed_ptr_with_owner(
                     ptr.as_ptr() as *mut _,
                     live_type,
-                    owner,
+                    None,
                     pinned
                 ));
             }
@@ -959,66 +913,36 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             } => {
                 let val = pop!();
                 let addr_val = pop!();
-                let ptr = addr_val.as_ptr();
 
-                // FIX: Handle writing to StackSlot (locals) directly to avoid corruption and trigger barrier
-                if let StackValue::ManagedPtr(mp) = &addr_val {
-                    if let Some(ManagedPtrOwner::StackSlot(h)) = mp.owner {
-                        *h.borrow_mut(gc) = val;
-                        self.increment_ip();
-                        return StepResult::InstructionStepped;
+                let ptr = match addr_val {
+                    StackValue::NativeInt(p) => p as *mut u8,
+                    StackValue::ManagedPtr(m) => {
+                        m.value.map_or(ptr::null_mut(), |p| p.as_ptr())
                     }
+                    StackValue::UnmanagedPtr(u) => u.0.as_ptr(),
+                    _ => panic!("StoreIndirect: expected pointer, got {:?}", addr_val),
+                };
+
+                let layout = match store_type {
+                    StoreType::Int8 => LayoutManager::Scalar(Scalar::Int8),
+                    StoreType::Int16 => LayoutManager::Scalar(Scalar::Int16),
+                    StoreType::Int32 => LayoutManager::Scalar(Scalar::Int32),
+                    StoreType::Int64 => LayoutManager::Scalar(Scalar::Int64),
+                    StoreType::IntPtr => LayoutManager::Scalar(Scalar::NativeInt),
+                    StoreType::Float32 => LayoutManager::Scalar(Scalar::Float32),
+                    StoreType::Float64 => LayoutManager::Scalar(Scalar::Float64),
+                    StoreType::Object => LayoutManager::Scalar(Scalar::ObjectRef),
+                };
+
+                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let owner = self
+                    .local
+                    .heap
+                    .find_object(ptr as usize);
+                match unsafe { memory.write_unaligned(ptr, owner, val, &layout) } {
+                    Ok(_) => {}
+                    Err(e) => panic!("StoreIndirect failed: {}", e),
                 }
-
-                // Bounds check
-                if let StackValue::ManagedPtr(mp) = &addr_val {
-                    if let Some(owner) = mp.owner {
-                        let (base_addr, storage_size) = match owner {
-                            ManagedPtrOwner::Heap(h) => {
-                                let inner = h.borrow();
-                                match &inner.storage {
-                                    HeapStorage::Obj(o) => (
-                                        o.instance_storage.get().as_ptr(),
-                                        o.instance_storage.get().len(),
-                                    ),
-                                    HeapStorage::Vec(v) => (v.get().as_ptr(), v.get().len()),
-                                    _ => (ptr::null(), 0),
-                                }
-                            }
-                            ManagedPtrOwner::Stack(s) => unsafe {
-                                (
-                                    s.as_ref().instance_storage.get().as_ptr(),
-                                    s.as_ref().instance_storage.get().len(),
-                                )
-                            },
-                            _ => (ptr::null(), 0),
-                        };
-
-                        if !base_addr.is_null() {
-                            let dest_offset = (ptr as usize).wrapping_sub(base_addr as usize);
-                            let size = match store_type {
-                                StoreType::Int8 => 1,
-                                StoreType::Int16 => 2,
-                                StoreType::Int32 => 4,
-                                StoreType::Int64 => 8,
-                                StoreType::IntPtr => size_of::<usize>(),
-                                StoreType::Float32 => 4,
-                                StoreType::Float64 => 8,
-                                StoreType::Object => size_of::<usize>(),
-                            };
-
-                            if size > 0
-                                && dest_offset
-                                    .checked_add(size)
-                                    .is_none_or(|end| end > storage_size)
-                            {
-                                panic!("Heap corruption detected! StoreIndirect writing {} bytes at offset {} into storage of size {}", size, dest_offset, storage_size);
-                            }
-                        }
-                    }
-                }
-
-                unsafe { val.store(ptr, *store_type) };
             }
             StoreLocal(i) => {
                 let val = pop!();
@@ -1255,51 +1179,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let ct = ctx.make_concrete(t);
                 let layout = type_layout(ct.clone(), &ctx);
 
-                // FIX: Check bounds for ManagedPtr before writing
-                if let StackValue::ManagedPtr(dest_mp) = &addr {
-                    if let Some(owner) = dest_mp.owner {
-                        let (base_addr, storage_size) = match owner {
-                            ManagedPtrOwner::Heap(h) => {
-                                let inner = h.borrow();
-                                match &inner.storage {
-                                    HeapStorage::Obj(o) => (
-                                        o.instance_storage.get().as_ptr(),
-                                        o.instance_storage.get().len(),
-                                    ),
-                                    HeapStorage::Vec(v) => (v.get().as_ptr(), v.get().len()),
-                                    _ => (ptr::null(), 0),
-                                }
-                            }
-                            ManagedPtrOwner::Stack(s) => unsafe {
-                                (
-                                    s.as_ref().instance_storage.get().as_ptr(),
-                                    s.as_ref().instance_storage.get().len(),
-                                )
-                            },
-                            ManagedPtrOwner::StackSlot(s) => {
-                                let val = s.borrow();
-                                match &*val {
-                                    StackValue::ValueType(o) => {
-                                        let guard = o.instance_storage.get();
-                                        (guard.as_ptr(), guard.len())
-                                    }
-                                    _ => (ptr::null(), 0),
-                                }
-                            }
-                        };
-
-                        if !base_addr.is_null() {
-                            let dest_offset = (target as usize).wrapping_sub(base_addr as usize);
-                            if dest_offset
-                                .checked_add(layout.size())
-                                .is_none_or(|end| end > storage_size)
-                            {
-                                panic!("Heap corruption detected! InitObj writing {} bytes at offset {} into storage of size {}", layout.size(), dest_offset, storage_size);
-                            }
-                        }
-                    }
-                }
-
                 unsafe { ptr::write_bytes(target, 0, layout.size()) };
             }
             IsInstance(target) => {
@@ -1442,10 +1321,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     _ => panic!("ldelema on non-vector"),
                 };
                 let target_type = self.loader().find_concrete_type(concrete_t);
-                push!(managed_ptr(
+                push!(StackValue::managed_ptr_with_owner(
                     ptr,
                     target_type,
-                    Some(ManagedPtrOwner::Heap(h)),
+                    obj.0.map(|_| obj),
                     false
                 ));
             }
@@ -1600,26 +1479,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                         name,
                                         ordering,
                                     );
-                                    let mut val = read_data(&field_data);
-                                    // Metadata recovery
-                                    if let CTSValue::Value(
-                                        dotnet_value::object::ValueType::Pointer(ref mut mp),
-                                    ) = val
-                                    {
-                                        let field_layout = o
-                                            .instance_storage
-                                            .layout()
-                                            .get_field(field.parent, name.as_ref())
-                                            .unwrap();
-                                        if let Some(metadata) = o
-                                            .managed_ptr_metadata
-                                            .borrow()
-                                            .get(field_layout.position)
-                                        {
-                                            mp.owner = metadata.recover_owner();
-                                        }
-                                    }
-                                    val
+                                    read_data(&field_data)
                                 }
                                 HeapStorage::Str(_) => {
                                     todo!("field on string: {}::{}", field.parent.type_name(), name)
@@ -1640,25 +1500,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                 o.description.type_name()
                             )
                         }
-                        let mut val =
-                            read_data(&o.instance_storage.get_field_local(field.parent, name));
-                        // Metadata recovery
-                        if let CTSValue::Value(dotnet_value::object::ValueType::Pointer(
-                            ref mut mp,
-                        )) = val
-                        {
-                            let field_layout = o
-                                .instance_storage
-                                .layout()
-                                .get_field(field.parent, name.as_ref())
-                                .unwrap();
-                            if let Some(metadata) =
-                                o.managed_ptr_metadata.borrow().get(field_layout.position)
-                            {
-                                mp.owner = metadata.recover_owner();
-                            }
-                        }
-                        val
+                        read_data(&o.instance_storage.get_field_local(field.parent, name))
                     }
                     StackValue::NativeInt(i) => {
                         if i == 0 {
@@ -1672,64 +1514,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             Some(p) => p.as_ptr(),
                             None => return self.throw_by_name(gc, "System.NullReferenceException"),
                         };
-                        let mut val = read_from_pointer(ptr);
-                        // Metadata recovery
-                        if let CTSValue::Value(dotnet_value::object::ValueType::Pointer(
-                            ref mut mp,
-                        )) = val
-                        {
-                            if let Some(owner) = m.owner {
-                                let target_addr =
-                                    m.value.expect("System.NullReferenceException").as_ptr()
-                                        as usize;
-                                let layout = LayoutFactory::instance_field_layout_cached(
-                                    field.parent,
-                                    &ctx,
-                                    Some(&self.shared.metrics),
-                                );
-                                let field_layout =
-                                    layout.get_field(field.parent, name.as_ref()).unwrap();
-                                let final_addr = target_addr + field_layout.position;
-
-                                match owner {
-                                    ManagedPtrOwner::Heap(h) => {
-                                        let borrow = h.borrow();
-                                        if let Some(o) = borrow.storage.as_obj() {
-                                            let base = o.instance_storage.get().as_ptr() as usize;
-                                            let offset = final_addr - base;
-                                            if let Some(metadata) =
-                                                o.managed_ptr_metadata.borrow().get(offset)
-                                            {
-                                                mp.owner = metadata.recover_owner();
-                                            }
-                                        }
-                                    }
-                                    ManagedPtrOwner::Stack(s) => {
-                                        let o = unsafe { s.as_ref() };
-                                        let base = o.instance_storage.get().as_ptr() as usize;
-                                        let offset = final_addr - base;
-                                        if let Some(metadata) =
-                                            o.managed_ptr_metadata.borrow().get(offset)
-                                        {
-                                            mp.owner = metadata.recover_owner();
-                                        }
-                                    }
-                                    ManagedPtrOwner::StackSlot(s) => {
-                                        let val = s.borrow();
-                                        if let StackValue::ValueType(o) = &*val {
-                                            let base = o.instance_storage.get().as_ptr() as usize;
-                                            let offset = final_addr - base;
-                                            if let Some(metadata) =
-                                                o.managed_ptr_metadata.borrow().get(offset)
-                                            {
-                                                mp.owner = metadata.recover_owner();
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        val
+                        read_from_pointer(ptr)
                     }
                     rest => panic!("stack value {:?} has no fields", rest),
                 };
@@ -1749,13 +1534,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     .current_context()
                     .for_type_with_generics(field.parent, &lookup);
 
-                let (source_ptr, owner, pinned): (*mut u8, _, _) = match parent {
+                let (source_ptr, pinned, owner): (*mut u8, _, _) = match &parent {
                     StackValue::ObjectRef(ObjectRef(None)) => {
                         return self.throw_by_name(gc, "System.NullReferenceException")
                     }
-                    StackValue::ObjectRef(ObjectRef(Some(h))) => {
+                    StackValue::ObjectRef(o @ ObjectRef(Some(h))) => {
                         // Intercept System.Runtime.CompilerServices.RawData access
-                        // This acts as an intrinsic for Unsafe.As<T, RawData> usage
                         if field.parent.type_name() == "System.Runtime.CompilerServices.RawData" {
                             let data = h.borrow();
                             let ptr = match &data.storage {
@@ -1773,10 +1557,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             if !ptr.is_null() {
                                 let target_type = self.current_context().get_field_desc(field);
                                 drop(data);
-                                push!(StackValue::managed_ptr(
+                                push!(StackValue::managed_ptr_with_owner(
                                     ptr,
                                     target_type,
-                                    Some(ManagedPtrOwner::Heap(h)),
+                                    o.0.map(|_| *o),
                                     false
                                 ));
                                 self.increment_ip();
@@ -1784,8 +1568,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             }
                         }
 
-                        // Intercept System.Runtime.CompilerServices.RawArrayData access on arrays
-                        // This acts as an intrinsic for Unsafe.As<Array, RawArrayData> usage
+                        // Intercept System.Runtime.CompilerServices.RawArrayData access
                         if field.parent.type_name()
                             == "System.Runtime.CompilerServices.RawArrayData"
                         {
@@ -1794,7 +1577,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                 let ptr = if name == "Data" {
                                     vector.get().as_ptr() as *mut u8
                                 } else if name == "Length" {
-                                    // Pointer to length (usize), compatible with uint (u32) in Little Endian
                                     (&vector.layout.length as *const usize) as *mut u8
                                 } else {
                                     ptr::null_mut()
@@ -1803,10 +1585,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                 if !ptr.is_null() {
                                     let target_type = self.current_context().get_field_desc(field);
                                     drop(data);
-                                    push!(StackValue::managed_ptr(
+                                    push!(StackValue::managed_ptr_with_owner(
                                         ptr,
                                         target_type,
-                                        Some(ManagedPtrOwner::Heap(h)),
+                                        o.0.map(|_| *o),
                                         false
                                     ));
                                     self.increment_ip();
@@ -1815,7 +1597,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             }
                         }
 
-                        let object_type = ctx.get_heap_description(h);
+                        let object_type = ctx.get_heap_description(*h);
                         if !ctx.is_a(object_type.into(), field.parent.into()) {
                             panic!(
                                 "tried to load field {}::{} from object of type {}",
@@ -1831,9 +1613,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             HeapStorage::Obj(o) => o.instance_storage.get().as_ptr() as *mut u8,
                             HeapStorage::Str(s) => {
                                 if name == "_firstChar" {
-                                    // Intercept _firstChar access to point to the actual string buffer.
-                                    // We need to return a pointer P such that P + offset(_firstChar) == string_buffer.
-                                    // So P = string_buffer - offset(_firstChar).
                                     let layout = LayoutFactory::instance_field_layout_cached(
                                         field.parent,
                                         &ctx,
@@ -1855,21 +1634,21 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             }
                             HeapStorage::Boxed(_) => todo!("field on boxed value type"),
                         };
-                        (source_ptr, Some(ManagedPtrOwner::Heap(h)), false)
+                        (source_ptr, false, o.0.map(|_| *o))
                     }
-                    StackValue::NativeInt(i) => (i as *mut u8, None, false),
-                    StackValue::UnmanagedPtr(UnmanagedPtr(ptr)) => (ptr.as_ptr(), None, false),
+                    StackValue::NativeInt(i) => (*i as *mut u8, false, None),
+                    StackValue::UnmanagedPtr(UnmanagedPtr(ptr)) => (ptr.as_ptr(), false, None),
                     StackValue::ManagedPtr(m) => {
                         let ptr = match m.value {
                             Some(p) => p.as_ptr(),
                             None => return self.throw_by_name(gc, "System.NullReferenceException"),
                         };
-                        (ptr, m.owner, m.pinned)
+                        (ptr, m.pinned, m.owner)
                     }
                     StackValue::ValueType(ref o) => (
                         o.instance_storage.get().as_ptr() as *mut u8,
-                        Some(ManagedPtrOwner::Stack(ptr::NonNull::from(&**o))),
                         false,
+                        None // ValueType on stack is covered by conservative scanning
                     ),
                     rest => panic!("cannot load field address from stack value {:?}", rest),
                 };
@@ -1882,9 +1661,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     &ctx,
                     Some(&self.shared.metrics),
                 );
-                // SAFETY: source_ptr is a valid pointer to the start of an object or value type's storage.
-                // The offset is obtained from the field layout, which is guaranteed to be within bounds
-                // for the given type.
+                
                 let ptr = unsafe {
                     source_ptr.add(
                         layout
@@ -1899,7 +1676,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 if let StackValue::UnmanagedPtr(_) | StackValue::NativeInt(_) = parent {
                     push!(unmanaged_ptr(ptr))
                 } else {
-                    push!(managed_ptr(ptr, target_type, owner, pinned))
+                    push!(StackValue::managed_ptr_with_owner(ptr, target_type, owner, pinned))
                 }
             }
             LoadFieldSkipNullCheck(_) => todo!("no.nullcheck ldfld"),
@@ -1943,88 +1720,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     ptr::copy_nonoverlapping(source_ptr, source_vec.as_mut_ptr(), layout.size())
                 };
                 let source = &source_vec;
-                let mut value = self
+                let value = self
                     .current_context()
                     .read_cts_value(&load_type, source, gc)
                     .into_stack();
 
-                // Recover ManagedPtr metadata from source side-table if the address is a ManagedPtr
-                if let StackValue::ManagedPtr(src_mp) = &addr {
-                    if let Some(owner) = src_mp.owner {
-                        let base_addr = match owner {
-                            ManagedPtrOwner::Heap(h) => {
-                                let inner = h.borrow();
-                                match &inner.storage {
-                                    HeapStorage::Obj(o) => o.instance_storage.get().as_ptr(),
-                                    HeapStorage::Vec(v) => v.get().as_ptr(),
-                                    _ => ptr::null(),
-                                }
-                            }
-                            ManagedPtrOwner::Stack(s) => unsafe {
-                                s.as_ref().instance_storage.get().as_ptr()
-                            },
-                            ManagedPtrOwner::StackSlot(s) => {
-                                let val = s.borrow();
-                                match &*val {
-                                    StackValue::ValueType(o) => o.instance_storage.get().as_ptr(),
-                                    _ => ptr::null(),
-                                }
-                            }
-                        };
-
-                        if !base_addr.is_null() {
-                            let src_offset = (source_ptr as usize).wrapping_sub(base_addr as usize);
-                            let size = layout.size();
-
-                            // Get metadata from owner
-                            let metadata_map = match owner {
-                                ManagedPtrOwner::Heap(h) => {
-                                    let inner = h.borrow();
-                                    match &inner.storage {
-                                        HeapStorage::Obj(o) => {
-                                            Some(o.managed_ptr_metadata.borrow().metadata.clone())
-                                        }
-                                        HeapStorage::Vec(v) => {
-                                            Some(v.managed_ptr_metadata.borrow().metadata.clone())
-                                        }
-                                        _ => None,
-                                    }
-                                }
-                                ManagedPtrOwner::Stack(s) => unsafe {
-                                    Some(s.as_ref().managed_ptr_metadata.borrow().metadata.clone())
-                                },
-                                ManagedPtrOwner::StackSlot(s) => {
-                                    let val = s.borrow();
-                                    match &*val {
-                                        StackValue::ValueType(o) => {
-                                            Some(o.managed_ptr_metadata.borrow().metadata.clone())
-                                        }
-                                        _ => None,
-                                    }
-                                }
-                            };
-
-                            if let Some(map) = metadata_map {
-                                match &mut value {
-                                    StackValue::ValueType(obj) => {
-                                        for (offset, meta) in map {
-                                            if offset >= src_offset && offset < src_offset + size {
-                                                let rel_offset = offset - src_offset;
-                                                obj.register_metadata(rel_offset, meta, gc);
-                                            }
-                                        }
-                                    }
-                                    StackValue::ManagedPtr(mp) => {
-                                        if let Some(meta) = map.get(&src_offset) {
-                                            mp.owner = meta.recover_owner();
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                    }
-                }
                 push!(value);
             }
             LoadStaticField {
@@ -2080,7 +1780,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     let field_data = storage.storage.get_field_local(field.parent, name);
                     // Static fields are rooted by the assembly's static storage.
                     // ManagedPtr metadata for static fields would need its own side-table if supported.
-                    StackValue::managed_ptr(field_data.as_ptr() as *mut _, field_type, None, true)
+                    StackValue::managed_ptr(field_data.as_ptr() as *mut _, field_type, true)
                 });
 
                 push!(value)
@@ -2522,11 +2222,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                         )
                                     });
 
-                                // Register managed pointer metadata in side-table if needed
-                                if let StackValue::ManagedPtr(m) = &value {
-                                    o.register_managed_ptr(field_layout.position, m, gc);
-                                }
-
                                 let mut val_bytes = vec![0u8; field_layout.layout.size()];
                                 write_data(&mut val_bytes);
                                 o.instance_storage.set_field_atomic(
@@ -2555,45 +2250,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             None => return self.throw_by_name(gc, "System.NullReferenceException"),
                         };
 
-                        if let StackValue::ManagedPtr(value_ptr) = &value {
-                            if let Some(owner) = target_ptr.owner {
-                                let layout = LayoutFactory::instance_field_layout_cached(
-                                    field.parent,
-                                    &ctx,
-                                    Some(&self.shared.metrics),
-                                );
-                                let field_layout =
-                                    layout.get_field(field.parent, name.as_ref()).unwrap();
-
-                                let target_addr = ptr as usize;
-                                let final_addr = target_addr + field_layout.position;
-
-                                match owner {
-                                    ManagedPtrOwner::Heap(h) => {
-                                        let borrow = h.borrow();
-                                        if let Some(o) = borrow.storage.as_obj() {
-                                            let base = o.instance_storage.get().as_ptr() as usize;
-                                            let offset = final_addr - base;
-                                            o.register_managed_ptr(offset, value_ptr, gc);
-                                        }
-                                    }
-                                    ManagedPtrOwner::Stack(s) => {
-                                        let o = unsafe { s.as_ref() };
-                                        let base = o.instance_storage.get().as_ptr() as usize;
-                                        let offset = final_addr - base;
-                                        o.register_managed_ptr(offset, value_ptr, gc);
-                                    }
-                                    ManagedPtrOwner::StackSlot(s) => {
-                                        let val = s.borrow();
-                                        if let StackValue::ValueType(o) = &*val {
-                                            let base = o.instance_storage.get().as_ptr() as usize;
-                                            let offset = final_addr - base;
-                                            o.register_managed_ptr(offset, value_ptr, gc);
-                                        }
-                                    }
-                                }
-                            }
-                        }
 
                         write_to_pointer_atomic(ptr)
                     }
@@ -2607,17 +2263,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             StoreObject { param0: t, .. } => {
                 let value = pop!();
                 let addr = pop!();
-
-                // FIX: Handle writing to StackSlot (locals) directly to avoid corruption and trigger barrier
-                if let StackValue::ManagedPtr(mp) = &addr {
-                    if let Some(ManagedPtrOwner::StackSlot(h)) = mp.owner {
-                        let ctx = self.current_context();
-                        let concrete_t = ctx.make_concrete(t);
-                        let final_val = ctx.new_cts_value(&concrete_t, value);
-                        *h.borrow_mut(gc) = final_val.into_stack();
-                        return StepResult::InstructionStepped;
-                    }
-                }
 
                 let ctx = self.current_context();
                 let concrete_t = ctx.make_concrete(t);
@@ -2641,94 +2286,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let mut bytes = vec![0u8; layout.size()];
                 ctx.new_cts_value(&concrete_t, value.clone())
                     .write(&mut bytes);
-
-                // FIX: Propagate ManagedPtr metadata to destination side-table
-                if let StackValue::ManagedPtr(dest_mp) = &addr {
-                    if let Some(owner) = dest_mp.owner {
-                        let (base_addr, storage_size) = match owner {
-                            ManagedPtrOwner::Heap(h) => {
-                                let inner = h.borrow();
-                                match &inner.storage {
-                                    HeapStorage::Obj(o) => (
-                                        o.instance_storage.get().as_ptr(),
-                                        o.instance_storage.get().len(),
-                                    ),
-                                    HeapStorage::Vec(v) => (v.get().as_ptr(), v.get().len()),
-                                    _ => (ptr::null(), 0),
-                                }
-                            }
-                            ManagedPtrOwner::Stack(s) => unsafe {
-                                (
-                                    s.as_ref().instance_storage.get().as_ptr(),
-                                    s.as_ref().instance_storage.get().len(),
-                                )
-                            },
-                            ManagedPtrOwner::StackSlot(s) => {
-                                let val = s.borrow();
-                                match &*val {
-                                    StackValue::ValueType(o) => {
-                                        let guard = o.instance_storage.get();
-                                        (guard.as_ptr(), guard.len())
-                                    }
-                                    _ => (ptr::null(), 0),
-                                }
-                            }
-                        };
-
-                        if !base_addr.is_null() {
-                            let dest_offset = (dest_ptr as usize).wrapping_sub(base_addr as usize);
-                            if dest_offset
-                                .checked_add(bytes.len())
-                                .is_none_or(|end| end > storage_size)
-                            {
-                                panic!("Heap corruption detected! StoreObject writing {} bytes at offset {} into storage of size {}", bytes.len(), dest_offset, storage_size);
-                            }
-
-                            let src_metadata: Vec<(usize, ManagedPtrMetadata)> = match &value {
-                                StackValue::ValueType(obj) => obj
-                                    .managed_ptr_metadata
-                                    .borrow()
-                                    .metadata
-                                    .iter()
-                                    .map(|(k, v)| (*k, v.clone()))
-                                    .collect(),
-                                StackValue::ManagedPtr(mp) => {
-                                    vec![(0, ManagedPtrMetadata::from_managed_ptr(mp))]
-                                }
-                                _ => vec![],
-                            };
-
-                            match owner {
-                                ManagedPtrOwner::Heap(h) => {
-                                    let mut inner = h.borrow_mut(gc);
-                                    if let Some(o) = inner.storage.as_obj_mut() {
-                                        for (offset, metadata) in src_metadata {
-                                            o.register_metadata(dest_offset + offset, metadata, gc);
-                                        }
-                                    } else if let HeapStorage::Vec(v) = &mut inner.storage {
-                                        for (offset, metadata) in src_metadata {
-                                            v.register_metadata(dest_offset + offset, metadata, gc);
-                                        }
-                                    }
-                                }
-                                ManagedPtrOwner::Stack(mut s) => {
-                                    let o = unsafe { s.as_mut() };
-                                    for (offset, metadata) in src_metadata {
-                                        o.register_metadata(dest_offset + offset, metadata, gc);
-                                    }
-                                }
-                                ManagedPtrOwner::StackSlot(s) => {
-                                    let mut val = s.borrow_mut(gc);
-                                    if let StackValue::ValueType(o) = &mut *val {
-                                        for (offset, metadata) in src_metadata {
-                                            o.register_metadata(dest_offset + offset, metadata, gc);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
 
                 unsafe {
                     ptr::copy_nonoverlapping(bytes.as_ptr(), dest_ptr, bytes.len());

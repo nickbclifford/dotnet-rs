@@ -18,7 +18,7 @@ use dotnet_value::{
 use gc_arena::{Collect, Collection};
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
 };
 
 use super::{
@@ -246,7 +246,7 @@ impl<'gc> ArenaLocalState<'gc> {
     pub fn new() -> Self {
         Self {
             heap: HeapManager {
-                _all_objs: RefCell::new(HashSet::new()),
+                _all_objs: RefCell::new(BTreeMap::new()),
                 finalization_queue: RefCell::new(vec![]),
                 pending_finalization: RefCell::new(vec![]),
                 pinned_objects: RefCell::new(HashSet::new()),

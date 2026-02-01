@@ -5,7 +5,7 @@ use dotnet_types::{
     TypeDescription,
 };
 use dotnet_value::layout::{
-    align_up, ArrayLayoutManager, FieldKey, FieldLayout, FieldLayoutManager, HasLayout,
+    align_up, ArrayLayoutManager, FieldKey, FieldLayout, FieldLayoutManager, GcDesc, HasLayout,
     LayoutManager, Scalar,
 };
 use dotnetdll::prelude::*;
@@ -13,6 +13,47 @@ use dotnetdll::prelude::*;
 pub struct LayoutFactory;
 
 impl LayoutFactory {
+    fn populate_gc_desc(layout: &LayoutManager, base_offset: usize, desc: &mut GcDesc) {
+        let ptr_size = std::mem::size_of::<usize>();
+        match layout {
+            LayoutManager::Scalar(Scalar::ObjectRef) => {
+                desc.set(base_offset / ptr_size);
+            }
+            LayoutManager::Scalar(Scalar::ManagedPtr) => {
+                // ManagedPtr is (Ptr, Owner). The second word is the ObjectRef.
+                // This ensures Ldind (reading 1 word) reads the Pointer, compatible with Stack.
+                desc.set((base_offset / ptr_size) + 1);
+            }
+            LayoutManager::FieldLayoutManager(m) => {
+                let offset_words = base_offset / ptr_size;
+                let bits_per_word = ptr_size * 8;
+                for (block_idx, &block) in m.gc_desc.bitmap.iter().enumerate() {
+                    let mut bits = block;
+                    while bits != 0 {
+                        let trailing = bits.trailing_zeros();
+                        bits &= !(1 << trailing); // Clear lowest bit
+                        let word_idx = block_idx * bits_per_word + trailing as usize;
+                        desc.set(offset_words + word_idx);
+                    }
+                }
+            }
+            LayoutManager::ArrayLayoutManager(arr) => {
+                let elem_size = arr.element_layout.size();
+                // Optimization: if element has no refs, skip
+                if arr.element_layout.is_or_contains_refs() {
+                    for i in 0..arr.length {
+                        Self::populate_gc_desc(
+                            &arr.element_layout,
+                            base_offset + i * elem_size,
+                            desc,
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub(crate) fn create_field_layout<'a>(
         fields: impl IntoIterator<Item = (TypeDescription, &'a str, Option<usize>, Arc<LayoutManager>)>,
         layout: Layout,
@@ -20,6 +61,7 @@ impl LayoutFactory {
         base_alignment: usize,
     ) -> FieldLayoutManager {
         let mut mapping = std::collections::HashMap::new();
+        let mut gc_desc = GcDesc::default();
         let total_size;
         let mut max_alignment = base_alignment.max(1);
 
@@ -41,6 +83,9 @@ impl LayoutFactory {
                     max_alignment = max_alignment.max(field_align);
 
                     let aligned_offset = align_up(offset, field_align);
+                    
+                    Self::populate_gc_desc(&layout, aligned_offset, &mut gc_desc);
+
                     mapping.insert(
                         FieldKey {
                             owner,
@@ -73,6 +118,9 @@ impl LayoutFactory {
                     max_alignment = max_alignment.max(field_align);
 
                     let aligned_offset = align_up(offset, field_align);
+                    
+                    Self::populate_gc_desc(&layout, aligned_offset, &mut gc_desc);
+
                     mapping.insert(
                         FieldKey {
                             owner,
@@ -92,6 +140,9 @@ impl LayoutFactory {
                 // For explicit layout, offsets are relative to the current type's fields
                 // We need to add base_size to these offsets
                 let mut offset = base_size;
+                // Keep track of fields to check for overlaps: (start, end, layout)
+                let mut placed_fields: Vec<(usize, usize, Arc<LayoutManager>)> = Vec::new();
+
                 for (owner, name, o, layout) in fields {
                     max_alignment = max_alignment.max(layout.alignment());
                     match o {
@@ -101,6 +152,23 @@ impl LayoutFactory {
                         Some(o) => {
                             // Add base size to the explicit offset
                             let actual_offset = base_size + o;
+                            let size = layout.size();
+                            let actual_end = actual_offset + size;
+
+                            // Validation: Check for overlaps with existing fields if refs are involved
+                            for (prev_start, prev_end, prev_layout) in &placed_fields {
+                                let overlap = actual_offset < *prev_end && *prev_start < actual_end;
+                                if overlap
+                                    && (layout.is_or_contains_refs()
+                                        || prev_layout.is_or_contains_refs())
+                                {
+                                    panic!("explicit field layout overlaps reference type fields");
+                                }
+                            }
+                            placed_fields.push((actual_offset, actual_end, layout.clone()));
+
+                            Self::populate_gc_desc(&layout, actual_offset, &mut gc_desc);
+
                             mapping.insert(
                                 FieldKey {
                                     owner,
@@ -111,7 +179,7 @@ impl LayoutFactory {
                                     layout: layout.clone(),
                                 },
                             );
-                            offset = offset.max(actual_offset + layout.size());
+                            offset = offset.max(actual_end);
                         }
                     };
                 }
@@ -130,6 +198,7 @@ impl LayoutFactory {
             fields: mapping,
             total_size,
             alignment: max_alignment,
+            gc_desc,
         }
     }
 
@@ -208,9 +277,10 @@ impl LayoutFactory {
         // Add all base class fields to the result
         if let Some(base_layout) = base_layout {
             // Merge base fields into result
-            for (key, field_layout) in base_layout.fields {
+            for (key, field_layout) in base_layout.fields.clone() {
                 result.fields.insert(key, field_layout);
             }
+            result.gc_desc.merge(&base_layout.gc_desc);
         }
 
         result

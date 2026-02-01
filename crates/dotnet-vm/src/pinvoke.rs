@@ -11,7 +11,7 @@ use dotnet_types::{
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     layout::{FieldLayoutManager, LayoutManager, Scalar},
-    object::{HeapStorage, ObjectRef, ValueType},
+    object::{HeapStorage, ObjectRef},
     string::CLRString,
     StackValue,
 };
@@ -353,98 +353,22 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 StackValue::ManagedPtr(p) => {
                     let mut handled = false;
                     if let Some(val_ptr) = p.value {
-                        if let Some(owner) = p.owner {
-                            match owner {
-                                dotnet_value::pointer::ManagedPtrOwner::Heap(h) => {
-                                    let obj_lock = h.borrow();
-                                    match &obj_lock.storage {
-                                        HeapStorage::Obj(o)
-                                        | HeapStorage::Boxed(ValueType::Struct(o)) => {
-                                            let guard = o.instance_storage.get();
-                                            let base_ptr = guard.as_ptr();
-                                            let total_len = guard.len();
-                                            let current_ptr = val_ptr.as_ptr();
-                                            // SAFETY: We trust the owner to be correct
-                                            let offset =
-                                                unsafe { current_ptr.offset_from(base_ptr) };
-
-                                            if offset >= 0 && (offset as usize) < total_len {
-                                                let rem_len = total_len - (offset as usize);
-                                                let buf_len = std::cmp::max(rem_len, ffi_size);
-                                                let mut buf = vec![0u8; buf_len];
-                                                unsafe {
-                                                    std::ptr::copy_nonoverlapping(
-                                                        current_ptr,
-                                                        buf.as_mut_ptr(),
-                                                        rem_len,
-                                                    );
-                                                }
-                                                temp_buffers.push(buf);
-                                                let buf_idx = temp_buffers.len() - 1;
-                                                arg_buffer_map[i] = Some(buf_idx);
-                                                write_backs.push((val_ptr, buf_idx, rem_len));
-                                                handled = true;
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                                dotnet_value::pointer::ManagedPtrOwner::Stack(s) => {
-                                    let o = unsafe { s.as_ref() };
-                                    let guard = o.instance_storage.get();
-                                    let base_ptr = guard.as_ptr();
-                                    let total_len = guard.len();
-                                    let current_ptr = val_ptr.as_ptr();
-                                    let offset = unsafe { current_ptr.offset_from(base_ptr) };
-
-                                    if offset >= 0 && (offset as usize) < total_len {
-                                        let rem_len = total_len - (offset as usize);
-                                        let buf_len = std::cmp::max(rem_len, ffi_size);
-                                        let mut buf = vec![0u8; buf_len];
-                                        unsafe {
-                                            std::ptr::copy_nonoverlapping(
-                                                current_ptr,
-                                                buf.as_mut_ptr(),
-                                                rem_len,
-                                            );
-                                        }
-                                        temp_buffers.push(buf);
-                                        let buf_idx = temp_buffers.len() - 1;
-                                        arg_buffer_map[i] = Some(buf_idx);
-                                        write_backs.push((val_ptr, buf_idx, rem_len));
-                                        handled = true;
-                                    }
-                                }
-                                dotnet_value::pointer::ManagedPtrOwner::StackSlot(s) => {
-                                    let val = s.borrow();
-                                    if let StackValue::ValueType(o) = &*val {
-                                        let guard = o.instance_storage.get();
-                                        let base_ptr = guard.as_ptr();
-                                        let total_len = guard.len();
-                                        let current_ptr = val_ptr.as_ptr();
-                                        let offset = unsafe { current_ptr.offset_from(base_ptr) };
-
-                                        if offset >= 0 && (offset as usize) < total_len {
-                                            let rem_len = total_len - (offset as usize);
-                                            let buf_len = std::cmp::max(rem_len, ffi_size);
-                                            let mut buf = vec![0u8; buf_len];
-                                            unsafe {
-                                                std::ptr::copy_nonoverlapping(
-                                                    current_ptr,
-                                                    buf.as_mut_ptr(),
-                                                    rem_len,
-                                                );
-                                            }
-                                            temp_buffers.push(buf);
-                                            let buf_idx = temp_buffers.len() - 1;
-                                            arg_buffer_map[i] = Some(buf_idx);
-                                            write_backs.push((val_ptr, buf_idx, rem_len));
-                                            handled = true;
-                                        }
-                                    }
-                                }
-                            }
+                        // Trust the pointer and size (marshaling without owner tracking)
+                        let current_ptr = val_ptr.as_ptr();
+                        let buf_len = ffi_size;
+                        let mut buf = vec![0u8; buf_len];
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(
+                                current_ptr,
+                                buf.as_mut_ptr(),
+                                buf_len,
+                            );
                         }
+                        temp_buffers.push(buf);
+                        let buf_idx = temp_buffers.len() - 1;
+                        arg_buffer_map[i] = Some(buf_idx);
+                        write_backs.push((val_ptr, buf_idx, buf_len));
+                        handled = true;
                     }
 
                     if !handled {

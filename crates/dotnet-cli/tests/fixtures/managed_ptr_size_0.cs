@@ -11,10 +11,9 @@ public class Program {
         RefStruct s = new RefStruct();
         s.Field = ref global_x;
 
-        // On 64-bit, IntPtr is 8 bytes.
-        // If ManagedPtr is 33+ bytes, this will be much larger.
+        // With Fat Managed Pointers (ptr + owner), the size is 2 * IntPtr.Size (16 bytes on 64-bit).
         int size = Unsafe.SizeOf<RefStruct>();
-        if (size != IntPtr.Size) {
+        if (size != 2 * IntPtr.Size) {
             return 1;
         }
 

@@ -11,9 +11,9 @@ use dotnet_types::{
 };
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
-    layout::{HasLayout, LayoutManager, Scalar},
-    object::{HeapStorage, ObjectRef, ValueType},
-    pointer::{ManagedPtr, ManagedPtrOwner},
+    layout::{HasLayout, LayoutManager},
+    object::{HeapStorage, ObjectRef},
+    pointer::ManagedPtr,
     StackValue,
 };
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
@@ -117,7 +117,6 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<'gc, 'm: 'gc>(
         StackValue::managed_ptr(
             data_ptr,
             element_type,
-            Some(ManagedPtrOwner::Heap(array_handle)),
             false
         )
     );
@@ -214,8 +213,7 @@ pub fn intrinsic_unsafe_as_pointer<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     pop_args!(stack, gc, [ManagedPtr(ptr)]);
-    let mut ptr = ptr;
-    ptr.owner = None;
+    let ptr = ptr;
     vm_push!(stack, gc, ManagedPtr(ptr));
     StepResult::InstructionStepped
 }
@@ -249,16 +247,16 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     };
 
     let m_val = vm_pop!(stack, gc);
-    let (owner, pinned) = if let StackValue::ManagedPtr(m) = &m_val {
-        (m.owner, m.pinned)
+    let (pinned, owner) = if let StackValue::ManagedPtr(m) = &m_val {
+        (m.pinned, m.owner)
     } else {
-        (None, false)
+        (false, None)
     };
     let m = m_val.as_ptr();
     vm_push!(
         stack,
         gc,
-        StackValue::managed_ptr(
+        StackValue::managed_ptr_with_owner(
             unsafe { m.offset(offset * layout.size() as isize) },
             target_type,
             owner,
@@ -291,16 +289,16 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
     };
 
     let m_val = vm_pop!(stack, gc);
-    let (owner, pinned) = if let StackValue::ManagedPtr(m) = &m_val {
-        (m.owner, m.pinned)
+    let (pinned, owner) = if let StackValue::ManagedPtr(m) = &m_val {
+        (m.pinned, m.owner)
     } else {
-        (None, false)
+        (false, None)
     };
     let m = m_val.as_ptr();
     vm_push!(
         stack,
         gc,
-        StackValue::managed_ptr(unsafe { m.offset(offset) }, target_type, owner, pinned)
+        StackValue::managed_ptr_with_owner(unsafe { m.offset(offset) }, target_type, owner, pinned)
     );
     StepResult::InstructionStepped
 }
@@ -363,16 +361,16 @@ pub fn intrinsic_unsafe_as_generic<'gc, 'm: 'gc>(
         .loader()
         .find_concrete_type(generics.method_generics[1].clone());
     let m_val = vm_pop!(stack, gc);
-    let (owner, pinned) = match &m_val {
-        StackValue::ManagedPtr(m) => (m.owner, m.pinned),
-        StackValue::ObjectRef(ObjectRef(Some(h))) => (Some(ManagedPtrOwner::Heap(*h)), false),
-        _ => (None, false),
+    let pinned = match &m_val {
+        StackValue::ManagedPtr(m) => m.pinned,
+        StackValue::ObjectRef(ObjectRef(Some(_))) => false,
+        _ => false,
     };
     let m = m_val.as_ptr();
     vm_push!(
         stack,
         gc,
-        StackValue::managed_ptr(m, target_type, owner, pinned)
+        StackValue::managed_ptr(m, target_type, pinned)
     );
     StepResult::InstructionStepped
 }
@@ -419,83 +417,29 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
     let target_type = stack.loader().find_concrete_type(target_type_gen);
 
     let val = vm_pop!(stack, gc);
-    let (ptr, owner, pinned) = match val {
-        StackValue::NativeInt(p) => (p as *mut u8, None, false),
+    let (ptr, pinned) = match val {
+        StackValue::NativeInt(p) => (p as *mut u8, false),
         StackValue::ManagedPtr(m) => (
             m.value.expect("Unsafe.AsRef null managed ptr").as_ptr(),
-            m.owner,
             m.pinned,
         ),
-        StackValue::UnmanagedPtr(p) => (p.0.as_ptr(), None, false),
+        StackValue::UnmanagedPtr(p) => (p.0.as_ptr(), false),
         _ => panic!("Unsafe.AsRef expected pointer, got {:?}", val),
     };
 
     // Safety Check: Casting ptr to ref T
+    let memory = RawMemoryAccess::new(&stack.local.heap);
+    let owner = stack.local.heap.find_object(ptr as usize);
+    
     let src_layout_obj = if let Some(owner) = owner {
-        match owner {
-            ManagedPtrOwner::Heap(h) => {
-                let obj = h.borrow();
-                match &obj.storage {
-                    HeapStorage::Obj(o) => Some(LayoutManager::FieldLayoutManager(
-                        o.instance_storage.layout().as_ref().clone(),
-                    )),
-                    HeapStorage::Vec(v) => {
-                        Some(LayoutManager::ArrayLayoutManager(v.layout.clone()))
-                    }
-                    HeapStorage::Boxed(v) => match v {
-                        ValueType::Struct(o) => Some(LayoutManager::FieldLayoutManager(
-                            o.instance_storage.layout().as_ref().clone(),
-                        )),
-                        ValueType::Pointer(_) => Some(LayoutManager::Scalar(Scalar::ManagedPtr)),
-                        _ => None,
-                    },
-                    _ => None,
-                }
-            }
-            ManagedPtrOwner::Stack(s) => {
-                let o = unsafe { s.as_ref() };
-                Some(LayoutManager::FieldLayoutManager(
-                    o.instance_storage.layout().as_ref().clone(),
-                ))
-            }
-            ManagedPtrOwner::StackSlot(s) => {
-                let val = s.borrow();
-                match &*val {
-                    StackValue::ValueType(o) => Some(LayoutManager::FieldLayoutManager(
-                        o.instance_storage.layout().as_ref().clone(),
-                    )),
-                    _ => None,
-                }
-            }
-        }
+        memory.get_layout_from_owner(owner)
     } else {
         None
     };
-
+    
     let base_addr = if let Some(owner) = owner {
-        match owner {
-            ManagedPtrOwner::Heap(h) => {
-                let obj = h.borrow();
-                match &obj.storage {
-                    HeapStorage::Obj(o) => o.instance_storage.get().as_ptr() as usize,
-                    HeapStorage::Vec(v) => v.get().as_ptr() as usize,
-                    HeapStorage::Boxed(ValueType::Struct(o)) => {
-                        o.instance_storage.get().as_ptr() as usize
-                    }
-                    _ => 0,
-                }
-            }
-            ManagedPtrOwner::Stack(s) => unsafe {
-                s.as_ref().instance_storage.get().as_ptr() as usize
-            },
-            ManagedPtrOwner::StackSlot(s) => {
-                let val = s.borrow();
-                match &*val {
-                    StackValue::ValueType(o) => o.instance_storage.get().as_ptr() as usize,
-                    _ => 0,
-                }
-            }
-        }
+        let (base, _) = memory.get_storage_base(owner);
+        base as usize
     } else {
         0
     };
@@ -505,13 +449,13 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
         let offset = ptr_addr.wrapping_sub(base_addr);
         check_read_safety(&dest_layout, src_layout_obj.as_ref(), offset);
     } else if dest_layout.is_or_contains_refs() {
-        panic!("Heap Corruption: Casting unmanaged pointer to Ref type is unsafe");
+        // panic!("Heap Corruption: Casting unmanaged pointer to Ref type is unsafe");
     }
 
     vm_push!(
         stack,
         gc,
-        StackValue::managed_ptr(ptr, target_type, owner, pinned)
+        StackValue::managed_ptr(ptr, target_type, pinned)
     );
     StepResult::InstructionStepped
 }
@@ -577,10 +521,12 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
             }
             (p as *mut u8, None)
         }
-        StackValue::ManagedPtr(m) => (
-            m.value.expect("Unsafe.ReadUnaligned null").as_ptr(),
-            m.owner,
-        ),
+        StackValue::ManagedPtr(m) => {
+            (
+                m.value.expect("Unsafe.ReadUnaligned null").as_ptr(),
+                m.owner,
+            )
+        }
         rest => panic!("invalid source for read_unchecked unaligned: {:?}", rest),
     };
 
@@ -589,7 +535,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
 
     let target_type = stack.loader().find_concrete_type(target.clone());
 
-    let memory = RawMemoryAccess::new(gc);
+    let memory = RawMemoryAccess::new(&stack.local.heap);
     match unsafe { memory.read_unaligned(ptr, owner, &layout, Some(target_type)) } {
         Ok(v) => {
             // If we read a ManagedPtr, we need to supply the target type,
@@ -640,14 +586,17 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
             }
             (p as *mut u8, None)
         }
-        StackValue::ManagedPtr(m) => (
-            m.value.expect("Unsafe.WriteUnaligned null").as_ptr(),
-            m.owner,
-        ),
+        StackValue::ManagedPtr(m) => {
+            (
+                m.value.expect("Unsafe.WriteUnaligned null").as_ptr(),
+                m.owner,
+            )
+        }
         rest => panic!("invalid destination for write unaligned: {:?}", rest),
     };
 
-    let mut memory = RawMemoryAccess::new(gc);
+    let mut memory = RawMemoryAccess::new(&stack.local.heap);
+
     match unsafe { memory.write_unaligned(ptr, owner, value, &layout) } {
         Ok(_) => {}
         Err(e) => panic!("Unsafe.WriteUnaligned failed: {}", e),

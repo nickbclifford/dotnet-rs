@@ -7,7 +7,6 @@ use dotnet_types::{
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     object::{HeapStorage, Object, ObjectRef},
-    pointer::ManagedPtrOwner,
     string::CLRString,
     with_string, with_string_mut, StackValue,
 };
@@ -264,15 +263,9 @@ pub fn intrinsic_string_get_raw_data<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let val = vm_pop!(stack, gc);
-    let obj_h = if let StackValue::ObjectRef(ObjectRef(Some(h))) = &val {
-        Some(*h)
-    } else {
-        None
-    };
     let ptr = with_string!(stack, gc, val, |s| s.as_ptr() as *mut u8);
-    let owner = obj_h.map(ManagedPtrOwner::Heap);
     let value =
-        StackValue::managed_ptr(ptr, stack.loader().corlib_type("System.Char"), owner, false);
+        StackValue::managed_ptr(ptr, stack.loader().corlib_type("System.Char"), false);
     vm_push!(stack, gc, value);
     StepResult::InstructionStepped
 }

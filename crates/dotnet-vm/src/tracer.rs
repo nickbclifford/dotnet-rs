@@ -626,7 +626,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             return;
         }
 
-        let objects: Vec<_> = self.local.heap._all_objs.borrow().iter().copied().collect(); // access via local.heap
+        let objects: Vec<_> = self.local.heap._all_objs.borrow().values().copied().collect(); // access via local.heap
         let mut tracer = self.tracer();
         tracer.dump_heap_snapshot_start(objects.len());
 
@@ -634,7 +634,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             let Some(ptr) = obj.0 else {
                 continue;
             };
-            let raw_ptr = Gc::as_ptr(ptr) as *const _ as usize;
+            let raw_ptr = Gc::<_>::as_ptr(ptr) as *const _ as usize;
             let borrowed = ptr.borrow();
             match &borrowed.storage {
                 HeapStorage::Obj(o) => {

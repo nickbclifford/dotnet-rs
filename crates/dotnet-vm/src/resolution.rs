@@ -251,8 +251,22 @@ impl<'a, 'm> ValueResolution for ResolutionContext<'a, 'm> {
             BaseType::IntPtr => {
                 CTSValue::Value(NativeInt(isize::from_ne_bytes(data.try_into().unwrap())))
             }
-            BaseType::UIntPtr | BaseType::FunctionPointer(_) | BaseType::ValuePointer(_, _) => {
+            BaseType::UIntPtr | BaseType::FunctionPointer(_) => {
                 CTSValue::Value(NativeUInt(usize::from_ne_bytes(data.try_into().unwrap())))
+            }
+            BaseType::ValuePointer(_modifiers, inner) => {
+                let (ptr, owner) = unsafe { ManagedPtr::read_from_bytes(data) };
+                let inner_type = if let Some(source) = inner {
+                    self.loader.find_concrete_type(source.clone())
+                } else {
+                    self.loader.corlib_type("System.Void")
+                };
+                CTSValue::Value(Pointer(ManagedPtr::new(
+                    ptr,
+                    inner_type,
+                    owner,
+                    false,
+                )))
             }
             BaseType::Object
             | BaseType::String

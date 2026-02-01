@@ -1,6 +1,6 @@
 use crate::{
     context::ResolutionContext,
-    layout::{type_layout, LayoutFactory},
+    layout::type_layout,
     pop_args,
     resolution::ValueResolution,
     vm_push, CallStack, StepResult,
@@ -13,7 +13,7 @@ use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     layout::HasLayout,
     object::{HeapStorage, Object, ObjectRef},
-    pointer::{ManagedPtr, ManagedPtrOwner},
+    pointer::ManagedPtr,
     StackValue,
 };
 use dotnetdll::prelude::ParameterType;
@@ -219,24 +219,14 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
         let managed = ManagedPtr::new(
             Some(NonNull::new(ptr).expect("Object pointer should not be null")),
             element_type_desc,
-            Some(ManagedPtrOwner::Heap(h)),
+            Some(ObjectRef(Some(h))),
             false,
         );
-        // Write only the pointer value (8 bytes) to memory.
-        managed.write_ptr_only(
+        managed.write(
             &mut span
                 .instance_storage
                 .get_field_mut_local(span_type, "_reference"),
         );
-        // Register metadata in Span's side-table
-        let span_layout = LayoutFactory::instance_field_layout_cached(
-            span_type,
-            &ctx,
-            Some(&stack.shared.metrics),
-        );
-
-        let reference_field = span_layout.get_field_by_name("_reference").unwrap();
-        span.register_managed_ptr(reference_field.position, &managed, gc);
     }
 
     span.instance_storage
@@ -308,8 +298,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
             None,
             false,
         );
-        // Write only the pointer value (8 bytes) to memory.
-        managed.write_ptr_only(
+        managed.write(
             &mut span_instance
                 .instance_storage
                 .get_field_mut_local(span_type, "_reference"),
@@ -320,15 +309,6 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
             .instance_storage
             .get_field_mut_local(span_type, "_length")
             .copy_from_slice(&element_count.to_ne_bytes());
-
-        // Register metadata in Span's side-table
-        let span_layout = LayoutFactory::instance_field_layout_cached(
-            span_type,
-            &ctx,
-            Some(&stack.shared.metrics),
-        );
-        let reference_field = span_layout.get_field_by_name("_reference").unwrap();
-        span_instance.register_managed_ptr(reference_field.position, &managed, gc);
 
         vm_push!(stack, gc, ValueType(Box::new(span_instance)));
         StepResult::InstructionStepped
@@ -444,7 +424,7 @@ pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc>(
             let managed = ManagedPtr::new(
                 NonNull::new(ptr as *mut u8),
                 element_type_desc,
-                Some(ManagedPtrOwner::Heap(handle)),
+                Some(array_ref),
                 false,
             );
             vm_push!(stack, gc, ManagedPtr(managed));
