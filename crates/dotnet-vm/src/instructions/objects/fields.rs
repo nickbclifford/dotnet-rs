@@ -131,7 +131,8 @@ pub fn ldfld<'gc, 'm: 'gc>(
     let size = field_layout.layout.size();
     let field_ptr = unsafe { ptr.add(field_layout.position) };
 
-    let value = if size <= std::mem::size_of::<usize>() && is_ptr_aligned_to_field(field_ptr, size) {
+    let value = if size <= std::mem::size_of::<usize>() && is_ptr_aligned_to_field(field_ptr, size)
+    {
         match size {
             1 => {
                 let val = unsafe { (*(field_ptr as *const crate::sync::AtomicU8)).load(ordering) };

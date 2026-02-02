@@ -1,13 +1,7 @@
-use dotnet_types::{
-    generics::GenericLookup,
-    resolution::ResolutionS,
-};
-use dotnet_value::{
-    object::ObjectRef,
-    StackValue,
-};
-use gc_arena::Collect;
 use crate::{exceptions::ExceptionState, MethodInfo, MethodState};
+use dotnet_types::{generics::GenericLookup, resolution::ResolutionS};
+use dotnet_value::{object::ObjectRef, StackValue};
+use gc_arena::Collect;
 
 #[derive(Collect)]
 #[collect(no_drop)]

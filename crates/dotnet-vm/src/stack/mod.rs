@@ -1,3 +1,16 @@
+use crate::{
+    context::ResolutionContext,
+    exceptions::ExceptionState,
+    layout::type_layout_with_metrics,
+    memory::heap::HeapManager,
+    pinvoke::NativeLibraries,
+    resolution::{TypeResolutionExt, ValueResolution},
+    state::{ArenaLocalState, SharedGlobalState},
+    statics::StaticStorageManager,
+    sync::{Arc, MutexGuard, Ordering},
+    tracer::{TraceLevel, Tracer},
+    MethodInfo, MethodState, StepResult,
+};
 use dotnet_assemblies::{decompose_type_source, AssemblyLoader};
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
@@ -23,21 +36,8 @@ use std::{
     ptr::NonNull,
 };
 
-use crate::{
-    context::ResolutionContext,
-    exceptions::ExceptionState,
-    layout::type_layout_with_metrics,
-    memory::heap::HeapManager,
-    pinvoke::NativeLibraries,
-    resolution::{TypeResolutionExt, ValueResolution},
-    state::{ArenaLocalState, SharedGlobalState},
-    statics::StaticStorageManager,
-    sync::{Arc, MutexGuard, Ordering},
-    tracer::{TraceLevel, Tracer},
-    MethodInfo, MethodState, StepResult,
-};
-
 pub mod context;
+
 pub use context::*;
 
 pub struct CallStack<'gc, 'm> {
@@ -467,10 +467,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let return_value = if let ReturnType(_, Some(_)) = &signature.return_type {
             // The return value is at the top of the evaluation stack, not at the base
             let return_slot_index = frame.base.stack + frame.stack_height - 1;
-            self.execution
-                .stack
-                .get(return_slot_index)
-                .cloned()
+            self.execution.stack.get(return_slot_index).cloned()
         } else {
             None
         };
@@ -750,11 +747,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.set_slot(gc, idx, value);
     }
 
-    pub(crate) fn get_local_index_at(
-        &self,
-        frame: &StackFrame<'gc, 'm>,
-        index: usize,
-    ) -> usize {
+    pub(crate) fn get_local_index_at(&self, frame: &StackFrame<'gc, 'm>, index: usize) -> usize {
         frame.base.locals + index
     }
 
@@ -940,9 +933,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let top = self.top_of_stack();
         let start = top - count;
 
-        (0..count)
-            .map(|i| self.get_slot(start + i))
-            .collect()
+        (0..count).map(|i| self.get_slot(start + i)).collect()
     }
 
     pub fn peek_stack(&self) -> StackValue<'gc> {

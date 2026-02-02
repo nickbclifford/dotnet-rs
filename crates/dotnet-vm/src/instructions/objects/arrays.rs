@@ -1,8 +1,4 @@
-use crate::{
-    instructions::type_layout,
-    resolution::ValueResolution,
-    CallStack, StepResult,
-};
+use crate::{instructions::type_layout, resolution::ValueResolution, CallStack, StepResult};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{

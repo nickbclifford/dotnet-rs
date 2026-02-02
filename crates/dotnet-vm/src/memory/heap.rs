@@ -1,14 +1,15 @@
 use dotnet_utils::gc::GCHandleType;
 use dotnet_value::object::{HeapStorage, ObjectRef};
-#[cfg(feature = "multithreaded-gc")]
-use dotnet_value::object::ObjectPtr;
 use gc_arena::{Collect, Collection};
-#[cfg(feature = "multithreaded-gc")]
-use gc_arena::Gc;
 use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, HashSet},
 };
+
+#[cfg(feature = "multithreaded-gc")]
+use dotnet_value::object::ObjectPtr;
+#[cfg(feature = "multithreaded-gc")]
+use gc_arena::Gc;
 
 pub struct HeapManager<'gc> {
     pub finalization_queue: RefCell<Vec<ObjectRef<'gc>>>,

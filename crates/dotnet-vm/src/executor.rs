@@ -194,7 +194,6 @@ impl Executor {
 
             let step_result = self.with_arena(|arena| arena.mutate_root(|gc, c| c.step(gc)));
 
-
             match step_result {
                 StepResult::Return => {
                     let exit_code = self.with_arena_ref(|arena| {

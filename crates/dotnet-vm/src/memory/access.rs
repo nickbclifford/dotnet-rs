@@ -1,4 +1,3 @@
-use super::heap::HeapManager;
 use dotnet_types::TypeDescription;
 use dotnet_value::{
     layout::{HasLayout, LayoutManager, Scalar},
@@ -8,6 +7,8 @@ use dotnet_value::{
     StackValue,
 };
 use std::{ptr, sync::Arc};
+
+use super::heap::HeapManager;
 
 /// Manages unsafe memory access, enforcing bounds checks, GC write barriers, and type integrity.
 pub struct RawMemoryAccess<'a, 'gc> {

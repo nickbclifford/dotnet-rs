@@ -23,13 +23,13 @@ use std::{
 
 use super::{
     intrinsics::{is_intrinsic, is_intrinsic_field, IntrinsicRegistry},
+    memory::HeapManager,
     metrics::{CacheSizes, CacheStats, RuntimeMetrics},
     pinvoke::NativeLibraries,
     statics::StaticStorageManager,
     sync::SyncBlockManager,
     threading::ThreadManager,
     tracer::Tracer,
-    memory::HeapManager,
 };
 
 #[cfg(feature = "multithreaded-gc")]
