@@ -7,10 +7,9 @@ use std::{
     ptr::NonNull,
 };
 
+pub mod generics;
 #[macro_use]
 mod macros;
-
-pub mod generics;
 pub mod members;
 pub mod resolution;
 pub mod runtime;

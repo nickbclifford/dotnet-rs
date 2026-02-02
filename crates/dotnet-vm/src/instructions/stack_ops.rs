@@ -1,4 +1,4 @@
-use crate::{resolution::ValueResolution, CallStack, StepResult};
+use crate::{instructions::macros::*, resolution::ValueResolution, CallStack, StepResult};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::StackValue;
@@ -8,7 +8,6 @@ use dotnetdll::prelude::*;
 pub fn nop<'gc, 'm: 'gc>(_gc: GCHandle<'gc>, _stack: &mut CallStack<'gc, 'm>) -> StepResult {
     StepResult::Continue
 }
-
 #[dotnet_instruction(Pop)]
 pub fn pop<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     stack.pop(gc);
@@ -23,62 +22,41 @@ pub fn duplicate<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>
     StepResult::Continue
 }
 
-#[dotnet_instruction(LoadConstantInt32)]
-pub fn ldc_i4<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    i: i32,
-) -> StepResult {
-    stack.push(gc, StackValue::Int32(i));
-    StepResult::Continue
-}
-
-#[dotnet_instruction(LoadConstantInt64)]
-pub fn ldc_i8<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    i: i64,
-) -> StepResult {
-    stack.push(gc, StackValue::Int64(i));
-    StepResult::Continue
-}
-
-#[dotnet_instruction(LoadConstantFloat32)]
-pub fn ldc_r4<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    f: f32,
-) -> StepResult {
-    stack.push(gc, StackValue::NativeFloat(f as f64));
-    StepResult::Continue
-}
-
-#[dotnet_instruction(LoadConstantFloat64)]
-pub fn ldc_r8<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    f: f64,
-) -> StepResult {
-    stack.push(gc, StackValue::NativeFloat(f));
-    StepResult::Continue
-}
-
+load_const!(
+    #[dotnet_instruction(LoadConstantInt32)]
+    ldc_i4,
+    i32,
+    StackValue::Int32
+);
+load_const!(
+    #[dotnet_instruction(LoadConstantInt64)]
+    ldc_i8,
+    i64,
+    StackValue::Int64
+);
+load_const!(
+    #[dotnet_instruction(LoadConstantFloat32)]
+    ldc_r4,
+    f32,
+    |v| StackValue::NativeFloat(v as f64)
+);
+load_const!(
+    #[dotnet_instruction(LoadConstantFloat64)]
+    ldc_r8,
+    f64,
+    StackValue::NativeFloat
+);
 #[dotnet_instruction(LoadNull)]
 pub fn ldnull<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     stack.push(gc, StackValue::null());
     StepResult::Continue
 }
 
-#[dotnet_instruction(LoadArgument)]
-pub fn ldarg<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    index: u16,
-) -> StepResult {
-    let val = stack.get_argument(index as usize);
-    stack.push(gc, val);
-    StepResult::Continue
-}
+load_var!(
+    #[dotnet_instruction(LoadArgument)]
+    ldarg,
+    get_argument
+);
 
 #[dotnet_instruction(LoadArgumentAddress)]
 pub fn ldarga<'gc, 'm: 'gc>(
@@ -100,27 +78,16 @@ pub fn ldarga<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(StoreArgument)]
-pub fn starg<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    index: u16,
-) -> StepResult {
-    let val = stack.pop(gc);
-    stack.set_argument(gc, index as usize, val);
-    StepResult::Continue
-}
-
-#[dotnet_instruction(LoadLocal)]
-pub fn ldloc<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    index: u16,
-) -> StepResult {
-    let val = stack.get_local(index as usize);
-    stack.push(gc, val);
-    StepResult::Continue
-}
+store_var!(
+    #[dotnet_instruction(StoreArgument)]
+    starg,
+    set_argument
+);
+load_var!(
+    #[dotnet_instruction(LoadLocal)]
+    ldloc,
+    get_local
+);
 
 #[dotnet_instruction(LoadLocalAddress)]
 pub fn ldloca<'gc, 'm: 'gc>(
@@ -141,13 +108,8 @@ pub fn ldloca<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(StoreLocal)]
-pub fn stloc<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    index: u16,
-) -> StepResult {
-    let val = stack.pop(gc);
-    stack.set_local(gc, index as usize, val);
-    StepResult::Continue
-}
+store_var!(
+    #[dotnet_instruction(StoreLocal)]
+    stloc,
+    set_local
+);

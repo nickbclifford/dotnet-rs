@@ -1,171 +1,49 @@
-use crate::{CallStack, StepResult};
+use crate::{instructions::macros::*, CallStack, StepResult};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnetdll::prelude::*;
 
-#[dotnet_instruction(Add)]
-pub fn add<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let v2 = stack.pop(gc);
-    let v1 = stack.pop(gc);
-    stack.push(gc, v1 + v2);
-    StepResult::Continue
-}
+binary_op!(#[dotnet_instruction(Add)] add, +);
+binary_op_result!(
+    #[dotnet_instruction(AddOverflow)]
+    add_ovf,
+    checked_add
+);
+binary_op!(#[dotnet_instruction(And)] and, &);
+binary_op_result!(
+    #[dotnet_instruction(Divide)]
+    divide,
+    div
+);
 
-#[dotnet_instruction(AddOverflow)]
-pub fn add_ovf<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    sgn: NumberSign,
-) -> StepResult {
-    let v2 = stack.pop(gc);
-    let v1 = stack.pop(gc);
-    match v1.checked_add(v2, sgn) {
-        Ok(v) => {
-            stack.push(gc, v);
-            StepResult::Continue
-        }
-        Err(e) => stack.throw_by_name(gc, e),
-    }
-}
-
-#[dotnet_instruction(And)]
-pub fn and<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let v2 = stack.pop(gc);
-    let v1 = stack.pop(gc);
-    stack.push(gc, v1 & v2);
-    StepResult::Continue
-}
-
-#[dotnet_instruction(Divide)]
-pub fn divide<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    sgn: NumberSign,
-) -> StepResult {
-    let v2 = stack.pop(gc);
-    let v1 = stack.pop(gc);
-    match v1.div(v2, sgn) {
-        Ok(v) => {
-            stack.push(gc, v);
-            StepResult::Continue
-        }
-        Err(e) => stack.throw_by_name(gc, e),
-    }
-}
-
-#[dotnet_instruction(Multiply)]
-pub fn multiply<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let v2 = stack.pop(gc);
-    let v1 = stack.pop(gc);
-    stack.push(gc, v1 * v2);
-    StepResult::Continue
-}
-
-#[dotnet_instruction(MultiplyOverflow)]
-pub fn multiply_ovf<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    sgn: NumberSign,
-) -> StepResult {
-    let v2 = stack.pop(gc);
-    let v1 = stack.pop(gc);
-    match v1.checked_mul(v2, sgn) {
-        Ok(v) => {
-            stack.push(gc, v);
-            StepResult::Continue
-        }
-        Err(e) => stack.throw_by_name(gc, e),
-    }
-}
-
-#[dotnet_instruction(Negate)]
-pub fn negate<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let v = stack.pop(gc);
-    stack.push(gc, -v);
-    StepResult::Continue
-}
-
-#[dotnet_instruction(Not)]
-pub fn not<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let v = stack.pop(gc);
-    stack.push(gc, !v);
-    StepResult::Continue
-}
-
-#[dotnet_instruction(Or)]
-pub fn or<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let v2 = stack.pop(gc);
-    let v1 = stack.pop(gc);
-    stack.push(gc, v1 | v2);
-    StepResult::Continue
-}
-
-#[dotnet_instruction(Remainder)]
-pub fn remainder<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    sgn: NumberSign,
-) -> StepResult {
-    let v2 = stack.pop(gc);
-    let v1 = stack.pop(gc);
-    match v1.rem(v2, sgn) {
-        Ok(v) => {
-            stack.push(gc, v);
-            StepResult::Continue
-        }
-        Err(e) => stack.throw_by_name(gc, e),
-    }
-}
-
-#[dotnet_instruction(ShiftLeft)]
-pub fn shl<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let v2 = stack.pop(gc);
-    let v1 = stack.pop(gc);
-    stack.push(gc, v1 << v2);
-    StepResult::Continue
-}
-
-#[dotnet_instruction(ShiftRight)]
-pub fn shr<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    sgn: NumberSign,
-) -> StepResult {
-    let v2 = stack.pop(gc);
-    let v1 = stack.pop(gc);
-    stack.push(gc, v1.shr(v2, sgn));
-    StepResult::Continue
-}
-
-#[dotnet_instruction(Subtract)]
-pub fn subtract<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let v2 = stack.pop(gc);
-    let v1 = stack.pop(gc);
-    stack.push(gc, v1 - v2);
-    StepResult::Continue
-}
-
-#[dotnet_instruction(SubtractOverflow)]
-pub fn subtract_ovf<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-    sgn: NumberSign,
-) -> StepResult {
-    let v2 = stack.pop(gc);
-    let v1 = stack.pop(gc);
-    match v1.checked_sub(v2, sgn) {
-        Ok(v) => {
-            stack.push(gc, v);
-            StepResult::Continue
-        }
-        Err(e) => stack.throw_by_name(gc, e),
-    }
-}
-
-#[dotnet_instruction(Xor)]
-pub fn xor<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let v2 = stack.pop(gc);
-    let v1 = stack.pop(gc);
-    stack.push(gc, v1 ^ v2);
-    StepResult::Continue
-}
+binary_op!(#[dotnet_instruction(Multiply)] multiply, *);
+binary_op_result!(
+    #[dotnet_instruction(MultiplyOverflow)]
+    multiply_ovf,
+    checked_mul
+);
+unary_op!(#[dotnet_instruction(Negate)] negate, -);
+unary_op!(
+    #[dotnet_instruction(Not)]
+    not,
+    !
+);
+binary_op!(#[dotnet_instruction(Or)] or, |);
+binary_op_result!(
+    #[dotnet_instruction(Remainder)]
+    remainder,
+    rem
+);
+binary_op!(#[dotnet_instruction(ShiftLeft)] shl, <<);
+binary_op_sgn!(
+    #[dotnet_instruction(ShiftRight)]
+    shr,
+    shr
+);
+binary_op!(#[dotnet_instruction(Subtract)] subtract, -);
+binary_op_result!(
+    #[dotnet_instruction(SubtractOverflow)]
+    subtract_ovf,
+    checked_sub
+);
+binary_op!(#[dotnet_instruction(Xor)] xor, ^);
