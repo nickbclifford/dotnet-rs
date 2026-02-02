@@ -10,6 +10,7 @@ use dotnet_utils::gc::{GCHandle, GCHandleType, ThreadSafeLock};
 use dotnet_value::{
     layout::{HasLayout, LayoutManager},
     object::{HeapStorage, Object as ObjectInstance, ObjectRef},
+    string::CLRString,
     StackValue,
 };
 use dotnetdll::prelude::*;
@@ -147,41 +148,6 @@ unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
         self.execution.trace(cc);
         self.local.trace(cc);
         self.shared.statics.trace(cc);
-
-        // Conservative Stack Scanning:
-        // Iterate over the evaluation stack and check for values that point into the heap.
-        for slot_handle in &self.execution.stack {
-            let slot_gc = slot_handle.0;
-            // Use borrow() to access the StackValue inside the ThreadSafeLock
-            let slot_val = slot_gc.borrow();
-
-            match &*slot_val {
-                StackValue::ManagedPtr(mp) => {
-                    if let Some(ptr) = mp.value {
-                        let addr = ptr.as_ptr() as usize;
-                        if let Some(obj) = self.local.heap.find_object(addr) {
-                            obj.trace(cc);
-                        }
-                    }
-                }
-                StackValue::NativeInt(val) => {
-                    let addr = *val as usize;
-                    if let Some(obj) = self.local.heap.find_object(addr) {
-                        obj.trace(cc);
-                    }
-                }
-                StackValue::ValueType(o) => {
-                    let bytes = o.instance_storage.get();
-                    for chunk in bytes.chunks_exact(size_of::<usize>()) {
-                        let val = usize::from_ne_bytes(chunk.try_into().unwrap());
-                        if let Some(obj) = self.local.heap.find_object(val) {
-                            obj.trace(cc);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
 
         #[cfg(feature = "multithreaded-gc")]
         {
@@ -697,6 +663,29 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.execution.frames.last_mut().unwrap()
     }
 
+    pub fn state(&self) -> &MethodState<'m> {
+        &self.current_frame().state
+    }
+
+    pub fn state_mut(&mut self) -> &mut MethodState<'m> {
+        &mut self.current_frame_mut().state
+    }
+
+    pub fn branch(&mut self, target: usize) {
+        crate::vm_trace_branch!(self, "BR", target, true);
+        self.state_mut().ip = target;
+    }
+
+    pub fn conditional_branch(&mut self, condition: bool, target: usize) -> bool {
+        crate::vm_trace_branch!(self, "BR_COND", target, condition);
+        if condition {
+            self.state_mut().ip = target;
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn increment_ip(&mut self) {
         self.current_frame_mut().state.ip += 1;
     }
@@ -937,6 +926,44 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
         }
         self.set_slot(gc, self.get_local_handle_at(frame, index), value);
+    }
+
+    pub fn push(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {
+        self.push_stack(gc, value);
+    }
+
+    pub fn push_string(&mut self, gc: GCHandle<'gc>, value: impl Into<CLRString>) {
+        let obj = ObjectRef::new(gc, HeapStorage::Str(value.into()));
+        self.register_new_object(&obj);
+        self.push(gc, StackValue::ObjectRef(obj));
+    }
+
+    pub fn pop(&mut self, gc: GCHandle<'gc>) -> StackValue<'gc> {
+        self.pop_stack(gc)
+    }
+
+    pub fn pop_i32(&mut self, gc: GCHandle<'gc>) -> i32 {
+        self.pop(gc).as_i32()
+    }
+
+    pub fn pop_i64(&mut self, gc: GCHandle<'gc>) -> i64 {
+        self.pop(gc).as_i64()
+    }
+
+    pub fn pop_f64(&mut self, gc: GCHandle<'gc>) -> f64 {
+        self.pop(gc).as_f64()
+    }
+
+    pub fn pop_isize(&mut self, gc: GCHandle<'gc>) -> isize {
+        self.pop(gc).as_isize()
+    }
+
+    pub fn pop_obj(&mut self, gc: GCHandle<'gc>) -> ObjectRef<'gc> {
+        self.pop(gc).as_object_ref()
+    }
+
+    pub fn pop_ptr(&mut self, gc: GCHandle<'gc>) -> *mut u8 {
+        self.pop(gc).as_ptr()
     }
 
     pub fn push_stack(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {

@@ -29,7 +29,7 @@ pub struct HandlerAddress {
 /// 1. **Search Phase**: The runtime searches for a matching `catch` block or a `filter` that returns true.
 /// 2. **Unwind Phase**: The runtime executes `finally` and `fault` blocks from the throw point
 ///    up to the found handler (or the target of a `leave` instruction).
-#[derive(Collect, Debug)]
+#[derive(Clone, Copy, PartialEq, Collect, Debug)]
 #[collect(no_drop)]
 pub enum ExceptionState<'gc> {
     /// No exception is currently being processed.
@@ -270,7 +270,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                         handler_index: 0,
                                     },
                                 };
-                                return StepResult::InstructionStepped;
+                                return StepResult::InstructionJumped;
                             }
                         }
                         HandlerKind::Filter { clause_offset } => {
@@ -301,7 +301,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             frame.exception_stack.push(exception);
                             vm_push!(self, gc, ObjectRef(exception));
 
-                            return StepResult::InstructionStepped;
+                            return StepResult::InstructionJumped;
                         }
                         _ => {} // finally and fault are ignored during the search phase
                     }
@@ -507,7 +507,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         frame.state.ip = handler_start_ip;
                         frame.stack_height = 0;
 
-                        return StepResult::InstructionStepped;
+                        return StepResult::InstructionJumped;
                     }
                 }
             }
@@ -554,6 +554,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
         }
 
-        StepResult::InstructionStepped
+        StepResult::InstructionJumped
     }
 }

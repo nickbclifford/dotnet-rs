@@ -1,29 +1,20 @@
 #[macro_export]
 macro_rules! vm_pop {
     ($stack:expr, $gc:expr) => {
-        $stack.pop_stack($gc)
+        $stack.pop($gc)
     };
 }
 
 #[macro_export]
 macro_rules! vm_push {
     ($stack:expr, $gc:expr, string($val:expr)) => {
-        {
-            let obj = dotnet_value::object::ObjectRef::new(
-                $gc,
-                dotnet_value::object::HeapStorage::Str(
-                    dotnet_value::string::CLRString::from($val)
-                )
-            );
-            $stack.register_new_object(&obj);
-            $stack.push_stack($gc, dotnet_value::StackValue::ObjectRef(obj))
-        }
+        $stack.push_string($gc, $val)
     };
     ($stack:expr, $gc:expr, $variant:ident ( $($args:expr),* )) => {
-        $stack.push_stack($gc, dotnet_value::StackValue::$variant($($args),*))
+        $stack.push($gc, dotnet_value::StackValue::$variant($($args),*))
     };
     ($stack:expr, $gc:expr, $val:expr) => {
-        $stack.push_stack($gc, $val)
+        $stack.push($gc, $val)
     };
 }
 

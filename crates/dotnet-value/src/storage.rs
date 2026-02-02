@@ -123,29 +123,43 @@ impl FieldStorage {
     }
 
     pub fn resurrect<'gc>(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
-        // We need to access data to resurrect?
-        // trace/resurrect on Vec<u8> is no-op, but layout resurrect is needed.
-        // And layout::resurrect takes &[u8] storage!
-        // So we lock for read_unchecked.
-        #[cfg(feature = "multithreading")]
-        let guard = self.data.read();
-        #[cfg(not(feature = "multithreading"))]
-        let guard = self.data.borrow();
+        // SAFETY: Tracing/Resurrection happens during a stop-the-world pause, so no other
+        // threads are running. We can safely access the inner value without
+        // acquiring the lock. This avoids deadlock (or panic) if a thread was
+        // already holding the write lock when it reached a safe point.
+        let data = unsafe {
+            #[cfg(feature = "multithreading")]
+            {
+                &*self.data.data_ptr()
+            }
+            #[cfg(not(feature = "multithreading"))]
+            {
+                &*self.data.as_ptr()
+            }
+        };
 
-        self.layout.resurrect(&guard, fc, visited);
+        self.layout.resurrect(data, fc, visited);
     }
 }
 
 unsafe impl Collect for FieldStorage {
     fn trace(&self, cc: &Collection) {
-        // Lock for read_unchecked to trace?
-        // Layout trace takes &[u8].
-        #[cfg(feature = "multithreading")]
-        let guard = self.data.read();
-        #[cfg(not(feature = "multithreading"))]
-        let guard = self.data.borrow();
+        // SAFETY: Tracing happens during a stop-the-world pause, so no other
+        // threads are running. We can safely access the inner value without
+        // acquiring the lock. This avoids deadlock (or panic) if a thread was
+        // already holding the write lock when it reached a safe point.
+        let data = unsafe {
+            #[cfg(feature = "multithreading")]
+            {
+                &*self.data.data_ptr()
+            }
+            #[cfg(not(feature = "multithreading"))]
+            {
+                &*self.data.as_ptr()
+            }
+        };
 
-        self.layout.trace(&guard, cc);
+        self.layout.trace(data, cc);
     }
 }
 

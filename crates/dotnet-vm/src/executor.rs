@@ -255,7 +255,9 @@ impl Executor {
                         break ExecutorResult::Threw;
                     }
                 }
-                StepResult::InstructionStepped | StepResult::YieldForGC => {}
+                StepResult::InstructionStepped
+                | StepResult::InstructionJumped
+                | StepResult::YieldForGC => {}
             }
 
             {

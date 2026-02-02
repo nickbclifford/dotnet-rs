@@ -284,6 +284,18 @@ impl<'gc> ObjectRef<'gc> {
         op(instance)
     }
 
+    pub fn as_vector_mut<T>(&self, gc: GCHandle<'gc>, op: impl FnOnce(&mut Vector<'gc>) -> T) -> T {
+        let ObjectRef(Some(o)) = &self else {
+            panic!("NullReferenceException: called ObjectRef::as_vector_mut on NULL object reference")
+        };
+        let mut inner = o.borrow_mut(gc);
+        let HeapStorage::Vec(instance) = &mut inner.storage else {
+            panic!("called ObjectRef::as_vector_mut on non-vector heap reference")
+        };
+
+        op(instance)
+    }
+
     pub fn as_heap_storage<T>(&self, op: impl FnOnce(&HeapStorage<'gc>) -> T) -> T {
         let ObjectRef(Some(o)) = &self else {
             panic!("NullReferenceException: called ObjectRef::as_heap_storage on NULL object reference")

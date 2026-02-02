@@ -161,3 +161,99 @@ pub fn dotnet_intrinsic_field(attr: TokenStream, item: TokenStream) -> TokenStre
 
     output.into()
 }
+
+#[proc_macro_attribute]
+pub fn dotnet_instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let variant_ident = parse_macro_input!(attr as syn::Ident);
+    let func = parse_macro_input!(item as ItemFn);
+    let func_name = &func.sig.ident;
+    let variant_name = variant_ident.to_string();
+
+    let args = &func.sig.inputs;
+    let extra_args = args.iter().skip(2);
+    let mut extra_arg_names = Vec::new();
+    let mut extra_arg_calls = Vec::new();
+    for arg in extra_args {
+        if let syn::FnArg::Typed(pat_type) = arg {
+            if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
+                let name = &pat_ident.ident;
+                extra_arg_names.push(name);
+                if let syn::Type::Reference(_) = &*pat_type.ty {
+                    extra_arg_calls.push(quote! { &#name });
+                } else {
+                    extra_arg_calls.push(quote! { #name });
+                }
+            } else {
+                panic!("Instruction handler must have named parameters");
+            }
+        } else {
+            panic!("Instruction handler must have named parameters");
+        }
+    }
+
+    let wrapper_name = syn::Ident::new(&format!("{}_wrapper", func_name), func_name.span());
+
+    // We generate a match arm.
+    let is_likely_struct = variant_name == "Call"
+        || variant_name == "CallVirtual"
+        || variant_name == "CallIndirect"
+        || variant_name == "LoadField"
+        || variant_name == "StoreField"
+        || variant_name == "LoadStaticField"
+        || variant_name == "StoreStaticField"
+        || variant_name == "LoadElement"
+        || variant_name == "StoreElement"
+        || variant_name == "LoadElementAddress"
+        || variant_name == "LoadElementPrimitive"
+        || variant_name == "StoreElementPrimitive"
+        || variant_name == "CastClass"
+        || variant_name == "UnboxIntoAddress"
+        || variant_name == "LoadObject"
+        || variant_name == "StoreObject"
+        || variant_name == "CopyMemoryBlock"
+        || variant_name == "InitializeMemoryBlock"
+        || variant_name == "StoreIndirect"
+        || variant_name == "LoadIndirect";
+
+    let match_arm = if is_likely_struct {
+        quote! {
+            Instruction::#variant_ident { #(#extra_arg_names,)* .. } => #func_name(gc, stack, #(#extra_arg_calls),*)
+        }
+    } else if extra_arg_names.is_empty() {
+        quote! {
+            Instruction::#variant_ident => #func_name(gc, stack)
+        }
+    } else {
+        quote! {
+            Instruction::#variant_ident(#(#extra_arg_names),*) => #func_name(gc, stack, #(#extra_arg_calls),*)
+        }
+    };
+
+    let submit = quote! {
+        inventory::submit! {
+            crate::instructions::InstructionEntry {
+                name: #variant_name,
+                handler: unsafe { std::mem::transmute(#wrapper_name as *const ()) },
+            }
+        }
+    };
+
+    let output = quote! {
+        #func
+
+        fn #wrapper_name<'gc, 'm: 'gc>(
+            gc: dotnet_utils::gc::GCHandle<'gc>,
+            stack: &mut crate::CallStack<'gc, 'm>,
+            instr: Instruction
+        ) -> crate::StepResult {
+            match instr {
+                #match_arm,
+                _ => unreachable!("Instruction wrapper called with wrong variant: expected {}, received {:?}", #variant_name, instr)
+            }
+        }
+
+        #submit
+    };
+
+    output.into()
+}

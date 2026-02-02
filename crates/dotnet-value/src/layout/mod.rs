@@ -94,11 +94,10 @@ impl LayoutManager {
                 unsafe { ObjectRef::read_unchecked(storage) }.trace(cc);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                // NOTE: ManagedPtr in memory is now pointer-sized (8 bytes).
-                // The GC metadata (owner handle) is stored in the Object's side-table.
-                // Tracing of managed pointer owners is handled by Object::trace,
-                // which has access to the side-table. Here we do nothing since
-                // the raw pointer value doesn't need tracing.
+                // ManagedPtr in memory is 16 bytes: (Pointer, Owner ObjectRef).
+                // We need to trace the owner at offset 8.
+                let ptr_size = std::mem::size_of::<usize>();
+                unsafe { ObjectRef::read_unchecked(&storage[ptr_size..]) }.trace(cc);
             }
             LayoutManager::FieldLayoutManager(f) => {
                 f.trace(storage, cc);
@@ -124,8 +123,10 @@ impl LayoutManager {
                 unsafe { ObjectRef::read_unchecked(storage) }.resurrect(fc, visited);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                // NOTE: ManagedPtr resurrection is handled by Object::resurrect
-                // which has access to the side-table containing the owner handles.
+                // ManagedPtr in memory is 16 bytes: (Pointer, Owner ObjectRef).
+                // We need to resurrect the owner at offset 8.
+                let ptr_size = std::mem::size_of::<usize>();
+                unsafe { ObjectRef::read_unchecked(&storage[ptr_size..]) }.resurrect(fc, visited);
             }
             LayoutManager::FieldLayoutManager(f) => {
                 for field in f.fields.values() {

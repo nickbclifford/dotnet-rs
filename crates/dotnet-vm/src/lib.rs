@@ -113,5 +113,6 @@ pub enum StepResult {
     MethodReturned,
     MethodThrew,
     InstructionStepped,
+    InstructionJumped,
     YieldForGC,
 }
