@@ -1,4 +1,4 @@
-use crate::{instructions::StepResult, vm_pop, vm_push, CallStack};
+use crate::{instructions::StepResult, CallStack};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
@@ -11,15 +11,8 @@ use std::ptr;
 
 #[dotnet_instruction(CopyMemoryBlock)]
 pub fn cpblk<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let size = match vm_pop!(stack, gc) {
-        StackValue::Int32(i) => i as usize,
-        StackValue::NativeInt(i) => i as usize,
-        rest => panic!(
-            "invalid type for size in cpblk (expected int32 or native int, received {:?})",
-            rest
-        ),
-    };
-    let src_val = vm_pop!(stack, gc);
+    let size = stack.pop_isize(gc) as usize;
+    let src_val = stack.pop(gc);
     let src = match &src_val {
         StackValue::NativeInt(i) => *i as *const u8,
         StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr() as *const u8,
@@ -29,7 +22,7 @@ pub fn cpblk<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) ->
             rest
         ),
     };
-    let dest_val = vm_pop!(stack, gc);
+    let dest_val = stack.pop(gc);
     let dest = match &dest_val {
         StackValue::NativeInt(i) => *i as *mut u8,
         StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
@@ -55,23 +48,9 @@ pub fn cpblk<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) ->
 
 #[dotnet_instruction(InitializeMemoryBlock)]
 pub fn initblk<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let size = match vm_pop!(stack, gc) {
-        StackValue::Int32(i) => i as usize,
-        StackValue::NativeInt(i) => i as usize,
-        rest => panic!(
-            "invalid type for size in initblk (expected int32 or native int, received {:?})",
-            rest
-        ),
-    };
-    let val = match vm_pop!(stack, gc) {
-        StackValue::Int32(i) => i as u8,
-        StackValue::NativeInt(i) => i as u8,
-        rest => panic!(
-            "invalid type for val in initblk (expected int32 or native int, received {:?})",
-            rest
-        ),
-    };
-    let addr_val = vm_pop!(stack, gc);
+    let size = stack.pop_isize(gc) as usize;
+    let val = stack.pop_isize(gc) as u8;
+    let addr_val = stack.pop(gc);
     let addr = match &addr_val {
         StackValue::NativeInt(i) => *i as *mut u8,
         StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
@@ -95,24 +74,11 @@ pub fn initblk<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) 
 
 #[dotnet_instruction(LocalMemoryAllocate)]
 pub fn localloc<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let size = match vm_pop!(stack, gc) {
-        StackValue::Int32(i) => {
-            if i < 0 {
-                return stack.throw_by_name(gc, "System.OverflowException");
-            }
-            i as usize
-        }
-        StackValue::NativeInt(i) => {
-            if i < 0 {
-                return stack.throw_by_name(gc, "System.OverflowException");
-            }
-            i as usize
-        }
-        rest => panic!(
-            "invalid type for size in localloc (expected int32 or native int, received {:?})",
-            rest
-        ),
-    };
+    let size_isize = stack.pop_isize(gc);
+    if size_isize < 0 {
+        return stack.throw_by_name(gc, "System.OverflowException");
+    }
+    let size = size_isize as usize;
 
     // Defensive check: limit local allocation to 128MB
     if size > 0x800_0000 {
@@ -126,10 +92,9 @@ pub fn localloc<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>)
         s.memory_pool[loc..].as_mut_ptr()
     };
 
-    vm_push!(
-        stack,
+    stack.push(
         gc,
-        StackValue::UnmanagedPtr(UnmanagedPtr(std::ptr::NonNull::new(ptr).unwrap()))
+        StackValue::UnmanagedPtr(UnmanagedPtr(std::ptr::NonNull::new(ptr).unwrap())),
     );
     StepResult::InstructionStepped
 }
@@ -140,8 +105,8 @@ pub fn stind<'gc, 'm: 'gc>(
     stack: &mut CallStack<'gc, 'm>,
     param0: StoreType,
 ) -> StepResult {
-    let val = vm_pop!(stack, gc);
-    let addr_val = vm_pop!(stack, gc);
+    let val = stack.pop(gc);
+    let addr_val = stack.pop(gc);
 
     let (ptr, owner) = match addr_val {
         StackValue::NativeInt(p) => (p as *mut u8, None),
@@ -176,7 +141,7 @@ pub fn ldind<'gc, 'm: 'gc>(
     stack: &mut CallStack<'gc, 'm>,
     param0: LoadType,
 ) -> StepResult {
-    let addr_val = vm_pop!(stack, gc);
+    let addr_val = stack.pop(gc);
     let (ptr, owner) = match addr_val {
         StackValue::NativeInt(p) => (p as *const u8, None),
         StackValue::ManagedPtr(m) => (
@@ -208,6 +173,6 @@ pub fn ldind<'gc, 'm: 'gc>(
             .read_unaligned(ptr, owner, &layout, None)
             .expect("Read failed")
     };
-    vm_push!(stack, gc, val);
+    stack.push(gc, val);
     StepResult::InstructionStepped
 }

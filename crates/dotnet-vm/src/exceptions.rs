@@ -1,4 +1,4 @@
-use crate::{context::ResolutionContext, stack::CallStack, vm_error, vm_push, StepResult};
+use crate::{context::ResolutionContext, stack::CallStack, vm_error, StepResult};
 use dotnet_types::generics::ConcreteType;
 use dotnet_utils::{gc::GCHandle, DebugStr};
 use dotnet_value::object::{HeapStorage, ObjectRef};
@@ -299,7 +299,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             frame.state.ip = *clause_offset;
                             frame.stack_height = 0;
                             frame.exception_stack.push(exception);
-                            vm_push!(self, gc, ObjectRef(exception));
+                            self.push_obj(gc, exception);
 
                             return StepResult::InstructionJumped;
                         }
@@ -512,7 +512,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 // Push the exception object onto the stack for the catch/filter handler.
                 let exception = exception.expect("Target handler reached but no exception present");
                 frame.exception_stack.push(exception);
-                vm_push!(self, gc, ObjectRef(exception));
+                self.push_obj(gc, exception);
             }
             UnwindTarget::Instruction(target_ip) => {
                 // Special case: usize::MAX indicates we should return from the method

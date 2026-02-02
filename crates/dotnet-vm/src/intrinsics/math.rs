@@ -1,6 +1,4 @@
-use crate::{
-    context::ResolutionContext, resolution::ValueResolution, vm_pop, vm_push, CallStack, StepResult,
-};
+use crate::{context::ResolutionContext, resolution::ValueResolution, CallStack, StepResult};
 use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
@@ -18,7 +16,7 @@ pub fn intrinsic_vector_is_hardware_accelerated<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    vm_push!(stack, gc, Int32(0));
+    stack.push_i32(gc, 0);
     StepResult::InstructionStepped
 }
 
@@ -43,7 +41,7 @@ pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc>(
     .with_generics(&new_lookup);
     let instance = ObjectRef::new(gc, HeapStorage::Obj(ctx.new_object(comparer_td)));
 
-    vm_push!(stack, gc, ObjectRef(instance));
+    stack.push_obj(gc, instance);
     StepResult::InstructionStepped
 }
 
@@ -63,24 +61,22 @@ pub fn intrinsic_numeric_create_truncating<'gc, 'm: 'gc>(
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let value = vm_pop!(stack, gc);
+    let value = stack.pop(gc);
     let target_type = method.parent.definition().type_name();
 
     macro_rules! convert {
         ($val:expr) => {
             match target_type.as_str() {
-                "Byte" | "System.Byte" => vm_push!(stack, gc, Int32(($val as u8) as i32)),
-                "SByte" | "System.SByte" => vm_push!(stack, gc, Int32(($val as i8) as i32)),
-                "UInt16" | "System.UInt16" => vm_push!(stack, gc, Int32(($val as u16) as i32)),
-                "Int16" | "System.Int16" => vm_push!(stack, gc, Int32(($val as i16) as i32)),
-                "UInt32" | "System.UInt32" => vm_push!(stack, gc, Int32(($val as u32) as i32)),
-                "Int32" | "System.Int32" => vm_push!(stack, gc, Int32($val as i32)),
-                "UInt64" | "System.UInt64" => vm_push!(stack, gc, Int64(($val as u64) as i64)),
-                "Int64" | "System.Int64" => vm_push!(stack, gc, Int64($val as i64)),
-                "UIntPtr" | "System.UIntPtr" => {
-                    vm_push!(stack, gc, NativeInt(($val as usize) as isize))
-                }
-                "IntPtr" | "System.IntPtr" => vm_push!(stack, gc, NativeInt($val as isize)),
+                "Byte" | "System.Byte" => stack.push_i32(gc, ($val as u8) as i32),
+                "SByte" | "System.SByte" => stack.push_i32(gc, ($val as i8) as i32),
+                "UInt16" | "System.UInt16" => stack.push_i32(gc, ($val as u16) as i32),
+                "Int16" | "System.Int16" => stack.push_i32(gc, ($val as i16) as i32),
+                "UInt32" | "System.UInt32" => stack.push_i32(gc, ($val as u32) as i32),
+                "Int32" | "System.Int32" => stack.push_i32(gc, $val as i32),
+                "UInt64" | "System.UInt64" => stack.push_i64(gc, ($val as u64) as i64),
+                "Int64" | "System.Int64" => stack.push_i64(gc, $val as i64),
+                "UIntPtr" | "System.UIntPtr" => stack.push_isize(gc, ($val as usize) as isize),
+                "IntPtr" | "System.IntPtr" => stack.push_isize(gc, $val as isize),
                 _ => panic!("unsupported CreateTruncating target type: {}", target_type),
             }
         };
@@ -103,17 +99,9 @@ pub fn intrinsic_math_min_double<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let b = vm_pop!(stack, gc);
-    let a = vm_pop!(stack, gc);
-    match (&a, &b) {
-        (StackValue::NativeFloat(av), StackValue::NativeFloat(bv)) => {
-            vm_push!(stack, gc, NativeFloat(av.min(*bv)));
-        }
-        _ => panic!(
-            "Math.Min(double, double) called with non-double arguments: {:?}, {:?}",
-            a, b
-        ),
-    }
+    let b = stack.pop_f64(gc);
+    let a = stack.pop_f64(gc);
+    stack.push_f64(gc, a.min(b));
     StepResult::InstructionStepped
 }
 
@@ -124,11 +112,8 @@ pub fn intrinsic_math_sqrt<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let val = vm_pop!(stack, gc);
-    match val {
-        StackValue::NativeFloat(f) => vm_push!(stack, gc, NativeFloat(f.sqrt())),
-        _ => panic!("Math.Sqrt called with non-double argument: {:?}", val),
-    }
+    let val = stack.pop_f64(gc);
+    stack.push_f64(gc, val.sqrt());
     StepResult::InstructionStepped
 }
 
@@ -140,6 +125,6 @@ pub fn intrinsic_bitconverter_is_little_endian<'gc, 'm: 'gc>(
     _type_generics: Vec<dotnet_types::generics::ConcreteType>,
     _is_address: bool,
 ) -> StepResult {
-    vm_push!(stack, gc, Int32(1));
+    stack.push_i32(gc, 1);
     StepResult::InstructionStepped
 }

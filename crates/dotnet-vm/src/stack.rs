@@ -10,6 +10,7 @@ use dotnet_utils::gc::{GCHandle, GCHandleType, ThreadSafeLock};
 use dotnet_value::{
     layout::{HasLayout, LayoutManager},
     object::{HeapStorage, Object as ObjectInstance, ObjectRef},
+    pointer::ManagedPtr,
     string::CLRString,
     StackValue,
 };
@@ -972,6 +973,52 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn pop_ptr(&mut self, gc: GCHandle<'gc>) -> *mut u8 {
         self.pop(gc).as_ptr()
+    }
+
+    pub fn pop_managed_ptr(&mut self, gc: GCHandle<'gc>) -> ManagedPtr<'gc> {
+        self.pop(gc).as_managed_ptr()
+    }
+
+    pub fn pop_value_type(&mut self, gc: GCHandle<'gc>) -> ObjectInstance<'gc> {
+        self.pop(gc).as_value_type()
+    }
+
+    pub fn push_i32(&mut self, gc: GCHandle<'gc>, value: i32) {
+        self.push(gc, StackValue::Int32(value));
+    }
+
+    pub fn push_i64(&mut self, gc: GCHandle<'gc>, value: i64) {
+        self.push(gc, StackValue::Int64(value));
+    }
+
+    pub fn push_f64(&mut self, gc: GCHandle<'gc>, value: f64) {
+        self.push(gc, StackValue::NativeFloat(value));
+    }
+
+    pub fn push_isize(&mut self, gc: GCHandle<'gc>, value: isize) {
+        self.push(gc, StackValue::NativeInt(value));
+    }
+
+    pub fn push_obj(&mut self, gc: GCHandle<'gc>, value: ObjectRef<'gc>) {
+        self.push(gc, StackValue::ObjectRef(value));
+    }
+
+    pub fn push_value_type(&mut self, gc: GCHandle<'gc>, value: ObjectInstance<'gc>) {
+        self.push(gc, StackValue::ValueType(value));
+    }
+
+    pub fn push_managed_ptr(&mut self, gc: GCHandle<'gc>, value: ManagedPtr<'gc>) {
+        self.push(gc, StackValue::ManagedPtr(value));
+    }
+
+    pub fn push_ptr(
+        &mut self,
+        gc: GCHandle<'gc>,
+        ptr: *mut u8,
+        t: TypeDescription,
+        is_pinned: bool,
+    ) {
+        self.push(gc, StackValue::managed_ptr(ptr, t, is_pinned));
     }
 
     pub fn pop_multiple(&mut self, gc: GCHandle<'gc>, count: usize) -> Vec<StackValue<'gc>> {

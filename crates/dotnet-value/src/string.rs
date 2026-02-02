@@ -7,13 +7,16 @@ use std::{
 #[macro_export]
 macro_rules! with_string {
     ($stack:expr, $gc:expr, $value:expr, |$s:ident| $code:expr) => {{
-        $crate::vm_expect_stack!(let ObjectRef(obj) = $value);
+        let obj = $value.as_object_ref();
         let $crate::object::ObjectRef(Some(obj)) = obj else {
             return $stack.throw_by_name($gc, "System.NullReferenceException");
         };
         let heap = obj.borrow();
         let $crate::object::HeapStorage::Str($s) = &heap.storage else {
-            panic!("invalid type on stack, expected string, received {:?}", heap.storage)
+            panic!(
+                "invalid type on stack, expected string, received {:?}",
+                heap.storage
+            )
         };
         $code
     }};
@@ -22,13 +25,16 @@ macro_rules! with_string {
 #[macro_export]
 macro_rules! with_string_mut {
     ($stack:expr, $gc:expr, $value:expr, |$s:ident| $code:expr) => {{
-        $crate::vm_expect_stack!(let ObjectRef(obj) = $value);
+        let obj = $value.as_object_ref();
         let $crate::object::ObjectRef(Some(obj)) = obj else {
             return $stack.throw_by_name($gc, "System.NullReferenceException");
         };
         let mut heap = obj.borrow_mut($gc);
         let $crate::object::HeapStorage::Str($s) = &mut heap.storage else {
-            panic!("invalid type on stack, expected string, received {:?}", heap.storage)
+            panic!(
+                "invalid type on stack, expected string, received {:?}",
+                heap.storage
+            )
         };
         $code
     }};

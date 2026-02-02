@@ -1,6 +1,6 @@
 use crate::{
-    context::ResolutionContext, layout::type_layout, pop_args, resolution::ValueResolution,
-    vm_push, CallStack, StepResult,
+    context::ResolutionContext, layout::type_layout, resolution::ValueResolution, CallStack,
+    StepResult,
 };
 use dotnet_types::{
     generics::GenericLookup,
@@ -63,16 +63,14 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(
-        stack,
-        gc,
-        [ValueType(a), ValueType(b), Int32(_culture_comparison)]
-    );
+    let _culture_comparison = stack.pop_i32(gc);
+    let b = stack.pop_value_type(gc);
+    let a = stack.pop_value_type(gc);
 
     let a = span_to_slice(a, 2);
     let b = span_to_slice(b, 2);
 
-    vm_push!(stack, gc, Int32((a == b) as i32));
+    stack.push_i32(gc, (a == b) as i32);
     StepResult::InstructionStepped
 }
 
@@ -230,7 +228,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
         .get_field_mut_local(span_type, "_length")
         .copy_from_slice(&(len as i32).to_ne_bytes());
 
-    vm_push!(stack, gc, ValueType(span));
+    stack.push_value_type(gc, span);
     StepResult::InstructionStepped
 }
 
@@ -250,7 +248,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
     );
     let element_size = type_layout(element_type.clone(), &ctx).size();
 
-    pop_args!(stack, gc, [ValueType(field_handle)]);
+    let field_handle = stack.pop_value_type(gc);
 
     let (FieldDescription { field, .. }, lookup) = {
         let mut ptr_buf = [0u8; ObjectRef::SIZE];
@@ -307,7 +305,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
             .get_field_mut_local(span_type, "_length")
             .copy_from_slice(&element_count.to_ne_bytes());
 
-        vm_push!(stack, gc, ValueType(span_instance));
+        stack.push_value_type(gc, span_instance);
         StepResult::InstructionStepped
     } else {
         todo!("initial field data for {:?}", field_desc);
@@ -321,15 +319,9 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(
-        stack,
-        gc,
-        [
-            ValueType(field_handle),
-            ValueType(type_handle),
-            ManagedPtr(length_ref)
-        ]
-    );
+    let length_ref = stack.pop_managed_ptr(gc);
+    let type_handle = stack.pop_value_type(gc);
+    let field_handle = stack.pop_value_type(gc);
 
     // Resolve field
     let (FieldDescription { field, .. }, _) = {
@@ -367,7 +359,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
     let element_size = type_layout(element_type, &ctx).size();
 
     let Some(initial_data) = &field.initial_value else {
-        vm_push!(stack, gc, NativeInt(0));
+        stack.push_isize(gc, 0);
         return StepResult::InstructionStepped;
     };
 
@@ -390,9 +382,9 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
         }
 
         let ptr = initial_data.as_ptr() as usize;
-        vm_push!(stack, gc, NativeInt(ptr as isize));
+        stack.push_isize(gc, ptr as isize);
     } else {
-        vm_push!(stack, gc, NativeInt(0));
+        stack.push_isize(gc, 0);
     }
     StepResult::InstructionStepped
 }
@@ -404,7 +396,7 @@ pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc>(
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(array_ref)]);
+    let array_ref = stack.pop_obj(gc);
 
     let element_type = if !generics.method_generics.is_empty() {
         generics.method_generics[0].clone()
@@ -424,13 +416,13 @@ pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc>(
                 Some(array_ref),
                 false,
             );
-            vm_push!(stack, gc, ManagedPtr(managed));
+            stack.push_managed_ptr(gc, managed);
         } else {
             panic!("GetArrayData called on non-vector object");
         }
     } else {
         let managed = ManagedPtr::new(None, element_type_desc, None, false);
-        vm_push!(stack, gc, ManagedPtr(managed));
+        stack.push_managed_ptr(gc, managed);
     }
     StepResult::InstructionStepped
 }

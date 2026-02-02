@@ -1,7 +1,6 @@
 use crate::{
-    pop_args,
     sync::{Arc, AtomicI32, Ordering, SyncBlockOps, SyncManagerOps},
-    vm_pop, vm_push, CallStack, StepResult,
+    CallStack, StepResult,
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
@@ -19,7 +18,7 @@ pub fn intrinsic_monitor_exit<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(obj_ref)]);
+    let obj_ref = stack.pop_obj(gc);
 
     if obj_ref.0.is_some() {
         // Get the current thread ID from the call stack
@@ -82,11 +81,9 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
 
     match target_type.get() {
         BaseType::Int32 => {
-            pop_args!(
-                stack,
-                gc,
-                [ManagedPtr(target_ptr), Int32(value), Int32(comparand)]
-            );
+            let comparand = stack.pop_i32(gc);
+            let value = stack.pop_i32(gc);
+            let target_ptr = stack.pop_managed_ptr(gc);
 
             let target = target_ptr
                 .pointer()
@@ -102,18 +99,12 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
                 Ok(prev) | Err(prev) => prev,
             };
 
-            vm_push!(stack, gc, Int32(prev));
+            stack.push_i32(gc, prev);
         }
         BaseType::IntPtr | BaseType::UIntPtr => {
-            pop_args!(
-                stack,
-                gc,
-                [
-                    ManagedPtr(target_ptr),
-                    NativeInt(value),
-                    NativeInt(comparand)
-                ]
-            );
+            let comparand = stack.pop_isize(gc);
+            let value = stack.pop_isize(gc);
+            let target_ptr = stack.pop_managed_ptr(gc);
 
             let target = target_ptr
                 .pointer()
@@ -129,19 +120,13 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
                 Ok(prev) | Err(prev) => prev,
             };
 
-            vm_push!(stack, gc, NativeInt(prev as isize));
+            stack.push_isize(gc, prev as isize);
         }
         _ => {
             // Assume ObjectRef (pointer sized) for all other types for now.
-            pop_args!(
-                stack,
-                gc,
-                [
-                    ManagedPtr(target_ptr),
-                    ObjectRef(value),
-                    ObjectRef(comparand)
-                ]
-            );
+            let comparand = stack.pop_obj(gc);
+            let value = stack.pop_obj(gc);
+            let target_ptr = stack.pop_managed_ptr(gc);
 
             let target = target_ptr
                 .pointer()
@@ -173,7 +158,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
                 // The object is kept alive because we are in an intrinsic call and the stack roots it (or the static field roots it).
                 ObjectRef(Some(unsafe { Gc::from_ptr(prev_raw as *const _) }))
             };
-            vm_push!(stack, gc, ObjectRef(prev));
+            stack.push_obj(gc, prev);
         }
     }
 
@@ -207,7 +192,8 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
 
     match target_type.get() {
         BaseType::Int32 => {
-            pop_args!(stack, gc, [ManagedPtr(target_ptr), Int32(value)]);
+            let value = stack.pop_i32(gc);
+            let target_ptr = stack.pop_managed_ptr(gc);
 
             let target = target_ptr
                 .pointer()
@@ -216,10 +202,11 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
 
             let prev = unsafe { AtomicI32::from_ptr(target) }.swap(value, Ordering::SeqCst);
 
-            vm_push!(stack, gc, Int32(prev));
+            stack.push_i32(gc, prev);
         }
         BaseType::Int64 => {
-            pop_args!(stack, gc, [ManagedPtr(target_ptr), Int64(value)]);
+            let value = stack.pop_i64(gc);
+            let target_ptr = stack.pop_managed_ptr(gc);
 
             let target = target_ptr
                 .pointer()
@@ -228,10 +215,11 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
 
             let prev = unsafe { atomic::AtomicI64::from_ptr(target) }.swap(value, Ordering::SeqCst);
 
-            vm_push!(stack, gc, Int64(prev));
+            stack.push_i64(gc, prev);
         }
         BaseType::IntPtr | BaseType::UIntPtr => {
-            pop_args!(stack, gc, [ManagedPtr(target_ptr), NativeInt(value)]);
+            let value = stack.pop_isize(gc);
+            let target_ptr = stack.pop_managed_ptr(gc);
 
             let target = target_ptr
                 .pointer()
@@ -241,21 +229,13 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
             let prev = unsafe { atomic::AtomicUsize::from_ptr(target) }
                 .swap(value as usize, Ordering::SeqCst);
 
-            vm_push!(stack, gc, NativeInt(prev as isize));
+            stack.push_isize(gc, prev as isize);
         }
         _ => {
             // Assume ObjectRef (pointer sized) for all other types for now.
             // We use manual popping to handle both ObjectRef and NativeInt (which might be used for null or pointers).
-            let value = vm_pop!(stack, gc);
-            let target_ptr_val = vm_pop!(stack, gc);
-
-            let target_ptr = match target_ptr_val {
-                StackValue::ManagedPtr(p) => p,
-                _ => panic!(
-                    "intrinsic_interlocked_exchange: Expected ManagedPtr, got {:?}",
-                    target_ptr_val
-                ),
-            };
+            let value = stack.pop(gc);
+            let target_ptr = stack.pop_managed_ptr(gc);
 
             let target = target_ptr
                 .pointer()
@@ -282,7 +262,7 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
                 // The object is kept alive because we are in an intrinsic call and the stack roots it.
                 ObjectRef(Some(unsafe { Gc::from_ptr(prev_raw as *const _) }))
             };
-            vm_push!(stack, gc, ObjectRef(prev));
+            stack.push_obj(gc, prev);
         }
     }
 
@@ -313,8 +293,8 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let success_flag = vm_pop!(stack, gc).as_ptr();
-    pop_args!(stack, gc, [ObjectRef(obj_ref)]);
+    let success_flag = stack.pop(gc).as_ptr();
+    let obj_ref = stack.pop_obj(gc);
 
     if obj_ref.0.is_some() {
         let thread_id = stack.thread_id.get();
@@ -352,7 +332,7 @@ pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(obj_ref)]);
+    let obj_ref = stack.pop_obj(gc);
 
     if obj_ref.0.is_some() {
         let thread_id = stack.thread_id.get();
@@ -363,7 +343,7 @@ pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc>(
 
         let sync_block = get_or_create_sync_block(&stack.shared.sync_blocks, obj_ref, gc);
         let success = sync_block.try_enter(thread_id);
-        vm_push!(stack, gc, Int32(if success { 1 } else { 0 }));
+        stack.push_i32(gc, if success { 1 } else { 0 });
     } else {
         return stack.throw_by_name(gc, "System.NullReferenceException");
     }
@@ -379,8 +359,9 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let success_flag = vm_pop!(stack, gc).as_ptr();
-    pop_args!(stack, gc, [ObjectRef(obj_ref), Int32(timeout_ms)]);
+    let success_flag = stack.pop(gc).as_ptr();
+    let timeout_ms = stack.pop_i32(gc);
+    let obj_ref = stack.pop_obj(gc);
 
     if obj_ref.0.is_some() {
         let thread_id = stack.thread_id.get();
@@ -421,7 +402,8 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(obj_ref), Int32(timeout_ms)]);
+    let timeout_ms = stack.pop_i32(gc);
+    let obj_ref = stack.pop_obj(gc);
 
     if obj_ref.0.is_some() {
         let thread_id = stack.thread_id.get();
@@ -444,7 +426,7 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
         let success =
             sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &stack.shared.metrics);
 
-        vm_push!(stack, gc, Int32(if success { 1 } else { 0 }));
+        stack.push_i32(gc, if success { 1 } else { 0 });
     } else {
         return stack.throw_by_name(gc, "System.NullReferenceException");
     }
@@ -473,7 +455,7 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let ptr = vm_pop!(stack, gc).as_ptr() as *const usize;
+    let ptr = stack.pop(gc).as_ptr() as *const usize;
 
     let raw = unsafe { ptr::read_volatile(ptr) };
     // Ensure acquire semantics to match .NET memory model
@@ -485,7 +467,7 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
         ObjectRef(Some(unsafe { Gc::from_ptr(raw as *const _) }))
     };
 
-    vm_push!(stack, gc, ObjectRef(value));
+    stack.push_obj(gc, value);
     StepResult::InstructionStepped
 }
 
@@ -510,8 +492,8 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let value = vm_pop!(stack, gc);
-    let ptr_val = vm_pop!(stack, gc);
+    let value = stack.pop(gc);
+    let ptr_val = stack.pop(gc);
     let ptr = ptr_val.as_ptr();
 
     // Ensure release semantics to match .NET memory model

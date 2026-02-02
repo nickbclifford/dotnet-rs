@@ -1,11 +1,10 @@
 use crate::{
     exceptions::{ExceptionState, HandlerAddress, UnwindTarget},
     instructions::StepResult,
-    vm_pop, CallStack,
+    CallStack,
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
-use dotnet_value::StackValue;
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(Leave)]
@@ -68,11 +67,7 @@ pub fn endfinally<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm
 
 #[dotnet_instruction(EndFilter)]
 pub fn endfilter<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let result = vm_pop!(stack, gc);
-    let result_val = match result {
-        StackValue::Int32(i) => i,
-        _ => panic!("EndFilter expected Int32, found {:?}", result),
-    };
+    let result_val = stack.pop_i32(gc);
 
     let (exception, handler) = match stack.execution.exception_mode {
         ExceptionState::Filtering { exception, handler } => (exception, handler),
@@ -125,13 +120,7 @@ pub fn endfilter<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>
 
 #[dotnet_instruction(Throw)]
 pub fn throw<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let exc = vm_pop!(stack, gc);
-    let StackValue::ObjectRef(exc) = exc else {
-        panic!(
-            "Throw expects an object reference on the stack, received {:?}",
-            exc
-        )
-    };
+    let exc = stack.pop_obj(gc);
     if exc.0.is_none() {
         return stack.throw_by_name(gc, "System.NullReferenceException");
     }

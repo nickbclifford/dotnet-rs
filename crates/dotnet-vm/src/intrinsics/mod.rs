@@ -102,7 +102,7 @@
 //!   ├─→ external_call() [if P/Invoke]
 //!   └─→ call_frame() [managed CIL]
 //! ```
-use crate::{vm_pop, vm_push, vm_trace_intrinsic};
+use crate::vm_trace_intrinsic;
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
@@ -603,7 +603,7 @@ fn object_to_string<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let this = vm_pop!(stack, gc);
+    let this = stack.pop(gc);
 
     let type_name = if let StackValue::ObjectRef(obj_ref) = this {
         if obj_ref.0.is_some() {
@@ -623,6 +623,6 @@ fn object_to_string<'gc, 'm: 'gc>(
     let str_val = CLRString::from(type_name);
     let storage = HeapStorage::Str(str_val);
     let obj_ref = ObjectRef::new(gc, storage);
-    vm_push!(stack, gc, StackValue::ObjectRef(obj_ref));
+    stack.push_obj(gc, obj_ref);
     StepResult::InstructionStepped
 }

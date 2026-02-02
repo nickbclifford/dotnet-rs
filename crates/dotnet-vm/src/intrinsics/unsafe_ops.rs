@@ -2,7 +2,7 @@ use crate::{
     context::ResolutionContext,
     layout::type_layout,
     memory::{check_read_safety, RawMemoryAccess},
-    pop_args, vm_pop, vm_push, CallStack, StepResult,
+    CallStack, StepResult,
 };
 use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{
@@ -30,7 +30,7 @@ pub fn intrinsic_marshal_get_last_pinvoke_error<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let value = unsafe { crate::pinvoke::LAST_ERROR };
-    vm_push!(stack, gc, Int32(value));
+    stack.push_i32(gc, value);
     StepResult::InstructionStepped
 }
 
@@ -42,7 +42,7 @@ pub fn intrinsic_marshal_set_last_pinvoke_error<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [Int32(value)]);
+    let value = stack.pop_i32(gc);
     unsafe {
         crate::pinvoke::LAST_ERROR = value;
     }
@@ -58,9 +58,9 @@ pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [NativeInt(len)]);
-    let src = vm_pop!(stack, gc).as_ptr();
-    let dst = vm_pop!(stack, gc).as_ptr();
+    let len = stack.pop_isize(gc);
+    let src = stack.pop_ptr(gc);
+    let dst = stack.pop_ptr(gc);
 
     let ctx = ResolutionContext::for_method(
         method,
@@ -98,7 +98,7 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(obj)]);
+    let obj = stack.pop_obj(gc);
     let Some(array_handle) = obj.0 else {
         return stack.throw_by_name(gc, "System.NullReferenceException");
     };
@@ -111,11 +111,7 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<'gc, 'm: 'gc>(
     let element_type = stack
         .loader()
         .find_concrete_type(generics.method_generics[0].clone());
-    vm_push!(
-        stack,
-        gc,
-        StackValue::managed_ptr(data_ptr, element_type, false)
-    );
+    stack.push_ptr(gc, data_ptr, element_type, false);
     StepResult::InstructionStepped
 }
 
@@ -138,16 +134,13 @@ pub fn intrinsic_marshal_size_of<'gc, 'm: 'gc>(
     let concrete_type = if method.method.signature.parameters.is_empty() {
         generics.method_generics[0].clone()
     } else {
-        let type_obj = match vm_pop!(stack, gc) {
-            StackValue::ObjectRef(o) => o,
-            rest => panic!("Marshal.SizeOf(Type) called on non-object: {:?}", rest),
-        };
+        let type_obj = stack.pop_obj(gc);
         stack
             .resolve_runtime_type(type_obj)
             .to_concrete(stack.loader())
     };
     let layout = type_layout(concrete_type, &ctx);
-    vm_push!(stack, gc, Int32(layout.size() as i32));
+    stack.push_i32(gc, layout.size() as i32);
     StepResult::InstructionStepped
 }
 
@@ -168,18 +161,12 @@ pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
         generics,
         stack.shared.caches.clone(),
     );
-    let field_name_val = vm_pop!(stack, gc);
+    let field_name_val = stack.pop(gc);
     let field_name = with_string!(stack, gc, field_name_val, |s| s.as_string());
     let concrete_type = if method.method.signature.parameters.len() == 1 {
         generics.method_generics[0].clone()
     } else {
-        let type_obj = match vm_pop!(stack, gc) {
-            StackValue::ObjectRef(o) => o,
-            rest => panic!(
-                "Marshal.OffsetOf(Type, string) called on non-object: {:?}",
-                rest
-            ),
-        };
+        let type_obj = stack.pop_obj(gc);
         stack
             .resolve_runtime_type(type_obj)
             .to_concrete(stack.loader())
@@ -189,7 +176,7 @@ pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
     if let LayoutManager::FieldLayoutManager(flm) = &*layout {
         let td = stack.loader().find_concrete_type(concrete_type.clone());
         if let Some(field) = flm.get_field(td, &field_name) {
-            vm_push!(stack, gc, NativeInt(field.position as isize));
+            stack.push_isize(gc, field.position as isize);
         } else {
             panic!("Field {} not found in type {:?}", field_name, concrete_type);
         }
@@ -208,8 +195,8 @@ pub fn intrinsic_unsafe_as_pointer<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ManagedPtr(ptr)]);
-    vm_push!(stack, gc, ManagedPtr(ptr));
+    let ptr = stack.pop_managed_ptr(gc);
+    stack.push(gc, StackValue::ManagedPtr(ptr));
     StepResult::InstructionStepped
 }
 
@@ -231,7 +218,7 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     let target_type = stack.loader().find_concrete_type(target.clone());
     let layout = type_layout(target.clone(), &ctx);
 
-    let offset_val = vm_pop!(stack, gc);
+    let offset_val = stack.pop(gc);
     let offset = match offset_val {
         StackValue::Int32(i) => i as isize,
         StackValue::NativeInt(i) => i,
@@ -241,7 +228,7 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
         ),
     };
 
-    let m_val = vm_pop!(stack, gc);
+    let m_val = stack.pop(gc);
     let (pinned, owner) = if let StackValue::ManagedPtr(m) = &m_val {
         (m.pinned, m.owner)
     } else {
@@ -249,10 +236,9 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     };
     let m = m_val.as_ptr();
     let result_ptr = unsafe { m.offset(offset * layout.size() as isize) };
-    vm_push!(
-        stack,
+    stack.push(
         gc,
-        StackValue::managed_ptr_with_owner(result_ptr, target_type, owner, pinned)
+        StackValue::managed_ptr_with_owner(result_ptr, target_type, owner, pinned),
     );
     StepResult::InstructionStepped
 }
@@ -269,7 +255,7 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
     let target = &generics.method_generics[0];
     let target_type = stack.loader().find_concrete_type(target.clone());
 
-    let offset_val = vm_pop!(stack, gc);
+    let offset_val = stack.pop(gc);
     let offset = match offset_val {
         StackValue::Int32(i) => i as isize,
         StackValue::NativeInt(i) => i,
@@ -279,17 +265,16 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
         ),
     };
 
-    let m_val = vm_pop!(stack, gc);
+    let m_val = stack.pop(gc);
     let (pinned, owner) = if let StackValue::ManagedPtr(m) = &m_val {
         (m.pinned, m.owner)
     } else {
         (false, None)
     };
     let m = m_val.as_ptr();
-    vm_push!(
-        stack,
+    stack.push(
         gc,
-        StackValue::managed_ptr_with_owner(unsafe { m.offset(offset) }, target_type, owner, pinned)
+        StackValue::managed_ptr_with_owner(unsafe { m.offset(offset) }, target_type, owner, pinned),
     );
     StepResult::InstructionStepped
 }
@@ -302,9 +287,9 @@ pub fn intrinsic_unsafe_are_same<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let m1 = vm_pop!(stack, gc).as_ptr();
-    let m2 = vm_pop!(stack, gc).as_ptr();
-    vm_push!(stack, gc, Int32((m1 == m2) as i32));
+    let m1 = stack.pop_ptr(gc);
+    let m2 = stack.pop_ptr(gc);
+    stack.push_i32(gc, (m1 == m2) as i32);
     StepResult::InstructionStepped
 }
 
@@ -351,14 +336,14 @@ pub fn intrinsic_unsafe_as_generic<'gc, 'm: 'gc>(
     let target_type = stack
         .loader()
         .find_concrete_type(generics.method_generics[1].clone());
-    let m_val = vm_pop!(stack, gc);
+    let m_val = stack.pop(gc);
     let pinned = match &m_val {
         StackValue::ManagedPtr(m) => m.pinned,
         StackValue::ObjectRef(ObjectRef(Some(_))) => false,
         _ => false,
     };
     let m = m_val.as_ptr();
-    vm_push!(stack, gc, StackValue::managed_ptr(m, target_type, pinned));
+    stack.push(gc, StackValue::managed_ptr(m, target_type, pinned));
     StepResult::InstructionStepped
 }
 
@@ -403,7 +388,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
 
     let target_type = stack.loader().find_concrete_type(target_type_gen);
 
-    let val = vm_pop!(stack, gc);
+    let val = stack.pop(gc);
     let (ptr, pinned) = match val {
         StackValue::NativeInt(p) => (p as *mut u8, false),
         StackValue::ManagedPtr(m) => (
@@ -439,7 +424,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
         // panic!("Heap Corruption: Casting unmanaged pointer to Ref type is unsafe");
     }
 
-    vm_push!(stack, gc, StackValue::managed_ptr(ptr, target_type, pinned));
+    stack.push(gc, StackValue::managed_ptr(ptr, target_type, pinned));
     StepResult::InstructionStepped
 }
 
@@ -460,7 +445,7 @@ pub fn intrinsic_unsafe_size_of<'gc, 'm: 'gc>(
     );
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
-    vm_push!(stack, gc, Int32(layout.size() as i32));
+    stack.push_i32(gc, layout.size() as i32);
     StepResult::InstructionStepped
 }
 
@@ -472,10 +457,10 @@ pub fn intrinsic_unsafe_byte_offset<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let r = vm_pop!(stack, gc).as_ptr();
-    let l = vm_pop!(stack, gc).as_ptr();
+    let r = stack.pop_ptr(gc);
+    let l = stack.pop_ptr(gc);
     let offset = (l as isize) - (r as isize);
-    vm_push!(stack, gc, NativeInt(offset));
+    stack.push_isize(gc, offset);
     StepResult::InstructionStepped
 }
 
@@ -496,7 +481,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
         stack.shared.caches.clone(),
     );
 
-    let source = vm_pop!(stack, gc);
+    let source = stack.pop(gc);
     let (ptr, owner) = match source {
         StackValue::NativeInt(p) => {
             if p == 0 {
@@ -524,9 +509,9 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
             if let StackValue::ManagedPtr(m) = v {
                 let target_type = stack.loader().find_concrete_type(target.clone());
                 let new_m = ManagedPtr::new(m.pointer(), target_type, m.owner, m.pinned);
-                vm_push!(stack, gc, StackValue::ManagedPtr(new_m));
+                stack.push(gc, StackValue::ManagedPtr(new_m));
             } else {
-                vm_push!(stack, gc, v);
+                stack.push(gc, v);
             }
         }
         Err(e) => panic!("Unsafe.ReadUnaligned failed: {}", e),
@@ -557,9 +542,9 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
     );
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
-    let value = vm_pop!(stack, gc);
+    let value = stack.pop(gc);
 
-    let dest = vm_pop!(stack, gc);
+    let dest = stack.pop(gc);
     let (ptr, owner) = match dest {
         StackValue::NativeInt(p) => {
             if p == 0 {

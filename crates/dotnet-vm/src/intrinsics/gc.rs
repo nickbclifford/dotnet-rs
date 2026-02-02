@@ -1,10 +1,10 @@
-use crate::{pop_args, vm_pop, vm_push, CallStack, StepResult};
+use crate::{CallStack, StepResult};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::{GCHandle, GCHandleType};
 use dotnet_value::{
     object::{HeapStorage, ObjectRef},
-    with_string, StackValue,
+    with_string,
 };
 
 /// System.ArgumentNullException::ThrowIfNull(object, string)
@@ -15,7 +15,8 @@ pub fn intrinsic_argument_null_exception_throw_if_null<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(target), ObjectRef(_param_name_obj)]);
+    let _param_name_obj = stack.pop_obj(gc);
+    let target = stack.pop_obj(gc);
     if target.0.is_none() {
         return stack.throw_by_name(gc, "System.ArgumentNullException");
     }
@@ -30,12 +31,10 @@ pub fn intrinsic_environment_get_variable_core<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let value = with_string!(stack, gc, vm_pop!(stack, gc), |s| std::env::var(
-        s.as_string()
-    ));
+    let value = with_string!(stack, gc, stack.pop(gc), |s| std::env::var(s.as_string()));
     match value.ok() {
-        Some(s) => vm_push!(stack, gc, string(s)),
-        None => vm_push!(stack, gc, StackValue::null()),
+        Some(s) => stack.push_string(gc, s),
+        None => stack.push_obj(gc, ObjectRef(None)),
     }
     StepResult::InstructionStepped
 }
@@ -49,7 +48,7 @@ pub fn intrinsic_gc_keep_alive<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(_obj)]);
+    let _obj = stack.pop_obj(gc);
     StepResult::InstructionStepped
 }
 
@@ -61,7 +60,7 @@ pub fn intrinsic_gc_suppress_finalize<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(obj)]);
+    let obj = stack.pop_obj(gc);
     if let Some(handle) = obj.0 {
         if let Some(o) = handle.borrow_mut(gc).storage.as_obj_mut() {
             o.finalizer_suppressed = true;
@@ -78,7 +77,7 @@ pub fn intrinsic_gc_reregister_for_finalize<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(obj)]);
+    let obj = stack.pop_obj(gc);
     if let Some(handle) = obj.0 {
         let is_obj = handle.borrow().storage.as_obj().is_some();
         if is_obj {
@@ -113,7 +112,7 @@ pub fn intrinsic_gc_collect_1<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [Int32(_generation)]);
+    let _generation = stack.pop_i32(gc);
     stack.heap().needs_full_collect.set(true);
     StepResult::InstructionStepped
 }
@@ -126,7 +125,8 @@ pub fn intrinsic_gc_collect_2<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [Int32(_generation), Int32(_mode)]);
+    let _mode = stack.pop_i32(gc);
+    let _generation = stack.pop_i32(gc);
     stack.heap().needs_full_collect.set(true);
     StepResult::InstructionStepped
 }
@@ -156,7 +156,8 @@ pub fn intrinsic_gchandle_internal_alloc<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(obj), Int32(handle_type)]);
+    let handle_type = stack.pop_i32(gc);
+    let obj = stack.pop_obj(gc);
 
     let handle_type = GCHandleType::from(handle_type);
     let index = {
@@ -193,7 +194,7 @@ pub fn intrinsic_gchandle_internal_alloc<'gc, 'm: 'gc>(
             .trace_gc_handle(stack.indent(), "ALLOC", &handle_type_str, addr);
     }
 
-    vm_push!(stack, gc, NativeInt((index + 1) as isize));
+    stack.push_isize(gc, (index + 1) as isize);
     StepResult::InstructionStepped
 }
 
@@ -204,7 +205,7 @@ pub fn intrinsic_gchandle_internal_free<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [NativeInt(handle)]);
+    let handle = stack.pop_isize(gc);
     if handle != 0 {
         let index = (handle - 1) as usize;
         let mut handles = stack.heap().gchandles.borrow_mut();
@@ -247,7 +248,7 @@ pub fn intrinsic_gchandle_internal_get<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [NativeInt(handle)]);
+    let handle = stack.pop_isize(gc);
     let result = if handle == 0 {
         ObjectRef(None)
     } else {
@@ -258,7 +259,7 @@ pub fn intrinsic_gchandle_internal_get<'gc, 'm: 'gc>(
             _ => ObjectRef(None),
         }
     };
-    vm_push!(stack, gc, ObjectRef(result));
+    stack.push_obj(gc, result);
     StepResult::InstructionStepped
 }
 
@@ -271,7 +272,8 @@ pub fn intrinsic_gchandle_internal_set<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [NativeInt(handle), ObjectRef(obj)]);
+    let obj = stack.pop_obj(gc);
+    let handle = stack.pop_isize(gc);
     if handle != 0 {
         let index = (handle - 1) as usize;
         let mut handles = stack.heap().gchandles.borrow_mut();
@@ -298,7 +300,7 @@ pub fn intrinsic_gchandle_internal_addr_of_pinned_object<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [NativeInt(handle)]);
+    let handle = stack.pop_isize(gc);
     let addr = if handle == 0 {
         0
     } else {
@@ -327,6 +329,6 @@ pub fn intrinsic_gchandle_internal_addr_of_pinned_object<'gc, 'm: 'gc>(
             0
         }
     };
-    vm_push!(stack, gc, NativeInt(addr));
+    stack.push_isize(gc, addr);
     StepResult::InstructionStepped
 }

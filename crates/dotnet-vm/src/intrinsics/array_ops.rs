@@ -1,4 +1,4 @@
-use crate::{pop_args, resolution::ValueResolution, vm_push, CallStack, StepResult};
+use crate::{resolution::ValueResolution, CallStack, StepResult};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
@@ -16,7 +16,7 @@ pub fn intrinsic_array_get_length<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(obj)]);
+    let obj = stack.pop_obj(gc);
     let ObjectRef(Some(handle)) = obj else {
         return stack.throw_by_name(gc, "System.NullReferenceException");
     };
@@ -27,7 +27,7 @@ pub fn intrinsic_array_get_length<'gc, 'm: 'gc>(
         _ => panic!("Not an array"),
     };
 
-    vm_push!(stack, gc, Int32(len as i32));
+    stack.push_i32(gc, len as i32);
     StepResult::InstructionStepped
 }
 
@@ -39,7 +39,7 @@ pub fn intrinsic_array_get_rank<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(obj)]);
+    let obj = stack.pop_obj(gc);
     let ObjectRef(Some(handle)) = obj else {
         return stack.throw_by_name(gc, "System.NullReferenceException");
     };
@@ -50,7 +50,7 @@ pub fn intrinsic_array_get_rank<'gc, 'm: 'gc>(
         _ => panic!("Not an array"),
     };
 
-    vm_push!(stack, gc, Int32(rank));
+    stack.push_i32(gc, rank);
     StepResult::InstructionStepped
 }
 
@@ -108,7 +108,7 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
         .read_cts_value(&v.element, &v.get()[start..end], gc)
         .into_stack(gc);
 
-    vm_push!(stack, gc, val);
+    stack.push(gc, val);
     StepResult::InstructionStepped
 }
 

@@ -26,23 +26,6 @@ pub mod pointer;
 pub mod storage;
 pub mod string;
 
-#[macro_export]
-macro_rules! vm_expect_stack {
-    (let $variant:ident ( $inner:ident $(as $t:ty)? ) = $v:expr) => {
-        let $inner = match $v {
-            $crate::StackValue::$variant($inner) => $inner,
-            err => panic!(
-                "invalid type on stack ({:?}), expected {}",
-                err,
-                stringify!($variant)
-            ),
-        };
-        $(
-            let $inner = $inner as $t;
-        )?
-    };
-}
-
 #[cfg(feature = "multithreaded-gc")]
 use object::ObjectPtr;
 
@@ -315,6 +298,20 @@ impl<'gc> StackValue<'gc> {
         match self {
             Self::ObjectRef(o) => *o,
             v => panic!("expected ObjectRef, received {:?}", v),
+        }
+    }
+
+    pub fn as_managed_ptr(&self) -> ManagedPtr<'gc> {
+        match self {
+            Self::ManagedPtr(m) => *m,
+            v => panic!("expected ManagedPtr, received {:?}", v),
+        }
+    }
+
+    pub fn as_value_type(&self) -> Object<'gc> {
+        match self {
+            Self::ValueType(v) => v.clone(),
+            v => panic!("expected ValueType, received {:?}", v),
         }
     }
 

@@ -2,7 +2,7 @@ use crate::{
     instructions::StepResult,
     layout::type_layout,
     resolution::{TypeResolutionExt, ValueResolution},
-    vm_expect_stack, vm_pop, vm_push, vm_trace, CallStack,
+    vm_trace, CallStack,
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
@@ -36,11 +36,7 @@ pub fn callvirt<'gc, 'm: 'gc>(
     // Determine number of arguments to extract this_type
     let (base_method, _) = stack.find_generic_method(param0);
     let num_args = 1 + base_method.method.signature.parameters.len();
-    let mut args = Vec::new();
-    for _ in 0..num_args {
-        args.push(vm_pop!(stack, gc));
-    }
-    args.reverse();
+    let args = stack.pop_multiple(gc, num_args);
 
     // Extract runtime type from this argument (value types are passed as managed pointers - I.8.9.7)
     let this_value = args[0].clone();
@@ -59,7 +55,7 @@ pub fn callvirt<'gc, 'm: 'gc>(
 
     // Push arguments back and dispatch
     for a in args {
-        vm_push!(stack, gc, a);
+        stack.push(gc, a);
     }
     stack.unified_dispatch(gc, param0, Some(this_type), None)
 }
@@ -112,8 +108,7 @@ pub fn callvirt_constrained<'gc, 'm: 'gc>(
 
     // Pop all arguments (this + parameters)
     let num_args = 1 + base_method.method.signature.parameters.len();
-    let mut args: Vec<_> = (0..num_args).map(|_| vm_pop!(stack, gc)).collect();
-    args.reverse();
+    let mut args = stack.pop_multiple(gc, num_args);
 
     let ctx = stack.current_context();
 
@@ -136,7 +131,11 @@ pub fn callvirt_constrained<'gc, 'm: 'gc>(
             overriding_method
         } else {
             // No override: box the value and use base implementation
-            let ptr = args[0].as_ptr();
+            let m = args[0].as_managed_ptr();
+            let ptr = m
+                .pointer()
+                .map(|p| p.as_ptr())
+                .unwrap_or(std::ptr::null_mut());
             if ptr.is_null() {
                 return stack.throw_by_name(gc, "System.NullReferenceException");
             }
@@ -162,7 +161,7 @@ pub fn callvirt_constrained<'gc, 'm: 'gc>(
         }
     } else {
         // Reference type: dereference the managed pointer
-        vm_expect_stack!(let ManagedPtr(m) = args[0].clone());
+        let m = args[0].as_managed_ptr();
         let ptr = match m.pointer() {
             Some(p) => p.as_ptr(),
             None => return stack.throw_by_name(gc, "System.NullReferenceException"),
@@ -202,7 +201,7 @@ pub fn callvirt_constrained<'gc, 'm: 'gc>(
     };
 
     for arg in args {
-        vm_push!(stack, gc, arg);
+        stack.push(gc, arg);
     }
 
     // Note: CallVirtualConstrained uses dispatch_method directly

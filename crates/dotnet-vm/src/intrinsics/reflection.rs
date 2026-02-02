@@ -1,9 +1,8 @@
 use crate::{
     context::ResolutionContext,
     layout::type_layout,
-    pop_args,
     resolution::{TypeResolutionExt, ValueResolution},
-    vm_pop, vm_push, CallStack, MethodInfo, StepResult,
+    CallStack, MethodInfo, StepResult,
 };
 use dotnet_assemblies::{decompose_type_source, SUPPORT_ASSEMBLY};
 use dotnet_macros::dotnet_intrinsic;
@@ -420,7 +419,7 @@ pub fn intrinsic_assembly_get_custom_attributes<'gc, 'm: 'gc>(
     let array = stack.current_context().new_vector(attribute_type.into(), 0);
     let obj = ObjectRef::new(gc, HeapStorage::Vec(array));
     stack.register_new_object(&obj);
-    vm_push!(stack, gc, ObjectRef(obj));
+    stack.push_obj(gc, obj);
 
     StepResult::InstructionStepped
 }
@@ -447,7 +446,7 @@ pub fn intrinsic_attribute_get_custom_attributes<'gc, 'm: 'gc>(
     let array = stack.current_context().new_vector(attribute_type.into(), 0);
     let obj = ObjectRef::new(gc, HeapStorage::Vec(array));
     stack.register_new_object(&obj);
-    vm_push!(stack, gc, ObjectRef(obj));
+    stack.push_obj(gc, obj);
 
     StepResult::InstructionStepped
 }
@@ -482,36 +481,25 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    macro_rules! pop {
-        () => {
-            vm_pop!(stack, gc)
-        };
-    }
-    macro_rules! push {
-        ($($args:tt)*) => {
-            vm_push!(stack, gc, $($args)*)
-        };
-    }
-
     let method_name = &*method.method.name;
     let param_count = method.method.signature.parameters.len();
 
     let result = match (method_name, param_count) {
         ("CreateInstanceCheckThis", 0) => {
-            pop_args!(stack, gc, [ObjectRef(_obj)]);
+            let _obj = stack.pop_obj(gc);
             // For now, we don't perform any actual checks.
             // In a real VM, this would check if the type is abstract, has a ctor, etc.
             Some(StepResult::InstructionStepped)
         }
         ("GetAssembly" | "get_Assembly", 0) => {
-            pop_args!(stack, gc, [ObjectRef(obj)]);
+            let obj = stack.pop_obj(gc);
 
             let target_type = stack.resolve_runtime_type(obj);
             let resolution = target_type.resolution(stack.loader());
 
             let cached_asm = stack.runtime_asms_read().get(&resolution).copied();
             if let Some(o) = cached_asm {
-                push!(ObjectRef(o));
+                stack.push_obj(gc, o);
                 return StepResult::InstructionStepped;
             }
 
@@ -538,31 +526,31 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             stack.register_new_object(&v);
 
             stack.runtime_asms_write().insert(resolution, v);
-            push!(ObjectRef(v));
+            stack.push_obj(gc, v);
             Some(StepResult::InstructionStepped)
         }
         ("GetNamespace" | "get_Namespace", 0) => {
-            pop_args!(stack, gc, [ObjectRef(obj)]);
+            let obj = stack.pop_obj(gc);
             let target_type = stack.resolve_runtime_type(obj);
             match target_type {
                 RuntimeType::Type(td) | RuntimeType::Generic(td, _) => {
                     match td.definition().namespace.as_ref() {
-                        None => push!(null()),
-                        Some(n) => push!(string(n)),
+                        None => stack.push(gc, StackValue::null()),
+                        Some(n) => stack.push_string(gc, n),
                     }
                 }
-                _ => push!(string("System")),
+                _ => stack.push_string(gc, "System"),
             }
             Some(StepResult::InstructionStepped)
         }
         ("GetName" | "get_Name", 0) => {
-            pop_args!(stack, gc, [ObjectRef(obj)]);
+            let obj = stack.pop_obj(gc);
             let target_type = stack.resolve_runtime_type(obj);
-            push!(string(target_type.get_name()));
+            stack.push_string(gc, target_type.get_name());
             Some(StepResult::InstructionStepped)
         }
         ("GetBaseType" | "get_BaseType", 0) => {
-            pop_args!(stack, gc, [ObjectRef(obj)]);
+            let obj = stack.pop_obj(gc);
             let target_type = stack.resolve_runtime_type(obj);
             match target_type {
                 RuntimeType::Type(td) | RuntimeType::Generic(td, _)
@@ -625,24 +613,24 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                             RuntimeType::Generic(base_td, runtime_generics)
                         };
                         let rt_obj = stack.get_runtime_type(gc, base_rt);
-                        push!(ObjectRef(rt_obj));
+                        stack.push_obj(gc, rt_obj);
                     } else {
-                        push!(null());
+                        stack.push(gc, StackValue::null());
                     }
                 }
-                _ => push!(null()),
+                _ => stack.push(gc, StackValue::null()),
             }
             Some(StepResult::InstructionStepped)
         }
         ("GetIsGenericType" | "get_IsGenericType", 0) => {
-            pop_args!(stack, gc, [ObjectRef(obj)]);
+            let obj = stack.pop_obj(gc);
             let target_type = stack.resolve_runtime_type(obj);
             let is_generic = matches!(target_type, RuntimeType::Generic(_, _));
-            push!(Int32(if is_generic { 1 } else { 0 }));
+            stack.push_i32(gc, if is_generic { 1 } else { 0 });
             Some(StepResult::InstructionStepped)
         }
         ("GetGenericTypeDefinition" | "get_GenericTypeDefinition", 0) => {
-            pop_args!(stack, gc, [ObjectRef(obj)]);
+            let obj = stack.pop_obj(gc);
             let target_type = stack.resolve_runtime_type(obj);
             match target_type {
                 RuntimeType::Generic(td, _) => {
@@ -652,14 +640,14 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                         .collect();
                     let def_rt = RuntimeType::Generic(td, params);
                     let rt_obj = stack.get_runtime_type(gc, def_rt);
-                    push!(ObjectRef(rt_obj));
+                    stack.push_obj(gc, rt_obj);
                 }
                 _ => return stack.throw_by_name(gc, "System.InvalidOperationException"),
             }
             Some(StepResult::InstructionStepped)
         }
         ("GetGenericArguments" | "get_GenericArguments", 0) => {
-            pop_args!(stack, gc, [ObjectRef(obj)]);
+            let obj = stack.pop_obj(gc);
             let target_type = stack.resolve_runtime_type(obj);
             let args = match target_type {
                 RuntimeType::Generic(_, args) => args.clone(),
@@ -687,21 +675,22 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             }
             let obj = ObjectRef::new(gc, HeapStorage::Vec(vector));
             stack.register_new_object(&obj);
-            push!(ObjectRef(obj));
+            stack.push_obj(gc, obj);
             Some(StepResult::InstructionStepped)
         }
         ("GetTypeHandle" | "get_TypeHandle", 0) => {
-            pop_args!(stack, gc, [ObjectRef(obj)]);
+            let obj = stack.pop_obj(gc);
 
             let rth = stack.loader().corlib_type("System.RuntimeTypeHandle");
             let instance = stack.current_context().new_object(rth);
             obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 
-            push!(ValueType(instance));
+            stack.push(gc, StackValue::ValueType(instance));
             Some(StepResult::InstructionStepped)
         }
         ("MakeGenericType", 1) => {
-            pop_args!(stack, gc, [ObjectRef(target), ObjectRef(parameters)]);
+            let parameters = stack.pop_obj(gc);
+            let target = stack.pop_obj(gc);
 
             // Check GC safe point before potentially allocating generic type objects
             stack.check_gc_safe_point();
@@ -722,16 +711,16 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 let new_rt = RuntimeType::Generic(td, new_generics);
 
                 let rt_obj = stack.get_runtime_type(gc, new_rt);
-                push!(ObjectRef(rt_obj));
+                stack.push_obj(gc, rt_obj);
             } else {
                 return stack.throw_by_name(gc, "System.InvalidOperationException");
             }
             Some(StepResult::InstructionStepped)
         }
         ("CreateInstanceDefaultCtor", 2) => {
-            pop!(); // skipCheck
-            pop!(); // publicOnly
-            pop_args!(stack, gc, [ObjectRef(target_obj)]);
+            stack.pop(gc); // skipCheck
+            stack.pop(gc); // publicOnly
+            let target_obj = stack.pop_obj(gc);
 
             // Check GC safe point before object instantiation
             stack.check_gc_safe_point();
@@ -797,16 +786,10 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
     match (method_name, param_count) {
         ("GetActivationInfo", 5) => {
             // static extern void GetActivationInfo(RuntimeTypeHandle type, out IntPtr pfnAllocator, out IntPtr allocatorFirstArg, out IntPtr pfnCtor, out bool ctorIsPublic);
-            pop_args!(
-                stack,
-                gc,
-                [
-                    ManagedPtr(pfn_allocator),
-                    ManagedPtr(allocator_first_arg),
-                    ManagedPtr(pfn_ctor),
-                    ManagedPtr(ctor_is_public)
-                ]
-            );
+            let ctor_is_public = stack.pop_managed_ptr(gc);
+            let pfn_ctor = stack.pop_managed_ptr(gc);
+            let allocator_first_arg = stack.pop_managed_ptr(gc);
+            let pfn_allocator = stack.pop_managed_ptr(gc);
 
             let rt_obj = match stack.pop(gc) {
                 StackValue::ValueType(rth_handle) => {
@@ -956,37 +939,31 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    macro_rules! push {
-        ($($args:tt)*) => {
-            vm_push!(stack, gc, $($args)*)
-        };
-    }
-
     let method_name = &*method.method.name;
     let param_count = method.method.signature.parameters.len();
 
     let result = match (method_name, param_count) {
         ("GetName" | "get_Name", 0) => {
-            pop_args!(stack, gc, [ObjectRef(obj)]);
+            let obj = stack.pop_obj(gc);
             let (method, _) = stack.resolve_runtime_method(obj);
-            push!(string(&method.method.name));
+            stack.push_string(gc, &method.method.name);
             Some(StepResult::InstructionStepped)
         }
         ("GetDeclaringType" | "get_DeclaringType", 0) => {
-            pop_args!(stack, gc, [ObjectRef(obj)]);
+            let obj = stack.pop_obj(gc);
             let (method, _) = stack.resolve_runtime_method(obj);
             let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(method.parent));
-            push!(ObjectRef(rt_obj));
+            stack.push_obj(gc, rt_obj);
             Some(StepResult::InstructionStepped)
         }
         ("GetMethodHandle" | "get_MethodHandle", 0) => {
-            pop_args!(stack, gc, [ObjectRef(obj)]);
+            let obj = stack.pop_obj(gc);
 
             let rmh = stack.loader().corlib_type("System.RuntimeMethodHandle");
             let instance = stack.current_context().new_object(rmh);
             obj.write(&mut instance.instance_storage.get_field_mut_local(rmh, "_value"));
 
-            push!(ValueType(instance));
+            stack.push(gc, StackValue::ValueType(instance));
             Some(StepResult::InstructionStepped)
         }
         _ => None,
@@ -1003,13 +980,9 @@ pub fn intrinsic_field_info_get_name<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj = vm_pop!(stack, gc);
-    let obj_ref = match obj {
-        StackValue::ObjectRef(r) => r,
-        _ => panic!("expected ObjectRef"),
-    };
+    let obj_ref = stack.pop_obj(gc);
     let (field, _) = stack.resolve_runtime_field(obj_ref);
-    vm_push!(stack, gc, string(&field.field.name));
+    stack.push_string(gc, &field.field.name);
     StepResult::InstructionStepped
 }
 
@@ -1020,14 +993,10 @@ pub fn intrinsic_field_info_get_declaring_type<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj = vm_pop!(stack, gc);
-    let obj_ref = match obj {
-        StackValue::ObjectRef(r) => r,
-        _ => panic!("expected ObjectRef"),
-    };
+    let obj_ref = stack.pop_obj(gc);
     let (field, _) = stack.resolve_runtime_field(obj_ref);
     let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(field.parent));
-    vm_push!(stack, gc, ObjectRef(rt_obj));
+    stack.push_obj(gc, rt_obj);
     StepResult::InstructionStepped
 }
 
@@ -1038,17 +1007,13 @@ pub fn intrinsic_field_info_get_field_handle<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj = vm_pop!(stack, gc);
-    let obj_ref = match obj {
-        StackValue::ObjectRef(r) => r,
-        _ => panic!("expected ObjectRef"),
-    };
+    let obj_ref = stack.pop_obj(gc);
 
     let rfh = stack.loader().corlib_type("System.RuntimeFieldHandle");
     let instance = stack.current_context().new_object(rfh);
     obj_ref.write(&mut instance.instance_storage.get_field_mut_local(rfh, "_value"));
 
-    vm_push!(stack, gc, ValueType(instance));
+    stack.push(gc, StackValue::ValueType(instance));
     StepResult::InstructionStepped
 }
 
@@ -1065,7 +1030,7 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc>(
         generics,
         stack.shared.caches.clone(),
     );
-    let obj = vm_pop!(stack, gc);
+    let obj = stack.pop(gc);
     let object_type = match obj {
         StackValue::ObjectRef(ObjectRef(Some(h))) => ctx.get_heap_description(h),
         StackValue::ObjectRef(ObjectRef(None)) => {
@@ -1075,7 +1040,7 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc>(
     };
 
     let mt_ptr = object_type.definition_ptr().unwrap().as_ptr();
-    vm_push!(stack, gc, NativeInt(mt_ptr as isize));
+    stack.push_isize(gc, mt_ptr as isize);
     StepResult::InstructionStepped
 }
 
@@ -1099,7 +1064,7 @@ pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc>(
         LayoutManager::Scalar(_) => true,
         _ => false,
     };
-    vm_push!(stack, gc, Int32(value as i32));
+    stack.push_i32(gc, value as i32);
     StepResult::InstructionStepped
 }
 
@@ -1120,7 +1085,7 @@ pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<'gc, 'm: 'g
     );
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
-    vm_push!(stack, gc, Int32(layout.is_or_contains_refs() as i32));
+    stack.push_i32(gc, layout.is_or_contains_refs() as i32);
     StepResult::InstructionStepped
 }
 
@@ -1178,7 +1143,7 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
 
     if target_td.is_value_type(&ctx) {
         let instance = ctx.new_object(target_td);
-        vm_push!(stack, gc, ValueType(instance));
+        stack.push_value_type(gc, instance);
         StepResult::InstructionStepped
     } else {
         let instance = ctx.new_object(target_td);
@@ -1223,7 +1188,7 @@ pub fn intrinsic_get_from_handle<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ValueType(handle)]);
+    let handle = stack.pop_value_type(gc);
     let target = unsafe {
         ObjectRef::read_branded(
             &handle
@@ -1232,7 +1197,7 @@ pub fn intrinsic_get_from_handle<'gc, 'm: 'gc>(
             gc,
         )
     };
-    vm_push!(stack, gc, ObjectRef(target));
+    stack.push_obj(gc, target);
     StepResult::InstructionStepped
 }
 
@@ -1248,12 +1213,12 @@ pub fn intrinsic_type_handle_to_int_ptr<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ValueType(handle)]);
+    let handle = stack.pop_value_type(gc);
     let target = handle
         .instance_storage
         .get_field_local(handle.description, "_value");
     let val = usize::from_ne_bytes((&*target).try_into().unwrap());
-    vm_push!(stack, gc, NativeInt(val as isize));
+    stack.push_isize(gc, val as isize);
     StepResult::InstructionStepped
 }
 
@@ -1265,7 +1230,7 @@ pub fn intrinsic_method_handle_get_function_pointer<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ValueType(handle)]);
+    let handle = stack.pop_value_type(gc);
     let method_obj = unsafe {
         ObjectRef::read_branded(
             &handle
@@ -1276,7 +1241,7 @@ pub fn intrinsic_method_handle_get_function_pointer<'gc, 'm: 'gc>(
     };
     let (method, lookup) = stack.resolve_runtime_method(method_obj);
     let index = stack.get_runtime_method_index(method, lookup.clone());
-    vm_push!(stack, gc, NativeInt(index as isize));
+    stack.push_isize(gc, index as isize);
     StepResult::InstructionStepped
 }
 
@@ -1289,7 +1254,7 @@ pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc>(
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(o)]);
+    let o = stack.pop_obj(gc);
     let target = stack.resolve_runtime_type(o);
     let target_ct = target.to_concrete(stack.loader());
     let target_desc = stack.loader().find_concrete_type(target_ct);
@@ -1300,7 +1265,7 @@ pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc>(
         stack.shared.caches.clone(),
     );
     let value = target_desc.is_value_type(&ctx);
-    vm_push!(stack, gc, Int32(value as i32));
+    stack.push_i32(gc, value as i32);
     StepResult::InstructionStepped
 }
 
@@ -1313,13 +1278,13 @@ pub fn intrinsic_type_get_is_enum<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(o)]);
+    let o = stack.pop_obj(gc);
     let target = stack.resolve_runtime_type(o);
     let value = match target {
         RuntimeType::Type(td) | RuntimeType::Generic(td, _) => td.is_enum().is_some(),
         _ => false,
     };
-    vm_push!(stack, gc, Int32(value as i32));
+    stack.push_i32(gc, value as i32);
     StepResult::InstructionStepped
 }
 
@@ -1332,7 +1297,7 @@ pub fn intrinsic_type_get_is_interface<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(o)]);
+    let o = stack.pop_obj(gc);
     let target = stack.resolve_runtime_type(o);
     let value = match target {
         RuntimeType::Type(td) | RuntimeType::Generic(td, _) => {
@@ -1340,7 +1305,7 @@ pub fn intrinsic_type_get_is_interface<'gc, 'm: 'gc>(
         }
         _ => false,
     };
-    vm_push!(stack, gc, Int32(value as i32));
+    stack.push_i32(gc, value as i32);
     StepResult::InstructionStepped
 }
 
@@ -1351,8 +1316,9 @@ pub fn intrinsic_type_op_equality<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(o1), ObjectRef(o2)]);
-    vm_push!(stack, gc, Int32((o1 == o2) as i32));
+    let o2 = stack.pop_obj(gc);
+    let o1 = stack.pop_obj(gc);
+    stack.push_i32(gc, (o1 == o2) as i32);
     StepResult::InstructionStepped
 }
 
@@ -1363,8 +1329,9 @@ pub fn intrinsic_type_op_inequality<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(o1), ObjectRef(o2)]);
-    vm_push!(stack, gc, Int32((o1 != o2) as i32));
+    let o2 = stack.pop_obj(gc);
+    let o1 = stack.pop_obj(gc);
+    stack.push_i32(gc, (o1 != o2) as i32);
     StepResult::InstructionStepped
 }
 
@@ -1375,7 +1342,7 @@ pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc>(
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    pop_args!(stack, gc, [ObjectRef(obj)]);
+    let obj = stack.pop_obj(gc);
 
     let rth = stack.loader().corlib_type("System.RuntimeTypeHandle");
     let ctx = ResolutionContext::for_method(
@@ -1387,6 +1354,6 @@ pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc>(
     let instance = ctx.new_object(rth);
     obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 
-    vm_push!(stack, gc, ValueType(instance));
+    stack.push_value_type(gc, instance);
     StepResult::InstructionStepped
 }
