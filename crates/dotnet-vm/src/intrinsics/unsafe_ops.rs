@@ -31,7 +31,7 @@ pub fn intrinsic_marshal_get_last_pinvoke_error<'gc, 'm: 'gc>(
 ) -> StepResult {
     let value = unsafe { crate::pinvoke::LAST_ERROR };
     stack.push_i32(gc, value);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static void System.Runtime.InteropServices.Marshal::SetLastPInvokeError(int)")]
@@ -46,7 +46,7 @@ pub fn intrinsic_marshal_set_last_pinvoke_error<'gc, 'm: 'gc>(
     unsafe {
         crate::pinvoke::LAST_ERROR = value;
     }
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static void System.Buffer::Memmove(byte*, byte*, ulong)")]
@@ -85,7 +85,7 @@ pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
     unsafe {
         ptr::copy(src, dst, total_count);
     }
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic(
@@ -112,7 +112,7 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<'gc, 'm: 'gc>(
         .loader()
         .find_concrete_type(generics.method_generics[0].clone());
     stack.push_ptr(gc, data_ptr, element_type, false);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static int System.Runtime.InteropServices.Marshal::SizeOf(object)")]
@@ -141,7 +141,7 @@ pub fn intrinsic_marshal_size_of<'gc, 'm: 'gc>(
     };
     let layout = type_layout(concrete_type, &ctx);
     stack.push_i32(gc, layout.size() as i32);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic(
@@ -183,7 +183,7 @@ pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
     } else {
         panic!("Type {:?} does not have field layout", concrete_type);
     }
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 // System.Runtime.CompilerServices.Unsafe::AsPointer<T>(ref T source)
@@ -197,7 +197,7 @@ pub fn intrinsic_unsafe_as_pointer<'gc, 'm: 'gc>(
 ) -> StepResult {
     let ptr = stack.pop_managed_ptr(gc);
     stack.push(gc, StackValue::ManagedPtr(ptr));
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::Add<T>(T&, int)")]
@@ -240,7 +240,7 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
         gc,
         StackValue::managed_ptr_with_owner(result_ptr, target_type, owner, pinned),
     );
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic(
@@ -276,7 +276,7 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
         gc,
         StackValue::managed_ptr_with_owner(unsafe { m.offset(offset) }, target_type, owner, pinned),
     );
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 // System.Runtime.CompilerServices.Unsafe::AreSame<T>(ref T left, ref T right)
@@ -290,7 +290,7 @@ pub fn intrinsic_unsafe_are_same<'gc, 'm: 'gc>(
     let m1 = stack.pop_ptr(gc);
     let m2 = stack.pop_ptr(gc);
     stack.push_i32(gc, (m1 == m2) as i32);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 // System.Runtime.CompilerServices.Unsafe::As<T>(object value)
@@ -305,7 +305,7 @@ pub fn intrinsic_unsafe_as<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     // Just leave the value on the stack, it's a no-op at runtime
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 // System.Runtime.CompilerServices.Unsafe::As<TFrom, TTo>(ref TFrom source)
@@ -344,7 +344,7 @@ pub fn intrinsic_unsafe_as_generic<'gc, 'm: 'gc>(
     };
     let m = m_val.as_ptr();
     stack.push(gc, StackValue::managed_ptr(m, target_type, pinned));
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 // System.Runtime.CompilerServices.Unsafe::AsRef<T>(in T source)
@@ -425,7 +425,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
     }
 
     stack.push(gc, StackValue::managed_ptr(ptr, target_type, pinned));
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 // System.Runtime.CompilerServices.Unsafe::SizeOf<T>()
@@ -446,7 +446,7 @@ pub fn intrinsic_unsafe_size_of<'gc, 'm: 'gc>(
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
     stack.push_i32(gc, layout.size() as i32);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 // System.Runtime.CompilerServices.Unsafe::ByteOffset<T>(ref T origin, ref T target)
@@ -461,7 +461,7 @@ pub fn intrinsic_unsafe_byte_offset<'gc, 'm: 'gc>(
     let l = stack.pop_ptr(gc);
     let offset = (l as isize) - (r as isize);
     stack.push_isize(gc, offset);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 // System.Runtime.CompilerServices.Unsafe::ReadUnaligned<T>(void* ptr)
@@ -517,7 +517,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
         Err(e) => panic!("Unsafe.ReadUnaligned failed: {}", e),
     }
 
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 // System.Runtime.CompilerServices.Unsafe::WriteUnaligned<T>(void* ptr, T value)
@@ -566,7 +566,7 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
         Err(e) => panic!("Unsafe.WriteUnaligned failed: {}", e),
     }
 
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic_field("static IntPtr System.IntPtr::Zero")]
@@ -578,5 +578,5 @@ pub fn intrinsic_field_intptr_zero<'gc, 'm: 'gc>(
     _is_address: bool,
 ) -> StepResult {
     stack.push(gc, StackValue::NativeInt(0));
-    StepResult::InstructionStepped
+    StepResult::Continue
 }

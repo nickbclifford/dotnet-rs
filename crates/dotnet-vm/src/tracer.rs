@@ -585,7 +585,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         let contents: Vec<_> = self.execution.stack[..self.execution.stack.len()] // Modified to not depend on top_of_stack if private
             .iter()
-            .map(|h| format!("{:?}", self.get_slot(h)))
+            .enumerate()
+            .map(|(i, _)| format!("{:?}", self.get_slot(i)))
             .collect();
 
         let mut markers = Vec::new();

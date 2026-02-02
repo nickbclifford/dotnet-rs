@@ -71,7 +71,7 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
     let b = span_to_slice(b, 2);
 
     stack.push_i32(gc, (a == b) as i32);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static System.ReadOnlySpan<char> System.String::op_Implicit(string)")]
@@ -229,7 +229,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
         .copy_from_slice(&(len as i32).to_ne_bytes());
 
     stack.push_value_type(gc, span);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static System.Span<T> System.Runtime.CompilerServices.RuntimeHelpers::CreateSpan<T>(System.RuntimeFieldHandle)")]
@@ -306,7 +306,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
             .copy_from_slice(&element_count.to_ne_bytes());
 
         stack.push_value_type(gc, span_instance);
-        StepResult::InstructionStepped
+        StepResult::Continue
     } else {
         todo!("initial field data for {:?}", field_desc);
     }
@@ -360,7 +360,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
 
     let Some(initial_data) = &field.initial_value else {
         stack.push_isize(gc, 0);
-        return StepResult::InstructionStepped;
+        return StepResult::Continue;
     };
 
     if field.name.starts_with("__StaticArrayInitTypeSize=") {
@@ -386,7 +386,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
     } else {
         stack.push_isize(gc, 0);
     }
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static byte& DotnetRs.Internal::GetArrayData(System.Array)")]
@@ -424,5 +424,5 @@ pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc>(
         let managed = ManagedPtr::new(None, element_type_desc, None, false);
         stack.push_managed_ptr(gc, managed);
     }
-    StepResult::InstructionStepped
+    StepResult::Continue
 }

@@ -10,11 +10,10 @@ use dotnetdll::prelude::*;
 #[dotnet_instruction(Branch)]
 pub fn br<'gc, 'm: 'gc>(
     _gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
+    _stack: &mut CallStack<'gc, 'm>,
     target: usize,
 ) -> StepResult {
-    stack.branch(target);
-    StepResult::InstructionJumped
+    StepResult::Jump(target)
 }
 
 #[dotnet_instruction(BranchEqual)]
@@ -25,10 +24,10 @@ pub fn beq<'gc, 'm: 'gc>(
 ) -> StepResult {
     let v2 = stack.pop(_gc);
     let v1 = stack.pop(_gc);
-    if stack.conditional_branch(v1 == v2, target) {
-        StepResult::InstructionJumped
+    if v1 == v2 {
+        StepResult::Jump(target)
     } else {
-        StepResult::InstructionStepped
+        StepResult::Continue
     }
 }
 
@@ -45,10 +44,10 @@ pub fn bge<'gc, 'm: 'gc>(
         v1.compare(&v2, sgn),
         Some(std::cmp::Ordering::Greater) | Some(std::cmp::Ordering::Equal)
     );
-    if stack.conditional_branch(cond, target) {
-        StepResult::InstructionJumped
+    if cond {
+        StepResult::Jump(target)
     } else {
-        StepResult::InstructionStepped
+        StepResult::Continue
     }
 }
 
@@ -62,10 +61,10 @@ pub fn bgt<'gc, 'm: 'gc>(
     let v2 = stack.pop(_gc);
     let v1 = stack.pop(_gc);
     let cond = matches!(v1.compare(&v2, sgn), Some(std::cmp::Ordering::Greater));
-    if stack.conditional_branch(cond, target) {
-        StepResult::InstructionJumped
+    if cond {
+        StepResult::Jump(target)
     } else {
-        StepResult::InstructionStepped
+        StepResult::Continue
     }
 }
 
@@ -82,10 +81,10 @@ pub fn ble<'gc, 'm: 'gc>(
         v1.compare(&v2, sgn),
         Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Equal)
     );
-    if stack.conditional_branch(cond, target) {
-        StepResult::InstructionJumped
+    if cond {
+        StepResult::Jump(target)
     } else {
-        StepResult::InstructionStepped
+        StepResult::Continue
     }
 }
 
@@ -99,10 +98,10 @@ pub fn blt<'gc, 'm: 'gc>(
     let v2 = stack.pop(_gc);
     let v1 = stack.pop(_gc);
     let cond = matches!(v1.compare(&v2, sgn), Some(std::cmp::Ordering::Less));
-    if stack.conditional_branch(cond, target) {
-        StepResult::InstructionJumped
+    if cond {
+        StepResult::Jump(target)
     } else {
-        StepResult::InstructionStepped
+        StepResult::Continue
     }
 }
 
@@ -114,10 +113,10 @@ pub fn bne<'gc, 'm: 'gc>(
 ) -> StepResult {
     let v2 = stack.pop(_gc);
     let v1 = stack.pop(_gc);
-    if stack.conditional_branch(v1 != v2, target) {
-        StepResult::InstructionJumped
+    if v1 != v2 {
+        StepResult::Jump(target)
     } else {
-        StepResult::InstructionStepped
+        StepResult::Continue
     }
 }
 
@@ -128,10 +127,10 @@ pub fn brtrue<'gc, 'm: 'gc>(
     target: usize,
 ) -> StepResult {
     let v = stack.pop(_gc);
-    if stack.conditional_branch(!is_nullish(v), target) {
-        StepResult::InstructionJumped
+    if !is_nullish(v) {
+        StepResult::Jump(target)
     } else {
-        StepResult::InstructionStepped
+        StepResult::Continue
     }
 }
 
@@ -142,10 +141,10 @@ pub fn brfalse<'gc, 'm: 'gc>(
     target: usize,
 ) -> StepResult {
     let v = stack.pop(_gc);
-    if stack.conditional_branch(is_nullish(v), target) {
-        StepResult::InstructionJumped
+    if is_nullish(v) {
+        StepResult::Jump(target)
     } else {
-        StepResult::InstructionStepped
+        StepResult::Continue
     }
 }
 
@@ -181,7 +180,7 @@ pub fn ret<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> S
         return stack.handle_exception(gc);
     }
 
-    StepResult::MethodReturned
+    StepResult::Return
 }
 
 fn is_nullish(val: StackValue) -> bool {

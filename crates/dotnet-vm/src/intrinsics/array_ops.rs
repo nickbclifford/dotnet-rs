@@ -28,7 +28,7 @@ pub fn intrinsic_array_get_length<'gc, 'm: 'gc>(
     };
 
     stack.push_i32(gc, len as i32);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("int System.Array::get_Rank()")]
@@ -51,7 +51,7 @@ pub fn intrinsic_array_get_rank<'gc, 'm: 'gc>(
     };
 
     stack.push_i32(gc, rank);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("object System.Array::GetValue(int)")]
@@ -109,7 +109,7 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
         .into_stack(gc);
 
     stack.push(gc, val);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("void System.Array::SetValue(object, int)")]
@@ -172,5 +172,5 @@ pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
     ctx.new_cts_value(&v.element, value)
         .write(&mut v.get_mut()[start..end]);
 
-    StepResult::InstructionStepped
+    StepResult::Continue
 }

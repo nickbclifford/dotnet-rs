@@ -421,7 +421,7 @@ pub fn intrinsic_assembly_get_custom_attributes<'gc, 'm: 'gc>(
     stack.register_new_object(&obj);
     stack.push_obj(gc, obj);
 
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static System.Attribute[] System.Attribute::GetCustomAttributes(System.Reflection.MemberInfo, System.Type, bool)")]
@@ -448,7 +448,7 @@ pub fn intrinsic_attribute_get_custom_attributes<'gc, 'm: 'gc>(
     stack.register_new_object(&obj);
     stack.push_obj(gc, obj);
 
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("string System.Type::get_Name()")]
@@ -489,7 +489,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             let _obj = stack.pop_obj(gc);
             // For now, we don't perform any actual checks.
             // In a real VM, this would check if the type is abstract, has a ctor, etc.
-            Some(StepResult::InstructionStepped)
+            Some(StepResult::Continue)
         }
         ("GetAssembly" | "get_Assembly", 0) => {
             let obj = stack.pop_obj(gc);
@@ -500,7 +500,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             let cached_asm = stack.runtime_asms_read().get(&resolution).copied();
             if let Some(o) = cached_asm {
                 stack.push_obj(gc, o);
-                return StepResult::InstructionStepped;
+                return StepResult::Continue;
             }
 
             let support_res = stack.loader().get_assembly(SUPPORT_ASSEMBLY);
@@ -527,7 +527,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
 
             stack.runtime_asms_write().insert(resolution, v);
             stack.push_obj(gc, v);
-            Some(StepResult::InstructionStepped)
+            Some(StepResult::Continue)
         }
         ("GetNamespace" | "get_Namespace", 0) => {
             let obj = stack.pop_obj(gc);
@@ -541,13 +541,13 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 }
                 _ => stack.push_string(gc, "System"),
             }
-            Some(StepResult::InstructionStepped)
+            Some(StepResult::Continue)
         }
         ("GetName" | "get_Name", 0) => {
             let obj = stack.pop_obj(gc);
             let target_type = stack.resolve_runtime_type(obj);
             stack.push_string(gc, target_type.get_name());
-            Some(StepResult::InstructionStepped)
+            Some(StepResult::Continue)
         }
         ("GetBaseType" | "get_BaseType", 0) => {
             let obj = stack.pop_obj(gc);
@@ -620,14 +620,14 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 }
                 _ => stack.push(gc, StackValue::null()),
             }
-            Some(StepResult::InstructionStepped)
+            Some(StepResult::Continue)
         }
         ("GetIsGenericType" | "get_IsGenericType", 0) => {
             let obj = stack.pop_obj(gc);
             let target_type = stack.resolve_runtime_type(obj);
             let is_generic = matches!(target_type, RuntimeType::Generic(_, _));
             stack.push_i32(gc, if is_generic { 1 } else { 0 });
-            Some(StepResult::InstructionStepped)
+            Some(StepResult::Continue)
         }
         ("GetGenericTypeDefinition" | "get_GenericTypeDefinition", 0) => {
             let obj = stack.pop_obj(gc);
@@ -644,7 +644,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 }
                 _ => return stack.throw_by_name(gc, "System.InvalidOperationException"),
             }
-            Some(StepResult::InstructionStepped)
+            Some(StepResult::Continue)
         }
         ("GetGenericArguments" | "get_GenericArguments", 0) => {
             let obj = stack.pop_obj(gc);
@@ -676,7 +676,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             let obj = ObjectRef::new(gc, HeapStorage::Vec(vector));
             stack.register_new_object(&obj);
             stack.push_obj(gc, obj);
-            Some(StepResult::InstructionStepped)
+            Some(StepResult::Continue)
         }
         ("GetTypeHandle" | "get_TypeHandle", 0) => {
             let obj = stack.pop_obj(gc);
@@ -686,7 +686,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 
             stack.push(gc, StackValue::ValueType(instance));
-            Some(StepResult::InstructionStepped)
+            Some(StepResult::Continue)
         }
         ("MakeGenericType", 1) => {
             let parameters = stack.pop_obj(gc);
@@ -715,7 +715,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             } else {
                 return stack.throw_by_name(gc, "System.InvalidOperationException");
             }
-            Some(StepResult::InstructionStepped)
+            Some(StepResult::Continue)
         }
         ("CreateInstanceDefaultCtor", 2) => {
             stack.pop(gc); // skipCheck
@@ -760,7 +760,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                         MethodInfo::new(desc, &new_lookup, stack.shared.clone()),
                         new_lookup,
                     );
-                    return StepResult::InstructionStepped;
+                    return StepResult::FramePushed;
                 }
             }
 
@@ -880,7 +880,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
                 panic!("Could not find default constructor for {}", td.type_name());
             }
 
-            StepResult::InstructionStepped
+            StepResult::Continue
         }
         _ => panic!(
             "Unknown RuntimeTypeHandle intrinsic: {}.{}",
@@ -947,14 +947,14 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
             let obj = stack.pop_obj(gc);
             let (method, _) = stack.resolve_runtime_method(obj);
             stack.push_string(gc, &method.method.name);
-            Some(StepResult::InstructionStepped)
+            Some(StepResult::Continue)
         }
         ("GetDeclaringType" | "get_DeclaringType", 0) => {
             let obj = stack.pop_obj(gc);
             let (method, _) = stack.resolve_runtime_method(obj);
             let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(method.parent));
             stack.push_obj(gc, rt_obj);
-            Some(StepResult::InstructionStepped)
+            Some(StepResult::Continue)
         }
         ("GetMethodHandle" | "get_MethodHandle", 0) => {
             let obj = stack.pop_obj(gc);
@@ -964,13 +964,13 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
             obj.write(&mut instance.instance_storage.get_field_mut_local(rmh, "_value"));
 
             stack.push(gc, StackValue::ValueType(instance));
-            Some(StepResult::InstructionStepped)
+            Some(StepResult::Continue)
         }
         _ => None,
     };
 
     result.expect("unimplemented method info intrinsic");
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("string DotnetRs.FieldInfo::GetName()")]
@@ -983,7 +983,7 @@ pub fn intrinsic_field_info_get_name<'gc, 'm: 'gc>(
     let obj_ref = stack.pop_obj(gc);
     let (field, _) = stack.resolve_runtime_field(obj_ref);
     stack.push_string(gc, &field.field.name);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("System.Type DotnetRs.FieldInfo::GetDeclaringType()")]
@@ -997,7 +997,7 @@ pub fn intrinsic_field_info_get_declaring_type<'gc, 'm: 'gc>(
     let (field, _) = stack.resolve_runtime_field(obj_ref);
     let rt_obj = stack.get_runtime_type(gc, RuntimeType::Type(field.parent));
     stack.push_obj(gc, rt_obj);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("System.RuntimeFieldHandle DotnetRs.FieldInfo::GetFieldHandle()")]
@@ -1014,7 +1014,7 @@ pub fn intrinsic_field_info_get_field_handle<'gc, 'm: 'gc>(
     obj_ref.write(&mut instance.instance_storage.get_field_mut_local(rfh, "_value"));
 
     stack.push(gc, StackValue::ValueType(instance));
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static System.RuntimeTypeHandle System.Runtime.CompilerServices.RuntimeHelpers::GetMethodTable(System.RuntimeTypeHandle)")]
@@ -1041,7 +1041,7 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc>(
 
     let mt_ptr = object_type.definition_ptr().unwrap().as_ptr();
     stack.push_isize(gc, mt_ptr as isize);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static bool System.Runtime.CompilerServices.RuntimeHelpers::IsBitwiseEquatable(System.RuntimeTypeHandle)")]
@@ -1065,7 +1065,7 @@ pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc>(
         _ => false,
     };
     stack.push_i32(gc, value as i32);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic(
@@ -1086,7 +1086,7 @@ pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<'gc, 'm: 'g
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx);
     stack.push_i32(gc, layout.is_or_contains_refs() as i32);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static void System.Runtime.CompilerServices.RuntimeHelpers::RunClassConstructor(System.RuntimeTypeHandle)")]
@@ -1117,12 +1117,12 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc>(
     let target_desc = stack.loader().find_concrete_type(target_ct);
 
     if stack.initialize_static_storage(gc, target_desc, generics.clone()) {
-        return StepResult::InstructionStepped;
+        return StepResult::FramePushed;
     }
 
     // Initialization complete, pop the argument
     stack.pop(gc);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static object System.Activator::CreateInstance()")]
@@ -1144,7 +1144,7 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
     if target_td.is_value_type(&ctx) {
         let instance = ctx.new_object(target_td);
         stack.push_value_type(gc, instance);
-        StepResult::InstructionStepped
+        StepResult::Continue
     } else {
         let instance = ctx.new_object(target_td);
         let mut new_lookup = GenericLookup::default();
@@ -1170,7 +1170,7 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
                     MethodInfo::new(desc, &new_lookup, stack.shared.clone()),
                     new_lookup,
                 );
-                return StepResult::InstructionStepped;
+                return StepResult::FramePushed;
             }
         }
 
@@ -1198,7 +1198,7 @@ pub fn intrinsic_get_from_handle<'gc, 'm: 'gc>(
         )
     };
     stack.push_obj(gc, target);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic(
@@ -1219,7 +1219,7 @@ pub fn intrinsic_type_handle_to_int_ptr<'gc, 'm: 'gc>(
         .get_field_local(handle.description, "_value");
     let val = usize::from_ne_bytes((&*target).try_into().unwrap());
     stack.push_isize(gc, val as isize);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static System.IntPtr System.RuntimeMethodHandle::GetFunctionPointer(System.RuntimeMethodHandle)")]
@@ -1242,7 +1242,7 @@ pub fn intrinsic_method_handle_get_function_pointer<'gc, 'm: 'gc>(
     let (method, lookup) = stack.resolve_runtime_method(method_obj);
     let index = stack.get_runtime_method_index(method, lookup.clone());
     stack.push_isize(gc, index as isize);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("bool System.Type::get_IsValueType()")]
@@ -1266,7 +1266,7 @@ pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc>(
     );
     let value = target_desc.is_value_type(&ctx);
     stack.push_i32(gc, value as i32);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("bool System.Type::get_IsEnum()")]
@@ -1285,7 +1285,7 @@ pub fn intrinsic_type_get_is_enum<'gc, 'm: 'gc>(
         _ => false,
     };
     stack.push_i32(gc, value as i32);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("bool System.Type::get_IsInterface()")]
@@ -1306,7 +1306,7 @@ pub fn intrinsic_type_get_is_interface<'gc, 'm: 'gc>(
         _ => false,
     };
     stack.push_i32(gc, value as i32);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static bool System.Type::op_Equality(System.Type, System.Type)")]
@@ -1319,7 +1319,7 @@ pub fn intrinsic_type_op_equality<'gc, 'm: 'gc>(
     let o2 = stack.pop_obj(gc);
     let o1 = stack.pop_obj(gc);
     stack.push_i32(gc, (o1 == o2) as i32);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static bool System.Type::op_Inequality(System.Type, System.Type)")]
@@ -1332,7 +1332,7 @@ pub fn intrinsic_type_op_inequality<'gc, 'm: 'gc>(
     let o2 = stack.pop_obj(gc);
     let o1 = stack.pop_obj(gc);
     stack.push_i32(gc, (o1 != o2) as i32);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static System.RuntimeTypeHandle System.Type::GetTypeHandle(object)")]
@@ -1355,5 +1355,5 @@ pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc>(
     obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 
     stack.push_value_type(gc, instance);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }

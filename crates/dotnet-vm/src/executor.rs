@@ -194,70 +194,22 @@ impl Executor {
 
             let step_result = self.with_arena(|arena| arena.mutate_root(|gc, c| c.step(gc)));
 
-            let frames_empty = |executor: &Self| {
-                executor.with_arena_ref(|arena| arena.mutate(|_, c| c.execution.frames.is_empty()))
-            };
 
             match step_result {
-                StepResult::MethodReturned => {
-                    let was_auto_invoked = self.with_arena(|arena| {
-                        arena.mutate_root(|gc, c| {
-                            let frame = c.execution.frames.last().unwrap();
-                            let val = frame.state.info_handle.is_cctor || frame.is_finalizer;
-                            c.return_frame(gc);
-                            val
+                StepResult::Return => {
+                    let exit_code = self.with_arena_ref(|arena| {
+                        arena.mutate(|_, c| match c.bottom_of_stack() {
+                            Some(StackValue::Int32(i)) => i as u8,
+                            Some(v) => panic!("invalid value for entrypoint return: {:?}", v),
+                            None => 0,
                         })
                     });
-
-                    if frames_empty(self) {
-                        let exit_code = self.with_arena_ref(|arena| {
-                            arena.mutate(|_, c| match c.bottom_of_stack() {
-                                Some(StackValue::Int32(i)) => i as u8,
-                                Some(v) => panic!("invalid value for entrypoint return: {:?}", v),
-                                None => 0,
-                            })
-                        });
-                        break ExecutorResult::Exited(exit_code);
-                    } else if !was_auto_invoked {
-                        // step the caller past the call instruction
-                        let ip_out_of_bounds = self.with_arena(|arena| {
-                            arena.mutate_root(|_, c| {
-                                c.increment_ip();
-                                // Check if the IP is now out of bounds (implicit return)
-                                let frame = c.execution.frames.last().unwrap();
-                                frame.state.ip >= frame.state.info_handle.instructions.len()
-                            })
-                        });
-                        // If the IP is out of bounds, treat it as an implicit return from the caller
-                        if ip_out_of_bounds {
-                            self.with_arena(|arena| {
-                                arena.mutate_root(|gc, c| {
-                                    c.return_frame(gc);
-                                });
-                            });
-                            if frames_empty(self) {
-                                let exit_code = self.with_arena_ref(|arena| {
-                                    arena.mutate(|_, c| match c.bottom_of_stack() {
-                                        Some(StackValue::Int32(i)) => i as u8,
-                                        Some(v) => {
-                                            panic!("invalid value for entrypoint return: {:?}", v)
-                                        }
-                                        None => 0,
-                                    })
-                                });
-                                break ExecutorResult::Exited(exit_code);
-                            }
-                        }
-                    }
+                    break ExecutorResult::Exited(exit_code);
                 }
                 StepResult::MethodThrew => {
-                    if frames_empty(self) {
-                        break ExecutorResult::Threw;
-                    }
+                    break ExecutorResult::Threw;
                 }
-                StepResult::InstructionStepped
-                | StepResult::InstructionJumped
-                | StepResult::YieldForGC => {}
+                _ => {}
             }
 
             {

@@ -26,7 +26,7 @@ pub fn ldtoken_type<'gc, 'm: 'gc>(
     rt_obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 
     stack.push(gc, StackValue::ValueType(instance));
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_instruction(LoadTokenMethod)]
@@ -44,7 +44,7 @@ pub fn ldtoken_method<'gc, 'm: 'gc>(
     method_obj.write(&mut instance.instance_storage.get_field_mut_local(rmh, "_value"));
 
     stack.push(gc, StackValue::ValueType(instance));
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_instruction(LoadTokenField)]
@@ -63,5 +63,5 @@ pub fn ldtoken_field<'gc, 'm: 'gc>(
     field_obj.write(&mut instance.instance_storage.get_field_mut_local(rfh, "_value"));
 
     stack.push(gc, StackValue::ValueType(instance));
-    StepResult::InstructionStepped
+    StepResult::Continue
 }

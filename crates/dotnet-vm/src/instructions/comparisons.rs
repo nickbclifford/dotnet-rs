@@ -10,7 +10,7 @@ pub fn ceq<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> S
     let value1 = stack.pop(gc);
     let val = (value1 == value2) as i32;
     stack.push_i32(gc, val);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_instruction(CompareGreater)]
@@ -23,7 +23,7 @@ pub fn cgt<'gc, 'm: 'gc>(
     let value1 = stack.pop(gc);
     let val = matches!(value1.compare(&value2, sgn), Some(CmpOrdering::Greater)) as i32;
     stack.push_i32(gc, val);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_instruction(CompareLess)]
@@ -36,7 +36,7 @@ pub fn clt<'gc, 'm: 'gc>(
     let value1 = stack.pop(gc);
     let val = matches!(value1.compare(&value2, sgn), Some(CmpOrdering::Less)) as i32;
     stack.push_i32(gc, val);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_instruction(CheckFinite)]
@@ -46,5 +46,5 @@ pub fn ckfinite<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>)
         return stack.throw_by_name(gc, "System.ArithmeticException");
     }
     stack.push_f64(gc, f);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }

@@ -20,7 +20,7 @@ pub fn intrinsic_argument_null_exception_throw_if_null<'gc, 'm: 'gc>(
     if target.0.is_none() {
         return stack.throw_by_name(gc, "System.ArgumentNullException");
     }
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.Environment::GetEnvironmentVariableCore(string)
@@ -36,7 +36,7 @@ pub fn intrinsic_environment_get_variable_core<'gc, 'm: 'gc>(
         Some(s) => stack.push_string(gc, s),
         None => stack.push_obj(gc, ObjectRef(None)),
     }
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.GC::KeepAlive(object) - Prevents the GC from collecting an object
@@ -49,7 +49,7 @@ pub fn intrinsic_gc_keep_alive<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let _obj = stack.pop_obj(gc);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.GC::SuppressFinalize(object)
@@ -66,7 +66,7 @@ pub fn intrinsic_gc_suppress_finalize<'gc, 'm: 'gc>(
             o.finalizer_suppressed = true;
         }
     }
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.GC::ReRegisterForFinalize(object)
@@ -89,7 +89,7 @@ pub fn intrinsic_gc_reregister_for_finalize<'gc, 'm: 'gc>(
                 .finalizer_suppressed = false;
         }
     }
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.GC::Collect()
@@ -101,7 +101,7 @@ pub fn intrinsic_gc_collect_0<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     stack.heap().needs_full_collect.set(true);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.GC::Collect(int)
@@ -114,7 +114,7 @@ pub fn intrinsic_gc_collect_1<'gc, 'm: 'gc>(
 ) -> StepResult {
     let _generation = stack.pop_i32(gc);
     stack.heap().needs_full_collect.set(true);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.GC::Collect(int, GCCollectionMode)
@@ -128,7 +128,7 @@ pub fn intrinsic_gc_collect_2<'gc, 'm: 'gc>(
     let _mode = stack.pop_i32(gc);
     let _generation = stack.pop_i32(gc);
     stack.heap().needs_full_collect.set(true);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static void System.GC::WaitForPendingFinalizers()")]
@@ -144,9 +144,9 @@ pub fn intrinsic_gc_wait_for_pending_finalizers<'gc, 'm: 'gc>(
         || stack.heap().processing_finalizer.get()
     {
         stack.current_frame_mut().state.ip -= 1;
-        return StepResult::InstructionStepped;
+        return StepResult::Continue;
     }
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static IntPtr System.Runtime.InteropServices.GCHandle::InternalAlloc(object, System.Runtime.InteropServices.GCHandleType)")]
@@ -195,7 +195,7 @@ pub fn intrinsic_gchandle_internal_alloc<'gc, 'm: 'gc>(
     }
 
     stack.push_isize(gc, (index + 1) as isize);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static void System.Runtime.InteropServices.GCHandle::InternalFree(IntPtr)")]
@@ -238,7 +238,7 @@ pub fn intrinsic_gchandle_internal_free<'gc, 'm: 'gc>(
             handles[index] = None;
         }
     }
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static object System.Runtime.InteropServices.GCHandle::InternalGet(IntPtr)")]
@@ -260,7 +260,7 @@ pub fn intrinsic_gchandle_internal_get<'gc, 'm: 'gc>(
         }
     };
     stack.push_obj(gc, result);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic(
@@ -288,7 +288,7 @@ pub fn intrinsic_gchandle_internal_set<'gc, 'm: 'gc>(
             }
         }
     }
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic(
@@ -330,5 +330,5 @@ pub fn intrinsic_gchandle_internal_addr_of_pinned_object<'gc, 'm: 'gc>(
         }
     };
     stack.push_isize(gc, addr);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }

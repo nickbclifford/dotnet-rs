@@ -29,7 +29,7 @@ use super::{
     sync::SyncBlockManager,
     threading::ThreadManager,
     tracer::Tracer,
-    HeapManager,
+    memory::HeapManager,
 };
 
 #[cfg(feature = "multithreaded-gc")]

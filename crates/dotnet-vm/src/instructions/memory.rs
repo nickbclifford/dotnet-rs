@@ -43,7 +43,7 @@ pub fn cpblk<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) ->
     unsafe {
         ptr::copy(src, dest, size);
     }
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_instruction(InitializeMemoryBlock)]
@@ -69,7 +69,7 @@ pub fn initblk<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) 
     unsafe {
         ptr::write_bytes(addr, val, size);
     }
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_instruction(LocalMemoryAllocate)]
@@ -96,7 +96,7 @@ pub fn localloc<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>)
         gc,
         StackValue::UnmanagedPtr(UnmanagedPtr(std::ptr::NonNull::new(ptr).unwrap())),
     );
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_instruction(StoreIndirect)]
@@ -132,7 +132,7 @@ pub fn stind<'gc, 'm: 'gc>(
         Ok(_) => {}
         Err(e) => panic!("StoreIndirect failed: {}", e),
     }
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_instruction(LoadIndirect)]
@@ -174,5 +174,5 @@ pub fn ldind<'gc, 'm: 'gc>(
             .expect("Read failed")
     };
     stack.push(gc, val);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }

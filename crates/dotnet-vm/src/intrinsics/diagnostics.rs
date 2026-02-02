@@ -14,7 +14,7 @@ pub fn intrinsic_is_event_source_logging_enabled<'gc, 'm: 'gc>(
 ) -> StepResult {
     // Return false (0)
     stack.push_i32(gc, 0);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static ulong System.Diagnostics.Tracing.EventPipeInternal::CreateProvider(string, IntPtr, IntPtr)")]
@@ -34,5 +34,5 @@ pub fn intrinsic_eventpipe_create_provider<'gc, 'm: 'gc>(
     // Pushing 0 (invalid handle) to satisfy caller.
     stack.push_isize(gc, 0);
 
-    StepResult::InstructionStepped
+    StepResult::Continue
 }

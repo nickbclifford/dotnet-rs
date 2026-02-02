@@ -1,4 +1,4 @@
-use crate::stack::HeapManager;
+use super::heap::HeapManager;
 use dotnet_types::TypeDescription;
 use dotnet_value::{
     layout::{HasLayout, LayoutManager, Scalar},

@@ -17,7 +17,7 @@ pub fn intrinsic_vector_is_hardware_accelerated<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     stack.push_i32(gc, 0);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static System.Collections.Generic.EqualityComparer<T> System.Collections.Generic.EqualityComparer<T>::get_Default()")]
@@ -42,7 +42,7 @@ pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc>(
     let instance = ObjectRef::new(gc, HeapStorage::Obj(ctx.new_object(comparer_td)));
 
     stack.push_obj(gc, instance);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static byte System.Byte::CreateTruncating<T>(T)")]
@@ -89,7 +89,7 @@ pub fn intrinsic_numeric_create_truncating<'gc, 'm: 'gc>(
         _ => panic!("unsupported CreateTruncating source type: {:?}", value),
     }
 
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static double System.Math::Min(double, double)")]
@@ -102,7 +102,7 @@ pub fn intrinsic_math_min_double<'gc, 'm: 'gc>(
     let b = stack.pop_f64(gc);
     let a = stack.pop_f64(gc);
     stack.push_f64(gc, a.min(b));
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static double System.Math::Sqrt(double)")]
@@ -114,7 +114,7 @@ pub fn intrinsic_math_sqrt<'gc, 'm: 'gc>(
 ) -> StepResult {
     let val = stack.pop_f64(gc);
     stack.push_f64(gc, val.sqrt());
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic_field("static bool System.BitConverter::IsLittleEndian")]
@@ -126,5 +126,5 @@ pub fn intrinsic_bitconverter_is_little_endian<'gc, 'm: 'gc>(
     _is_address: bool,
 ) -> StepResult {
     stack.push_i32(gc, 1);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }

@@ -19,7 +19,7 @@ pub fn intrinsic_unicode_utility_is_ascii_code_point<'gc, 'm: 'gc>(
         _ => false,
     };
     stack.push_i32(gc, if is_ascii { 1 } else { 0 });
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static bool System.Text.UnicodeUtility::IsInRangeInclusive(uint, uint, uint)")]
@@ -42,5 +42,5 @@ pub fn intrinsic_unicode_utility_is_in_range_inclusive<'gc, 'm: 'gc>(
         _ => panic!("IsInRangeInclusive: mismatched types"),
     };
     stack.push_i32(gc, if result { 1 } else { 0 });
-    StepResult::InstructionStepped
+    StepResult::Continue
 }

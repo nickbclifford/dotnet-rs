@@ -28,7 +28,7 @@ use super::{
 };
 
 pub type InstructionHandler =
-    for<'gc, 'm> fn(GCHandle<'gc>, &mut CallStack<'gc, 'm>, Instruction) -> StepResult;
+    for<'gc, 'm> fn(GCHandle<'gc>, &mut CallStack<'gc, 'm>, &Instruction) -> StepResult;
 
 pub struct InstructionEntry {
     pub name: &'static str,
@@ -46,7 +46,7 @@ impl InstructionRegistry {
     pub fn dispatch<'gc, 'm>(
         gc: GCHandle<'gc>,
         stack: &mut CallStack<'gc, 'm>,
-        instr: Instruction,
+        instr: &Instruction,
     ) -> Option<StepResult> {
         let table = INSTRUCTION_TABLE.get_or_init(|| {
             let mut t = [None; Instruction::VARIANT_COUNT];
@@ -57,8 +57,8 @@ impl InstructionRegistry {
             }
             t
         });
-
-        table[instr.opcode()].map(|handler| handler(gc, stack, instr))
+        let handler = table[instr.opcode()]?;
+        Some(handler(gc, stack, instr))
     }
 }
 
@@ -185,7 +185,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             intrinsic_call(gc, self, method, &lookup)
         } else if method.method.pinvoke.is_some() {
             self.external_call(method, gc);
-            StepResult::InstructionStepped
+            StepResult::Continue
         } else {
             if method.method.internal_call {
                 panic!("intrinsic not found: {:?}", method);
@@ -195,7 +195,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 MethodInfo::new(method, &lookup, self.shared.clone()),
                 lookup,
             );
-            StepResult::InstructionStepped
+            StepResult::FramePushed
         }
     }
 
@@ -250,28 +250,29 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             return self.handle_exception(gc);
         }
 
-        let initial_frame_count = self.execution.frames.len();
-
-        let i = self.state().info_handle.instructions[self.state().ip].clone();
+        let i = &self.state().info_handle.instructions[self.state().ip];
         let ip = self.state().ip;
         let i_res = self.state().info_handle.source.resolution();
 
         vm_trace_instruction!(self, ip, &i.show(i_res.definition()));
 
-        if let Some(res) = InstructionRegistry::dispatch(gc, self, i.clone()) {
-            if res == StepResult::InstructionJumped {
-                return StepResult::InstructionStepped;
-            }
-            if res != StepResult::InstructionStepped {
-                return res;
-            }
+        let res = if let Some(res) = InstructionRegistry::dispatch(gc, self, i) {
+            res
         } else {
             panic!("Unregistered instruction: {:?}", i);
-        }
+        };
 
-        if initial_frame_count == self.execution.frames.len() {
-            self.increment_ip();
+        match res {
+            StepResult::Continue => {
+                self.increment_ip();
+                StepResult::Continue
+            }
+            StepResult::Jump(target) => {
+                self.branch(target);
+                StepResult::Continue
+            }
+            StepResult::Return => self.handle_return(gc),
+            _ => res,
         }
-        StepResult::InstructionStepped
     }
 }

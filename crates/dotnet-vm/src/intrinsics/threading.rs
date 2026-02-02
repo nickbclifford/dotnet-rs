@@ -44,7 +44,7 @@ pub fn intrinsic_monitor_exit<'gc, 'm: 'gc>(
         panic!("ArgumentNullException: Monitor.Exit(null)");
     }
 
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.Threading.Interlocked::CompareExchange(ref T, T, T)
@@ -162,7 +162,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
         }
     }
 
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic("static int System.Threading.Interlocked::Exchange(int&, int)")]
@@ -266,7 +266,7 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
         }
     }
 
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 fn get_or_create_sync_block<'gc, T: SyncManagerOps>(
@@ -321,7 +321,7 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
         return stack.throw_by_name(gc, "System.NullReferenceException");
     }
 
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.Threading.Monitor::TryEnter_FastPath(object)
@@ -348,7 +348,7 @@ pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc>(
         return stack.throw_by_name(gc, "System.NullReferenceException");
     }
 
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.Threading.Monitor::TryEnter(object, int, ref bool)
@@ -391,7 +391,7 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
         return stack.throw_by_name(gc, "System.NullReferenceException");
     }
 
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.Threading.Monitor::TryEnter(object, int)
@@ -431,7 +431,7 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
         return stack.throw_by_name(gc, "System.NullReferenceException");
     }
 
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.Threading.Volatile::Read<T>(ref T location)
@@ -468,7 +468,7 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
     };
 
     stack.push_obj(gc, value);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.Threading.Volatile::Write(ref T location, T value)
@@ -542,5 +542,5 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
         _ => panic!("Volatile.Write not implemented for {:?}", value),
     }
 
-    StepResult::InstructionStepped
+    StepResult::Continue
 }

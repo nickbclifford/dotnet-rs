@@ -624,5 +624,5 @@ fn object_to_string<'gc, 'm: 'gc>(
     let storage = HeapStorage::Str(str_val);
     let obj_ref = ObjectRef::new(gc, storage);
     stack.push_obj(gc, obj_ref);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }

@@ -48,7 +48,7 @@ pub fn intrinsic_string_equals<'gc, 'm: 'gc>(
     };
 
     stack.push_i32(gc, if res { 1 } else { 0 });
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.String::FastAllocateString(int)
@@ -89,7 +89,7 @@ pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc>(
 
     let value = CLRString::new(vec![0u16; len]);
     stack.push_string(gc, value);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.String::.ctor(char[])
@@ -123,7 +123,7 @@ pub fn intrinsic_string_ctor_char_array<'gc, 'm: 'gc>(
 
     let value = CLRString::new(chars);
     stack.push_string(gc, value);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.String::.ctor(char*)
@@ -163,7 +163,7 @@ pub fn intrinsic_string_ctor_char_ptr<'gc, 'm: 'gc>(
     };
 
     stack.push_string(gc, value);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.String::get_Chars(int)
@@ -178,7 +178,7 @@ pub fn intrinsic_string_get_chars<'gc, 'm: 'gc>(
     let val = stack.pop(gc);
     let value = with_string!(stack, gc, val, |s| s[index as usize]);
     stack.push_i32(gc, value as i32);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.String::get_Length()
@@ -192,7 +192,7 @@ pub fn intrinsic_string_get_length<'gc, 'm: 'gc>(
     let val = stack.pop(gc);
     let len = with_string!(stack, gc, val, |s| s.len());
     stack.push_i32(gc, len as i32);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.String::Concat(ReadOnlySpan<char>, ReadOnlySpan<char>, ReadOnlySpan<char>)
@@ -226,7 +226,7 @@ pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
 
     let value = CLRString::new(data0.into_iter().chain(data1).chain(data2).collect());
     stack.push_string(gc, value);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.String::GetHashCodeOrdinalIgnoreCase()
@@ -246,7 +246,7 @@ pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<'gc, 'm: 'gc>(
     let code = h.finish();
 
     stack.push_i32(gc, code as i32);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.String::GetPinnableReference()
@@ -262,7 +262,7 @@ pub fn intrinsic_string_get_raw_data<'gc, 'm: 'gc>(
     let val = stack.pop(gc);
     let ptr = with_string!(stack, gc, val, |s| s.as_ptr() as *mut u8);
     stack.push_ptr(gc, ptr, stack.loader().corlib_type("System.Char"), false);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.String::IndexOf(char)
@@ -297,7 +297,7 @@ pub fn intrinsic_string_index_of<'gc, 'm: 'gc>(
             Some(i) => (i + start_at) as i32,
         },
     );
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.String::Substring(int)
@@ -329,7 +329,7 @@ pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
     });
 
     stack.push_string(gc, CLRString::new(value));
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.String::IsNullOrEmpty(string)
@@ -353,7 +353,7 @@ pub fn intrinsic_string_is_null_or_empty<'gc, 'm: 'gc>(
         _ => panic!("System.String::IsNullOrEmpty called on invalid stack value"),
     };
     stack.push_i32(gc, is_null_or_empty as i32);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.String::IsNullOrWhiteSpace(string)
@@ -376,7 +376,7 @@ pub fn intrinsic_string_is_null_or_white_space<'gc, 'm: 'gc>(
         }),
     };
     stack.push_i32(gc, is_null_or_white_space as i32);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic_field("static string System.String::Empty")]
@@ -388,7 +388,7 @@ pub fn intrinsic_field_string_empty<'gc, 'm: 'gc>(
     _is_address: bool,
 ) -> StepResult {
     stack.push_string(gc, CLRString::new(vec![]));
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic_field("int System.String::_stringLength")]
@@ -407,7 +407,7 @@ pub fn intrinsic_field_string_length<'gc, 'm: 'gc>(
     let len = with_string!(stack, gc, val, |s| s.len());
 
     stack.push_i32(gc, len as i32);
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 /// System.String::CopyStringContent(string, int, string)
@@ -428,5 +428,5 @@ pub fn intrinsic_string_copy_string_content<'gc, 'm: 'gc>(
         let len = src.len();
         dest.as_mut_slice()[dest_pos..dest_pos + len].copy_from_slice(&src);
     });
-    StepResult::InstructionStepped
+    StepResult::Continue
 }

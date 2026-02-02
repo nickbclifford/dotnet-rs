@@ -188,7 +188,7 @@ mod tests {
         use crate::StepResult;
 
         // Create a dummy handler for testing
-        let dummy_handler: IntrinsicHandler = |_, _, _, _| StepResult::InstructionStepped;
+        let dummy_handler: IntrinsicHandler = |_, _, _, _| StepResult::Continue;
 
         // Test static constructor
         let static_meta = IntrinsicMetadata::static_intrinsic(dummy_handler, "test reason");
@@ -242,7 +242,7 @@ mod tests {
         // Verify that metadata includes human-readable reasons for intrinsics
         use crate::StepResult;
 
-        let dummy_handler: IntrinsicHandler = |_, _, _, _| StepResult::InstructionStepped;
+        let dummy_handler: IntrinsicHandler = |_, _, _, _| StepResult::Continue;
 
         // Test that each constructor creates metadata with the correct reason
         let direct_meta = IntrinsicMetadata::direct_intercept(
@@ -273,7 +273,7 @@ mod tests {
         // Verify that metadata correctly stores handler function pointers
         use crate::StepResult;
 
-        let handler1: IntrinsicHandler = |_, _, _, _| StepResult::InstructionStepped;
+        let handler1: IntrinsicHandler = |_, _, _, _| StepResult::Continue;
         let handler2: IntrinsicHandler = |_, _, _, _| StepResult::MethodThrew;
 
         let meta1 = IntrinsicMetadata::static_intrinsic(handler1, "test1");

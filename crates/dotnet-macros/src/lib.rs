@@ -179,9 +179,9 @@ pub fn dotnet_instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
                 let name = &pat_ident.ident;
                 extra_arg_names.push(name);
                 if let syn::Type::Reference(_) = &*pat_type.ty {
-                    extra_arg_calls.push(quote! { &#name });
-                } else {
                     extra_arg_calls.push(quote! { #name });
+                } else {
+                    extra_arg_calls.push(quote! { *#name });
                 }
             } else {
                 panic!("Instruction handler must have named parameters");
@@ -244,7 +244,7 @@ pub fn dotnet_instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
         fn #wrapper_name<'gc, 'm: 'gc>(
             gc: dotnet_utils::gc::GCHandle<'gc>,
             stack: &mut crate::CallStack<'gc, 'm>,
-            instr: Instruction
+            instr: &Instruction
         ) -> crate::StepResult {
             match instr {
                 #match_arm,

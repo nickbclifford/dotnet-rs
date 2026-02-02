@@ -94,7 +94,7 @@ pub fn conv<'gc, 'm: 'gc>(
             stack.push(gc, StackValue::NativeInt(i as isize));
         }
     }
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_instruction(ConvertOverflow)]
@@ -126,7 +126,7 @@ pub fn conv_r4<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) 
         ),
     };
     stack.push(gc, StackValue::NativeFloat(v as f64));
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_instruction(ConvertFloat64)]
@@ -142,7 +142,7 @@ pub fn conv_r8<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) 
         ),
     };
     stack.push(gc, StackValue::NativeFloat(v));
-    StepResult::InstructionStepped
+    StepResult::Continue
 }
 
 #[dotnet_instruction(ConvertUnsignedToFloat)]

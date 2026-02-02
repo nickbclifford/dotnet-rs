@@ -6,7 +6,7 @@ use dotnet_types::{
     runtime::RuntimeType,
     TypeDescription,
 };
-use dotnet_utils::gc::{GCHandle, GCHandleType, ThreadSafeLock};
+use dotnet_utils::gc::{GCHandle, GCHandleType};
 use dotnet_value::{
     layout::{HasLayout, LayoutManager},
     object::{HeapStorage, Object as ObjectInstance, ObjectRef},
@@ -15,21 +15,19 @@ use dotnet_value::{
     StackValue,
 };
 use dotnetdll::prelude::*;
-use gc_arena::{Arena, Collect, Collection, Gc, Rootable};
+use gc_arena::{Arena, Collect, Rootable};
 use std::{
-    cell::{Cell, Ref, RefCell, RefMut},
-    collections::{BTreeMap, HashMap, HashSet},
-    fmt::{self, Debug},
+    cell::{Cell, Ref, RefMut},
+    collections::{HashMap, HashSet},
+    fmt,
     ptr::NonNull,
 };
 
-#[cfg(feature = "multithreaded-gc")]
-use dotnet_value::object::ObjectPtr;
-
-use super::{
+use crate::{
     context::ResolutionContext,
     exceptions::ExceptionState,
     layout::type_layout_with_metrics,
+    memory::heap::HeapManager,
     pinvoke::NativeLibraries,
     resolution::{TypeResolutionExt, ValueResolution},
     state::{ArenaLocalState, SharedGlobalState},
@@ -39,94 +37,8 @@ use super::{
     MethodInfo, MethodState, StepResult,
 };
 
-#[cfg(feature = "multithreaded-gc")]
-use super::gc::coordinator::record_allocation;
-
-#[derive(Collect, Clone, Copy)]
-#[collect(no_drop)]
-pub struct StackSlotHandle<'gc>(pub Gc<'gc, ThreadSafeLock<StackValue<'gc>>>);
-
-/// Thread-local execution state for a single .NET thread.
-/// Contains the evaluation stack, call frames, and exception state.
-#[derive(Collect)]
-#[collect(no_drop)]
-pub struct ThreadContext<'gc, 'm> {
-    pub stack: Vec<StackSlotHandle<'gc>>,
-    pub frames: Vec<StackFrame<'gc, 'm>>,
-    pub exception_mode: ExceptionState<'gc>,
-    pub suspended_frames: Vec<StackFrame<'gc, 'm>>,
-    pub suspended_stack: Vec<StackSlotHandle<'gc>>,
-    pub original_ip: usize,
-    pub original_stack_height: usize,
-}
-
-pub struct HeapManager<'gc> {
-    pub finalization_queue: RefCell<Vec<ObjectRef<'gc>>>,
-    pub pending_finalization: RefCell<Vec<ObjectRef<'gc>>>,
-    pub pinned_objects: RefCell<HashSet<ObjectRef<'gc>>>,
-    pub gchandles: RefCell<Vec<Option<(ObjectRef<'gc>, GCHandleType)>>>,
-    pub processing_finalizer: Cell<bool>,
-    pub needs_full_collect: Cell<bool>,
-    /// Roots for objects in this arena that are referenced by other arenas.
-    /// This is populated during the coordinated GC marking phase.
-    #[cfg(feature = "multithreaded-gc")]
-    pub cross_arena_roots: RefCell<HashSet<ObjectPtr>>,
-    /// Untraced handles to every heap object in this arena.
-    /// Used by the tracer during debugging and for conservative stack scanning.
-    pub(super) _all_objs: RefCell<BTreeMap<usize, ObjectRef<'gc>>>,
-}
-
-impl<'gc> HeapManager<'gc> {
-    pub fn find_object(&self, ptr: usize) -> Option<ObjectRef<'gc>> {
-        let all_objs = self._all_objs.borrow();
-        let (&start, &obj) = all_objs.range(..=ptr).next_back()?;
-
-        let size = {
-            let inner_gc = obj.0.unwrap();
-            let inner = inner_gc.borrow();
-            match &inner.storage {
-                HeapStorage::Obj(o) => o.size_bytes(),
-                HeapStorage::Vec(v) => v.size_bytes(),
-                HeapStorage::Str(s) => s.size_bytes(),
-                HeapStorage::Boxed(b) => b.size_bytes(),
-            }
-        };
-
-        if ptr < start + size {
-            Some(obj)
-        } else {
-            None
-        }
-    }
-}
-
-unsafe impl<'gc> Collect for HeapManager<'gc> {
-    fn trace(&self, cc: &Collection) {
-        // Normal and Pinned handles keep objects alive.
-        // Weak handles DO NOT trace.
-        for entry in self.gchandles.borrow().iter().flatten() {
-            match entry.1 {
-                GCHandleType::Normal | GCHandleType::Pinned => {
-                    entry.0.trace(cc);
-                }
-                GCHandleType::Weak | GCHandleType::WeakTrackResurrection => {
-                    // Weak handles don't trace
-                }
-            }
-        }
-
-        for obj in self.pinned_objects.borrow().iter() {
-            obj.trace(cc);
-        }
-        #[cfg(feature = "multithreaded-gc")]
-        for ptr in self.cross_arena_roots.borrow().iter() {
-            unsafe {
-                Gc::from_ptr(ptr.as_ptr()).trace(cc);
-            }
-        }
-        self.pending_finalization.borrow().trace(cc);
-    }
-}
+pub mod context;
+pub use context::*;
 
 pub struct CallStack<'gc, 'm> {
     pub execution: ThreadContext<'gc, 'm>,
@@ -136,7 +48,7 @@ pub struct CallStack<'gc, 'm> {
 }
 
 unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
-    fn trace(&self, cc: &Collection) {
+    fn trace(&self, cc: &gc_arena::Collection) {
         // NOTE: tracing_id is managed by execute_gc_command_for_current_thread,
         // NOT here. Setting/clearing it here would interfere with gc-arena's
         // deferred work list processing (StackValue traces happen AFTER this returns).
@@ -144,51 +56,6 @@ unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
         self.local.trace(cc);
         self.shared.statics.trace(cc);
     }
-}
-
-pub struct StackFrame<'gc, 'm> {
-    pub stack_height: usize,
-    pub base: BasePointer,
-    pub state: MethodState<'m>,
-    pub generic_inst: GenericLookup,
-    pub source_resolution: ResolutionS,
-    /// The exceptions currently being handled by catch blocks in this frame (required for rethrow).
-    pub exception_stack: Vec<ObjectRef<'gc>>,
-    pub pinned_locals: Vec<bool>,
-    pub is_finalizer: bool,
-}
-unsafe impl<'gc, 'm> Collect for StackFrame<'gc, 'm> {
-    fn trace(&self, cc: &Collection) {
-        self.exception_stack.trace(cc);
-        self.state.trace(cc);
-        self.generic_inst.trace(cc);
-    }
-}
-impl<'gc, 'm> StackFrame<'gc, 'm> {
-    pub fn new(
-        base_pointer: BasePointer,
-        method: MethodInfo<'m>,
-        generic_inst: GenericLookup,
-        pinned_locals: Vec<bool>,
-    ) -> Self {
-        Self {
-            stack_height: 0,
-            base: base_pointer,
-            source_resolution: method.source.resolution(),
-            state: MethodState::new(method),
-            generic_inst,
-            exception_stack: Vec::new(),
-            pinned_locals,
-            is_finalizer: false,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct BasePointer {
-    pub arguments: usize,
-    pub locals: usize,
-    pub stack: usize,
 }
 
 pub type GCArena = Arena<Rootable!['gc => CallStack<'gc, 'static>]>;
@@ -212,11 +79,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     // careful with this, it always allocates a new slot
-    fn insert_value(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {
+    fn insert_value(&mut self, _gc: GCHandle<'gc>, value: StackValue<'gc>) {
         #[cfg(feature = "multithreaded-gc")]
-        record_allocation(value.size_bytes() + 16); // +16 for Gc/ThreadSafeLock overhead
-        let handle = Gc::new(gc, ThreadSafeLock::new(value));
-        self.execution.stack.push(StackSlotHandle(handle));
+        crate::gc::coordinator::record_allocation(value.size_bytes());
+        self.execution.stack.push(value);
     }
 
     fn init_locals(
@@ -290,30 +156,27 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         (values, pinned_locals)
     }
 
-    pub(super) fn get_slot(&self, handle: &StackSlotHandle<'gc>) -> StackValue<'gc> {
-        handle.0.borrow().clone()
+    pub(super) fn get_slot(&self, index: usize) -> StackValue<'gc> {
+        self.execution.stack[index].clone()
     }
 
-    fn set_slot(&self, gc: GCHandle<'gc>, handle: &StackSlotHandle<'gc>, value: StackValue<'gc>) {
+    fn set_slot(&mut self, _gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
         #[cfg(feature = "multithreaded-gc")]
         if matches!(value, StackValue::ValueType(_)) {
-            record_allocation(value.size_bytes());
+            crate::gc::coordinator::record_allocation(value.size_bytes());
         }
-        *handle.0.borrow_mut(gc) = value;
+        self.execution.stack[index] = value;
     }
 
     fn set_slot_at(&mut self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
-        match self.execution.stack.get(index) {
-            Some(h) => {
-                self.set_slot(gc, h, value);
+        if index < self.execution.stack.len() {
+            self.set_slot(gc, index, value);
+        } else {
+            for _ in self.top_of_stack()..index {
+                self.insert_value(gc, StackValue::null());
             }
-            None => {
-                for _ in self.top_of_stack()..index {
-                    self.insert_value(gc, StackValue::null());
-                }
-                self.insert_value(gc, value);
-            }
-        };
+            self.insert_value(gc, value);
+        }
     }
 
     pub fn entrypoint_frame(
@@ -355,7 +218,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let heap = &self.local.heap;
 
         {
-            let addr = Gc::as_ptr(*ptr) as usize;
+            let addr = gc_arena::Gc::as_ptr(*ptr) as usize;
             heap._all_objs.borrow_mut().insert(addr, *instance);
         }
 
@@ -373,7 +236,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 HeapStorage::Str(s) => ("System.String".to_string(), s.size_bytes()),
                 HeapStorage::Boxed(b) => ("Boxed".to_string(), b.size_bytes()),
             };
-            vm_trace_gc_allocation!(self, &type_name, size);
+            crate::vm_trace_gc_allocation!(self, &type_name, size);
         }
 
         if let HeapStorage::Obj(o) = &borrowed.storage {
@@ -386,7 +249,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
     pub fn process_pending_finalizers(&mut self, gc: GCHandle<'gc>) -> StepResult {
         if self.local.heap.processing_finalizer.get() {
-            return StepResult::MethodReturned;
+            return StepResult::Continue;
         }
 
         let obj_ref = self.local.heap.pending_finalization.borrow_mut().pop();
@@ -401,7 +264,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             // Trace finalization event
             if self.tracer_enabled() {
                 let type_name = format!("{:?}", obj_type);
-                let addr = Gc::as_ptr(ptr) as usize;
+                let addr = gc_arena::Gc::as_ptr(ptr) as usize;
                 self.shared
                     .tracer
                     .lock()
@@ -446,9 +309,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 vec![StackValue::ObjectRef(obj_ref)],
             );
             self.execution.frames.last_mut().unwrap().is_finalizer = true;
-            return StepResult::InstructionStepped;
+            return StepResult::FramePushed;
         }
-        StepResult::MethodReturned
+        StepResult::Continue
     }
 
     pub fn constructor_frame(
@@ -607,13 +470,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             self.execution
                 .stack
                 .get(return_slot_index)
-                .map(|handle| self.get_slot(handle))
+                .cloned()
         } else {
             None
         };
 
-        for handle in &self.execution.stack[frame.base.arguments..] {
-            self.set_slot(gc, handle, StackValue::null());
+        for i in frame.base.arguments..self.execution.stack.len() {
+            self.set_slot(gc, i, StackValue::null());
         }
         self.execution.stack.truncate(frame.base.arguments);
 
@@ -627,6 +490,36 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
     }
 
+    pub fn handle_return(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        if self.execution.frames.is_empty() {
+            return StepResult::Return;
+        }
+
+        let was_auto_invoked = {
+            let frame = self.execution.frames.last().unwrap();
+            frame.state.info_handle.is_cctor || frame.is_finalizer
+        };
+
+        self.return_frame(gc);
+
+        if self.execution.frames.is_empty() {
+            return StepResult::Return;
+        }
+
+        if !was_auto_invoked {
+            self.increment_ip();
+            let out_of_bounds = {
+                let frame = self.execution.frames.last().unwrap();
+                frame.state.ip >= frame.state.info_handle.instructions.len()
+            };
+            if out_of_bounds {
+                return self.handle_return(gc);
+            }
+        }
+
+        StepResult::Continue
+    }
+
     pub fn unwind_frame(&mut self, gc: GCHandle<'gc>) {
         let frame = self
             .execution
@@ -636,8 +529,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         if frame.is_finalizer {
             self.local.heap.processing_finalizer.set(false);
         }
-        for handle in &self.execution.stack[frame.base.arguments..] {
-            self.set_slot(gc, handle, StackValue::null());
+        for i in frame.base.arguments..self.execution.stack.len() {
+            self.set_slot(gc, i, StackValue::null());
         }
         self.execution.stack.truncate(frame.base.arguments);
     }
@@ -739,9 +632,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             for (obj_ref, handle_type) in handles.iter_mut().flatten() {
                 if *handle_type == for_type {
                     if let ObjectRef(Some(ptr)) = obj_ref {
-                        if Gc::is_dead(fc, *ptr) {
+                        if gc_arena::Gc::is_dead(fc, *ptr) {
                             if for_type == GCHandleType::WeakTrackResurrection
-                                && resurrected.contains(&(Gc::as_ptr(*ptr) as usize))
+                                && resurrected.contains(&(gc_arena::Gc::as_ptr(*ptr) as usize))
                             {
                                 continue;
                             }
@@ -760,7 +653,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let ptr = obj.0.expect("object in finalization queue is null");
 
                 // Debug print
-                let is_dead = Gc::is_dead(fc, ptr);
+                let is_dead = gc_arena::Gc::is_dead(fc, ptr);
 
                 let is_suppressed = match &ptr.borrow().storage {
                     HeapStorage::Obj(o) => o.finalizer_suppressed,
@@ -784,7 +677,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 for obj in to_finalize {
                     let ptr = obj.0.unwrap();
                     pending.push(obj);
-                    if resurrected.insert(Gc::as_ptr(ptr) as usize) {
+                    if resurrected.insert(gc_arena::Gc::as_ptr(ptr) as usize) {
                         // Trace resurrection event
                         if self.tracer_enabled() {
                             let obj_type_name = match &ptr.borrow().storage {
@@ -793,14 +686,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                 HeapStorage::Str(_) => "String".to_string(),
                                 HeapStorage::Boxed(_) => "Boxed".to_string(),
                             };
-                            let addr = Gc::as_ptr(ptr) as usize;
+                            let addr = gc_arena::Gc::as_ptr(ptr) as usize;
                             self.shared.tracer.lock().trace_gc_resurrection(
                                 self.indent(),
                                 &obj_type_name,
                                 addr,
                             );
                         }
-                        Gc::resurrect(fc, ptr);
+                        gc_arena::Gc::resurrect(fc, ptr);
                         ptr.borrow().storage.resurrect(fc, &mut resurrected);
                     }
                 }
@@ -815,7 +708,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         // 3. Prune dead objects from the debugging harness
         heap._all_objs.borrow_mut().retain(|addr, obj| match obj.0 {
-            Some(ptr) => !Gc::is_dead(fc, ptr) || resurrected.contains(addr),
+            Some(ptr) => !gc_arena::Gc::is_dead(fc, ptr) || resurrected.contains(addr),
             None => false,
         });
     }
@@ -825,84 +718,74 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         f.base.stack + f.stack_height
     }
 
-    fn get_handle_location(&self, handle: &StackSlotHandle<'gc>) -> NonNull<u8> {
-        // SAFETY: We use as_ptr() to get a stable pointer to the StackValue.
-        // The StackValue is stable in memory because it's inside a Gc-managed ThreadSafeLock.
-        // However, the variant inside the lock could be changed if another thread (or this thread)
-        // calls borrow_mut(). CIL safety should prevent this for active byrefs.
-        unsafe {
-            let lock_ptr = Gc::as_ptr(handle.0);
-            (*(*lock_ptr).as_ptr()).data_location()
-        }
+    fn get_handle_location(&self, index: usize) -> NonNull<u8> {
+        self.execution.stack[index].data_location()
     }
 
-    fn get_arg_handle(&self, index: usize) -> &StackSlotHandle<'gc> {
+    fn get_arg_index(&self, index: usize) -> usize {
         let bp = &self.current_frame().base;
         let idx = bp.arguments + index;
         if idx >= self.execution.stack.len() {
             panic!(
-                "get_arg_handle out of bounds: idx={} len={} bp.arguments={} stack.len={}",
+                "get_arg_index out of bounds: idx={} len={} bp.arguments={} stack.len={}",
                 idx,
                 self.execution.stack.len(),
                 bp.arguments,
                 self.execution.stack.len()
             );
         }
-        &self.execution.stack[idx]
+        idx
     }
 
     pub fn get_argument(&self, index: usize) -> StackValue<'gc> {
-        self.get_slot(self.get_arg_handle(index))
+        self.get_slot(self.get_arg_index(index))
     }
 
     pub fn get_argument_address(&self, index: usize) -> NonNull<u8> {
-        self.get_handle_location(self.get_arg_handle(index))
+        self.get_handle_location(self.get_arg_index(index))
     }
 
-    pub fn set_argument(&self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
-        self.set_slot(gc, self.get_arg_handle(index), value);
+    pub fn set_argument(&mut self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
+        let idx = self.get_arg_index(index);
+        self.set_slot(gc, idx, value);
     }
 
-    pub(crate) fn get_local_handle_at(
+    pub(crate) fn get_local_index_at(
         &self,
         frame: &StackFrame<'gc, 'm>,
         index: usize,
-    ) -> &StackSlotHandle<'gc> {
-        &self.execution.stack[frame.base.locals + index]
+    ) -> usize {
+        frame.base.locals + index
     }
 
     pub fn get_local(&self, index: usize) -> StackValue<'gc> {
-        self.get_slot(self.get_local_handle_at(self.current_frame(), index))
+        self.get_slot(self.get_local_index_at(self.current_frame(), index))
     }
 
     pub fn get_local_address(&self, index: usize) -> NonNull<u8> {
-        self.get_handle_location(self.get_local_handle_at(self.current_frame(), index))
+        self.get_handle_location(self.get_local_index_at(self.current_frame(), index))
     }
 
     pub fn get_local_info_for_managed_ptr(&self, index: usize) -> (NonNull<u8>, bool) {
         let frame = self.current_frame();
-        let handle = self.get_local_handle_at(frame, index);
+        let idx = self.get_local_index_at(frame, index);
         let pinned = if index < frame.pinned_locals.len() {
             frame.pinned_locals[index]
         } else {
             false
         };
 
-        unsafe {
-            let lock_ptr = Gc::as_ptr(handle.0);
-            let val = &*(*lock_ptr).as_ptr();
-
-            match val {
-                StackValue::ValueType(obj) => (
-                    NonNull::new(obj.instance_storage.get().as_ptr() as *mut u8).unwrap(),
-                    pinned,
-                ),
-                _ => (val.data_location(), pinned),
-            }
+        let val = &self.execution.stack[idx];
+        match val {
+            StackValue::ValueType(obj) => (
+                NonNull::new(obj.instance_storage.get().as_ptr() as *mut u8).unwrap(),
+                pinned,
+            ),
+            _ => (val.data_location(), pinned),
         }
     }
 
-    pub fn set_local(&self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
+    pub fn set_local(&mut self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
         let frame = self.current_frame();
         if index < frame.pinned_locals.len() && frame.pinned_locals[index] {
             if let StackValue::ObjectRef(obj) = value {
@@ -911,7 +794,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 }
             }
         }
-        self.set_slot(gc, self.get_local_handle_at(frame, index), value);
+        let idx = self.get_local_index_at(frame, index);
+        self.set_slot(gc, idx, value);
     }
 
     pub fn push(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {
@@ -937,8 +821,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         if top == 0 {
             panic!("empty call stack");
         }
-        let handle = self.execution.stack[top - 1];
-        let value = self.get_slot(&handle);
+        let index = top - 1;
+        let value = self.get_slot(index);
         if self.tracer_enabled() {
             self.shared
                 .tracer
@@ -946,7 +830,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 .trace_stack_op(self.indent(), "POP", &format!("{:?}", value));
         }
         // Zap the slot to avoid GC leaks
-        self.set_slot(gc, &handle, StackValue::null());
+        self.set_slot(gc, index, StackValue::null());
         self.current_frame_mut().stack_height -= 1;
         value
     }
@@ -1033,9 +917,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let start = top - count;
         let mut result = Vec::with_capacity(count);
 
-        for handle in &self.execution.stack[start..top] {
-            result.push(self.get_slot(handle));
-            self.set_slot(gc, handle, StackValue::null());
+        for i in start..top {
+            result.push(self.get_slot(i));
+            self.set_slot(gc, i, StackValue::null());
         }
 
         if self.tracer_enabled() {
@@ -1056,9 +940,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let top = self.top_of_stack();
         let start = top - count;
 
-        self.execution.stack[start..top]
-            .iter()
-            .map(|handle| self.get_slot(handle))
+        (0..count)
+            .map(|i| self.get_slot(start + i))
             .collect()
     }
 
@@ -1074,20 +957,18 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 top, offset
             );
         }
-        self.get_slot(&self.execution.stack[top - 1 - offset])
+        self.get_slot(top - 1 - offset)
     }
 
     pub fn top_of_stack_address(&self) -> NonNull<u8> {
-        self.get_handle_location(&self.execution.stack[self.top_of_stack() - 1])
+        self.get_handle_location(self.top_of_stack() - 1)
     }
 
     pub fn bottom_of_stack(&self) -> Option<StackValue<'gc>> {
-        match self.execution.stack.first() {
-            Some(h) => {
-                let value = self.get_slot(h);
-                Some(value)
-            }
-            None => None,
+        if !self.execution.stack.is_empty() {
+            Some(self.get_slot(0))
+        } else {
+            None
         }
     }
 

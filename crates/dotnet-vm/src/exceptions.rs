@@ -171,7 +171,7 @@ pub fn parse<'a>(
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     pub fn handle_exception(&mut self, gc: GCHandle<'gc>) -> StepResult {
         match self.execution.exception_mode {
-            ExceptionState::None => StepResult::InstructionStepped,
+            ExceptionState::None => StepResult::Continue,
             ExceptionState::Throwing(exception) => self.begin_throwing(exception, gc),
             ExceptionState::Searching { exception, cursor } => {
                 self.search_for_handler(gc, exception, cursor)
@@ -182,7 +182,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 cursor,
             } => self.unwind(gc, exception, target, cursor),
             ExceptionState::Filtering { .. } | ExceptionState::ExecutingHandler { .. } => {
-                StepResult::InstructionStepped
+                StepResult::Continue
             }
         }
     }
@@ -270,7 +270,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                         handler_index: 0,
                                     },
                                 };
-                                return StepResult::InstructionJumped;
+                                return StepResult::Jump(self.state().ip);
                             }
                         }
                         HandlerKind::Filter { clause_offset } => {
@@ -301,7 +301,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             frame.exception_stack.push(exception);
                             self.push_obj(gc, exception);
 
-                            return StepResult::InstructionJumped;
+                            return StepResult::Jump(*clause_offset);
                         }
                         _ => {} // finally and fault are ignored during the search phase
                     }
@@ -480,7 +480,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         frame.state.ip = handler_start_ip;
                         frame.stack_height = 0;
 
-                        return StepResult::InstructionJumped;
+                        return StepResult::Jump(handler_start_ip);
                     }
                 }
             }
@@ -494,7 +494,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         // We have successfully unwound to the target!
         self.execution.exception_mode = ExceptionState::None;
-        match target {
+        let target_ip = match target {
             UnwindTarget::Handler(target_h) => {
                 let handler_start_ip = {
                     let section = &self.execution.frames[target_h.frame_index]
@@ -513,20 +513,22 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let exception = exception.expect("Target handler reached but no exception present");
                 frame.exception_stack.push(exception);
                 self.push_obj(gc, exception);
+                handler_start_ip
             }
             UnwindTarget::Instruction(target_ip) => {
                 // Special case: usize::MAX indicates we should return from the method
                 // after executing finally blocks
                 if target_ip == usize::MAX {
-                    return StepResult::MethodReturned;
+                    return StepResult::Return;
                 }
 
                 let frame = &mut self.execution.frames[target_frame];
                 frame.state.ip = target_ip;
                 frame.stack_height = 0;
+                target_ip
             }
-        }
+        };
 
-        StepResult::InstructionJumped
+        StepResult::Jump(target_ip)
     }
 }

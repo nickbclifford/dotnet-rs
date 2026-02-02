@@ -110,9 +110,10 @@ impl MethodInfo<'static> {
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum StepResult {
-    MethodReturned,
-    MethodThrew,
-    InstructionStepped,
-    InstructionJumped,
-    YieldForGC,
+    Continue,    // Advance IP
+    Jump(usize), // Set IP to X
+    FramePushed, // Do not advance IP (new frame active)
+    Return,      // Pop frame
+    MethodThrew, // Exception unhandled in frame
+    Yield,       // GC/Thread yield
 }
