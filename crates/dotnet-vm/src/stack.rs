@@ -1121,8 +1121,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         // Standard virtual method resolution: search ancestors
         for (parent, _) in ctx.get_ancestors(this_type) {
-            if let Some(this_method) =
-                self.find_and_cache_method(parent, base_method, ctx.generics)
+            if let Some(this_method) = self.find_and_cache_method(parent, base_method, ctx.generics)
             {
                 return this_method;
             }

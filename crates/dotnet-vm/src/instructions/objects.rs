@@ -1,16 +1,14 @@
-use crate::instructions::type_layout;
-use crate::instructions::LayoutFactory;
-use crate::sync::Ordering as AtomicOrdering;
 use crate::{
-    instructions::is_intrinsic_cached, instructions::is_intrinsic_field_cached, intrinsics::intrinsic_call, intrinsics::intrinsic_field,
-    resolution::{TypeResolutionExt, ValueResolution}, CallStack,
-    StepResult,
+    instructions::{is_intrinsic_cached, is_intrinsic_field_cached, type_layout, LayoutFactory},
+    intrinsics::{intrinsic_call, intrinsic_field},
+    resolution::{TypeResolutionExt, ValueResolution},
+    sync::Ordering as AtomicOrdering,
+    CallStack, StepResult,
 };
 use dotnet_assemblies::decompose_type_source;
 use dotnet_macros::dotnet_instruction;
 use dotnet_types::members::MethodDescription;
-use dotnet_utils::gc::GCHandle;
-use dotnet_utils::is_ptr_aligned_to_field;
+use dotnet_utils::{gc::GCHandle, is_ptr_aligned_to_field};
 use dotnet_value::{
     layout::HasLayout,
     object::{HeapStorage, ObjectRef},
@@ -20,7 +18,11 @@ use dotnet_value::{
 use dotnetdll::prelude::*;
 use std::ptr::{self, NonNull};
 
-fn get_ptr<'gc, 'm: 'gc>(stack: &mut CallStack<'gc, 'm>, gc: GCHandle<'gc>, val: StackValue<'gc>) -> Result<(*mut u8, Option<ObjectRef<'gc>>), StepResult> {
+fn get_ptr<'gc, 'm: 'gc>(
+    stack: &mut CallStack<'gc, 'm>,
+    gc: GCHandle<'gc>,
+    val: StackValue<'gc>,
+) -> Result<(*mut u8, Option<ObjectRef<'gc>>), StepResult> {
     match val {
         StackValue::ObjectRef(o @ ObjectRef(Some(h))) => {
             let inner = h.borrow();
@@ -29,9 +31,11 @@ fn get_ptr<'gc, 'm: 'gc>(stack: &mut CallStack<'gc, 'm>, gc: GCHandle<'gc>, val:
                 HeapStorage::Vec(v) => v.get().as_ptr() as *mut u8,
                 HeapStorage::Str(s) => s.as_ptr() as *mut u8,
                 HeapStorage::Boxed(v) => match v {
-                     dotnet_value::object::ValueType::Struct(s) => s.instance_storage.get().as_ptr() as *mut u8,
-                     _ => ptr::null_mut(),
-                }
+                    dotnet_value::object::ValueType::Struct(s) => {
+                        s.instance_storage.get().as_ptr() as *mut u8
+                    }
+                    _ => ptr::null_mut(),
+                },
             };
             Ok((ptr, Some(o)))
         }
@@ -39,9 +43,14 @@ fn get_ptr<'gc, 'm: 'gc>(stack: &mut CallStack<'gc, 'm>, gc: GCHandle<'gc>, val:
             let ptr = o.instance_storage.get().as_ptr() as *mut u8;
             Ok((ptr, None))
         }
-        StackValue::ManagedPtr(m) => Ok((m.pointer().map(|p| p.as_ptr()).unwrap_or(ptr::null_mut()), m.owner)),
+        StackValue::ManagedPtr(m) => Ok((
+            m.pointer().map(|p| p.as_ptr()).unwrap_or(ptr::null_mut()),
+            m.owner,
+        )),
         StackValue::UnmanagedPtr(UnmanagedPtr(p)) => Ok((p.as_ptr(), None)),
-        StackValue::ObjectRef(ObjectRef(None)) => Err(stack.throw_by_name(gc, "System.NullReferenceException")),
+        StackValue::ObjectRef(ObjectRef(None)) => {
+            Err(stack.throw_by_name(gc, "System.NullReferenceException"))
+        }
         _ => panic!("Invalid parent for field/element access: {:?}", val),
     }
 }
@@ -87,15 +96,16 @@ pub fn new_object<'gc, 'm: 'gc>(
                     let ctx = stack.current_context();
                     let elem_type = ctx.normalize_type(elem_type_concrete.clone());
 
-                    let layout = LayoutFactory::create_array_layout(
-                        elem_type.clone(),
-                        total_len,
-                        &ctx,
-                    );
+                    let layout =
+                        LayoutFactory::create_array_layout(elem_type.clone(), total_len, &ctx);
                     let total_size_bytes = layout.element_layout.size() * total_len;
 
-                    let vec_obj =
-                        dotnet_value::object::Vector::new(elem_type, layout, vec![0; total_size_bytes], dims);
+                    let vec_obj = dotnet_value::object::Vector::new(
+                        elem_type,
+                        layout,
+                        vec![0; total_size_bytes],
+                        dims,
+                    );
                     let o = ObjectRef::new(gc, HeapStorage::Vec(vec_obj));
                     stack.register_new_object(&o);
                     stack.push(gc, StackValue::ObjectRef(o));
@@ -201,23 +211,26 @@ pub fn ldfld<'gc, 'm: 'gc>(
         AtomicOrdering::Acquire
     };
 
-    let read_data = |d: &[u8]| -> dotnet_value::object::CTSValue<'gc> { ctx.read_cts_value(&t, d, gc) };
+    let read_data =
+        |d: &[u8]| -> dotnet_value::object::CTSValue<'gc> { ctx.read_cts_value(&t, d, gc) };
 
     if let StackValue::ObjectRef(ObjectRef(Some(h))) = &parent {
         if field.parent.type_name() == "System.Runtime.CompilerServices.RawArrayData" {
             let data = h.borrow();
             if let HeapStorage::Vec(ref vector) = data.storage {
                 let intercepted = if name == "Length" {
-                    Some(dotnet_value::object::CTSValue::Value(dotnet_value::object::ValueType::UInt32(
-                        vector.layout.length as u32,
-                    )))
+                    Some(dotnet_value::object::CTSValue::Value(
+                        dotnet_value::object::ValueType::UInt32(vector.layout.length as u32),
+                    ))
                 } else if name == "Data" {
                     let b = if vector.layout.length > 0 {
                         vector.get()[0]
                     } else {
                         0
                     };
-                    Some(dotnet_value::object::CTSValue::Value(dotnet_value::object::ValueType::UInt8(b)))
+                    Some(dotnet_value::object::CTSValue::Value(
+                        dotnet_value::object::ValueType::UInt8(b),
+                    ))
                 } else {
                     None
                 };
@@ -244,9 +257,11 @@ pub fn ldfld<'gc, 'm: 'gc>(
                 HeapStorage::Vec(v) => v.get().as_ptr() as *mut u8,
                 HeapStorage::Str(s) => s.as_ptr() as *mut u8,
                 HeapStorage::Boxed(v) => match v {
-                     dotnet_value::object::ValueType::Struct(s) => s.instance_storage.get().as_ptr() as *mut u8,
-                     _ => ptr::null_mut(),
-                }
+                    dotnet_value::object::ValueType::Struct(s) => {
+                        s.instance_storage.get().as_ptr() as *mut u8
+                    }
+                    _ => ptr::null_mut(),
+                },
             }
         }
         StackValue::ValueType(v) => v.instance_storage.get().as_ptr() as *mut u8,
@@ -317,7 +332,7 @@ pub fn stfld<'gc, 'm: 'gc>(
     volatile: bool,
 ) -> StepResult {
     let (field, lookup) = stack.locate_field(*param0);
-    
+
     let value = stack.pop(gc);
     let parent = stack.pop(gc);
 
@@ -347,9 +362,11 @@ pub fn stfld<'gc, 'm: 'gc>(
                 HeapStorage::Vec(v) => v.get().as_ptr() as *mut u8,
                 HeapStorage::Str(s) => s.as_ptr() as *mut u8,
                 HeapStorage::Boxed(v) => match v {
-                     dotnet_value::object::ValueType::Struct(s) => s.instance_storage.get().as_ptr() as *mut u8,
-                     _ => ptr::null_mut(),
-                }
+                    dotnet_value::object::ValueType::Struct(s) => {
+                        s.instance_storage.get().as_ptr() as *mut u8
+                    }
+                    _ => ptr::null_mut(),
+                },
             }
         }
         StackValue::ValueType(v) => v.instance_storage.get().as_ptr() as *mut u8,
@@ -411,7 +428,6 @@ pub fn stfld<'gc, 'm: 'gc>(
 
     StepResult::InstructionStepped
 }
-
 
 #[dotnet_instruction(LoadStaticField)]
 pub fn ldsfld<'gc, 'm: 'gc>(
@@ -599,9 +615,9 @@ pub fn ldflda<'gc, 'm: 'gc>(
     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
 
     let ptr = if field.parent.type_name() == "System.String" && name == "_firstChar" {
-         unsafe { ptr.sub(field_layout.position) }
+        unsafe { ptr.sub(field_layout.position) }
     } else {
-         ptr
+        ptr
     };
 
     let field_ptr = unsafe { ptr.add(field_layout.position) };
@@ -660,7 +676,6 @@ pub fn ldsflda<'gc, 'm: 'gc>(
 
     StepResult::InstructionStepped
 }
-
 
 #[dotnet_instruction(LoadElement)]
 pub fn ldelem<'gc, 'm: 'gc>(
@@ -739,12 +754,10 @@ pub fn ldelem_primitive<'gc, 'm: 'gc>(
             return Err(());
         }
         let target = &array.get()[(elem_size * index)..(elem_size * (index + 1))];
-        
+
         macro_rules! from_bytes {
             ($t:ty) => {
-                <$t>::from_ne_bytes(
-                    target.try_into().expect("source data was too small"),
-                )
+                <$t>::from_ne_bytes(target.try_into().expect("source data was too small"))
             };
         }
 
@@ -914,7 +927,7 @@ pub fn stelem_primitive<'gc, 'm: 'gc>(
             return Err(());
         }
         let target = &mut array.get_mut()[(elem_size * index)..(elem_size * (index + 1))];
-        
+
         macro_rules! to_bytes {
             ($t:ty, $v:expr) => {{
                 let val = $v as $t;
@@ -923,15 +936,59 @@ pub fn stelem_primitive<'gc, 'm: 'gc>(
         }
 
         match param0 {
-            StoreType::Int8 => to_bytes!(i8, match value { StackValue::Int32(i) => i, _ => panic!("Invalid value for i8 store") }),
-            StoreType::Int16 => to_bytes!(i16, match value { StackValue::Int32(i) => i, _ => panic!("Invalid value for i16 store") }),
-            StoreType::Int32 => to_bytes!(i32, match value { StackValue::Int32(i) => i, _ => panic!("Invalid value for i32 store") }),
-            StoreType::Int64 => to_bytes!(i64, match value { StackValue::Int64(i) => i, _ => panic!("Invalid value for i64 store") }),
-            StoreType::Float32 => to_bytes!(f32, match value { StackValue::NativeFloat(f) => f, _ => panic!("Invalid value for f32 store") }),
-            StoreType::Float64 => to_bytes!(f64, match value { StackValue::NativeFloat(f) => f, _ => panic!("Invalid value for f64 store") }),
-            StoreType::IntPtr => to_bytes!(usize, match value { StackValue::NativeInt(i) => i as usize, _ => panic!("Invalid value for IntPtr store") }),
+            StoreType::Int8 => to_bytes!(
+                i8,
+                match value {
+                    StackValue::Int32(i) => i,
+                    _ => panic!("Invalid value for i8 store"),
+                }
+            ),
+            StoreType::Int16 => to_bytes!(
+                i16,
+                match value {
+                    StackValue::Int32(i) => i,
+                    _ => panic!("Invalid value for i16 store"),
+                }
+            ),
+            StoreType::Int32 => to_bytes!(
+                i32,
+                match value {
+                    StackValue::Int32(i) => i,
+                    _ => panic!("Invalid value for i32 store"),
+                }
+            ),
+            StoreType::Int64 => to_bytes!(
+                i64,
+                match value {
+                    StackValue::Int64(i) => i,
+                    _ => panic!("Invalid value for i64 store"),
+                }
+            ),
+            StoreType::Float32 => to_bytes!(
+                f32,
+                match value {
+                    StackValue::NativeFloat(f) => f,
+                    _ => panic!("Invalid value for f32 store"),
+                }
+            ),
+            StoreType::Float64 => to_bytes!(
+                f64,
+                match value {
+                    StackValue::NativeFloat(f) => f,
+                    _ => panic!("Invalid value for f64 store"),
+                }
+            ),
+            StoreType::IntPtr => to_bytes!(
+                usize,
+                match value {
+                    StackValue::NativeInt(i) => i as usize,
+                    _ => panic!("Invalid value for IntPtr store"),
+                }
+            ),
             StoreType::Object => {
-                let StackValue::ObjectRef(r) = value else { panic!("Invalid value for object store") };
+                let StackValue::ObjectRef(r) = value else {
+                    panic!("Invalid value for object store")
+                };
                 r.write(target);
             }
         }
@@ -952,7 +1009,7 @@ pub fn newarr<'gc, 'm: 'gc>(
     // Check for GC safe point before large allocations
     // Threshold: arrays with > 1024 elements
     const LARGE_ARRAY_THRESHOLD: usize = 1024;
-    
+
     let length = match stack.pop(gc) {
         StackValue::Int32(i) => {
             if i < 0 {
@@ -961,7 +1018,7 @@ pub fn newarr<'gc, 'm: 'gc>(
             i as usize
         }
         StackValue::NativeInt(i) => {
-             if i < 0 {
+            if i < 0 {
                 return stack.throw_by_name(gc, "System.OverflowException");
             }
             i as usize
@@ -984,10 +1041,7 @@ pub fn newarr<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(LoadLength)]
-pub fn ldlen<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-) -> StepResult {
+pub fn ldlen<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     let array = stack.pop(gc);
     let StackValue::ObjectRef(obj) = array else {
         panic!("ldlen: expected object on stack, got {:?}", array);
@@ -1012,7 +1066,6 @@ pub fn ldlen<'gc, 'm: 'gc>(
     StepResult::InstructionStepped
 }
 
-
 #[dotnet_instruction(CastClass)]
 pub fn castclass<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
@@ -1021,7 +1074,10 @@ pub fn castclass<'gc, 'm: 'gc>(
 ) -> StepResult {
     let target_obj_val = stack.pop(gc);
     let StackValue::ObjectRef(target_obj) = target_obj_val else {
-        panic!("castclass: expected object on stack, got {:?}", target_obj_val);
+        panic!(
+            "castclass: expected object on stack, got {:?}",
+            target_obj_val
+        );
     };
 
     if let ObjectRef(Some(o)) = target_obj {
@@ -1107,10 +1163,9 @@ pub fn unbox_any<'gc, 'm: 'gc>(
             let td = stack.loader().find_concrete_type(target_ct.clone());
             td.is_value_type(&ctx)
         }
-        BaseType::Vector(_, _)
-        | BaseType::Array(_, _)
-        | BaseType::Object
-        | BaseType::String => false,
+        BaseType::Vector(_, _) | BaseType::Array(_, _) | BaseType::Object | BaseType::String => {
+            false
+        }
         _ => true, // Primitives, IntPtr, etc are value types
     };
 
@@ -1126,7 +1181,9 @@ pub fn unbox_any<'gc, 'm: 'gc>(
 
         let result = obj.as_heap_storage(|storage| {
             match storage {
-                HeapStorage::Boxed(v) => dotnet_value::object::CTSValue::Value(v.clone()).into_stack(gc),
+                HeapStorage::Boxed(v) => {
+                    dotnet_value::object::CTSValue::Value(v.clone()).into_stack(gc)
+                }
                 HeapStorage::Obj(o) => {
                     // Boxed struct is just an Object of that struct type.
                     StackValue::ValueType(o.clone())
@@ -1212,7 +1269,9 @@ pub fn ldobj<'gc, 'm: 'gc>(
 
     let mut source_vec = vec![0u8; layout.size()];
     unsafe { ptr::copy_nonoverlapping(source_ptr, source_vec.as_mut_ptr(), layout.size()) };
-    let value = ctx.read_cts_value(&load_type, &source_vec, gc).into_stack(gc);
+    let value = ctx
+        .read_cts_value(&load_type, &source_vec, gc)
+        .into_stack(gc);
 
     stack.push(gc, value);
     StepResult::InstructionStepped
@@ -1247,8 +1306,7 @@ pub fn stobj<'gc, 'm: 'gc>(
 
     let layout = type_layout(concrete_t.clone(), &ctx);
     let mut bytes = vec![0u8; layout.size()];
-    ctx.new_cts_value(&concrete_t, value)
-        .write(&mut bytes);
+    ctx.new_cts_value(&concrete_t, value).write(&mut bytes);
 
     unsafe {
         ptr::copy_nonoverlapping(bytes.as_ptr(), dest_ptr, bytes.len());
@@ -1305,8 +1363,11 @@ pub fn ldstr<'gc, 'm: 'gc>(
     stack: &mut CallStack<'gc, 'm>,
     chars: Vec<u16>,
 ) -> StepResult {
-    use dotnet_value::{object::{HeapStorage, ObjectRef}, string::CLRString};
-    
+    use dotnet_value::{
+        object::{HeapStorage, ObjectRef},
+        string::CLRString,
+    };
+
     let s = CLRString::new(chars);
     let storage = HeapStorage::Str(s);
     let obj_ref = ObjectRef::new(gc, storage);

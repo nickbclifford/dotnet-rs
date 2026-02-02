@@ -268,7 +268,7 @@ impl LayoutFactory {
                 });
                 type_layout_with_metrics(t, context, metrics)
             };
-            
+
             current_type_fields.push((td, f.name.as_ref(), f.offset, layout));
         }
 
@@ -407,9 +407,10 @@ fn type_layout_internal(
         BaseType::Int16 => Scalar::Int16.into(),
         BaseType::Int32 | BaseType::UInt32 => Scalar::Int32.into(),
         BaseType::Int64 | BaseType::UInt64 => Scalar::Int64.into(),
-        BaseType::IntPtr | BaseType::UIntPtr | BaseType::FunctionPointer(_) | BaseType::ValuePointer(_, _) => {
-            Scalar::NativeInt.into()
-        }
+        BaseType::IntPtr
+        | BaseType::UIntPtr
+        | BaseType::FunctionPointer(_)
+        | BaseType::ValuePointer(_, _) => Scalar::NativeInt.into(),
         BaseType::Float32 => Scalar::Float32.into(),
         BaseType::Float64 => Scalar::Float64.into(),
         BaseType::Type {

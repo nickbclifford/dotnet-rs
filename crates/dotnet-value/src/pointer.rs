@@ -161,7 +161,9 @@ impl<'gc> ManagedPtr<'gc> {
         let ptr_size = size_of::<usize>();
 
         // Write Owner (Offset 0)
-        self.owner.unwrap_or(ObjectRef(None)).write(&mut dest[0..ptr_size]);
+        self.owner
+            .unwrap_or(ObjectRef(None))
+            .write(&mut dest[0..ptr_size]);
 
         // Write Offset (Offset 8)
         let offset_bytes = self.offset.to_ne_bytes();

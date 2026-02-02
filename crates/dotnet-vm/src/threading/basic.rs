@@ -3,8 +3,6 @@ use crate::{
     threading::{STWGuardOps, ThreadManagerOps, ThreadState},
     tracer::Tracer,
 };
-#[cfg(feature = "multithreaded-gc")]
-use tracing::warn;
 use dotnet_utils::sync::{Arc, AtomicU64, Mutex, Ordering, MANAGED_THREAD_ID};
 use std::{
     cell::Cell,
@@ -24,6 +22,8 @@ use std::{
     mem,
     time::{Duration, Instant},
 };
+#[cfg(feature = "multithreaded-gc")]
+use tracing::warn;
 
 thread_local! {
     /// Flag indicating if this thread is currently performing GC

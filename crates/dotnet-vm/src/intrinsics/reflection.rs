@@ -648,10 +648,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 RuntimeType::Generic(td, _) => {
                     let n_params = td.definition().generic_parameters.len();
                     let params = (0..n_params as u16)
-                        .map(|index| RuntimeType::TypeParameter {
-                            owner: td,
-                            index,
-                        })
+                        .map(|index| RuntimeType::TypeParameter { owner: td, index })
                         .collect();
                     let def_rt = RuntimeType::Generic(td, params);
                     let rt_obj = stack.get_runtime_type(gc, def_rt);
@@ -830,7 +827,10 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
             stack.push(gc, StackValue::NativeInt(0));
             unsafe {
                 stack.pop(gc).store(
-                    pfn_allocator.pointer().expect("pfn_allocator null").as_ptr(),
+                    pfn_allocator
+                        .pointer()
+                        .expect("pfn_allocator null")
+                        .as_ptr(),
                     dotnetdll::prelude::StoreType::IntPtr,
                 )
             };
@@ -881,7 +881,10 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
                     stack.push(gc, StackValue::Int32(1));
                     unsafe {
                         stack.pop(gc).store(
-                            ctor_is_public.pointer().expect("ctor_is_public null").as_ptr(),
+                            ctor_is_public
+                                .pointer()
+                                .expect("ctor_is_public null")
+                                .as_ptr(),
                             dotnetdll::prelude::StoreType::Int8,
                         )
                     };

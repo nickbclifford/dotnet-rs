@@ -6,7 +6,18 @@ use dotnet_types::{
 };
 use dotnet_utils::gc::GCHandle;
 use dotnetdll::prelude::*;
-use std::{sync::OnceLock, collections::HashMap};
+use std::{collections::HashMap, sync::OnceLock};
+
+pub mod arithmetic;
+pub mod calls;
+pub mod comparisons;
+pub mod conversions;
+pub mod exceptions;
+pub mod flow;
+pub mod memory;
+pub mod objects;
+pub mod reflection;
+pub mod stack_ops;
 
 use super::{
     exceptions::ExceptionState,
@@ -15,17 +26,6 @@ use super::{
     threading::ThreadManagerOps,
     CallStack, MethodInfo, ResolutionContext, StepResult,
 };
-
-pub mod arithmetic;
-pub mod conversions;
-pub mod flow;
-pub mod objects;
-pub mod reflection;
-pub mod stack_ops;
-pub mod comparisons;
-pub mod exceptions;
-pub mod calls;
-pub mod memory;
 
 pub type InstructionHandler =
     for<'gc, 'm> fn(GCHandle<'gc>, &mut CallStack<'gc, 'm>, Instruction) -> StepResult;
@@ -55,7 +55,8 @@ impl InstructionRegistry {
             m
         });
 
-        map.get(instr.name()).map(|handler| handler(gc, stack, instr))
+        map.get(instr.name())
+            .map(|handler| handler(gc, stack, instr))
     }
 }
 

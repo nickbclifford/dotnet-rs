@@ -1,32 +1,22 @@
-use crate::resolution::ValueResolution;
-use crate::{CallStack, StepResult};
+use crate::{resolution::ValueResolution, CallStack, StepResult};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::StackValue;
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(NoOperation)]
-pub fn nop<'gc, 'm: 'gc>(
-    _gc: GCHandle<'gc>,
-    _stack: &mut CallStack<'gc, 'm>,
-) -> StepResult {
+pub fn nop<'gc, 'm: 'gc>(_gc: GCHandle<'gc>, _stack: &mut CallStack<'gc, 'm>) -> StepResult {
     StepResult::InstructionStepped
 }
 
 #[dotnet_instruction(Pop)]
-pub fn pop<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-) -> StepResult {
+pub fn pop<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     stack.pop(gc);
     StepResult::InstructionStepped
 }
 
 #[dotnet_instruction(Duplicate)]
-pub fn duplicate<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-) -> StepResult {
+pub fn duplicate<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     let val = stack.pop(gc);
     stack.push(gc, val.clone());
     stack.push(gc, val);
@@ -74,10 +64,7 @@ pub fn ldc_r8<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(LoadNull)]
-pub fn ldnull<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-) -> StepResult {
+pub fn ldnull<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     stack.push(gc, StackValue::null());
     StepResult::InstructionStepped
 }
@@ -149,12 +136,7 @@ pub fn ldloca<'gc, 'm: 'gc>(
 
     stack.push(
         gc,
-        StackValue::managed_ptr_with_owner(
-            ptr.as_ptr() as *mut _,
-            live_type,
-            None,
-            pinned,
-        ),
+        StackValue::managed_ptr_with_owner(ptr.as_ptr() as *mut _, live_type, None, pinned),
     );
     StepResult::InstructionStepped
 }

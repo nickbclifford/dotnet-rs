@@ -4,10 +4,7 @@ use dotnet_utils::gc::GCHandle;
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(Add)]
-pub fn add<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-) -> StepResult {
+pub fn add<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     let v2 = stack.pop(gc);
     let v1 = stack.pop(gc);
     stack.push(gc, v1 + v2);
@@ -32,10 +29,7 @@ pub fn add_ovf<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(And)]
-pub fn and<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-) -> StepResult {
+pub fn and<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     let v2 = stack.pop(gc);
     let v1 = stack.pop(gc);
     stack.push(gc, v1 & v2);
@@ -60,10 +54,7 @@ pub fn divide<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(Multiply)]
-pub fn multiply<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-) -> StepResult {
+pub fn multiply<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     let v2 = stack.pop(gc);
     let v1 = stack.pop(gc);
     stack.push(gc, v1 * v2);
@@ -88,30 +79,21 @@ pub fn multiply_ovf<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(Negate)]
-pub fn negate<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-) -> StepResult {
+pub fn negate<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     let v = stack.pop(gc);
     stack.push(gc, -v);
     StepResult::InstructionStepped
 }
 
 #[dotnet_instruction(Not)]
-pub fn not<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-) -> StepResult {
+pub fn not<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     let v = stack.pop(gc);
     stack.push(gc, !v);
     StepResult::InstructionStepped
 }
 
 #[dotnet_instruction(Or)]
-pub fn or<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-) -> StepResult {
+pub fn or<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     let v2 = stack.pop(gc);
     let v1 = stack.pop(gc);
     stack.push(gc, v1 | v2);
@@ -136,10 +118,7 @@ pub fn remainder<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(ShiftLeft)]
-pub fn shl<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-) -> StepResult {
+pub fn shl<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     let v2 = stack.pop(gc);
     let v1 = stack.pop(gc);
     stack.push(gc, v1 << v2);
@@ -159,10 +138,7 @@ pub fn shr<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(Subtract)]
-pub fn subtract<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-) -> StepResult {
+pub fn subtract<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     let v2 = stack.pop(gc);
     let v1 = stack.pop(gc);
     stack.push(gc, v1 - v2);
@@ -187,10 +163,7 @@ pub fn subtract_ovf<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(Xor)]
-pub fn xor<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-) -> StepResult {
+pub fn xor<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     let v2 = stack.pop(gc);
     let v1 = stack.pop(gc);
     stack.push(gc, v1 ^ v2);

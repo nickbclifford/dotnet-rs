@@ -252,12 +252,7 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     vm_push!(
         stack,
         gc,
-        StackValue::managed_ptr_with_owner(
-            result_ptr,
-            target_type,
-            owner,
-            pinned
-        )
+        StackValue::managed_ptr_with_owner(result_ptr, target_type, owner, pinned)
     );
     StepResult::InstructionStepped
 }

@@ -1,14 +1,19 @@
-use crate::instructions::StepResult;
-use crate::{CallStack, vm_pop};
+use crate::{
+    exceptions::{ExceptionState, HandlerAddress, UnwindTarget},
+    instructions::StepResult,
+    vm_pop, CallStack,
+};
+use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::StackValue;
-use dotnet_macros::dotnet_instruction;
 use dotnetdll::prelude::*;
-use crate::exceptions::{ExceptionState, HandlerAddress, UnwindTarget};
 
 #[dotnet_instruction(Leave)]
-pub fn leave<'gc, 'm>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>, jump_target: usize) -> StepResult
-where 'm: 'gc {
+pub fn leave<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    jump_target: usize,
+) -> StepResult {
     // If we're already executing a handler (e.g., a finally block during unwinding),
     // we need to preserve that state. The Leave instruction in this case just means
     // "exit this finally block and continue unwinding".
@@ -40,8 +45,7 @@ where 'm: 'gc {
 }
 
 #[dotnet_instruction(EndFinally)]
-pub fn endfinally<'gc, 'm>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult
-where 'm: 'gc {
+pub fn endfinally<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     match stack.execution.exception_mode {
         ExceptionState::ExecutingHandler {
             exception,
@@ -63,8 +67,7 @@ where 'm: 'gc {
 }
 
 #[dotnet_instruction(EndFilter)]
-pub fn endfilter<'gc, 'm>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult
-where 'm: 'gc {
+pub fn endfilter<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     let result = vm_pop!(stack, gc);
     let result_val = match result {
         StackValue::Int32(i) => i,
@@ -79,13 +82,16 @@ where 'm: 'gc {
     // Restore suspended state
     // Note: we use handler.frame_index because the filter ran in that frame.
     // It might have called other methods, but those should have returned by now.
-    stack.execution
+    stack
+        .execution
         .stack
         .truncate(stack.execution.frames[handler.frame_index].base.stack);
-    stack.execution
+    stack
+        .execution
         .stack
         .append(&mut stack.execution.suspended_stack);
-    stack.execution
+    stack
+        .execution
         .frames
         .append(&mut stack.execution.suspended_frames);
 
@@ -118,8 +124,7 @@ where 'm: 'gc {
 }
 
 #[dotnet_instruction(Throw)]
-pub fn throw<'gc, 'm>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult
-where 'm: 'gc {
+pub fn throw<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     let exc = vm_pop!(stack, gc);
     let StackValue::ObjectRef(exc) = exc else {
         panic!(
@@ -135,8 +140,7 @@ where 'm: 'gc {
 }
 
 #[dotnet_instruction(Rethrow)]
-pub fn rethrow<'gc, 'm>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult
-where 'm: 'gc {
+pub fn rethrow<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     let exception = stack
         .current_frame()
         .exception_stack

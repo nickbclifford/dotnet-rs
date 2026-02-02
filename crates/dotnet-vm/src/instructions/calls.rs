@@ -1,25 +1,35 @@
-use crate::instructions::StepResult;
-use crate::{CallStack, vm_expect_stack, vm_push, vm_pop, vm_trace};
-use dotnet_utils::gc::GCHandle;
-use dotnet_value::{StackValue, object::{ObjectRef, HeapStorage}};
+use crate::{
+    instructions::StepResult,
+    layout::type_layout,
+    resolution::{TypeResolutionExt, ValueResolution},
+    vm_expect_stack, vm_pop, vm_push, vm_trace, CallStack,
+};
 use dotnet_macros::dotnet_instruction;
+use dotnet_utils::gc::GCHandle;
+use dotnet_value::{
+    layout::HasLayout,
+    object::{HeapStorage, ObjectRef},
+    StackValue,
+};
 use dotnetdll::prelude::*;
-use crate::layout::type_layout;
-use crate::resolution::{TypeResolutionExt, ValueResolution};
-use dotnet_value::layout::HasLayout;
-use std::ptr;
-use std::mem::align_of;
+use std::{mem::align_of, ptr};
 
 #[dotnet_instruction(Call)]
-pub fn call<'gc, 'm>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>, param0: &MethodSource) -> StepResult
-where 'm: 'gc {
+pub fn call<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    param0: &MethodSource,
+) -> StepResult {
     // Use unified dispatch pipeline for static calls
     stack.unified_dispatch(gc, param0, None, None)
 }
 
 #[dotnet_instruction(CallVirtual)]
-pub fn callvirt<'gc, 'm>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>, param0: &MethodSource) -> StepResult
-where 'm: 'gc {
+pub fn callvirt<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    param0: &MethodSource,
+) -> StepResult {
     // Use unified dispatch pipeline for virtual calls
     // Note: We still need to pop args to extract this_type before dispatch
 
@@ -55,8 +65,12 @@ where 'm: 'gc {
 }
 
 #[dotnet_instruction(CallConstrained)]
-pub fn call_constrained<'gc, 'm>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>, constraint: &MethodType, source: &MethodSource) -> StepResult
-where 'm: 'gc {
+pub fn call_constrained<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    constraint: &MethodType,
+    source: &MethodSource,
+) -> StepResult {
     // according to the standard, this doesn't really make sense
     // because the constrained prefix should only be on callvirt
     // however, this appears to be used for static interface dispatch?
@@ -70,7 +84,9 @@ where 'm: 'gc {
         let target = stack
             .current_context()
             .locate_method(o.implementation, &lookup);
-        let declaration = stack.current_context().locate_method(o.declaration, &lookup);
+        let declaration = stack
+            .current_context()
+            .locate_method(o.declaration, &lookup);
         if method == declaration {
             vm_trace!(stack, "-- dispatching to {:?} --", target);
             // Note: Uses dispatch_method directly since method is already resolved
@@ -86,8 +102,12 @@ where 'm: 'gc {
 }
 
 #[dotnet_instruction(CallVirtualConstrained)]
-pub fn callvirt_constrained<'gc, 'm>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>, constraint: &MethodType, source: &MethodSource) -> StepResult
-where 'm: 'gc {
+pub fn callvirt_constrained<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    constraint: &MethodType,
+    source: &MethodSource,
+) -> StepResult {
     let (base_method, lookup) = stack.find_generic_method(source);
 
     // Pop all arguments (this + parameters)
@@ -105,15 +125,13 @@ where 'm: 'gc {
     // Determine dispatch strategy based on constraint type
     let method = if constraint_type.is_value_type(&ctx) {
         // Value type: check for direct override first
-        if let Some(overriding_method) =
-            stack.loader().find_method_in_type_with_substitution(
-                constraint_type,
-                &base_method.method.name,
-                &base_method.method.signature,
-                base_method.resolution(),
-                &lookup,
-            )
-        {
+        if let Some(overriding_method) = stack.loader().find_method_in_type_with_substitution(
+            constraint_type,
+            &base_method.method.name,
+            &base_method.method.signature,
+            base_method.resolution(),
+            &lookup,
+        ) {
             // Value type has its own implementation
             overriding_method
         } else {
@@ -126,9 +144,7 @@ where 'm: 'gc {
             let value_size = type_layout(constraint_type_source.clone(), &ctx).size();
 
             let mut value_vec = vec![0u8; value_size];
-            unsafe {
-                ptr::copy_nonoverlapping(ptr, value_vec.as_mut_ptr(), value_size)
-            };
+            unsafe { ptr::copy_nonoverlapping(ptr, value_vec.as_mut_ptr(), value_size) };
             let value_data = &value_vec;
             let value = ctx.read_cts_value(&constraint_type_source, value_data, gc);
 
@@ -158,9 +174,7 @@ where 'm: 'gc {
         // Create a slice from the pointer. We know ObjectRef is pointer-sized.
 
         let mut value_vec = vec![0u8; ObjectRef::SIZE];
-        unsafe {
-            ptr::copy_nonoverlapping(ptr, value_vec.as_mut_ptr(), ObjectRef::SIZE)
-        };
+        unsafe { ptr::copy_nonoverlapping(ptr, value_vec.as_mut_ptr(), ObjectRef::SIZE) };
         let value_bytes = &value_vec;
         let obj_ref = unsafe { ObjectRef::read_branded(value_bytes, gc) };
 

@@ -275,7 +275,10 @@ impl<'gc> StackValue<'gc> {
         match self {
             Self::NativeInt(i) => *i as *mut u8,
             Self::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-            Self::ManagedPtr(m) => m.pointer().map(|p| p.as_ptr()).unwrap_or(std::ptr::null_mut()),
+            Self::ManagedPtr(m) => m
+                .pointer()
+                .map(|p| p.as_ptr())
+                .unwrap_or(std::ptr::null_mut()),
             v => panic!("expected pointer on stack, received {:?}", v),
         }
     }

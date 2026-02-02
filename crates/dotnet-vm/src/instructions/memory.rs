@@ -1,11 +1,13 @@
-use crate::instructions::StepResult;
-use crate::{CallStack, vm_push, vm_pop};
-use dotnet_utils::gc::GCHandle;
-use dotnet_value::{StackValue, pointer::UnmanagedPtr};
+use crate::{instructions::StepResult, vm_pop, vm_push, CallStack};
 use dotnet_macros::dotnet_instruction;
+use dotnet_utils::gc::GCHandle;
+use dotnet_value::{
+    layout::{LayoutManager, Scalar},
+    pointer::UnmanagedPtr,
+    StackValue,
+};
 use dotnetdll::prelude::*;
 use std::ptr;
-use dotnet_value::layout::{LayoutManager, Scalar};
 
 #[dotnet_instruction(CopyMemoryBlock)]
 pub fn cpblk<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
@@ -99,13 +101,13 @@ pub fn localloc<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>)
                 return stack.throw_by_name(gc, "System.OverflowException");
             }
             i as usize
-        },
+        }
         StackValue::NativeInt(i) => {
-             if i < 0 {
+            if i < 0 {
                 return stack.throw_by_name(gc, "System.OverflowException");
             }
             i as usize
-        },
+        }
         rest => panic!(
             "invalid type for size in localloc (expected int32 or native int, received {:?})",
             rest
@@ -123,13 +125,21 @@ pub fn localloc<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>)
         s.memory_pool.extend(vec![0; size]);
         s.memory_pool[loc..].as_mut_ptr()
     };
-    
-    vm_push!(stack, gc, StackValue::UnmanagedPtr(UnmanagedPtr(std::ptr::NonNull::new(ptr).unwrap())));
+
+    vm_push!(
+        stack,
+        gc,
+        StackValue::UnmanagedPtr(UnmanagedPtr(std::ptr::NonNull::new(ptr).unwrap()))
+    );
     StepResult::InstructionStepped
 }
 
 #[dotnet_instruction(StoreIndirect)]
-pub fn stind<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>, param0: StoreType) -> StepResult {
+pub fn stind<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    param0: StoreType,
+) -> StepResult {
     let val = vm_pop!(stack, gc);
     let addr_val = vm_pop!(stack, gc);
 
@@ -161,11 +171,18 @@ pub fn stind<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>, pa
 }
 
 #[dotnet_instruction(LoadIndirect)]
-pub fn ldind<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>, param0: LoadType) -> StepResult {
+pub fn ldind<'gc, 'm: 'gc>(
+    gc: GCHandle<'gc>,
+    stack: &mut CallStack<'gc, 'm>,
+    param0: LoadType,
+) -> StepResult {
     let addr_val = vm_pop!(stack, gc);
     let (ptr, owner) = match addr_val {
         StackValue::NativeInt(p) => (p as *const u8, None),
-        StackValue::ManagedPtr(m) => (m.pointer().map_or(ptr::null(), |p| p.as_ptr() as *const u8), m.owner),
+        StackValue::ManagedPtr(m) => (
+            m.pointer().map_or(ptr::null(), |p| p.as_ptr() as *const u8),
+            m.owner,
+        ),
         StackValue::UnmanagedPtr(u) => (u.0.as_ptr() as *const u8, None),
         _ => panic!("LoadIndirect: expected pointer, got {:?}", addr_val),
     };
@@ -186,7 +203,11 @@ pub fn ldind<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>, pa
 
     let heap = &stack.local.heap;
     let memory = crate::memory::RawMemoryAccess::new(heap);
-    let val = unsafe { memory.read_unaligned(ptr, owner, &layout, None).expect("Read failed") };
+    let val = unsafe {
+        memory
+            .read_unaligned(ptr, owner, &layout, None)
+            .expect("Read failed")
+    };
     vm_push!(stack, gc, val);
     StepResult::InstructionStepped
 }

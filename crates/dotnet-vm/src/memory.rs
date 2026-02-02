@@ -281,29 +281,19 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
         Ok(match layout {
             LayoutManager::Scalar(s) => match s {
-                Scalar::Int8 => StackValue::Int32(
-                    ptr::read_unaligned(ptr as *const i8) as i32
-                ),
-                Scalar::UInt8 => StackValue::Int32(
-                    ptr::read_unaligned(ptr) as i32
-                ),
-                Scalar::Int16 => StackValue::Int32(
-                    ptr::read_unaligned(ptr as *const i16) as i32
-                ),
-                Scalar::UInt16 => StackValue::Int32(
-                    ptr::read_unaligned(ptr as *const u16) as i32
-                ),
+                Scalar::Int8 => StackValue::Int32(ptr::read_unaligned(ptr as *const i8) as i32),
+                Scalar::UInt8 => StackValue::Int32(ptr::read_unaligned(ptr) as i32),
+                Scalar::Int16 => StackValue::Int32(ptr::read_unaligned(ptr as *const i16) as i32),
+                Scalar::UInt16 => StackValue::Int32(ptr::read_unaligned(ptr as *const u16) as i32),
                 Scalar::Int32 => StackValue::Int32(ptr::read_unaligned(ptr as *const i32)),
                 Scalar::Int64 => StackValue::Int64(ptr::read_unaligned(ptr as *const i64)),
-                Scalar::NativeInt => StackValue::NativeInt(ptr::read_unaligned(
-                    ptr as *const isize,
-                )),
-                Scalar::Float32 => StackValue::NativeFloat(
-                    ptr::read_unaligned(ptr as *const f32) as f64,
-                ),
-                Scalar::Float64 => StackValue::NativeFloat(ptr::read_unaligned(
-                    ptr as *const f64,
-                )),
+                Scalar::NativeInt => {
+                    StackValue::NativeInt(ptr::read_unaligned(ptr as *const isize))
+                }
+                Scalar::Float32 => {
+                    StackValue::NativeFloat(ptr::read_unaligned(ptr as *const f32) as f64)
+                }
+                Scalar::Float64 => StackValue::NativeFloat(ptr::read_unaligned(ptr as *const f64)),
                 Scalar::ObjectRef => {
                     let mut buf = [0u8; 8];
                     ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), 8);
@@ -320,7 +310,10 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     );
 
                     StackValue::ManagedPtr(ManagedPtr::new(
-                        ptr_val, void_desc, Some(owner_ref), false,
+                        ptr_val,
+                        void_desc,
+                        Some(owner_ref),
+                        false,
                     ))
                 }
             },

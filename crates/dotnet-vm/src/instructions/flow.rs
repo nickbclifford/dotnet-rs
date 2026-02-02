@@ -1,5 +1,7 @@
-use crate::exceptions::{ExceptionState, HandlerAddress, UnwindTarget};
-use crate::{CallStack, StepResult};
+use crate::{
+    exceptions::{ExceptionState, HandlerAddress, UnwindTarget},
+    CallStack, StepResult,
+};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::StackValue;
@@ -39,7 +41,10 @@ pub fn bge<'gc, 'm: 'gc>(
 ) -> StepResult {
     let v2 = stack.pop(_gc);
     let v1 = stack.pop(_gc);
-    let cond = matches!(v1.compare(&v2, sgn), Some(std::cmp::Ordering::Greater) | Some(std::cmp::Ordering::Equal));
+    let cond = matches!(
+        v1.compare(&v2, sgn),
+        Some(std::cmp::Ordering::Greater) | Some(std::cmp::Ordering::Equal)
+    );
     if stack.conditional_branch(cond, target) {
         StepResult::InstructionJumped
     } else {
@@ -73,7 +78,10 @@ pub fn ble<'gc, 'm: 'gc>(
 ) -> StepResult {
     let v2 = stack.pop(_gc);
     let v1 = stack.pop(_gc);
-    let cond = matches!(v1.compare(&v2, sgn), Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Equal));
+    let cond = matches!(
+        v1.compare(&v2, sgn),
+        Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Equal)
+    );
     if stack.conditional_branch(cond, target) {
         StepResult::InstructionJumped
     } else {
@@ -142,10 +150,7 @@ pub fn brfalse<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(Return)]
-pub fn ret<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-) -> StepResult {
+pub fn ret<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     let frame_index = stack.execution.frames.len() - 1;
     if let ExceptionState::ExecutingHandler {
         exception, cursor, ..

@@ -263,7 +263,12 @@ impl<'a, 'm> ValueResolution for ResolutionContext<'a, 'm> {
 
                 if data.len() >= 16 {
                     let (ptr, owner, _offset) = unsafe { ManagedPtr::read_from_bytes(data) };
-                    CTSValue::Value(Pointer(ManagedPtr::new(ptr, inner_type, Some(owner), false)))
+                    CTSValue::Value(Pointer(ManagedPtr::new(
+                        ptr,
+                        inner_type,
+                        Some(owner),
+                        false,
+                    )))
                 } else {
                     let mut ptr_bytes = [0u8; 8];
                     ptr_bytes.copy_from_slice(&data[0..8]);

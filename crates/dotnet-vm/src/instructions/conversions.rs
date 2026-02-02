@@ -1,8 +1,8 @@
 use crate::{CallStack, StepResult};
+use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{pointer::UnmanagedPtr, StackValue};
 use dotnetdll::prelude::*;
-use dotnet_macros::dotnet_instruction;
 
 #[dotnet_instruction(Convert)]
 pub fn conv<'gc, 'm: 'gc>(
@@ -80,14 +80,12 @@ pub fn conv<'gc, 'm: 'gc>(
             stack.push(gc, StackValue::NativeInt(i));
         }
         ConversionType::UIntPtr => {
-             let i = match value {
+            let i = match value {
                 StackValue::Int32(i) => (i as u32) as usize,
                 StackValue::Int64(i) => i as u64 as usize,
                 StackValue::NativeInt(i) => i as usize,
-                StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr() as usize ,
-                StackValue::ManagedPtr(m) => {
-                    m.pointer().map_or(0, |ptr| ptr.as_ptr() as usize)
-                }
+                StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr() as usize,
+                StackValue::ManagedPtr(m) => m.pointer().map_or(0, |ptr| ptr.as_ptr() as usize),
                 StackValue::NativeFloat(f) => {
                     todo!("truncate {} towards zero for conversion to usize", f)
                 }
@@ -116,10 +114,7 @@ pub fn conv_ovf<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(ConvertFloat32)]
-pub fn conv_r4<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-) -> StepResult {
+pub fn conv_r4<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     let v = match stack.pop(gc) {
         StackValue::Int32(i) => i as f32,
         StackValue::Int64(i) => i as f32,
@@ -135,10 +130,7 @@ pub fn conv_r4<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(ConvertFloat64)]
-pub fn conv_r8<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-) -> StepResult {
+pub fn conv_r8<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     let v = match stack.pop(gc) {
         StackValue::Int32(i) => i as f64,
         StackValue::Int64(i) => i as f64,
@@ -154,10 +146,7 @@ pub fn conv_r8<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(ConvertUnsignedToFloat)]
-pub fn conv_r_un<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-) -> StepResult {
+pub fn conv_r_un<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     let value = stack.pop(gc);
     todo!("conv.r.un({:?})", value)
 }

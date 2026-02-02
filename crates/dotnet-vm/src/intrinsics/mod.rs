@@ -56,7 +56,7 @@
 //!     Create a function with the following signature and apply the `#[dotnet_intrinsic]` attribute:
 //!     ```rust,ignore
 //!     #[dotnet_intrinsic("static double System.Math::Min(double, double)")]
-//!     pub fn math_min_double<'gc, 'm>(
+//!     pub fn math_min_double<'gc, 'm: 'gc>(
 //!         gc: GCHandle<'gc>,
 //!         stack: &mut CallStack<'gc, 'm>,
 //!         method: MethodDescription,
