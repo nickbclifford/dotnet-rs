@@ -6,7 +6,7 @@ use dotnet_types::{
 };
 use dotnet_utils::gc::GCHandle;
 use dotnetdll::prelude::*;
-use std::{collections::HashMap, sync::OnceLock};
+use std::sync::OnceLock;
 
 pub mod arithmetic;
 pub mod calls;
@@ -39,7 +39,8 @@ inventory::collect!(InstructionEntry);
 
 pub struct InstructionRegistry;
 
-static INSTRUCTION_MAP: OnceLock<HashMap<&'static str, InstructionHandler>> = OnceLock::new();
+type InstructionTable = [Option<InstructionHandler>; Instruction::VARIANT_COUNT];
+static INSTRUCTION_TABLE: OnceLock<InstructionTable> = OnceLock::new();
 
 impl InstructionRegistry {
     pub fn dispatch<'gc, 'm>(
@@ -47,16 +48,17 @@ impl InstructionRegistry {
         stack: &mut CallStack<'gc, 'm>,
         instr: Instruction,
     ) -> Option<StepResult> {
-        let map = INSTRUCTION_MAP.get_or_init(|| {
-            let mut m = HashMap::new();
+        let table = INSTRUCTION_TABLE.get_or_init(|| {
+            let mut t = [None; Instruction::VARIANT_COUNT];
             for entry in inventory::iter::<InstructionEntry> {
-                m.insert(entry.name, entry.handler);
+                if let Some(opcode) = Instruction::opcode_from_name(entry.name) {
+                    t[opcode] = Some(entry.handler);
+                }
             }
-            m
+            t
         });
 
-        map.get(instr.name())
-            .map(|handler| handler(gc, stack, instr))
+        table[instr.opcode()].map(|handler| handler(gc, stack, instr))
     }
 }
 
