@@ -1,6 +1,7 @@
 use crate::{
-    instructions::{is_intrinsic_cached, type_layout, LayoutFactory},
+    dispatch::{is_intrinsic_cached, Interpreter},
     intrinsics::intrinsic_call,
+    layout::{type_layout, LayoutFactory},
     resolution::ValueResolution,
     CallStack, StepResult,
 };
@@ -65,7 +66,8 @@ pub fn new_object<'gc, 'm: 'gc>(
     stack: &mut CallStack<'gc, 'm>,
     ctor: &UserMethod,
 ) -> StepResult {
-    let (mut method, lookup) = stack.find_generic_method(&MethodSource::User(*ctor));
+    let (mut method, lookup) =
+        Interpreter::new(stack, gc).find_generic_method(&MethodSource::User(*ctor));
 
     if method.method.name == "CtorArraySentinel" {
         if let UserMethod::Reference(r) = *ctor {

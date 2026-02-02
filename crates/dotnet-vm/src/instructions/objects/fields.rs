@@ -1,9 +1,6 @@
 use crate::{
-    instructions::{is_intrinsic_field_cached, LayoutFactory},
-    intrinsics::intrinsic_field,
-    resolution::ValueResolution,
-    sync::Ordering as AtomicOrdering,
-    CallStack, StepResult,
+    dispatch::is_intrinsic_field_cached, intrinsics::intrinsic_field, layout::LayoutFactory,
+    resolution::ValueResolution, sync::Ordering as AtomicOrdering, CallStack, StepResult,
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::{gc::GCHandle, is_ptr_aligned_to_field};

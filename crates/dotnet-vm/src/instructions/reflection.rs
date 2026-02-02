@@ -1,6 +1,6 @@
 use crate::{
-    instructions::StepResult, intrinsics::reflection::ReflectionExtensions,
-    resolution::ValueResolution, CallStack,
+    dispatch::Interpreter, intrinsics::reflection::ReflectionExtensions,
+    resolution::ValueResolution, CallStack, StepResult,
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
@@ -35,7 +35,7 @@ pub fn ldtoken_method<'gc, 'm: 'gc>(
     stack: &mut CallStack<'gc, 'm>,
     param0: &MethodSource,
 ) -> StepResult {
-    let (method, lookup) = stack.find_generic_method(param0);
+    let (method, lookup) = Interpreter::new(stack, gc).find_generic_method(param0);
 
     let method_obj = stack.get_runtime_method_obj(gc, method, lookup);
 

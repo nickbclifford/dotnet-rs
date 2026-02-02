@@ -1,8 +1,8 @@
 use crate::{
-    instructions::StepResult,
+    dispatch::Interpreter,
     layout::type_layout,
     resolution::{TypeResolutionExt, ValueResolution},
-    vm_trace, CallStack,
+    vm_trace, CallStack, StepResult,
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
@@ -21,7 +21,7 @@ pub fn call<'gc, 'm: 'gc>(
     param0: &MethodSource,
 ) -> StepResult {
     // Use unified dispatch pipeline for static calls
-    stack.unified_dispatch(gc, param0, None, None)
+    Interpreter::new(stack, gc).unified_dispatch(param0, None, None)
 }
 
 #[dotnet_instruction(CallVirtual)]
@@ -34,7 +34,7 @@ pub fn callvirt<'gc, 'm: 'gc>(
     // Note: We still need to pop args to extract this_type before dispatch
 
     // Determine number of arguments to extract this_type
-    let (base_method, _) = stack.find_generic_method(param0);
+    let (base_method, _) = Interpreter::new(stack, gc).find_generic_method(param0);
     let num_args = 1 + base_method.method.signature.parameters.len();
     let args = stack.pop_multiple(gc, num_args);
 
@@ -57,7 +57,7 @@ pub fn callvirt<'gc, 'm: 'gc>(
     for a in args {
         stack.push(gc, a);
     }
-    stack.unified_dispatch(gc, param0, Some(this_type), None)
+    Interpreter::new(stack, gc).unified_dispatch(param0, Some(this_type), None)
 }
 
 #[dotnet_instruction(CallConstrained)]
@@ -72,7 +72,7 @@ pub fn call_constrained<'gc, 'm: 'gc>(
     // however, this appears to be used for static interface dispatch?
 
     let constraint_type = stack.current_context().make_concrete(constraint);
-    let (method, lookup) = stack.find_generic_method(source);
+    let (method, lookup) = Interpreter::new(stack, gc).find_generic_method(source);
 
     let td = stack.loader().find_concrete_type(constraint_type.clone());
 
@@ -87,7 +87,7 @@ pub fn call_constrained<'gc, 'm: 'gc>(
             vm_trace!(stack, "-- dispatching to {:?} --", target);
             // Note: Uses dispatch_method directly since method is already resolved
             // via explicit override lookup (static interface dispatch pattern)
-            return stack.dispatch_method(gc, target, lookup);
+            return Interpreter::new(stack, gc).dispatch_method(target, lookup);
         }
     }
 
@@ -104,7 +104,7 @@ pub fn callvirt_constrained<'gc, 'm: 'gc>(
     constraint: &MethodType,
     source: &MethodSource,
 ) -> StepResult {
-    let (base_method, lookup) = stack.find_generic_method(source);
+    let (base_method, lookup) = Interpreter::new(stack, gc).find_generic_method(source);
 
     // Pop all arguments (this + parameters)
     let num_args = 1 + base_method.method.signature.parameters.len();
@@ -208,5 +208,5 @@ pub fn callvirt_constrained<'gc, 'm: 'gc>(
     // instead of unified_dispatch because it performs custom method resolution
     // (boxing value types, constraint-specific lookup) that doesn't fit the
     // standard virtual dispatch pattern. The method is already fully resolved here.
-    stack.dispatch_method(gc, method, lookup)
+    Interpreter::new(stack, gc).dispatch_method(method, lookup)
 }

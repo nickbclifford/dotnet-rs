@@ -4,6 +4,7 @@ use gc_arena::{unsafe_empty_collect, Collect};
 use std::rc::Rc;
 
 pub mod context;
+pub mod dispatch;
 mod exceptions;
 mod executor;
 pub mod gc;

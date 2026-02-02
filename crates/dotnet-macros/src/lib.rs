@@ -231,7 +231,7 @@ pub fn dotnet_instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let submit = quote! {
         inventory::submit! {
-            crate::instructions::InstructionEntry {
+            crate::dispatch::InstructionEntry {
                 name: #variant_name,
                 handler: unsafe { std::mem::transmute(#wrapper_name as *const ()) },
             }

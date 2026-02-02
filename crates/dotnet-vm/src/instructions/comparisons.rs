@@ -1,17 +1,11 @@
-use crate::{
-    instructions::{macros::*, StepResult},
-    CallStack,
-};
+use crate::{instructions::macros::*, CallStack, StepResult};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnetdll::prelude::*;
 use std::cmp::Ordering as CmpOrdering;
 
 #[dotnet_instruction(CompareEqual)]
-pub fn ceq<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
-) -> StepResult {
+pub fn ceq<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
     let v2 = stack.pop(gc);
     let v1 = stack.pop(gc);
     let val = (v1 == v2) as i32;

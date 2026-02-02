@@ -7,6 +7,7 @@ use dotnet_value::StackValue;
 use crate::vm_debug;
 
 use super::{
+    dispatch::Interpreter,
     metrics::CacheStats,
     stack::{CallStack, GCArena},
     state::{ArenaLocalState, SharedGlobalState},
@@ -192,7 +193,12 @@ impl Executor {
                 arena.mutate_root(|gc, c| c.process_pending_finalizers(gc));
             });
 
-            let step_result = self.with_arena(|arena| arena.mutate_root(|gc, c| c.step(gc)));
+            let step_result = self.with_arena(|arena| {
+                arena.mutate_root(|gc, c| {
+                    let mut interpreter = Interpreter::new(c, gc);
+                    interpreter.step()
+                })
+            });
 
             match step_result {
                 StepResult::Return => {
