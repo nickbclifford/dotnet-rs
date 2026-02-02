@@ -7,6 +7,9 @@ use std::{
     ptr::NonNull,
 };
 
+#[macro_use]
+mod macros;
+
 pub mod generics;
 pub mod members;
 pub mod resolution;
