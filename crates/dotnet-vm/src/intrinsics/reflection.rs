@@ -45,6 +45,7 @@ pub trait ReflectionExtensions<'gc, 'm> {
     fn resolve_runtime_method(&self, obj: ObjectRef<'gc>) -> (MethodDescription, GenericLookup);
     fn resolve_runtime_field(&self, obj: ObjectRef<'gc>) -> (FieldDescription, GenericLookup);
     fn make_runtime_type(&self, ctx: &ResolutionContext, t: &MethodType) -> RuntimeType;
+    #[allow(dead_code)]
     fn get_handle_for_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> Object<'gc>;
     fn get_runtime_method_index(&mut self, method: MethodDescription, lookup: GenericLookup)
         -> u16;
@@ -411,7 +412,7 @@ pub fn intrinsic_assembly_get_custom_attributes<'gc, 'm: 'gc>(
             0
         };
     for _ in 0..num_args {
-        stack.pop_stack(gc);
+        stack.pop(gc);
     }
 
     // Return an empty array of Attribute
@@ -438,7 +439,7 @@ pub fn intrinsic_attribute_get_custom_attributes<'gc, 'm: 'gc>(
             0
         };
     for _ in 0..num_args {
-        stack.pop_stack(gc);
+        stack.pop(gc);
     }
 
     // Return an empty array of Attribute
@@ -646,13 +647,12 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             match target_type {
                 RuntimeType::Generic(td, _) => {
                     let n_params = td.definition().generic_parameters.len();
-                    let mut params = Vec::with_capacity(n_params);
-                    for i in 0..n_params {
-                        params.push(RuntimeType::TypeParameter {
+                    let params = (0..n_params as u16)
+                        .map(|index| RuntimeType::TypeParameter {
                             owner: td,
-                            index: i as u16,
-                        });
-                    }
+                            index,
+                        })
+                        .collect();
                     let def_rt = RuntimeType::Generic(td, params);
                     let rt_obj = stack.get_runtime_type(gc, def_rt);
                     push!(ObjectRef(rt_obj));
@@ -675,14 +675,18 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             let type_type_td = stack.loader().corlib_type("System.Type");
             let type_type = ConcreteType::from(type_type_td);
             let mut vector = stack.current_context().new_vector(type_type, args.len());
-            for (i, arg) in args.into_iter().enumerate() {
+            for (i, (arg, chunk)) in args
+                .into_iter()
+                .zip(vector.get_mut().chunks_exact_mut(ObjectRef::SIZE))
+                .enumerate()
+            {
                 // Check GC safe point periodically during loops with allocations
                 // Check every 16 iterations
                 if i % 16 == 0 {
                     stack.check_gc_safe_point();
                 }
                 let arg_obj = stack.get_runtime_type(gc, arg);
-                arg_obj.write(&mut vector.get_mut()[(i * ObjectRef::SIZE)..]);
+                arg_obj.write(chunk);
             }
             let obj = ObjectRef::new(gc, HeapStorage::Vec(vector));
             stack.register_new_object(&obj);
@@ -696,7 +700,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             let instance = stack.current_context().new_object(rth);
             obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 
-            push!(ValueType(Box::new(instance)));
+            push!(ValueType(instance));
             Some(StepResult::InstructionStepped)
         }
         ("MakeGenericType", 1) => {
@@ -709,18 +713,15 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
 
             if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_rt {
                 let param_objs = parameters.as_vector(|v| {
-                    let mut result = vec![];
-                    for i in 0..v.layout.length {
-                        result.push(unsafe {
-                            ObjectRef::read_branded(&v.get()[(i * ObjectRef::SIZE)..], gc)
-                        });
-                    }
-                    result
+                    v.get()
+                        .chunks_exact(ObjectRef::SIZE)
+                        .map(|chunk| unsafe { ObjectRef::read_branded(chunk, gc) })
+                        .collect::<Vec<_>>()
                 });
-                let mut new_generics = Vec::with_capacity(param_objs.len());
-                for p_obj in param_objs {
-                    new_generics.push(stack.resolve_runtime_type(p_obj).clone());
-                }
+                let new_generics: Vec<_> = param_objs
+                    .into_iter()
+                    .map(|p_obj| stack.resolve_runtime_type(p_obj).clone())
+                    .collect();
                 let new_rt = RuntimeType::Generic(td, new_generics);
 
                 let rt_obj = stack.get_runtime_type(gc, new_rt);
@@ -810,7 +811,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
                 ]
             );
 
-            let rt_obj = match stack.pop_stack(gc) {
+            let rt_obj = match stack.pop(gc) {
                 StackValue::ValueType(rth_handle) => {
                     unsafe { ObjectRef::read_branded(&rth_handle.instance_storage.get_field_local(rth_handle.description, "_value"), gc) }
                 }
@@ -826,20 +827,20 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
             };
 
             // pfnAllocator = IntPtr.Zero
-            stack.push_stack(gc, StackValue::NativeInt(0));
+            stack.push(gc, StackValue::NativeInt(0));
             unsafe {
-                stack.pop_stack(gc).store(
-                    pfn_allocator.value.expect("pfn_allocator null").as_ptr(),
+                stack.pop(gc).store(
+                    pfn_allocator.pointer().expect("pfn_allocator null").as_ptr(),
                     dotnetdll::prelude::StoreType::IntPtr,
                 )
             };
 
             // allocatorFirstArg = IntPtr.Zero
-            stack.push_stack(gc, StackValue::NativeInt(0));
+            stack.push(gc, StackValue::NativeInt(0));
             unsafe {
-                stack.pop_stack(gc).store(
+                stack.pop(gc).store(
                     allocator_first_arg
-                        .value
+                        .pointer()
                         .expect("allocator_first_arg null")
                         .as_ptr(),
                     dotnetdll::prelude::StoreType::IntPtr,
@@ -869,18 +870,18 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
                         },
                     );
 
-                    stack.push_stack(gc, StackValue::NativeInt(method_idx as isize));
+                    stack.push(gc, StackValue::NativeInt(method_idx as isize));
                     unsafe {
-                        stack.pop_stack(gc).store(
-                            pfn_ctor.value.expect("pfn_ctor null").as_ptr(),
+                        stack.pop(gc).store(
+                            pfn_ctor.pointer().expect("pfn_ctor null").as_ptr(),
                             dotnetdll::prelude::StoreType::IntPtr,
                         )
                     };
 
-                    stack.push_stack(gc, StackValue::Int32(1));
+                    stack.push(gc, StackValue::Int32(1));
                     unsafe {
-                        stack.pop_stack(gc).store(
-                            ctor_is_public.value.expect("ctor_is_public null").as_ptr(),
+                        stack.pop(gc).store(
+                            ctor_is_public.pointer().expect("ctor_is_public null").as_ptr(),
                             dotnetdll::prelude::StoreType::Int8,
                         )
                     };
@@ -982,7 +983,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
             let instance = stack.current_context().new_object(rmh);
             obj.write(&mut instance.instance_storage.get_field_mut_local(rmh, "_value"));
 
-            push!(ValueType(Box::new(instance)));
+            push!(ValueType(instance));
             Some(StepResult::InstructionStepped)
         }
         _ => None,
@@ -1044,7 +1045,7 @@ pub fn intrinsic_field_info_get_field_handle<'gc, 'm: 'gc>(
     let instance = stack.current_context().new_object(rfh);
     obj_ref.write(&mut instance.instance_storage.get_field_mut_local(rfh, "_value"));
 
-    vm_push!(stack, gc, ValueType(Box::new(instance)));
+    vm_push!(stack, gc, ValueType(instance));
     StepResult::InstructionStepped
 }
 
@@ -1152,7 +1153,7 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc>(
     }
 
     // Initialization complete, pop the argument
-    stack.pop_stack(gc);
+    stack.pop(gc);
     StepResult::InstructionStepped
 }
 
@@ -1174,7 +1175,7 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
 
     if target_td.is_value_type(&ctx) {
         let instance = ctx.new_object(target_td);
-        vm_push!(stack, gc, ValueType(Box::new(instance)));
+        vm_push!(stack, gc, ValueType(instance));
         StepResult::InstructionStepped
     } else {
         let instance = ctx.new_object(target_td);
@@ -1383,6 +1384,6 @@ pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc>(
     let instance = ctx.new_object(rth);
     obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 
-    vm_push!(stack, gc, ValueType(Box::new(instance)));
+    vm_push!(stack, gc, ValueType(instance));
     StepResult::InstructionStepped
 }

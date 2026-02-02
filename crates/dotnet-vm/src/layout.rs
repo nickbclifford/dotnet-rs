@@ -9,6 +9,7 @@ use dotnet_value::layout::{
     LayoutManager, Scalar,
 };
 use dotnetdll::prelude::*;
+use tracing::trace;
 
 pub struct LayoutFactory;
 
@@ -20,9 +21,9 @@ impl LayoutFactory {
                 desc.set(base_offset / ptr_size);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                // ManagedPtr is (Ptr, Owner). The second word is the ObjectRef.
-                // This ensures Ldind (reading 1 word) reads the Pointer, compatible with Stack.
-                desc.set((base_offset / ptr_size) + 1);
+                // ManagedPtr is (Owner, Offset). The first word is the ObjectRef.
+                // The pointer is recomputed from owner + offset on each read.
+                desc.set(base_offset / ptr_size);
             }
             LayoutManager::FieldLayoutManager(m) => {
                 let offset_words = base_offset / ptr_size;
@@ -257,12 +258,17 @@ impl LayoutFactory {
                 continue;
             }
 
-            let t = context.get_field_type(FieldDescription {
-                parent: td,
-                field_resolution: td.resolution,
-                field: f,
-            });
-            let layout = type_layout_with_metrics(t, context, metrics);
+            let layout = if f.by_ref {
+                Arc::new(Scalar::ManagedPtr.into())
+            } else {
+                let t = context.get_field_type(FieldDescription {
+                    parent: td,
+                    field_resolution: td.resolution,
+                    field: f,
+                });
+                type_layout_with_metrics(t, context, metrics)
+            };
+            
             current_type_fields.push((td, f.name.as_ref(), f.offset, layout));
         }
 
@@ -395,14 +401,15 @@ fn type_layout_internal(
     let mut context = context.clone();
     context.resolution = t.resolution();
     match t.get() {
-        BaseType::Boolean | BaseType::Int8 | BaseType::UInt8 => Scalar::Int8.into(),
-        BaseType::Char | BaseType::Int16 | BaseType::UInt16 => Scalar::Int16.into(),
+        BaseType::Boolean | BaseType::UInt8 => Scalar::UInt8.into(),
+        BaseType::Int8 => Scalar::Int8.into(),
+        BaseType::Char | BaseType::UInt16 => Scalar::UInt16.into(),
+        BaseType::Int16 => Scalar::Int16.into(),
         BaseType::Int32 | BaseType::UInt32 => Scalar::Int32.into(),
         BaseType::Int64 | BaseType::UInt64 => Scalar::Int64.into(),
-        BaseType::IntPtr | BaseType::UIntPtr | BaseType::FunctionPointer(_) => {
+        BaseType::IntPtr | BaseType::UIntPtr | BaseType::FunctionPointer(_) | BaseType::ValuePointer(_, _) => {
             Scalar::NativeInt.into()
         }
-        BaseType::ValuePointer(_, _) => Scalar::ManagedPtr.into(),
         BaseType::Float32 => Scalar::Float32.into(),
         BaseType::Float64 => Scalar::Float64.into(),
         BaseType::Type {
@@ -417,6 +424,18 @@ fn type_layout_internal(
                     context.locate_type(*base)
                 }
             };
+
+            // Intrinsic: System.ByReference<T> is a ManagedPtr
+            let name = t.type_name();
+            trace!("Computing layout for: {}", name);
+            if name == "System.ByReference`1"
+                || name == "System.ReadOnlyByReference`1"
+                || name == "System.ByReference"
+                || name == "System.Runtime.CompilerServices.ByReference`1"
+                || name == "System.Runtime.CompilerServices.ReadOnlyByReference`1"
+            {
+                return Scalar::ManagedPtr.into();
+            }
 
             let new_lookup = GenericLookup::new(type_generics);
             let ctx = context.with_generics(&new_lookup);

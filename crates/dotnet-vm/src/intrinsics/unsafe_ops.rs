@@ -248,11 +248,12 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
         (false, None)
     };
     let m = m_val.as_ptr();
+    let result_ptr = unsafe { m.offset(offset * layout.size() as isize) };
     vm_push!(
         stack,
         gc,
         StackValue::managed_ptr_with_owner(
-            unsafe { m.offset(offset * layout.size() as isize) },
+            result_ptr,
             target_type,
             owner,
             pinned
@@ -411,7 +412,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
     let (ptr, pinned) = match val {
         StackValue::NativeInt(p) => (p as *mut u8, false),
         StackValue::ManagedPtr(m) => (
-            m.value.expect("Unsafe.AsRef null managed ptr").as_ptr(),
+            m.pointer().expect("Unsafe.AsRef null managed ptr").as_ptr(),
             m.pinned,
         ),
         StackValue::UnmanagedPtr(p) => (p.0.as_ptr(), false),
@@ -509,7 +510,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
             (p as *mut u8, None)
         }
         StackValue::ManagedPtr(m) => (
-            m.value.expect("Unsafe.ReadUnaligned null").as_ptr(),
+            m.pointer().expect("Unsafe.ReadUnaligned null").as_ptr(),
             m.owner,
         ),
         rest => panic!("invalid source for read_unchecked unaligned: {:?}", rest),
@@ -527,7 +528,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
             // because memory.read_unaligned returns ManagedPtr with void/unknown type.
             if let StackValue::ManagedPtr(m) = v {
                 let target_type = stack.loader().find_concrete_type(target.clone());
-                let new_m = ManagedPtr::new(m.value, target_type, m.owner, m.pinned);
+                let new_m = ManagedPtr::new(m.pointer(), target_type, m.owner, m.pinned);
                 vm_push!(stack, gc, StackValue::ManagedPtr(new_m));
             } else {
                 vm_push!(stack, gc, v);
@@ -572,7 +573,7 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
             (p as *mut u8, None)
         }
         StackValue::ManagedPtr(m) => (
-            m.value.expect("Unsafe.WriteUnaligned null").as_ptr(),
+            m.pointer().expect("Unsafe.WriteUnaligned null").as_ptr(),
             m.owner,
         ),
         rest => panic!("invalid destination for write unaligned: {:?}", rest),
@@ -596,6 +597,6 @@ pub fn intrinsic_field_intptr_zero<'gc, 'm: 'gc>(
     _type_generics: Vec<ConcreteType>,
     _is_address: bool,
 ) -> StepResult {
-    stack.push_stack(gc, StackValue::NativeInt(0));
+    stack.push(gc, StackValue::NativeInt(0));
     StepResult::InstructionStepped
 }

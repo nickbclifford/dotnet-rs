@@ -69,8 +69,8 @@ impl LayoutManager {
             LayoutManager::Scalar(s) => match s {
                 Scalar::ObjectRef => "obj",
                 Scalar::ManagedPtr => "ptr",
-                Scalar::Int8 => "i8",
-                Scalar::Int16 => "i16",
+                Scalar::Int8 | Scalar::UInt8 => "i8",
+                Scalar::Int16 | Scalar::UInt16 => "i16",
                 Scalar::Int32 => "i32",
                 Scalar::Int64 => "i64",
                 Scalar::NativeInt => "ptr",
@@ -94,10 +94,10 @@ impl LayoutManager {
                 unsafe { ObjectRef::read_unchecked(storage) }.trace(cc);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                // ManagedPtr in memory is 16 bytes: (Pointer, Owner ObjectRef).
-                // We need to trace the owner at offset 8.
+                // ManagedPtr in memory is 16 bytes: (Owner ObjectRef, Offset).
+                // We need to trace the owner at offset 0.
                 let ptr_size = std::mem::size_of::<usize>();
-                unsafe { ObjectRef::read_unchecked(&storage[ptr_size..]) }.trace(cc);
+                unsafe { ObjectRef::read_unchecked(&storage[0..ptr_size]) }.trace(cc);
             }
             LayoutManager::FieldLayoutManager(f) => {
                 f.trace(storage, cc);
@@ -123,10 +123,10 @@ impl LayoutManager {
                 unsafe { ObjectRef::read_unchecked(storage) }.resurrect(fc, visited);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                // ManagedPtr in memory is 16 bytes: (Pointer, Owner ObjectRef).
-                // We need to resurrect the owner at offset 8.
+                // ManagedPtr in memory is 16 bytes: (Owner ObjectRef, Offset).
+                // We need to resurrect the owner at offset 0.
                 let ptr_size = std::mem::size_of::<usize>();
-                unsafe { ObjectRef::read_unchecked(&storage[ptr_size..]) }.resurrect(fc, visited);
+                unsafe { ObjectRef::read_unchecked(&storage[0..ptr_size]) }.resurrect(fc, visited);
             }
             LayoutManager::FieldLayoutManager(f) => {
                 for field in f.fields.values() {
@@ -314,7 +314,9 @@ pub enum Scalar {
     ObjectRef,
     ManagedPtr,
     Int8,
+    UInt8,
     Int16,
+    UInt16,
     Int32,
     Int64,
     NativeInt,
@@ -325,8 +327,8 @@ pub enum Scalar {
 impl HasLayout for Scalar {
     fn size(&self) -> usize {
         match self {
-            Scalar::Int8 => 1,
-            Scalar::Int16 => 2,
+            Scalar::Int8 | Scalar::UInt8 => 1,
+            Scalar::Int16 | Scalar::UInt16 => 2,
             Scalar::Int32 => 4,
             Scalar::Int64 => 8,
             Scalar::ObjectRef | Scalar::NativeInt => ObjectRef::SIZE,

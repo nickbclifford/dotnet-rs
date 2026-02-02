@@ -163,7 +163,7 @@ pub fn intrinsic_string_ctor_char_ptr<'gc, 'm: 'gc>(
     };
 
     let sv = StackValue::string(gc, value);
-    stack.push_stack(gc, sv);
+    stack.push(gc, sv);
     StepResult::InstructionStepped
 }
 
@@ -217,9 +217,9 @@ pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
             .collect::<Vec<_>>()
     }
 
-    let data0 = char_span_into_str(*span0);
-    let data1 = char_span_into_str(*span1);
-    let data2 = char_span_into_str(*span2);
+    let data0 = char_span_into_str(span0);
+    let data1 = char_span_into_str(span1);
+    let data2 = char_span_into_str(span2);
 
     let total_length = data0.len() + data1.len() + data2.len();
     const LARGE_STRING_CONCAT_THRESHOLD: usize = 1024;

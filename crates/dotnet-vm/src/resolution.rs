@@ -196,7 +196,7 @@ impl<'a, 'm> ValueResolution for ResolutionContext<'a, 'm> {
                         // We should probably check for compatibility here.
                         o.description = td;
                     }
-                    CTSValue::Value(Struct(*o))
+                    CTSValue::Value(Struct(o))
                 } else {
                     let mut instance = self.new_object(td);
                     if let StackValue::ObjectRef(o) = data {
@@ -255,13 +255,26 @@ impl<'a, 'm> ValueResolution for ResolutionContext<'a, 'm> {
                 CTSValue::Value(NativeUInt(usize::from_ne_bytes(data.try_into().unwrap())))
             }
             BaseType::ValuePointer(_modifiers, inner) => {
-                let (ptr, owner) = unsafe { ManagedPtr::read_from_bytes(data) };
                 let inner_type = if let Some(source) = inner {
                     self.loader.find_concrete_type(source.clone())
                 } else {
                     self.loader.corlib_type("System.Void")
                 };
-                CTSValue::Value(Pointer(ManagedPtr::new(ptr, inner_type, owner, false)))
+
+                if data.len() >= 16 {
+                    let (ptr, owner, _offset) = unsafe { ManagedPtr::read_from_bytes(data) };
+                    CTSValue::Value(Pointer(ManagedPtr::new(ptr, inner_type, Some(owner), false)))
+                } else {
+                    let mut ptr_bytes = [0u8; 8];
+                    ptr_bytes.copy_from_slice(&data[0..8]);
+                    let ptr = usize::from_ne_bytes(ptr_bytes);
+                    CTSValue::Value(Pointer(ManagedPtr::new(
+                        NonNull::new(ptr as *mut u8),
+                        inner_type,
+                        None,
+                        false,
+                    )))
+                }
             }
             BaseType::Object
             | BaseType::String
@@ -323,7 +336,7 @@ fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(data: StackVal
         StackValue::UnmanagedPtr(p) => (p.0.as_ptr() as usize)
             .try_into()
             .unwrap_or_else(|_| panic!("failed to convert from pointer")),
-        StackValue::ManagedPtr(p) => (p.value.map_or(0, |x| x.as_ptr() as usize))
+        StackValue::ManagedPtr(p) => (p.pointer().map_or(0, |x| x.as_ptr() as usize))
             .try_into()
             .unwrap_or_else(|_| panic!("failed to convert from pointer")),
         other => panic!(

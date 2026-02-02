@@ -3,6 +3,8 @@ use crate::{
     threading::{STWGuardOps, ThreadManagerOps, ThreadState},
     tracer::Tracer,
 };
+#[cfg(feature = "multithreaded-gc")]
+use tracing::warn;
 use dotnet_utils::sync::{Arc, AtomicU64, Mutex, Ordering, MANAGED_THREAD_ID};
 use std::{
     cell::Cell,
@@ -310,18 +312,18 @@ impl ThreadManagerOps for ThreadManager {
                 }
 
                 if !warned && start_time.elapsed() > WARN_TIMEOUT {
-                    eprintln!("[GC WARNING] Stop-the-world pause taking longer than expected:");
-                    eprintln!("  Total threads: {}", thread_count);
-                    eprintln!(
+                    warn!("[GC WARNING] Stop-the-world pause taking longer than expected:");
+                    warn!("  Total threads: {}", thread_count);
+                    warn!(
                         "  Threads at safe point: {}",
                         self.threads_at_safepoint.load(Ordering::Acquire)
                     );
 
                     let threads = self.threads.lock();
-                    eprintln!("  Threads not at safe point:");
+                    warn!("  Threads not at safe point:");
                     for (tid, thread) in threads.iter() {
                         if thread.get_state() != ThreadState::AtSafePoint {
-                            eprintln!(
+                            warn!(
                                 "    - Thread ID {}: {:?} (native: {:?})",
                                 tid,
                                 thread.get_state(),
@@ -337,7 +339,7 @@ impl ThreadManagerOps for ThreadManager {
             }
 
             if warned {
-                eprintln!(
+                warn!(
                     "[GC] Stop-the-world completed after {} ms",
                     start_time.elapsed().as_millis()
                 );

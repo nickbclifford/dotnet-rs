@@ -175,18 +175,6 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
     }
 
     pub fn get_field_type(&self, field: FieldDescription) -> ConcreteType {
-        if field.field.name == "_reference" {
-            let type_name = field.parent.type_name();
-            if type_name == "System.Span`1" || type_name == "System.ReadOnlySpan`1" {
-                if let Some(element_type) = self.generics.type_generics.first() {
-                    return ConcreteType::new(
-                        self.resolution,
-                        BaseType::ValuePointer(vec![], Some(element_type.clone())),
-                    );
-                }
-            }
-        }
-
         let return_type = &field.field.return_type;
         if field.field.by_ref {
             let by_ref_t: MemberType = BaseType::pointer(return_type.clone()).into();

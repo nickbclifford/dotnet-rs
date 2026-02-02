@@ -55,11 +55,7 @@ impl InstructionRegistry {
             m
         });
 
-        if let Some(handler) = map.get(instr.name()) {
-            Some(handler(gc, stack, instr))
-        } else {
-            None
-        }
+        map.get(instr.name()).map(|handler| handler(gc, stack, instr))
     }
 }
 

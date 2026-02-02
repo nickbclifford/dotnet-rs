@@ -135,7 +135,7 @@ where 'm: 'gc {
             let boxed = ObjectRef::new(
                 gc,
                 HeapStorage::Boxed(
-                    ctx.new_value_type(&constraint_type_source, value.into_stack()),
+                    ctx.new_value_type(&constraint_type_source, value.into_stack(gc)),
                 ),
             );
             stack.register_new_object(&boxed);
@@ -147,7 +147,7 @@ where 'm: 'gc {
     } else {
         // Reference type: dereference the managed pointer
         vm_expect_stack!(let ManagedPtr(m) = args[0].clone());
-        let ptr = match m.value {
+        let ptr = match m.pointer() {
             Some(p) => p.as_ptr(),
             None => return stack.throw_by_name(gc, "System.NullReferenceException"),
         };

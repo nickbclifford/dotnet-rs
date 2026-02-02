@@ -330,33 +330,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             }
         });
 
-        // Always log to stderr (regardless of tracer configuration)
-        eprintln!("╔═══════════════════════════════════════════════════════");
-        eprintln!("║ UNHANDLED EXCEPTION");
-        if let Some(msg) = &message {
-            eprintln!("║ Message: {}", msg);
-        }
-        eprintln!("╠═══════════════════════════════════════════════════════");
-        eprintln!("║ Exception Object: {:?}", exception);
-        eprintln!("╠═══════════════════════════════════════════════════════");
-        eprintln!("║ Call Stack (backtrace):");
-        eprintln!("╠═══════════════════════════════════════════════════════");
-
-        // Log the full call stack backtrace
-        for (frame_idx, frame) in self.execution.frames.iter().enumerate() {
-            eprintln!(
-                "║   Frame #{}: {:?}",
-                frame_idx, frame.state.info_handle.source
-            );
-            eprintln!(
-                "║     at IP {} (method has {} instructions total)",
-                frame.state.ip,
-                frame.state.info_handle.instructions.len()
-            );
-        }
-
-        eprintln!("╚═══════════════════════════════════════════════════════");
-
         // Also log to tracer if enabled
         if let Some(msg) = &message {
             vm_error!(

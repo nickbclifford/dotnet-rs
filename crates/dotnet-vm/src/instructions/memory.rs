@@ -21,7 +21,7 @@ pub fn cpblk<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) ->
     let src = match &src_val {
         StackValue::NativeInt(i) => *i as *const u8,
         StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr() as *const u8,
-        StackValue::ManagedPtr(m) => m.value.map_or(ptr::null(), |p| p.as_ptr()),
+        StackValue::ManagedPtr(m) => m.pointer().map_or(ptr::null(), |p| p.as_ptr()),
         rest => panic!(
             "invalid type for src in cpblk (expected pointer, received {:?})",
             rest
@@ -31,7 +31,7 @@ pub fn cpblk<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) ->
     let dest = match &dest_val {
         StackValue::NativeInt(i) => *i as *mut u8,
         StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-        StackValue::ManagedPtr(m) => m.value.map_or(ptr::null_mut(), |p| p.as_ptr()),
+        StackValue::ManagedPtr(m) => m.pointer().map_or(ptr::null_mut(), |p| p.as_ptr()),
         rest => panic!(
             "invalid type for dest in cpblk (expected pointer, received {:?})",
             rest
@@ -73,7 +73,7 @@ pub fn initblk<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) 
     let addr = match &addr_val {
         StackValue::NativeInt(i) => *i as *mut u8,
         StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-        StackValue::ManagedPtr(m) => m.value.map_or(ptr::null_mut(), |p| p.as_ptr()),
+        StackValue::ManagedPtr(m) => m.pointer().map_or(ptr::null_mut(), |p| p.as_ptr()),
         rest => panic!(
             "invalid type for addr in initblk (expected pointer, received {:?})",
             rest
@@ -133,10 +133,10 @@ pub fn stind<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>, pa
     let val = vm_pop!(stack, gc);
     let addr_val = vm_pop!(stack, gc);
 
-    let ptr = match addr_val {
-        StackValue::NativeInt(p) => p as *mut u8,
-        StackValue::ManagedPtr(m) => m.value.map_or(ptr::null_mut(), |p| p.as_ptr()),
-        StackValue::UnmanagedPtr(u) => u.0.as_ptr(),
+    let (ptr, owner) = match addr_val {
+        StackValue::NativeInt(p) => (p as *mut u8, None),
+        StackValue::ManagedPtr(m) => (m.pointer().map_or(ptr::null_mut(), |p| p.as_ptr()), m.owner),
+        StackValue::UnmanagedPtr(u) => (u.0.as_ptr(), None),
         _ => panic!("StoreIndirect: expected pointer, got {:?}", addr_val),
     };
 
@@ -153,7 +153,6 @@ pub fn stind<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>, pa
 
     let heap = &stack.local.heap;
     let mut memory = crate::memory::RawMemoryAccess::new(heap);
-    let owner = heap.find_object(ptr as usize);
     match unsafe { memory.write_unaligned(ptr, owner, val, &layout) } {
         Ok(_) => {}
         Err(e) => panic!("StoreIndirect failed: {}", e),
@@ -166,16 +165,16 @@ pub fn ldind<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>, pa
     let addr_val = vm_pop!(stack, gc);
     let (ptr, owner) = match addr_val {
         StackValue::NativeInt(p) => (p as *const u8, None),
-        StackValue::ManagedPtr(m) => (m.value.map_or(ptr::null(), |p| p.as_ptr() as *const u8), m.owner),
+        StackValue::ManagedPtr(m) => (m.pointer().map_or(ptr::null(), |p| p.as_ptr() as *const u8), m.owner),
         StackValue::UnmanagedPtr(u) => (u.0.as_ptr() as *const u8, None),
         _ => panic!("LoadIndirect: expected pointer, got {:?}", addr_val),
     };
 
     let layout = match param0 {
         LoadType::Int8 => LayoutManager::Scalar(Scalar::Int8),
-        LoadType::UInt8 => LayoutManager::Scalar(Scalar::Int8),
+        LoadType::UInt8 => LayoutManager::Scalar(Scalar::UInt8),
         LoadType::Int16 => LayoutManager::Scalar(Scalar::Int16),
-        LoadType::UInt16 => LayoutManager::Scalar(Scalar::Int16),
+        LoadType::UInt16 => LayoutManager::Scalar(Scalar::UInt16),
         LoadType::Int32 => LayoutManager::Scalar(Scalar::Int32),
         LoadType::UInt32 => LayoutManager::Scalar(Scalar::Int32),
         LoadType::Int64 => LayoutManager::Scalar(Scalar::Int64),

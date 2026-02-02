@@ -3,13 +3,15 @@ using System.Runtime.CompilerServices;
 
 class Program {
     static int Main() {
-        if (!TestSpanGCSafety()) return 101;
-        if (!TestInteriorPointer()) return 102;
+        int res = TestSpanGCSafety();
+        if (res != 42) return res;
+        res = TestInteriorPointer();
+        if (res != 42) return res;
         return 42;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    static bool TestSpanGCSafety() {
+    static int TestSpanGCSafety() {
         byte[] array = new byte[100];
         array[0] = 123;
         
@@ -21,18 +23,21 @@ class Program {
         GC.WaitForPendingFinalizers();
         GC.Collect();
 
-        if (span.Length != 100) return false;
+        if (span.Length != 100) return 110;
         
-        if (span[0] != 123) return false;
+        if (span[0] != 123) return 111;
 
         span[0] = 200;
-        if (span[0] != 200) return false;
+        if (span[0] != 200) {
+            if (span[0] == 123) return 113;
+            return 112;
+        }
 
-        return true;
+        return 42;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    static bool TestInteriorPointer() {
+    static int TestInteriorPointer() {
         int[] array = new int[10];
         array[5] = 999;
 
@@ -44,12 +49,12 @@ class Program {
         GC.WaitForPendingFinalizers();
         GC.Collect();
 
-        if (span.Length != 2) return false;
-        if (span[0] != 999) return false;
+        if (span.Length != 2) return 120;
+        if (span[0] != 999) return 121;
 
         span[0] = 888;
-        if (span[0] != 888) return false;
+        if (span[0] != 888) return 122;
 
-        return true;
+        return 42;
     }
 }

@@ -149,7 +149,7 @@ pub fn ret<'gc, 'm: 'gc>(
     let frame_index = stack.execution.frames.len() - 1;
     if let ExceptionState::ExecutingHandler {
         exception, cursor, ..
-    } = stack.execution.exception_mode.clone()
+    } = stack.execution.exception_mode
     {
         if cursor.frame_index == frame_index {
             stack.execution.exception_mode = ExceptionState::Unwinding {

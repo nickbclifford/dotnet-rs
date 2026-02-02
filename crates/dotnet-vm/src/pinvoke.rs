@@ -170,7 +170,9 @@ fn layout_to_ffi(l: &LayoutManager) -> Type {
         LayoutManager::ArrayLayoutManager(_) => todo!("marshalling not yet supported for arrays"),
         LayoutManager::Scalar(s) => match s {
             Scalar::Int8 => Type::i8(),
+            Scalar::UInt8 => Type::u8(),
             Scalar::Int16 => Type::i16(),
+            Scalar::UInt16 => Type::u16(),
             Scalar::Int32 => Type::i32(),
             Scalar::Int64 => Type::i64(),
             Scalar::ObjectRef => todo!("marshalling not yet supported for native object refs"),
@@ -229,10 +231,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         };
 
         let arg_count = method.method.signature.parameters.len();
-        let mut stack_values = vec![];
-        for i in 0..arg_count {
-            stack_values.push(self.peek_stack_at(arg_count - 1 - i));
-        }
+        let stack_values = self.peek_multiple(arg_count);
 
         let res = method.resolution();
         let module = if !res.is_null() {
@@ -352,7 +351,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 }
                 StackValue::ManagedPtr(p) => {
                     let mut handled = false;
-                    if let Some(val_ptr) = p.value {
+                    if let Some(val_ptr) = p.pointer() {
                         // Trust the pointer and size (marshaling without owner tracking)
                         let current_ptr = val_ptr.as_ptr();
                         let buf_len = ffi_size;
@@ -369,7 +368,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
                     if !handled {
                         let ptr = p
-                            .value
+                            .pointer()
                             .map(|x| x.as_ptr() as *mut c_void)
                             .unwrap_or(std::ptr::null_mut());
                         ptr_args.push(ptr);
@@ -432,9 +431,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 let _: c_void = unsafe { cif.call(target, &arg_values) };
                 do_write_back();
                 vm_trace_interop!(self, "POST-CALL", "(void) {}::{}", module, function);
-                for _ in 0..arg_count {
-                    self.pop_stack(gc);
-                }
+                self.pop_multiple(gc, arg_count);
             }
             Some(p) => {
                 let ParameterType::Value(t) = p else {
@@ -534,15 +531,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                         do_write_back();
                         vm_trace_interop!(self, "POST-CALL", "(struct) {}::{}", module, function);
 
-                        StackValue::ValueType(Box::new(instance))
+                        StackValue::ValueType(instance)
                     }
                     rest => todo!("marshalling not yet supported for {:?}", rest),
                 };
                 vm_trace!(self, "-- returning {v:?} --");
-                for _ in 0..arg_count {
-                    self.pop_stack(gc);
-                }
-                self.push_stack(gc, v);
+                self.pop_multiple(gc, arg_count);
+                self.push(gc, v);
             }
         }
         vm_trace_interop!(self, "RETURN", "Returned from {}::{}", module, function);

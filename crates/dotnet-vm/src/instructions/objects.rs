@@ -35,8 +35,11 @@ fn get_ptr<'gc, 'm: 'gc>(stack: &mut CallStack<'gc, 'm>, gc: GCHandle<'gc>, val:
             };
             Ok((ptr, Some(o)))
         }
-        StackValue::ValueType(v) => Ok((v.instance_storage.get().as_ptr() as *mut u8, None)),
-        StackValue::ManagedPtr(m) => Ok((m.value.map(|p| p.as_ptr()).unwrap_or(ptr::null_mut()), m.owner)),
+        StackValue::ValueType(o) => {
+            let ptr = o.instance_storage.get().as_ptr() as *mut u8;
+            Ok((ptr, None))
+        }
+        StackValue::ManagedPtr(m) => Ok((m.pointer().map(|p| p.as_ptr()).unwrap_or(ptr::null_mut()), m.owner)),
         StackValue::UnmanagedPtr(UnmanagedPtr(p)) => Ok((p.as_ptr(), None)),
         StackValue::ObjectRef(ObjectRef(None)) => Err(stack.throw_by_name(gc, "System.NullReferenceException")),
         _ => panic!("Invalid parent for field/element access: {:?}", val),
@@ -49,7 +52,7 @@ pub fn new_object<'gc, 'm: 'gc>(
     stack: &mut CallStack<'gc, 'm>,
     ctor: &UserMethod,
 ) -> StepResult {
-    let (mut method, lookup) = stack.find_generic_method(&MethodSource::User(ctor.clone()));
+    let (mut method, lookup) = stack.find_generic_method(&MethodSource::User(*ctor));
 
     if method.method.name == "CtorArraySentinel" {
         if let UserMethod::Reference(r) = *ctor {
@@ -220,7 +223,7 @@ pub fn ldfld<'gc, 'm: 'gc>(
                 };
 
                 if let Some(val) = intercepted {
-                    stack.push(gc, val.into_stack());
+                    stack.push(gc, val.into_stack(gc));
                     return StepResult::InstructionStepped;
                 }
             }
@@ -247,7 +250,7 @@ pub fn ldfld<'gc, 'm: 'gc>(
             }
         }
         StackValue::ValueType(v) => v.instance_storage.get().as_ptr() as *mut u8,
-        StackValue::ManagedPtr(m) => m.value.map(|p| p.as_ptr()).unwrap_or(ptr::null_mut()),
+        StackValue::ManagedPtr(m) => m.pointer().map(|p| p.as_ptr()).unwrap_or(ptr::null_mut()),
         StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
         StackValue::NativeInt(i) => {
             if *i == 0 {
@@ -302,7 +305,7 @@ pub fn ldfld<'gc, 'm: 'gc>(
         read_data(&buf)
     };
 
-    stack.push(gc, value.into_stack());
+    stack.push(gc, value.into_stack(gc));
     StepResult::InstructionStepped
 }
 
@@ -350,7 +353,7 @@ pub fn stfld<'gc, 'm: 'gc>(
             }
         }
         StackValue::ValueType(v) => v.instance_storage.get().as_ptr() as *mut u8,
-        StackValue::ManagedPtr(m) => m.value.map(|p| p.as_ptr()).unwrap_or(ptr::null_mut()),
+        StackValue::ManagedPtr(m) => m.pointer().map(|p| p.as_ptr()).unwrap_or(ptr::null_mut()),
         StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
         StackValue::NativeInt(i) => {
             if *i == 0 {
@@ -453,7 +456,7 @@ pub fn ldsfld<'gc, 'm: 'gc>(
         .get_field_atomic(field.parent, name, ordering);
     let value = ctx.read_cts_value(&t, &val_bytes, gc);
 
-    stack.push(gc, value.into_stack());
+    stack.push(gc, value.into_stack(gc));
     StepResult::InstructionStepped
 }
 
@@ -687,7 +690,7 @@ pub fn ldelem<'gc, 'm: 'gc>(
         }
         let elem_size = array.layout.element_layout.size();
         let target = &array.get()[(elem_size * index)..(elem_size * (index + 1))];
-        Ok(ctx.read_cts_value(&load_type, target, gc).into_stack())
+        Ok(ctx.read_cts_value(&load_type, target, gc).into_stack(gc))
     });
     match value {
         Ok(v) => stack.push(gc, v),
@@ -1123,10 +1126,10 @@ pub fn unbox_any<'gc, 'm: 'gc>(
 
         let result = obj.as_heap_storage(|storage| {
             match storage {
-                HeapStorage::Boxed(v) => dotnet_value::object::CTSValue::Value(v.clone()).into_stack(),
+                HeapStorage::Boxed(v) => dotnet_value::object::CTSValue::Value(v.clone()).into_stack(gc),
                 HeapStorage::Obj(o) => {
                     // Boxed struct is just an Object of that struct type.
-                    StackValue::ValueType(Box::new(o.clone()))
+                    StackValue::ValueType(o.clone())
                 }
                 _ => panic!("unbox.any: expected boxed value, got {:?}", storage),
             }
@@ -1209,7 +1212,7 @@ pub fn ldobj<'gc, 'm: 'gc>(
 
     let mut source_vec = vec![0u8; layout.size()];
     unsafe { ptr::copy_nonoverlapping(source_ptr, source_vec.as_mut_ptr(), layout.size()) };
-    let value = ctx.read_cts_value(&load_type, &source_vec, gc).into_stack();
+    let value = ctx.read_cts_value(&load_type, &source_vec, gc).into_stack(gc);
 
     stack.push(gc, value);
     StepResult::InstructionStepped
@@ -1235,7 +1238,7 @@ pub fn stobj<'gc, 'm: 'gc>(
             *i as *mut u8
         }
         StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-        StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => match p {
+        StackValue::ManagedPtr(m) => match m.pointer() {
             Some(ptr) => ptr.as_ptr(),
             None => return stack.throw_by_name(gc, "System.NullReferenceException"),
         },
@@ -1267,8 +1270,8 @@ pub fn initobj<'gc, 'm: 'gc>(
             }
             i as *mut u8
         }
-        StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr() as *mut u8,
-        StackValue::ManagedPtr(m) => match m.value {
+        StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
+        StackValue::ManagedPtr(m) => match m.pointer() {
             Some(ptr) => ptr.as_ptr(),
             None => return stack.throw_by_name(gc, "System.NullReferenceException"),
         },

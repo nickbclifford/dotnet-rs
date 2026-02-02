@@ -89,7 +89,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
             );
 
             let target = target_ptr
-                .value
+                .pointer()
                 .expect("Target pointer should not be null")
                 .as_ptr() as *mut i32;
 
@@ -116,7 +116,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
             );
 
             let target = target_ptr
-                .value
+                .pointer()
                 .expect("Target pointer should not be null")
                 .as_ptr() as *mut usize;
 
@@ -144,7 +144,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
             );
 
             let target = target_ptr
-                .value
+                .pointer()
                 .expect("Target pointer should not be null")
                 .as_ptr() as *mut usize;
 
@@ -210,7 +210,7 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
             pop_args!(stack, gc, [ManagedPtr(target_ptr), Int32(value)]);
 
             let target = target_ptr
-                .value
+                .pointer()
                 .expect("Target pointer should not be null")
                 .as_ptr() as *mut i32;
 
@@ -222,7 +222,7 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
             pop_args!(stack, gc, [ManagedPtr(target_ptr), Int64(value)]);
 
             let target = target_ptr
-                .value
+                .pointer()
                 .expect("Target pointer should not be null")
                 .as_ptr() as *mut i64;
 
@@ -234,7 +234,7 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
             pop_args!(stack, gc, [ManagedPtr(target_ptr), NativeInt(value)]);
 
             let target = target_ptr
-                .value
+                .pointer()
                 .expect("Target pointer should not be null")
                 .as_ptr() as *mut usize;
 
@@ -258,7 +258,7 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
             };
 
             let target = target_ptr
-                .value
+                .pointer()
                 .expect("Target pointer should not be null")
                 .as_ptr() as *mut usize;
 

@@ -59,7 +59,7 @@ pub enum StackValue<'gc> {
     ObjectRef(ObjectRef<'gc>),
     UnmanagedPtr(UnmanagedPtr),
     ManagedPtr(ManagedPtr<'gc>),
-    ValueType(Box<Object<'gc>>),
+    ValueType(Object<'gc>),
     /// Reference to an object in another thread's arena.
     /// (ObjectPtr, OwningThreadID)
     #[cfg(feature = "multithreaded-gc")]
@@ -71,7 +71,7 @@ unsafe impl<'gc> Collect for StackValue<'gc> {
         match self {
             Self::ObjectRef(o) => o.trace(cc),
             Self::ManagedPtr(m) => m.trace(cc),
-            Self::ValueType(v) => v.as_ref().trace(cc),
+            Self::ValueType(v) => v.trace(cc),
             #[cfg(feature = "multithreaded-gc")]
             Self::CrossArenaObjectRef(ptr, tid) => {
                 record_cross_arena_ref(*tid, ptr.as_ptr() as usize);
@@ -261,9 +261,10 @@ impl<'gc> StackValue<'gc> {
             Self::NativeFloat(f) => ref_to_ptr(f),
             Self::ObjectRef(ObjectRef(o)) => ref_to_ptr(o),
             Self::UnmanagedPtr(UnmanagedPtr(u)) => *u,
-            Self::ManagedPtr(m) => m.value.unwrap_or(NonNull::dangling()),
+            Self::ManagedPtr(m) => m.pointer().unwrap_or(NonNull::dangling()),
             Self::ValueType(o) => {
-                NonNull::new(o.instance_storage.get().as_ptr() as *mut u8).unwrap()
+                let ptr = o.instance_storage.get().as_ptr() as *mut u8;
+                NonNull::new(ptr).unwrap()
             }
             #[cfg(feature = "multithreaded-gc")]
             Self::CrossArenaObjectRef(_, _) => todo!("handle CrossArenaObjectRef in data_location"),
@@ -274,7 +275,7 @@ impl<'gc> StackValue<'gc> {
         match self {
             Self::NativeInt(i) => *i as *mut u8,
             Self::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-            Self::ManagedPtr(m) => m.value.map(|p| p.as_ptr()).unwrap_or(std::ptr::null_mut()),
+            Self::ManagedPtr(m) => m.pointer().map(|p| p.as_ptr()).unwrap_or(std::ptr::null_mut()),
             v => panic!("expected pointer on stack, received {:?}", v),
         }
     }
@@ -521,10 +522,10 @@ impl<'gc> PartialEq for StackValue<'gc> {
             (NativeFloat(l), NativeFloat(r)) => l == r,
             (ManagedPtr(l), ManagedPtr(r)) => l == r,
             (ManagedPtr(l), NativeInt(r)) => {
-                (l.value.map(|p| p.as_ptr() as isize).unwrap_or(0)) == *r
+                (l.pointer().map(|p| p.as_ptr() as isize).unwrap_or(0)) == *r
             }
             (NativeInt(l), ManagedPtr(r)) => {
-                *l == (r.value.map(|p| p.as_ptr() as isize).unwrap_or(0))
+                *l == (r.pointer().map(|p| p.as_ptr() as isize).unwrap_or(0))
             }
             (ObjectRef(l), ObjectRef(r)) => l == r,
             (ValueType(l), ValueType(r)) => l == r,
@@ -545,10 +546,10 @@ impl PartialOrd for StackValue<'_> {
             (NativeFloat(l), NativeFloat(r)) => l.partial_cmp(r),
             (ManagedPtr(l), ManagedPtr(r)) => l.partial_cmp(r),
             (ManagedPtr(l), NativeInt(r)) => {
-                (l.value.map(|p| p.as_ptr() as isize).unwrap_or(0)).partial_cmp(r)
+                (l.pointer().map(|p| p.as_ptr() as isize).unwrap_or(0)).partial_cmp(r)
             }
             (NativeInt(l), ManagedPtr(r)) => {
-                l.partial_cmp(&(r.value.map(|p| p.as_ptr() as isize).unwrap_or(0)))
+                l.partial_cmp(&(r.pointer().map(|p| p.as_ptr() as isize).unwrap_or(0)))
             }
             (ObjectRef(l), ObjectRef(r)) => l.partial_cmp(r),
             _ => None,
@@ -593,8 +594,8 @@ impl<'gc> Sub for StackValue<'gc> {
                 unsafe { ManagedPtr(m.offset(-(i as isize))) }
             }
             (ManagedPtr(m1), ManagedPtr(m2)) => {
-                let v1 = m1.value.map(|p| p.as_ptr() as isize).unwrap_or(0);
-                let v2 = m2.value.map(|p| p.as_ptr() as isize).unwrap_or(0);
+                let v1 = m1.pointer().map(|p| p.as_ptr() as isize).unwrap_or(0);
+                let v2 = m2.pointer().map(|p| p.as_ptr() as isize).unwrap_or(0);
                 NativeInt(v1 - v2)
             }
             (l, r) => wrapping_arithmetic_op!(l, r, wrapping_sub, -),

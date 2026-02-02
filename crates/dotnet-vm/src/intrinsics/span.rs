@@ -24,9 +24,8 @@ pub fn span_to_slice<'gc, 'a>(span: Object<'gc>, element_size: usize) -> &'a [u8
         .get_field_local(span.description, "_reference");
     let mut len_data = [0u8; size_of::<i32>()];
 
-    // Read only the pointer value (8 bytes) from memory.
-    // Managed pointers in Span fields are stored pointer-sized.
-    let ptr = ManagedPtr::read_raw_ptr_unsafe(&ptr_data);
+    // Read the 16-byte ManagedPtr from memory.
+    let (ptr, _owner, _offset) = unsafe { ManagedPtr::read_from_bytes(&ptr_data) };
     len_data.copy_from_slice(
         &span
             .instance_storage
@@ -70,8 +69,8 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
         [ValueType(a), ValueType(b), Int32(_culture_comparison)]
     );
 
-    let a = span_to_slice(*a, 2);
-    let b = span_to_slice(*b, 2);
+    let a = span_to_slice(a, 2);
+    let b = span_to_slice(b, 2);
 
     vm_push!(stack, gc, Int32((a == b) as i32));
     StepResult::InstructionStepped
@@ -101,18 +100,18 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
     let (start, length_override) = match param_count {
         1 => (0, None),
         2 => {
-            let start = match stack.pop_stack(gc) {
+            let start = match stack.pop(gc) {
                 StackValue::Int32(i) => i as usize,
                 v => panic!("AsSpan: expected Int32 for start parameter, got {:?}", v),
             };
             (start, None)
         }
         3 => {
-            let length = match stack.pop_stack(gc) {
+            let length = match stack.pop(gc) {
                 StackValue::Int32(i) => i as usize,
                 v => panic!("AsSpan: expected Int32 for length parameter, got {:?}", v),
             };
-            let start = match stack.pop_stack(gc) {
+            let start = match stack.pop(gc) {
                 StackValue::Int32(i) => i as usize,
                 v => panic!("AsSpan: expected Int32 for start parameter, got {:?}", v),
             };
@@ -121,7 +120,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
         _ => panic!("AsSpan: unexpected parameter count {}", param_count),
     };
 
-    let obj_val = stack.pop_stack(gc);
+    let obj_val = stack.pop(gc);
 
     let ctx = ResolutionContext::for_method(
         method,
@@ -213,6 +212,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
 
     if let Some(h) = h_opt {
         let element_type_desc = stack.loader().find_concrete_type(element_type);
+
         let managed = ManagedPtr::new(
             Some(NonNull::new(ptr).expect("Object pointer should not be null")),
             element_type_desc,
@@ -230,7 +230,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
         .get_field_mut_local(span_type, "_length")
         .copy_from_slice(&(len as i32).to_ne_bytes());
 
-    vm_push!(stack, gc, ValueType(Box::new(span)));
+    vm_push!(stack, gc, ValueType(span));
     StepResult::InstructionStepped
 }
 
@@ -307,7 +307,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
             .get_field_mut_local(span_type, "_length")
             .copy_from_slice(&element_count.to_ne_bytes());
 
-        vm_push!(stack, gc, ValueType(Box::new(span_instance)));
+        vm_push!(stack, gc, ValueType(span_instance));
         StepResult::InstructionStepped
     } else {
         todo!("initial field data for {:?}", field_desc);
@@ -382,7 +382,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
             std::ptr::copy_nonoverlapping(
                 element_count.to_ne_bytes().as_ptr(),
                 length_ref
-                    .value
+                    .pointer()
                     .expect("System.NullReferenceException")
                     .as_ptr(),
                 size_of::<i32>(),

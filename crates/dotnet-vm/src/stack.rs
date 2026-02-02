@@ -23,8 +23,6 @@ use std::{
 };
 
 #[cfg(feature = "multithreaded-gc")]
-use dotnet_utils::gc::set_currently_tracing;
-#[cfg(feature = "multithreaded-gc")]
 use dotnet_value::object::ObjectPtr;
 
 use super::{
@@ -138,21 +136,12 @@ pub struct CallStack<'gc, 'm> {
 
 unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
     fn trace(&self, cc: &Collection) {
-        #[cfg(feature = "multithreaded-gc")]
-        {
-            // Set the current thread ID as the tracing ID.
-            // This ensures ObjectRef::trace can correctly identify and skip foreign objects.
-            set_currently_tracing(Some(self.thread_id.get()));
-        }
-
+        // NOTE: tracing_id is managed by execute_gc_command_for_current_thread,
+        // NOT here. Setting/clearing it here would interfere with gc-arena's
+        // deferred work list processing (StackValue traces happen AFTER this returns).
         self.execution.trace(cc);
         self.local.trace(cc);
         self.shared.statics.trace(cc);
-
-        #[cfg(feature = "multithreaded-gc")]
-        {
-            set_currently_tracing(None);
-        }
     }
 }
 
@@ -278,7 +267,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                 };
                                 let new_ctx = ctx.with_generics(&new_lookup);
                                 let instance = new_ctx.new_object(desc);
-                                StackValue::ValueType(Box::new(instance))
+                                StackValue::ValueType(instance)
                             } else {
                                 StackValue::null()
                             }
@@ -472,26 +461,24 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         // newobj is typically not used for value types, but still works to put them on the stack (III.4.21)
         let value = if desc.is_value_type(&self.current_context()) {
-            StackValue::ValueType(Box::new(instance))
+            StackValue::ValueType(instance)
         } else {
             let in_heap = ObjectRef::new(gc, HeapStorage::Obj(instance));
             self.register_new_object(&in_heap);
             StackValue::ObjectRef(in_heap)
         };
 
-        let mut args = vec![];
-        for _ in 0..method.signature.parameters.len() {
-            args.push(self.pop_stack(gc));
-        }
+        let num_params = method.signature.parameters.len();
+        let args = self.pop_multiple(gc, num_params);
 
         // first pushing the NewObject 'return value', then the value of the 'this' parameter
         if desc.is_value_type(&self.current_context()) {
-            self.push_stack(gc, value);
+            self.push(gc, value);
 
             // We need a pointer to the Object inside the ValueType on the stack.
             // This is stable because it's behind a Gc-managed ThreadSafeLock.
 
-            self.push_stack(
+            self.push(
                 gc,
                 StackValue::managed_ptr(
                     self.top_of_stack_address().as_ptr() as *mut _,
@@ -500,13 +487,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 ),
             );
         } else {
-            self.push_stack(gc, value.clone());
+            self.push(gc, value.clone());
 
-            self.push_stack(gc, value);
+            self.push(gc, value);
         }
 
-        for _ in 0..method.signature.parameters.len() {
-            self.push_stack(gc, args.pop().unwrap());
+        for arg in args {
+            self.push(gc, arg);
         }
         self.call_frame(gc, method, generic_inst);
     }
@@ -624,16 +611,15 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             None
         };
 
-        for i in frame.base.arguments..self.execution.stack.len() {
-            let handle = self.execution.stack[i];
-            self.set_slot(gc, &handle, StackValue::null());
+        for handle in &self.execution.stack[frame.base.arguments..] {
+            self.set_slot(gc, handle, StackValue::null());
         }
         self.execution.stack.truncate(frame.base.arguments);
 
         if let Some(return_value) = return_value {
             // since we popped the returning frame off, this now refers to the caller frame
             if !self.execution.frames.is_empty() {
-                self.push_stack(gc, return_value);
+                self.push(gc, return_value);
             } else {
                 self.insert_value(gc, return_value);
             }
@@ -649,9 +635,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         if frame.is_finalizer {
             self.local.heap.processing_finalizer.set(false);
         }
-        for i in frame.base.arguments..self.execution.stack.len() {
-            let handle = self.execution.stack[i];
-            self.set_slot(gc, &handle, StackValue::null());
+        for handle in &self.execution.stack[frame.base.arguments..] {
+            self.set_slot(gc, handle, StackValue::null());
         }
         self.execution.stack.truncate(frame.base.arguments);
     }
@@ -929,7 +914,15 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn push(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {
-        self.push_stack(gc, value);
+        if self.tracer_enabled() {
+            self.shared.tracer.lock().trace_stack_op(
+                self.indent(),
+                "PUSH",
+                &format!("{:?}", value),
+            );
+        }
+        self.set_slot_at(gc, self.top_of_stack(), value);
+        self.current_frame_mut().stack_height += 1;
     }
 
     pub fn push_string(&mut self, gc: GCHandle<'gc>, value: impl Into<CLRString>) {
@@ -939,7 +932,22 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn pop(&mut self, gc: GCHandle<'gc>) -> StackValue<'gc> {
-        self.pop_stack(gc)
+        let top = self.top_of_stack();
+        if top == 0 {
+            panic!("empty call stack");
+        }
+        let handle = self.execution.stack[top - 1];
+        let value = self.get_slot(&handle);
+        if self.tracer_enabled() {
+            self.shared
+                .tracer
+                .lock()
+                .trace_stack_op(self.indent(), "POP", &format!("{:?}", value));
+        }
+        // Zap the slot to avoid GC leaks
+        self.set_slot(gc, &handle, StackValue::null());
+        self.current_frame_mut().stack_height -= 1;
+        value
     }
 
     pub fn pop_i32(&mut self, gc: GCHandle<'gc>) -> i32 {
@@ -966,35 +974,45 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.pop(gc).as_ptr()
     }
 
-    pub fn push_stack(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {
-        if self.tracer_enabled() {
-            self.shared.tracer.lock().trace_stack_op(
-                self.indent(),
-                "PUSH",
-                &format!("{:?}", value),
-            );
+    pub fn pop_multiple(&mut self, gc: GCHandle<'gc>, count: usize) -> Vec<StackValue<'gc>> {
+        if count == 0 {
+            return vec![];
         }
-        self.set_slot_at(gc, self.top_of_stack(), value);
-        self.current_frame_mut().stack_height += 1;
+        let top = self.top_of_stack();
+        if top < count {
+            panic!("stack underflow in pop_multiple");
+        }
+
+        let start = top - count;
+        let mut result = Vec::with_capacity(count);
+
+        for handle in &self.execution.stack[start..top] {
+            result.push(self.get_slot(handle));
+            self.set_slot(gc, handle, StackValue::null());
+        }
+
+        if self.tracer_enabled() {
+            let mut tracer = self.shared.tracer.lock();
+            for value in &result {
+                tracer.trace_stack_op(self.indent(), "POP", &format!("{:?}", value));
+            }
+        }
+
+        self.current_frame_mut().stack_height -= count;
+        result
     }
 
-    pub fn pop_stack(&mut self, gc: GCHandle<'gc>) -> StackValue<'gc> {
+    pub fn peek_multiple(&self, count: usize) -> Vec<StackValue<'gc>> {
+        if count == 0 {
+            return vec![];
+        }
         let top = self.top_of_stack();
-        if top == 0 {
-            panic!("empty call stack");
-        }
-        let handle = self.execution.stack[top - 1];
-        let value = self.get_slot(&handle);
-        if self.tracer_enabled() {
-            self.shared
-                .tracer
-                .lock()
-                .trace_stack_op(self.indent(), "POP", &format!("{:?}", value));
-        }
-        // Zap the slot to avoid GC leaks
-        self.set_slot(gc, &handle, StackValue::null());
-        self.current_frame_mut().stack_height -= 1;
-        value
+        let start = top - count;
+
+        self.execution.stack[start..top]
+            .iter()
+            .map(|handle| self.get_slot(handle))
+            .collect()
     }
 
     pub fn peek_stack(&self) -> StackValue<'gc> {
@@ -1052,6 +1070,25 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.handle_exception(gc)
     }
 
+    fn find_and_cache_method(
+        &self,
+        this_type: TypeDescription,
+        method: MethodDescription,
+        generics: &GenericLookup,
+    ) -> Option<MethodDescription> {
+        let this_method = self.shared.loader.find_method_in_type(
+            this_type,
+            &method.method.name,
+            &method.method.signature,
+            method.resolution(),
+        )?;
+        self.shared
+            .caches
+            .vmt_cache
+            .insert((method, this_type, generics.clone()), this_method);
+        Some(this_method)
+    }
+
     pub fn resolve_virtual_method(
         &self,
         base_method: MethodDescription,
@@ -1077,26 +1114,17 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         // If the runtime type (this_type) has an intrinsic override, prefer it.
 
         // First, check if this_type itself has the method
-        if let Some(this_method) = self.shared.loader.find_method_in_type(
-            this_type,
-            &base_method.method.name,
-            &base_method.method.signature,
-            base_method.resolution(),
-        ) {
-            self.shared.caches.vmt_cache.insert(cache_key, this_method);
+        if let Some(this_method) = self.find_and_cache_method(this_type, base_method, ctx.generics)
+        {
             return this_method;
         }
 
         // Standard virtual method resolution: search ancestors
         for (parent, _) in ctx.get_ancestors(this_type) {
-            if let Some(method) = self.shared.loader.find_method_in_type(
-                parent,
-                &base_method.method.name,
-                &base_method.method.signature,
-                base_method.resolution(),
-            ) {
-                self.shared.caches.vmt_cache.insert(cache_key, method);
-                return method;
+            if let Some(this_method) =
+                self.find_and_cache_method(parent, base_method, ctx.generics)
+            {
+                return this_method;
             }
         }
         panic!(

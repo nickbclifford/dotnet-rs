@@ -1,6 +1,6 @@
 use crate::{CallStack, StepResult};
 use dotnet_utils::gc::GCHandle;
-use dotnet_value::{pointer::ManagedPtr, pointer::UnmanagedPtr, StackValue};
+use dotnet_value::{pointer::UnmanagedPtr, StackValue};
 use dotnetdll::prelude::*;
 use dotnet_macros::dotnet_instruction;
 
@@ -62,11 +62,11 @@ pub fn conv<'gc, 'm: 'gc>(
                 // all Rust casts from signed types will sign extend
                 // so first we have to make them unsigned so they'll properly zero extend
                 StackValue::Int32(i) => (i as u32) as u64,
-                StackValue::Int64(i) => (i as u64) as u64,
-                StackValue::NativeInt(i) => (i as usize) as u64,
+                StackValue::Int64(i) => i as u64,
+                StackValue::NativeInt(i) => i as usize as u64,
                 StackValue::UnmanagedPtr(UnmanagedPtr(p)) => (p.as_ptr() as usize) as u64,
-                StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => {
-                    (p.map_or(0, |ptr| ptr.as_ptr() as usize)) as u64
+                StackValue::ManagedPtr(m) => {
+                    (m.pointer().map_or(0, |ptr| ptr.as_ptr() as usize)) as u64
                 }
                 StackValue::NativeFloat(f) => {
                     todo!("truncate {} towards zero for conversion to u64", f)
@@ -82,11 +82,11 @@ pub fn conv<'gc, 'm: 'gc>(
         ConversionType::UIntPtr => {
              let i = match value {
                 StackValue::Int32(i) => (i as u32) as usize,
-                StackValue::Int64(i) => (i as u64) as usize,
-                StackValue::NativeInt(i) => (i as usize) as usize,
+                StackValue::Int64(i) => i as u64 as usize,
+                StackValue::NativeInt(i) => i as usize,
                 StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr() as usize ,
-                StackValue::ManagedPtr(ManagedPtr { value: p, .. }) => {
-                    p.map_or(0, |ptr| ptr.as_ptr() as usize)
+                StackValue::ManagedPtr(m) => {
+                    m.pointer().map_or(0, |ptr| ptr.as_ptr() as usize)
                 }
                 StackValue::NativeFloat(f) => {
                     todo!("truncate {} towards zero for conversion to usize", f)

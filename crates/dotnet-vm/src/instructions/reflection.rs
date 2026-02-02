@@ -1,11 +1,11 @@
 use crate::instructions::StepResult;
-use crate::CallStack;
-use dotnet_utils::gc::GCHandle;
-use dotnet_macros::dotnet_instruction;
-use dotnetdll::prelude::*;
 use crate::intrinsics::reflection::ReflectionExtensions;
-use dotnet_value::{StackValue, object::{ObjectRef, HeapStorage}};
 use crate::resolution::ValueResolution;
+use crate::CallStack;
+use dotnet_macros::dotnet_instruction;
+use dotnet_utils::gc::GCHandle;
+use dotnet_value::StackValue;
+use dotnetdll::prelude::*;
 
 #[dotnet_instruction(LoadTokenType)]
 pub fn ldtoken_type<'gc, 'm: 'gc>(
@@ -25,7 +25,7 @@ pub fn ldtoken_type<'gc, 'm: 'gc>(
     let instance = ctx.new_object(rth);
     rt_obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
     
-    stack.push(gc, StackValue::ValueType(Box::new(instance)));
+    stack.push(gc, StackValue::ValueType(instance));
     StepResult::InstructionStepped
 }
 
@@ -43,7 +43,7 @@ pub fn ldtoken_method<'gc, 'm: 'gc>(
     let instance = stack.current_context().new_object(rmh);
     method_obj.write(&mut instance.instance_storage.get_field_mut_local(rmh, "_value"));
     
-    stack.push(gc, StackValue::ValueType(Box::new(instance)));
+    stack.push(gc, StackValue::ValueType(instance));
     StepResult::InstructionStepped
 }
 
@@ -53,7 +53,7 @@ pub fn ldtoken_field<'gc, 'm: 'gc>(
     stack: &mut CallStack<'gc, 'm>,
     param0: &FieldSource
 ) -> StepResult {
-    let (field, lookup) = stack.locate_field(param0.clone());
+    let (field, lookup) = stack.locate_field(*param0);
     
     let field_obj = stack.get_runtime_field_obj(gc, field, lookup);
     
@@ -62,6 +62,6 @@ pub fn ldtoken_field<'gc, 'm: 'gc>(
     let instance = ctx.new_object(rfh);
     field_obj.write(&mut instance.instance_storage.get_field_mut_local(rfh, "_value"));
     
-    stack.push(gc, StackValue::ValueType(Box::new(instance)));
+    stack.push(gc, StackValue::ValueType(instance));
     StepResult::InstructionStepped
 }

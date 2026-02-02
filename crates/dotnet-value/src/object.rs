@@ -429,7 +429,7 @@ pub enum CTSValue<'gc> {
 }
 
 impl<'gc> CTSValue<'gc> {
-    pub fn into_stack(self) -> StackValue<'gc> {
+    pub fn into_stack(self, _gc: GCHandle<'gc>) -> StackValue<'gc> {
         use CTSValue::*;
         use ValueType::*;
         match self {
@@ -449,7 +449,7 @@ impl<'gc> CTSValue<'gc> {
             Value(Float32(f)) => StackValue::NativeFloat(f as f64),
             Value(Float64(f)) => StackValue::NativeFloat(f),
             Value(TypedRef) => todo!(),
-            Value(Struct(s)) => StackValue::ValueType(Box::new(s)),
+            Value(Struct(s)) => StackValue::ValueType(s),
             Ref(o) => StackValue::ObjectRef(o),
         }
     }

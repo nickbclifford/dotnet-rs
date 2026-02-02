@@ -202,9 +202,17 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     let v = extract_int(value)? as i8;
                     ptr::write_unaligned(ptr as *mut i8, v);
                 }
+                Scalar::UInt8 => {
+                    let v = extract_int(value)? as u8;
+                    ptr::write_unaligned(ptr, v);
+                }
                 Scalar::Int16 => {
                     let v = extract_int(value)? as i16;
                     ptr::write_unaligned(ptr as *mut i16, v);
+                }
+                Scalar::UInt16 => {
+                    let v = extract_int(value)? as u16;
+                    ptr::write_unaligned(ptr as *mut u16, v);
                 }
                 Scalar::Int32 => {
                     let v = extract_int(value)?;
@@ -246,8 +254,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 }
             },
             LayoutManager::FieldLayoutManager(flm) => {
-                if let StackValue::ValueType(src_obj_box) = value {
-                    let src_obj = src_obj_box.as_ref();
+                if let StackValue::ValueType(src_obj) = value {
                     let src_ptr = src_obj.instance_storage.get().as_ptr();
                     ptr::copy_nonoverlapping(src_ptr, ptr, flm.size());
                 } else {
@@ -271,32 +278,39 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         if ptr.is_null() {
             return Err("RawMemoryAccess::perform_read called with null pointer!".to_string());
         }
-        match layout {
+
+        Ok(match layout {
             LayoutManager::Scalar(s) => match s {
-                Scalar::Int8 => Ok(StackValue::Int32(
+                Scalar::Int8 => StackValue::Int32(
                     ptr::read_unaligned(ptr as *const i8) as i32
-                )),
-                Scalar::Int16 => Ok(StackValue::Int32(
+                ),
+                Scalar::UInt8 => StackValue::Int32(
+                    ptr::read_unaligned(ptr) as i32
+                ),
+                Scalar::Int16 => StackValue::Int32(
                     ptr::read_unaligned(ptr as *const i16) as i32
-                )),
-                Scalar::Int32 => Ok(StackValue::Int32(ptr::read_unaligned(ptr as *const i32))),
-                Scalar::Int64 => Ok(StackValue::Int64(ptr::read_unaligned(ptr as *const i64))),
-                Scalar::NativeInt => Ok(StackValue::NativeInt(ptr::read_unaligned(
+                ),
+                Scalar::UInt16 => StackValue::Int32(
+                    ptr::read_unaligned(ptr as *const u16) as i32
+                ),
+                Scalar::Int32 => StackValue::Int32(ptr::read_unaligned(ptr as *const i32)),
+                Scalar::Int64 => StackValue::Int64(ptr::read_unaligned(ptr as *const i64)),
+                Scalar::NativeInt => StackValue::NativeInt(ptr::read_unaligned(
                     ptr as *const isize,
-                ))),
-                Scalar::Float32 => Ok(StackValue::NativeFloat(
-                    ptr::read_unaligned(ptr as *const f32) as f64,
                 )),
-                Scalar::Float64 => Ok(StackValue::NativeFloat(ptr::read_unaligned(
+                Scalar::Float32 => StackValue::NativeFloat(
+                    ptr::read_unaligned(ptr as *const f32) as f64,
+                ),
+                Scalar::Float64 => StackValue::NativeFloat(ptr::read_unaligned(
                     ptr as *const f64,
-                ))),
+                )),
                 Scalar::ObjectRef => {
                     let mut buf = [0u8; 8];
                     ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), 8);
-                    Ok(StackValue::ObjectRef(ObjectRef::read_unchecked(&buf)))
+                    StackValue::ObjectRef(ObjectRef::read_unchecked(&buf))
                 }
                 Scalar::ManagedPtr => {
-                    let (ptr_val, owner_ref) = ManagedPtr::read_from_bytes(
+                    let (ptr_val, owner_ref, _offset) = ManagedPtr::read_from_bytes(
                         std::slice::from_raw_parts(ptr, ManagedPtr::MEMORY_SIZE),
                     );
 
@@ -305,9 +319,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         None,
                     );
 
-                    Ok(StackValue::ManagedPtr(ManagedPtr::new(
-                        ptr_val, void_desc, owner_ref, false,
-                    )))
+                    StackValue::ManagedPtr(ManagedPtr::new(
+                        ptr_val, void_desc, Some(owner_ref), false,
+                    ))
                 }
             },
             LayoutManager::FieldLayoutManager(flm) => {
@@ -319,13 +333,13 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     let storage = FieldStorage::new(Arc::new(flm.clone()), data);
                     let obj = ObjectInstance::new(desc, storage);
 
-                    Ok(StackValue::ValueType(Box::new(obj)))
+                    StackValue::ValueType(obj)
                 } else {
-                    Err("Struct read requires TypeDescription, which is not passed to read_unaligned".into())
+                    return Err("Struct read requires TypeDescription, which is not passed to read_unaligned".into());
                 }
             }
-            _ => Err("Array read not supported".to_string()),
-        }
+            _ => return Err("Array read not supported".to_string()),
+        })
     }
 }
 

@@ -67,8 +67,8 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     // This handles GetValue(int index) or GetValue(params int[] indices) depending on which one is called
-    let arg = stack.pop_stack(gc);
-    let this_val = stack.pop_stack(gc);
+    let arg = stack.pop(gc);
+    let this_val = stack.pop(gc);
     let StackValue::ObjectRef(ObjectRef(Some(handle))) = this_val else {
         return stack.throw_by_name(gc, "System.NullReferenceException");
     };
@@ -106,7 +106,7 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
     let ctx = stack.current_context();
     let val = ctx
         .read_cts_value(&v.element, &v.get()[start..end], gc)
-        .into_stack();
+        .into_stack(gc);
 
     vm_push!(stack, gc, val);
     StepResult::InstructionStepped
@@ -124,9 +124,9 @@ pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let index_arg = stack.pop_stack(gc);
-    let value = stack.pop_stack(gc);
-    let this_val = stack.pop_stack(gc);
+    let index_arg = stack.pop(gc);
+    let value = stack.pop(gc);
+    let this_val = stack.pop(gc);
 
     let StackValue::ObjectRef(ObjectRef(Some(handle))) = this_val else {
         return stack.throw_by_name(gc, "System.NullReferenceException");
