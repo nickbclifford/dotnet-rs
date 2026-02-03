@@ -583,14 +583,15 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             return;
         }
 
-        let contents: Vec<_> = self.execution.stack[..self.execution.stack.len()] // Modified to not depend on top_of_stack if private
+        let contents: Vec<_> = self.execution.evaluation_stack.stack
+            [..self.execution.evaluation_stack.stack.len()] // Modified to not depend on top_of_stack if private
             .iter()
             .enumerate()
             .map(|(i, _)| format!("{:?}", self.get_slot(i)))
             .collect();
 
         let mut markers = Vec::new();
-        for (i, frame) in self.execution.frames.iter().enumerate() {
+        for (i, frame) in self.execution.frame_stack.frames.iter().enumerate() {
             let base = &frame.base;
             markers.push((base.stack, format!("Stack base of frame #{}", i)));
             if base.locals != base.stack {
@@ -608,7 +609,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
 
         let mut tracer = self.tracer();
-        for (idx, frame) in self.execution.frames.iter().enumerate() {
+        for (idx, frame) in self.execution.frame_stack.frames.iter().enumerate() {
             let method_name = format!("{:?}", frame.state.info_handle.source);
             tracer.dump_frame_state(
                 idx,

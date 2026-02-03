@@ -1,8 +1,5 @@
 use crate::{
-    dispatch::Interpreter,
-    layout::type_layout,
-    resolution::{TypeResolutionExt, ValueResolution},
-    vm_trace, CallStack, StepResult,
+    layout::type_layout, resolution::TypeResolutionExt, stack::VesContext, vm_trace, StepResult,
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
@@ -16,36 +13,38 @@ use std::{mem::align_of, ptr};
 
 #[dotnet_instruction(Call)]
 pub fn call<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     param0: &MethodSource,
 ) -> StepResult {
     // Use unified dispatch pipeline for static calls
-    Interpreter::new(stack, gc).unified_dispatch(param0, None, None)
+    ctx.unified_dispatch(gc, param0, None, None)
 }
 
 #[dotnet_instruction(CallVirtual)]
 pub fn callvirt<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     param0: &MethodSource,
 ) -> StepResult {
     // Use unified dispatch pipeline for virtual calls
     // Note: We still need to pop args to extract this_type before dispatch
 
     // Determine number of arguments to extract this_type
-    let (base_method, _) = Interpreter::new(stack, gc).find_generic_method(param0);
+    let (base_method, _) = ctx
+        .resolver()
+        .find_generic_method(param0, &ctx.current_context());
     let num_args = 1 + base_method.method.signature.parameters.len();
-    let args = stack.pop_multiple(gc, num_args);
+    let args = ctx.pop_multiple(gc, num_args);
 
     // Extract runtime type from this argument (value types are passed as managed pointers - I.8.9.7)
     let this_value = args[0].clone();
     let this_type = match this_value {
         StackValue::ObjectRef(ObjectRef(None)) => {
-            return stack.throw_by_name(gc, "System.NullReferenceException")
+            return ctx.throw_by_name(gc, "System.NullReferenceException")
         }
         StackValue::ObjectRef(ObjectRef(Some(o))) => {
-            stack.current_context().get_heap_description(o)
+            ctx.current_context().get_heap_description(o)
         },
         StackValue::ManagedPtr(m) => m.inner_type,
         rest => panic!("invalid this argument for virtual call (expected ObjectRef or ManagedPtr, received {:?})", rest)
@@ -55,15 +54,15 @@ pub fn callvirt<'gc, 'm: 'gc>(
 
     // Push arguments back and dispatch
     for a in args {
-        stack.push(gc, a);
+        ctx.push(gc, a);
     }
-    Interpreter::new(stack, gc).unified_dispatch(param0, Some(this_type), None)
+    ctx.unified_dispatch(gc, param0, Some(this_type), None)
 }
 
 #[dotnet_instruction(CallConstrained)]
 pub fn call_constrained<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     constraint: &MethodType,
     source: &MethodSource,
 ) -> StepResult {
@@ -71,23 +70,23 @@ pub fn call_constrained<'gc, 'm: 'gc>(
     // because the constrained prefix should only be on callvirt
     // however, this appears to be used for static interface dispatch?
 
-    let constraint_type = stack.current_context().make_concrete(constraint);
-    let (method, lookup) = Interpreter::new(stack, gc).find_generic_method(source);
+    let constraint_type = ctx.current_context().make_concrete(constraint);
+    let (method, lookup) = ctx
+        .resolver()
+        .find_generic_method(source, &ctx.current_context());
 
-    let td = stack.loader().find_concrete_type(constraint_type.clone());
+    let td = ctx.loader().find_concrete_type(constraint_type.clone());
 
     for o in td.definition().overrides.iter() {
-        let target = stack
+        let target = ctx
             .current_context()
             .locate_method(o.implementation, &lookup);
-        let declaration = stack
-            .current_context()
-            .locate_method(o.declaration, &lookup);
+        let declaration = ctx.current_context().locate_method(o.declaration, &lookup);
         if method == declaration {
-            vm_trace!(stack, "-- dispatching to {:?} --", target);
+            vm_trace!(ctx, "-- dispatching to {:?} --", target);
             // Note: Uses dispatch_method directly since method is already resolved
             // via explicit override lookup (static interface dispatch pattern)
-            return Interpreter::new(stack, gc).dispatch_method(target, lookup);
+            return ctx.dispatch_method(gc, target, lookup);
         }
     }
 
@@ -99,28 +98,28 @@ pub fn call_constrained<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(CallVirtualConstrained)]
 pub fn callvirt_constrained<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     constraint: &MethodType,
     source: &MethodSource,
 ) -> StepResult {
-    let (base_method, lookup) = Interpreter::new(stack, gc).find_generic_method(source);
+    let (base_method, lookup) = ctx
+        .resolver()
+        .find_generic_method(source, &ctx.current_context());
 
     // Pop all arguments (this + parameters)
     let num_args = 1 + base_method.method.signature.parameters.len();
-    let mut args = stack.pop_multiple(gc, num_args);
-
-    let ctx = stack.current_context();
+    let mut args = ctx.pop_multiple(gc, num_args);
 
     let constraint_type_source = ctx.make_concrete(constraint);
-    let constraint_type = stack
+    let constraint_type = ctx
         .loader()
         .find_concrete_type(constraint_type_source.clone());
 
     // Determine dispatch strategy based on constraint type
-    let method = if constraint_type.is_value_type(&ctx) {
+    let method = if constraint_type.is_value_type(&ctx.current_context()) {
         // Value type: check for direct override first
-        if let Some(overriding_method) = stack.loader().find_method_in_type_with_substitution(
+        if let Some(overriding_method) = ctx.loader().find_method_in_type_with_substitution(
             constraint_type,
             &base_method.method.name,
             &base_method.method.signature,
@@ -134,13 +133,14 @@ pub fn callvirt_constrained<'gc, 'm: 'gc>(
             let m = args[0].as_managed_ptr();
             let ptr = m
                 .pointer()
-                .map(|p| p.as_ptr())
+                .map(|p: std::ptr::NonNull<u8>| p.as_ptr())
                 .unwrap_or(std::ptr::null_mut());
             if ptr.is_null() {
-                return stack.throw_by_name(gc, "System.NullReferenceException");
+                return ctx.throw_by_name(gc, "System.NullReferenceException");
             }
 
-            let value_size = type_layout(constraint_type_source.clone(), &ctx).size();
+            let value_size =
+                type_layout(constraint_type_source.clone(), &ctx.current_context()).size();
 
             let mut value_vec = vec![0u8; value_size];
             unsafe { ptr::copy_nonoverlapping(ptr, value_vec.as_mut_ptr(), value_size) };
@@ -153,18 +153,19 @@ pub fn callvirt_constrained<'gc, 'm: 'gc>(
                     ctx.new_value_type(&constraint_type_source, value.into_stack(gc)),
                 ),
             );
-            stack.register_new_object(&boxed);
+            ctx.register_new_object(&boxed);
 
             args[0] = StackValue::ObjectRef(boxed);
             let this_type = ctx.get_heap_description(boxed.0.unwrap());
-            stack.resolve_virtual_method(base_method, this_type, Some(&ctx))
+            ctx.resolver()
+                .resolve_virtual_method(base_method, this_type, &ctx.current_context())
         }
     } else {
         // Reference type: dereference the managed pointer
         let m = args[0].as_managed_ptr();
         let ptr = match m.pointer() {
             Some(p) => p.as_ptr(),
-            None => return stack.throw_by_name(gc, "System.NullReferenceException"),
+            None => return ctx.throw_by_name(gc, "System.NullReferenceException"),
         };
         debug_assert!(
             (ptr as usize).is_multiple_of(align_of::<ObjectRef>()),
@@ -178,14 +179,14 @@ pub fn callvirt_constrained<'gc, 'm: 'gc>(
         let obj_ref = unsafe { ObjectRef::read_branded(value_bytes, gc) };
 
         if obj_ref.0.is_none() {
-            return stack.throw_by_name(gc, "System.NullReferenceException");
+            return ctx.throw_by_name(gc, "System.NullReferenceException");
         }
 
         args[0] = StackValue::ObjectRef(obj_ref);
 
         // For reference types with constrained callvirt, try to find the method
         // implementation directly in the constraint type first
-        if let Some(impl_method) = stack.loader().find_method_in_type_with_substitution(
+        if let Some(impl_method) = ctx.loader().find_method_in_type_with_substitution(
             constraint_type,
             &base_method.method.name,
             &base_method.method.signature,
@@ -196,17 +197,18 @@ pub fn callvirt_constrained<'gc, 'm: 'gc>(
         } else {
             // Fall back to normal virtual dispatch
             let this_type = ctx.get_heap_description(obj_ref.0.unwrap());
-            stack.resolve_virtual_method(base_method, this_type, Some(&ctx))
+            ctx.resolver()
+                .resolve_virtual_method(base_method, this_type, &ctx.current_context())
         }
     };
 
     for arg in args {
-        stack.push(gc, arg);
+        ctx.push(gc, arg);
     }
 
     // Note: CallVirtualConstrained uses dispatch_method directly
     // instead of unified_dispatch because it performs custom method resolution
     // (boxing value types, constraint-specific lookup) that doesn't fit the
     // standard virtual dispatch pattern. The method is already fully resolved here.
-    Interpreter::new(stack, gc).dispatch_method(method, lookup)
+    ctx.dispatch_method(gc, method, lookup)
 }

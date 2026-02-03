@@ -1,15 +1,15 @@
-use crate::{instructions::macros::*, CallStack, StepResult};
+use crate::{instructions::macros::*, stack::VesContext, StepResult};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnetdll::prelude::*;
 use std::cmp::Ordering as CmpOrdering;
 
 #[dotnet_instruction(CompareEqual)]
-pub fn ceq<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let v2 = stack.pop(gc);
-    let v1 = stack.pop(gc);
+pub fn ceq<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+    let v2 = ctx.pop(gc);
+    let v1 = ctx.pop(gc);
     let val = (v1 == v2) as i32;
-    stack.push_i32(gc, val);
+    ctx.push_i32(gc, val);
     StepResult::Continue
 }
 
@@ -25,11 +25,11 @@ comparison_op!(
 );
 
 #[dotnet_instruction(CheckFinite)]
-pub fn ckfinite<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let f = stack.pop_f64(gc);
+pub fn ckfinite<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+    let f = ctx.pop_f64(gc);
     if f.is_infinite() || f.is_nan() {
-        return stack.throw_by_name(gc, "System.ArithmeticException");
+        return ctx.throw_by_name(gc, "System.ArithmeticException");
     }
-    stack.push_f64(gc, f);
+    ctx.push_f64(gc, f);
     StepResult::Continue
 }

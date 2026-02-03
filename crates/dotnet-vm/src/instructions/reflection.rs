@@ -1,6 +1,6 @@
 use crate::{
-    dispatch::Interpreter, intrinsics::reflection::ReflectionExtensions,
-    resolution::ValueResolution, CallStack, StepResult,
+    intrinsics::reflection::ReflectionExtensions, resolution::ValueResolution, stack::VesContext,
+    StepResult,
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
@@ -9,59 +9,61 @@ use dotnetdll::prelude::*;
 
 #[dotnet_instruction(LoadTokenType)]
 pub fn ldtoken_type<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     param0: &MethodType,
 ) -> StepResult {
     let runtime_type = {
-        let ctx = stack.current_context();
-        stack.make_runtime_type(&ctx, param0)
+        let res_ctx = ctx.current_context();
+        ctx.make_runtime_type(&res_ctx, param0)
     };
 
-    let rt_obj = stack.get_runtime_type(gc, runtime_type);
+    let rt_obj = ctx.get_runtime_type(gc, runtime_type);
 
-    let ctx = stack.current_context();
-    let rth = stack.loader().corlib_type("System.RuntimeTypeHandle");
-    let instance = ctx.new_object(rth);
+    let res_ctx = ctx.current_context();
+    let rth = ctx.loader().corlib_type("System.RuntimeTypeHandle");
+    let instance = res_ctx.new_object(rth);
     rt_obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 
-    stack.push(gc, StackValue::ValueType(instance));
+    ctx.push(gc, StackValue::ValueType(instance));
     StepResult::Continue
 }
 
 #[dotnet_instruction(LoadTokenMethod)]
 pub fn ldtoken_method<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     param0: &MethodSource,
 ) -> StepResult {
-    let (method, lookup) = Interpreter::new(stack, gc).find_generic_method(param0);
+    let (method, lookup) = ctx
+        .resolver()
+        .find_generic_method(param0, &ctx.current_context());
 
-    let method_obj = stack.get_runtime_method_obj(gc, method, lookup);
+    let method_obj = ctx.get_runtime_method_obj(gc, method, lookup);
 
-    let rmh = stack.loader().corlib_type("System.RuntimeMethodHandle");
-    let instance = stack.current_context().new_object(rmh);
+    let rmh = ctx.loader().corlib_type("System.RuntimeMethodHandle");
+    let instance = ctx.current_context().new_object(rmh);
     method_obj.write(&mut instance.instance_storage.get_field_mut_local(rmh, "_value"));
 
-    stack.push(gc, StackValue::ValueType(instance));
+    ctx.push(gc, StackValue::ValueType(instance));
     StepResult::Continue
 }
 
 #[dotnet_instruction(LoadTokenField)]
 pub fn ldtoken_field<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     param0: &FieldSource,
 ) -> StepResult {
-    let (field, lookup) = stack.locate_field(*param0);
+    let (field, lookup) = ctx.locate_field(*param0);
 
-    let field_obj = stack.get_runtime_field_obj(gc, field, lookup);
+    let field_obj = ctx.get_runtime_field_obj(gc, field, lookup);
 
-    let ctx = stack.current_context();
-    let rfh = stack.loader().corlib_type("System.RuntimeFieldHandle");
-    let instance = ctx.new_object(rfh);
+    let res_ctx = ctx.current_context();
+    let rfh = ctx.loader().corlib_type("System.RuntimeFieldHandle");
+    let instance = res_ctx.new_object(rfh);
     field_obj.write(&mut instance.instance_storage.get_field_mut_local(rfh, "_value"));
 
-    stack.push(gc, StackValue::ValueType(instance));
+    ctx.push(gc, StackValue::ValueType(instance));
     StepResult::Continue
 }

@@ -17,16 +17,17 @@ use dotnet_value::{
 };
 use gc_arena::{Collect, Collection};
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, Ref, RefCell, RefMut},
     collections::{BTreeMap, HashMap, HashSet},
 };
+
+pub use super::statics::StaticStorageManager;
 
 use super::{
     intrinsics::{is_intrinsic, is_intrinsic_field, IntrinsicRegistry},
     memory::HeapManager,
     metrics::{CacheSizes, CacheStats, RuntimeMetrics},
     pinvoke::NativeLibraries,
-    statics::StaticStorageManager,
     sync::SyncBlockManager,
     threading::ThreadManager,
     tracer::Tracer,
@@ -264,5 +265,79 @@ impl<'gc> ArenaLocalState<'gc> {
             runtime_fields: RefCell::new(vec![]),
             runtime_field_objs: RefCell::new(HashMap::new()),
         }
+    }
+}
+
+pub struct ReflectionRegistry<'a, 'gc> {
+    local: &'a ArenaLocalState<'gc>,
+}
+
+impl<'a, 'gc> ReflectionRegistry<'a, 'gc> {
+    pub fn new(local: &'a ArenaLocalState<'gc>) -> Self {
+        Self { local }
+    }
+
+    pub fn asms_read(&self) -> Ref<'a, HashMap<ResolutionS, ObjectRef<'gc>>> {
+        self.local.runtime_asms.borrow()
+    }
+
+    pub fn asms_write(&self) -> RefMut<'a, HashMap<ResolutionS, ObjectRef<'gc>>> {
+        self.local.runtime_asms.borrow_mut()
+    }
+
+    pub fn types_read(&self) -> Ref<'a, HashMap<RuntimeType, ObjectRef<'gc>>> {
+        self.local.runtime_types.borrow()
+    }
+
+    pub fn types_write(&self) -> RefMut<'a, HashMap<RuntimeType, ObjectRef<'gc>>> {
+        self.local.runtime_types.borrow_mut()
+    }
+
+    pub fn types_list_read(&self) -> Ref<'a, Vec<RuntimeType>> {
+        self.local.runtime_types_list.borrow()
+    }
+
+    pub fn types_list_write(&self) -> RefMut<'a, Vec<RuntimeType>> {
+        self.local.runtime_types_list.borrow_mut()
+    }
+
+    pub fn methods_read(&self) -> Ref<'a, Vec<(MethodDescription, GenericLookup)>> {
+        self.local.runtime_methods.borrow()
+    }
+
+    pub fn methods_write(&self) -> RefMut<'a, Vec<(MethodDescription, GenericLookup)>> {
+        self.local.runtime_methods.borrow_mut()
+    }
+
+    pub fn method_objs_read(
+        &self,
+    ) -> Ref<'a, HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>> {
+        self.local.runtime_method_objs.borrow()
+    }
+
+    pub fn method_objs_write(
+        &self,
+    ) -> RefMut<'a, HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>> {
+        self.local.runtime_method_objs.borrow_mut()
+    }
+
+    pub fn fields_read(&self) -> Ref<'a, Vec<(FieldDescription, GenericLookup)>> {
+        self.local.runtime_fields.borrow()
+    }
+
+    pub fn fields_write(&self) -> RefMut<'a, Vec<(FieldDescription, GenericLookup)>> {
+        self.local.runtime_fields.borrow_mut()
+    }
+
+    pub fn field_objs_read(
+        &self,
+    ) -> Ref<'a, HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>> {
+        self.local.runtime_field_objs.borrow()
+    }
+
+    pub fn field_objs_write(
+        &self,
+    ) -> RefMut<'a, HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>> {
+        self.local.runtime_field_objs.borrow_mut()
     }
 }

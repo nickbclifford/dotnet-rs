@@ -1,10 +1,9 @@
 use crate::{
     context::ResolutionContext, gc::coordinator::GCCoordinator, layout::LayoutFactory,
-    metrics::RuntimeMetrics, threading::ThreadManagerOps, CallStack, MethodInfo,
+    metrics::RuntimeMetrics, threading::ThreadManagerOps,
 };
 use dotnet_types::{generics::GenericLookup, members::MethodDescription, TypeDescription};
 use dotnet_utils::{
-    gc::GCHandle,
     sync::{Arc, AtomicU64, AtomicU8, Condvar, Mutex, Ordering, RwLock},
     DebugStr,
 };
@@ -324,83 +323,6 @@ impl StaticStorageManager {
             {
                 // In single-threaded mode, just wait normally
                 storage.init_cond.wait(&mut lock);
-            }
-        }
-    }
-}
-
-impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
-    /// Initialize static storage for a type and invoke its .cctor if needed.
-    /// This method is thread-safe.
-    ///
-    /// Returns `true` if a .cctor was invoked (caller should return early),
-    /// or `false` if initialization is complete or not needed.
-    pub fn initialize_static_storage(
-        &mut self,
-        gc: GCHandle<'gc>,
-        description: TypeDescription,
-        generics: GenericLookup,
-    ) -> bool {
-        // Check GC safe point before potentially running static constructors
-        // which may allocate many objects
-        self.check_gc_safe_point();
-
-        let ctx = ResolutionContext {
-            resolution: description.resolution,
-            generics: &generics,
-            loader: self.loader(),
-            type_owner: Some(description),
-            method_owner: None,
-            caches: self.shared.caches.clone(),
-        };
-
-        loop {
-            let tid = self.thread_id.get();
-            let init_result = {
-                // Thread-safe path: use StaticStorageManager's internal locking
-                self.shared
-                    .statics
-                    .init(description, &ctx, tid, Some(&self.shared.metrics))
-            };
-
-            use StaticInitResult::*;
-            match init_result {
-                Execute(m) => {
-                    vm_trace!(
-                        self,
-                        "-- calling static constructor (will return to ip {}) --",
-                        self.current_frame().state.ip
-                    );
-                    self.call_frame(
-                        gc,
-                        MethodInfo::new(m, &generics, self.shared.clone()),
-                        generics,
-                    );
-                    return true;
-                }
-                Initialized | Recursive => {
-                    return false;
-                }
-                Waiting => {
-                    // If INITIALIZING on another thread, we wait using the condition variable.
-                    // wait_for_init now checks for GC safe points internally
-                    #[cfg(feature = "multithreaded-gc")]
-                    self.shared.statics.wait_for_init(
-                        description,
-                        &generics,
-                        self.shared.thread_manager.as_ref(),
-                        self.thread_id.get(),
-                        &self.shared.gc_coordinator,
-                    );
-                    #[cfg(not(feature = "multithreaded-gc"))]
-                    self.shared.statics.wait_for_init(
-                        description,
-                        &generics,
-                        self.shared.thread_manager.as_ref(),
-                        self.thread_id.get(),
-                        &Default::default(),
-                    );
-                }
             }
         }
     }

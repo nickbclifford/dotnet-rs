@@ -1,7 +1,11 @@
-use crate::{context::ResolutionContext, stack::CallStack, vm_error, StepResult};
+use crate::{context::ResolutionContext, stack::VesContext, vm_error, StepResult, StoreType};
 use dotnet_types::generics::ConcreteType;
 use dotnet_utils::{gc::GCHandle, DebugStr};
-use dotnet_value::object::{HeapStorage, ObjectRef};
+use dotnet_value::{
+    object::{HeapStorage, ObjectRef},
+    string::CLRString,
+    StackValue,
+};
 use dotnetdll::prelude::*;
 use gc_arena::Collect;
 use std::{
@@ -23,6 +27,28 @@ pub struct HandlerAddress {
     pub handler_index: usize,
 }
 
+#[derive(Clone, Copy, PartialEq, Collect, Debug)]
+#[collect(no_drop)]
+pub struct SearchState<'gc> {
+    pub exception: ObjectRef<'gc>,
+    pub cursor: HandlerAddress,
+}
+
+#[derive(Clone, Copy, PartialEq, Collect, Debug)]
+#[collect(no_drop)]
+pub struct FilterState<'gc> {
+    pub exception: ObjectRef<'gc>,
+    pub handler: HandlerAddress,
+}
+
+#[derive(Clone, Copy, PartialEq, Collect, Debug)]
+#[collect(no_drop)]
+pub struct UnwindState<'gc> {
+    pub exception: Option<ObjectRef<'gc>>,
+    pub target: UnwindTarget,
+    pub cursor: HandlerAddress,
+}
+
 /// The current state of the exception handling mechanism.
 ///
 /// Exception handling in the CLI is a two-pass process:
@@ -37,27 +63,13 @@ pub enum ExceptionState<'gc> {
     /// An exception has just been thrown. The next step is to begin the search phase.
     Throwing(ObjectRef<'gc>),
     /// Currently searching for a matching handler (catch or filter).
-    Searching {
-        exception: ObjectRef<'gc>,
-        cursor: HandlerAddress,
-    },
+    Searching(SearchState<'gc>),
     /// A filter block is currently executing.
-    Filtering {
-        exception: ObjectRef<'gc>,
-        handler: HandlerAddress,
-    },
+    Filtering(FilterState<'gc>),
     /// Currently in the unwind phase, executing `finally` and `fault` blocks.
-    Unwinding {
-        exception: Option<ObjectRef<'gc>>,
-        target: UnwindTarget,
-        cursor: HandlerAddress,
-    },
+    Unwinding(UnwindState<'gc>),
     /// A `finally`, `fault`, or `catch` handler is currently executing.
-    ExecutingHandler {
-        exception: Option<ObjectRef<'gc>>,
-        target: UnwindTarget,
-        cursor: HandlerAddress,
-    },
+    ExecutingHandler(UnwindState<'gc>),
 }
 
 /// The destination of the current unwind operation.
@@ -168,30 +180,39 @@ pub fn parse<'a>(
     v
 }
 
-impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
-    pub fn handle_exception(&mut self, gc: GCHandle<'gc>) -> StepResult {
-        match self.execution.exception_mode {
+pub struct ExceptionHandlingSystem;
+
+impl ExceptionHandlingSystem {
+    pub fn handle_exception<'a, 'gc, 'm: 'gc>(
+        &self,
+        ctx: &mut VesContext<'a, 'gc, 'm>,
+        gc: GCHandle<'gc>,
+    ) -> StepResult {
+        match *ctx.exception_mode {
             ExceptionState::None => StepResult::Continue,
-            ExceptionState::Throwing(exception) => self.begin_throwing(exception, gc),
-            ExceptionState::Searching { exception, cursor } => {
-                self.search_for_handler(gc, exception, cursor)
+            ExceptionState::Throwing(exception) => self.begin_throwing(ctx, exception, gc),
+            ExceptionState::Searching(state) => {
+                self.search_for_handler(ctx, gc, state.exception, state.cursor)
             }
-            ExceptionState::Unwinding {
-                exception,
-                target,
-                cursor,
-            } => self.unwind(gc, exception, target, cursor),
-            ExceptionState::Filtering { .. } | ExceptionState::ExecutingHandler { .. } => {
+            ExceptionState::Unwinding(state) => {
+                self.unwind(ctx, gc, state.exception, state.target, state.cursor)
+            }
+            ExceptionState::Filtering(_) | ExceptionState::ExecutingHandler(_) => {
                 StepResult::Continue
             }
         }
     }
 
-    fn begin_throwing(&mut self, exception: ObjectRef<'gc>, gc: GCHandle<'gc>) -> StepResult {
-        let frame = self.execution.frames.last().unwrap();
-        if self.tracer_enabled() {
-            self.tracer().trace_exception(
-                self.indent(),
+    fn begin_throwing<'a, 'gc, 'm: 'gc>(
+        &self,
+        ctx: &mut VesContext<'a, 'gc, 'm>,
+        exception: ObjectRef<'gc>,
+        gc: GCHandle<'gc>,
+    ) -> StepResult {
+        let frame = ctx.frame_stack.current_frame();
+        if ctx.tracer_enabled() {
+            ctx.tracer().trace_exception(
+                ctx.indent(),
                 &format!("{:?}", exception),
                 &format!(
                     "{:?} at IP {}",
@@ -199,30 +220,65 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 ),
             );
         }
-        // Preempt any existing exception handling state (nested exceptions)
-        self.execution.suspended_stack.clear();
-        self.execution.suspended_frames.clear();
 
-        self.execution.exception_mode = ExceptionState::Searching {
+        // Capture and store stack trace
+        let mut trace = String::new();
+        for frame in ctx.frame_stack.frames.iter().rev() {
+            let method = &frame.state.info_handle.source;
+            let type_name = method.parent.type_name();
+            let method_name = method.method.name.to_string();
+            let ip = frame.state.ip;
+            trace.push_str(&format!(
+                "   at {}.{}(...) in IP {}\n",
+                type_name, method_name, ip
+            ));
+        }
+
+        let exception_type = ctx.loader().corlib_type("System.Exception");
+        exception.as_object(|obj| {
+            if obj
+                .instance_storage
+                .has_field(exception_type, "_stackTraceString")
+            {
+                let clr_str = CLRString::from(trace);
+                let str_obj = ObjectRef::new(gc, HeapStorage::Str(clr_str));
+                ctx.register_new_object(&str_obj);
+
+                let mut field_data = obj
+                    .instance_storage
+                    .get_field_mut_local(exception_type, "_stackTraceString");
+                let val = StackValue::ObjectRef(str_obj);
+                unsafe {
+                    val.store(field_data.as_mut_ptr(), StoreType::Object);
+                }
+            }
+        });
+
+        // Preempt any existing exception handling state (nested exceptions)
+        ctx.evaluation_stack.clear_suspended();
+        ctx.frame_stack.clear_suspended();
+
+        *ctx.exception_mode = ExceptionState::Searching(SearchState {
             exception,
             cursor: HandlerAddress {
-                frame_index: self.execution.frames.len() - 1,
+                frame_index: ctx.frame_stack.len() - 1,
                 section_index: 0,
                 handler_index: 0,
             },
-        };
-        self.handle_exception(gc)
+        });
+        self.handle_exception(ctx, gc)
     }
 
-    fn search_for_handler(
-        &mut self,
+    fn search_for_handler<'a, 'gc, 'm: 'gc>(
+        &self,
+        ctx: &mut VesContext<'a, 'gc, 'm>,
         gc: GCHandle<'gc>,
         exception: ObjectRef<'gc>,
         cursor: HandlerAddress,
     ) -> StepResult {
         // Search from the cursor's frame down to the bottom of the stack
         for frame_index in (0..=cursor.frame_index).rev() {
-            let frame = &self.execution.frames[frame_index];
+            let frame = &ctx.frame_stack.frames[frame_index];
             let ip = frame.state.ip;
             let exceptions = frame.state.info_handle.exceptions.clone();
 
@@ -250,14 +306,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 {
                     match &handler.kind {
                         HandlerKind::Catch(t) => {
-                            let exc_type = self
+                            let exc_type = ctx
                                 .current_context()
                                 .get_heap_description(exception.0.expect("throwing null"));
                             let catch_type = t.clone();
 
-                            if self.is_a(exc_type.into(), catch_type) {
+                            if ctx.current_context().is_a(exc_type.into(), catch_type) {
                                 // Match found! Start the unwind phase towards this handler.
-                                self.execution.exception_mode = ExceptionState::Unwinding {
+                                *ctx.exception_mode = ExceptionState::Unwinding(UnwindState {
                                     exception: Some(exception),
                                     target: UnwindTarget::Handler(HandlerAddress {
                                         frame_index,
@@ -265,12 +321,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                         handler_index,
                                     }),
                                     cursor: HandlerAddress {
-                                        frame_index: self.execution.frames.len() - 1,
+                                        frame_index: ctx.frame_stack.len() - 1,
                                         section_index: 0,
                                         handler_index: 0,
                                     },
-                                };
-                                return StepResult::Jump(self.state().ip);
+                                });
+                                return StepResult::Jump(ctx.state().ip);
                             }
                         }
                         HandlerKind::Filter { clause_offset } => {
@@ -280,26 +336,24 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                                 section_index,
                                 handler_index,
                             };
-                            self.execution.exception_mode = ExceptionState::Filtering {
+                            *ctx.exception_mode = ExceptionState::Filtering(FilterState {
                                 exception,
                                 handler: handler_addr,
-                            };
+                            });
 
                             // To run the filter, we must suspend the frames and stack above it.
-                            let stack_base = self.execution.frames[frame_index].base.stack;
-                            self.execution.suspended_stack =
-                                self.execution.stack.split_off(stack_base);
-                            self.execution.suspended_frames =
-                                self.execution.frames.split_off(frame_index + 1);
+                            let stack_base = ctx.frame_stack.frames[frame_index].base.stack;
+                            ctx.evaluation_stack.suspend_above(stack_base);
+                            ctx.frame_stack.suspend_above(frame_index);
 
-                            let frame = &mut self.execution.frames[frame_index];
-                            self.execution.original_ip = frame.state.ip;
-                            self.execution.original_stack_height = frame.stack_height;
+                            let frame = &mut ctx.frame_stack.frames[frame_index];
+                            *ctx.original_ip = frame.state.ip;
+                            *ctx.original_stack_height = frame.stack_height;
 
                             frame.state.ip = *clause_offset;
                             frame.stack_height = 0;
                             frame.exception_stack.push(exception);
-                            self.push_obj(gc, exception);
+                            ctx.push_obj(gc, exception);
 
                             return StepResult::Jump(*clause_offset);
                         }
@@ -314,7 +368,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         // Log the exception and full backtrace before clearing the stack.
 
         let mut message = None;
-        let exception_type = self.loader().corlib_type("System.Exception");
+        let mut stack_trace = None;
+        let exc_type = ctx
+            .current_context()
+            .get_heap_description(exception.0.expect("throwing null"));
+        let type_name = exc_type.type_name();
+
+        let exception_type = ctx.loader().corlib_type("System.Exception");
         exception.as_object(|obj| {
             if obj.instance_storage.has_field(exception_type, "_message") {
                 let message_bytes = obj
@@ -328,41 +388,62 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                 }
             }
+            if obj
+                .instance_storage
+                .has_field(exception_type, "_stackTraceString")
+            {
+                let st_bytes = obj
+                    .instance_storage
+                    .get_field_local(exception_type, "_stackTraceString");
+                let st_ref = unsafe { ObjectRef::read_branded(&st_bytes, gc) };
+                if let Some(st_inner) = st_ref.0 {
+                    let storage = &st_inner.borrow().storage;
+                    if let HeapStorage::Str(clr_str) = storage {
+                        stack_trace = Some(clr_str.as_string());
+                    }
+                }
+            }
         });
 
         // Also log to tracer if enabled
         if let Some(msg) = &message {
             vm_error!(
-                self,
-                "UNHANDLED EXCEPTION: {} ({:?}) - No matching exception handler found",
+                ctx,
+                "UNHANDLED EXCEPTION: {} (Type: {}) - No matching exception handler found",
                 msg,
-                exception
+                type_name
             );
         } else {
             vm_error!(
-                self,
-                "UNHANDLED EXCEPTION: {:?} - No matching exception handler found",
-                exception
-            );
-        }
-        for (frame_idx, frame) in self.execution.frames.iter().enumerate() {
-            vm_error!(
-                self,
-                "  Frame #{}: {:?} at IP {}",
-                frame_idx,
-                frame.state.info_handle.source,
-                frame.state.ip
+                ctx,
+                "UNHANDLED EXCEPTION: {} - No matching exception handler found",
+                type_name
             );
         }
 
-        self.execution.exception_mode = ExceptionState::None;
-        self.execution.frames.clear();
-        self.execution.stack.clear();
+        if let Some(st) = stack_trace {
+            vm_error!(ctx, "Stack Trace:\n{}", st);
+        } else {
+            for (frame_idx, frame) in ctx.frame_stack.frames.iter().enumerate() {
+                vm_error!(
+                    ctx,
+                    "  Frame #{}: {:?} at IP {}",
+                    frame_idx,
+                    frame.state.info_handle.source,
+                    frame.state.ip
+                );
+            }
+        }
+
+        *ctx.exception_mode = ExceptionState::None;
+        ctx.frame_stack.clear();
+        ctx.evaluation_stack.clear();
         StepResult::MethodThrew
     }
 
-    fn unwind(
-        &mut self,
+    fn unwind<'a, 'gc, 'm: 'gc>(
+        &self,
+        ctx: &mut VesContext<'a, 'gc, 'm>,
         gc: GCHandle<'gc>,
         exception: Option<ObjectRef<'gc>>,
         target: UnwindTarget,
@@ -376,7 +457,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         // Unwind from the cursor's frame down to the target frame
         for frame_index in (target_frame..=cursor.frame_index).rev() {
             let (ip, exceptions) = {
-                let frame = &self.execution.frames[frame_index];
+                let frame = &ctx.frame_stack.frames[frame_index];
                 (frame.state.ip, frame.state.info_handle.exceptions.clone())
             };
 
@@ -439,7 +520,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             handler_kind,
                             HandlerKind::Catch(_) | HandlerKind::Filter { .. }
                         ) {
-                            self.execution.frames[frame_index].exception_stack.pop();
+                            ctx.frame_stack.frames[frame_index].exception_stack.pop();
                         }
                         continue;
                     }
@@ -470,13 +551,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                             }
                         };
 
-                        self.execution.exception_mode = ExceptionState::ExecutingHandler {
+                        *ctx.exception_mode = ExceptionState::ExecutingHandler(UnwindState {
                             exception,
                             target,
                             cursor: next_cursor,
-                        };
+                        });
 
-                        let frame = &mut self.execution.frames[frame_index];
+                        let frame = &mut ctx.frame_stack.frames[frame_index];
                         frame.state.ip = handler_start_ip;
                         frame.stack_height = 0;
 
@@ -488,16 +569,20 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             // If we have finished all sections in this frame and it's not the target frame,
             // we pop it and continue unwinding in the caller.
             if frame_index > target_frame {
-                self.unwind_frame(gc);
+                ctx.frame_stack.unwind_frame(
+                    gc,
+                    ctx.evaluation_stack,
+                    &ctx.local.heap.processing_finalizer,
+                );
             }
         }
 
         // We have successfully unwound to the target!
-        self.execution.exception_mode = ExceptionState::None;
+        *ctx.exception_mode = ExceptionState::None;
         let target_ip = match target {
             UnwindTarget::Handler(target_h) => {
                 let handler_start_ip = {
-                    let section = &self.execution.frames[target_h.frame_index]
+                    let section = &ctx.frame_stack.frames[target_h.frame_index]
                         .state
                         .info_handle
                         .exceptions[target_h.section_index];
@@ -505,14 +590,14 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     handler.instructions.start
                 };
 
-                let frame = &mut self.execution.frames[target_h.frame_index];
+                let frame = &mut ctx.frame_stack.frames[target_h.frame_index];
                 frame.state.ip = handler_start_ip;
                 frame.stack_height = 0;
 
                 // Push the exception object onto the stack for the catch/filter handler.
                 let exception = exception.expect("Target handler reached but no exception present");
                 frame.exception_stack.push(exception);
-                self.push_obj(gc, exception);
+                ctx.push_obj(gc, exception);
                 handler_start_ip
             }
             UnwindTarget::Instruction(target_ip) => {
@@ -522,7 +607,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     return StepResult::Return;
                 }
 
-                let frame = &mut self.execution.frames[target_frame];
+                let frame = &mut ctx.frame_stack.frames[target_frame];
                 frame.state.ip = target_ip;
                 frame.stack_height = 0;
                 target_ip
@@ -530,5 +615,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         };
 
         StepResult::Jump(target_ip)
+    }
+}
+
+impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
+    pub fn handle_exception(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        ExceptionHandlingSystem.handle_exception(self, gc)
     }
 }

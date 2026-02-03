@@ -1,4 +1,3 @@
-use crate::intrinsics::reflection::ReflectionExtensions;
 use dotnet_types::members::MethodDescription;
 use dotnet_utils::sync::{Arc, Ordering};
 use dotnet_value::StackValue;
@@ -7,7 +6,7 @@ use dotnet_value::StackValue;
 use crate::vm_debug;
 
 use super::{
-    dispatch::Interpreter,
+    dispatch::ExecutionEngine,
     metrics::CacheStats,
     stack::{CallStack, GCArena},
     state::{ArenaLocalState, SharedGlobalState},
@@ -85,7 +84,7 @@ impl Executor {
         let shared_clone = Arc::clone(&shared);
         let mut arena = Box::new(GCArena::new(|_| {
             let local = ArenaLocalState::new();
-            CallStack::new(shared_clone, local)
+            ExecutionEngine::new(CallStack::new(shared_clone, local))
         }));
 
         let thread_id = shared.thread_manager.register_thread();
@@ -100,8 +99,11 @@ impl Executor {
 
         // Set thread id in arena and pre-initialize reflection
         arena.mutate_root(|gc, c| {
-            c.thread_id.set(thread_id);
-            c.pre_initialize_reflection(gc);
+            c.stack.thread_id.set(thread_id);
+            let mut ctx = c.stack.ves_context();
+            crate::intrinsics::reflection::ReflectionExtensions::pre_initialize_reflection(
+                &mut ctx, gc,
+            );
         });
 
         #[cfg(feature = "multithreaded-gc")]
@@ -121,12 +123,10 @@ impl Executor {
         // TODO: initialize argv (entry point args are either string[] or nothing, II.15.4.1.2)
         self.with_arena(|arena| {
             arena.mutate_root(|gc, c| {
-                c.entrypoint_frame(
-                    gc,
-                    MethodInfo::new(method, &Default::default(), c.shared.clone()),
-                    Default::default(),
-                    vec![],
-                )
+                let shared = c.stack.shared.clone();
+                let info = MethodInfo::new(method, &Default::default(), shared);
+                c.ves_context()
+                    .entrypoint_frame(gc, info, Default::default(), vec![])
             });
         });
     }
@@ -139,14 +139,19 @@ impl Executor {
             #[cfg(not(feature = "multithreaded-gc"))]
             self.with_arena(|arena| {
                 if let Some(marked) = arena.mark_debt() {
-                    marked.finalize(|fc, c| c.finalize_check(fc));
+                    marked.finalize(|fc, c| {
+                        c.stack
+                            .local
+                            .heap
+                            .finalize_check(fc, &c.stack.shared, c.stack.indent())
+                    });
                 }
             });
 
             let full_collect = self.with_arena(|arena| {
                 arena.mutate(|_, c| {
-                    if c.heap().needs_full_collect.get() {
-                        c.heap().needs_full_collect.set(false);
+                    if c.stack.local.heap.needs_full_collect.get() {
+                        c.stack.local.heap.needs_full_collect.set(false);
                         true
                     } else {
                         false
@@ -190,23 +195,20 @@ impl Executor {
             }
 
             self.with_arena(|arena| {
-                arena.mutate_root(|gc, c| c.process_pending_finalizers(gc));
+                arena.mutate_root(|gc, c| c.ves_context().process_pending_finalizers(gc));
             });
 
-            let step_result = self.with_arena(|arena| {
-                arena.mutate_root(|gc, c| {
-                    let mut interpreter = Interpreter::new(c, gc);
-                    interpreter.step()
-                })
-            });
+            let step_result = self.with_arena(|arena| arena.mutate_root(|gc, c| c.step(gc)));
 
             match step_result {
                 StepResult::Return => {
                     let exit_code = self.with_arena_ref(|arena| {
-                        arena.mutate(|_, c| match c.bottom_of_stack() {
-                            Some(StackValue::Int32(i)) => i as u8,
-                            Some(v) => panic!("invalid value for entrypoint return: {:?}", v),
-                            None => 0,
+                        arena.mutate(|_, c| {
+                            match c.stack.execution.evaluation_stack.stack.first() {
+                                Some(StackValue::Int32(i)) => *i as u8,
+                                Some(v) => panic!("invalid value for entrypoint return: {:?}", v),
+                                None => 0,
+                            }
                         })
                     });
                     break ExecutorResult::Exited(exit_code);
@@ -272,7 +274,7 @@ impl Executor {
 
             self.with_arena(|arena| {
                 arena.mutate(|_, c| {
-                    vm_debug!(c, "GC: Coordinated stop-the-world collection started");
+                    vm_debug!(c.stack, "GC: Coordinated stop-the-world collection started");
                 });
             });
 
@@ -296,7 +298,11 @@ impl Executor {
 
             self.with_arena(|arena| {
                 arena.mutate(|_, c| {
-                    vm_debug!(c, "GC: Coordinated collection completed in {:?}", duration);
+                    vm_debug!(
+                        c.stack,
+                        "GC: Coordinated collection completed in {:?}",
+                        duration
+                    );
                 });
             });
         }
@@ -313,7 +319,12 @@ impl Executor {
                     marked = arena.mark_all();
                 }
                 if let Some(marked) = marked {
-                    marked.finalize(|fc, c| c.finalize_check(fc));
+                    marked.finalize(|fc, c| {
+                        c.stack
+                            .local
+                            .heap
+                            .finalize_check(fc, &c.stack.shared, c.stack.indent())
+                    });
                 }
                 arena.collect_all();
             });

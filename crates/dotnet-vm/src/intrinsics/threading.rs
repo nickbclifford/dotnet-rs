@@ -1,6 +1,7 @@
 use crate::{
+    stack::VesContext,
     sync::{Arc, AtomicI32, Ordering, SyncBlockOps, SyncManagerOps},
-    CallStack, StepResult,
+    StepResult,
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
@@ -13,21 +14,21 @@ use std::{ptr, sync::atomic, thread};
 /// System.Threading.Monitor::Exit(object) - Releases the lock on an object.
 #[dotnet_intrinsic("static void System.Threading.Monitor::Exit(object)")]
 pub fn intrinsic_monitor_exit<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj_ref = stack.pop_obj(gc);
+    let obj_ref = ctx.pop_obj(gc);
 
     if obj_ref.0.is_some() {
         // Get the current thread ID from the call stack
-        let thread_id = stack.thread_id.get();
+        let thread_id = ctx.thread_id() as u64;
         assert_ne!(thread_id, 0, "Monitor.Exit called from unregistered thread");
 
         // Get the sync block if it exists
         if let Some(index) = obj_ref.as_object(|o| o.sync_block_index) {
-            let sync_block = stack
+            let sync_block = ctx
                 .shared
                 .sync_blocks
                 .get_sync_block(index)
@@ -60,8 +61,8 @@ pub fn intrinsic_monitor_exit<'gc, 'm: 'gc>(
 )]
 #[dotnet_intrinsic("static T System.Threading.Interlocked::CompareExchange<T>(T&, T, T)")]
 pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
@@ -81,9 +82,9 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
 
     match target_type.get() {
         BaseType::Int32 => {
-            let comparand = stack.pop_i32(gc);
-            let value = stack.pop_i32(gc);
-            let target_ptr = stack.pop_managed_ptr(gc);
+            let comparand = ctx.pop_i32(gc);
+            let value = ctx.pop_i32(gc);
+            let target_ptr = ctx.pop_managed_ptr(gc);
 
             let target = target_ptr
                 .pointer()
@@ -99,12 +100,12 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
                 Ok(prev) | Err(prev) => prev,
             };
 
-            stack.push_i32(gc, prev);
+            ctx.push_i32(gc, prev);
         }
         BaseType::IntPtr | BaseType::UIntPtr => {
-            let comparand = stack.pop_isize(gc);
-            let value = stack.pop_isize(gc);
-            let target_ptr = stack.pop_managed_ptr(gc);
+            let comparand = ctx.pop_isize(gc);
+            let value = ctx.pop_isize(gc);
+            let target_ptr = ctx.pop_managed_ptr(gc);
 
             let target = target_ptr
                 .pointer()
@@ -120,13 +121,13 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
                 Ok(prev) | Err(prev) => prev,
             };
 
-            stack.push_isize(gc, prev as isize);
+            ctx.push_isize(gc, prev as isize);
         }
         _ => {
             // Assume ObjectRef (pointer sized) for all other types for now.
-            let comparand = stack.pop_obj(gc);
-            let value = stack.pop_obj(gc);
-            let target_ptr = stack.pop_managed_ptr(gc);
+            let comparand = ctx.pop_obj(gc);
+            let value = ctx.pop_obj(gc);
+            let target_ptr = ctx.pop_managed_ptr(gc);
 
             let target = target_ptr
                 .pointer()
@@ -158,7 +159,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
                 // The object is kept alive because we are in an intrinsic call and the stack roots it (or the static field roots it).
                 ObjectRef(Some(unsafe { Gc::from_ptr(prev_raw as *const _) }))
             };
-            stack.push_obj(gc, prev);
+            ctx.push_obj(gc, prev);
         }
     }
 
@@ -171,8 +172,8 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static object System.Threading.Interlocked::Exchange(object&, object)")]
 #[dotnet_intrinsic("static T System.Threading.Interlocked::Exchange<T>(T&, T)")]
 pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
@@ -192,8 +193,8 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
 
     match target_type.get() {
         BaseType::Int32 => {
-            let value = stack.pop_i32(gc);
-            let target_ptr = stack.pop_managed_ptr(gc);
+            let value = ctx.pop_i32(gc);
+            let target_ptr = ctx.pop_managed_ptr(gc);
 
             let target = target_ptr
                 .pointer()
@@ -202,11 +203,11 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
 
             let prev = unsafe { AtomicI32::from_ptr(target) }.swap(value, Ordering::SeqCst);
 
-            stack.push_i32(gc, prev);
+            ctx.push_i32(gc, prev);
         }
         BaseType::Int64 => {
-            let value = stack.pop_i64(gc);
-            let target_ptr = stack.pop_managed_ptr(gc);
+            let value = ctx.pop_i64(gc);
+            let target_ptr = ctx.pop_managed_ptr(gc);
 
             let target = target_ptr
                 .pointer()
@@ -215,11 +216,11 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
 
             let prev = unsafe { atomic::AtomicI64::from_ptr(target) }.swap(value, Ordering::SeqCst);
 
-            stack.push_i64(gc, prev);
+            ctx.push_i64(gc, prev);
         }
         BaseType::IntPtr | BaseType::UIntPtr => {
-            let value = stack.pop_isize(gc);
-            let target_ptr = stack.pop_managed_ptr(gc);
+            let value = ctx.pop_isize(gc);
+            let target_ptr = ctx.pop_managed_ptr(gc);
 
             let target = target_ptr
                 .pointer()
@@ -229,13 +230,13 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
             let prev = unsafe { atomic::AtomicUsize::from_ptr(target) }
                 .swap(value as usize, Ordering::SeqCst);
 
-            stack.push_isize(gc, prev as isize);
+            ctx.push_isize(gc, prev as isize);
         }
         _ => {
             // Assume ObjectRef (pointer sized) for all other types for now.
             // We use manual popping to handle both ObjectRef and NativeInt (which might be used for null or pointers).
-            let value = stack.pop(gc);
-            let target_ptr = stack.pop_managed_ptr(gc);
+            let value = ctx.pop(gc);
+            let target_ptr = ctx.pop_managed_ptr(gc);
 
             let target = target_ptr
                 .pointer()
@@ -262,7 +263,7 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
                 // The object is kept alive because we are in an intrinsic call and the stack roots it.
                 ObjectRef(Some(unsafe { Gc::from_ptr(prev_raw as *const _) }))
             };
-            stack.push_obj(gc, prev);
+            ctx.push_obj(gc, prev);
         }
     }
 
@@ -288,29 +289,29 @@ fn get_or_create_sync_block<'gc, T: SyncManagerOps>(
 /// System.Threading.Monitor::ReliableEnter(object, ref bool)
 #[dotnet_intrinsic("static void System.Threading.Monitor::ReliableEnter(object, bool&)")]
 pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let success_flag = stack.pop(gc).as_ptr();
-    let obj_ref = stack.pop_obj(gc);
+    let success_flag = ctx.pop(gc).as_ptr();
+    let obj_ref = ctx.pop_obj(gc);
 
     if obj_ref.0.is_some() {
-        let thread_id = stack.thread_id.get();
+        let thread_id = ctx.thread_id() as u64;
         assert_ne!(
             thread_id, 0,
             "Monitor.ReliableEnter called from unregistered thread"
         );
 
-        let sync_block = get_or_create_sync_block(&stack.shared.sync_blocks, obj_ref, gc);
+        let sync_block = get_or_create_sync_block(&ctx.shared.sync_blocks, obj_ref, gc);
 
-        while !stack.shared.sync_blocks.try_enter_block(
+        while !ctx.shared.sync_blocks.try_enter_block(
             sync_block.clone(),
             thread_id,
-            &stack.shared.metrics,
+            &ctx.shared.metrics,
         ) {
-            stack.check_gc_safe_point();
+            ctx.check_gc_safe_point();
             thread::yield_now();
         }
 
@@ -318,7 +319,7 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
             *success_flag = 1u8;
         }
     } else {
-        return stack.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name(gc, "System.NullReferenceException");
     }
 
     StepResult::Continue
@@ -327,25 +328,25 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
 /// System.Threading.Monitor::TryEnter_FastPath(object)
 #[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter_FastPath(object)")]
 pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj_ref = stack.pop_obj(gc);
+    let obj_ref = ctx.pop_obj(gc);
 
     if obj_ref.0.is_some() {
-        let thread_id = stack.thread_id.get();
+        let thread_id = ctx.thread_id() as u64;
         assert_ne!(
             thread_id, 0,
             "Monitor.TryEnter_FastPath called from unregistered thread"
         );
 
-        let sync_block = get_or_create_sync_block(&stack.shared.sync_blocks, obj_ref, gc);
+        let sync_block = get_or_create_sync_block(&ctx.shared.sync_blocks, obj_ref, gc);
         let success = sync_block.try_enter(thread_id);
-        stack.push_i32(gc, if success { 1 } else { 0 });
+        ctx.push_i32(gc, if success { 1 } else { 0 });
     } else {
-        return stack.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name(gc, "System.NullReferenceException");
     }
 
     StepResult::Continue
@@ -354,41 +355,41 @@ pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc>(
 /// System.Threading.Monitor::TryEnter(object, int, ref bool)
 #[dotnet_intrinsic("static void System.Threading.Monitor::TryEnter(object, int, bool&)")]
 pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let success_flag = stack.pop(gc).as_ptr();
-    let timeout_ms = stack.pop_i32(gc);
-    let obj_ref = stack.pop_obj(gc);
+    let success_flag = ctx.pop(gc).as_ptr();
+    let timeout_ms = ctx.pop_i32(gc);
+    let obj_ref = ctx.pop_obj(gc);
 
     if obj_ref.0.is_some() {
-        let thread_id = stack.thread_id.get();
+        let thread_id = ctx.thread_id() as u64;
         assert_ne!(
             thread_id, 0,
             "Monitor.TryEnter called from unregistered thread"
         );
 
-        let sync_block = get_or_create_sync_block(&stack.shared.sync_blocks, obj_ref, gc);
+        let sync_block = get_or_create_sync_block(&ctx.shared.sync_blocks, obj_ref, gc);
 
         #[cfg(feature = "multithreaded-gc")]
         let success = sync_block.enter_with_timeout_safe(
             thread_id,
             timeout_ms as u64,
-            &stack.shared.metrics,
-            stack.shared.thread_manager.as_ref(),
-            &stack.shared.gc_coordinator,
+            &ctx.shared.metrics,
+            ctx.shared.thread_manager.as_ref(),
+            &ctx.shared.gc_coordinator,
         );
         #[cfg(not(feature = "multithreaded-gc"))]
         let success =
-            sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &stack.shared.metrics);
+            sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &ctx.shared.metrics);
 
         unsafe {
             *success_flag = if success { 1u8 } else { 0u8 };
         }
     } else {
-        return stack.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name(gc, "System.NullReferenceException");
     }
 
     StepResult::Continue
@@ -397,38 +398,38 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
 /// System.Threading.Monitor::TryEnter(object, int)
 #[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter(object, int)")]
 pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let timeout_ms = stack.pop_i32(gc);
-    let obj_ref = stack.pop_obj(gc);
+    let timeout_ms = ctx.pop_i32(gc);
+    let obj_ref = ctx.pop_obj(gc);
 
     if obj_ref.0.is_some() {
-        let thread_id = stack.thread_id.get();
+        let thread_id = ctx.thread_id() as u64;
         assert_ne!(
             thread_id, 0,
             "Monitor.TryEnter called from unregistered thread"
         );
 
-        let sync_block = get_or_create_sync_block(&stack.shared.sync_blocks, obj_ref, gc);
+        let sync_block = get_or_create_sync_block(&ctx.shared.sync_blocks, obj_ref, gc);
 
         #[cfg(feature = "multithreaded-gc")]
         let success = sync_block.enter_with_timeout_safe(
             thread_id,
             timeout_ms as u64,
-            &stack.shared.metrics,
-            stack.shared.thread_manager.as_ref(),
-            &stack.shared.gc_coordinator,
+            &ctx.shared.metrics,
+            ctx.shared.thread_manager.as_ref(),
+            &ctx.shared.gc_coordinator,
         );
         #[cfg(not(feature = "multithreaded-gc"))]
         let success =
-            sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &stack.shared.metrics);
+            sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &ctx.shared.metrics);
 
-        stack.push_i32(gc, if success { 1 } else { 0 });
+        ctx.push_i32(gc, if success { 1 } else { 0 });
     } else {
-        return stack.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name(gc, "System.NullReferenceException");
     }
 
     StepResult::Continue
@@ -450,12 +451,12 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static float System.Threading.Volatile::Read(float&)")]
 #[dotnet_intrinsic("static double System.Threading.Volatile::Read(double&)")]
 pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let ptr = stack.pop(gc).as_ptr() as *const usize;
+    let ptr = ctx.pop(gc).as_ptr() as *const usize;
 
     let raw = unsafe { ptr::read_volatile(ptr) };
     // Ensure acquire semantics to match .NET memory model
@@ -467,7 +468,7 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
         ObjectRef(Some(unsafe { Gc::from_ptr(raw as *const _) }))
     };
 
-    stack.push_obj(gc, value);
+    ctx.push_obj(gc, value);
     StepResult::Continue
 }
 
@@ -487,13 +488,13 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static void System.Threading.Volatile::Write(float&, float)")]
 #[dotnet_intrinsic("static void System.Threading.Volatile::Write(double&, double)")]
 pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let value = stack.pop(gc);
-    let ptr_val = stack.pop(gc);
+    let value = ctx.pop(gc);
+    let ptr_val = ctx.pop(gc);
     let ptr = ptr_val.as_ptr();
 
     // Ensure release semantics to match .NET memory model
@@ -521,6 +522,9 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
     match value {
         StackValue::Int32(i) => {
             if is_byte {
+                unsafe {
+                    ptr::read_volatile(ptr as *const u8);
+                } // Dummy read for volatile? No, Write.
                 unsafe { ptr::write_volatile(ptr, i as u8) };
             } else {
                 unsafe { ptr::write_volatile(ptr as *mut i32, i) };

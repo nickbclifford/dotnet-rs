@@ -1,4 +1,4 @@
-use crate::{CallStack, StepResult};
+use crate::{stack::VesContext, StepResult};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{pointer::UnmanagedPtr, StackValue};
@@ -6,11 +6,11 @@ use dotnetdll::prelude::*;
 
 #[dotnet_instruction(Convert)]
 pub fn conv<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     t: ConversionType,
 ) -> StepResult {
-    let value = stack.pop(gc);
+    let value = ctx.pop(gc);
 
     macro_rules! simple_cast {
         ($t:ty) => {
@@ -31,31 +31,31 @@ pub fn conv<'gc, 'm: 'gc>(
     match t {
         ConversionType::Int8 => {
             let i = simple_cast!(i8);
-            stack.push(gc, StackValue::Int32(i as i32));
+            ctx.push(gc, StackValue::Int32(i as i32));
         }
         ConversionType::UInt8 => {
             let i = simple_cast!(u8);
-            stack.push(gc, StackValue::Int32(i as i32));
+            ctx.push(gc, StackValue::Int32(i as i32));
         }
         ConversionType::Int16 => {
             let i = simple_cast!(i16);
-            stack.push(gc, StackValue::Int32(i as i32));
+            ctx.push(gc, StackValue::Int32(i as i32));
         }
         ConversionType::UInt16 => {
             let i = simple_cast!(u16);
-            stack.push(gc, StackValue::Int32(i as i32));
+            ctx.push(gc, StackValue::Int32(i as i32));
         }
         ConversionType::Int32 => {
             let i = simple_cast!(i32);
-            stack.push(gc, StackValue::Int32(i));
+            ctx.push(gc, StackValue::Int32(i));
         }
         ConversionType::UInt32 => {
             let i = simple_cast!(u32);
-            stack.push(gc, StackValue::Int32(i as i32));
+            ctx.push(gc, StackValue::Int32(i as i32));
         }
         ConversionType::Int64 => {
             let i = simple_cast!(i64);
-            stack.push(gc, StackValue::Int64(i));
+            ctx.push(gc, StackValue::Int64(i));
         }
         ConversionType::UInt64 => {
             let i = match value {
@@ -73,11 +73,11 @@ pub fn conv<'gc, 'm: 'gc>(
                 }
                 v => panic!("invalid type on stack ({:?}) for conversion to u64", v),
             };
-            stack.push(gc, StackValue::Int64(i as i64));
+            ctx.push(gc, StackValue::Int64(i as i64));
         }
         ConversionType::IntPtr => {
             let i = simple_cast!(isize);
-            stack.push(gc, StackValue::NativeInt(i));
+            ctx.push(gc, StackValue::NativeInt(i));
         }
         ConversionType::UIntPtr => {
             let i = match value {
@@ -91,7 +91,7 @@ pub fn conv<'gc, 'm: 'gc>(
                 }
                 v => panic!("invalid type on stack ({:?}) for conversion to usize", v),
             };
-            stack.push(gc, StackValue::NativeInt(i as isize));
+            ctx.push(gc, StackValue::NativeInt(i as isize));
         }
     }
     StepResult::Continue
@@ -99,12 +99,12 @@ pub fn conv<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(ConvertOverflow)]
 pub fn conv_ovf<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     t: ConversionType,
     sgn: NumberSign,
 ) -> StepResult {
-    let value = stack.pop(gc);
+    let value = ctx.pop(gc);
     todo!(
         "{:?} conversion to {:?} with overflow detection ({:?})",
         t,
@@ -114,8 +114,8 @@ pub fn conv_ovf<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(ConvertFloat32)]
-pub fn conv_r4<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let v = match stack.pop(gc) {
+pub fn conv_r4<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+    let v = match ctx.pop(gc) {
         StackValue::Int32(i) => i as f32,
         StackValue::Int64(i) => i as f32,
         StackValue::NativeInt(i) => i as f32,
@@ -125,13 +125,13 @@ pub fn conv_r4<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) 
             rest
         ),
     };
-    stack.push(gc, StackValue::NativeFloat(v as f64));
+    ctx.push(gc, StackValue::NativeFloat(v as f64));
     StepResult::Continue
 }
 
 #[dotnet_instruction(ConvertFloat64)]
-pub fn conv_r8<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let v = match stack.pop(gc) {
+pub fn conv_r8<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+    let v = match ctx.pop(gc) {
         StackValue::Int32(i) => i as f64,
         StackValue::Int64(i) => i as f64,
         StackValue::NativeInt(i) => i as f64,
@@ -141,12 +141,12 @@ pub fn conv_r8<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) 
             rest
         ),
     };
-    stack.push(gc, StackValue::NativeFloat(v));
+    ctx.push(gc, StackValue::NativeFloat(v));
     StepResult::Continue
 }
 
 #[dotnet_instruction(ConvertUnsignedToFloat)]
-pub fn conv_r_un<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let value = stack.pop(gc);
+pub fn conv_r_un<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+    let value = ctx.pop(gc);
     todo!("conv.r.un({:?})", value)
 }

@@ -1,4 +1,4 @@
-use crate::{CallStack, StepResult};
+use crate::{stack::VesContext, StepResult};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
@@ -10,9 +10,9 @@ use dotnetdll::prelude::*;
 use std::ptr;
 
 #[dotnet_instruction(CopyMemoryBlock)]
-pub fn cpblk<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let size = stack.pop_isize(gc) as usize;
-    let src_val = stack.pop(gc);
+pub fn cpblk<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+    let size = ctx.pop_isize(gc) as usize;
+    let src_val = ctx.pop(gc);
     let src = match &src_val {
         StackValue::NativeInt(i) => *i as *const u8,
         StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr() as *const u8,
@@ -22,7 +22,7 @@ pub fn cpblk<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) ->
             rest
         ),
     };
-    let dest_val = stack.pop(gc);
+    let dest_val = ctx.pop(gc);
     let dest = match &dest_val {
         StackValue::NativeInt(i) => *i as *mut u8,
         StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
@@ -37,7 +37,7 @@ pub fn cpblk<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) ->
     // Threshold: copying more than 4KB of data
     const LARGE_COPY_THRESHOLD: usize = 4096;
     if size > LARGE_COPY_THRESHOLD {
-        stack.check_gc_safe_point();
+        ctx.check_gc_safe_point();
     }
 
     unsafe {
@@ -47,10 +47,10 @@ pub fn cpblk<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) ->
 }
 
 #[dotnet_instruction(InitializeMemoryBlock)]
-pub fn initblk<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let size = stack.pop_isize(gc) as usize;
-    let val = stack.pop_isize(gc) as u8;
-    let addr_val = stack.pop(gc);
+pub fn initblk<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+    let size = ctx.pop_isize(gc) as usize;
+    let val = ctx.pop_isize(gc) as u8;
+    let addr_val = ctx.pop(gc);
     let addr = match &addr_val {
         StackValue::NativeInt(i) => *i as *mut u8,
         StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
@@ -63,7 +63,7 @@ pub fn initblk<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) 
 
     // Check GC safe point before large memory block initialization
     if size > 4096 {
-        stack.check_gc_safe_point();
+        ctx.check_gc_safe_point();
     }
 
     unsafe {
@@ -73,26 +73,26 @@ pub fn initblk<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) 
 }
 
 #[dotnet_instruction(LocalMemoryAllocate)]
-pub fn localloc<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let size_isize = stack.pop_isize(gc);
+pub fn localloc<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+    let size_isize = ctx.pop_isize(gc);
     if size_isize < 0 {
-        return stack.throw_by_name(gc, "System.OverflowException");
+        return ctx.throw_by_name(gc, "System.OverflowException");
     }
     let size = size_isize as usize;
 
     // Defensive check: limit local allocation to 128MB
     if size > 0x800_0000 {
-        return stack.throw_by_name(gc, "System.OutOfMemoryException");
+        return ctx.throw_by_name(gc, "System.OutOfMemoryException");
     }
 
     let ptr = {
-        let s = stack.state_mut();
+        let s = ctx.state_mut();
         let loc = s.memory_pool.len();
         s.memory_pool.extend(vec![0; size]);
         s.memory_pool[loc..].as_mut_ptr()
     };
 
-    stack.push(
+    ctx.push(
         gc,
         StackValue::UnmanagedPtr(UnmanagedPtr(std::ptr::NonNull::new(ptr).unwrap())),
     );
@@ -101,12 +101,12 @@ pub fn localloc<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>)
 
 #[dotnet_instruction(StoreIndirect)]
 pub fn stind<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     param0: StoreType,
 ) -> StepResult {
-    let val = stack.pop(gc);
-    let addr_val = stack.pop(gc);
+    let val = ctx.pop(gc);
+    let addr_val = ctx.pop(gc);
 
     let (ptr, owner) = match addr_val {
         StackValue::NativeInt(p) => (p as *mut u8, None),
@@ -126,7 +126,7 @@ pub fn stind<'gc, 'm: 'gc>(
         StoreType::Object => LayoutManager::Scalar(Scalar::ObjectRef),
     };
 
-    let heap = &stack.local.heap;
+    let heap = &ctx.local.heap;
     let mut memory = crate::memory::RawMemoryAccess::new(heap);
     match unsafe { memory.write_unaligned(ptr, owner, val, &layout) } {
         Ok(_) => {}
@@ -137,11 +137,11 @@ pub fn stind<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(LoadIndirect)]
 pub fn ldind<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     param0: LoadType,
 ) -> StepResult {
-    let addr_val = stack.pop(gc);
+    let addr_val = ctx.pop(gc);
     let (ptr, owner) = match addr_val {
         StackValue::NativeInt(p) => (p as *const u8, None),
         StackValue::ManagedPtr(m) => (
@@ -166,13 +166,13 @@ pub fn ldind<'gc, 'm: 'gc>(
         LoadType::Object => LayoutManager::Scalar(Scalar::ObjectRef),
     };
 
-    let heap = &stack.local.heap;
+    let heap = &ctx.local.heap;
     let memory = crate::memory::RawMemoryAccess::new(heap);
     let val = unsafe {
         memory
             .read_unaligned(ptr, owner, &layout, None)
             .expect("Read failed")
     };
-    stack.push(gc, val);
+    ctx.push(gc, val);
     StepResult::Continue
 }

@@ -26,12 +26,12 @@ pub mod pointer;
 pub mod storage;
 pub mod string;
 
+pub use object::{HeapStorage, Object, ObjectRef};
+pub use pointer::{ManagedPtr, UnmanagedPtr};
+pub use string::CLRString;
+
 #[cfg(feature = "multithreaded-gc")]
 use object::ObjectPtr;
-
-use object::{HeapStorage, Object, ObjectRef};
-use pointer::{ManagedPtr, UnmanagedPtr};
-use string::CLRString;
 
 #[derive(Clone, Debug)]
 pub enum StackValue<'gc> {

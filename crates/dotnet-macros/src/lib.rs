@@ -217,15 +217,15 @@ pub fn dotnet_instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let match_arm = if is_likely_struct {
         quote! {
-            Instruction::#variant_ident { #(#extra_arg_names,)* .. } => #func_name(gc, stack, #(#extra_arg_calls),*)
+            Instruction::#variant_ident { #(#extra_arg_names,)* .. } => #func_name(ctx, gc, #(#extra_arg_calls),*)
         }
     } else if extra_arg_names.is_empty() {
         quote! {
-            Instruction::#variant_ident => #func_name(gc, stack)
+            Instruction::#variant_ident => #func_name(ctx, gc)
         }
     } else {
         quote! {
-            Instruction::#variant_ident(#(#extra_arg_names),*) => #func_name(gc, stack, #(#extra_arg_calls),*)
+            Instruction::#variant_ident(#(#extra_arg_names),*) => #func_name(ctx, gc, #(#extra_arg_calls),*)
         }
     };
 
@@ -242,8 +242,8 @@ pub fn dotnet_instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
         #func
 
         fn #wrapper_name<'gc, 'm: 'gc>(
+            ctx: &mut crate::stack::VesContext<'_, 'gc, 'm>,
             gc: dotnet_utils::gc::GCHandle<'gc>,
-            stack: &mut crate::CallStack<'gc, 'm>,
             instr: &Instruction
         ) -> crate::StepResult {
             match instr {

@@ -1,6 +1,6 @@
 use crate::{
-    context::ResolutionContext, layout::type_layout, resolution::ValueResolution, CallStack,
-    StepResult,
+    context::ResolutionContext, layout::type_layout, resolution::ValueResolution,
+    stack::VesContext, StepResult,
 };
 use dotnet_types::{
     generics::GenericLookup,
@@ -58,19 +58,19 @@ use dotnet_macros::dotnet_intrinsic;
 
 #[dotnet_intrinsic("static bool System.MemoryExtensions::Equals(System.ReadOnlySpan<char>, System.ReadOnlySpan<char>, System.StringComparison)")]
 pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _culture_comparison = stack.pop_i32(gc);
-    let b = stack.pop_value_type(gc);
-    let a = stack.pop_value_type(gc);
+    let _culture_comparison = ctx.pop_i32(gc);
+    let b = ctx.pop_value_type(gc);
+    let a = ctx.pop_value_type(gc);
 
     let a = span_to_slice(a, 2);
     let b = span_to_slice(b, 2);
 
-    stack.push_i32(gc, (a == b) as i32);
+    ctx.push_i32(gc, (a == b) as i32);
     StepResult::Continue
 }
 
@@ -81,8 +81,8 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
     "static System.ReadOnlySpan<char> System.MemoryExtensions::AsSpan(string, int, int)"
 )]
 pub fn intrinsic_as_span<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
@@ -98,18 +98,18 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
     let (start, length_override) = match param_count {
         1 => (0, None),
         2 => {
-            let start = match stack.pop(gc) {
+            let start = match ctx.pop(gc) {
                 StackValue::Int32(i) => i as usize,
                 v => panic!("AsSpan: expected Int32 for start parameter, got {:?}", v),
             };
             (start, None)
         }
         3 => {
-            let length = match stack.pop(gc) {
+            let length = match ctx.pop(gc) {
                 StackValue::Int32(i) => i as usize,
                 v => panic!("AsSpan: expected Int32 for length parameter, got {:?}", v),
             };
-            let start = match stack.pop(gc) {
+            let start = match ctx.pop(gc) {
                 StackValue::Int32(i) => i as usize,
                 v => panic!("AsSpan: expected Int32 for start parameter, got {:?}", v),
             };
@@ -118,14 +118,10 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
         _ => panic!("AsSpan: unexpected parameter count {}", param_count),
     };
 
-    let obj_val = stack.pop(gc);
+    let obj_val = ctx.pop(gc);
 
-    let ctx = ResolutionContext::for_method(
-        method,
-        stack.loader(),
-        generics,
-        stack.shared.caches.clone(),
-    );
+    let res_ctx =
+        ResolutionContext::for_method(method, ctx.loader(), generics, ctx.shared.caches.clone());
 
     let (base_ptr, total_len, h_opt, element_type, element_size) = match obj_val {
         StackValue::ObjectRef(ObjectRef(Some(h))) => {
@@ -136,7 +132,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
                         s.as_ptr() as *mut u8,
                         s.len(),
                         Some(h),
-                        ctx.make_concrete(&dotnetdll::prelude::BaseType::Char),
+                        res_ctx.make_concrete(&dotnetdll::prelude::BaseType::Char),
                         2, // char is 2 bytes in .NET
                     )
                 }
@@ -161,7 +157,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
             let element_type = if !generics.method_generics.is_empty() {
                 generics.method_generics[0].clone()
             } else {
-                ctx.make_concrete(&dotnetdll::prelude::BaseType::Char)
+                res_ctx.make_concrete(&dotnetdll::prelude::BaseType::Char)
             };
             (std::ptr::null_mut(), 0, None, element_type, 2)
         }
@@ -194,22 +190,22 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
     let len = actual_length;
 
     let span_type_concrete = match &method.method.signature.return_type.1 {
-        Some(ParameterType::Value(t)) => ctx.make_concrete(t),
+        Some(ParameterType::Value(t)) => res_ctx.make_concrete(t),
         Some(_) => panic!("AsSpan called on method with ref/typedref return"),
         None => panic!("AsSpan called on method returning void"),
     };
-    let span_type = stack.loader().find_concrete_type(span_type_concrete);
+    let span_type = ctx.loader().find_concrete_type(span_type_concrete);
 
     let new_lookup = GenericLookup {
         type_generics: vec![element_type.clone()],
         method_generics: vec![],
     };
-    let ctx = ctx.with_generics(&new_lookup);
+    let res_ctx_generic = res_ctx.with_generics(&new_lookup);
 
-    let span = ctx.new_object(span_type);
+    let span = res_ctx_generic.new_object(span_type);
 
     if let Some(h) = h_opt {
-        let element_type_desc = stack.loader().find_concrete_type(element_type);
+        let element_type_desc = ctx.loader().find_concrete_type(element_type);
 
         let managed = ManagedPtr::new(
             Some(NonNull::new(ptr).expect("Object pointer should not be null")),
@@ -228,27 +224,23 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
         .get_field_mut_local(span_type, "_length")
         .copy_from_slice(&(len as i32).to_ne_bytes());
 
-    stack.push_value_type(gc, span);
+    ctx.push_value_type(gc, span);
     StepResult::Continue
 }
 
 #[dotnet_intrinsic("static System.Span<T> System.Runtime.CompilerServices.RuntimeHelpers::CreateSpan<T>(System.RuntimeFieldHandle)")]
 pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let element_type = &generics.method_generics[0];
-    let ctx = ResolutionContext::for_method(
-        method,
-        stack.loader(),
-        generics,
-        stack.shared.caches.clone(),
-    );
-    let element_size = type_layout(element_type.clone(), &ctx).size();
+    let res_ctx =
+        ResolutionContext::for_method(method, ctx.loader(), generics, ctx.shared.caches.clone());
+    let element_size = type_layout(element_type.clone(), &res_ctx).size();
 
-    let field_handle = stack.pop_value_type(gc);
+    let field_handle = ctx.pop_value_type(gc);
 
     let (FieldDescription { field, .. }, lookup) = {
         let mut ptr_buf = [0u8; ObjectRef::SIZE];
@@ -258,13 +250,13 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
                 .get_field_local(field_handle.description, "_value"),
         );
         let obj_ref = unsafe { ObjectRef::read_branded(&ptr_buf, gc) };
-        stack.resolve_runtime_field(obj_ref)
+        ctx.resolve_runtime_field(obj_ref)
     };
     let field_type = ctx.with_generics(&lookup).make_concrete(&field.return_type);
-    let field_desc = stack.loader().find_concrete_type(field_type.clone());
+    let field_desc = ctx.loader().find_concrete_type(field_type.clone());
 
     let Some(initial_data) = &field.initial_value else {
-        return stack.throw_by_name(gc, "System.ArgumentException");
+        return ctx.throw_by_name(gc, "System.ArgumentException");
     };
 
     if field_desc
@@ -278,12 +270,12 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
         let array_size = size_str[..size_end].parse::<usize>().unwrap();
         let data_slice = &initial_data[..array_size];
 
-        let span_type = stack.loader().corlib_type("System.ReadOnlySpan`1");
+        let span_type = ctx.loader().corlib_type("System.ReadOnlySpan`1");
         let span_lookup = GenericLookup::new(vec![element_type.clone()]);
-        let ctx = ctx.with_generics(&span_lookup);
-        let span_instance = ctx.new_object(span_type);
+        let span_res_ctx = res_ctx.with_generics(&span_lookup);
+        let span_instance = span_res_ctx.new_object(span_type);
 
-        let element_desc = stack.loader().find_concrete_type(element_type.clone());
+        let element_desc = ctx.loader().find_concrete_type(element_type.clone());
         let managed = ManagedPtr::new(
             Some(
                 NonNull::new(data_slice.as_ptr() as *mut u8)
@@ -305,7 +297,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
             .get_field_mut_local(span_type, "_length")
             .copy_from_slice(&element_count.to_ne_bytes());
 
-        stack.push_value_type(gc, span_instance);
+        ctx.push_value_type(gc, span_instance);
         StepResult::Continue
     } else {
         todo!("initial field data for {:?}", field_desc);
@@ -314,14 +306,14 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic("static T& System.Runtime.CompilerServices.RuntimeHelpers::GetSpanDataFrom<T>(T&, System.Type, int&)")]
 pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let length_ref = stack.pop_managed_ptr(gc);
-    let type_handle = stack.pop_value_type(gc);
-    let field_handle = stack.pop_value_type(gc);
+    let length_ref = ctx.pop_managed_ptr(gc);
+    let type_handle = ctx.pop_value_type(gc);
+    let field_handle = ctx.pop_value_type(gc);
 
     // Resolve field
     let (FieldDescription { field, .. }, _) = {
@@ -332,7 +324,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
                 .get_field_local(field_handle.description, "_value"),
         );
         let obj_ref = unsafe { ObjectRef::read_branded(&ptr_buf, gc) };
-        stack.resolve_runtime_field(obj_ref)
+        ctx.resolve_runtime_field(obj_ref)
     };
 
     // Resolve type
@@ -344,22 +336,18 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
                 .get_field_local(type_handle.description, "_value"),
         );
         let obj_ref = unsafe { ObjectRef::read_branded(&ptr_buf, gc) };
-        stack.resolve_runtime_type(obj_ref)
+        ctx.resolve_runtime_type(obj_ref)
     };
 
     let element_type: dotnet_types::generics::ConcreteType =
-        element_type_runtime.to_concrete(stack.loader());
+        element_type_runtime.to_concrete(ctx.loader());
 
-    let ctx = ResolutionContext::for_method(
-        _method,
-        stack.loader(),
-        generics,
-        stack.shared.caches.clone(),
-    );
-    let element_size = type_layout(element_type, &ctx).size();
+    let res_ctx =
+        ResolutionContext::for_method(_method, ctx.loader(), generics, ctx.shared.caches.clone());
+    let element_size = type_layout(element_type, &res_ctx).size();
 
     let Some(initial_data) = &field.initial_value else {
-        stack.push_isize(gc, 0);
+        ctx.push_isize(gc, 0);
         return StepResult::Continue;
     };
 
@@ -382,21 +370,21 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
         }
 
         let ptr = initial_data.as_ptr() as usize;
-        stack.push_isize(gc, ptr as isize);
+        ctx.push_isize(gc, ptr as isize);
     } else {
-        stack.push_isize(gc, 0);
+        ctx.push_isize(gc, 0);
     }
     StepResult::Continue
 }
 
 #[dotnet_intrinsic("static byte& DotnetRs.Internal::GetArrayData(System.Array)")]
 pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let array_ref = stack.pop_obj(gc);
+    let array_ref = ctx.pop_obj(gc);
 
     let element_type = if !generics.method_generics.is_empty() {
         generics.method_generics[0].clone()
@@ -404,7 +392,7 @@ pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc>(
         panic!("GetArrayData expected generic argument");
     };
 
-    let element_type_desc = stack.loader().find_concrete_type(element_type);
+    let element_type_desc = ctx.loader().find_concrete_type(element_type);
 
     if let Some(handle) = array_ref.0 {
         let inner = handle.borrow();
@@ -416,13 +404,13 @@ pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc>(
                 Some(array_ref),
                 false,
             );
-            stack.push_managed_ptr(gc, managed);
+            ctx.push_managed_ptr(gc, managed);
         } else {
             panic!("GetArrayData called on non-vector object");
         }
     } else {
         let managed = ManagedPtr::new(None, element_type_desc, None, false);
-        stack.push_managed_ptr(gc, managed);
+        ctx.push_managed_ptr(gc, managed);
     }
     StepResult::Continue
 }

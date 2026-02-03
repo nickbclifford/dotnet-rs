@@ -1,4 +1,4 @@
-use crate::{instructions::macros::*, CallStack, StepResult};
+use crate::{instructions::macros::*, StepResult};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnetdll::prelude::*;

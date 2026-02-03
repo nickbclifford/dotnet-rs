@@ -1,24 +1,24 @@
-use crate::{instructions::macros::*, resolution::ValueResolution, CallStack, StepResult};
+use crate::{instructions::macros::*, resolution::ValueResolution, stack::VesContext, StepResult};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::StackValue;
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(NoOperation)]
-pub fn nop<'gc, 'm: 'gc>(_gc: GCHandle<'gc>, _stack: &mut CallStack<'gc, 'm>) -> StepResult {
+pub fn nop<'gc, 'm: 'gc>(_ctx: &mut VesContext<'_, 'gc, 'm>, _gc: GCHandle<'gc>) -> StepResult {
     StepResult::Continue
 }
 #[dotnet_instruction(Pop)]
-pub fn pop<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    stack.pop(gc);
+pub fn pop<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+    ctx.pop(gc);
     StepResult::Continue
 }
 
 #[dotnet_instruction(Duplicate)]
-pub fn duplicate<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let val = stack.pop(gc);
-    stack.push(gc, val.clone());
-    stack.push(gc, val);
+pub fn duplicate<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+    let val = ctx.pop(gc);
+    ctx.push(gc, val.clone());
+    ctx.push(gc, val);
     StepResult::Continue
 }
 
@@ -47,8 +47,8 @@ load_const!(
     StackValue::NativeFloat
 );
 #[dotnet_instruction(LoadNull)]
-pub fn ldnull<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    stack.push(gc, StackValue::null());
+pub fn ldnull<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+    ctx.push(gc, StackValue::null());
     StepResult::Continue
 }
 
@@ -60,17 +60,17 @@ load_var!(
 
 #[dotnet_instruction(LoadArgumentAddress)]
 pub fn ldarga<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     index: u16,
 ) -> StepResult {
-    let arg = stack.get_argument(index as usize);
-    let ctx = stack.current_context();
-    let live_type = ctx.stack_value_type(&arg);
-    stack.push(
+    let arg = ctx.get_argument(index as usize);
+    let resolution_ctx = ctx.current_context();
+    let live_type = resolution_ctx.stack_value_type(&arg);
+    ctx.push(
         gc,
         StackValue::managed_ptr(
-            stack.get_argument_address(index as usize).as_ptr() as *mut _,
+            ctx.get_argument_address(index as usize).as_ptr() as *mut _,
             live_type,
             true,
         ),
@@ -91,17 +91,17 @@ load_var!(
 
 #[dotnet_instruction(LoadLocalAddress)]
 pub fn ldloca<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     index: u16,
 ) -> StepResult {
-    let local = stack.get_local(index as usize);
-    let ctx = stack.current_context();
-    let live_type = ctx.stack_value_type(&local);
+    let local = ctx.get_local(index as usize);
+    let resolution_ctx = ctx.current_context();
+    let live_type = resolution_ctx.stack_value_type(&local);
 
-    let (ptr, pinned) = stack.get_local_info_for_managed_ptr(index as usize);
+    let (ptr, pinned) = ctx.get_local_info_for_managed_ptr(index as usize);
 
-    stack.push(
+    ctx.push(
         gc,
         StackValue::managed_ptr_with_owner(ptr.as_ptr() as *mut _, live_type, None, pinned),
     );

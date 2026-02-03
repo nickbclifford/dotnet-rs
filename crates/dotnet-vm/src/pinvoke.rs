@@ -1,6 +1,6 @@
 use crate::{
     context::ResolutionContext, exceptions::ExceptionState, layout::LayoutFactory,
-    resolution::ValueResolution, tracer::Tracer, CallStack,
+    resolution::ValueResolution, stack::context::VesContext, tracer::Tracer,
 };
 use dashmap::DashMap;
 use dotnet_assemblies::decompose_type_source;
@@ -224,14 +224,14 @@ fn param_to_type(p: &ParameterType<MethodType>, ctx: &ResolutionContext) -> Type
     type_to_ffi(&ctx.make_concrete(t), ctx)
 }
 
-impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
+impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
     pub fn external_call(&mut self, method: MethodDescription, gc: GCHandle<'gc>) {
         let Some(p) = &method.method.pinvoke else {
             unreachable!()
         };
 
         let arg_count = method.method.signature.parameters.len();
-        let stack_values = self.peek_multiple(arg_count);
+        let stack_values = self.evaluation_stack.peek_multiple(arg_count);
 
         let res = method.resolution();
         let module = if !res.is_null() {
@@ -264,10 +264,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
         let target_res = if self.tracer_enabled() {
             let mut guard = self.tracer();
-            self.pinvoke()
+            self.shared
+                .pinvoke
                 .get_function(module, function, Some(&mut *guard))
         } else {
-            self.pinvoke().get_function(module, function, None)
+            self.shared.pinvoke.get_function(module, function, None)
         };
 
         let target = match target_res {
@@ -306,7 +307,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                     }
                 });
 
-                self.execution.exception_mode = ExceptionState::Throwing(exception);
+                *self.exception_mode = ExceptionState::Throwing(exception);
                 return;
             }
         };

@@ -1,3 +1,4 @@
+use crate::{state::SharedGlobalState, sync::Ordering};
 use dotnet_utils::gc::GCHandleType;
 use dotnet_value::object::{HeapStorage, ObjectRef};
 use gc_arena::{Collect, Collection};
@@ -48,6 +49,100 @@ impl<'gc> HeapManager<'gc> {
         } else {
             None
         }
+    }
+
+    pub fn finalize_check(
+        &self,
+        fc: &gc_arena::Finalization<'gc>,
+        shared: &SharedGlobalState<'_>,
+        indent: usize,
+    ) {
+        let mut queue = self.finalization_queue.borrow_mut();
+        let mut handles = self.gchandles.borrow_mut();
+        let mut resurrected = HashSet::new();
+
+        let mut zero_out_handles = |for_type: GCHandleType, resurrected: &HashSet<usize>| {
+            for (obj_ref, handle_type) in handles.iter_mut().flatten() {
+                if *handle_type == for_type {
+                    if let ObjectRef(Some(ptr)) = obj_ref {
+                        if gc_arena::Gc::is_dead(fc, *ptr) {
+                            if for_type == GCHandleType::WeakTrackResurrection
+                                && resurrected.contains(&(gc_arena::Gc::as_ptr(*ptr) as usize))
+                            {
+                                continue;
+                            }
+                            *obj_ref = ObjectRef(None);
+                        }
+                    }
+                }
+            }
+        };
+
+        if !queue.is_empty() {
+            let mut to_finalize = Vec::new();
+            let mut i = 0;
+            while i < queue.len() {
+                let obj = queue[i];
+                let ptr = obj.0.expect("object in finalization queue is null");
+
+                let is_dead = gc_arena::Gc::is_dead(fc, ptr);
+
+                let is_suppressed = match &ptr.borrow().storage {
+                    HeapStorage::Obj(o) => o.finalizer_suppressed,
+                    _ => false,
+                };
+
+                if is_suppressed {
+                    queue.swap_remove(i);
+                    continue;
+                }
+
+                if is_dead {
+                    to_finalize.push(queue.swap_remove(i));
+                } else {
+                    i += 1;
+                }
+            }
+
+            if !to_finalize.is_empty() {
+                let mut pending = self.pending_finalization.borrow_mut();
+                for obj in to_finalize {
+                    let ptr = obj.0.unwrap();
+                    pending.push(obj);
+                    if resurrected.insert(gc_arena::Gc::as_ptr(ptr) as usize) {
+                        // Trace resurrection event
+                        if shared.tracer_enabled.load(Ordering::Relaxed) {
+                            let obj_type_name = match &ptr.borrow().storage {
+                                HeapStorage::Obj(o) => format!("{:?}", o.description),
+                                HeapStorage::Vec(_) => "Vector".to_string(),
+                                HeapStorage::Str(_) => "String".to_string(),
+                                HeapStorage::Boxed(_) => "Boxed".to_string(),
+                            };
+                            let addr = gc_arena::Gc::as_ptr(ptr) as usize;
+                            shared.tracer.lock().trace_gc_resurrection(
+                                indent,
+                                &obj_type_name,
+                                addr,
+                            );
+                        }
+                        gc_arena::Gc::resurrect(fc, ptr);
+                        ptr.borrow().storage.resurrect(fc, &mut resurrected);
+                    }
+                }
+            }
+        }
+
+        // 1. Zero out Weak handles for dead objects
+        zero_out_handles(GCHandleType::Weak, &resurrected);
+
+        // 2. Zero out WeakTrackResurrection handles
+        zero_out_handles(GCHandleType::WeakTrackResurrection, &resurrected);
+
+        // 3. Prune dead objects from the debugging harness
+        self._all_objs.borrow_mut().retain(|addr, obj| match obj.0 {
+            Some(ptr) => !gc_arena::Gc::is_dead(fc, ptr) || resurrected.contains(addr),
+            None => false,
+        });
     }
 }
 

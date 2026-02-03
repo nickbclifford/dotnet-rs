@@ -17,6 +17,7 @@ pub mod memory;
 pub mod metrics;
 mod pinvoke;
 pub mod resolution;
+pub mod resolver;
 mod stack;
 pub mod state;
 pub mod statics;
@@ -26,6 +27,7 @@ pub mod tracer;
 
 pub use executor::*;
 pub use stack::*;
+pub use state::ReflectionRegistry;
 
 use context::ResolutionContext;
 use state::SharedGlobalState;

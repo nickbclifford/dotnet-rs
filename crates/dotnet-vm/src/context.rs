@@ -1,9 +1,5 @@
-use crate::{
-    resolution::{TypeResolutionExt, ValueResolution},
-    state::GlobalCaches,
-    sync::Arc,
-};
-use dotnet_assemblies::{decompose_type_source, Ancestor, AssemblyLoader};
+use crate::{resolver::ResolverService, state::GlobalCaches, sync::Arc, MethodType};
+use dotnet_assemblies::{Ancestor, AssemblyLoader};
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
@@ -11,10 +7,7 @@ use dotnet_types::{
     TypeDescription,
 };
 use dotnet_value::object::ObjectHandle;
-use dotnetdll::prelude::{
-    BaseType, FieldSource, MemberType, MethodType, TypeSource, UserMethod, UserType, ValueKind,
-};
-use std::collections::{HashSet, VecDeque};
+use dotnetdll::prelude::{FieldSource, UserMethod, UserType};
 
 #[derive(Clone)]
 pub struct ResolutionContext<'a, 'm> {
@@ -59,6 +52,10 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
         }
     }
 
+    pub fn resolver(&self) -> ResolverService<'m> {
+        ResolverService::from_parts(self.loader, self.caches.clone())
+    }
+
     pub fn with_generics(&self, generics: &'a GenericLookup) -> ResolutionContext<'a, 'm> {
         ResolutionContext {
             generics,
@@ -90,7 +87,7 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
     }
 
     pub fn locate_type(&self, handle: UserType) -> TypeDescription {
-        self.loader.locate_type(self.resolution, handle)
+        self.resolver().locate_type(self.resolution, handle)
     }
 
     pub fn locate_method(
@@ -98,12 +95,12 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
         handle: UserMethod,
         generic_inst: &GenericLookup,
     ) -> MethodDescription {
-        self.loader
+        self.resolver()
             .locate_method(self.resolution, handle, generic_inst)
     }
 
     pub fn locate_field(&self, field: FieldSource) -> (FieldDescription, GenericLookup) {
-        self.loader
+        self.resolver()
             .locate_field(self.resolution, field, self.generics)
     }
 
@@ -115,119 +112,29 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
     }
 
     pub fn is_a(&self, value: ConcreteType, ancestor: ConcreteType) -> bool {
-        let value = self.normalize_type(value);
-        let ancestor = self.normalize_type(ancestor);
-
-        if value == ancestor {
-            return true;
-        }
-
-        let cache_key = (value.clone(), ancestor.clone());
-        if let Some(cached) = self.caches.hierarchy_cache.get(&cache_key) {
-            return *cached;
-        }
-
-        let value_td = self.loader.find_concrete_type(value);
-        let ancestor_td = self.loader.find_concrete_type(ancestor);
-
-        let mut seen = HashSet::new();
-        let mut queue = VecDeque::new();
-
-        for (a, _) in self.get_ancestors(value_td) {
-            queue.push_back(a);
-        }
-
-        let mut result = false;
-        while let Some(current) = queue.pop_front() {
-            if current == ancestor_td {
-                result = true;
-                break;
-            }
-            if !seen.insert(current) {
-                continue;
-            }
-
-            for (_, interface_source) in &current.definition().implements {
-                let handle = match interface_source {
-                    TypeSource::User(h) | TypeSource::Generic { base: h, .. } => *h,
-                };
-                let interface = self.loader.locate_type(current.resolution, handle);
-                queue.push_back(interface);
-            }
-        }
-
-        self.caches.hierarchy_cache.insert(cache_key, result);
-        result
+        self.resolver().is_a(value, ancestor)
     }
 
     pub fn get_heap_description(&self, object: ObjectHandle) -> TypeDescription {
-        use dotnet_value::object::HeapStorage::*;
-        match &object.as_ref().borrow().storage {
-            Obj(o) => o.description,
-            Vec(_) => self.loader.corlib_type("System.Array"),
-            Str(_) => self.loader.corlib_type("System.String"),
-            Boxed(v) => self.value_type_description(v),
-        }
+        self.resolver().get_heap_description(object)
     }
 
     pub fn make_concrete<T: Clone + Into<MethodType>>(&self, t: &T) -> ConcreteType {
-        self.generics.make_concrete(self.resolution, t.clone())
+        self.resolver()
+            .make_concrete(self.resolution, self.generics, t)
     }
 
     pub fn get_field_type(&self, field: FieldDescription) -> ConcreteType {
-        let return_type = &field.field.return_type;
-        if field.field.by_ref {
-            let by_ref_t: MemberType = BaseType::pointer(return_type.clone()).into();
-            self.make_concrete(&by_ref_t)
-        } else {
-            self.make_concrete(return_type)
-        }
+        self.resolver()
+            .get_field_type(self.resolution, self.generics, field)
     }
 
     pub fn get_field_desc(&self, field: FieldDescription) -> TypeDescription {
-        self.loader.find_concrete_type(self.get_field_type(field))
+        self.resolver()
+            .get_field_desc(self.resolution, self.generics, field)
     }
 
-    pub fn normalize_type(&self, mut t: ConcreteType) -> ConcreteType {
-        let (ut, res) = match t.get() {
-            BaseType::Type { source, .. } => (decompose_type_source(source).0, t.resolution()),
-            _ => return t,
-        };
-
-        let name = ut.type_name(res.definition());
-        let base = match name.as_ref() {
-            "System.Boolean" => Some(BaseType::Boolean),
-            "System.Char" => Some(BaseType::Char),
-            "System.Byte" => Some(BaseType::UInt8),
-            "System.SByte" => Some(BaseType::Int8),
-            "System.Int16" => Some(BaseType::Int16),
-            "System.UInt16" => Some(BaseType::UInt16),
-            "System.Int32" => Some(BaseType::Int32),
-            "System.UInt32" => Some(BaseType::UInt32),
-            "System.Int64" => Some(BaseType::Int64),
-            "System.UInt64" => Some(BaseType::UInt64),
-            "System.Single" => Some(BaseType::Float32),
-            "System.Double" => Some(BaseType::Float64),
-            "System.IntPtr" => Some(BaseType::IntPtr),
-            "System.UIntPtr" => Some(BaseType::UIntPtr),
-            "System.Object" => Some(BaseType::Object),
-            "System.String" => Some(BaseType::String),
-            _ => None,
-        };
-
-        if let Some(base) = base {
-            ConcreteType::new(res, base)
-        } else {
-            if let BaseType::Type { source, value_kind } = t.get_mut() {
-                if value_kind.is_none() {
-                    let (ut, _) = decompose_type_source(source);
-                    let td = self.loader.locate_type(res, ut);
-                    if td.is_value_type(self) {
-                        *value_kind = Some(ValueKind::ValueType);
-                    }
-                }
-            }
-            t
-        }
+    pub fn normalize_type(&self, t: ConcreteType) -> ConcreteType {
+        self.resolver().normalize_type(t)
     }
 }

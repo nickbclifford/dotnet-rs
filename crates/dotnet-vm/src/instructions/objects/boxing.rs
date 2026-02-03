@@ -1,6 +1,7 @@
 use crate::{
     resolution::{TypeResolutionExt, ValueResolution},
-    CallStack, StepResult,
+    stack::VesContext,
+    StepResult,
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
@@ -14,41 +15,40 @@ use std::ptr::NonNull;
 
 #[dotnet_instruction(BoxValue)]
 pub fn box_value<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     param0: &MethodType,
 ) -> StepResult {
-    let t = stack.current_context().make_concrete(param0);
-    let value = stack.pop(gc);
+    let res_ctx = ctx.current_context();
+    let t = res_ctx.make_concrete(param0);
+    let value = ctx.pop(gc);
 
     if let StackValue::ObjectRef(_) = value {
         // boxing is a noop for all reference types
-        stack.push(gc, value);
+        ctx.push(gc, value);
     } else {
-        let obj = ObjectRef::new(
-            gc,
-            HeapStorage::Boxed(stack.current_context().new_value_type(&t, value)),
-        );
-        stack.register_new_object(&obj);
-        stack.push(gc, StackValue::ObjectRef(obj));
+        let res_ctx = ctx.current_context();
+        let obj = ObjectRef::new(gc, HeapStorage::Boxed(res_ctx.new_value_type(&t, value)));
+        ctx.register_new_object(&obj);
+        ctx.push(gc, StackValue::ObjectRef(obj));
     }
     StepResult::Continue
 }
 
 #[dotnet_instruction(UnboxIntoValue)]
 pub fn unbox_any<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     param0: &MethodType,
 ) -> StepResult {
-    let val = stack.pop(gc);
-    let ctx = stack.current_context();
-    let target_ct = ctx.make_concrete(param0);
+    let val = ctx.pop(gc);
+    let res_ctx = ctx.current_context();
+    let target_ct = res_ctx.make_concrete(param0);
 
     let is_vt = match target_ct.get() {
         BaseType::Type { .. } => {
-            let td = stack.loader().find_concrete_type(target_ct.clone());
-            td.is_value_type(&ctx)
+            let td = ctx.loader().find_concrete_type(target_ct.clone());
+            td.is_value_type(&res_ctx)
         }
         BaseType::Vector(_, _) | BaseType::Array(_, _) | BaseType::Object | BaseType::String => {
             false
@@ -63,7 +63,7 @@ pub fn unbox_any<'gc, 'm: 'gc>(
         };
         if obj.0.is_none() {
             // unbox.any on null value type throws NullReferenceException (III.4.33)
-            return stack.throw_by_name(gc, "System.NullReferenceException");
+            return ctx.throw_by_name(gc, "System.NullReferenceException");
         }
 
         let result = obj.as_heap_storage(|storage| {
@@ -78,21 +78,21 @@ pub fn unbox_any<'gc, 'm: 'gc>(
                 _ => panic!("unbox.any: expected boxed value, got {:?}", storage),
             }
         });
-        stack.push(gc, result);
+        ctx.push(gc, result);
     } else {
         // Reference type: identical to castclass.
         let StackValue::ObjectRef(target_obj) = val else {
             panic!("unbox.any: expected object on stack, got {:?}", val);
         };
         if let ObjectRef(Some(o)) = target_obj {
-            let obj_type = ctx.get_heap_description(o);
-            if ctx.is_a(obj_type.into(), target_ct) {
-                stack.push(gc, StackValue::ObjectRef(target_obj));
+            let obj_type = res_ctx.get_heap_description(o);
+            if res_ctx.is_a(obj_type.into(), target_ct) {
+                ctx.push(gc, StackValue::ObjectRef(target_obj));
             } else {
-                return stack.throw_by_name(gc, "System.InvalidCastException");
+                return ctx.throw_by_name(gc, "System.InvalidCastException");
             }
         } else {
-            stack.push(gc, StackValue::ObjectRef(ObjectRef(None)));
+            ctx.push(gc, StackValue::ObjectRef(ObjectRef(None)));
         }
     }
     StepResult::Continue
@@ -100,19 +100,19 @@ pub fn unbox_any<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(UnboxIntoAddress)]
 pub fn unbox<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     param0: &MethodType,
 ) -> StepResult {
-    let value = stack.pop(gc);
-    let ctx = stack.current_context();
-    let target_ct = ctx.make_concrete(param0);
+    let value = ctx.pop(gc);
+    let res_ctx = ctx.current_context();
+    let target_ct = res_ctx.make_concrete(param0);
 
     let StackValue::ObjectRef(obj) = value else {
         panic!("unbox on non-object: {:?}", value);
     };
     let Some(h) = obj.0 else {
-        return stack.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name(gc, "System.NullReferenceException");
     };
 
     let inner = h.borrow();
@@ -123,8 +123,8 @@ pub fn unbox<'gc, 'm: 'gc>(
         _ => panic!("unbox on non-boxed struct"),
     };
 
-    let target_type = stack.loader().find_concrete_type(target_ct);
-    stack.push(
+    let target_type = ctx.loader().find_concrete_type(target_ct);
+    ctx.push(
         gc,
         StackValue::ManagedPtr(ManagedPtr::new(
             NonNull::new(ptr),

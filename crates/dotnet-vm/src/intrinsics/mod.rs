@@ -31,7 +31,7 @@
 //! ### Virtual Dispatch Integration
 //!
 //! Virtual intrinsics are integrated into the standard virtual method resolution
-//! flow in `resolve_virtual_method()` (see `src/vm/stack.rs`).
+//! flow in `resolve_virtual_method()` (see `src/stack/mod.rs`).
 //!
 //! When resolving a virtual call:
 //! 1. Check if the target method has a `VirtualOverride` intrinsic for the runtime type.
@@ -40,7 +40,7 @@
 //!
 //! ### Unified Dispatch Pipeline
 //!
-//! All method calls flow through a unified dispatch pipeline (see `src/vm/instructions.rs`):
+//! All method calls flow through a unified dispatch pipeline (see `src/dispatch.rs`):
 //! 1. **Generic resolution**: Resolve the method from instruction operand.
 //! 2. **Virtual resolution**: Resolve the runtime type-specific method (if virtual).
 //! 3. **Intrinsic check**: Use [`classify_intrinsic`] to check if the resolved method is an intrinsic.
@@ -57,13 +57,13 @@
 //!     ```rust,ignore
 //!     #[dotnet_intrinsic("static double System.Math::Min(double, double)")]
 //!     pub fn math_min_double<'gc, 'm: 'gc>(
+//!         ctx: &mut VesContext<'_, 'gc, 'm>,
 //!         gc: GCHandle<'gc>,
-//!         stack: &mut CallStack<'gc, 'm>,
 //!         method: MethodDescription,
 //!         generics: &GenericLookup,
 //!     ) -> StepResult { ... }
 //!     ```
-//!     Place this function in an appropriate submodule (e.g., `src/vm/intrinsics/math.rs`).
+//!     Place this function in an appropriate submodule (e.g., `src/intrinsics/math.rs`).
 //!
 //! 2.  **Use the `#[dotnet_intrinsic]` attribute**:
 //!     The attribute takes a C#-style signature string. This automatically registers the handler
@@ -132,7 +132,7 @@ pub mod unsafe_ops;
 pub use metadata::{classify_intrinsic, IntrinsicKind, IntrinsicMetadata};
 pub use reflection::ReflectionExtensions;
 
-use super::{context::ResolutionContext, sync::Arc, tracer::Tracer, CallStack, StepResult};
+use super::{context::ResolutionContext, sync::Arc, tracer::Tracer, StepResult};
 
 pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttribute";
 
@@ -154,15 +154,15 @@ pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttri
 ///
 /// GenericLookup is passed by reference to avoid cloning on every intrinsic call.
 pub type IntrinsicHandler = for<'gc, 'm> fn(
+    ctx: &mut crate::stack::VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult;
 
 pub type IntrinsicFieldHandler = for<'gc, 'm> fn(
+    ctx: &mut crate::stack::VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     field: FieldDescription,
     type_generics: Vec<ConcreteType>,
     is_address: bool,
@@ -549,29 +549,25 @@ pub fn is_intrinsic_field(
 
 pub fn intrinsic_call<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
+    ctx: &mut crate::stack::VesContext<'_, 'gc, 'm>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _ctx = ResolutionContext::for_method(
-        method,
-        stack.loader(),
-        generics,
-        stack.shared.caches.clone(),
-    );
+    let _res_ctx =
+        ResolutionContext::for_method(method, ctx.loader(), generics, ctx.shared.caches.clone());
 
     vm_trace_intrinsic!(
-        stack,
+        ctx,
         "CALL",
         &format!("{}.{}", method.parent.type_name(), method.method.name)
     );
 
     if let Some(metadata) = classify_intrinsic(
         method,
-        stack.loader(),
-        Some(&stack.shared.caches.intrinsic_registry),
+        ctx.loader(),
+        Some(&ctx.shared.caches.intrinsic_registry),
     ) {
-        return (metadata.handler)(gc, stack, method, generics);
+        return (metadata.handler)(ctx, gc, method, generics);
     }
 
     panic!("unsupported intrinsic {:?}", method);
@@ -579,18 +575,18 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
 pub fn intrinsic_field<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
+    ctx: &mut crate::stack::VesContext<'_, 'gc, 'm>,
     field: FieldDescription,
     type_generics: Vec<ConcreteType>,
     is_address: bool,
 ) -> StepResult {
     vm_trace_intrinsic!(
-        stack,
+        ctx,
         "FIELD-LOAD",
         &format!("{}.{}", field.parent.type_name(), field.field.name)
     );
-    if let Some(handler) = stack.shared.caches.intrinsic_registry.get_field(&field) {
-        handler(gc, stack, field, type_generics, is_address)
+    if let Some(handler) = ctx.shared.caches.intrinsic_registry.get_field(&field) {
+        handler(ctx, gc, field, type_generics, is_address)
     } else {
         panic!("unsupported load from intrinsic field: {:?}", field);
     }
@@ -598,12 +594,12 @@ pub fn intrinsic_field<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic("string System.Object::ToString()")]
 fn object_to_string<'gc, 'm: 'gc>(
+    ctx: &mut crate::stack::VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let this = stack.pop(gc);
+    let this = ctx.pop(gc);
 
     let type_name = if let StackValue::ObjectRef(obj_ref) = this {
         if obj_ref.0.is_some() {
@@ -614,7 +610,7 @@ fn object_to_string<'gc, 'm: 'gc>(
                 HeapStorage::Boxed(_) => "System.ValueType".to_string(),
             })
         } else {
-            return stack.throw_by_name(gc, "System.NullReferenceException");
+            return ctx.throw_by_name(gc, "System.NullReferenceException");
         }
     } else {
         "System.Object".to_string()
@@ -623,6 +619,6 @@ fn object_to_string<'gc, 'm: 'gc>(
     let str_val = CLRString::from(type_name);
     let storage = HeapStorage::Str(str_val);
     let obj_ref = ObjectRef::new(gc, storage);
-    stack.push_obj(gc, obj_ref);
+    ctx.push_obj(gc, obj_ref);
     StepResult::Continue
 }

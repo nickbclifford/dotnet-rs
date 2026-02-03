@@ -445,7 +445,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                             set_currently_tracing(Some(thread_id));
 
                             arena.mutate(|_, c| {
-                                c.heap().cross_arena_roots.borrow_mut().clear();
+                                c.stack.local.heap.cross_arena_roots.borrow_mut().clear();
                             });
 
                             let mut marked = None;
@@ -473,7 +473,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                             set_currently_tracing(Some(thread_id));
 
                             arena.mutate(|_, c| {
-                                let mut roots = c.heap().cross_arena_roots.borrow_mut();
+                                let mut roots = c.stack.local.heap.cross_arena_roots.borrow_mut();
                                 for ptr_usize in ptrs {
                                     let ptr = unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }
                                         .unwrap();
@@ -508,7 +508,13 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                             }
 
                             if let Some(marked) = marked {
-                                marked.finalize(|fc, c| c.finalize_check(fc));
+                                marked.finalize(|fc, c| {
+                                    c.stack.local.heap.finalize_check(
+                                        fc,
+                                        &c.stack.shared,
+                                        c.stack.indent(),
+                                    )
+                                });
                             }
                         }
                     }

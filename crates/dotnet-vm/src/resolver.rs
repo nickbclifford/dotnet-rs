@@ -1,0 +1,757 @@
+use crate::{
+    context::ResolutionContext,
+    layout::type_layout_with_metrics,
+    metrics::RuntimeMetrics,
+    state::{GlobalCaches, SharedGlobalState},
+};
+use dotnet_assemblies::{decompose_type_source, AssemblyLoader};
+use dotnet_types::{
+    generics::{ConcreteType, GenericLookup},
+    members::{FieldDescription, MethodDescription},
+    resolution::ResolutionS,
+    TypeDescription,
+};
+use dotnet_utils::gc::GCHandle;
+use dotnet_value::{
+    layout::{HasLayout, LayoutManager},
+    object::{CTSValue, Object, ObjectHandle, ValueType, Vector},
+    pointer::ManagedPtr,
+    storage::FieldStorage,
+    StackValue,
+};
+use dotnetdll::prelude::*;
+use std::{
+    any,
+    collections::{HashSet, VecDeque},
+    error::Error,
+    ptr::NonNull,
+    sync::Arc,
+};
+
+/// Service for resolving types, methods, and fields with caching.
+pub struct ResolverService<'m> {
+    pub loader: &'m AssemblyLoader,
+    pub caches: Arc<GlobalCaches>,
+    pub shared: Option<Arc<SharedGlobalState<'m>>>,
+}
+
+impl<'m> ResolverService<'m> {
+    pub fn new(shared: Arc<SharedGlobalState<'m>>) -> Self {
+        Self {
+            loader: shared.loader,
+            caches: shared.caches.clone(),
+            shared: Some(shared),
+        }
+    }
+
+    pub fn from_parts(loader: &'m AssemblyLoader, caches: Arc<GlobalCaches>) -> Self {
+        Self {
+            loader,
+            caches,
+            shared: None,
+        }
+    }
+
+    fn metrics(&self) -> Option<&RuntimeMetrics> {
+        self.shared.as_ref().map(|s| &s.metrics)
+    }
+
+    pub fn loader(&self) -> &'m AssemblyLoader {
+        self.loader
+    }
+
+    pub fn is_intrinsic_cached(&self, method: MethodDescription) -> bool {
+        if let Some(cached) = self.caches.intrinsic_cache.get(&method) {
+            if let Some(metrics) = self.metrics() {
+                metrics.record_intrinsic_cache_hit();
+            }
+            return *cached;
+        }
+
+        if let Some(metrics) = self.metrics() {
+            metrics.record_intrinsic_cache_miss();
+        }
+        let result =
+            crate::intrinsics::is_intrinsic(method, self.loader(), &self.caches.intrinsic_registry);
+        self.caches.intrinsic_cache.insert(method, result);
+        result
+    }
+
+    pub fn is_intrinsic_field_cached(&self, field: FieldDescription) -> bool {
+        if let Some(cached) = self.caches.intrinsic_field_cache.get(&field) {
+            if let Some(metrics) = self.metrics() {
+                metrics.record_intrinsic_field_cache_hit();
+            }
+            return *cached;
+        }
+
+        if let Some(metrics) = self.metrics() {
+            metrics.record_intrinsic_field_cache_miss();
+        }
+        let result = crate::intrinsics::is_intrinsic_field(
+            field,
+            self.loader(),
+            &self.caches.intrinsic_registry,
+        );
+        self.caches.intrinsic_field_cache.insert(field, result);
+        result
+    }
+
+    pub fn find_generic_method(
+        &self,
+        source: &MethodSource,
+        ctx: &ResolutionContext<'_, 'm>,
+    ) -> (MethodDescription, GenericLookup) {
+        let mut new_lookup = ctx.generics.clone();
+
+        let method = match source {
+            MethodSource::User(u) => *u,
+            MethodSource::Generic(g) => {
+                new_lookup.method_generics =
+                    g.parameters.iter().map(|t| ctx.make_concrete(t)).collect();
+                g.base
+            }
+        };
+
+        if let UserMethod::Reference(r) = method {
+            if let MethodReferenceParent::Type(t) = &ctx.resolution[r].parent {
+                let parent = ctx.make_concrete(t);
+                if let BaseType::Type {
+                    source: TypeSource::Generic { parameters, .. },
+                    ..
+                } = parent.get()
+                {
+                    new_lookup.type_generics = parameters.clone();
+                }
+            }
+        }
+
+        (ctx.locate_method(method, &new_lookup), new_lookup)
+    }
+
+    pub fn resolve_virtual_method(
+        &self,
+        base_method: MethodDescription,
+        this_type: TypeDescription,
+        ctx: &ResolutionContext<'_, 'm>,
+    ) -> MethodDescription {
+        let cache_key = (base_method, this_type, ctx.generics.clone());
+        if let Some(cached) = self.caches.vmt_cache.get(&cache_key) {
+            return *cached;
+        }
+
+        if let Some(metrics) = self.metrics() {
+            metrics.record_vmt_cache_miss();
+        }
+
+        // First, check if this_type itself has the method
+        if let Some(this_method) = self.find_and_cache_method(this_type, base_method, ctx.generics)
+        {
+            return this_method;
+        }
+
+        // Standard virtual method resolution: search ancestors
+        for (parent, _) in ctx.get_ancestors(this_type) {
+            if let Some(this_method) = self.find_and_cache_method(parent, base_method, ctx.generics)
+            {
+                return this_method;
+            }
+        }
+        panic!(
+            "could not find virtual method implementation of {:?} in {:?}",
+            base_method, this_type
+        )
+    }
+
+    fn find_and_cache_method(
+        &self,
+        this_type: TypeDescription,
+        method: MethodDescription,
+        generics: &GenericLookup,
+    ) -> Option<MethodDescription> {
+        let this_method = self.loader.find_method_in_type(
+            this_type,
+            &method.method.name,
+            &method.method.signature,
+            method.resolution(),
+        )?;
+        self.caches
+            .vmt_cache
+            .insert((method, this_type, generics.clone()), this_method);
+        Some(this_method)
+    }
+
+    pub fn type_layout_cached(
+        &self,
+        t: ConcreteType,
+        ctx: &ResolutionContext<'_, 'm>,
+    ) -> Arc<LayoutManager> {
+        type_layout_with_metrics(t, ctx, self.metrics())
+    }
+
+    pub fn normalize_type(&self, mut t: ConcreteType) -> ConcreteType {
+        let (ut, res) = match t.get() {
+            BaseType::Type { source, .. } => (decompose_type_source(source).0, t.resolution()),
+            _ => return t,
+        };
+
+        let name = ut.type_name(res.definition());
+        let base = match name.as_ref() {
+            "System.Boolean" => Some(BaseType::Boolean),
+            "System.Char" => Some(BaseType::Char),
+            "System.Byte" => Some(BaseType::UInt8),
+            "System.SByte" => Some(BaseType::Int8),
+            "System.Int16" => Some(BaseType::Int16),
+            "System.UInt16" => Some(BaseType::UInt16),
+            "System.Int32" => Some(BaseType::Int32),
+            "System.UInt32" => Some(BaseType::UInt32),
+            "System.Int64" => Some(BaseType::Int64),
+            "System.UInt64" => Some(BaseType::UInt64),
+            "System.IntPtr" => Some(BaseType::IntPtr),
+            "System.UIntPtr" => Some(BaseType::UIntPtr),
+            "System.Single" => Some(BaseType::Float32),
+            "System.Double" => Some(BaseType::Float64),
+            "System.String" => Some(BaseType::String),
+            "System.Object" => Some(BaseType::Object),
+            _ => None,
+        };
+
+        if let Some(base) = base {
+            ConcreteType::new(res, base)
+        } else {
+            if let BaseType::Type { source, value_kind } = t.get_mut() {
+                if value_kind.is_none() {
+                    let (ut, _) = decompose_type_source(source);
+                    let td = self.loader.locate_type(res, ut);
+                    if self.is_value_type(td) {
+                        *value_kind = Some(ValueKind::ValueType);
+                    }
+                }
+            }
+            t
+        }
+    }
+
+    pub fn is_a(&self, value: ConcreteType, ancestor: ConcreteType) -> bool {
+        let value = self.normalize_type(value);
+        let ancestor = self.normalize_type(ancestor);
+
+        if value == ancestor {
+            return true;
+        }
+
+        let cache_key = (value.clone(), ancestor.clone());
+        if let Some(cached) = self.caches.hierarchy_cache.get(&cache_key) {
+            return *cached;
+        }
+
+        if let Some(metrics) = self.metrics() {
+            metrics.record_hierarchy_cache_miss();
+        }
+
+        let value_td = self.loader.find_concrete_type(value);
+        let ancestor_td = self.loader.find_concrete_type(ancestor);
+
+        let mut seen = HashSet::new();
+        let mut queue = VecDeque::new();
+
+        for (a, _) in self.loader.ancestors(value_td) {
+            queue.push_back(a);
+        }
+
+        let mut result = false;
+        while let Some(current) = queue.pop_front() {
+            if current == ancestor_td {
+                result = true;
+                break;
+            }
+            if !seen.insert(current) {
+                continue;
+            }
+
+            for (_, interface_source) in &current.definition().implements {
+                let handle = match interface_source {
+                    TypeSource::User(h) | TypeSource::Generic { base: h, .. } => *h,
+                };
+                let interface = self.loader.locate_type(current.resolution, handle);
+                queue.push_back(interface);
+            }
+        }
+
+        self.caches.hierarchy_cache.insert(cache_key, result);
+        result
+    }
+
+    pub fn locate_type(&self, resolution: ResolutionS, handle: UserType) -> TypeDescription {
+        self.loader.locate_type(resolution, handle)
+    }
+
+    pub fn locate_method(
+        &self,
+        resolution: ResolutionS,
+        handle: UserMethod,
+        generic_inst: &GenericLookup,
+    ) -> MethodDescription {
+        self.loader.locate_method(resolution, handle, generic_inst)
+    }
+
+    pub fn locate_field(
+        &self,
+        resolution: ResolutionS,
+        field: FieldSource,
+        generics: &GenericLookup,
+    ) -> (FieldDescription, GenericLookup) {
+        self.loader.locate_field(resolution, field, generics)
+    }
+
+    pub fn make_concrete<T: Clone + Into<MethodType>>(
+        &self,
+        resolution: ResolutionS,
+        generics: &GenericLookup,
+        t: &T,
+    ) -> ConcreteType {
+        generics.make_concrete(resolution, t.clone())
+    }
+
+    pub fn is_value_type(&self, td: TypeDescription) -> bool {
+        for (a, _) in self.loader.ancestors(td) {
+            if matches!(a.type_name().as_str(), "System.Enum" | "System.ValueType") {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn has_finalizer(&self, td: TypeDescription) -> bool {
+        let check_type = |td: TypeDescription| {
+            let def = td.definition();
+            let ns = def.namespace.as_deref().unwrap_or("");
+            let name = &def.name;
+
+            if ns == "System" && (name == "Object" || name == "ValueType" || name == "Enum") {
+                return false;
+            }
+
+            def.methods.iter().any(|m| {
+                m.name == "Finalize" && m.virtual_member && m.signature.parameters.is_empty()
+            })
+        };
+
+        if check_type(td) {
+            return true;
+        }
+
+        for (ancestor, _) in self.loader.ancestors(td) {
+            if check_type(ancestor) {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn get_field_type(
+        &self,
+        resolution: ResolutionS,
+        generics: &GenericLookup,
+        field: FieldDescription,
+    ) -> ConcreteType {
+        let return_type = &field.field.return_type;
+        if field.field.by_ref {
+            let by_ref_t: MemberType = BaseType::pointer(return_type.clone()).into();
+            self.make_concrete(resolution, generics, &by_ref_t)
+        } else {
+            self.make_concrete(resolution, generics, return_type)
+        }
+    }
+
+    pub fn get_field_desc(
+        &self,
+        resolution: ResolutionS,
+        generics: &GenericLookup,
+        field: FieldDescription,
+    ) -> TypeDescription {
+        self.loader
+            .find_concrete_type(self.get_field_type(resolution, generics, field))
+    }
+
+    pub fn get_heap_description<'gc>(&self, object: ObjectHandle<'gc>) -> TypeDescription {
+        use dotnet_value::object::HeapStorage::*;
+        match &object.as_ref().borrow().storage {
+            Obj(o) => o.description,
+            Vec(_) => self.loader.corlib_type("System.Array"),
+            Str(_) => self.loader.corlib_type("System.String"),
+            Boxed(v) => self.value_type_description(v),
+        }
+    }
+
+    pub fn value_type_description<'gc>(&self, vt: &ValueType<'gc>) -> TypeDescription {
+        let asms = self.loader();
+        match vt {
+            ValueType::Bool(_) => asms.corlib_type("System.Boolean"),
+            ValueType::Char(_) => asms.corlib_type("System.Char"),
+            ValueType::Int8(_) => asms.corlib_type("System.SByte"),
+            ValueType::UInt8(_) => asms.corlib_type("System.Byte"),
+            ValueType::Int16(_) => asms.corlib_type("System.Int16"),
+            ValueType::UInt16(_) => asms.corlib_type("System.UInt16"),
+            ValueType::Int32(_) => asms.corlib_type("System.Int32"),
+            ValueType::UInt32(_) => asms.corlib_type("System.UInt32"),
+            ValueType::Int64(_) => asms.corlib_type("System.Int64"),
+            ValueType::UInt64(_) => asms.corlib_type("System.UInt64"),
+            ValueType::NativeInt(_) => asms.corlib_type("System.IntPtr"),
+            ValueType::NativeUInt(_) => asms.corlib_type("System.UIntPtr"),
+            ValueType::Pointer(_) => asms.corlib_type("System.IntPtr"),
+            ValueType::Float32(_) => asms.corlib_type("System.Single"),
+            ValueType::Float64(_) => asms.corlib_type("System.Double"),
+            ValueType::TypedRef => asms.corlib_type("System.TypedReference"),
+            ValueType::Struct(s) => s.description,
+        }
+    }
+
+    pub fn stack_value_type<'gc>(&self, val: &StackValue<'gc>) -> TypeDescription {
+        use dotnet_value::object::ObjectRef;
+        match val {
+            StackValue::Int32(_) => self.loader.corlib_type("System.Int32"),
+            StackValue::Int64(_) => self.loader.corlib_type("System.Int64"),
+            StackValue::NativeInt(_) | StackValue::UnmanagedPtr(_) => {
+                self.loader.corlib_type("System.IntPtr")
+            }
+            StackValue::NativeFloat(_) => self.loader.corlib_type("System.Double"),
+            StackValue::ObjectRef(ObjectRef(Some(o))) => self.get_heap_description(*o),
+            StackValue::ObjectRef(ObjectRef(None)) => self.loader.corlib_type("System.Object"),
+            StackValue::ManagedPtr(m) => m.inner_type,
+            StackValue::ValueType(o) => o.description,
+            #[cfg(feature = "multithreaded-gc")]
+            StackValue::CrossArenaObjectRef(_, _) => {
+                todo!("handle CrossArenaObjectRef in contains_type")
+            }
+        }
+    }
+
+    pub fn new_object<'gc>(
+        &self,
+        td: TypeDescription,
+        ctx: &ResolutionContext<'_, 'm>,
+    ) -> Object<'gc> {
+        Object::new(td, self.new_instance_fields(td, ctx))
+    }
+
+    pub fn new_instance_fields(
+        &self,
+        td: TypeDescription,
+        ctx: &ResolutionContext<'_, 'm>,
+    ) -> FieldStorage {
+        let layout =
+            crate::layout::LayoutFactory::instance_field_layout_cached(td, ctx, self.metrics());
+        let size = layout.size();
+        FieldStorage::new(layout, vec![0; size])
+    }
+
+    pub fn new_static_fields(
+        &self,
+        td: TypeDescription,
+        ctx: &ResolutionContext<'_, 'm>,
+    ) -> FieldStorage {
+        let layout = Arc::new(crate::layout::LayoutFactory::static_fields_with_metrics(
+            td,
+            ctx,
+            self.metrics(),
+        ));
+        let size = layout.size();
+        FieldStorage::new(layout, vec![0; size])
+    }
+
+    pub fn new_value_type<'gc>(
+        &self,
+        t: &ConcreteType,
+        data: StackValue<'gc>,
+        ctx: &ResolutionContext<'_, 'm>,
+    ) -> ValueType<'gc> {
+        match self.new_cts_value(t, data, ctx) {
+            CTSValue::Value(v) => v,
+            CTSValue::Ref(r) => {
+                panic!(
+                    "tried to instantiate value type, received object reference ({:?})",
+                    r
+                )
+            }
+        }
+    }
+
+    pub fn new_cts_value<'gc>(
+        &self,
+        t: &ConcreteType,
+        data: StackValue<'gc>,
+        ctx: &ResolutionContext<'_, 'm>,
+    ) -> CTSValue<'gc> {
+        use ValueType::*;
+        let t = self.normalize_type(t.clone());
+        match t.get() {
+            BaseType::Boolean => CTSValue::Value(Bool(convert_num::<u8>(data) != 0)),
+            BaseType::Char => CTSValue::Value(Char(convert_num(data))),
+            BaseType::Int8 => CTSValue::Value(Int8(convert_num(data))),
+            BaseType::UInt8 => CTSValue::Value(UInt8(convert_num(data))),
+            BaseType::Int16 => CTSValue::Value(Int16(convert_num(data))),
+            BaseType::UInt16 => CTSValue::Value(UInt16(convert_num(data))),
+            BaseType::Int32 => CTSValue::Value(Int32(convert_num(data))),
+            BaseType::UInt32 => CTSValue::Value(UInt32(convert_num(data))),
+            BaseType::Int64 => CTSValue::Value(Int64(convert_i64(data))),
+            BaseType::UInt64 => CTSValue::Value(UInt64(reinterpret_i64_as_u64(data))),
+            BaseType::Float32 => CTSValue::Value(Float32(match data {
+                StackValue::NativeFloat(f) => f as f32,
+                other => panic!("invalid stack value {:?} for float conversion", other),
+            })),
+            BaseType::Float64 => CTSValue::Value(Float64(match data {
+                StackValue::NativeFloat(f) => f,
+                other => panic!("invalid stack value {:?} for float conversion", other),
+            })),
+            BaseType::IntPtr => CTSValue::Value(NativeInt(convert_num(data))),
+            BaseType::UIntPtr | BaseType::FunctionPointer(_) => {
+                CTSValue::Value(NativeUInt(convert_num(data)))
+            }
+            BaseType::ValuePointer(_modifiers, inner) => match data {
+                StackValue::ManagedPtr(p) => CTSValue::Value(Pointer(p)),
+                _ => {
+                    let ptr = convert_num::<usize>(data);
+                    let inner_type = if let Some(source) = inner {
+                        self.loader.find_concrete_type(source.clone())
+                    } else {
+                        self.loader.corlib_type("System.Void")
+                    };
+                    CTSValue::Value(Pointer(ManagedPtr::new(
+                        NonNull::new(ptr as *mut u8),
+                        inner_type,
+                        None,
+                        false,
+                    )))
+                }
+            },
+            BaseType::Object
+            | BaseType::String
+            | BaseType::Vector(_, _)
+            | BaseType::Array(_, _) => {
+                if let StackValue::ObjectRef(o) = data {
+                    CTSValue::Ref(o)
+                } else {
+                    panic!("expected ObjectRef, got {:?}", data)
+                }
+            }
+            BaseType::Type {
+                value_kind: Some(ValueKind::Class),
+                ..
+            } => {
+                if let StackValue::ObjectRef(o) = data {
+                    CTSValue::Ref(o)
+                } else {
+                    panic!("expected ObjectRef, got {:?}", data)
+                }
+            }
+            BaseType::Type {
+                value_kind: None | Some(ValueKind::ValueType),
+                source,
+            } => {
+                let (ut, type_generics) = decompose_type_source(source);
+                let new_lookup = GenericLookup::new(type_generics);
+                let new_ctx = ctx.with_generics(&new_lookup);
+                let td = new_ctx.locate_type(ut);
+
+                if let Some(e) = td.is_enum() {
+                    let enum_type = new_ctx.make_concrete(e);
+                    return self.new_cts_value(&enum_type, data, &new_ctx);
+                }
+
+                if td.type_name() == "System.TypedReference" {
+                    return CTSValue::Value(TypedRef);
+                }
+
+                if let StackValue::ValueType(mut o) = data {
+                    if o.description != td {
+                        o.description = td;
+                    }
+                    CTSValue::Value(Struct(o))
+                } else {
+                    let mut instance = self.new_object(td, &new_ctx);
+                    if let StackValue::ObjectRef(o) = data {
+                        if let Some(handle) = o.0 {
+                            let borrowed = handle.borrow();
+                            match &borrowed.storage {
+                                dotnet_value::object::HeapStorage::Obj(obj) => {
+                                    instance.instance_storage = obj.instance_storage.clone();
+                                }
+                                _ => panic!("cannot unbox from non-object storage"),
+                            }
+                        }
+                    }
+                    CTSValue::Value(Struct(instance))
+                }
+            }
+        }
+    }
+
+    pub fn read_cts_value<'gc>(
+        &self,
+        t: &ConcreteType,
+        data: &[u8],
+        gc: GCHandle<'gc>,
+        ctx: &ResolutionContext<'_, 'm>,
+    ) -> CTSValue<'gc> {
+        use ValueType::*;
+        let t = self.normalize_type(t.clone());
+        match t.get() {
+            BaseType::Boolean => CTSValue::Value(Bool(data[0] != 0)),
+            BaseType::Char => CTSValue::Value(Char(u16::from_ne_bytes(data.try_into().unwrap()))),
+            BaseType::Int8 => CTSValue::Value(Int8(data[0] as i8)),
+            BaseType::UInt8 => CTSValue::Value(UInt8(data[0])),
+            BaseType::Int16 => CTSValue::Value(Int16(i16::from_ne_bytes(data.try_into().unwrap()))),
+            BaseType::UInt16 => {
+                CTSValue::Value(UInt16(u16::from_ne_bytes(data.try_into().unwrap())))
+            }
+            BaseType::Int32 => CTSValue::Value(Int32(i32::from_ne_bytes(data.try_into().unwrap()))),
+            BaseType::UInt32 => {
+                CTSValue::Value(UInt32(u32::from_ne_bytes(data.try_into().unwrap())))
+            }
+            BaseType::Int64 => CTSValue::Value(Int64(i64::from_ne_bytes(data.try_into().unwrap()))),
+            BaseType::UInt64 => {
+                CTSValue::Value(UInt64(u64::from_ne_bytes(data.try_into().unwrap())))
+            }
+            BaseType::Float32 => {
+                CTSValue::Value(Float32(f32::from_ne_bytes(data.try_into().unwrap())))
+            }
+            BaseType::Float64 => {
+                CTSValue::Value(Float64(f64::from_ne_bytes(data.try_into().unwrap())))
+            }
+            BaseType::IntPtr => {
+                CTSValue::Value(NativeInt(isize::from_ne_bytes(data.try_into().unwrap())))
+            }
+            BaseType::UIntPtr | BaseType::FunctionPointer(_) => {
+                CTSValue::Value(NativeUInt(usize::from_ne_bytes(data.try_into().unwrap())))
+            }
+            BaseType::ValuePointer(_modifiers, inner) => {
+                let inner_type = if let Some(source) = inner {
+                    self.loader.find_concrete_type(source.clone())
+                } else {
+                    self.loader.corlib_type("System.Void")
+                };
+
+                if data.len() >= 16 {
+                    let (ptr, owner, _offset) = unsafe { ManagedPtr::read_from_bytes(data) };
+                    CTSValue::Value(Pointer(ManagedPtr::new(
+                        ptr,
+                        inner_type,
+                        Some(owner),
+                        false,
+                    )))
+                } else {
+                    let mut ptr_bytes = [0u8; 8];
+                    ptr_bytes.copy_from_slice(&data[0..8]);
+                    let ptr = usize::from_ne_bytes(ptr_bytes);
+                    CTSValue::Value(Pointer(ManagedPtr::new(
+                        NonNull::new(ptr as *mut u8),
+                        inner_type,
+                        None,
+                        false,
+                    )))
+                }
+            }
+            BaseType::Object
+            | BaseType::String
+            | BaseType::Vector(_, _)
+            | BaseType::Array(_, _) => {
+                CTSValue::Ref(unsafe { dotnet_value::object::ObjectRef::read_branded(data, gc) })
+            }
+            BaseType::Type {
+                value_kind: Some(ValueKind::Class),
+                ..
+            } => CTSValue::Ref(unsafe { dotnet_value::object::ObjectRef::read_branded(data, gc) }),
+            BaseType::Type {
+                value_kind: None | Some(ValueKind::ValueType),
+                source,
+            } => {
+                let (ut, type_generics) = decompose_type_source(source);
+                let new_lookup = GenericLookup::new(type_generics);
+                let new_ctx = ctx.with_generics(&new_lookup);
+                let td = new_ctx.locate_type(ut);
+
+                if let Some(e) = td.is_enum() {
+                    let enum_type = new_ctx.make_concrete(e);
+                    return self.read_cts_value(&enum_type, data, gc, &new_ctx);
+                }
+
+                if td.type_name() == "System.TypedReference" {
+                    return CTSValue::Value(TypedRef);
+                }
+
+                let instance = self.new_object(td, &new_ctx);
+                instance.instance_storage.get_mut().copy_from_slice(data);
+                CTSValue::Value(Struct(instance))
+            }
+        }
+    }
+
+    pub fn new_vector<'gc>(
+        &self,
+        element: ConcreteType,
+        size: usize,
+        ctx: &ResolutionContext<'_, 'm>,
+    ) -> Vector<'gc> {
+        let layout = crate::layout::LayoutFactory::create_array_layout_with_metrics(
+            element.clone(),
+            size,
+            ctx,
+            self.metrics(),
+        );
+        let total_size = layout.element_layout.size() * size;
+        if total_size > 0x7FFF_FFFF {
+            panic!(
+                "attempted to allocate massive vector of {} bytes (element: {:?}, length: {})",
+                total_size, element, size
+            );
+        }
+
+        Vector::new(element, layout, vec![0; total_size], vec![size])
+    }
+}
+
+fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(data: StackValue<'_>) -> T {
+    match data {
+        StackValue::Int32(i) => i
+            .try_into()
+            .unwrap_or_else(|_| panic!("failed to convert from i32")),
+        StackValue::NativeInt(i) => i
+            .try_into()
+            .unwrap_or_else(|_| panic!("failed to convert from isize")),
+        StackValue::UnmanagedPtr(p) => (p.0.as_ptr() as usize)
+            .try_into()
+            .unwrap_or_else(|_| panic!("failed to convert from pointer")),
+        StackValue::ManagedPtr(p) => (p.pointer().map_or(0, |x| x.as_ptr() as usize))
+            .try_into()
+            .unwrap_or_else(|_| panic!("failed to convert from pointer")),
+        other => panic!(
+            "invalid stack value {:?} for conversion into {}",
+            other,
+            any::type_name::<T>()
+        ),
+    }
+}
+
+fn convert_i64<T: TryFrom<i64>>(data: StackValue<'_>) -> T
+where
+    T::Error: Error,
+{
+    match data {
+        StackValue::Int64(i) => i.try_into().unwrap_or_else(|e| {
+            panic!(
+                "failed to convert from i64 to {} ({})",
+                any::type_name::<T>(),
+                e
+            )
+        }),
+        other => panic!("invalid stack value {:?} for integer conversion", other),
+    }
+}
+
+fn reinterpret_i64_as_u64(data: StackValue<'_>) -> u64 {
+    match data {
+        StackValue::Int64(i) => i as u64,
+        other => panic!("invalid stack value {:?} for u64 reinterpretation", other),
+    }
+}

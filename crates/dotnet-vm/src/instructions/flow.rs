@@ -1,6 +1,7 @@
 use crate::{
-    exceptions::{ExceptionState, HandlerAddress, UnwindTarget},
-    CallStack, StepResult,
+    exceptions::{ExceptionState, HandlerAddress, UnwindState, UnwindTarget},
+    stack::VesContext,
+    StepResult,
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
@@ -9,8 +10,8 @@ use dotnetdll::prelude::*;
 
 #[dotnet_instruction(Branch)]
 pub fn br<'gc, 'm: 'gc>(
+    _ctx: &mut VesContext<'_, 'gc, 'm>,
     _gc: GCHandle<'gc>,
-    _stack: &mut CallStack<'gc, 'm>,
     target: usize,
 ) -> StepResult {
     StepResult::Jump(target)
@@ -18,12 +19,12 @@ pub fn br<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(BranchEqual)]
 pub fn beq<'gc, 'm: 'gc>(
-    _gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
+    ctx: &mut VesContext<'_, 'gc, 'm>,
+    gc: GCHandle<'gc>,
     target: usize,
 ) -> StepResult {
-    let v2 = stack.pop(_gc);
-    let v1 = stack.pop(_gc);
+    let v2 = ctx.pop(gc);
+    let v1 = ctx.pop(gc);
     if v1 == v2 {
         StepResult::Jump(target)
     } else {
@@ -33,13 +34,13 @@ pub fn beq<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(BranchGreaterOrEqual)]
 pub fn bge<'gc, 'm: 'gc>(
-    _gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
+    ctx: &mut VesContext<'_, 'gc, 'm>,
+    gc: GCHandle<'gc>,
     sgn: NumberSign,
     target: usize,
 ) -> StepResult {
-    let v2 = stack.pop(_gc);
-    let v1 = stack.pop(_gc);
+    let v2 = ctx.pop(gc);
+    let v1 = ctx.pop(gc);
     let cond = matches!(
         v1.compare(&v2, sgn),
         Some(std::cmp::Ordering::Greater) | Some(std::cmp::Ordering::Equal)
@@ -53,13 +54,13 @@ pub fn bge<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(BranchGreater)]
 pub fn bgt<'gc, 'm: 'gc>(
-    _gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
+    ctx: &mut VesContext<'_, 'gc, 'm>,
+    gc: GCHandle<'gc>,
     sgn: NumberSign,
     target: usize,
 ) -> StepResult {
-    let v2 = stack.pop(_gc);
-    let v1 = stack.pop(_gc);
+    let v2 = ctx.pop(gc);
+    let v1 = ctx.pop(gc);
     let cond = matches!(v1.compare(&v2, sgn), Some(std::cmp::Ordering::Greater));
     if cond {
         StepResult::Jump(target)
@@ -70,13 +71,13 @@ pub fn bgt<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(BranchLessOrEqual)]
 pub fn ble<'gc, 'm: 'gc>(
-    _gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
+    ctx: &mut VesContext<'_, 'gc, 'm>,
+    gc: GCHandle<'gc>,
     sgn: NumberSign,
     target: usize,
 ) -> StepResult {
-    let v2 = stack.pop(_gc);
-    let v1 = stack.pop(_gc);
+    let v2 = ctx.pop(gc);
+    let v1 = ctx.pop(gc);
     let cond = matches!(
         v1.compare(&v2, sgn),
         Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Equal)
@@ -90,13 +91,13 @@ pub fn ble<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(BranchLess)]
 pub fn blt<'gc, 'm: 'gc>(
-    _gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
+    ctx: &mut VesContext<'_, 'gc, 'm>,
+    gc: GCHandle<'gc>,
     sgn: NumberSign,
     target: usize,
 ) -> StepResult {
-    let v2 = stack.pop(_gc);
-    let v1 = stack.pop(_gc);
+    let v2 = ctx.pop(gc);
+    let v1 = ctx.pop(gc);
     let cond = matches!(v1.compare(&v2, sgn), Some(std::cmp::Ordering::Less));
     if cond {
         StepResult::Jump(target)
@@ -107,12 +108,12 @@ pub fn blt<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(BranchNotEqual)]
 pub fn bne<'gc, 'm: 'gc>(
-    _gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
+    ctx: &mut VesContext<'_, 'gc, 'm>,
+    gc: GCHandle<'gc>,
     target: usize,
 ) -> StepResult {
-    let v2 = stack.pop(_gc);
-    let v1 = stack.pop(_gc);
+    let v2 = ctx.pop(gc);
+    let v1 = ctx.pop(gc);
     if v1 != v2 {
         StepResult::Jump(target)
     } else {
@@ -122,11 +123,11 @@ pub fn bne<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(BranchTruthy)]
 pub fn brtrue<'gc, 'm: 'gc>(
-    _gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
+    ctx: &mut VesContext<'_, 'gc, 'm>,
+    gc: GCHandle<'gc>,
     target: usize,
 ) -> StepResult {
-    let v = stack.pop(_gc);
+    let v = ctx.pop(gc);
     if !is_nullish(v) {
         StepResult::Jump(target)
     } else {
@@ -136,11 +137,11 @@ pub fn brtrue<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(BranchFalsy)]
 pub fn brfalse<'gc, 'm: 'gc>(
-    _gc: GCHandle<'gc>,
-    stack: &mut CallStack<'gc, 'm>,
+    ctx: &mut VesContext<'_, 'gc, 'm>,
+    gc: GCHandle<'gc>,
     target: usize,
 ) -> StepResult {
-    let v = stack.pop(_gc);
+    let v = ctx.pop(gc);
     if is_nullish(v) {
         StepResult::Jump(target)
     } else {
@@ -149,26 +150,23 @@ pub fn brfalse<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(Return)]
-pub fn ret<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> StepResult {
-    let frame_index = stack.execution.frames.len() - 1;
-    if let ExceptionState::ExecutingHandler {
-        exception, cursor, ..
-    } = stack.execution.exception_mode
-    {
-        if cursor.frame_index == frame_index {
-            stack.execution.exception_mode = ExceptionState::Unwinding {
-                exception,
+pub fn ret<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+    let frame_index = ctx.frame_stack.len() - 1;
+    if let ExceptionState::ExecutingHandler(state) = *ctx.exception_mode {
+        if state.cursor.frame_index == frame_index {
+            *ctx.exception_mode = ExceptionState::Unwinding(UnwindState {
+                exception: state.exception,
                 target: UnwindTarget::Instruction(usize::MAX),
-                cursor,
-            };
-            return stack.handle_exception(gc);
+                cursor: state.cursor,
+            });
+            return ctx.handle_exception(gc);
         }
     }
 
-    let has_finally_blocks = !stack.state().info_handle.exceptions.is_empty();
+    let has_finally_blocks = !ctx.state().info_handle.exceptions.is_empty();
 
     if has_finally_blocks {
-        stack.execution.exception_mode = ExceptionState::Unwinding {
+        *ctx.exception_mode = ExceptionState::Unwinding(UnwindState {
             exception: None,
             target: UnwindTarget::Instruction(usize::MAX),
             cursor: HandlerAddress {
@@ -176,8 +174,8 @@ pub fn ret<'gc, 'm: 'gc>(gc: GCHandle<'gc>, stack: &mut CallStack<'gc, 'm>) -> S
                 section_index: 0,
                 handler_index: 0,
             },
-        };
-        return stack.handle_exception(gc);
+        });
+        return ctx.handle_exception(gc);
     }
 
     StepResult::Return
