@@ -1,6 +1,6 @@
 use crate::{
-    intrinsics::reflection::ReflectionExtensions, resolution::ValueResolution, stack::VesContext,
-    StepResult,
+    StepResult, intrinsics::reflection::ReflectionExtensions, resolution::ValueResolution,
+    stack::VesContext,
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;

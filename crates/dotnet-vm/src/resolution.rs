@@ -1,10 +1,10 @@
 use crate::context::ResolutionContext;
-use dotnet_types::{generics::ConcreteType, TypeDescription};
+use dotnet_types::{TypeDescription, generics::ConcreteType};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
+    StackValue,
     object::{CTSValue, Object, ValueType, Vector},
     storage::FieldStorage,
-    StackValue,
 };
 
 pub trait TypeResolutionExt {

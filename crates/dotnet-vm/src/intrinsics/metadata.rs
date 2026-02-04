@@ -22,7 +22,7 @@
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::members::MethodDescription;
 
-use super::{IntrinsicHandler, IntrinsicRegistry, INTRINSIC_ATTR};
+use super::{INTRINSIC_ATTR, IntrinsicHandler, IntrinsicRegistry};
 
 /// Classification of intrinsic methods based on their dispatch behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,22 +128,22 @@ pub fn classify_intrinsic(
     registry: Option<&IntrinsicRegistry>,
 ) -> ClassificationResult {
     // 1. Check registry first if available (most efficient and now source of truth)
-    if let Some(registry) = registry {
-        if let Some(metadata) = registry.get_metadata(&method) {
-            return Some(metadata);
-        }
+    if let Some(registry) = registry
+        && let Some(metadata) = registry.get_metadata(&method)
+    {
+        return Some(metadata);
     }
 
     // 2. Check internal_call flag - fall back to generic static if registry didn't have it
     if method.method.internal_call {
         // We still check registry.get(&method) in case it's registered without full metadata
-        if let Some(registry) = registry {
-            if let Some(handler) = registry.get(&method) {
-                return Some(IntrinsicMetadata::static_intrinsic(
-                    handler,
-                    "Marked as internal_call in metadata",
-                ));
-            }
+        if let Some(registry) = registry
+            && let Some(handler) = registry.get(&method)
+        {
+            return Some(IntrinsicMetadata::static_intrinsic(
+                handler,
+                "Marked as internal_call in metadata",
+            ));
         }
         return None;
     }
@@ -152,14 +152,14 @@ pub fn classify_intrinsic(
     for a in &method.method.attributes {
         let ctor = loader.locate_attribute(method.resolution(), a);
         if ctor.parent.type_name() == INTRINSIC_ATTR {
-            if let Some(registry) = registry {
-                if let Some(handler) = registry.get(&method) {
-                    // For attributed intrinsics without full metadata, default to DirectIntercept
-                    return Some(IntrinsicMetadata::direct_intercept(
-                        handler,
-                        "Marked with IntrinsicAttribute",
-                    ));
-                }
+            if let Some(registry) = registry
+                && let Some(handler) = registry.get(&method)
+            {
+                // For attributed intrinsics without full metadata, default to DirectIntercept
+                return Some(IntrinsicMetadata::direct_intercept(
+                    handler,
+                    "Marked with IntrinsicAttribute",
+                ));
             }
             return None;
         }

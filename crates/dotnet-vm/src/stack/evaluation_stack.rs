@@ -1,9 +1,9 @@
 use dotnet_types::TypeDescription;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
+    StackValue,
     object::{Object as ObjectInstance, ObjectRef},
     pointer::ManagedPtr,
-    StackValue,
 };
 use gc_arena::Collect;
 use std::ptr::NonNull;

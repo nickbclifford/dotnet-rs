@@ -1,4 +1,4 @@
-use crate::{stack::VesContext, StepResult};
+use crate::{StepResult, stack::VesContext};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
@@ -17,7 +17,9 @@ pub fn intrinsic_is_event_source_logging_enabled<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_intrinsic("static ulong System.Diagnostics.Tracing.EventPipeInternal::CreateProvider(string, IntPtr, IntPtr)")]
+#[dotnet_intrinsic(
+    "static ulong System.Diagnostics.Tracing.EventPipeInternal::CreateProvider(string, IntPtr, IntPtr)"
+)]
 pub fn intrinsic_eventpipe_create_provider<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,

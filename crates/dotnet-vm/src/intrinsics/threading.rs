@@ -1,12 +1,12 @@
 use crate::{
+    StepResult,
     stack::VesContext,
     sync::{Arc, AtomicI32, Ordering, SyncBlockOps, SyncManagerOps},
-    StepResult,
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
-use dotnet_value::{object::ObjectRef, StackValue};
+use dotnet_value::{StackValue, object::ObjectRef};
 use dotnetdll::prelude::{BaseType, MethodType, Parameter, ParameterType};
 use gc_arena::Gc;
 use std::{ptr, sync::atomic, thread};

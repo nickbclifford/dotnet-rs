@@ -10,13 +10,13 @@ use dotnet_types::{
 };
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
+    StackValue,
     layout::{FieldLayoutManager, LayoutManager, Scalar},
     object::{HeapStorage, ObjectRef},
     string::CLRString,
-    StackValue,
 };
 use dotnetdll::prelude::*;
-use gc_arena::{unsafe_empty_collect, Collect};
+use gc_arena::{Collect, unsafe_empty_collect};
 use libffi::middle::*;
 use libloading::{Library, Symbol};
 use std::{ffi::c_void, path::PathBuf};
@@ -386,11 +386,11 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
 
         for (i, v) in stack_values.iter().enumerate() {
             let arg = match v {
-                StackValue::Int32(ref i) => Arg::new(i),
-                StackValue::Int64(ref i) => Arg::new(i),
-                StackValue::NativeInt(ref i) => Arg::new(i),
-                StackValue::NativeFloat(ref f) => Arg::new(f),
-                StackValue::UnmanagedPtr(ref p) => Arg::new(&p.0),
+                StackValue::Int32(i) => Arg::new(i),
+                StackValue::Int64(i) => Arg::new(i),
+                StackValue::NativeInt(i) => Arg::new(i),
+                StackValue::NativeFloat(f) => Arg::new(f),
+                StackValue::UnmanagedPtr(p) => Arg::new(&p.0),
                 StackValue::ManagedPtr(_) => {
                     if let Some(idx) = arg_buffer_map[i] {
                         Arg::new(&temp_buffers[idx][0])
@@ -450,9 +450,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                 }
 
                 macro_rules! read_into_i32 {
-                    ($t:ty) => {{
-                        StackValue::Int32(read_return!($t) as i32)
-                    }};
+                    ($t:ty) => {{ StackValue::Int32(read_return!($t) as i32) }};
                 }
 
                 let t = ctx.make_concrete(t);
@@ -506,7 +504,13 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
 
                         // Check for buffer overflow risk
                         if ffi_size > allocated_size {
-                            vm_trace_interop!(self, "WARNING", "Buffer overflow detected! FFI expects {} bytes, but object has {} bytes. Using temp buffer.", ffi_size, allocated_size);
+                            vm_trace_interop!(
+                                self,
+                                "WARNING",
+                                "Buffer overflow detected! FFI expects {} bytes, but object has {} bytes. Using temp buffer.",
+                                ffi_size,
+                                allocated_size
+                            );
                             let mut temp_buffer = vec![0u8; ffi_size];
                             unsafe {
                                 libffi::raw::ffi_call(

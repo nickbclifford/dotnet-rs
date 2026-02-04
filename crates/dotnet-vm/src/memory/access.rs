@@ -1,10 +1,10 @@
 use dotnet_types::TypeDescription;
 use dotnet_value::{
+    StackValue,
     layout::{HasLayout, LayoutManager, Scalar},
     object::{HeapStorage, Object as ObjectInstance, ObjectRef, ValueType},
     pointer::ManagedPtr,
     storage::FieldStorage,
-    StackValue,
 };
 use std::{ptr, sync::Arc};
 
@@ -193,80 +193,80 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         value: StackValue<'gc>,
         layout: &LayoutManager,
     ) -> Result<(), String> {
-        if ptr.is_null() {
-            return Err("RawMemoryAccess::perform_write called with null pointer!".to_string());
-        }
+        unsafe {
+            if ptr.is_null() {
+                return Err("RawMemoryAccess::perform_write called with null pointer!".to_string());
+            }
 
-        match layout {
-            LayoutManager::Scalar(s) => match s {
-                Scalar::Int8 => {
-                    let v = extract_int(value)? as i8;
-                    ptr::write_unaligned(ptr as *mut i8, v);
-                }
-                Scalar::UInt8 => {
-                    let v = extract_int(value)? as u8;
-                    ptr::write_unaligned(ptr, v);
-                }
-                Scalar::Int16 => {
-                    let v = extract_int(value)? as i16;
-                    ptr::write_unaligned(ptr as *mut i16, v);
-                }
-                Scalar::UInt16 => {
-                    let v = extract_int(value)? as u16;
-                    ptr::write_unaligned(ptr as *mut u16, v);
-                }
-                Scalar::Int32 => {
-                    let v = extract_int(value)?;
-                    ptr::write_unaligned(ptr as *mut i32, v);
-                }
-                Scalar::Int64 => {
-                    let v = extract_long(value)?;
-                    ptr::write_unaligned(ptr as *mut i64, v);
-                }
-                Scalar::NativeInt => {
-                    let v = extract_native_int(value)?;
-                    ptr::write_unaligned(ptr as *mut isize, v);
-                }
-                Scalar::Float32 => {
-                    let v = extract_float(value)? as f32;
-                    ptr::write_unaligned(ptr as *mut f32, v);
-                }
-                Scalar::Float64 => {
-                    let v = extract_float(value)?;
-                    ptr::write_unaligned(ptr as *mut f64, v);
-                }
-                Scalar::ManagedPtr => {
-                    if let StackValue::ManagedPtr(m) = value {
-                        if ptr.is_null() {
-                            panic!("perform_write: ptr is null!");
+            match layout {
+                LayoutManager::Scalar(s) => match s {
+                    Scalar::Int8 => {
+                        let v = extract_int(value)? as i8;
+                        ptr::write_unaligned(ptr as *mut i8, v);
+                    }
+                    Scalar::UInt8 => {
+                        let v = extract_int(value)? as u8;
+                        ptr::write_unaligned(ptr, v);
+                    }
+                    Scalar::Int16 => {
+                        let v = extract_int(value)? as i16;
+                        ptr::write_unaligned(ptr as *mut i16, v);
+                    }
+                    Scalar::UInt16 => {
+                        let v = extract_int(value)? as u16;
+                        ptr::write_unaligned(ptr as *mut u16, v);
+                    }
+                    Scalar::Int32 => {
+                        let v = extract_int(value)?;
+                        ptr::write_unaligned(ptr as *mut i32, v);
+                    }
+                    Scalar::Int64 => {
+                        let v = extract_long(value)?;
+                        ptr::write_unaligned(ptr as *mut i64, v);
+                    }
+                    Scalar::NativeInt => {
+                        let v = extract_native_int(value)?;
+                        ptr::write_unaligned(ptr as *mut isize, v);
+                    }
+                    Scalar::Float32 => {
+                        let v = extract_float(value)? as f32;
+                        ptr::write_unaligned(ptr as *mut f32, v);
+                    }
+                    Scalar::Float64 => {
+                        let v = extract_float(value)?;
+                        ptr::write_unaligned(ptr as *mut f64, v);
+                    }
+                    Scalar::ManagedPtr => {
+                        if let StackValue::ManagedPtr(m) = value {
+                            if ptr.is_null() {
+                                panic!("perform_write: ptr is null!");
+                            }
+                            m.write(std::slice::from_raw_parts_mut(ptr, ManagedPtr::MEMORY_SIZE));
+                        } else {
+                            return Err("Expected ManagedPtr".into());
                         }
-                        m.write(std::slice::from_raw_parts_mut(ptr, ManagedPtr::MEMORY_SIZE));
+                    }
+                    Scalar::ObjectRef => {
+                        if let StackValue::ObjectRef(r) = value {
+                            let val_ptr = r.0.map(gc_arena::Gc::as_ptr).unwrap_or(ptr::null());
+                            ptr::write_unaligned(ptr as *mut *const (), val_ptr as *const ());
+                        } else {
+                            return Err("Expected ObjectRef".into());
+                        }
+                    }
+                },
+                LayoutManager::Field(flm) => {
+                    if let StackValue::ValueType(src_obj) = value {
+                        let src_ptr = src_obj.instance_storage.get().as_ptr();
+                        ptr::copy_nonoverlapping(src_ptr, ptr, flm.size());
                     } else {
-                        return Err("Expected ManagedPtr".into());
+                        return Err("Expected ValueType for Struct write".into());
                     }
                 }
-                Scalar::ObjectRef => {
-                    if let StackValue::ObjectRef(r) = value {
-                        let val_ptr = r.0.map(gc_arena::Gc::as_ptr).unwrap_or(ptr::null());
-                        ptr::write_unaligned(ptr as *mut *const (), val_ptr as *const ());
-                    } else {
-                        return Err("Expected ObjectRef".into());
-                    }
-                }
-            },
-            LayoutManager::Field(flm) => {
-                if let StackValue::ValueType(src_obj) = value {
-                    let src_ptr = src_obj.instance_storage.get().as_ptr();
-                    ptr::copy_nonoverlapping(src_ptr, ptr, flm.size());
-                } else {
-                    return Err("Expected ValueType for Struct write".into());
-                }
+                LayoutManager::Array(_) => return Err("Cannot write entire array unaligned".into()),
             }
-            LayoutManager::Array(_) => {
-                return Err("Cannot write entire array unaligned".into())
-            }
+            Ok(())
         }
-        Ok(())
     }
 
     unsafe fn perform_read(
@@ -276,64 +276,72 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         layout: &LayoutManager,
         type_desc: Option<TypeDescription>,
     ) -> Result<StackValue<'gc>, String> {
-        if ptr.is_null() {
-            return Err("RawMemoryAccess::perform_read called with null pointer!".to_string());
-        }
-
-        Ok(match layout {
-            LayoutManager::Scalar(s) => match s {
-                Scalar::Int8 => StackValue::Int32(ptr::read_unaligned(ptr as *const i8) as i32),
-                Scalar::UInt8 => StackValue::Int32(ptr::read_unaligned(ptr) as i32),
-                Scalar::Int16 => StackValue::Int32(ptr::read_unaligned(ptr as *const i16) as i32),
-                Scalar::UInt16 => StackValue::Int32(ptr::read_unaligned(ptr as *const u16) as i32),
-                Scalar::Int32 => StackValue::Int32(ptr::read_unaligned(ptr as *const i32)),
-                Scalar::Int64 => StackValue::Int64(ptr::read_unaligned(ptr as *const i64)),
-                Scalar::NativeInt => {
-                    StackValue::NativeInt(ptr::read_unaligned(ptr as *const isize))
-                }
-                Scalar::Float32 => {
-                    StackValue::NativeFloat(ptr::read_unaligned(ptr as *const f32) as f64)
-                }
-                Scalar::Float64 => StackValue::NativeFloat(ptr::read_unaligned(ptr as *const f64)),
-                Scalar::ObjectRef => {
-                    let mut buf = [0u8; 8];
-                    ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), 8);
-                    StackValue::ObjectRef(ObjectRef::read_unchecked(&buf))
-                }
-                Scalar::ManagedPtr => {
-                    let (ptr_val, owner_ref, _offset) = ManagedPtr::read_from_bytes(
-                        std::slice::from_raw_parts(ptr, ManagedPtr::MEMORY_SIZE),
-                    );
-
-                    let void_desc = TypeDescription::from_raw(
-                        dotnet_types::resolution::ResolutionS::new(ptr::null()),
-                        None,
-                    );
-
-                    StackValue::ManagedPtr(ManagedPtr::new(
-                        ptr_val,
-                        void_desc,
-                        Some(owner_ref),
-                        false,
-                    ))
-                }
-            },
-            LayoutManager::Field(flm) => {
-                if let Some(desc) = type_desc {
-                    let size = flm.size();
-                    let mut data = vec![0u8; size];
-                    ptr::copy_nonoverlapping(ptr, data.as_mut_ptr(), size);
-
-                    let storage = FieldStorage::new(Arc::new(flm.clone()), data);
-                    let obj = ObjectInstance::new(desc, storage);
-
-                    StackValue::ValueType(obj)
-                } else {
-                    return Err("Struct read requires TypeDescription, which is not passed to read_unaligned".into());
-                }
+        unsafe {
+            if ptr.is_null() {
+                return Err("RawMemoryAccess::perform_read called with null pointer!".to_string());
             }
-            _ => return Err("Array read not supported".to_string()),
-        })
+
+            Ok(match layout {
+                LayoutManager::Scalar(s) => match s {
+                    Scalar::Int8 => StackValue::Int32(ptr::read_unaligned(ptr as *const i8) as i32),
+                    Scalar::UInt8 => StackValue::Int32(ptr::read_unaligned(ptr) as i32),
+                    Scalar::Int16 => {
+                        StackValue::Int32(ptr::read_unaligned(ptr as *const i16) as i32)
+                    }
+                    Scalar::UInt16 => {
+                        StackValue::Int32(ptr::read_unaligned(ptr as *const u16) as i32)
+                    }
+                    Scalar::Int32 => StackValue::Int32(ptr::read_unaligned(ptr as *const i32)),
+                    Scalar::Int64 => StackValue::Int64(ptr::read_unaligned(ptr as *const i64)),
+                    Scalar::NativeInt => {
+                        StackValue::NativeInt(ptr::read_unaligned(ptr as *const isize))
+                    }
+                    Scalar::Float32 => {
+                        StackValue::NativeFloat(ptr::read_unaligned(ptr as *const f32) as f64)
+                    }
+                    Scalar::Float64 => {
+                        StackValue::NativeFloat(ptr::read_unaligned(ptr as *const f64))
+                    }
+                    Scalar::ObjectRef => {
+                        let mut buf = [0u8; 8];
+                        ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), 8);
+                        StackValue::ObjectRef(ObjectRef::read_unchecked(&buf))
+                    }
+                    Scalar::ManagedPtr => {
+                        let (ptr_val, owner_ref, _offset) = ManagedPtr::read_from_bytes(
+                            std::slice::from_raw_parts(ptr, ManagedPtr::MEMORY_SIZE),
+                        );
+
+                        let void_desc = TypeDescription::from_raw(
+                            dotnet_types::resolution::ResolutionS::new(ptr::null()),
+                            None,
+                        );
+
+                        StackValue::ManagedPtr(ManagedPtr::new(
+                            ptr_val,
+                            void_desc,
+                            Some(owner_ref),
+                            false,
+                        ))
+                    }
+                },
+                LayoutManager::Field(flm) => {
+                    if let Some(desc) = type_desc {
+                        let size = flm.size();
+                        let mut data = vec![0u8; size];
+                        ptr::copy_nonoverlapping(ptr, data.as_mut_ptr(), size);
+
+                        let storage = FieldStorage::new(Arc::new(flm.clone()), data);
+                        let obj = ObjectInstance::new(desc, storage);
+
+                        StackValue::ValueType(obj)
+                    } else {
+                        return Err("Struct read requires TypeDescription, which is not passed to read_unaligned".into());
+                    }
+                }
+                _ => return Err("Array read not supported".to_string()),
+            })
+        }
     }
 }
 

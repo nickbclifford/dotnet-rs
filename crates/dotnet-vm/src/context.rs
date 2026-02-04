@@ -1,10 +1,10 @@
-use crate::{resolver::ResolverService, state::GlobalCaches, sync::Arc, MethodType};
+use crate::{MethodType, resolver::ResolverService, state::GlobalCaches, sync::Arc};
 use dotnet_assemblies::{Ancestor, AssemblyLoader};
 use dotnet_types::{
+    TypeDescription,
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     resolution::ResolutionS,
-    TypeDescription,
 };
 use dotnet_value::object::ObjectHandle;
 use dotnetdll::prelude::{FieldSource, UserMethod, UserType};

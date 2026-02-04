@@ -1,13 +1,13 @@
 use dashmap::DashMap;
 use dotnet_types::{
+    TypeDescription, TypeResolver,
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     resolution::ResolutionS,
-    TypeDescription, TypeResolver,
 };
 use dotnet_utils::sync::{AtomicU64, Ordering, RwLock};
 use dotnetdll::prelude::*;
-use gc_arena::{unsafe_empty_collect, Collect};
+use gc_arena::{Collect, unsafe_empty_collect};
 use std::{
     collections::HashMap,
     error::Error,
@@ -319,10 +319,11 @@ impl AssemblyLoader {
                 let owner = td.definition();
 
                 for t in &res.definition().type_definitions {
-                    if let Some(enc) = t.encloser {
-                        if t.type_name() == type_ref.type_name() && ptr::eq(&res[enc], owner) {
-                            return TypeDescription::new(res, t);
-                        }
+                    if let Some(enc) = t.encloser
+                        && t.type_name() == type_ref.type_name()
+                        && ptr::eq(&res[enc], owner)
+                    {
+                        return TypeDescription::new(res, t);
                     }
                 }
 
@@ -728,20 +729,20 @@ impl AssemblyLoader {
                 match &method_ref.parent {
                     Type(t) => {
                         let concrete = generic_inst.make_concrete(resolution, t.clone());
-                        if method_ref.name == ".ctor" {
-                            if let BaseType::Array(_, _) = concrete.get() {
-                                let array_type = self.corlib_type("DotnetRs.Array");
-                                for method in &array_type.definition().methods {
-                                    if method.name == "CtorArraySentinel" {
-                                        return MethodDescription {
-                                            parent: array_type,
-                                            method_resolution: array_type.resolution,
-                                            method,
-                                        };
-                                    }
+                        if method_ref.name == ".ctor"
+                            && let BaseType::Array(_, _) = concrete.get()
+                        {
+                            let array_type = self.corlib_type("DotnetRs.Array");
+                            for method in &array_type.definition().methods {
+                                if method.name == "CtorArraySentinel" {
+                                    return MethodDescription {
+                                        parent: array_type,
+                                        method_resolution: array_type.resolution,
+                                        method,
+                                    };
                                 }
-                                panic!("CtorArraySentinel not found in DotnetRs.Array");
                             }
+                            panic!("CtorArraySentinel not found in DotnetRs.Array");
                         }
 
                         let parent_type = self.find_concrete_type(concrete);

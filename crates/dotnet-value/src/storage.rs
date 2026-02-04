@@ -121,15 +121,17 @@ impl FieldStorage {
         let mut dest = self.get_field_mut_local(owner, name);
         dest.copy_from_slice(value);
     }
-    
+
     unsafe fn raw_data_unsynchronized(&self) -> &[u8] {
-        #[cfg(feature = "multithreading")]
-        {
-            &*self.data.data_ptr()
-        }
-        #[cfg(not(feature = "multithreading"))]
-        {
-            &*self.data.as_ptr()
+        unsafe {
+            #[cfg(feature = "multithreading")]
+            {
+                &*self.data.data_ptr()
+            }
+            #[cfg(not(feature = "multithreading"))]
+            {
+                &*self.data.as_ptr()
+            }
         }
     }
 

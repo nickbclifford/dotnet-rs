@@ -1,14 +1,14 @@
 use crate::{
+    StepResult,
     resolution::{TypeResolutionExt, ValueResolution},
     stack::VesContext,
-    StepResult,
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
+    StackValue,
     object::{HeapStorage, ObjectRef},
     pointer::ManagedPtr,
-    StackValue,
 };
 use dotnetdll::prelude::*;
 use std::ptr::NonNull;

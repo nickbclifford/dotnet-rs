@@ -1,12 +1,12 @@
 use crate::{
-    layout::type_layout, resolution::TypeResolutionExt, stack::VesContext, vm_trace, StepResult,
+    StepResult, layout::type_layout, resolution::TypeResolutionExt, stack::VesContext, vm_trace,
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
+    StackValue,
     layout::HasLayout,
     object::{HeapStorage, ObjectRef},
-    StackValue,
 };
 use dotnetdll::prelude::*;
 use std::{mem::align_of, ptr};
@@ -41,13 +41,14 @@ pub fn callvirt<'gc, 'm: 'gc>(
     let this_value = args[0].clone();
     let this_type = match this_value {
         StackValue::ObjectRef(ObjectRef(None)) => {
-            return ctx.throw_by_name(gc, "System.NullReferenceException")
+            return ctx.throw_by_name(gc, "System.NullReferenceException");
         }
-        StackValue::ObjectRef(ObjectRef(Some(o))) => {
-            ctx.current_context().get_heap_description(o)
-        },
+        StackValue::ObjectRef(ObjectRef(Some(o))) => ctx.current_context().get_heap_description(o),
         StackValue::ManagedPtr(m) => m.inner_type,
-        rest => panic!("invalid this argument for virtual call (expected ObjectRef or ManagedPtr, received {:?})", rest)
+        rest => panic!(
+            "invalid this argument for virtual call (expected ObjectRef or ManagedPtr, received {:?})",
+            rest
+        ),
     };
 
     // TODO: check explicit overrides

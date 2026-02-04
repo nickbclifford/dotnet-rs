@@ -1,4 +1,4 @@
-use gc_arena::{unsafe_empty_collect, Collect};
+use gc_arena::{Collect, unsafe_empty_collect};
 use std::{
     fmt::{Debug, Formatter},
     ops::Deref,

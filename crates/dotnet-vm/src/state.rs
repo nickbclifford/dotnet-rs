@@ -4,11 +4,11 @@ use dotnet_utils::sync::AtomicUsize;
 use dashmap::DashMap;
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{
+    TypeDescription,
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     resolution::ResolutionS,
     runtime::RuntimeType,
-    TypeDescription,
 };
 use dotnet_utils::sync::{Arc, AtomicBool, Mutex, Ordering};
 use dotnet_value::{
@@ -24,7 +24,7 @@ use std::{
 pub use super::statics::StaticStorageManager;
 
 use super::{
-    intrinsics::{is_intrinsic, is_intrinsic_field, IntrinsicRegistry},
+    intrinsics::{IntrinsicRegistry, is_intrinsic, is_intrinsic_field},
     memory::HeapManager,
     metrics::{CacheSizes, CacheStats, RuntimeMetrics},
     pinvoke::NativeLibraries,
@@ -148,7 +148,8 @@ impl<'m> SharedGlobalState<'m> {
         }
 
         let tracer_enabled = Arc::new(AtomicBool::new(tracer.is_enabled()));
-        let this = Self {
+
+        Self {
             loader,
             pinvoke: NativeLibraries::new(loader.get_root()),
             sync_blocks: SyncBlockManager::new(),
@@ -179,9 +180,7 @@ impl<'m> SharedGlobalState<'m> {
             shared_runtime_fields_rev: DashMap::new(),
             #[cfg(feature = "multithreaded-gc")]
             next_runtime_field_index: AtomicUsize::new(0),
-        };
-
-        this
+        }
     }
 
     pub fn get_cache_stats(&self) -> CacheStats {

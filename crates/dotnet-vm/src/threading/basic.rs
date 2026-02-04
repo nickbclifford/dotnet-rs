@@ -3,7 +3,7 @@ use crate::{
     threading::{STWGuardOps, ThreadManagerOps, ThreadState},
     tracer::Tracer,
 };
-use dotnet_utils::sync::{Arc, AtomicU64, Mutex, Ordering, MANAGED_THREAD_ID};
+use dotnet_utils::sync::{Arc, AtomicU64, MANAGED_THREAD_ID, Mutex, Ordering};
 use std::{
     cell::Cell,
     collections::HashMap,
@@ -14,7 +14,7 @@ use std::{
 #[cfg(feature = "multithreaded-gc")]
 use crate::gc::{set_currently_tracing, take_found_cross_arena_refs};
 #[cfg(feature = "multithreaded-gc")]
-use dotnet_utils::sync::{get_current_thread_id, AtomicBool, AtomicUsize, Condvar, MutexGuard};
+use dotnet_utils::sync::{AtomicBool, AtomicUsize, Condvar, MutexGuard, get_current_thread_id};
 #[cfg(feature = "multithreaded-gc")]
 use dotnet_value::object::ObjectPtr;
 #[cfg(feature = "multithreaded-gc")]
@@ -237,11 +237,11 @@ impl ThreadManagerOps for ThreadManager {
                 {
                     let mut guard = self.gc_coordination.lock();
                     while self.gc_stop_requested.load(Ordering::Acquire) {
-                        if coordinator.has_command(managed_id) {
-                            if let Some(command) = coordinator.get_command(managed_id) {
-                                self.execute_gc_command(command, coordinator);
-                                coordinator.command_finished(managed_id);
-                            }
+                        if coordinator.has_command(managed_id)
+                            && let Some(command) = coordinator.get_command(managed_id)
+                        {
+                            self.execute_gc_command(command, coordinator);
+                            coordinator.command_finished(managed_id);
                         }
                         self.all_threads_stopped.wait(&mut guard);
                     }
@@ -439,94 +439,94 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
         match command {
             GCCommand::MarkAll => {
                 THREAD_ARENA.with(|cell| {
-                    if let Ok(mut arena_opt) = cell.try_borrow_mut() {
-                        if let Some(arena) = arena_opt.as_mut() {
-                            let thread_id = get_current_thread_id();
-                            set_currently_tracing(Some(thread_id));
+                    if let Ok(mut arena_opt) = cell.try_borrow_mut()
+                        && let Some(arena) = arena_opt.as_mut()
+                    {
+                        let thread_id = get_current_thread_id();
+                        set_currently_tracing(Some(thread_id));
 
-                            arena.mutate(|_, c| {
-                                c.stack.local.heap.cross_arena_roots.borrow_mut().clear();
-                            });
+                        arena.mutate(|_, c| {
+                            c.stack.local.heap.cross_arena_roots.borrow_mut().clear();
+                        });
 
-                            let mut marked = None;
-                            while marked.is_none() {
-                                marked = arena.mark_all();
-                            }
-                            // Do not finalize or sweep yet.
+                        let mut marked = None;
+                        while marked.is_none() {
+                            marked = arena.mark_all();
+                        }
+                        // Do not finalize or sweep yet.
 
-                            set_currently_tracing(None);
+                        set_currently_tracing(None);
 
-                            for (target_id, ptr_usize) in take_found_cross_arena_refs() {
-                                let ptr =
-                                    unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
-                                coordinator.record_cross_arena_ref(target_id, ptr);
-                            }
+                        for (target_id, ptr_usize) in take_found_cross_arena_refs() {
+                            let ptr =
+                                unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
+                            coordinator.record_cross_arena_ref(target_id, ptr);
                         }
                     }
                 });
             }
             GCCommand::MarkObjects(ptrs) => {
                 THREAD_ARENA.with(|cell| {
-                    if let Ok(mut arena_opt) = cell.try_borrow_mut() {
-                        if let Some(arena) = arena_opt.as_mut() {
-                            let thread_id = get_current_thread_id();
-                            set_currently_tracing(Some(thread_id));
+                    if let Ok(mut arena_opt) = cell.try_borrow_mut()
+                        && let Some(arena) = arena_opt.as_mut()
+                    {
+                        let thread_id = get_current_thread_id();
+                        set_currently_tracing(Some(thread_id));
 
-                            arena.mutate(|_, c| {
-                                let mut roots = c.stack.local.heap.cross_arena_roots.borrow_mut();
-                                for ptr_usize in ptrs {
-                                    let ptr = unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }
-                                        .unwrap();
-                                    roots.insert(ptr);
-                                }
-                            });
-
-                            let mut marked = None;
-                            while marked.is_none() {
-                                marked = arena.mark_all();
-                            }
-                            // Do not finalize or sweep yet.
-
-                            set_currently_tracing(None);
-                            for (target_id, ptr_usize) in take_found_cross_arena_refs() {
+                        arena.mutate(|_, c| {
+                            let mut roots = c.stack.local.heap.cross_arena_roots.borrow_mut();
+                            for ptr_usize in ptrs {
                                 let ptr =
                                     unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
-                                coordinator.record_cross_arena_ref(target_id, ptr);
+                                roots.insert(ptr);
                             }
+                        });
+
+                        let mut marked = None;
+                        while marked.is_none() {
+                            marked = arena.mark_all();
+                        }
+                        // Do not finalize or sweep yet.
+
+                        set_currently_tracing(None);
+                        for (target_id, ptr_usize) in take_found_cross_arena_refs() {
+                            let ptr =
+                                unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
+                            coordinator.record_cross_arena_ref(target_id, ptr);
                         }
                     }
                 });
             }
             GCCommand::Finalize => {
                 THREAD_ARENA.with(|cell| {
-                    if let Ok(mut arena_opt) = cell.try_borrow_mut() {
-                        if let Some(arena) = arena_opt.as_mut() {
-                            // Ensure we are in Marked phase
-                            let mut marked = None;
-                            while marked.is_none() {
-                                marked = arena.mark_all();
-                            }
+                    if let Ok(mut arena_opt) = cell.try_borrow_mut()
+                        && let Some(arena) = arena_opt.as_mut()
+                    {
+                        // Ensure we are in Marked phase
+                        let mut marked = None;
+                        while marked.is_none() {
+                            marked = arena.mark_all();
+                        }
 
-                            if let Some(marked) = marked {
-                                marked.finalize(|fc, c| {
-                                    c.stack.local.heap.finalize_check(
-                                        fc,
-                                        &c.stack.shared,
-                                        c.stack.indent(),
-                                    )
-                                });
-                            }
+                        if let Some(marked) = marked {
+                            marked.finalize(|fc, c| {
+                                c.stack.local.heap.finalize_check(
+                                    fc,
+                                    &c.stack.shared,
+                                    c.stack.indent(),
+                                )
+                            });
                         }
                     }
                 });
             }
             GCCommand::Sweep => {
                 THREAD_ARENA.with(|cell| {
-                    if let Ok(mut arena_opt) = cell.try_borrow_mut() {
-                        if let Some(arena) = arena_opt.as_mut() {
-                            // Finish the collection (finalize and sweep)
-                            arena.collect_all();
-                        }
+                    if let Ok(mut arena_opt) = cell.try_borrow_mut()
+                        && let Some(arena) = arena_opt.as_mut()
+                    {
+                        // Finish the collection (finalize and sweep)
+                        arena.collect_all();
                     }
                 });
             }

@@ -9,10 +9,10 @@ use std::collections::{HashMap, HashSet};
 
 #[cfg(feature = "multithreaded-gc")]
 pub use dotnet_utils::gc::{
-    clear_tracing_state, get_currently_tracing, is_current_arena_collection_requested,
-    record_allocation, reset_current_arena_collection_requested, set_current_arena_handle,
-    set_currently_tracing, take_found_cross_arena_refs, update_current_arena_metrics, ArenaHandle,
-    GCCommand, ALLOCATION_THRESHOLD,
+    ALLOCATION_THRESHOLD, ArenaHandle, GCCommand, clear_tracing_state, get_currently_tracing,
+    is_current_arena_collection_requested, record_allocation,
+    reset_current_arena_collection_requested, set_current_arena_handle, set_currently_tracing,
+    take_found_cross_arena_refs, update_current_arena_metrics,
 };
 
 #[cfg(feature = "multithreaded-gc")]

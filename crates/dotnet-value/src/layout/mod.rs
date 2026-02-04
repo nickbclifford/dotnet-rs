@@ -53,9 +53,7 @@ impl LayoutManager {
 
     pub fn is_or_contains_refs(&self) -> bool {
         match self {
-            LayoutManager::Field(f) => {
-                f.fields.values().any(|f| f.layout.is_or_contains_refs())
-            }
+            LayoutManager::Field(f) => f.fields.values().any(|f| f.layout.is_or_contains_refs()),
             LayoutManager::Array(a) => a.element_layout.is_or_contains_refs(),
             LayoutManager::Scalar(Scalar::ObjectRef)
             | LayoutManager::Scalar(Scalar::ManagedPtr) => true,

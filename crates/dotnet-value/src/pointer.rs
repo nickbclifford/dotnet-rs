@@ -1,6 +1,6 @@
 use crate::object::ObjectRef;
 use dotnet_types::TypeDescription;
-use gc_arena::{unsafe_empty_collect, Collect, Collection};
+use gc_arena::{Collect, Collection, unsafe_empty_collect};
 use std::{
     cmp::Ordering,
     collections::HashSet,
@@ -98,35 +98,37 @@ impl<'gc> ManagedPtr<'gc> {
     /// The `source` slice must be at least `ManagedPtr::MEMORY_SIZE` bytes long.
     /// It must contain valid bytes representing a `ManagedPtr`.
     pub unsafe fn read_from_bytes(source: &[u8]) -> (Option<NonNull<u8>>, ObjectRef<'gc>, usize) {
-        let ptr_size = size_of::<usize>();
+        unsafe {
+            let ptr_size = size_of::<usize>();
 
-        // Memory layout: (Owner ObjectRef at offset 0, Offset at offset 8)
-        // Read Owner (Offset 0)
-        let owner = ObjectRef::read_unchecked(&source[0..ptr_size]);
+            // Memory layout: (Owner ObjectRef at offset 0, Offset at offset 8)
+            // Read Owner (Offset 0)
+            let owner = ObjectRef::read_unchecked(&source[0..ptr_size]);
 
-        // Read Offset (Offset 8)
-        let mut offset_bytes = [0u8; size_of::<usize>()];
-        offset_bytes.copy_from_slice(&source[ptr_size..ptr_size * 2]);
-        let offset = usize::from_ne_bytes(offset_bytes);
+            // Read Offset (Offset 8)
+            let mut offset_bytes = [0u8; size_of::<usize>()];
+            offset_bytes.copy_from_slice(&source[ptr_size..ptr_size * 2]);
+            let offset = usize::from_ne_bytes(offset_bytes);
 
-        // Compute pointer from owner's data + offset
-        let ptr = if let Some(handle) = owner.0 {
-            let base_ptr = handle.borrow().storage.as_ptr();
-            if base_ptr.is_null() {
+            // Compute pointer from owner's data + offset
+            let ptr = if let Some(handle) = owner.0 {
+                let base_ptr = handle.borrow().storage.as_ptr();
+                if base_ptr.is_null() {
+                    None
+                } else {
+                    NonNull::new(base_ptr.wrapping_add(offset) as *mut u8)
+                }
+            } else if offset == 0 {
+                // Null owner with zero offset means null pointer
                 None
             } else {
-                NonNull::new(base_ptr.wrapping_add(offset) as *mut u8)
-            }
-        } else if offset == 0 {
-            // Null owner with zero offset means null pointer
-            None
-        } else {
-            // Null owner but non-zero offset - this is a static data pointer
-            // Store raw pointer directly in offset field for static data
-            NonNull::new(offset as *mut u8)
-        };
+                // Null owner but non-zero offset - this is a static data pointer
+                // Store raw pointer directly in offset field for static data
+                NonNull::new(offset as *mut u8)
+            };
 
-        (ptr, owner, offset)
+            (ptr, owner, offset)
+        }
     }
 
     // Legacy / Raw read: Reads only the pointer.

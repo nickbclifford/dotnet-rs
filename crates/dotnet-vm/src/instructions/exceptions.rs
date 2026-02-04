@@ -1,7 +1,7 @@
 use crate::{
+    StepResult,
     exceptions::{ExceptionState, HandlerAddress, UnwindState, UnwindTarget},
     stack::VesContext,
-    StepResult,
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;

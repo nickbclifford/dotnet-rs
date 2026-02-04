@@ -3,15 +3,15 @@
 //! This module now provides a backward-compatible wrapper around `tracing`.
 use crate::{metrics::RuntimeMetrics, stack::CallStack};
 use dotnet_value::object::HeapStorage;
-use gc_arena::{unsafe_empty_collect, Collect, Gc};
+use gc_arena::{Collect, Gc, unsafe_empty_collect};
 use std::{
     env,
     fs::File,
     io::{stderr, stdout},
     sync::Once,
 };
-use tracing::{debug, error, info, trace, Level};
-use tracing_subscriber::{fmt, prelude::*, EnvFilter, Registry};
+use tracing::{Level, debug, error, info, trace};
+use tracing_subscriber::{EnvFilter, Registry, fmt, prelude::*};
 
 static INIT: Once = Once::new();
 

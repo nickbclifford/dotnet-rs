@@ -1,5 +1,5 @@
 //! Garbage collection utility types.
-use gc_arena::{barrier::Unlock, Collect, Collection, Mutation};
+use gc_arena::{Collect, Collection, Mutation, barrier::Unlock};
 use std::ops::{Deref, DerefMut};
 
 #[cfg(feature = "multithreaded-gc")]

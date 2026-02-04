@@ -1,19 +1,19 @@
 use crate::{
+    StepResult,
     intrinsics::intrinsic_call,
-    layout::{type_layout, LayoutFactory},
+    layout::{LayoutFactory, type_layout},
     resolution::ValueResolution,
     stack::VesContext,
-    StepResult,
 };
 use dotnet_assemblies::decompose_type_source;
 use dotnet_macros::dotnet_instruction;
 use dotnet_types::members::MethodDescription;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
+    StackValue,
     layout::HasLayout,
     object::{HeapStorage, ObjectRef},
     pointer::UnmanagedPtr,
-    StackValue,
 };
 use dotnetdll::prelude::*;
 use std::ptr;
@@ -63,51 +63,51 @@ pub fn new_object<'gc, 'm: 'gc>(
         .resolver()
         .find_generic_method(&MethodSource::User(*ctor), &ctx.current_context());
 
-    if method.method.name == "CtorArraySentinel" {
-        if let UserMethod::Reference(r) = *ctor {
-            let resolution = ctx.current_frame().source_resolution;
-            let method_ref = &resolution[r];
+    if method.method.name == "CtorArraySentinel"
+        && let UserMethod::Reference(r) = *ctor
+    {
+        let resolution = ctx.current_frame().source_resolution;
+        let method_ref = &resolution[r];
 
-            if let MethodReferenceParent::Type(t) = &method_ref.parent {
-                let concrete = {
-                    let res_ctx = ctx.current_context();
-                    res_ctx.generics.make_concrete(resolution, t.clone())
-                };
+        if let MethodReferenceParent::Type(t) = &method_ref.parent {
+            let concrete = {
+                let res_ctx = ctx.current_context();
+                res_ctx.generics.make_concrete(resolution, t.clone())
+            };
 
-                if let BaseType::Array(element, shape) = concrete.get() {
-                    let rank = shape.rank;
-                    let mut dims: Vec<usize> = (0..rank)
-                        .map(|_| {
-                            let v = ctx.pop(gc);
-                            match v {
-                                StackValue::Int32(i) => i as usize,
-                                StackValue::NativeInt(i) => i as usize,
-                                _ => panic!("Invalid dimension {:?}", v),
-                            }
-                        })
-                        .collect();
-                    dims.reverse();
+            if let BaseType::Array(element, shape) = concrete.get() {
+                let rank = shape.rank;
+                let mut dims: Vec<usize> = (0..rank)
+                    .map(|_| {
+                        let v = ctx.pop(gc);
+                        match v {
+                            StackValue::Int32(i) => i as usize,
+                            StackValue::NativeInt(i) => i as usize,
+                            _ => panic!("Invalid dimension {:?}", v),
+                        }
+                    })
+                    .collect();
+                dims.reverse();
 
-                    let total_len: usize = dims.iter().product();
+                let total_len: usize = dims.iter().product();
 
-                    let res_ctx = ctx.current_context();
-                    let elem_type = res_ctx.normalize_type(element.clone());
+                let res_ctx = ctx.current_context();
+                let elem_type = res_ctx.normalize_type(element.clone());
 
-                    let layout =
-                        LayoutFactory::create_array_layout(elem_type.clone(), total_len, &res_ctx);
-                    let total_size_bytes = layout.element_layout.size() * total_len;
+                let layout =
+                    LayoutFactory::create_array_layout(elem_type.clone(), total_len, &res_ctx);
+                let total_size_bytes = layout.element_layout.size() * total_len;
 
-                    let vec_obj = dotnet_value::object::Vector::new(
-                        elem_type,
-                        layout,
-                        vec![0; total_size_bytes],
-                        dims,
-                    );
-                    let o = ObjectRef::new(gc, HeapStorage::Vec(vec_obj));
-                    ctx.register_new_object(&o);
-                    ctx.push(gc, StackValue::ObjectRef(o));
-                    return StepResult::Continue;
-                }
+                let vec_obj = dotnet_value::object::Vector::new(
+                    elem_type,
+                    layout,
+                    vec![0; total_size_bytes],
+                    dims,
+                );
+                let o = ObjectRef::new(gc, HeapStorage::Vec(vec_obj));
+                ctx.register_new_object(&o);
+                ctx.push(gc, StackValue::ObjectRef(o));
+                return StepResult::Continue;
             }
         }
     }

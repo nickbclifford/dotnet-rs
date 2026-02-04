@@ -1,7 +1,7 @@
 use crate::{
+    StepResult,
     exceptions::{ExceptionState, HandlerAddress, UnwindState, UnwindTarget},
     stack::VesContext,
-    StepResult,
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
@@ -152,15 +152,15 @@ pub fn brfalse<'gc, 'm: 'gc>(
 #[dotnet_instruction(Return)]
 pub fn ret<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
     let frame_index = ctx.frame_stack.len() - 1;
-    if let ExceptionState::ExecutingHandler(state) = *ctx.exception_mode {
-        if state.cursor.frame_index == frame_index {
-            *ctx.exception_mode = ExceptionState::Unwinding(UnwindState {
-                exception: state.exception,
-                target: UnwindTarget::Instruction(usize::MAX),
-                cursor: state.cursor,
-            });
-            return ctx.handle_exception(gc);
-        }
+    if let ExceptionState::ExecutingHandler(state) = *ctx.exception_mode
+        && state.cursor.frame_index == frame_index
+    {
+        *ctx.exception_mode = ExceptionState::Unwinding(UnwindState {
+            exception: state.exception,
+            target: UnwindTarget::Instruction(usize::MAX),
+            cursor: state.cursor,
+        });
+        return ctx.handle_exception(gc);
     }
 
     let has_finally_blocks = !ctx.state().info_handle.exceptions.is_empty();

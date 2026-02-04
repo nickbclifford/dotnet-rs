@@ -278,10 +278,10 @@ impl SyncManagerOps for SyncBlockManager {
     ) -> (usize, Arc<Self::Block>) {
         let mut blocks = self.blocks.lock();
 
-        if let Some(index) = get_index() {
-            if let Some(block) = blocks.get(&index) {
-                return (index, block.clone());
-            }
+        if let Some(index) = get_index()
+            && let Some(block) = blocks.get(&index)
+        {
+            return (index, block.clone());
         }
 
         let index = {

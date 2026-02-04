@@ -15,7 +15,7 @@ pub trait SyncBlockOps {
     fn try_enter(&self, thread_id: u64) -> bool;
     fn enter(&self, thread_id: u64, metrics: &RuntimeMetrics);
     fn enter_with_timeout(&self, thread_id: u64, timeout_ms: u64, metrics: &RuntimeMetrics)
-        -> bool;
+    -> bool;
     fn enter_safe(
         &self,
         thread_id: u64,

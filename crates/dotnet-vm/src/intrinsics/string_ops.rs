@@ -1,4 +1,4 @@
-use crate::{intrinsics::span::span_to_slice, stack::VesContext, StepResult};
+use crate::{StepResult, intrinsics::span::span_to_slice, stack::VesContext};
 use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
@@ -6,9 +6,10 @@ use dotnet_types::{
 };
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
+    StackValue,
     object::{HeapStorage, Object, ObjectRef},
     string::CLRString,
-    with_string, with_string_mut, StackValue,
+    with_string, with_string_mut,
 };
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -196,7 +197,9 @@ pub fn intrinsic_string_get_length<'gc, 'm: 'gc>(
 }
 
 /// System.String::Concat(ReadOnlySpan<char>, ReadOnlySpan<char>, ReadOnlySpan<char>)
-#[dotnet_intrinsic("static string System.String::Concat(System.ReadOnlySpan<char>, System.ReadOnlySpan<char>, System.ReadOnlySpan<char>)")]
+#[dotnet_intrinsic(
+    "static string System.String::Concat(System.ReadOnlySpan<char>, System.ReadOnlySpan<char>, System.ReadOnlySpan<char>)"
+)]
 pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,

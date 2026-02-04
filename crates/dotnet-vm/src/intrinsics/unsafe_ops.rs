@@ -1,9 +1,9 @@
 use crate::{
+    StepResult,
     context::ResolutionContext,
     layout::type_layout,
-    memory::{check_read_safety, RawMemoryAccess},
+    memory::{RawMemoryAccess, check_read_safety},
     stack::VesContext,
-    StepResult,
 };
 use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{
@@ -12,10 +12,10 @@ use dotnet_types::{
 };
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
+    StackValue,
     layout::{HasLayout, LayoutManager},
     object::{HeapStorage, ObjectRef},
     pointer::ManagedPtr,
-    StackValue,
 };
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use std::ptr;
@@ -326,10 +326,10 @@ pub fn intrinsic_unsafe_as_ref_any<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let param_type = &method.method.signature.parameters[0].1;
-    if let ParameterType::Value(MethodType::Base(b)) = param_type {
-        if matches!(**b, BaseType::ValuePointer(_, _)) {
-            return intrinsic_unsafe_as_ref_ptr(ctx, gc, method, generics);
-        }
+    if let ParameterType::Value(MethodType::Base(b)) = param_type
+        && matches!(**b, BaseType::ValuePointer(_, _))
+    {
+        return intrinsic_unsafe_as_ref_ptr(ctx, gc, method, generics);
     }
     // Otherwise it's the "in T source" (ByRef) overload, which is a no-op
     intrinsic_unsafe_as(ctx, gc, method, generics)

@@ -1,6 +1,6 @@
 use crate::{
-    memory::heap::HeapManager, stack::context::StackFrame, state::SharedGlobalState, MethodState,
-    StepResult,
+    MethodState, StepResult, memory::heap::HeapManager, stack::context::StackFrame,
+    state::SharedGlobalState,
 };
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::StackValue;

@@ -1,7 +1,7 @@
 use syn::{
+    Ident, Result, Token,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
-    Ident, Result, Token,
 };
 
 #[derive(Debug)]
@@ -273,12 +273,6 @@ mod tests {
     fn test_parse_qualified_params() {
         let sig: ParsedSignature = parse_str("System.String System.Console::ReadLine()").unwrap();
         assert_eq!(sig.return_type, "String"); // Normalized
-                                               // If it was System.String, it normalizes to String?
-                                               // My code: "string" -> "String". "System.String" -> "System.String".
-                                               // Wait, "System.String" matches "String" in base types usually.
-                                               // But my normalizer only handles single identifiers.
-                                               // "System.String" will be returned as "System.String".
-                                               // This is fine, as long as matching logic handles it.
 
         assert_eq!(sig.class_name, "System.Console");
     }

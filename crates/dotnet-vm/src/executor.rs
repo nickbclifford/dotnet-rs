@@ -6,6 +6,7 @@ use dotnet_value::StackValue;
 use crate::vm_debug;
 
 use super::{
+    MethodInfo, StepResult,
     dispatch::ExecutionEngine,
     metrics::CacheStats,
     stack::{CallStack, GCArena},
@@ -13,7 +14,6 @@ use super::{
     sync::MutexGuard,
     threading::ThreadManagerOps,
     tracer::Tracer,
-    MethodInfo, StepResult,
 };
 
 #[cfg(feature = "multithreaded-gc")]

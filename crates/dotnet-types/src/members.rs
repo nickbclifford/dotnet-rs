@@ -1,4 +1,4 @@
-use crate::{resolution::ResolutionS, TypeDescription};
+use crate::{TypeDescription, resolution::ResolutionS};
 use dotnetdll::prelude::{Field, Method, ResolvedDebug};
 use std::{
     fmt::{Debug, Formatter},

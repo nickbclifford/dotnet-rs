@@ -1,15 +1,15 @@
 use crate::{
+    StackValue,
     layout::{ArrayLayoutManager, HasLayout, LayoutManager, Scalar},
     pointer::ManagedPtr,
     storage::FieldStorage,
     string::CLRString,
-    StackValue,
 };
-use dotnet_types::{generics::ConcreteType, TypeDescription};
+use dotnet_types::{TypeDescription, generics::ConcreteType};
 use dotnet_utils::{
+    DebugStr,
     gc::{GCHandle, ThreadSafeLock},
     sync::get_current_thread_id,
-    DebugStr,
 };
 use gc_arena::{Collect, Collection, Gc};
 use std::{
@@ -165,39 +165,41 @@ impl<'gc> ObjectRef<'gc> {
     /// - The caller must ensure the returned `ObjectRef` does not outlive the
     ///   arena generation it belongs to.
     pub unsafe fn read_unchecked(source: &[u8]) -> Self {
-        let ptr_val = {
-            // SAFETY: Use read_unaligned to avoid UB on unaligned access.
-            // We assume the caller holds a lock (FieldStorage RwLock) to prevent tearing.
-            (source.as_ptr() as *const usize).read_unaligned()
-        };
+        unsafe {
+            let ptr_val = {
+                // SAFETY: Use read_unaligned to avoid UB on unaligned access.
+                // We assume the caller holds a lock (FieldStorage RwLock) to prevent tearing.
+                (source.as_ptr() as *const usize).read_unaligned()
+            };
 
-        let ptr = ptr_val as *const ThreadSafeLock<ObjectInner<'gc>>;
+            let ptr = ptr_val as *const ThreadSafeLock<ObjectInner<'gc>>;
 
-        if ptr.is_null() {
-            ObjectRef(None)
-        } else {
-            #[cfg(any(feature = "memory-validation", debug_assertions))]
-            {
-                if ptr_val % align_of::<ThreadSafeLock<ObjectInner<'static>>>() != 0 {
-                    panic!("ObjectRef::read: Pointer {:#x} is not aligned", ptr_val);
+            if ptr.is_null() {
+                ObjectRef(None)
+            } else {
+                #[cfg(any(feature = "memory-validation", debug_assertions))]
+                {
+                    if ptr_val % align_of::<ThreadSafeLock<ObjectInner<'static>>>() != 0 {
+                        panic!("ObjectRef::read: Pointer {:#x} is not aligned", ptr_val);
+                    }
+
+                    // Verify magic number to ensure we are pointing to a valid object
+                    let inner = &*(*ptr).as_ptr();
+                    if inner.magic != OBJECT_MAGIC {
+                        panic!(
+                            "ObjectRef::read: Pointer {:#x} points to invalid object (bad magic: {:#x})",
+                            ptr_val, inner.magic
+                        );
+                    }
                 }
 
-                // Verify magic number to ensure we are pointing to a valid object
-                let inner = &*(*ptr).as_ptr();
-                if inner.magic != OBJECT_MAGIC {
-                    panic!(
-                        "ObjectRef::read: Pointer {:#x} points to invalid object (bad magic: {:#x})",
-                        ptr_val, inner.magic
-                    );
-                }
+                // SAFETY: The pointer was originally obtained via Gc::as_ptr and stored as bytes.
+                // Since this is only called during VM execution where 'gc is valid and
+                // the object is guaranteed to be alive (as it is traced by the caller),
+                // it is safe to reconstruct the Gc pointer.
+                // Note: We don't assert alignment of the Gc pointer itself here, but Gc ptrs are always aligned.
+                ObjectRef(Some(Gc::from_ptr(ptr)))
             }
-
-            // SAFETY: The pointer was originally obtained via Gc::as_ptr and stored as bytes.
-            // Since this is only called during VM execution where 'gc is valid and
-            // the object is guaranteed to be alive (as it is traced by the caller),
-            // it is safe to reconstruct the Gc pointer.
-            // Note: We don't assert alignment of the Gc pointer itself here, but Gc ptrs are always aligned.
-            ObjectRef(Some(Gc::from_ptr(ptr)))
         }
     }
 
@@ -207,7 +209,7 @@ impl<'gc> ObjectRef<'gc> {
     /// - `source` must contain a valid `Gc` pointer.
     /// - The pointer must belong to the arena associated with `gc`.
     pub unsafe fn read_branded(source: &[u8], _gc: GCHandle<'gc>) -> Self {
-        Self::read_unchecked(source)
+        unsafe { Self::read_unchecked(source) }
     }
 
     pub fn write(&self, dest: &mut [u8]) {
@@ -300,7 +302,9 @@ impl<'gc> ObjectRef<'gc> {
 
     pub fn as_heap_storage<T>(&self, op: impl FnOnce(&HeapStorage<'gc>) -> T) -> T {
         let ObjectRef(Some(o)) = &self else {
-            panic!("NullReferenceException: called ObjectRef::as_heap_storage on NULL object reference")
+            panic!(
+                "NullReferenceException: called ObjectRef::as_heap_storage on NULL object reference"
+            )
         };
         let inner = o.borrow();
         op(&inner.storage)
@@ -380,9 +384,7 @@ impl<'gc> HeapStorage<'gc> {
             HeapStorage::Vec(v) => v.get().as_ptr(),
             HeapStorage::Str(s) => s.as_ptr() as *const u8,
             HeapStorage::Obj(o) => o.instance_storage.get().as_ptr(),
-            HeapStorage::Boxed(ValueType::Struct(o)) => {
-                o.instance_storage.get().as_ptr()
-            }
+            HeapStorage::Boxed(ValueType::Struct(o)) => o.instance_storage.get().as_ptr(),
             _ => ptr::null(),
         }
     }

@@ -184,11 +184,7 @@ fn find_dotnet_app_path() -> PathBuf {
 
     let base = if !base.exists() {
         let alt_base = PathBuf::from("/usr/lib/dotnet/shared/Microsoft.NETCore.App");
-        if alt_base.exists() {
-            alt_base
-        } else {
-            base
-        }
+        if alt_base.exists() { alt_base } else { base }
     } else {
         base
     };

@@ -1,6 +1,6 @@
 #![allow(clippy::arc_with_non_send_sync)]
 use dotnet_assemblies::{self as assemblies, static_res_from_file};
-use dotnet_types::{members::MethodDescription, resolution::ResolutionS, TypeDescription};
+use dotnet_types::{TypeDescription, members::MethodDescription, resolution::ResolutionS};
 use dotnet_vm::{self as vm, state};
 use dotnetdll::prelude::*;
 use std::{
@@ -38,11 +38,7 @@ impl TestHarness {
 
         let base = if !base.exists() {
             let alt_base = PathBuf::from("/usr/lib/dotnet/shared/Microsoft.NETCore.App");
-            if alt_base.exists() {
-                alt_base
-            } else {
-                base
-            }
+            if alt_base.exists() { alt_base } else { base }
         } else {
             base
         };

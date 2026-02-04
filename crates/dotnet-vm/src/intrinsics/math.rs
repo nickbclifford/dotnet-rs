@@ -1,12 +1,12 @@
 use crate::{
-    context::ResolutionContext, resolution::ValueResolution, stack::VesContext, StepResult,
+    StepResult, context::ResolutionContext, resolution::ValueResolution, stack::VesContext,
 };
 use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
-    object::{HeapStorage, ObjectRef},
     StackValue,
+    object::{HeapStorage, ObjectRef},
 };
 
 #[dotnet_intrinsic("static bool System.Runtime.Intrinsics.Vector128::get_IsHardwareAccelerated()")]
@@ -22,7 +22,9 @@ pub fn intrinsic_vector_is_hardware_accelerated<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_intrinsic("static System.Collections.Generic.EqualityComparer<T> System.Collections.Generic.EqualityComparer<T>::get_Default()")]
+#[dotnet_intrinsic(
+    "static System.Collections.Generic.EqualityComparer<T> System.Collections.Generic.EqualityComparer<T>::get_Default()"
+)]
 pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,

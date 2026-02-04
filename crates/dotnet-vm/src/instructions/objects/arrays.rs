@@ -1,11 +1,11 @@
-use crate::{layout::type_layout, resolution::ValueResolution, stack::VesContext, StepResult};
+use crate::{StepResult, layout::type_layout, resolution::ValueResolution, stack::VesContext};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
+    StackValue,
     layout::HasLayout,
     object::{HeapStorage, ObjectRef},
     pointer::ManagedPtr,
-    StackValue,
 };
 use dotnetdll::prelude::*;
 use std::ptr::NonNull;

@@ -6,6 +6,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, HashSet},
 };
+
 #[cfg(feature = "multithreaded-gc")]
 use dotnet_value::object::ObjectPtr;
 
@@ -41,11 +42,7 @@ impl<'gc> HeapManager<'gc> {
             }
         };
 
-        if ptr < start + size {
-            Some(obj)
-        } else {
-            None
-        }
+        if ptr < start + size { Some(obj) } else { None }
     }
 
     pub fn finalize_check(
@@ -60,17 +57,16 @@ impl<'gc> HeapManager<'gc> {
 
         let mut zero_out_handles = |for_type: GCHandleType, resurrected: &HashSet<usize>| {
             for (obj_ref, handle_type) in handles.iter_mut().flatten() {
-                if *handle_type == for_type {
-                    if let ObjectRef(Some(ptr)) = obj_ref {
-                        if Gc::is_dead(fc, *ptr) {
-                            if for_type == GCHandleType::WeakTrackResurrection
-                                && resurrected.contains(&(Gc::as_ptr(*ptr) as usize))
-                            {
-                                continue;
-                            }
-                            *obj_ref = ObjectRef(None);
-                        }
+                if *handle_type == for_type
+                    && let ObjectRef(Some(ptr)) = obj_ref
+                    && Gc::is_dead(fc, *ptr)
+                {
+                    if for_type == GCHandleType::WeakTrackResurrection
+                        && resurrected.contains(&(Gc::as_ptr(*ptr) as usize))
+                    {
+                        continue;
                     }
+                    *obj_ref = ObjectRef(None);
                 }
             }
         };

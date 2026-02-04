@@ -1,10 +1,10 @@
-use crate::{context::ResolutionContext, stack::VesContext, vm_error, StepResult, StoreType};
+use crate::{StepResult, StoreType, context::ResolutionContext, stack::VesContext, vm_error};
 use dotnet_types::generics::ConcreteType;
-use dotnet_utils::{gc::GCHandle, DebugStr};
+use dotnet_utils::{DebugStr, gc::GCHandle};
 use dotnet_value::{
+    StackValue,
     object::{HeapStorage, ObjectRef},
     string::CLRString,
-    StackValue,
 };
 use dotnetdll::prelude::*;
 use gc_arena::Collect;
@@ -469,12 +469,11 @@ impl ExceptionHandlingSystem {
 
             for (section_index, section) in exceptions.iter().enumerate().skip(section_start) {
                 // If we are in the target frame, stop before processing the target section or anything beyond it.
-                if let UnwindTarget::Handler(target_h) = target {
-                    if frame_index == target_h.frame_index
-                        && section_index >= target_h.section_index
-                    {
-                        break;
-                    }
+                if let UnwindTarget::Handler(target_h) = target
+                    && frame_index == target_h.frame_index
+                    && section_index >= target_h.section_index
+                {
+                    break;
                 }
 
                 let in_try = section.instructions.contains(&ip);

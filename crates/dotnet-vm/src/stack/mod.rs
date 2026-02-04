@@ -1,10 +1,10 @@
 use crate::{
+    MethodState, StepResult,
     dispatch::ExecutionEngine,
     exceptions::ExceptionState,
     state::{ArenaLocalState, SharedGlobalState},
     sync::{Arc, MutexGuard, Ordering},
     tracer::Tracer,
-    MethodState, StepResult,
 };
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::StackValue;

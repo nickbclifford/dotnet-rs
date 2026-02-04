@@ -10,7 +10,7 @@
 //!   multiple thread-local arenas. Depends on `multithreading`.
 use clap::Parser;
 use dotnet_assemblies::static_res_from_file;
-use dotnet_types::{members::MethodDescription, TypeDescription};
+use dotnet_types::{TypeDescription, members::MethodDescription};
 use dotnet_vm::{self as vm, ExecutorResult};
 use dotnetdll::prelude::*;
 use std::process::ExitCode;

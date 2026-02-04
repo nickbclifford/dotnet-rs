@@ -2,10 +2,10 @@ use crate::{
     context::ResolutionContext, gc::coordinator::GCCoordinator, layout::LayoutFactory,
     metrics::RuntimeMetrics, threading::ThreadManagerOps,
 };
-use dotnet_types::{generics::GenericLookup, members::MethodDescription, TypeDescription};
+use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::{
-    sync::{Arc, AtomicU64, AtomicU8, Condvar, Mutex, Ordering, RwLock},
     DebugStr,
+    sync::{Arc, AtomicU8, AtomicU64, Condvar, Mutex, Ordering, RwLock},
 };
 use dotnet_value::{
     layout::{FieldLayoutManager, HasLayout},

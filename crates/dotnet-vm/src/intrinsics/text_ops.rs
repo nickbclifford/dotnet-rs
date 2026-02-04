@@ -1,4 +1,4 @@
-use crate::{stack::VesContext, StepResult};
+use crate::{StepResult, stack::VesContext};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;

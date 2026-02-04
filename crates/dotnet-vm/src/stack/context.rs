@@ -1,4 +1,5 @@
 use crate::{
+    MethodInfo, MethodState, MethodType, ResolutionContext, StepResult,
     memory::heap::HeapManager,
     resolution::{TypeResolutionExt, ValueResolution},
     resolver::ResolverService,
@@ -7,21 +8,20 @@ use crate::{
     sync::{Arc, MutexGuard},
     threading::ThreadManagerOps,
     tracer::Tracer,
-    MethodInfo, MethodState, MethodType, ResolutionContext, StepResult,
 };
-use dotnet_assemblies::{decompose_type_source, AssemblyLoader};
+use dotnet_assemblies::{AssemblyLoader, decompose_type_source};
 use dotnet_types::{
+    TypeDescription,
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     resolution::ResolutionS,
-    TypeDescription,
 };
 use dotnet_value::{
+    StackValue,
     layout::HasLayout,
     object::{CTSValue, HeapStorage, Object as ObjectInstance, ObjectRef, ValueType, Vector},
     pointer::ManagedPtr,
     storage::FieldStorage,
-    StackValue,
 };
 use dotnetdll::prelude::*;
 use gc_arena::Collect;
@@ -663,11 +663,11 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
             crate::vm_trace_gc_allocation!(self, &type_name, size);
         }
 
-        if let HeapStorage::Obj(o) = &borrowed.storage {
-            if o.description.has_finalizer(&ctx) {
-                let mut queue = heap.finalization_queue.borrow_mut();
-                queue.push(*instance);
-            }
+        if let HeapStorage::Obj(o) = &borrowed.storage
+            && o.description.has_finalizer(&ctx)
+        {
+            let mut queue = heap.finalization_queue.borrow_mut();
+            queue.push(*instance);
         }
     }
 

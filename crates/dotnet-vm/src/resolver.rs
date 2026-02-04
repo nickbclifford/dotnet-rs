@@ -4,20 +4,20 @@ use crate::{
     metrics::RuntimeMetrics,
     state::{GlobalCaches, SharedGlobalState},
 };
-use dotnet_assemblies::{decompose_type_source, AssemblyLoader};
+use dotnet_assemblies::{AssemblyLoader, decompose_type_source};
 use dotnet_types::{
+    TypeDescription,
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     resolution::ResolutionS,
-    TypeDescription,
 };
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
+    StackValue,
     layout::{HasLayout, LayoutManager},
     object::{CTSValue, Object, ObjectHandle, ValueType, Vector},
     pointer::ManagedPtr,
     storage::FieldStorage,
-    StackValue,
 };
 use dotnetdll::prelude::*;
 use std::{
@@ -113,16 +113,16 @@ impl<'m> ResolverService<'m> {
             }
         };
 
-        if let UserMethod::Reference(r) = method {
-            if let MethodReferenceParent::Type(t) = &ctx.resolution[r].parent {
-                let parent = ctx.make_concrete(t);
-                if let BaseType::Type {
-                    source: TypeSource::Generic { parameters, .. },
-                    ..
-                } = parent.get()
-                {
-                    new_lookup.type_generics = parameters.clone();
-                }
+        if let UserMethod::Reference(r) = method
+            && let MethodReferenceParent::Type(t) = &ctx.resolution[r].parent
+        {
+            let parent = ctx.make_concrete(t);
+            if let BaseType::Type {
+                source: TypeSource::Generic { parameters, .. },
+                ..
+            } = parent.get()
+            {
+                new_lookup.type_generics = parameters.clone();
             }
         }
 
@@ -219,13 +219,13 @@ impl<'m> ResolverService<'m> {
         if let Some(base) = base {
             ConcreteType::new(res, base)
         } else {
-            if let BaseType::Type { source, value_kind } = t.get_mut() {
-                if value_kind.is_none() {
-                    let (ut, _) = decompose_type_source(source);
-                    let td = self.loader.locate_type(res, ut);
-                    if self.is_value_type(td) {
-                        *value_kind = Some(ValueKind::ValueType);
-                    }
+            if let BaseType::Type { source, value_kind } = t.get_mut()
+                && value_kind.is_none()
+            {
+                let (ut, _) = decompose_type_source(source);
+                let td = self.loader.locate_type(res, ut);
+                if self.is_value_type(td) {
+                    *value_kind = Some(ValueKind::ValueType);
                 }
             }
             t
@@ -570,15 +570,15 @@ impl<'m> ResolverService<'m> {
                     CTSValue::Value(Struct(o))
                 } else {
                     let mut instance = self.new_object(td, &new_ctx);
-                    if let StackValue::ObjectRef(o) = data {
-                        if let Some(handle) = o.0 {
-                            let borrowed = handle.borrow();
-                            match &borrowed.storage {
-                                dotnet_value::object::HeapStorage::Obj(obj) => {
-                                    instance.instance_storage = obj.instance_storage.clone();
-                                }
-                                _ => panic!("cannot unbox from non-object storage"),
+                    if let StackValue::ObjectRef(o) = data
+                        && let Some(handle) = o.0
+                    {
+                        let borrowed = handle.borrow();
+                        match &borrowed.storage {
+                            dotnet_value::object::HeapStorage::Obj(obj) => {
+                                instance.instance_storage = obj.instance_storage.clone();
                             }
+                            _ => panic!("cannot unbox from non-object storage"),
                         }
                     }
                     CTSValue::Value(Struct(instance))

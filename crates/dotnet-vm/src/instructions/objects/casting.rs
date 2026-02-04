@@ -1,7 +1,7 @@
-use crate::{stack::VesContext, StepResult};
+use crate::{StepResult, stack::VesContext};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
-use dotnet_value::{object::ObjectRef, StackValue};
+use dotnet_value::{StackValue, object::ObjectRef};
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(CastClass)]

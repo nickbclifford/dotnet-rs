@@ -1,10 +1,10 @@
-use crate::{stack::VesContext, StepResult};
+use crate::{StepResult, stack::VesContext};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
+    StackValue,
     layout::{LayoutManager, Scalar},
     pointer::UnmanagedPtr,
-    StackValue,
 };
 use dotnetdll::prelude::*;
 use std::ptr;

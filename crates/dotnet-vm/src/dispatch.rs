@@ -1,13 +1,13 @@
 use crate::vm_trace_instruction;
-use dotnet_types::{generics::GenericLookup, members::MethodDescription, TypeDescription};
+use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnetdll::prelude::*;
 use gc_arena::Collect;
 use std::sync::OnceLock;
 
 use super::{
-    exceptions::ExceptionState, threading::ThreadManagerOps, CallStack, MethodInfo,
-    ResolutionContext, StepResult,
+    CallStack, MethodInfo, ResolutionContext, StepResult, exceptions::ExceptionState,
+    threading::ThreadManagerOps,
 };
 
 pub type InstructionHandler = for<'gc, 'm> fn(

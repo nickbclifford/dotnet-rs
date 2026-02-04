@@ -1,7 +1,7 @@
-use crate::{stack::VesContext, StepResult};
+use crate::{StepResult, stack::VesContext};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
-use dotnet_value::{pointer::UnmanagedPtr, StackValue};
+use dotnet_value::{StackValue, pointer::UnmanagedPtr};
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(Convert)]

@@ -1,12 +1,12 @@
 use crate::{context::ResolutionContext, metrics::RuntimeMetrics, sync::Arc};
 use dotnet_types::{
+    TypeDescription,
     generics::{ConcreteType, GenericLookup},
     members::FieldDescription,
-    TypeDescription,
 };
 use dotnet_value::layout::{
-    align_up, ArrayLayoutManager, FieldKey, FieldLayout, FieldLayoutManager, GcDesc, HasLayout,
-    LayoutManager, Scalar,
+    ArrayLayoutManager, FieldKey, FieldLayout, FieldLayoutManager, GcDesc, HasLayout,
+    LayoutManager, Scalar, align_up,
 };
 use dotnetdll::prelude::*;
 use tracing::trace;

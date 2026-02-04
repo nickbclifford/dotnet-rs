@@ -1,23 +1,23 @@
 use crate::{
+    MethodInfo, StepResult,
     context::ResolutionContext,
     layout::type_layout,
     resolution::{TypeResolutionExt, ValueResolution},
     stack::VesContext,
-    MethodInfo, StepResult,
 };
-use dotnet_assemblies::{decompose_type_source, SUPPORT_ASSEMBLY};
+use dotnet_assemblies::{SUPPORT_ASSEMBLY, decompose_type_source};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
+    TypeDescription,
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     runtime::{RuntimeMethodSignature, RuntimeType},
-    TypeDescription,
 };
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
+    StackValue,
     layout::{LayoutManager, Scalar},
     object::{HeapStorage, Object, ObjectRef},
-    StackValue,
 };
 use dotnetdll::prelude::{BaseType, Kind, MemberType, MethodType, TypeSource};
 
@@ -48,7 +48,7 @@ pub trait ReflectionExtensions<'gc, 'm> {
     #[allow(dead_code)]
     fn get_handle_for_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> Object<'gc>;
     fn get_runtime_method_index(&mut self, method: MethodDescription, lookup: GenericLookup)
-        -> u16;
+    -> u16;
     #[cfg(not(feature = "multithreaded-gc"))]
     fn get_runtime_field_index(&mut self, field: FieldDescription, lookup: GenericLookup) -> u16;
     fn get_runtime_method_obj(
@@ -432,7 +432,9 @@ pub fn intrinsic_assembly_get_custom_attributes<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_intrinsic("static System.Attribute[] System.Attribute::GetCustomAttributes(System.Reflection.MemberInfo, System.Type, bool)")]
+#[dotnet_intrinsic(
+    "static System.Attribute[] System.Attribute::GetCustomAttributes(System.Reflection.MemberInfo, System.Type, bool)"
+)]
 pub fn intrinsic_attribute_get_custom_attributes<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -780,8 +782,12 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
     result.unwrap_or_else(|| panic!("unimplemented runtime type intrinsic: {:?}", method))
 }
 
-#[dotnet_intrinsic("static void System.RuntimeTypeHandle::GetActivationInfo(System.RuntimeTypeHandle, System.IntPtr&, System.IntPtr&, System.IntPtr&, bool&)")]
-#[dotnet_intrinsic("static void DotnetRs.RuntimeTypeHandle::GetActivationInfo(DotnetRs.RuntimeTypeHandle, System.IntPtr&, System.IntPtr&, System.IntPtr&, bool&)")]
+#[dotnet_intrinsic(
+    "static void System.RuntimeTypeHandle::GetActivationInfo(System.RuntimeTypeHandle, System.IntPtr&, System.IntPtr&, System.IntPtr&, bool&)"
+)]
+#[dotnet_intrinsic(
+    "static void DotnetRs.RuntimeTypeHandle::GetActivationInfo(DotnetRs.RuntimeTypeHandle, System.IntPtr&, System.IntPtr&, System.IntPtr&, bool&)"
+)]
 pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -800,11 +806,19 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
             let pfn_allocator = ctx.pop_managed_ptr(gc);
 
             let rt_obj = match ctx.pop(gc) {
-                StackValue::ValueType(rth_handle) => {
-                    unsafe { ObjectRef::read_branded(&rth_handle.instance_storage.get_field_local(rth_handle.description, "_value"), gc) }
-                }
+                StackValue::ValueType(rth_handle) => unsafe {
+                    ObjectRef::read_branded(
+                        &rth_handle
+                            .instance_storage
+                            .get_field_local(rth_handle.description, "_value"),
+                        gc,
+                    )
+                },
                 StackValue::ObjectRef(rt_obj) => rt_obj,
-                v => panic!("invalid type on stack ({:?}), expected ValueType(RuntimeTypeHandle) or ObjectRef(RuntimeType)", v),
+                v => panic!(
+                    "invalid type on stack ({:?}), expected ValueType(RuntimeTypeHandle) or ObjectRef(RuntimeType)",
+                    v
+                ),
             };
 
             let rt = ctx.resolve_runtime_type(rt_obj);
@@ -1025,7 +1039,9 @@ pub fn intrinsic_field_info_get_field_handle<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_intrinsic("static System.RuntimeTypeHandle System.Runtime.CompilerServices.RuntimeHelpers::GetMethodTable(System.RuntimeTypeHandle)")]
+#[dotnet_intrinsic(
+    "static System.RuntimeTypeHandle System.Runtime.CompilerServices.RuntimeHelpers::GetMethodTable(System.RuntimeTypeHandle)"
+)]
 pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -1048,7 +1064,9 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_intrinsic("static bool System.Runtime.CompilerServices.RuntimeHelpers::IsBitwiseEquatable(System.RuntimeTypeHandle)")]
+#[dotnet_intrinsic(
+    "static bool System.Runtime.CompilerServices.RuntimeHelpers::IsBitwiseEquatable(System.RuntimeTypeHandle)"
+)]
 pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -1081,7 +1099,9 @@ pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<'gc, 'm: 'g
     StepResult::Continue
 }
 
-#[dotnet_intrinsic("static void System.Runtime.CompilerServices.RuntimeHelpers::RunClassConstructor(System.RuntimeTypeHandle)")]
+#[dotnet_intrinsic(
+    "static void System.Runtime.CompilerServices.RuntimeHelpers::RunClassConstructor(System.RuntimeTypeHandle)"
+)]
 pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -1210,8 +1230,12 @@ pub fn intrinsic_type_handle_to_int_ptr<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_intrinsic("static System.IntPtr System.RuntimeMethodHandle::GetFunctionPointer(System.RuntimeMethodHandle)")]
-#[dotnet_intrinsic("static System.IntPtr DotnetRs.RuntimeMethodHandle::GetFunctionPointer(DotnetRs.RuntimeMethodHandle)")]
+#[dotnet_intrinsic(
+    "static System.IntPtr System.RuntimeMethodHandle::GetFunctionPointer(System.RuntimeMethodHandle)"
+)]
+#[dotnet_intrinsic(
+    "static System.IntPtr DotnetRs.RuntimeMethodHandle::GetFunctionPointer(DotnetRs.RuntimeMethodHandle)"
+)]
 pub fn intrinsic_method_handle_get_function_pointer<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,

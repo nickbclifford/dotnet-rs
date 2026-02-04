@@ -111,9 +111,9 @@ use dotnet_types::{
 };
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
+    StackValue,
     object::{HeapStorage, ObjectRef},
     string::CLRString,
-    StackValue,
 };
 use std::collections::HashMap;
 
@@ -129,10 +129,10 @@ pub mod text_ops;
 pub mod threading;
 pub mod unsafe_ops;
 
-pub use metadata::{classify_intrinsic, IntrinsicKind, IntrinsicMetadata};
+pub use metadata::{IntrinsicKind, IntrinsicMetadata, classify_intrinsic};
 pub use reflection::ReflectionExtensions;
 
-use super::{context::ResolutionContext, sync::Arc, tracer::Tracer, StepResult};
+use super::{StepResult, context::ResolutionContext, sync::Arc, tracer::Tracer};
 
 pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttribute";
 

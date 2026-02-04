@@ -1,6 +1,6 @@
 use crate::{
-    context::ResolutionContext, layout::type_layout, resolution::ValueResolution,
-    stack::VesContext, StepResult,
+    StepResult, context::ResolutionContext, layout::type_layout, resolution::ValueResolution,
+    stack::VesContext,
 };
 use dotnet_types::{
     generics::GenericLookup,
@@ -8,10 +8,10 @@ use dotnet_types::{
 };
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
+    StackValue,
     layout::HasLayout,
     object::{HeapStorage, Object, ObjectRef},
     pointer::ManagedPtr,
-    StackValue,
 };
 use dotnetdll::prelude::ParameterType;
 use std::{mem::size_of, ptr::NonNull, slice};
@@ -56,7 +56,9 @@ pub fn span_to_slice<'gc, 'a>(span: Object<'gc>, element_size: usize) -> &'a [u8
 
 use dotnet_macros::dotnet_intrinsic;
 
-#[dotnet_intrinsic("static bool System.MemoryExtensions::Equals(System.ReadOnlySpan<char>, System.ReadOnlySpan<char>, System.StringComparison)")]
+#[dotnet_intrinsic(
+    "static bool System.MemoryExtensions::Equals(System.ReadOnlySpan<char>, System.ReadOnlySpan<char>, System.StringComparison)"
+)]
 pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -228,7 +230,9 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_intrinsic("static System.Span<T> System.Runtime.CompilerServices.RuntimeHelpers::CreateSpan<T>(System.RuntimeFieldHandle)")]
+#[dotnet_intrinsic(
+    "static System.Span<T> System.Runtime.CompilerServices.RuntimeHelpers::CreateSpan<T>(System.RuntimeFieldHandle)"
+)]
 pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -304,7 +308,9 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
     }
 }
 
-#[dotnet_intrinsic("static T& System.Runtime.CompilerServices.RuntimeHelpers::GetSpanDataFrom<T>(T&, System.Type, int&)")]
+#[dotnet_intrinsic(
+    "static T& System.Runtime.CompilerServices.RuntimeHelpers::GetSpanDataFrom<T>(T&, System.Type, int&)"
+)]
 pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,

@@ -6,7 +6,7 @@ use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
 };
-use syn::{parse_macro_input, ItemFn, LitStr};
+use syn::{ItemFn, LitStr, parse_macro_input};
 
 mod signature;
 
@@ -79,12 +79,8 @@ pub fn dotnet_intrinsic(attr: TokenStream, item: TokenStream) -> TokenStream {
                 // Check if parameter matches Expected Type.
                 {
                     use dotnetdll::prelude::*;
-                    if let Some(Parameter(_, ParameterType::Value(MethodType::Base(b)))) =
-                        method.method.signature.parameters.get(#i) {
-                        if !matches!(**b, #base_type) { return false; }
-                    } else {
-                        return false;
-                    }
+                    let Some(Parameter(_, ParameterType::Value(MethodType::Base(b)))) = method.method.signature.parameters.get(#i) else { return false; };
+                    if !matches!(**b, #base_type) { return false; }
                 }
             }
         } else {
@@ -174,17 +170,15 @@ pub fn dotnet_instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut extra_arg_names = Vec::new();
     let mut extra_arg_calls = Vec::new();
     for arg in extra_args {
-        if let syn::FnArg::Typed(pat_type) = arg {
-            if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
-                let name = &pat_ident.ident;
-                extra_arg_names.push(name);
-                if let syn::Type::Reference(_) = &*pat_type.ty {
-                    extra_arg_calls.push(quote! { #name });
-                } else {
-                    extra_arg_calls.push(quote! { *#name });
-                }
+        if let syn::FnArg::Typed(pat_type) = arg
+            && let syn::Pat::Ident(pat_ident) = &*pat_type.pat
+        {
+            let name = &pat_ident.ident;
+            extra_arg_names.push(name);
+            if let syn::Type::Reference(_) = &*pat_type.ty {
+                extra_arg_calls.push(quote! { #name });
             } else {
-                panic!("Instruction handler must have named parameters");
+                extra_arg_calls.push(quote! { *#name });
             }
         } else {
             panic!("Instruction handler must have named parameters");

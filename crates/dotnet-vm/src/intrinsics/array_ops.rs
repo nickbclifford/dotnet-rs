@@ -1,11 +1,11 @@
-use crate::{resolution::ValueResolution, stack::VesContext, StepResult};
+use crate::{StepResult, resolution::ValueResolution, stack::VesContext};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
+    StackValue,
     layout::HasLayout,
     object::{HeapStorage, ObjectRef},
-    StackValue,
 };
 
 #[dotnet_intrinsic("int System.Array::get_Length()")]

@@ -1,14 +1,14 @@
 use crate::{
-    intrinsics::intrinsic_field, layout::LayoutFactory, resolution::ValueResolution,
-    stack::VesContext, sync::Ordering as AtomicOrdering, StepResult,
+    StepResult, intrinsics::intrinsic_field, layout::LayoutFactory, resolution::ValueResolution,
+    stack::VesContext, sync::Ordering as AtomicOrdering,
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::{gc::GCHandle, is_ptr_aligned_to_field};
 use dotnet_value::{
+    StackValue,
     layout::HasLayout,
     object::{HeapStorage, ObjectRef},
     pointer::{ManagedPtr, UnmanagedPtr},
-    StackValue,
 };
 use dotnetdll::prelude::*;
 use std::ptr::{self, NonNull};
@@ -52,31 +52,31 @@ pub fn ldfld<'gc, 'm: 'gc>(
     let read_data =
         |d: &[u8]| -> dotnet_value::object::CTSValue<'gc> { res_ctx.read_cts_value(&t, d, gc) };
 
-    if let StackValue::ObjectRef(ObjectRef(Some(h))) = &parent {
-        if field.parent.type_name() == "System.Runtime.CompilerServices.RawArrayData" {
-            let data = h.borrow();
-            if let HeapStorage::Vec(ref vector) = data.storage {
-                let intercepted = if name == "Length" {
-                    Some(dotnet_value::object::CTSValue::Value(
-                        dotnet_value::object::ValueType::UInt32(vector.layout.length as u32),
-                    ))
-                } else if name == "Data" {
-                    let b = if vector.layout.length > 0 {
-                        vector.get()[0]
-                    } else {
-                        0
-                    };
-                    Some(dotnet_value::object::CTSValue::Value(
-                        dotnet_value::object::ValueType::UInt8(b),
-                    ))
+    if let StackValue::ObjectRef(ObjectRef(Some(h))) = &parent
+        && field.parent.type_name() == "System.Runtime.CompilerServices.RawArrayData"
+    {
+        let data = h.borrow();
+        if let HeapStorage::Vec(ref vector) = data.storage {
+            let intercepted = if name == "Length" {
+                Some(dotnet_value::object::CTSValue::Value(
+                    dotnet_value::object::ValueType::UInt32(vector.layout.length as u32),
+                ))
+            } else if name == "Data" {
+                let b = if vector.layout.length > 0 {
+                    vector.get()[0]
                 } else {
-                    None
+                    0
                 };
+                Some(dotnet_value::object::CTSValue::Value(
+                    dotnet_value::object::ValueType::UInt8(b),
+                ))
+            } else {
+                None
+            };
 
-                if let Some(val) = intercepted {
-                    ctx.push(gc, val.into_stack(gc));
-                    return StepResult::Continue;
-                }
+            if let Some(val) = intercepted {
+                ctx.push(gc, val.into_stack(gc));
+                return StepResult::Continue;
             }
         }
     }

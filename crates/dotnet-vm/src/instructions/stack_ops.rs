@@ -1,4 +1,4 @@
-use crate::{instructions::macros::*, resolution::ValueResolution, stack::VesContext, StepResult};
+use crate::{StepResult, instructions::macros::*, resolution::ValueResolution, stack::VesContext};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::StackValue;
