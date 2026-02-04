@@ -168,12 +168,12 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         if let Some(h) = owner.0 {
             let obj = h.borrow();
             match &obj.storage {
-                HeapStorage::Obj(o) => Some(LayoutManager::FieldLayoutManager(
+                HeapStorage::Obj(o) => Some(LayoutManager::Field(
                     o.instance_storage.layout().as_ref().clone(),
                 )),
-                HeapStorage::Vec(v) => Some(LayoutManager::ArrayLayoutManager(v.layout.clone())),
+                HeapStorage::Vec(v) => Some(LayoutManager::Array(v.layout.clone())),
                 HeapStorage::Boxed(v) => match v {
-                    ValueType::Struct(o) => Some(LayoutManager::FieldLayoutManager(
+                    ValueType::Struct(o) => Some(LayoutManager::Field(
                         o.instance_storage.layout().as_ref().clone(),
                     )),
                     ValueType::Pointer(_) => Some(LayoutManager::Scalar(Scalar::ManagedPtr)),
@@ -254,7 +254,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     }
                 }
             },
-            LayoutManager::FieldLayoutManager(flm) => {
+            LayoutManager::Field(flm) => {
                 if let StackValue::ValueType(src_obj) = value {
                     let src_ptr = src_obj.instance_storage.get().as_ptr();
                     ptr::copy_nonoverlapping(src_ptr, ptr, flm.size());
@@ -262,7 +262,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     return Err("Expected ValueType for Struct write".into());
                 }
             }
-            LayoutManager::ArrayLayoutManager(_) => {
+            LayoutManager::Array(_) => {
                 return Err("Cannot write entire array unaligned".into())
             }
         }
@@ -318,7 +318,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     ))
                 }
             },
-            LayoutManager::FieldLayoutManager(flm) => {
+            LayoutManager::Field(flm) => {
                 if let Some(desc) = type_desc {
                     let size = flm.size();
                     let mut data = vec![0u8; size];
@@ -401,7 +401,7 @@ pub fn has_ref_at(layout: &LayoutManager, offset: usize) -> bool {
             Scalar::ObjectRef | Scalar::ManagedPtr => offset == 0,
             _ => false,
         },
-        LayoutManager::FieldLayoutManager(fm) => {
+        LayoutManager::Field(fm) => {
             for f in fm.fields.values() {
                 if offset >= f.position && offset < f.position + f.layout.size() {
                     return has_ref_at(&f.layout, offset - f.position);
@@ -409,7 +409,7 @@ pub fn has_ref_at(layout: &LayoutManager, offset: usize) -> bool {
             }
             false
         }
-        LayoutManager::ArrayLayoutManager(am) => {
+        LayoutManager::Array(am) => {
             let elem_size = am.element_layout.size();
             if elem_size == 0 {
                 return false;
@@ -433,12 +433,12 @@ where
             Scalar::ObjectRef | Scalar::ManagedPtr => callback(base),
             _ => {}
         },
-        LayoutManager::FieldLayoutManager(fm) => {
+        LayoutManager::Field(fm) => {
             for f in fm.fields.values() {
                 check_refs_in_layout(&f.layout, base + f.position, callback);
             }
         }
-        LayoutManager::ArrayLayoutManager(am) => {
+        LayoutManager::Array(am) => {
             if am.element_layout.is_or_contains_refs() {
                 let sz = am.element_layout.size();
                 for i in 0..am.length {
@@ -495,7 +495,7 @@ fn validate_ref_integrity(
             }
             _ => {}
         },
-        LayoutManager::FieldLayoutManager(fm) => {
+        LayoutManager::Field(fm) => {
             for f in fm.fields.values() {
                 let f_start = base_offset + f.position;
                 let f_end = f_start + f.layout.size();
@@ -504,7 +504,7 @@ fn validate_ref_integrity(
                 }
             }
         }
-        LayoutManager::ArrayLayoutManager(am) => {
+        LayoutManager::Array(am) => {
             if am.element_layout.is_or_contains_refs() {
                 let elem_size = am.element_layout.size();
                 if elem_size == 0 {

@@ -10,12 +10,12 @@ multithreaded-gc = ["multithreading", "dotnet-utils/multithreaded-gc", "dotnet-v
 memory-validation = ["dotnet-vm/memory-validation", "dotnet-value/memory-validation"]
 
 [dependencies]
+clap = { version = "4.5", features = ["derive"] }
+dotnet-assemblies = { workspace = true }
 dotnet-types = { workspace = true }
 dotnet-utils = { workspace = true, default-features = false }
 dotnet-value = { workspace = true, default-features = false }
-dotnet-assemblies = { workspace = true }
 dotnet-vm = { workspace = true, default-features = false }
-clap = { workspace = true }
 dotnetdll = { workspace = true }
 parking_lot = { workspace = true, optional = true }
 

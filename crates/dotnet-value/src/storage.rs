@@ -121,22 +121,24 @@ impl FieldStorage {
         let mut dest = self.get_field_mut_local(owner, name);
         dest.copy_from_slice(value);
     }
+    
+    unsafe fn raw_data_unsynchronized(&self) -> &[u8] {
+        #[cfg(feature = "multithreading")]
+        {
+            &*self.data.data_ptr()
+        }
+        #[cfg(not(feature = "multithreading"))]
+        {
+            &*self.data.as_ptr()
+        }
+    }
 
     pub fn resurrect<'gc>(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
-        // SAFETY: Tracing/Resurrection happens during a stop-the-world pause, so no other
+        // SAFETY: Resurrection happens during a stop-the-world pause, so no other
         // threads are running. We can safely access the inner value without
         // acquiring the lock. This avoids deadlock (or panic) if a thread was
         // already holding the write lock when it reached a safe point.
-        let data = unsafe {
-            #[cfg(feature = "multithreading")]
-            {
-                &*self.data.data_ptr()
-            }
-            #[cfg(not(feature = "multithreading"))]
-            {
-                &*self.data.as_ptr()
-            }
-        };
+        let data = unsafe { self.raw_data_unsynchronized() };
 
         self.layout.resurrect(data, fc, visited);
     }
@@ -144,20 +146,8 @@ impl FieldStorage {
 
 unsafe impl Collect for FieldStorage {
     fn trace(&self, cc: &Collection) {
-        // SAFETY: Tracing happens during a stop-the-world pause, so no other
-        // threads are running. We can safely access the inner value without
-        // acquiring the lock. This avoids deadlock (or panic) if a thread was
-        // already holding the write lock when it reached a safe point.
-        let data = unsafe {
-            #[cfg(feature = "multithreading")]
-            {
-                &*self.data.data_ptr()
-            }
-            #[cfg(not(feature = "multithreading"))]
-            {
-                &*self.data.as_ptr()
-            }
-        };
+        // SAFETY: Tracing also happens during a stop-the-world pause, same reasoning as above
+        let data = unsafe { self.raw_data_unsynchronized() };
 
         self.layout.trace(data, cc);
     }

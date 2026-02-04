@@ -15,7 +15,7 @@ pub struct LayoutFactory;
 
 impl LayoutFactory {
     fn populate_gc_desc(layout: &LayoutManager, base_offset: usize, desc: &mut GcDesc) {
-        let ptr_size = std::mem::size_of::<usize>();
+        let ptr_size = size_of::<usize>();
         match layout {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
                 desc.set(base_offset / ptr_size);
@@ -25,20 +25,13 @@ impl LayoutFactory {
                 // The pointer is recomputed from owner + offset on each read.
                 desc.set(base_offset / ptr_size);
             }
-            LayoutManager::FieldLayoutManager(m) => {
+            LayoutManager::Field(m) => {
                 let offset_words = base_offset / ptr_size;
-                let bits_per_word = ptr_size * 8;
-                for (block_idx, &block) in m.gc_desc.bitmap.iter().enumerate() {
-                    let mut bits = block;
-                    while bits != 0 {
-                        let trailing = bits.trailing_zeros();
-                        bits &= !(1 << trailing); // Clear lowest bit
-                        let word_idx = block_idx * bits_per_word + trailing as usize;
-                        desc.set(offset_words + word_idx);
-                    }
+                for word_idx in m.gc_desc.bitmap.iter_ones() {
+                    desc.set(offset_words + word_idx);
                 }
             }
-            LayoutManager::ArrayLayoutManager(arr) => {
+            LayoutManager::Array(arr) => {
                 let elem_size = arr.element_layout.size();
                 // Optimization: if element has no refs, skip
                 if arr.element_layout.is_or_contains_refs() {

@@ -1,16 +1,13 @@
 use crate::{state::SharedGlobalState, sync::Ordering};
 use dotnet_utils::gc::GCHandleType;
 use dotnet_value::object::{HeapStorage, ObjectRef};
-use gc_arena::{Collect, Collection};
+use gc_arena::{Collect, Collection, Gc};
 use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, HashSet},
 };
-
 #[cfg(feature = "multithreaded-gc")]
 use dotnet_value::object::ObjectPtr;
-#[cfg(feature = "multithreaded-gc")]
-use gc_arena::Gc;
 
 pub struct HeapManager<'gc> {
     pub finalization_queue: RefCell<Vec<ObjectRef<'gc>>>,
@@ -65,9 +62,9 @@ impl<'gc> HeapManager<'gc> {
             for (obj_ref, handle_type) in handles.iter_mut().flatten() {
                 if *handle_type == for_type {
                     if let ObjectRef(Some(ptr)) = obj_ref {
-                        if gc_arena::Gc::is_dead(fc, *ptr) {
+                        if Gc::is_dead(fc, *ptr) {
                             if for_type == GCHandleType::WeakTrackResurrection
-                                && resurrected.contains(&(gc_arena::Gc::as_ptr(*ptr) as usize))
+                                && resurrected.contains(&(Gc::as_ptr(*ptr) as usize))
                             {
                                 continue;
                             }
@@ -85,7 +82,7 @@ impl<'gc> HeapManager<'gc> {
                 let obj = queue[i];
                 let ptr = obj.0.expect("object in finalization queue is null");
 
-                let is_dead = gc_arena::Gc::is_dead(fc, ptr);
+                let is_dead = Gc::is_dead(fc, ptr);
 
                 let is_suppressed = match &ptr.borrow().storage {
                     HeapStorage::Obj(o) => o.finalizer_suppressed,
@@ -109,7 +106,7 @@ impl<'gc> HeapManager<'gc> {
                 for obj in to_finalize {
                     let ptr = obj.0.unwrap();
                     pending.push(obj);
-                    if resurrected.insert(gc_arena::Gc::as_ptr(ptr) as usize) {
+                    if resurrected.insert(Gc::as_ptr(ptr) as usize) {
                         // Trace resurrection event
                         if shared.tracer_enabled.load(Ordering::Relaxed) {
                             let obj_type_name = match &ptr.borrow().storage {
@@ -118,14 +115,14 @@ impl<'gc> HeapManager<'gc> {
                                 HeapStorage::Str(_) => "String".to_string(),
                                 HeapStorage::Boxed(_) => "Boxed".to_string(),
                             };
-                            let addr = gc_arena::Gc::as_ptr(ptr) as usize;
+                            let addr = Gc::as_ptr(ptr) as usize;
                             shared.tracer.lock().trace_gc_resurrection(
                                 indent,
                                 &obj_type_name,
                                 addr,
                             );
                         }
-                        gc_arena::Gc::resurrect(fc, ptr);
+                        Gc::resurrect(fc, ptr);
                         ptr.borrow().storage.resurrect(fc, &mut resurrected);
                     }
                 }
@@ -140,7 +137,7 @@ impl<'gc> HeapManager<'gc> {
 
         // 3. Prune dead objects from the debugging harness
         self._all_objs.borrow_mut().retain(|addr, obj| match obj.0 {
-            Some(ptr) => !gc_arena::Gc::is_dead(fc, ptr) || resurrected.contains(addr),
+            Some(ptr) => !Gc::is_dead(fc, ptr) || resurrected.contains(addr),
             None => false,
         });
     }

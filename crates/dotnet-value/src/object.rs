@@ -374,6 +374,18 @@ impl<'gc> HeapStorage<'gc> {
             _ => None,
         }
     }
+
+    pub fn as_ptr(&self) -> *const u8 {
+        match self {
+            HeapStorage::Vec(v) => v.get().as_ptr(),
+            HeapStorage::Str(s) => s.as_ptr() as *const u8,
+            HeapStorage::Obj(o) => o.instance_storage.get().as_ptr(),
+            HeapStorage::Boxed(ValueType::Struct(o)) => {
+                o.instance_storage.get().as_ptr()
+            }
+            _ => ptr::null(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

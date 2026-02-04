@@ -154,7 +154,7 @@ pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
     };
     let layout = type_layout(concrete_type.clone(), &ctx.current_context());
 
-    if let LayoutManager::FieldLayoutManager(flm) = &*layout {
+    if let LayoutManager::Field(flm) = &*layout {
         let td = ctx.loader().find_concrete_type(concrete_type.clone());
         if let Some(field) = flm.get_field(td, &field_name) {
             ctx.push_isize(gc, field.position as isize);

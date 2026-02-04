@@ -1,4 +1,5 @@
 use crate::object::ObjectRef;
+use bitvec::prelude::*;
 use dotnet_types::TypeDescription;
 use dotnet_utils::sync::Arc;
 use gc_arena::{Collect, Collection};
@@ -13,27 +14,27 @@ pub trait HasLayout {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayoutManager {
-    FieldLayoutManager(FieldLayoutManager),
-    ArrayLayoutManager(ArrayLayoutManager),
+    Field(FieldLayoutManager),
+    Array(ArrayLayoutManager),
     Scalar(Scalar),
 }
 impl HasLayout for LayoutManager {
     fn size(&self) -> usize {
         match self {
-            LayoutManager::FieldLayoutManager(f) => f.size(),
-            LayoutManager::ArrayLayoutManager(a) => a.size(),
+            LayoutManager::Field(f) => f.size(),
+            LayoutManager::Array(a) => a.size(),
             LayoutManager::Scalar(s) => s.size(),
         }
     }
 }
 impl From<FieldLayoutManager> for LayoutManager {
     fn from(f: FieldLayoutManager) -> Self {
-        Self::FieldLayoutManager(f)
+        Self::Field(f)
     }
 }
 impl From<ArrayLayoutManager> for LayoutManager {
     fn from(a: ArrayLayoutManager) -> Self {
-        Self::ArrayLayoutManager(a)
+        Self::Array(a)
     }
 }
 impl From<Scalar> for LayoutManager {
@@ -52,10 +53,10 @@ impl LayoutManager {
 
     pub fn is_or_contains_refs(&self) -> bool {
         match self {
-            LayoutManager::FieldLayoutManager(f) => {
+            LayoutManager::Field(f) => {
                 f.fields.values().any(|f| f.layout.is_or_contains_refs())
             }
-            LayoutManager::ArrayLayoutManager(a) => a.element_layout.is_or_contains_refs(),
+            LayoutManager::Array(a) => a.element_layout.is_or_contains_refs(),
             LayoutManager::Scalar(Scalar::ObjectRef)
             | LayoutManager::Scalar(Scalar::ManagedPtr) => true,
             _ => false,
@@ -64,8 +65,8 @@ impl LayoutManager {
 
     pub fn type_tag(&self) -> &'static str {
         match &self {
-            LayoutManager::FieldLayoutManager(_) => "struct",
-            LayoutManager::ArrayLayoutManager(_) => "arr",
+            LayoutManager::Field(_) => "struct",
+            LayoutManager::Array(_) => "arr",
             LayoutManager::Scalar(s) => match s {
                 Scalar::ObjectRef => "obj",
                 Scalar::ManagedPtr => "ptr",
@@ -82,8 +83,8 @@ impl LayoutManager {
 
     pub fn alignment(&self) -> usize {
         match self {
-            LayoutManager::FieldLayoutManager(f) => f.alignment,
-            LayoutManager::ArrayLayoutManager(a) => a.element_layout.alignment(),
+            LayoutManager::Field(f) => f.alignment,
+            LayoutManager::Array(a) => a.element_layout.alignment(),
             LayoutManager::Scalar(s) => s.alignment(),
         }
     }
@@ -96,13 +97,13 @@ impl LayoutManager {
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
                 // ManagedPtr in memory is 16 bytes: (Owner ObjectRef, Offset).
                 // We need to trace the owner at offset 0.
-                let ptr_size = std::mem::size_of::<usize>();
+                let ptr_size = size_of::<usize>();
                 unsafe { ObjectRef::read_unchecked(&storage[0..ptr_size]) }.trace(cc);
             }
-            LayoutManager::FieldLayoutManager(f) => {
+            LayoutManager::Field(f) => {
                 f.trace(storage, cc);
             }
-            LayoutManager::ArrayLayoutManager(a) => {
+            LayoutManager::Array(a) => {
                 let elem_size = a.element_layout.size();
                 for i in 0..a.length {
                     a.element_layout.trace(&storage[i * elem_size..], cc);
@@ -125,17 +126,17 @@ impl LayoutManager {
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
                 // ManagedPtr in memory is 16 bytes: (Owner ObjectRef, Offset).
                 // We need to resurrect the owner at offset 0.
-                let ptr_size = std::mem::size_of::<usize>();
+                let ptr_size = size_of::<usize>();
                 unsafe { ObjectRef::read_unchecked(&storage[0..ptr_size]) }.resurrect(fc, visited);
             }
-            LayoutManager::FieldLayoutManager(f) => {
+            LayoutManager::Field(f) => {
                 for field in f.fields.values() {
                     field
                         .layout
                         .resurrect(&storage[field.position..], fc, visited);
                 }
             }
-            LayoutManager::ArrayLayoutManager(a) => {
+            LayoutManager::Array(a) => {
                 let elem_size = a.element_layout.size();
                 for i in 0..a.length {
                     a.element_layout
@@ -182,51 +183,35 @@ impl std::fmt::Display for FieldKey {
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct GcDesc {
-    pub bitmap: Vec<usize>,
+    pub bitmap: BitVec<usize, Lsb0>,
 }
 
 impl GcDesc {
     pub fn set(&mut self, word_index: usize) {
-        let ptr_bits = usize::BITS as usize;
-        let block_idx = word_index / ptr_bits;
-        let bit_idx = word_index % ptr_bits;
-
-        if block_idx >= self.bitmap.len() {
-            self.bitmap.resize(block_idx + 1, 0);
+        if word_index >= self.bitmap.len() {
+            self.bitmap.resize(word_index + 1, false);
         }
-        self.bitmap[block_idx] |= 1 << bit_idx;
+        self.bitmap.set(word_index, true);
     }
 
     pub fn merge(&mut self, other: &GcDesc) {
         if other.bitmap.len() > self.bitmap.len() {
-            self.bitmap.resize(other.bitmap.len(), 0);
+            self.bitmap.resize(other.bitmap.len(), false);
         }
-        for (i, &word) in other.bitmap.iter().enumerate() {
-            self.bitmap[i] |= word;
-        }
+        self.bitmap |= &other.bitmap;
     }
 
     pub fn trace(&self, storage: &[u8], cc: &Collection) {
         let ptr_size = size_of::<usize>();
-        for (block_idx, &block) in self.bitmap.iter().enumerate() {
-            let mut bits = block;
-            while bits != 0 {
-                let trailing = bits.trailing_zeros();
-                let bit_idx = trailing as usize;
+        for word_index in self.bitmap.iter_ones() {
+            let offset = word_index * ptr_size;
 
-                // Clear the lowest set bit
-                bits &= !(1 << bit_idx);
-
-                let word_index = block_idx * (ptr_size * 8) + bit_idx;
-                let offset = word_index * ptr_size;
-
-                // Safety: layout creation ensures this offset is valid and contains a pointer
-                if offset + ptr_size <= storage.len() {
-                    // Use read_unchecked to handle potential unaligned access safely
-                    // and correctly reconstruct the ObjectRef.
-                    let ptr = unsafe { ObjectRef::read_unchecked(&storage[offset..]) };
-                    ptr.trace(cc);
-                }
+            // Safety: layout creation ensures this offset is valid and contains a pointer
+            if offset + ptr_size <= storage.len() {
+                // Use read_unchecked to handle potential unaligned access safely
+                // and correctly reconstruct the ObjectRef.
+                let ptr = unsafe { ObjectRef::read_unchecked(&storage[offset..]) };
+                ptr.trace(cc);
             }
         }
     }

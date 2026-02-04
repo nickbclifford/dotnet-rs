@@ -255,6 +255,7 @@ dependencies = [
 name = "dotnet-value"
 version = "0.1.0"
 dependencies = [
+ "bitvec",
  "dotnet-types",
  "dotnet-utils",
  "dotnetdll",

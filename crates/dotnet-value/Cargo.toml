@@ -4,10 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+bitvec = "1.0"
 dotnet-types = { workspace = true }
 dotnet-utils = { workspace = true, default-features = false }
-gc-arena = { workspace = true }
 dotnetdll = { workspace = true }
+gc-arena = { workspace = true }
 
 [features]
 default = ["multithreaded-gc"]

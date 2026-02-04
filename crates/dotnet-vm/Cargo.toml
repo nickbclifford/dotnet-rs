@@ -4,21 +4,21 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-dotnet-types = { workspace = true }
-dotnet-value = { workspace = true, default-features = false }
+dashmap = { workspace = true }
 dotnet-assemblies = { workspace = true }
+dotnet-macros = { path = "../dotnet-macros" }
+dotnet-types = { workspace = true }
 dotnet-utils = { workspace = true, default-features = false }
+dotnet-value = { workspace = true, default-features = false }
 dotnetdll = { workspace = true }
 gc-arena = { workspace = true }
-libffi = { workspace = true }
-parking_lot = { workspace = true }
-serde = { workspace = true }
-libloading = { workspace = true }
-dashmap = { workspace = true }
 inventory = "0.3"
-dotnet-macros = { path = "../dotnet-macros" }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+libffi = "5.0.0"
+libloading = "0.9.0"
+parking_lot = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 [features]
 default = ["multithreaded-gc"]

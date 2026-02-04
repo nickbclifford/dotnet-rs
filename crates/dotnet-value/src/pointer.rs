@@ -13,8 +13,6 @@ use std::{
 pub struct UnmanagedPtr(pub NonNull<u8>);
 unsafe_empty_collect!(UnmanagedPtr);
 
-// Kept for compatibility but effectively replaced by ObjectRef for heap owners
-
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct ManagedPtr<'gc> {
@@ -65,30 +63,21 @@ impl<'gc> ManagedPtr<'gc> {
         pinned: bool,
     ) -> Self {
         let owner = owner.and_then(|o| if o.0.is_some() { Some(o) } else { None });
-        let offset = if let (Some(ptr), Some(owner)) = (value, owner) {
-            if let Some(handle) = owner.0 {
-                let inner = handle.borrow();
-                let base_ptr: *const u8 = match &inner.storage {
-                    crate::object::HeapStorage::Vec(v) => v.get().as_ptr(),
-                    crate::object::HeapStorage::Str(s) => s.as_ptr() as *const u8,
-                    crate::object::HeapStorage::Obj(o) => o.instance_storage.get().as_ptr(),
-                    crate::object::HeapStorage::Boxed(crate::object::ValueType::Struct(o)) => {
-                        o.instance_storage.get().as_ptr()
+        let offset = match (value, owner) {
+            (Some(ptr), Some(owner)) => {
+                if let Some(handle) = owner.0 {
+                    let base_ptr = handle.borrow().storage.as_ptr();
+                    if base_ptr.is_null() {
+                        0usize
+                    } else {
+                        (ptr.as_ptr() as usize).wrapping_sub(base_ptr as usize)
                     }
-                    _ => std::ptr::null(),
-                };
-                if base_ptr.is_null() {
-                    0usize
                 } else {
-                    (ptr.as_ptr() as usize).wrapping_sub(base_ptr as usize)
+                    0usize
                 }
-            } else {
-                0usize
             }
-        } else if let Some(ptr) = value {
-            ptr.as_ptr() as usize
-        } else {
-            0usize
+            (Some(ptr), None) => ptr.as_ptr() as usize,
+            _ => 0usize,
         };
 
         Self {
@@ -122,16 +111,7 @@ impl<'gc> ManagedPtr<'gc> {
 
         // Compute pointer from owner's data + offset
         let ptr = if let Some(handle) = owner.0 {
-            let inner = handle.borrow();
-            let base_ptr: *const u8 = match &inner.storage {
-                crate::object::HeapStorage::Vec(v) => v.get().as_ptr(),
-                crate::object::HeapStorage::Str(s) => s.as_ptr() as *const u8,
-                crate::object::HeapStorage::Obj(o) => o.instance_storage.get().as_ptr(),
-                crate::object::HeapStorage::Boxed(crate::object::ValueType::Struct(o)) => {
-                    o.instance_storage.get().as_ptr()
-                }
-                _ => std::ptr::null(),
-            };
+            let base_ptr = handle.borrow().storage.as_ptr();
             if base_ptr.is_null() {
                 None
             } else {
@@ -172,24 +152,12 @@ impl<'gc> ManagedPtr<'gc> {
 
     pub fn pointer(&self) -> Option<NonNull<u8>> {
         if let Some(owner) = self.owner {
-            if let Some(handle) = owner.0 {
-                let inner = handle.borrow();
-                let base_ptr: *const u8 = match &inner.storage {
-                    crate::object::HeapStorage::Vec(v) => v.get().as_ptr(),
-                    crate::object::HeapStorage::Str(s) => s.as_ptr() as *const u8,
-                    crate::object::HeapStorage::Obj(o) => o.instance_storage.get().as_ptr(),
-                    crate::object::HeapStorage::Boxed(crate::object::ValueType::Struct(o)) => {
-                        o.instance_storage.get().as_ptr()
-                    }
-                    _ => std::ptr::null(),
-                };
-                if base_ptr.is_null() {
-                    None
-                } else {
-                    NonNull::new(base_ptr.wrapping_add(self.offset) as *mut u8)
-                }
-            } else {
+            let handle = owner.0?;
+            let base_ptr = handle.borrow().storage.as_ptr();
+            if base_ptr.is_null() {
                 None
+            } else {
+                NonNull::new(base_ptr.wrapping_add(self.offset) as *mut u8)
             }
         } else if self.offset == 0 {
             None

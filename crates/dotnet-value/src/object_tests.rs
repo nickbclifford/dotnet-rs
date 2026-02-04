@@ -21,11 +21,11 @@ mod tests {
         arena.mutate(|gc, _root| {
             let storage = HeapStorage::Boxed(ValueType::Int32(42));
             let obj = ObjectRef::new(gc, storage);
-            let mut buffer = [0u8; std::mem::size_of::<usize>()];
+            let mut buffer = [0u8; size_of::<usize>()];
             obj.write(&mut buffer);
             unsafe {
                 let read_obj = ObjectRef::read_branded(&buffer, gc);
-                assert!(read_obj == obj);
+                assert_eq!(read_obj, obj);
             }
         });
     }

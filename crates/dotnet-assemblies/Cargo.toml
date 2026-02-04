@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+dashmap = { workspace = true }
 dotnet-types = { workspace = true }
 dotnet-utils = { workspace = true, default-features = false }
 dotnetdll = { workspace = true }
-dashmap = { workspace = true }
 gc-arena = { workspace = true }
