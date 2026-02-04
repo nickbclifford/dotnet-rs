@@ -32,7 +32,7 @@ pub mod compat {
     #[derive(Debug, Default)]
     pub struct Condvar(());
     impl Condvar {
-        pub fn new() -> Self {
+        pub const fn new() -> Self {
             Self(())
         }
         pub fn notify_one(&self) {}

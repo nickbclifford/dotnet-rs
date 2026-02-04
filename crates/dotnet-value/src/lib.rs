@@ -492,7 +492,7 @@ impl<'gc> StackValue<'gc> {
     }
 }
 
-fn load_type_alignment(t: LoadType) -> usize {
+const fn load_type_alignment(t: LoadType) -> usize {
     match t {
         LoadType::Int8 | LoadType::UInt8 => 1,
         LoadType::Int16 | LoadType::UInt16 => align_of::<i16>(),
@@ -505,7 +505,7 @@ fn load_type_alignment(t: LoadType) -> usize {
     }
 }
 
-fn store_type_alignment(t: StoreType) -> usize {
+const fn store_type_alignment(t: StoreType) -> usize {
     match t {
         StoreType::Int8 => 1,
         StoreType::Int16 => align_of::<i16>(),

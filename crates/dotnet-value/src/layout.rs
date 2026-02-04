@@ -146,7 +146,7 @@ impl LayoutManager {
     }
 }
 
-pub fn align_up(value: usize, align: usize) -> usize {
+pub const fn align_up(value: usize, align: usize) -> usize {
     let misalignment = value % align;
     if misalignment == 0 {
         value
@@ -309,6 +309,14 @@ pub enum Scalar {
 
 impl HasLayout for Scalar {
     fn size(&self) -> usize {
+        self.size_const()
+    }
+}
+
+impl Scalar {
+    /// Const-compatible version of size calculation.
+    /// Use this when you need compile-time size evaluation.
+    pub const fn size_const(&self) -> usize {
         match self {
             Scalar::Int8 | Scalar::UInt8 => 1,
             Scalar::Int16 | Scalar::UInt16 => 2,
@@ -321,13 +329,16 @@ impl HasLayout for Scalar {
             Scalar::Float64 => 8,
         }
     }
-}
 
-impl Scalar {
-    pub fn alignment(&self) -> usize {
+    /// Const-compatible version of alignment calculation.
+    pub const fn alignment_const(&self) -> usize {
         match self {
             Scalar::ManagedPtr => ObjectRef::SIZE,
-            _ => self.size(),
+            _ => self.size_const(),
         }
+    }
+
+    pub fn alignment(&self) -> usize {
+        self.alignment_const()
     }
 }

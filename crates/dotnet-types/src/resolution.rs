@@ -15,14 +15,15 @@ unsafe_empty_collect!(ResolutionS);
 unsafe impl Send for ResolutionS {}
 unsafe impl Sync for ResolutionS {}
 impl ResolutionS {
-    pub fn new(ptr: *const Resolution<'static>) -> Self {
+    pub const fn new(ptr: *const Resolution<'static>) -> Self {
         Self(NonNull::new(ptr as *mut _))
     }
 
-    pub fn as_raw(self) -> *const Resolution<'static> {
-        self.0
-            .map(|p| p.as_ptr() as *const _)
-            .unwrap_or(ptr::null())
+    pub const fn as_raw(self) -> *const Resolution<'static> {
+        match self.0 {
+            Some(p) => p.as_ptr() as *const _,
+            None => ptr::null(),
+        }
     }
 
     /// # Safety
@@ -35,7 +36,7 @@ impl ResolutionS {
         Self::new(res)
     }
 
-    pub fn is_null(&self) -> bool {
+    pub const fn is_null(&self) -> bool {
         self.0.is_none()
     }
 

@@ -31,14 +31,14 @@ unsafe impl Send for TypeDescription {}
 unsafe impl Sync for TypeDescription {}
 
 impl TypeDescription {
-    pub fn new(resolution: ResolutionS, definition: &'static TypeDefinition<'static>) -> Self {
+    pub const fn new(resolution: ResolutionS, definition: &'static TypeDefinition<'static>) -> Self {
         Self {
             resolution,
             definition_ptr: NonNull::new(definition as *const _ as *mut _),
         }
     }
 
-    pub fn from_raw(
+    pub const fn from_raw(
         resolution: ResolutionS,
         definition_ptr: Option<NonNull<TypeDefinition<'static>>>,
     ) -> Self {
@@ -48,7 +48,7 @@ impl TypeDescription {
         }
     }
 
-    pub fn definition_ptr(&self) -> Option<NonNull<TypeDefinition<'static>>> {
+    pub const fn definition_ptr(&self) -> Option<NonNull<TypeDefinition<'static>>> {
         self.definition_ptr
     }
 
@@ -61,7 +61,7 @@ impl TypeDescription {
         }
     }
 
-    pub fn is_null(&self) -> bool {
+    pub const fn is_null(&self) -> bool {
         self.definition_ptr.is_none()
     }
 }

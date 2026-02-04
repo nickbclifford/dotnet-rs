@@ -13,7 +13,7 @@ pub struct MethodDescription {
 }
 
 impl MethodDescription {
-    pub fn resolution(&self) -> ResolutionS {
+    pub const fn resolution(&self) -> ResolutionS {
         self.method_resolution
     }
 }
@@ -61,7 +61,7 @@ pub struct FieldDescription {
 }
 
 impl FieldDescription {
-    pub fn resolution(&self) -> ResolutionS {
+    pub const fn resolution(&self) -> ResolutionS {
         self.field_resolution
     }
 }
