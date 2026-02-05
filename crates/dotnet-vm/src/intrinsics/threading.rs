@@ -1,15 +1,16 @@
 use crate::{
     StepResult,
     stack::VesContext,
-    sync::{Arc, AtomicI32, Ordering, SyncBlockOps, SyncManagerOps},
+    sync::{Arc, Ordering, SyncBlockOps, SyncManagerOps},
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+use dotnet_utils::atomic::{AtomicAccess, StandardAtomicAccess};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{StackValue, object::ObjectRef};
-use dotnetdll::prelude::{BaseType, MethodType, Parameter, ParameterType};
+use dotnetdll::prelude::{BaseType, Parameter, ParameterType};
 use gc_arena::Gc;
-use std::{ptr, sync::atomic, thread};
+use std::thread;
 
 /// System.Threading.Monitor::Exit(object) - Releases the lock on an object.
 #[dotnet_intrinsic("static void System.Threading.Monitor::Exit(object)")]
@@ -89,18 +90,47 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
             let target = target_ptr
                 .pointer()
                 .expect("Target pointer should not be null")
-                .as_ptr() as *mut i32;
+                .as_ptr();
 
-            let prev = match unsafe { AtomicI32::from_ptr(target) }.compare_exchange(
-                comparand,
-                value,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                Ok(prev) | Err(prev) => prev,
+            let prev = match unsafe {
+                StandardAtomicAccess::compare_exchange_atomic(
+                    target,
+                    4,
+                    comparand as u64,
+                    value as u64,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+            } {
+                Ok(prev) | Err(prev) => prev as i32,
             };
 
             ctx.push_i32(gc, prev);
+        }
+        BaseType::Int64 => {
+            let comparand = ctx.pop_i64(gc);
+            let value = ctx.pop_i64(gc);
+            let target_ptr = ctx.pop_managed_ptr(gc);
+
+            let target = target_ptr
+                .pointer()
+                .expect("Target pointer should not be null")
+                .as_ptr();
+
+            let prev = match unsafe {
+                StandardAtomicAccess::compare_exchange_atomic(
+                    target,
+                    8,
+                    comparand as u64,
+                    value as u64,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+            } {
+                Ok(prev) | Err(prev) => prev as i64,
+            };
+
+            ctx.push_i64(gc, prev);
         }
         BaseType::IntPtr | BaseType::UIntPtr => {
             let comparand = ctx.pop_isize(gc);
@@ -110,18 +140,23 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
             let target = target_ptr
                 .pointer()
                 .expect("Target pointer should not be null")
-                .as_ptr() as *mut usize;
+                .as_ptr();
 
-            let prev = match unsafe { atomic::AtomicUsize::from_ptr(target) }.compare_exchange(
-                comparand as usize,
-                value as usize,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                Ok(prev) | Err(prev) => prev,
+            let size = std::mem::size_of::<usize>();
+            let prev = match unsafe {
+                StandardAtomicAccess::compare_exchange_atomic(
+                    target,
+                    size,
+                    comparand as u64,
+                    value as u64,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+            } {
+                Ok(prev) | Err(prev) => prev as isize,
             };
 
-            ctx.push_isize(gc, prev as isize);
+            ctx.push_isize(gc, prev);
         }
         _ => {
             // Assume ObjectRef (pointer sized) for all other types for now.
@@ -132,7 +167,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
             let target = target_ptr
                 .pointer()
                 .expect("Target pointer should not be null")
-                .as_ptr() as *mut usize;
+                .as_ptr();
 
             let val_raw = match value.0 {
                 Some(ptr) => Gc::as_ptr(ptr) as usize,
@@ -143,19 +178,24 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
                 None => 0,
             };
 
-            let prev_raw = match unsafe { atomic::AtomicUsize::from_ptr(target) }.compare_exchange(
-                comp_raw,
-                val_raw,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                Ok(prev) | Err(prev) => prev,
+            let size = std::mem::size_of::<usize>();
+            let prev_raw = match unsafe {
+                StandardAtomicAccess::compare_exchange_atomic(
+                    target,
+                    size,
+                    comp_raw as u64,
+                    val_raw as u64,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+            } {
+                Ok(prev) | Err(prev) => prev as usize,
             };
 
             let prev = if prev_raw == 0 {
                 ObjectRef(None)
             } else {
-                // SAFETY: We just read this from an AtomicUsize where we stored valid Gc payload pointers.
+                // SAFETY: We just read this from an atomic access where we stored valid Gc payload pointers.
                 // The object is kept alive because we are in an intrinsic call and the stack roots it (or the static field roots it).
                 ObjectRef(Some(unsafe { Gc::from_ptr(prev_raw as *const _) }))
             };
@@ -199,9 +239,11 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
             let target = target_ptr
                 .pointer()
                 .expect("Target pointer should not be null")
-                .as_ptr() as *mut i32;
+                .as_ptr();
 
-            let prev = unsafe { AtomicI32::from_ptr(target) }.swap(value, Ordering::SeqCst);
+            let prev = unsafe {
+                StandardAtomicAccess::exchange_atomic(target, 4, value as u64, Ordering::SeqCst)
+            } as i32;
 
             ctx.push_i32(gc, prev);
         }
@@ -212,9 +254,11 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
             let target = target_ptr
                 .pointer()
                 .expect("Target pointer should not be null")
-                .as_ptr() as *mut i64;
+                .as_ptr();
 
-            let prev = unsafe { atomic::AtomicI64::from_ptr(target) }.swap(value, Ordering::SeqCst);
+            let prev = unsafe {
+                StandardAtomicAccess::exchange_atomic(target, 8, value as u64, Ordering::SeqCst)
+            } as i64;
 
             ctx.push_i64(gc, prev);
         }
@@ -225,12 +269,14 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
             let target = target_ptr
                 .pointer()
                 .expect("Target pointer should not be null")
-                .as_ptr() as *mut usize;
+                .as_ptr();
 
-            let prev = unsafe { atomic::AtomicUsize::from_ptr(target) }
-                .swap(value as usize, Ordering::SeqCst);
+            let size = std::mem::size_of::<usize>();
+            let prev = unsafe {
+                StandardAtomicAccess::exchange_atomic(target, size, value as u64, Ordering::SeqCst)
+            } as isize;
 
-            ctx.push_isize(gc, prev as isize);
+            ctx.push_isize(gc, prev);
         }
         _ => {
             // Assume ObjectRef (pointer sized) for all other types for now.
@@ -241,7 +287,7 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
             let target = target_ptr
                 .pointer()
                 .expect("Target pointer should not be null")
-                .as_ptr() as *mut usize;
+                .as_ptr();
 
             let val_raw = match value {
                 StackValue::ObjectRef(ObjectRef(Some(ptr))) => Gc::as_ptr(ptr) as usize,
@@ -253,13 +299,15 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
                 ),
             };
 
-            let prev_raw =
-                unsafe { atomic::AtomicUsize::from_ptr(target) }.swap(val_raw, Ordering::SeqCst);
+            let size = std::mem::size_of::<usize>();
+            let prev_raw = unsafe {
+                StandardAtomicAccess::exchange_atomic(target, size, val_raw as u64, Ordering::SeqCst)
+            } as usize;
 
             let prev = if prev_raw == 0 {
                 ObjectRef(None)
             } else {
-                // SAFETY: We just read this from an AtomicUsize where we stored valid Gc payload pointers.
+                // SAFETY: We just read this from an atomic access where we stored valid Gc payload pointers.
                 // The object is kept alive because we are in an intrinsic call and the stack roots it.
                 ObjectRef(Some(unsafe { Gc::from_ptr(prev_raw as *const _) }))
             };
@@ -453,22 +501,100 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
 pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    _method: MethodDescription,
-    _generics: &GenericLookup,
+    method: MethodDescription,
+    generics: &GenericLookup,
 ) -> StepResult {
-    let ptr = ctx.pop(gc).as_ptr() as *const usize;
+    let params = &method.method.signature.parameters;
+    let Parameter(_, first_param_type) = &params[0];
 
-    let raw = unsafe { ptr::read_volatile(ptr) };
-    // Ensure acquire semantics to match .NET memory model
-    atomic::fence(Ordering::Acquire);
-
-    let value = if raw == 0 {
-        ObjectRef(None)
+    let target_type = if let ParameterType::Ref(inner) = first_param_type {
+        generics.make_concrete(method.resolution(), inner.clone())
     } else {
-        ObjectRef(Some(unsafe { Gc::from_ptr(raw as *const _) }))
+        panic!(
+            "intrinsic_volatile_read: First parameter must be Ref, found {:?}",
+            first_param_type
+        );
     };
 
-    ctx.push_obj(gc, value);
+    match target_type.get() {
+        BaseType::Boolean | BaseType::Int8 | BaseType::UInt8 => {
+            let target_ptr = ctx.pop_managed_ptr(gc);
+            let target = target_ptr
+                .pointer()
+                .expect("Target pointer should not be null")
+                .as_ptr();
+
+            let val = unsafe { StandardAtomicAccess::load_atomic(target, 1, Ordering::Acquire) };
+            ctx.push_i32(gc, val as i32);
+        }
+        BaseType::Int16 | BaseType::UInt16 => {
+            let target_ptr = ctx.pop_managed_ptr(gc);
+            let target = target_ptr
+                .pointer()
+                .expect("Target pointer should not be null")
+                .as_ptr();
+
+            let val = unsafe { StandardAtomicAccess::load_atomic(target, 2, Ordering::Acquire) };
+            ctx.push_i32(gc, val as i32);
+        }
+        BaseType::Int32 | BaseType::UInt32 | BaseType::Float32 => {
+            let target_ptr = ctx.pop_managed_ptr(gc);
+            let target = target_ptr
+                .pointer()
+                .expect("Target pointer should not be null")
+                .as_ptr();
+
+            let val = unsafe { StandardAtomicAccess::load_atomic(target, 4, Ordering::Acquire) };
+            if matches!(target_type.get(), BaseType::Float32) {
+                ctx.push_f64(gc, f32::from_bits(val as u32) as f64);
+            } else {
+                ctx.push_i32(gc, val as i32);
+            }
+        }
+        BaseType::Int64 | BaseType::UInt64 | BaseType::Float64 => {
+            let target_ptr = ctx.pop_managed_ptr(gc);
+            let target = target_ptr
+                .pointer()
+                .expect("Target pointer should not be null")
+                .as_ptr();
+
+            let val = unsafe { StandardAtomicAccess::load_atomic(target, 8, Ordering::Acquire) };
+            if matches!(target_type.get(), BaseType::Float64) {
+                ctx.push_f64(gc, f64::from_bits(val));
+            } else {
+                ctx.push_i64(gc, val as i64);
+            }
+        }
+        BaseType::IntPtr | BaseType::UIntPtr => {
+            let target_ptr = ctx.pop_managed_ptr(gc);
+            let target = target_ptr
+                .pointer()
+                .expect("Target pointer should not be null")
+                .as_ptr();
+
+            let size = std::mem::size_of::<usize>();
+            let val = unsafe { StandardAtomicAccess::load_atomic(target, size, Ordering::Acquire) };
+            ctx.push_isize(gc, val as isize);
+        }
+        _ => {
+            // Assume ObjectRef
+            let target_ptr = ctx.pop_managed_ptr(gc);
+            let target = target_ptr
+                .pointer()
+                .expect("Target pointer should not be null")
+                .as_ptr();
+
+            let size = std::mem::size_of::<usize>();
+            let val = unsafe { StandardAtomicAccess::load_atomic(target, size, Ordering::Acquire) };
+            let obj = if val == 0 {
+                ObjectRef(None)
+            } else {
+                ObjectRef(Some(unsafe { Gc::from_ptr(val as usize as *const _) }))
+            };
+            ctx.push_obj(gc, obj);
+        }
+    }
+
     StepResult::Continue
 }
 
@@ -494,56 +620,74 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let value = ctx.pop(gc);
-    let ptr_val = ctx.pop(gc);
-    let ptr = ptr_val.as_ptr();
+    let target_ptr = ctx.pop_managed_ptr(gc);
+    let target = target_ptr
+        .pointer()
+        .expect("Target pointer should not be null")
+        .as_ptr();
 
-    // Ensure release semantics to match .NET memory model
-    atomic::fence(Ordering::Release);
+    let params = &method.method.signature.parameters;
+    let Parameter(_, target_ref_type) = &params[0];
 
-    let val_param = &method.method.signature.parameters[1].1;
-
-    // Determine if it's a byte-sized type (bool, byte, sbyte)
-    let is_byte = if let ParameterType::Value(MethodType::Base(b)) = val_param {
-        matches!(**b, BaseType::Boolean | BaseType::Int8 | BaseType::UInt8)
-    } else if let ParameterType::Value(MethodType::MethodGeneric(0)) = val_param {
-        // Check generic type
-        if let Some(t) = generics.method_generics.first() {
-            matches!(
-                t.get(),
-                BaseType::Boolean | BaseType::Int8 | BaseType::UInt8
-            )
-        } else {
-            false
-        }
+    let target_type = if let ParameterType::Ref(inner) = target_ref_type {
+        generics.make_concrete(method.resolution(), inner.clone())
     } else {
-        false
+        panic!(
+            "intrinsic_volatile_write: First parameter must be Ref, found {:?}",
+            target_ref_type
+        );
     };
 
-    match value {
-        StackValue::Int32(i) => {
-            if is_byte {
-                unsafe {
-                    ptr::read_volatile(ptr as *const u8);
-                } // Dummy read for volatile? No, Write.
-                unsafe { ptr::write_volatile(ptr, i as u8) };
-            } else {
-                unsafe { ptr::write_volatile(ptr as *mut i32, i) };
-            }
-        }
-        StackValue::ObjectRef(o) => {
-            let raw = match o.0 {
-                Some(ptr) => Gc::as_ptr(ptr) as usize,
-                None => 0,
+    match target_type.get() {
+        BaseType::Boolean | BaseType::Int8 | BaseType::UInt8 => {
+            let val = match value {
+                StackValue::Int32(i) => i as u64,
+                _ => panic!("Expected Int32 for byte-sized Volatile.Write"),
             };
-            unsafe { ptr::write_volatile(ptr as *mut usize, raw) };
+            unsafe { StandardAtomicAccess::store_atomic(target, 1, val, Ordering::Release) };
         }
-        StackValue::NativeInt(i) => {
-            unsafe { ptr::write_volatile(ptr as *mut isize, i) };
+        BaseType::Int16 | BaseType::UInt16 => {
+            let val = match value {
+                StackValue::Int32(i) => i as u64,
+                _ => panic!("Expected Int32 for 16-bit Volatile.Write"),
+            };
+            unsafe { StandardAtomicAccess::store_atomic(target, 2, val, Ordering::Release) };
         }
-        StackValue::Int64(i) => {
-            unsafe { ptr::write_volatile(ptr as *mut i64, i) };
+        BaseType::Int32 | BaseType::UInt32 | BaseType::Float32 => {
+            let val = match value {
+                StackValue::Int32(i) => i as u32 as u64,
+                StackValue::NativeFloat(f) => (f as f32).to_bits() as u64,
+                _ => panic!("Expected Int32 or Float for 32-bit Volatile.Write"),
+            };
+            unsafe { StandardAtomicAccess::store_atomic(target, 4, val, Ordering::Release) };
         }
-        _ => panic!("Volatile.Write not implemented for {:?}", value),
+        BaseType::Int64 | BaseType::UInt64 | BaseType::Float64 => {
+            let val = match value {
+                StackValue::Int64(i) => i as u64,
+                StackValue::NativeFloat(f) => f.to_bits(),
+                _ => panic!("Expected Int64 or Float for 64-bit Volatile.Write"),
+            };
+            unsafe { StandardAtomicAccess::store_atomic(target, 8, val, Ordering::Release) };
+        }
+        BaseType::IntPtr | BaseType::UIntPtr => {
+            let val = match value {
+                StackValue::NativeInt(i) => i as u64,
+                _ => panic!("Expected NativeInt for Volatile.Write"),
+            };
+            let size = std::mem::size_of::<usize>();
+            unsafe { StandardAtomicAccess::store_atomic(target, size, val, Ordering::Release) };
+        }
+        _ => {
+            // Assume ObjectRef
+            let val_raw = match value {
+                StackValue::ObjectRef(ObjectRef(Some(ptr))) => Gc::as_ptr(ptr) as usize as u64,
+                StackValue::ObjectRef(ObjectRef(None)) => 0,
+                StackValue::NativeInt(i) => i as u64,
+                _ => panic!("Expected ObjectRef or NativeInt for Volatile.Write"),
+            };
+            let size = std::mem::size_of::<usize>();
+            unsafe { StandardAtomicAccess::store_atomic(target, size, val_raw, Ordering::Release) };
+        }
     }
 
     StepResult::Continue

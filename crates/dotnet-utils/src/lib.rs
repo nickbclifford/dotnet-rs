@@ -5,6 +5,7 @@ use std::{
 
 pub mod gc;
 pub mod sync;
+pub mod atomic;
 
 pub struct DebugStr(pub String);
 

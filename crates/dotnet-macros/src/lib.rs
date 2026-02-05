@@ -249,101 +249,6 @@ impl Parse for FieldMapping {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_instruction_mapping() {
-        let input = "Add";
-        let parsed: InstructionMapping = syn::parse_str(input).unwrap();
-        match parsed {
-            InstructionMapping::Unit(ident) => assert_eq!(ident, "Add"),
-            _ => panic!("Expected Unit"),
-        }
-
-        let input = "LoadIndirect(param0)";
-        let parsed: InstructionMapping = syn::parse_str(input).unwrap();
-        match parsed {
-            InstructionMapping::Tuple(ident, fields) => {
-                assert_eq!(ident, "LoadIndirect");
-                assert_eq!(fields.len(), 1);
-                assert_eq!(fields[0], "param0");
-            }
-            _ => panic!("Expected Tuple"),
-        }
-
-        let input = "LoadField { param0: field }";
-        let parsed: InstructionMapping = syn::parse_str(input).unwrap();
-        match parsed {
-            InstructionMapping::Struct(ident, fields) => {
-                assert_eq!(ident, "LoadField");
-                assert_eq!(fields.len(), 1);
-                assert_eq!(fields[0].field_name, "param0");
-                assert_eq!(fields[0].binding_name, "field");
-            }
-            _ => panic!("Expected Struct"),
-        }
-
-        let input = "LoadField { param0 }";
-        let parsed: InstructionMapping = syn::parse_str(input).unwrap();
-        match parsed {
-            InstructionMapping::Struct(ident, fields) => {
-                assert_eq!(ident, "LoadField");
-                assert_eq!(fields.len(), 1);
-                assert_eq!(fields[0].field_name, "param0");
-                assert_eq!(fields[0].binding_name, "param0");
-            }
-            _ => panic!("Expected Struct"),
-        }
-    }
-
-    #[test]
-    fn test_instruction_mapping_to_match_arm() {
-        let func_name = Ident::new("my_func", proc_macro2::Span::call_site());
-        let p0 = Ident::new("p0", proc_macro2::Span::call_site());
-        let extra_arg_info = [(&p0, false)];
-
-        // Unit
-        let mapping = InstructionMapping::Unit(Ident::new("Nop", proc_macro2::Span::call_site()));
-        let arm = mapping.to_match_arm(&func_name, &[]);
-        let expected = quote! {
-            Instruction::Nop => my_func(ctx, gc)
-        };
-        assert_eq!(arm.to_string(), expected.to_string());
-
-        // Tuple
-        let mapping = InstructionMapping::Tuple(
-            Ident::new("LoadIndirect", proc_macro2::Span::call_site()),
-            {
-                let mut p = Punctuated::new();
-                p.push(p0.clone());
-                p
-            },
-        );
-        let arm = mapping.to_match_arm(&func_name, &extra_arg_info);
-        let expected = quote! {
-            Instruction::LoadIndirect(p0) => my_func(ctx, gc, *p0)
-        };
-        assert_eq!(arm.to_string(), expected.to_string());
-
-        // Struct
-        let mapping =
-            InstructionMapping::Struct(Ident::new("LoadField", proc_macro2::Span::call_site()), {
-                let mut p = Punctuated::new();
-                p.push(FieldMapping {
-                    field_name: Ident::new("param0", proc_macro2::Span::call_site()),
-                    binding_name: p0.clone(),
-                });
-                p
-            });
-        let arm = mapping.to_match_arm(&func_name, &extra_arg_info);
-        let expected = quote! {
-            Instruction::LoadField { param0: p0, .. } => my_func(ctx, gc, *p0)
-        };
-        assert_eq!(arm.to_string(), expected.to_string());
-    }
-}
 
 #[proc_macro_attribute]
 pub fn dotnet_instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -461,4 +366,101 @@ pub fn dotnet_instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     output.into()
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_instruction_mapping() {
+        let input = "Add";
+        let parsed: InstructionMapping = syn::parse_str(input).unwrap();
+        match parsed {
+            InstructionMapping::Unit(ident) => assert_eq!(ident, "Add"),
+            _ => panic!("Expected Unit"),
+        }
+
+        let input = "LoadIndirect(param0)";
+        let parsed: InstructionMapping = syn::parse_str(input).unwrap();
+        match parsed {
+            InstructionMapping::Tuple(ident, fields) => {
+                assert_eq!(ident, "LoadIndirect");
+                assert_eq!(fields.len(), 1);
+                assert_eq!(fields[0], "param0");
+            }
+            _ => panic!("Expected Tuple"),
+        }
+
+        let input = "LoadField { param0: field }";
+        let parsed: InstructionMapping = syn::parse_str(input).unwrap();
+        match parsed {
+            InstructionMapping::Struct(ident, fields) => {
+                assert_eq!(ident, "LoadField");
+                assert_eq!(fields.len(), 1);
+                assert_eq!(fields[0].field_name, "param0");
+                assert_eq!(fields[0].binding_name, "field");
+            }
+            _ => panic!("Expected Struct"),
+        }
+
+        let input = "LoadField { param0 }";
+        let parsed: InstructionMapping = syn::parse_str(input).unwrap();
+        match parsed {
+            InstructionMapping::Struct(ident, fields) => {
+                assert_eq!(ident, "LoadField");
+                assert_eq!(fields.len(), 1);
+                assert_eq!(fields[0].field_name, "param0");
+                assert_eq!(fields[0].binding_name, "param0");
+            }
+            _ => panic!("Expected Struct"),
+        }
+    }
+
+    #[test]
+    fn test_instruction_mapping_to_match_arm() {
+        let func_name = Ident::new("my_func", proc_macro2::Span::call_site());
+        let p0 = Ident::new("p0", proc_macro2::Span::call_site());
+        let extra_arg_info = [(&p0, false)];
+
+        // Unit
+        let mapping = InstructionMapping::Unit(Ident::new("Nop", proc_macro2::Span::call_site()));
+        let arm = mapping.to_match_arm(&func_name, &[]);
+        let expected = quote! {
+            Instruction::Nop => my_func(ctx, gc)
+        };
+        assert_eq!(arm.to_string(), expected.to_string());
+
+        // Tuple
+        let mapping = InstructionMapping::Tuple(
+            Ident::new("LoadIndirect", proc_macro2::Span::call_site()),
+            {
+                let mut p = Punctuated::new();
+                p.push(p0.clone());
+                p
+            },
+        );
+        let arm = mapping.to_match_arm(&func_name, &extra_arg_info);
+        let expected = quote! {
+            Instruction::LoadIndirect(p0) => my_func(ctx, gc, *p0)
+        };
+        assert_eq!(arm.to_string(), expected.to_string());
+
+        // Struct
+        let mapping =
+            InstructionMapping::Struct(Ident::new("LoadField", proc_macro2::Span::call_site()), {
+                let mut p = Punctuated::new();
+                p.push(FieldMapping {
+                    field_name: Ident::new("param0", proc_macro2::Span::call_site()),
+                    binding_name: p0.clone(),
+                });
+                p
+            });
+        let arm = mapping.to_match_arm(&func_name, &extra_arg_info);
+        let expected = quote! {
+            Instruction::LoadField { param0: p0, .. } => my_func(ctx, gc, *p0)
+        };
+        assert_eq!(arm.to_string(), expected.to_string());
+    }
 }

@@ -122,7 +122,7 @@ impl ThreadManagerOps for ThreadManager {
     /// Returns the managed thread ID assigned to this thread.
     fn register_thread(&self) -> u64 {
         let native_id = thread::current().id();
-        let managed_id = self.next_thread_id.fetch_add(1, Ordering::SeqCst);
+        let managed_id = self.next_thread_id.fetch_add(1, Ordering::Relaxed);
 
         let thread_info = Arc::new(ManagedThread::new(native_id, managed_id));
 

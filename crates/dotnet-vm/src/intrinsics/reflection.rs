@@ -106,7 +106,7 @@ impl<'a, 'gc, 'm: 'gc> ReflectionExtensions<'gc, 'm> for VesContext<'a, 'gc, 'm>
                 let idx = self
                     .shared
                     .next_runtime_type_index
-                    .fetch_add(1, Ordering::SeqCst);
+                    .fetch_add(1, Ordering::Relaxed);
                 self.shared
                     .shared_runtime_types_rev
                     .insert(idx, target.clone());
@@ -316,7 +316,7 @@ impl<'a, 'gc, 'm: 'gc> ReflectionExtensions<'gc, 'm> for VesContext<'a, 'gc, 'm>
                 let idx = self
                     .shared
                     .next_runtime_method_index
-                    .fetch_add(1, Ordering::SeqCst);
+                    .fetch_add(1, Ordering::Relaxed);
                 self.shared
                     .shared_runtime_methods_rev
                     .insert(idx, (method, lookup.clone()));
@@ -375,7 +375,7 @@ impl<'a, 'gc, 'm: 'gc> ReflectionExtensions<'gc, 'm> for VesContext<'a, 'gc, 'm>
                 let idx = self
                     .shared
                     .next_runtime_field_index
-                    .fetch_add(1, Ordering::SeqCst);
+                    .fetch_add(1, Ordering::Relaxed);
                 self.shared
                     .shared_runtime_fields_rev
                     .insert(idx, (field, lookup.clone()));

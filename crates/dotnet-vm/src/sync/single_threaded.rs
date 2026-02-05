@@ -27,7 +27,7 @@ impl SyncBlock {
 
 impl SyncBlockOps for SyncBlock {
     fn try_enter(&self, _thread_id: u64) -> bool {
-        self.recursion_count.fetch_add(1, Ordering::SeqCst);
+        self.recursion_count.fetch_add(1, Ordering::Relaxed);
         true
     }
 
@@ -67,9 +67,9 @@ impl SyncBlockOps for SyncBlock {
     }
 
     fn exit(&self, _thread_id: u64) -> bool {
-        let count = self.recursion_count.load(Ordering::SeqCst);
+        let count = self.recursion_count.load(Ordering::Relaxed);
         if count > 0 {
-            self.recursion_count.fetch_sub(1, Ordering::SeqCst);
+            self.recursion_count.fetch_sub(1, Ordering::Relaxed);
             true
         } else {
             false
@@ -118,7 +118,7 @@ impl SyncManagerOps for SyncBlockManager {
             }
         }
 
-        let index = self.next_index.fetch_add(1, Ordering::SeqCst);
+        let index = self.next_index.fetch_add(1, Ordering::Relaxed);
 
         let block = Arc::new(SyncBlock::new());
         let mut blocks = self.blocks.lock();

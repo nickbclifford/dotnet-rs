@@ -69,6 +69,12 @@ pub struct CacheSizes {
     pub assembly_method_info: (u64, u64, usize),
 }
 
+/// Metrics counters.
+///
+/// All counters use `Ordering::Relaxed` because they are independent and do not
+/// synchronize memory between threads. We only care that they are updated
+/// atomically, not when those updates become visible to other threads relative
+/// to other memory operations.
 #[derive(Debug, Default)]
 pub struct RuntimeMetrics {
     /// Total time spent in GC stop-the-world pauses (in microseconds)

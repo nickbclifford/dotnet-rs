@@ -1,26 +1,28 @@
-use crate::layout::FieldLayoutManager;
+use crate::layout::{FieldLayoutManager, HasLayout};
 use dotnet_types::TypeDescription;
-use dotnet_utils::sync::{MappedRwLockReadGuard, MappedRwLockWriteGuard};
+use dotnet_utils::atomic::Atomic;
+use dotnet_utils::sync::{
+    Arc, MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
+};
 use gc_arena::{Collect, Collection};
 use std::{
     collections::HashSet,
     fmt::{self, Debug, Formatter},
-    sync::Arc,
 };
 
-#[cfg(feature = "multithreading")]
-use dotnet_utils::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-
-#[cfg(not(feature = "multithreading"))]
-use std::cell::RefCell as RwLock;
-
-#[derive(Clone)]
 pub struct FieldStorage {
     layout: Arc<FieldLayoutManager>,
-    #[cfg(feature = "multithreading")]
-    data: Arc<RwLock<Vec<u8>>>, // RwLock is not Clone, wrap in Arc or implement Clone manually
-    #[cfg(not(feature = "multithreading"))]
     data: RwLock<Vec<u8>>,
+}
+
+impl Clone for FieldStorage {
+    fn clone(&self) -> Self {
+        let data = self.data.read();
+        Self {
+            layout: self.layout.clone(),
+            data: RwLock::new(data.clone()),
+        }
+    }
 }
 
 impl PartialEq for FieldStorage {
@@ -28,41 +30,24 @@ impl PartialEq for FieldStorage {
         if !Arc::ptr_eq(&self.layout, &other.layout) {
             return false;
         }
-        #[cfg(feature = "multithreading")]
-        {
-            *self.data.read() == *other.data.read()
-        }
-        #[cfg(not(feature = "multithreading"))]
-        {
-            *self.data.borrow() == *other.data.borrow()
-        }
+        *self.data.read() == *other.data.read()
     }
 }
 
 impl FieldStorage {
     pub fn new(layout: Arc<FieldLayoutManager>, data: Vec<u8>) -> Self {
-        #[cfg(feature = "multithreading")]
-        let data = Arc::new(RwLock::new(data));
-        #[cfg(not(feature = "multithreading"))]
-        let data = RwLock::new(data);
-
-        Self { layout, data }
+        Self {
+            layout,
+            data: RwLock::new(data),
+        }
     }
 
     pub fn get(&self) -> MappedRwLockReadGuard<'_, [u8]> {
-        #[cfg(feature = "multithreading")]
-        return RwLockReadGuard::map(self.data.read(), |v| v.as_slice());
-        #[cfg(not(feature = "multithreading"))]
-        return std::cell::Ref::map(self.data.borrow(), |v| v.as_slice());
+        RwLockReadGuard::map(self.data.read(), |v| v.as_slice())
     }
 
-    // Note: get_mut returning MappedRwLockWriteGuard might be tricky if we need &mut [u8].
-    // If the caller needs to write back, MappedRwLockWriteGuard works.
     pub fn get_mut(&self) -> MappedRwLockWriteGuard<'_, [u8]> {
-        #[cfg(feature = "multithreading")]
-        return RwLockWriteGuard::map(self.data.write(), |v| v.as_mut_slice());
-        #[cfg(not(feature = "multithreading"))]
-        return std::cell::RefMut::map(self.data.borrow_mut(), |v| v.as_mut_slice());
+        RwLockWriteGuard::map(self.data.write(), |v| v.as_mut_slice())
     }
 
     pub fn layout(&self) -> &Arc<FieldLayoutManager> {
@@ -81,10 +66,7 @@ impl FieldStorage {
         let field = self.layout.get_field(owner, name).expect("Field not found");
         let range = field.as_range();
 
-        #[cfg(feature = "multithreading")]
-        return RwLockReadGuard::map(self.data.read(), |v| &v[range]);
-        #[cfg(not(feature = "multithreading"))]
-        return std::cell::Ref::map(self.data.borrow(), |v| &v[range]);
+        RwLockReadGuard::map(self.data.read(), |v| &v[range])
     }
 
     pub fn get_field_mut_local(
@@ -95,13 +77,13 @@ impl FieldStorage {
         let field = self.layout.get_field(owner, name).expect("Field not found");
         let range = field.as_range();
 
-        #[cfg(feature = "multithreading")]
-        return RwLockWriteGuard::map(self.data.write(), |v| &mut v[range]);
-        #[cfg(not(feature = "multithreading"))]
-        return std::cell::RefMut::map(self.data.borrow_mut(), |v| &mut v[range]);
+        RwLockWriteGuard::map(self.data.write(), |v| &mut v[range])
     }
 
-    pub fn get_field_atomic(
+    /// Returns a copy of the field's data, synchronized via RwLock to prevent tearing.
+    /// NOTE: This method ignores the `Ordering` parameter and should only be used
+    /// for non-volatile access where tearing prevention is the primary concern.
+    pub fn get_field_synchronized(
         &self,
         owner: TypeDescription,
         name: &str,
@@ -111,7 +93,8 @@ impl FieldStorage {
         self.get_field_local(owner, name).to_vec()
     }
 
-    pub fn set_field_atomic(
+    /// Sets the field's data, synchronized via RwLock to prevent tearing.
+    pub fn set_field_synchronized(
         &self,
         owner: TypeDescription,
         name: &str,
@@ -122,17 +105,45 @@ impl FieldStorage {
         dest.copy_from_slice(value);
     }
 
+    /// Returns a copy of the field's data using atomic operations for supported sizes.
+    /// This method respects the provided `Ordering` and is suitable for volatile access.
+    /// It still acquires a read lock to ensure memory safety and prevent tearing
+    /// against synchronized writers for large field sizes.
+    pub fn get_field_atomic(
+        &self,
+        owner: TypeDescription,
+        name: &str,
+        ord: std::sync::atomic::Ordering,
+    ) -> Vec<u8> {
+        let field = self.layout.get_field(owner, name).expect("Field not found");
+        let size = field.layout.size();
+        let data = self.get();
+        let ptr = data.as_ptr();
+        let field_ptr = unsafe { ptr.add(field.position) };
+        unsafe { Atomic::load_field(field_ptr, size, ord) }
+    }
+
+    /// Sets the field's data using atomic operations for supported sizes.
+    /// This method respects the provided `Ordering` and is suitable for volatile access.
+    /// It acquires a write lock to ensure memory safety and prevent tearing
+    /// against other synchronized readers/writers for large field sizes.
+    pub fn set_field_atomic(
+        &self,
+        owner: TypeDescription,
+        name: &str,
+        value: &[u8],
+        ord: std::sync::atomic::Ordering,
+    ) {
+        let field = self.layout.get_field(owner, name).expect("Field not found");
+        // Let's just use get_mut() to be safe and consistent with synchronized.
+        let data = self.get_mut();
+        let ptr = data.as_ptr() as *mut u8;
+        let field_ptr = unsafe { ptr.add(field.position) };
+        unsafe { Atomic::store_field(field_ptr, value, ord) }
+    }
+
     unsafe fn raw_data_unsynchronized(&self) -> &[u8] {
-        unsafe {
-            #[cfg(feature = "multithreading")]
-            {
-                &*self.data.data_ptr()
-            }
-            #[cfg(not(feature = "multithreading"))]
-            {
-                &*self.data.as_ptr()
-            }
-        }
+        unsafe { &*self.data.data_ptr() }
     }
 
     pub fn resurrect<'gc>(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
@@ -157,11 +168,7 @@ unsafe impl Collect for FieldStorage {
 
 impl Debug for FieldStorage {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        #[cfg(feature = "multithreading")]
         let len = self.data.read().len();
-        #[cfg(not(feature = "multithreading"))]
-        let len = self.data.borrow().len();
-
         write!(f, "FieldStorage({} bytes)", len)
     }
 }

@@ -5,30 +5,106 @@
 //! Low-level modules can depend on this without pulling in the entire VM subsystem.
 #[cfg(not(feature = "multithreading"))]
 pub mod compat {
-    use std::sync::{self, MutexGuard, RwLockReadGuard, RwLockWriteGuard};
-    #[derive(Debug)]
-    pub struct Mutex<T>(sync::Mutex<T>);
+    use std::cell::{Ref, RefCell, RefMut};
+    use std::ops::{Deref, DerefMut};
+
+    #[derive(Debug, Default)]
+    pub struct Mutex<T>(RefCell<T>);
     impl<T> Mutex<T> {
         pub fn new(t: T) -> Self {
-            Self(sync::Mutex::new(t))
+            Self(RefCell::new(t))
         }
         pub fn lock(&self) -> MutexGuard<'_, T> {
-            self.0.lock().unwrap()
+            MutexGuard(self.0.borrow_mut())
         }
     }
-    #[derive(Debug)]
-    pub struct RwLock<T>(sync::RwLock<T>);
+
+    pub struct MutexGuard<'a, T>(RefMut<'a, T>);
+    impl<T> Deref for MutexGuard<'_, T> {
+        type Target = T;
+        fn deref(&self) -> &T {
+            &self.0
+        }
+    }
+    impl<T> DerefMut for MutexGuard<'_, T> {
+        fn deref_mut(&mut self) -> &mut T {
+            &mut self.0
+        }
+    }
+
+    #[derive(Debug, Default)]
+    pub struct RwLock<T>(RefCell<T>);
     impl<T> RwLock<T> {
         pub fn new(t: T) -> Self {
-            Self(sync::RwLock::new(t))
+            Self(RefCell::new(t))
         }
         pub fn read(&self) -> RwLockReadGuard<'_, T> {
-            self.0.read().unwrap()
+            RwLockReadGuard(self.0.borrow())
         }
         pub fn write(&self) -> RwLockWriteGuard<'_, T> {
-            self.0.write().unwrap()
+            RwLockWriteGuard(self.0.borrow_mut())
+        }
+        /// Get a pointer to the inner data.
+        ///
+        /// # Safety
+        ///
+        /// Caller must ensure they have proper access to the data and that the
+        /// pointer does not outlive the lock.
+        pub unsafe fn data_ptr(&self) -> *mut T {
+            self.0.as_ptr()
+        }
+        pub fn try_read(&self) -> Option<RwLockReadGuard<'_, T>> {
+            self.0.try_borrow().ok().map(RwLockReadGuard)
+        }
+        pub fn try_write(&self) -> Option<RwLockWriteGuard<'_, T>> {
+            self.0.try_borrow_mut().ok().map(RwLockWriteGuard)
         }
     }
+
+    // SAFETY: In single-threaded mode, we can safely share across "threads"
+    // because there is only one.
+    unsafe impl<T> Sync for Mutex<T> {}
+    unsafe impl<T> Send for Mutex<T> {}
+    unsafe impl<T> Sync for RwLock<T> {}
+    unsafe impl<T> Send for RwLock<T> {}
+
+    pub struct RwLockReadGuard<'a, T>(Ref<'a, T>);
+    impl<T> Deref for RwLockReadGuard<'_, T> {
+        type Target = T;
+        fn deref(&self) -> &T {
+            &self.0
+        }
+    }
+    impl<'a, T> RwLockReadGuard<'a, T> {
+        pub fn map<U: ?Sized, F>(this: Self, f: F) -> MappedRwLockReadGuard<'a, U>
+        where
+            F: FnOnce(&T) -> &U,
+        {
+            Ref::map(this.0, f)
+        }
+    }
+
+    pub struct RwLockWriteGuard<'a, T>(RefMut<'a, T>);
+    impl<T> Deref for RwLockWriteGuard<'_, T> {
+        type Target = T;
+        fn deref(&self) -> &T {
+            &self.0
+        }
+    }
+    impl<T> DerefMut for RwLockWriteGuard<'_, T> {
+        fn deref_mut(&mut self) -> &mut T {
+            &mut self.0
+        }
+    }
+    impl<'a, T> RwLockWriteGuard<'a, T> {
+        pub fn map<U: ?Sized, F>(this: Self, f: F) -> MappedRwLockWriteGuard<'a, U>
+        where
+            F: FnOnce(&mut T) -> &mut U,
+        {
+            RefMut::map(this.0, f)
+        }
+    }
+
     #[derive(Debug, Default)]
     pub struct Condvar(());
     impl Condvar {
@@ -39,20 +115,9 @@ pub mod compat {
         pub fn notify_all(&self) {}
         pub fn wait<T>(&self, _guard: &mut MutexGuard<'_, T>) {}
     }
-    pub struct MappedRwLockReadGuard<'a, T: ?Sized>(std::cell::Ref<'a, T>);
-    impl<'a, T: ?Sized> std::ops::Deref for MappedRwLockReadGuard<'a, T> {
-        type Target = T;
-        fn deref(&self) -> &T {
-            &self.0
-        }
-    }
-    pub struct MappedRwLockWriteGuard<'a, T: ?Sized>(std::cell::RefMut<'a, T>);
-    impl<'a, T: ?Sized> std::ops::Deref for MappedRwLockWriteGuard<'a, T> {
-        type Target = T;
-        fn deref(&self) -> &T {
-            &self.0
-        }
-    }
+
+    pub type MappedRwLockReadGuard<'a, T> = Ref<'a, T>;
+    pub type MappedRwLockWriteGuard<'a, T> = RefMut<'a, T>;
 }
 
 pub use std::sync::{
@@ -89,7 +154,3 @@ pub use parking_lot::{
 
 #[cfg(not(feature = "multithreading"))]
 pub use compat::*;
-#[cfg(not(feature = "multithreading"))]
-pub use std::cell::{Ref as MappedRwLockReadGuard, RefMut as MappedRwLockWriteGuard};
-#[cfg(not(feature = "multithreading"))]
-pub use std::sync::{MutexGuard, RwLockReadGuard, RwLockWriteGuard};

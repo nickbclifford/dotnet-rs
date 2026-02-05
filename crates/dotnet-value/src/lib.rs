@@ -3,11 +3,9 @@ use dotnet_utils::gc::record_cross_arena_ref;
 
 use dotnet_types::TypeDescription;
 use dotnet_utils::{
+    atomic::{AtomicAccess, StandardAtomicAccess},
     gc::{GCHandle, ThreadSafeLock},
-    sync::{
-        AtomicI8, AtomicI16, AtomicI32, AtomicI64, AtomicIsize, AtomicU8, AtomicU16, AtomicU32,
-        AtomicU64, AtomicUsize, Ordering as AtomicOrdering,
-    },
+    sync::{Ordering as AtomicOrdering},
 };
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, Collection, Gc};
@@ -25,6 +23,8 @@ mod object_tests;
 pub mod pointer;
 pub mod storage;
 pub mod string;
+#[cfg(test)]
+mod atomic_tests;
 
 pub use object::{HeapStorage, Object, ObjectRef};
 pub use pointer::{ManagedPtr, UnmanagedPtr};
@@ -389,38 +389,29 @@ impl<'gc> StackValue<'gc> {
                 t
             );
 
+            let size = match t {
+                LoadType::Int8 | LoadType::UInt8 => 1,
+                LoadType::Int16 | LoadType::UInt16 => 2,
+                LoadType::Int32 | LoadType::UInt32 | LoadType::Float32 => 4,
+                LoadType::Int64 | LoadType::Float64 => 8,
+                LoadType::IntPtr => std::mem::size_of::<isize>(),
+                LoadType::Object => std::mem::size_of::<usize>(),
+            };
+
+            let val = StandardAtomicAccess::load_atomic(ptr, size, ordering);
+
             match t {
-                LoadType::Int8 => {
-                    Self::Int32(AtomicI8::from_ptr(ptr as *mut i8).load(ordering) as i32)
-                }
-                LoadType::UInt8 => {
-                    Self::Int32(AtomicU8::from_ptr(ptr as *mut u8).load(ordering) as i32)
-                }
-                LoadType::Int16 => {
-                    Self::Int32(AtomicI16::from_ptr(ptr as *mut i16).load(ordering) as i32)
-                }
-                LoadType::UInt16 => {
-                    Self::Int32(AtomicU16::from_ptr(ptr as *mut u16).load(ordering) as i32)
-                }
-                LoadType::Int32 => Self::Int32(AtomicI32::from_ptr(ptr as *mut i32).load(ordering)),
-                LoadType::UInt32 => {
-                    Self::Int32(AtomicU32::from_ptr(ptr as *mut u32).load(ordering) as i32)
-                }
-                LoadType::Int64 => Self::Int64(AtomicI64::from_ptr(ptr as *mut i64).load(ordering)),
-                LoadType::Float32 => {
-                    let val = AtomicU32::from_ptr(ptr as *mut u32).load(ordering);
-                    Self::NativeFloat(f32::from_bits(val) as f64)
-                }
-                LoadType::Float64 => {
-                    let val = AtomicU64::from_ptr(ptr as *mut u64).load(ordering);
-                    Self::NativeFloat(f64::from_bits(val))
-                }
-                LoadType::IntPtr => {
-                    Self::NativeInt(AtomicIsize::from_ptr(ptr as *mut isize).load(ordering))
-                }
+                LoadType::Int8 => Self::Int32(val as i8 as i32),
+                LoadType::UInt8 => Self::Int32(val as u8 as i32),
+                LoadType::Int16 => Self::Int32(val as i16 as i32),
+                LoadType::UInt16 => Self::Int32(val as u16 as i32),
+                LoadType::Int32 | LoadType::UInt32 => Self::Int32(val as i32),
+                LoadType::Int64 => Self::Int64(val as i64),
+                LoadType::Float32 => Self::NativeFloat(f32::from_bits(val as u32) as f64),
+                LoadType::Float64 => Self::NativeFloat(f64::from_bits(val)),
+                LoadType::IntPtr => Self::NativeInt(val as isize),
                 LoadType::Object => {
-                    let val = AtomicUsize::from_ptr(ptr as *mut usize).load(ordering);
-                    let ptr = val as *const ThreadSafeLock<object::ObjectInner<'gc>>;
+                    let ptr = val as usize as *const ThreadSafeLock<object::ObjectInner<'gc>>;
                     if ptr.is_null() {
                         Self::ObjectRef(ObjectRef(None))
                     } else {
@@ -455,39 +446,25 @@ impl<'gc> StackValue<'gc> {
                 t
             );
 
-            match t {
-                StoreType::Int8 => {
-                    AtomicI8::from_ptr(ptr as *mut i8).store(self.as_i32() as i8, ordering)
-                }
-                StoreType::Int16 => {
-                    AtomicI16::from_ptr(ptr as *mut i16).store(self.as_i32() as i16, ordering)
-                }
-                StoreType::Int32 => {
-                    AtomicI32::from_ptr(ptr as *mut i32).store(self.as_i32(), ordering)
-                }
-                StoreType::Int64 => {
-                    AtomicI64::from_ptr(ptr as *mut i64).store(self.as_i64(), ordering)
-                }
-                StoreType::Float32 => {
-                    let val = (self.as_f64() as f32).to_bits();
-                    AtomicU32::from_ptr(ptr as *mut u32).store(val, ordering);
-                }
-                StoreType::Float64 => {
-                    let val = self.as_f64().to_bits();
-                    AtomicU64::from_ptr(ptr as *mut u64).store(val, ordering);
-                }
-                StoreType::IntPtr => {
-                    AtomicIsize::from_ptr(ptr as *mut isize).store(self.as_isize(), ordering)
-                }
+            let (val, size) = match t {
+                StoreType::Int8 => (self.as_i32() as u64, 1),
+                StoreType::Int16 => (self.as_i32() as u64, 2),
+                StoreType::Int32 => (self.as_i32() as u64, 4),
+                StoreType::Int64 => (self.as_i64() as u64, 8),
+                StoreType::Float32 => ((self.as_f64() as f32).to_bits() as u64, 4),
+                StoreType::Float64 => (self.as_f64().to_bits(), 8),
+                StoreType::IntPtr => (self.as_isize() as u64, std::mem::size_of::<isize>()),
                 StoreType::Object => {
                     let obj = self.as_object_ref();
                     let val = match obj.0 {
                         Some(h) => Gc::as_ptr(h) as usize,
                         None => 0,
                     };
-                    AtomicUsize::from_ptr(ptr as *mut usize).store(val, ordering);
+                    (val as u64, std::mem::size_of::<usize>())
                 }
-            }
+            };
+
+            StandardAtomicAccess::store_atomic(ptr, size, val, ordering);
         }
     }
 }

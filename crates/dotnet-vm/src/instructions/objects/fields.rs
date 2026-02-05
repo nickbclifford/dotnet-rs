@@ -1,9 +1,9 @@
 use crate::{
-    StepResult, intrinsics::intrinsic_field, layout::LayoutFactory, resolution::ValueResolution,
-    stack::VesContext, sync::Ordering as AtomicOrdering,
+    StepResult, intrinsics::intrinsic_field, layout::LayoutFactory, memory::Atomic,
+    resolution::ValueResolution, stack::VesContext, sync::Ordering as AtomicOrdering,
 };
 use dotnet_macros::dotnet_instruction;
-use dotnet_utils::{gc::GCHandle, is_ptr_aligned_to_field};
+use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     StackValue,
     layout::HasLayout,
@@ -128,36 +128,8 @@ pub fn ldfld<'gc, 'm: 'gc>(
     let size = field_layout.layout.size();
     let field_ptr = unsafe { ptr.add(field_layout.position) };
 
-    let value = if size <= std::mem::size_of::<usize>() && is_ptr_aligned_to_field(field_ptr, size)
-    {
-        match size {
-            1 => {
-                let val = unsafe { (*(field_ptr as *const crate::sync::AtomicU8)).load(ordering) };
-                read_data(&val.to_ne_bytes())
-            }
-            2 => {
-                let val = unsafe { (*(field_ptr as *const crate::sync::AtomicU16)).load(ordering) };
-                read_data(&val.to_ne_bytes())
-            }
-            4 => {
-                let val = unsafe { (*(field_ptr as *const crate::sync::AtomicU32)).load(ordering) };
-                read_data(&val.to_ne_bytes())
-            }
-            8 => {
-                let val = unsafe { (*(field_ptr as *const crate::sync::AtomicU64)).load(ordering) };
-                read_data(&val.to_ne_bytes())
-            }
-            _ => {
-                let mut buf = vec![0u8; size];
-                unsafe { ptr::copy_nonoverlapping(field_ptr, buf.as_mut_ptr(), size) };
-                read_data(&buf)
-            }
-        }
-    } else {
-        let mut buf = vec![0u8; size];
-        unsafe { ptr::copy_nonoverlapping(field_ptr, buf.as_mut_ptr(), size) };
-        read_data(&buf)
-    };
+    let val_bytes = unsafe { Atomic::load_field(field_ptr, size, ordering) };
+    let value = read_data(&val_bytes);
 
     ctx.push(gc, value.into_stack(gc));
     StepResult::Continue
@@ -237,33 +209,7 @@ pub fn stfld<'gc, 'm: 'gc>(
     let mut val_bytes = vec![0u8; size];
     res_ctx.new_cts_value(&t, value).write(&mut val_bytes);
 
-    if size <= std::mem::size_of::<usize>() && is_ptr_aligned_to_field(field_ptr, size) {
-        match size {
-            1 => unsafe {
-                (*(field_ptr as *const crate::sync::AtomicU8))
-                    .store(u8::from_ne_bytes(val_bytes.try_into().unwrap()), ordering)
-            },
-            2 => unsafe {
-                (*(field_ptr as *const crate::sync::AtomicU16))
-                    .store(u16::from_ne_bytes(val_bytes.try_into().unwrap()), ordering)
-            },
-            4 => unsafe {
-                (*(field_ptr as *const crate::sync::AtomicU32))
-                    .store(u32::from_ne_bytes(val_bytes.try_into().unwrap()), ordering)
-            },
-            8 => unsafe {
-                (*(field_ptr as *const crate::sync::AtomicU64))
-                    .store(u64::from_ne_bytes(val_bytes.try_into().unwrap()), ordering)
-            },
-            _ => unsafe {
-                ptr::copy_nonoverlapping(val_bytes.as_ptr(), field_ptr, size);
-            },
-        }
-    } else {
-        unsafe {
-            ptr::copy_nonoverlapping(val_bytes.as_ptr(), field_ptr, size);
-        }
-    }
+    unsafe { Atomic::store_field(field_ptr, &val_bytes, ordering) };
 
     StepResult::Continue
 }
