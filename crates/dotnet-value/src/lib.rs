@@ -5,7 +5,7 @@ use dotnet_types::TypeDescription;
 use dotnet_utils::{
     atomic::{AtomicAccess, StandardAtomicAccess},
     gc::{GCHandle, ThreadSafeLock},
-    sync::{Ordering as AtomicOrdering},
+    sync::Ordering as AtomicOrdering,
 };
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, Collection, Gc};
@@ -16,6 +16,8 @@ use std::{
     ptr::NonNull,
 };
 
+#[cfg(test)]
+mod atomic_tests;
 pub mod layout;
 pub mod object;
 #[cfg(test)]
@@ -23,8 +25,6 @@ mod object_tests;
 pub mod pointer;
 pub mod storage;
 pub mod string;
-#[cfg(test)]
-mod atomic_tests;
 
 pub use object::{HeapStorage, Object, ObjectRef};
 pub use pointer::{ManagedPtr, UnmanagedPtr};

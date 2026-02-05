@@ -3,9 +3,9 @@ use std::{
     mem::align_of,
 };
 
+pub mod atomic;
 pub mod gc;
 pub mod sync;
-pub mod atomic;
 
 pub struct DebugStr(pub String);
 

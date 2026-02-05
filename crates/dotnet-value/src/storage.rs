@@ -1,8 +1,11 @@
 use crate::layout::{FieldLayoutManager, HasLayout};
 use dotnet_types::TypeDescription;
-use dotnet_utils::atomic::Atomic;
-use dotnet_utils::sync::{
-    Arc, MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
+use dotnet_utils::{
+    atomic::Atomic,
+    sync::{
+        Arc, MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLock, RwLockReadGuard,
+        RwLockWriteGuard,
+    },
 };
 use gc_arena::{Collect, Collection};
 use std::{

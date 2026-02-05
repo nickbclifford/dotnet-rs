@@ -249,7 +249,6 @@ impl Parse for FieldMapping {
     }
 }
 
-
 #[proc_macro_attribute]
 pub fn dotnet_instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mapping = parse_macro_input!(attr as InstructionMapping);
@@ -367,7 +366,6 @@ pub fn dotnet_instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     output.into()
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -5,8 +5,10 @@ use crate::{
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
-use dotnet_utils::atomic::{AtomicAccess, StandardAtomicAccess};
-use dotnet_utils::gc::GCHandle;
+use dotnet_utils::{
+    atomic::{AtomicAccess, StandardAtomicAccess},
+    gc::GCHandle,
+};
 use dotnet_value::{StackValue, object::ObjectRef};
 use dotnetdll::prelude::{BaseType, Parameter, ParameterType};
 use gc_arena::Gc;
@@ -301,7 +303,12 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
 
             let size = std::mem::size_of::<usize>();
             let prev_raw = unsafe {
-                StandardAtomicAccess::exchange_atomic(target, size, val_raw as u64, Ordering::SeqCst)
+                StandardAtomicAccess::exchange_atomic(
+                    target,
+                    size,
+                    val_raw as u64,
+                    Ordering::SeqCst,
+                )
             } as usize;
 
             let prev = if prev_raw == 0 {

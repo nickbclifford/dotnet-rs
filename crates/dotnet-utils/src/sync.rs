@@ -7,7 +7,6 @@
 pub mod compat {
     use std::cell::{Ref, RefCell, RefMut};
     use std::ops::{Deref, DerefMut};
-
     #[derive(Debug, Default)]
     pub struct Mutex<T>(RefCell<T>);
     impl<T> Mutex<T> {
@@ -18,7 +17,6 @@ pub mod compat {
             MutexGuard(self.0.borrow_mut())
         }
     }
-
     pub struct MutexGuard<'a, T>(RefMut<'a, T>);
     impl<T> Deref for MutexGuard<'_, T> {
         type Target = T;
@@ -31,7 +29,6 @@ pub mod compat {
             &mut self.0
         }
     }
-
     #[derive(Debug, Default)]
     pub struct RwLock<T>(RefCell<T>);
     impl<T> RwLock<T> {
@@ -60,14 +57,10 @@ pub mod compat {
             self.0.try_borrow_mut().ok().map(RwLockWriteGuard)
         }
     }
-
-    // SAFETY: In single-threaded mode, we can safely share across "threads"
-    // because there is only one.
     unsafe impl<T> Sync for Mutex<T> {}
     unsafe impl<T> Send for Mutex<T> {}
     unsafe impl<T> Sync for RwLock<T> {}
     unsafe impl<T> Send for RwLock<T> {}
-
     pub struct RwLockReadGuard<'a, T>(Ref<'a, T>);
     impl<T> Deref for RwLockReadGuard<'_, T> {
         type Target = T;
@@ -83,7 +76,6 @@ pub mod compat {
             Ref::map(this.0, f)
         }
     }
-
     pub struct RwLockWriteGuard<'a, T>(RefMut<'a, T>);
     impl<T> Deref for RwLockWriteGuard<'_, T> {
         type Target = T;
@@ -104,7 +96,6 @@ pub mod compat {
             RefMut::map(this.0, f)
         }
     }
-
     #[derive(Debug, Default)]
     pub struct Condvar(());
     impl Condvar {
@@ -115,7 +106,6 @@ pub mod compat {
         pub fn notify_all(&self) {}
         pub fn wait<T>(&self, _guard: &mut MutexGuard<'_, T>) {}
     }
-
     pub type MappedRwLockReadGuard<'a, T> = Ref<'a, T>;
     pub type MappedRwLockWriteGuard<'a, T> = RefMut<'a, T>;
 }

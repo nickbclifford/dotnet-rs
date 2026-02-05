@@ -1,9 +1,9 @@
 #[cfg(feature = "multithreading")]
-use std::sync::atomic::{
-    AtomicU8, AtomicU16, AtomicU32, AtomicU64,
-};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, AtomicU64};
+
 use crate::is_ptr_aligned_to_field;
+use std::sync::atomic::Ordering;
+
 #[cfg(not(feature = "multithreading"))]
 use std::ptr;
 
@@ -101,9 +101,8 @@ impl AtomicAccess for StandardAtomicAccess {
                     .map_err(|x| x as u64)
             },
             8 => unsafe {
-                AtomicU64::from_ptr(ptr as *mut u64).compare_exchange(
-                    expected, new, success, failure,
-                )
+                AtomicU64::from_ptr(ptr as *mut u64)
+                    .compare_exchange(expected, new, success, failure)
             },
             _ => panic!("Unsupported atomic size: {}", size),
         }
@@ -176,7 +175,8 @@ impl Atomic {
     /// # Safety
     /// Caller must ensure `ptr` is valid for `size` bytes.
     pub unsafe fn load_field(ptr: *const u8, size: usize, ordering: Ordering) -> Vec<u8> {
-        if (size == 1 || size == 2 || size == 4 || size == 8) && is_ptr_aligned_to_field(ptr, size) {
+        if (size == 1 || size == 2 || size == 4 || size == 8) && is_ptr_aligned_to_field(ptr, size)
+        {
             let val = unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) };
             match size {
                 1 => (val as u8).to_ne_bytes().to_vec(),
@@ -196,7 +196,8 @@ impl Atomic {
     /// Caller must ensure `ptr` is valid for `value.len()` bytes.
     pub unsafe fn store_field(ptr: *mut u8, value: &[u8], ordering: Ordering) {
         let size = value.len();
-        if (size == 1 || size == 2 || size == 4 || size == 8) && is_ptr_aligned_to_field(ptr, size) {
+        if (size == 1 || size == 2 || size == 4 || size == 8) && is_ptr_aligned_to_field(ptr, size)
+        {
             let val = match size {
                 1 => u8::from_ne_bytes(value.try_into().unwrap()) as u64,
                 2 => u16::from_ne_bytes(value.try_into().unwrap()) as u64,
@@ -223,21 +224,33 @@ mod tests {
 
         unsafe {
             StandardAtomicAccess::store_atomic(ptr, 1, 0xAA, Ordering::SeqCst);
-            assert_eq!(StandardAtomicAccess::load_atomic(ptr, 1, Ordering::SeqCst), 0xAA);
+            assert_eq!(
+                StandardAtomicAccess::load_atomic(ptr, 1, Ordering::SeqCst),
+                0xAA
+            );
             assert_eq!(data[0] as u8, 0xAA);
 
             StandardAtomicAccess::store_atomic(ptr.add(2), 2, 0xBBCC, Ordering::SeqCst);
-            assert_eq!(StandardAtomicAccess::load_atomic(ptr.add(2), 2, Ordering::SeqCst), 0xBBCC);
+            assert_eq!(
+                StandardAtomicAccess::load_atomic(ptr.add(2), 2, Ordering::SeqCst),
+                0xBBCC
+            );
             // On little-endian, 0xBBCC at offset 2 in u64:
             // [00 00 CC BB 00 00 00 00]
             assert_eq!((data[0] >> 16) as u16, 0xBBCC);
 
             StandardAtomicAccess::store_atomic(ptr.add(4), 4, 0xDEADBEEF, Ordering::SeqCst);
-            assert_eq!(StandardAtomicAccess::load_atomic(ptr.add(4), 4, Ordering::SeqCst), 0xDEADBEEF);
+            assert_eq!(
+                StandardAtomicAccess::load_atomic(ptr.add(4), 4, Ordering::SeqCst),
+                0xDEADBEEF
+            );
             assert_eq!((data[0] >> 32) as u32, 0xDEADBEEF);
 
             StandardAtomicAccess::store_atomic(ptr.add(8), 8, 0x0123456789ABCDEF, Ordering::SeqCst);
-            assert_eq!(StandardAtomicAccess::load_atomic(ptr.add(8), 8, Ordering::SeqCst), 0x0123456789ABCDEF);
+            assert_eq!(
+                StandardAtomicAccess::load_atomic(ptr.add(8), 8, Ordering::SeqCst),
+                0x0123456789ABCDEF
+            );
             assert_eq!(data[1], 0x0123456789ABCDEF);
         }
     }
@@ -260,4 +273,3 @@ mod tests {
         }
     }
 }
-
