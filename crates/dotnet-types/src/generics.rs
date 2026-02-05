@@ -1,8 +1,10 @@
 use crate::{TypeDescription, resolution::ResolutionS};
 use dotnetdll::prelude::{BaseType, MethodType, Resolution, ResolvedDebug, TypeSource, UserType};
 use gc_arena::{Collect, Collection};
-use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::{
+    fmt::{Debug, Formatter},
+    sync::Arc,
+};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ConcreteType {
@@ -87,8 +89,8 @@ unsafe impl Collect for GenericLookup {
 
 impl GenericLookup {
     pub fn cache_key_hash(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();
         self.hash(&mut hasher);
         hasher.finish()

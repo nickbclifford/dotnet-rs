@@ -1,4 +1,9 @@
-use crate::{MethodType, resolver::ResolverService, state::{GlobalCaches, SharedGlobalState}, sync::Arc};
+use crate::{
+    MethodType,
+    resolver::ResolverService,
+    state::{GlobalCaches, SharedGlobalState},
+    sync::Arc,
+};
 use dotnet_assemblies::{Ancestor, AssemblyLoader};
 use dotnet_types::{
     TypeDescription,

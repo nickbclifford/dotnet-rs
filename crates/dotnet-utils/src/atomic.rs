@@ -2,10 +2,7 @@
 use std::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, AtomicU64};
 
 use crate::is_ptr_aligned_to_field;
-use std::{
-    sync::atomic::Ordering,
-    ptr
-};
+use std::{ptr, sync::atomic::Ordering};
 
 /// Unified atomic memory access operations.
 ///

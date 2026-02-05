@@ -110,12 +110,12 @@ use dotnet_types::{
     members::{FieldDescription, MethodDescription},
 };
 use dotnet_utils::gc::GCHandle;
-use std::sync::Arc;
 use dotnet_value::{
     StackValue,
     object::{HeapStorage, ObjectRef},
     string::CLRString,
 };
+use std::sync::Arc;
 
 pub mod array_ops;
 pub mod diagnostics;
@@ -327,8 +327,13 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _res_ctx =
-        ResolutionContext::for_method(method, ctx.loader(), generics, ctx.shared.caches.clone(), Some(ctx.shared.clone()));
+    let _res_ctx = ResolutionContext::for_method(
+        method,
+        ctx.loader(),
+        generics,
+        ctx.shared.caches.clone(),
+        Some(ctx.shared.clone()),
+    );
 
     vm_trace_intrinsic!(
         ctx,

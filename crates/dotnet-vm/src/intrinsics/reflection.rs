@@ -864,10 +864,12 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
                             method: m,
                         },
                         if let RuntimeType::Generic(_, type_generics) = rt {
-                            GenericLookup::new(type_generics
-                                .iter()
-                                .map(|t| t.to_concrete(ctx.loader()))
-                                .collect())
+                            GenericLookup::new(
+                                type_generics
+                                    .iter()
+                                    .map(|t| t.to_concrete(ctx.loader()))
+                                    .collect(),
+                            )
                         } else {
                             ctx.shared.empty_generics.clone()
                         },
@@ -1046,8 +1048,13 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let res_ctx =
-        ResolutionContext::for_method(method, ctx.loader(), generics, ctx.shared.caches.clone(), Some(ctx.shared.clone()));
+    let res_ctx = ResolutionContext::for_method(
+        method,
+        ctx.loader(),
+        generics,
+        ctx.shared.caches.clone(),
+        Some(ctx.shared.clone()),
+    );
     let obj = ctx.pop(gc);
     let object_type = match obj {
         StackValue::ObjectRef(ObjectRef(Some(h))) => res_ctx.get_heap_description(h),
@@ -1144,8 +1151,13 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
 ) -> StepResult {
     let target_ct = generics.method_generics[0].clone();
     let target_td = ctx.loader().find_concrete_type(target_ct.clone());
-    let res_ctx =
-        ResolutionContext::for_method(method, ctx.loader(), generics, ctx.shared.caches.clone(), Some(ctx.shared.clone()));
+    let res_ctx = ResolutionContext::for_method(
+        method,
+        ctx.loader(),
+        generics,
+        ctx.shared.caches.clone(),
+        Some(ctx.shared.clone()),
+    );
 
     if target_td.is_value_type(&ctx.current_context()) {
         let instance = res_ctx.new_object(target_td);
@@ -1349,14 +1361,13 @@ pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc>(
     let obj = ctx.pop_obj(gc);
 
     let rth = ctx.loader().corlib_type("System.RuntimeTypeHandle");
-    let res_ctx =
-        ResolutionContext::for_method(
-            _method,
-            ctx.loader(),
-            generics,
-            ctx.shared.caches.clone(),
-            Some(ctx.shared.clone()),
-        );
+    let res_ctx = ResolutionContext::for_method(
+        _method,
+        ctx.loader(),
+        generics,
+        ctx.shared.caches.clone(),
+        Some(ctx.shared.clone()),
+    );
     let instance = res_ctx.new_object(rth);
     obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 

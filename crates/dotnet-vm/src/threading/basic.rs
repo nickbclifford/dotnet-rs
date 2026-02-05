@@ -435,8 +435,7 @@ impl Drop for StopTheWorldGuard {
 #[cfg(feature = "multithreaded-gc")]
 fn record_found_cross_arena_refs(coordinator: &GCCoordinator) {
     for (target_id, ptr_usize) in take_found_cross_arena_refs() {
-        let ptr =
-            unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
+        let ptr = unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
         coordinator.record_cross_arena_ref(target_id, ptr);
     }
 }
@@ -494,7 +493,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                         // Do not finalize or sweep yet.
 
                         set_currently_tracing(None);
-                        
+
                         record_found_cross_arena_refs(coordinator);
                     }
                 });

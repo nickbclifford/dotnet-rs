@@ -11,8 +11,10 @@ use dotnet_value::{
     string::CLRString,
     with_string, with_string_mut,
 };
-use std::sync::Arc;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::{
+    hash::{DefaultHasher, Hash, Hasher},
+    sync::Arc,
+};
 
 /// System.String::Equals(string, string)
 /// System.String::Equals(string)

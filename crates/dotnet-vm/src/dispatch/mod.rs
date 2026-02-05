@@ -41,7 +41,6 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 }
 
-
 pub struct ExecutionEngine<'gc, 'm: 'gc> {
     pub stack: CallStack<'gc, 'm>,
 }

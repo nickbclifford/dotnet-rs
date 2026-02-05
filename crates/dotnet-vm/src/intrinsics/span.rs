@@ -122,8 +122,13 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
 
     let obj_val = ctx.pop(gc);
 
-    let res_ctx =
-        ResolutionContext::for_method(method, ctx.loader(), generics, ctx.shared.caches.clone(), Some(ctx.shared.clone()));
+    let res_ctx = ResolutionContext::for_method(
+        method,
+        ctx.loader(),
+        generics,
+        ctx.shared.caches.clone(),
+        Some(ctx.shared.clone()),
+    );
 
     let (base_ptr, total_len, h_opt, element_type, element_size) = match obj_val {
         StackValue::ObjectRef(ObjectRef(Some(h))) => {
@@ -237,8 +242,13 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let element_type = &generics.method_generics[0];
-    let res_ctx =
-        ResolutionContext::for_method(method, ctx.loader(), generics, ctx.shared.caches.clone(), Some(ctx.shared.clone()));
+    let res_ctx = ResolutionContext::for_method(
+        method,
+        ctx.loader(),
+        generics,
+        ctx.shared.caches.clone(),
+        Some(ctx.shared.clone()),
+    );
     let element_size = type_layout(element_type.clone(), &res_ctx).size();
 
     let field_handle = ctx.pop_value_type(gc);
@@ -345,14 +355,13 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
     let element_type: dotnet_types::generics::ConcreteType =
         element_type_runtime.to_concrete(ctx.loader());
 
-    let res_ctx =
-        ResolutionContext::for_method(
-            _method,
-            ctx.loader(),
-            generics,
-            ctx.shared.caches.clone(),
-            Some(ctx.shared.clone()),
-        );
+    let res_ctx = ResolutionContext::for_method(
+        _method,
+        ctx.loader(),
+        generics,
+        ctx.shared.caches.clone(),
+        Some(ctx.shared.clone()),
+    );
     let element_size = type_layout(element_type, &res_ctx).size();
 
     let Some(initial_data) = &field.initial_value else {

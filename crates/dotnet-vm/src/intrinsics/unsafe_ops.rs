@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use crate::{
     StepResult,
     context::ResolutionContext,
@@ -19,7 +18,7 @@ use dotnet_value::{
     pointer::ManagedPtr,
 };
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
-use std::ptr;
+use std::{ptr, sync::Arc};
 
 use super::ReflectionExtensions;
 
@@ -64,8 +63,13 @@ pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
     let src = ctx.pop_ptr(gc);
     let dst = ctx.pop_ptr(gc);
 
-    let res_ctx =
-        ResolutionContext::for_method(method, ctx.loader(), generics, ctx.shared.caches.clone(), Some(ctx.shared.clone()));
+    let res_ctx = ResolutionContext::for_method(
+        method,
+        ctx.loader(),
+        generics,
+        ctx.shared.caches.clone(),
+        Some(ctx.shared.clone()),
+    );
     let total_count = if generics.method_generics.is_empty() {
         len as usize
     } else {
@@ -399,8 +403,13 @@ pub fn intrinsic_unsafe_size_of<'gc, 'm: 'gc>(
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let res_ctx =
-        ResolutionContext::for_method(method, ctx.loader(), generics, ctx.shared.caches.clone(), Some(ctx.shared.clone()));
+    let res_ctx = ResolutionContext::for_method(
+        method,
+        ctx.loader(),
+        generics,
+        ctx.shared.caches.clone(),
+        Some(ctx.shared.clone()),
+    );
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx.current_context());
     ctx.push_i32(gc, layout.size() as i32);

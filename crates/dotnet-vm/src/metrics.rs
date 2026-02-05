@@ -224,7 +224,8 @@ impl RuntimeMetrics {
 
     #[inline]
     pub fn record_has_finalizer_cache_hit(&self) {
-        self.has_finalizer_cache_hits.fetch_add(1, Ordering::Relaxed);
+        self.has_finalizer_cache_hits
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     #[inline]

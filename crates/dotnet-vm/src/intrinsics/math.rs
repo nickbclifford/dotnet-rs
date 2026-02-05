@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use crate::{
     StepResult, context::ResolutionContext, resolution::ValueResolution, stack::VesContext,
 };
@@ -9,6 +8,7 @@ use dotnet_value::{
     StackValue,
     object::{HeapStorage, ObjectRef},
 };
+use std::sync::Arc;
 
 #[dotnet_intrinsic("static bool System.Runtime.Intrinsics.Vector128::get_IsHardwareAccelerated()")]
 #[dotnet_intrinsic("static bool System.Runtime.Intrinsics.Vector256::get_IsHardwareAccelerated()")]
@@ -37,9 +37,14 @@ pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc>(
     let comparer_td = ctx.loader().corlib_type(comparer_type_name);
 
     let new_lookup = GenericLookup::new(vec![target_type]);
-    let res_ctx =
-        ResolutionContext::for_method(method, ctx.loader(), generics, ctx.shared.caches.clone(), Some(ctx.shared.clone()))
-            .with_generics(&new_lookup);
+    let res_ctx = ResolutionContext::for_method(
+        method,
+        ctx.loader(),
+        generics,
+        ctx.shared.caches.clone(),
+        Some(ctx.shared.clone()),
+    )
+    .with_generics(&new_lookup);
     let instance = ObjectRef::new(gc, HeapStorage::Obj(res_ctx.new_object(comparer_td)));
 
     ctx.push_obj(gc, instance);
