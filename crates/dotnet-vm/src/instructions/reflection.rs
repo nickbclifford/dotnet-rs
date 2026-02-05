@@ -7,7 +7,7 @@ use dotnet_utils::gc::GCHandle;
 use dotnet_value::StackValue;
 use dotnetdll::prelude::*;
 
-#[dotnet_instruction(LoadTokenType)]
+#[dotnet_instruction(LoadTokenType(param0))]
 pub fn ldtoken_type<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -29,7 +29,7 @@ pub fn ldtoken_type<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(LoadTokenMethod)]
+#[dotnet_instruction(LoadTokenMethod(param0))]
 pub fn ldtoken_method<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -49,7 +49,7 @@ pub fn ldtoken_method<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(LoadTokenField)]
+#[dotnet_instruction(LoadTokenField(param0))]
 pub fn ldtoken_field<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,

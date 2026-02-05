@@ -131,12 +131,6 @@ impl<'gc> ManagedPtr<'gc> {
         }
     }
 
-    // Legacy / Raw read: Reads only the pointer.
-    pub fn read_raw_ptr_unsafe(source: &[u8]) -> Option<NonNull<u8>> {
-        let (ptr, _, _) = unsafe { Self::read_from_bytes(source) };
-        ptr
-    }
-
     /// Write owner and offset to memory.
     /// Memory layout: (Owner ObjectRef at offset 0, Offset at offset 8)
     pub fn write(&self, dest: &mut [u8]) {

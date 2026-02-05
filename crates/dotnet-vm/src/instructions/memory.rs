@@ -9,7 +9,7 @@ use dotnet_value::{
 use dotnetdll::prelude::*;
 use std::ptr;
 
-#[dotnet_instruction(CopyMemoryBlock)]
+#[dotnet_instruction(CopyMemoryBlock { })]
 pub fn cpblk<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
     let size = ctx.pop_isize(gc) as usize;
     let src_val = ctx.pop(gc);
@@ -46,7 +46,7 @@ pub fn cpblk<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>)
     StepResult::Continue
 }
 
-#[dotnet_instruction(InitializeMemoryBlock)]
+#[dotnet_instruction(InitializeMemoryBlock { })]
 pub fn initblk<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
     let size = ctx.pop_isize(gc) as usize;
     let val = ctx.pop_isize(gc) as u8;
@@ -99,7 +99,7 @@ pub fn localloc<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'g
     StepResult::Continue
 }
 
-#[dotnet_instruction(StoreIndirect)]
+#[dotnet_instruction(StoreIndirect { param0 })]
 pub fn stind<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -135,7 +135,7 @@ pub fn stind<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(LoadIndirect)]
+#[dotnet_instruction(LoadIndirect { param0 })]
 pub fn ldind<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,

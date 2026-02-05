@@ -15,7 +15,7 @@ use std::ptr::{self, NonNull};
 
 use super::get_ptr;
 
-#[dotnet_instruction(LoadField)]
+#[dotnet_instruction(LoadField { param0, volatile })]
 pub fn ldfld<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -163,7 +163,7 @@ pub fn ldfld<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(StoreField)]
+#[dotnet_instruction(StoreField { param0, volatile })]
 pub fn stfld<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -268,7 +268,7 @@ pub fn stfld<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(LoadStaticField)]
+#[dotnet_instruction(LoadStaticField { param0, volatile })]
 pub fn ldsfld<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -315,7 +315,7 @@ pub fn ldsfld<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(StoreStaticField)]
+#[dotnet_instruction(StoreStaticField { param0, volatile })]
 pub fn stsfld<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -355,7 +355,7 @@ pub fn stsfld<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(LoadFieldAddress)]
+#[dotnet_instruction(LoadFieldAddress(param0))]
 pub fn ldflda<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -476,7 +476,7 @@ pub fn ldflda<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(LoadStaticFieldAddress)]
+#[dotnet_instruction(LoadStaticFieldAddress(param0))]
 pub fn ldsflda<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,

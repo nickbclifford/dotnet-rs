@@ -7,6 +7,7 @@ members = [
     "crates/dotnet-vm",
     "crates/dotnet-cli",
     "crates/dotnet-macros",
+    "crates/dotnet-macros-core",
 ]
 resolver = "2"
 
@@ -15,6 +16,7 @@ dotnet-types = { path = "crates/dotnet-types" }
 dotnet-utils = { path = "crates/dotnet-utils", default-features = false }
 dotnet-value = { path = "crates/dotnet-value", default-features = false }
 dotnet-assemblies = { path = "crates/dotnet-assemblies" }
+dotnet-macros-core = { path = "crates/dotnet-macros-core" }
 dotnet-vm = { path = "crates/dotnet-vm", default-features = false }
 dotnetdll = { path = "../dotnetdll", version = "0.1.2" }
 gc-arena = "0.5"

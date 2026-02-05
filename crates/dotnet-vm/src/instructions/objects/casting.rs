@@ -4,7 +4,7 @@ use dotnet_utils::gc::GCHandle;
 use dotnet_value::{StackValue, object::ObjectRef};
 use dotnetdll::prelude::*;
 
-#[dotnet_instruction(CastClass)]
+#[dotnet_instruction(CastClass { param0 })]
 pub fn castclass<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -35,7 +35,7 @@ pub fn castclass<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(IsInstance)]
+#[dotnet_instruction(IsInstance(param0))]
 pub fn isinst<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,

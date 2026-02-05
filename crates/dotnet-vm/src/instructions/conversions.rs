@@ -4,7 +4,7 @@ use dotnet_utils::gc::GCHandle;
 use dotnet_value::{StackValue, pointer::UnmanagedPtr};
 use dotnetdll::prelude::*;
 
-#[dotnet_instruction(Convert)]
+#[dotnet_instruction(Convert(t))]
 pub fn conv<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -97,7 +97,7 @@ pub fn conv<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(ConvertOverflow)]
+#[dotnet_instruction(ConvertOverflow(t, sgn))]
 pub fn conv_ovf<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,

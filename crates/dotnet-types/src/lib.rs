@@ -31,7 +31,10 @@ unsafe impl Send for TypeDescription {}
 unsafe impl Sync for TypeDescription {}
 
 impl TypeDescription {
-    pub const fn new(resolution: ResolutionS, definition: &'static TypeDefinition<'static>) -> Self {
+    pub const fn new(
+        resolution: ResolutionS,
+        definition: &'static TypeDefinition<'static>,
+    ) -> Self {
         Self {
             resolution,
             definition_ptr: NonNull::new(definition as *const _ as *mut _),

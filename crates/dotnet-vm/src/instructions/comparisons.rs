@@ -14,12 +14,12 @@ pub fn ceq<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -
 }
 
 comparison_op!(
-    #[dotnet_instruction(CompareGreater)]
+    #[dotnet_instruction(CompareGreater(sgn))]
     cgt,
     CmpOrdering::Greater
 );
 comparison_op!(
-    #[dotnet_instruction(CompareLess)]
+    #[dotnet_instruction(CompareLess(sgn))]
     clt,
     CmpOrdering::Less
 );

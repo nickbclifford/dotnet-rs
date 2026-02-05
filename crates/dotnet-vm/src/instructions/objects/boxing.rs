@@ -13,7 +13,7 @@ use dotnet_value::{
 use dotnetdll::prelude::*;
 use std::ptr::NonNull;
 
-#[dotnet_instruction(BoxValue)]
+#[dotnet_instruction(BoxValue(param0))]
 pub fn box_value<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -35,7 +35,7 @@ pub fn box_value<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(UnboxIntoValue)]
+#[dotnet_instruction(UnboxIntoValue(param0))]
 pub fn unbox_any<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -98,7 +98,7 @@ pub fn unbox_any<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(UnboxIntoAddress)]
+#[dotnet_instruction(UnboxIntoAddress { param0 })]
 pub fn unbox<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,

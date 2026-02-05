@@ -67,7 +67,7 @@
 //!
 //! 2.  **Use the `#[dotnet_intrinsic]` attribute**:
 //!     The attribute takes a C#-style signature string. This automatically registers the handler
-//!     in the `inventory`-based registry at startup.
+//!     in the static PHF-based registry at build time.
 //!
 //!     The signature string format:
 //!     `[static] <ReturnType> <Namespace>.<Type>::<MethodName>(<ParamTypes>)`
@@ -115,7 +115,6 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
     string::CLRString,
 };
-use std::collections::HashMap;
 
 pub mod array_ops;
 pub mod diagnostics;
@@ -124,7 +123,10 @@ pub mod math;
 pub mod metadata;
 pub mod reflection;
 pub mod span;
+pub mod static_registry;
 pub mod string_ops;
+
+include!(concat!(env!("OUT_DIR"), "/intrinsics_phf.rs"));
 pub mod text_ops;
 pub mod threading;
 pub mod unsafe_ops;
@@ -132,7 +134,7 @@ pub mod unsafe_ops;
 pub use metadata::{IntrinsicKind, IntrinsicMetadata, classify_intrinsic};
 pub use reflection::ReflectionExtensions;
 
-use super::{StepResult, context::ResolutionContext, sync::Arc, tracer::Tracer};
+use super::{StepResult, context::ResolutionContext, tracer::Tracer};
 
 pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttribute";
 
@@ -168,27 +170,6 @@ pub type IntrinsicFieldHandler = for<'gc, 'm> fn(
     is_address: bool,
 ) -> StepResult;
 
-pub struct IntrinsicEntry {
-    pub class_name: &'static str,
-    pub method_name: &'static str,
-    #[allow(dead_code)]
-    pub signature: &'static str,
-    pub handler: IntrinsicHandler,
-    pub is_static: bool,
-    pub param_count: usize,
-    pub signature_filter: Option<fn(&MethodDescription) -> bool>,
-}
-
-inventory::collect!(IntrinsicEntry);
-
-pub struct IntrinsicFieldEntry {
-    pub class_name: &'static str,
-    pub field_name: &'static str,
-    pub handler: IntrinsicFieldHandler,
-}
-
-inventory::collect!(IntrinsicFieldEntry);
-
 // Note on transmute safety:
 // Throughout this file, we use `unsafe { std::mem::transmute::<_, IntrinsicHandler>(...) }`
 // to convert concrete function pointers to the IntrinsicHandler type. This is safe because:
@@ -206,314 +187,106 @@ inventory::collect!(IntrinsicFieldEntry);
 /// replacing the older O(N) macro-based matching approach.
 ///
 /// The registry is lazily initialized on first use via OnceLock.
-/// A key for looking up intrinsics that works across different AssemblyLoader instances.
-/// Uses type name + method name + parameter count instead of pointer equality.
-///
-/// We use `Arc<str>` instead of `Box<str>` or `String` to optimize lookups:
-/// - Cloning Arc<str> is cheap (just incrementing a reference count, no heap allocation)
-/// - This allows us to construct lookup keys without new heap allocations
-/// - Arc<str> can be created from &str via Arc::from() which reuses existing string data
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct IntrinsicKey {
-    type_name: Arc<str>,
-    member_name: Arc<str>,
-    param_count: Option<usize>,
-}
-
-impl IntrinsicKey {
-    /// Creates an IntrinsicKey from a MethodDescription.
-    ///
-    /// Uses Arc::from to potentially reuse string data. While this still allocates
-    /// the Arc control block, it's much cheaper than allocating new strings.
-    fn from_method(method: MethodDescription) -> Self {
-        let type_name: Arc<str> = method.parent.type_name().into();
-        let member_name: Arc<str> = (&*method.method.name).into();
-        let param_count = if method.method.signature.instance {
-            method.method.signature.parameters.len() + 1
-        } else {
-            method.method.signature.parameters.len()
-        };
-
-        Self {
-            type_name,
-            member_name,
-            param_count: Some(param_count),
-        }
-    }
-
-    /// Creates an IntrinsicKey from a FieldDescription.
-    fn from_field(field: FieldDescription) -> Self {
-        let type_name: Arc<str> = field.parent.type_name().into();
-        let member_name: Arc<str> = (&*field.field.name).into();
-        Self {
-            type_name,
-            member_name,
-            param_count: None,
-        }
-    }
-}
-
-pub struct IntrinsicRegistry {
-    method_handlers: HashMap<IntrinsicKey, IntrinsicHandler>,
-    field_handlers: HashMap<IntrinsicKey, IntrinsicFieldHandler>,
-    /// Metadata storage for intrinsics with full classification.
-    method_metadata: HashMap<IntrinsicKey, Vec<IntrinsicMetadata>>,
-}
+pub struct IntrinsicRegistry;
 
 impl IntrinsicRegistry {
-    /// Creates a new empty registry.
-    fn new() -> Self {
-        Self {
-            method_handlers: HashMap::new(),
-            field_handlers: HashMap::new(),
-            method_metadata: HashMap::new(),
-        }
-    }
-
-    /// Registers an intrinsic handler for the given method.
-    pub fn register(
-        &mut self,
-        method: MethodDescription,
-        handler: IntrinsicHandler,
-        tracer: Option<&mut Tracer>,
-    ) {
-        let key = IntrinsicKey::from_method(method);
-        if let Some(tracer) = tracer {
-            tracer.trace_intrinsic(
-                0,
-                "REGISTER",
-                &format!(
-                    "{}.{}({:?} params)",
-                    key.type_name,
-                    key.member_name,
-                    key.param_count.unwrap_or(0)
-                ),
-            );
-        }
-        self.method_handlers.insert(key, handler);
-    }
-
-    /// Registers an intrinsic handler by name and parameter count.
-    /// Used for methods that might not be in the metadata.
-    pub fn register_raw(
-        &mut self,
-        type_name: &str,
-        method_name: &str,
-        param_count: usize,
-        handler: IntrinsicHandler,
-        tracer: Option<&mut Tracer>,
-    ) {
-        let key = IntrinsicKey {
-            type_name: Arc::from(type_name),
-            member_name: Arc::from(method_name),
-            param_count: Some(param_count),
-        };
-        if let Some(tracer) = tracer {
-            tracer.trace_intrinsic(
-                0,
-                "REGISTER-RAW",
-                &format!(
-                    "{}.{}({} params)",
-                    key.type_name, key.member_name, param_count
-                ),
-            );
-        }
-        self.method_handlers.insert(key, handler);
-    }
-
-    /// Registers an intrinsic handler for the given field.
-    pub fn register_field(
-        &mut self,
-        field: FieldDescription,
-        handler: IntrinsicFieldHandler,
-        tracer: Option<&mut Tracer>,
-    ) {
-        let key = IntrinsicKey::from_field(field);
-        self.register_field_with_key(key, handler, tracer);
-    }
-
-    /// Registers an intrinsic field by name.
-    pub fn register_raw_field(
-        &mut self,
-        type_name: &str,
-        field_name: &str,
-        handler: IntrinsicFieldHandler,
-        tracer: Option<&mut Tracer>,
-    ) {
-        let key = IntrinsicKey {
-            type_name: Arc::from(type_name),
-            member_name: Arc::from(field_name),
-            param_count: None,
-        };
-        self.register_field_with_key(key, handler, tracer);
-    }
-
-    fn register_field_with_key(
-        &mut self,
-        key: IntrinsicKey,
-        handler: IntrinsicFieldHandler,
-        tracer: Option<&mut Tracer>,
-    ) {
-        if let Some(tracer) = tracer {
-            tracer.trace_intrinsic(
-                0,
-                "REGISTER-FIELD",
-                &format!("{}.{}", key.type_name, key.member_name),
-            );
-        }
-        self.field_handlers.insert(key, handler);
+    /// Initializes a new registry with intrinsic handlers.
+    pub fn initialize(_loader: &AssemblyLoader, _tracer: Option<&mut Tracer>) -> Self {
+        Self
     }
 
     /// Looks up an intrinsic handler for the given method.
     pub fn get(&self, method: &MethodDescription) -> Option<IntrinsicHandler> {
-        if let Some(metadata) = self.get_metadata(method) {
-            return Some(metadata.handler);
-        }
-        let key = IntrinsicKey::from_method(*method);
-        self.method_handlers.get(&key).copied()
+        self.get_metadata(method).map(|m| m.handler)
     }
 
     /// Looks up an intrinsic handler for the given field.
     pub fn get_field(&self, field: &FieldDescription) -> Option<IntrinsicFieldHandler> {
-        let key = IntrinsicKey::from_field(*field);
-        self.field_handlers.get(&key).copied()
-    }
-
-    /// Registers an intrinsic with full metadata.
-    /// This is the preferred registration method.
-    pub fn register_metadata(
-        &mut self,
-        method: MethodDescription,
-        metadata: IntrinsicMetadata,
-        tracer: Option<&mut Tracer>,
-    ) {
-        let key = IntrinsicKey::from_method(method);
-        self.register_metadata_with_key(key, metadata, tracer);
-    }
-
-    /// Registers an intrinsic using raw names and parameter count with full metadata.
-    pub fn register_raw_metadata(
-        &mut self,
-        type_name: &str,
-        method_name: &str,
-        param_count: usize,
-        metadata: IntrinsicMetadata,
-        tracer: Option<&mut Tracer>,
-    ) {
-        let key = IntrinsicKey {
-            type_name: Arc::from(type_name),
-            member_name: Arc::from(method_name),
-            param_count: Some(param_count),
-        };
-        self.register_metadata_with_key(key, metadata, tracer);
-    }
-
-    fn register_metadata_with_key(
-        &mut self,
-        key: IntrinsicKey,
-        metadata: IntrinsicMetadata,
-        tracer: Option<&mut Tracer>,
-    ) {
-        if let Some(tracer) = tracer {
-            tracer.trace_intrinsic(
-                0,
-                "REGISTER-META",
-                &format!(
-                    "{}.{}({:?} params) [{:?}] - {}",
-                    key.type_name,
-                    key.member_name,
-                    key.param_count.unwrap_or(0),
-                    metadata.kind,
-                    metadata.reason
-                ),
-            );
-        }
-        // Register both in metadata map and handler map for backward compatibility
-        self.method_handlers.insert(key.clone(), metadata.handler);
-        self.method_metadata.entry(key).or_default().push(metadata);
-    }
-
-    /// Looks up intrinsic metadata for the given method.
-    /// Returns full metadata including kind and documentation.
-    pub fn get_metadata(&self, method: &MethodDescription) -> Option<IntrinsicMetadata> {
-        // Check metadata map
-        let key = IntrinsicKey::from_method(*method);
-        if let Some(candidates) = self.method_metadata.get(&key) {
-            for metadata in candidates {
-                if let Some(filter) = metadata.signature_filter {
-                    if filter(method) {
-                        return Some(metadata.clone());
-                    }
-                } else {
-                    return Some(metadata.clone());
-                }
+        let mut buf = [0u8; 512];
+        let key = self.build_field_key(field, &mut buf)?;
+        let range = INTRINSIC_LOOKUP.get(key)?;
+        for entry in &INTRINSIC_ENTRIES[range.start..range.start + range.len] {
+            if let StaticIntrinsicHandler::Field(h) = entry.handler {
+                return Some(h);
             }
         }
         None
     }
 
-    /// Initializes a new registry with intrinsic handlers.
-    pub fn initialize(_loader: &AssemblyLoader, mut tracer: Option<&mut Tracer>) -> Self {
-        let mut registry = Self::new();
-
-        for entry in inventory::iter::<IntrinsicEntry> {
-            let metadata = if entry.is_static {
-                if let Some(filter) = entry.signature_filter {
-                    IntrinsicMetadata::with_filter(
-                        IntrinsicKind::Static,
-                        entry.handler,
-                        "Registered via inventory",
-                        filter,
-                    )
+    /// Looks up intrinsic metadata for the given method.
+    /// Returns full metadata including kind and documentation.
+    pub fn get_metadata(&self, method: &MethodDescription) -> Option<IntrinsicMetadata> {
+        let mut buf = [0u8; 512];
+        let key = self.build_method_key(method, &mut buf)?;
+        let range = INTRINSIC_LOOKUP.get(key)?;
+        for entry in &INTRINSIC_ENTRIES[range.start..range.start + range.len] {
+            if let StaticIntrinsicHandler::Method(h) = entry.handler
+                && entry.filter.is_none_or(|f| f(method))
+            {
+                // Map to IntrinsicMetadata
+                let kind = if entry.is_static {
+                    IntrinsicKind::Static
                 } else {
-                    IntrinsicMetadata::static_intrinsic(entry.handler, "Registered via inventory")
-                }
-            } else if let Some(filter) = entry.signature_filter {
-                IntrinsicMetadata::with_filter(
-                    IntrinsicKind::VirtualOverride,
-                    entry.handler,
-                    "Registered via inventory",
-                    filter,
-                )
-            } else {
-                IntrinsicMetadata::virtual_override(entry.handler, "Registered via inventory")
-            };
-
-            registry.register_raw_metadata(
-                entry.class_name,
-                entry.method_name,
-                entry.param_count,
-                metadata,
-                tracer.as_deref_mut(),
-            );
-        }
-
-        for entry in inventory::iter::<IntrinsicFieldEntry> {
-            registry.register_raw_field(
-                entry.class_name,
-                entry.field_name,
-                entry.handler,
-                tracer.as_deref_mut(),
-            );
-
-            // Alias registration for base types
-            let alias = match entry.class_name {
-                "String" => Some("System.String"),
-                "Object" => Some("System.Object"),
-                _ => None,
-            };
-
-            if let Some(alias_name) = alias {
-                registry.register_raw_field(
-                    alias_name,
-                    entry.field_name,
-                    entry.handler,
-                    tracer.as_deref_mut(),
-                );
+                    IntrinsicKind::VirtualOverride
+                };
+                return Some(IntrinsicMetadata {
+                    kind,
+                    handler: h,
+                    reason: "Registered via PHF",
+                    signature_filter: entry.filter,
+                });
             }
         }
+        None
+    }
 
-        registry
+    fn build_method_key<'a>(
+        &self,
+        method: &MethodDescription,
+        buf: &'a mut [u8],
+    ) -> Option<&'a str> {
+        use std::fmt::Write;
+        let mut w = StackWrite { buf, pos: 0 };
+        let arity = if method.method.signature.instance {
+            method.method.signature.parameters.len() + 1
+        } else {
+            method.method.signature.parameters.len()
+        };
+        write!(
+            w,
+            "M:{}::{}#{}",
+            method.parent.type_name(),
+            &*method.method.name,
+            arity
+        )
+        .ok()?;
+        let pos = w.pos;
+        std::str::from_utf8(&buf[..pos]).ok()
+    }
+
+    fn build_field_key<'a>(&self, field: &FieldDescription, buf: &'a mut [u8]) -> Option<&'a str> {
+        use std::fmt::Write;
+        let mut w = StackWrite { buf, pos: 0 };
+        write!(w, "F:{}::{}", field.parent.type_name(), &*field.field.name).ok()?;
+        let pos = w.pos;
+        std::str::from_utf8(&buf[..pos]).ok()
+    }
+}
+
+struct StackWrite<'a> {
+    buf: &'a mut [u8],
+    pos: usize,
+}
+
+impl<'a> std::fmt::Write for StackWrite<'a> {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        let bytes = s.as_bytes();
+        if self.pos + bytes.len() > self.buf.len() {
+            return Err(std::fmt::Error);
+        }
+        self.buf[self.pos..self.pos + bytes.len()].copy_from_slice(bytes);
+        self.pos += bytes.len();
+        Ok(())
     }
 }
 

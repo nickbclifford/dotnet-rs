@@ -7,7 +7,7 @@ use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnetdll::prelude::*;
 
-#[dotnet_instruction(Leave)]
+#[dotnet_instruction(Leave(jump_target))]
 pub fn leave<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,

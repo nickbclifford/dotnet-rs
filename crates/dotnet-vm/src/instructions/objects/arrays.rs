@@ -10,7 +10,7 @@ use dotnet_value::{
 use dotnetdll::prelude::*;
 use std::ptr::NonNull;
 
-#[dotnet_instruction(LoadElement)]
+#[dotnet_instruction(LoadElement { param0 })]
 pub fn ldelem<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -49,7 +49,7 @@ pub fn ldelem<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(LoadElementPrimitive)]
+#[dotnet_instruction(LoadElementPrimitive { param0 })]
 pub fn ldelem_primitive<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -118,7 +118,7 @@ pub fn ldelem_primitive<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(LoadElementAddress)]
+#[dotnet_instruction(LoadElementAddress { param0 })]
 pub fn ldelema<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -127,7 +127,7 @@ pub fn ldelema<'gc, 'm: 'gc>(
     ldelema_internal(gc, ctx, param0, false)
 }
 
-#[dotnet_instruction(LoadElementAddressReadonly)]
+#[dotnet_instruction(LoadElementAddressReadonly(param0))]
 pub fn ldelema_readonly<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -187,7 +187,7 @@ fn ldelema_internal<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(StoreElement)]
+#[dotnet_instruction(StoreElement { param0 })]
 pub fn stelem<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -225,7 +225,7 @@ pub fn stelem<'gc, 'm: 'gc>(
     }
 }
 
-#[dotnet_instruction(StoreElementPrimitive)]
+#[dotnet_instruction(StoreElementPrimitive { param0 })]
 pub fn stelem_primitive<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -334,7 +334,7 @@ pub fn stelem_primitive<'gc, 'm: 'gc>(
     }
 }
 
-#[dotnet_instruction(NewArray)]
+#[dotnet_instruction(NewArray(param0))]
 pub fn newarr<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,

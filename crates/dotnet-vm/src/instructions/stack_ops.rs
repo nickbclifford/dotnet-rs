@@ -23,25 +23,25 @@ pub fn duplicate<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'
 }
 
 load_const!(
-    #[dotnet_instruction(LoadConstantInt32)]
+    #[dotnet_instruction(LoadConstantInt32(val))]
     ldc_i4,
     i32,
     StackValue::Int32
 );
 load_const!(
-    #[dotnet_instruction(LoadConstantInt64)]
+    #[dotnet_instruction(LoadConstantInt64(val))]
     ldc_i8,
     i64,
     StackValue::Int64
 );
 load_const!(
-    #[dotnet_instruction(LoadConstantFloat32)]
+    #[dotnet_instruction(LoadConstantFloat32(val))]
     ldc_r4,
     f32,
     |v| StackValue::NativeFloat(v as f64)
 );
 load_const!(
-    #[dotnet_instruction(LoadConstantFloat64)]
+    #[dotnet_instruction(LoadConstantFloat64(val))]
     ldc_r8,
     f64,
     StackValue::NativeFloat
@@ -53,12 +53,12 @@ pub fn ldnull<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>
 }
 
 load_var!(
-    #[dotnet_instruction(LoadArgument)]
+    #[dotnet_instruction(LoadArgument(index))]
     ldarg,
     get_argument
 );
 
-#[dotnet_instruction(LoadArgumentAddress)]
+#[dotnet_instruction(LoadArgumentAddress(index))]
 pub fn ldarga<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -79,17 +79,17 @@ pub fn ldarga<'gc, 'm: 'gc>(
 }
 
 store_var!(
-    #[dotnet_instruction(StoreArgument)]
+    #[dotnet_instruction(StoreArgument(index))]
     starg,
     set_argument
 );
 load_var!(
-    #[dotnet_instruction(LoadLocal)]
+    #[dotnet_instruction(LoadLocal(index))]
     ldloc,
     get_local
 );
 
-#[dotnet_instruction(LoadLocalAddress)]
+#[dotnet_instruction(LoadLocalAddress(index))]
 pub fn ldloca<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -109,7 +109,7 @@ pub fn ldloca<'gc, 'm: 'gc>(
 }
 
 store_var!(
-    #[dotnet_instruction(StoreLocal)]
+    #[dotnet_instruction(StoreLocal(index))]
     stloc,
     set_local
 );

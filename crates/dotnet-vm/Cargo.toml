@@ -12,10 +12,10 @@ dotnet-utils = { workspace = true, default-features = false }
 dotnet-value = { workspace = true, default-features = false }
 dotnetdll = { workspace = true }
 gc-arena = { workspace = true }
-inventory = "0.3"
 libffi = "5.0.0"
 libloading = "0.9.0"
 parking_lot = { workspace = true }
+phf = "0.11"
 serde = { version = "1.0", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
@@ -25,3 +25,10 @@ default = ["multithreaded-gc"]
 multithreading = ["dotnet-utils/multithreading"]
 multithreaded-gc = ["multithreading", "dotnet-utils/multithreaded-gc", "dotnet-value/multithreaded-gc"]
 memory-validation = ["dotnet-value/memory-validation"]
+
+[build-dependencies]
+dotnet-macros-core = { workspace = true }
+phf_codegen = "0.11"
+syn = { version = "2", features = ["full"] }
+walkdir = "2"
+dotnetdll = { workspace = true }

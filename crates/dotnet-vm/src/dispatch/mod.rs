@@ -3,30 +3,15 @@ use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDesc
 use dotnet_utils::gc::GCHandle;
 use dotnetdll::prelude::*;
 use gc_arena::Collect;
-use std::sync::OnceLock;
+
+pub mod registry;
 
 use super::{
     CallStack, MethodInfo, ResolutionContext, StepResult, exceptions::ExceptionState,
     threading::ThreadManagerOps,
 };
 
-pub type InstructionHandler = for<'gc, 'm> fn(
-    &mut crate::stack::VesContext<'_, 'gc, 'm>,
-    GCHandle<'gc>,
-    &Instruction,
-) -> StepResult;
-
-pub struct InstructionEntry {
-    pub name: &'static str,
-    pub handler: InstructionHandler,
-}
-
-inventory::collect!(InstructionEntry);
-
 pub struct InstructionRegistry;
-
-type InstructionTable = [Option<InstructionHandler>; Instruction::VARIANT_COUNT];
-static INSTRUCTION_TABLE: OnceLock<InstructionTable> = OnceLock::new();
 
 impl InstructionRegistry {
     pub fn dispatch<'gc, 'm>(
@@ -34,16 +19,7 @@ impl InstructionRegistry {
         interp: &mut ExecutionEngine<'gc, 'm>,
         instr: &Instruction,
     ) -> Option<StepResult> {
-        let table = INSTRUCTION_TABLE.get_or_init(|| {
-            let mut t = [None; Instruction::VARIANT_COUNT];
-            for entry in inventory::iter::<InstructionEntry> {
-                if let Some(opcode) = Instruction::opcode_from_name(entry.name) {
-                    t[opcode] = Some(entry.handler);
-                }
-            }
-            t
-        });
-        let handler = table[instr.opcode()]?;
+        let handler = registry::get_handler(instr.opcode())?;
         let mut ctx = interp.ves_context();
         Some(handler(&mut ctx, gc, instr))
     }

@@ -11,7 +11,7 @@ use dotnet_value::{
 use dotnetdll::prelude::*;
 use std::{mem::align_of, ptr};
 
-#[dotnet_instruction(Call)]
+#[dotnet_instruction(Call { param0 })]
 pub fn call<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -21,7 +21,7 @@ pub fn call<'gc, 'm: 'gc>(
     ctx.unified_dispatch(gc, param0, None, None)
 }
 
-#[dotnet_instruction(CallVirtual)]
+#[dotnet_instruction(CallVirtual { param0 })]
 pub fn callvirt<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -60,7 +60,7 @@ pub fn callvirt<'gc, 'm: 'gc>(
     ctx.unified_dispatch(gc, param0, Some(this_type), None)
 }
 
-#[dotnet_instruction(CallConstrained)]
+#[dotnet_instruction(CallConstrained(constraint, source))]
 pub fn call_constrained<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -97,7 +97,7 @@ pub fn call_constrained<'gc, 'm: 'gc>(
     );
 }
 
-#[dotnet_instruction(CallVirtualConstrained)]
+#[dotnet_instruction(CallVirtualConstrained(constraint, source))]
 pub fn callvirt_constrained<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,

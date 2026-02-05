@@ -24,7 +24,7 @@ use std::{
 pub use super::statics::StaticStorageManager;
 
 use super::{
-    intrinsics::{IntrinsicRegistry, is_intrinsic, is_intrinsic_field},
+    intrinsics::IntrinsicRegistry,
     memory::HeapManager,
     metrics::{CacheSizes, CacheStats, RuntimeMetrics},
     pinvoke::NativeLibraries,
@@ -118,34 +118,6 @@ impl<'m> SharedGlobalState<'m> {
     pub fn new(loader: &'m AssemblyLoader) -> Self {
         let mut tracer = Tracer::new();
         let caches = Arc::new(GlobalCaches::new(loader, &mut tracer));
-
-        // Pre-populate intrinsic caches
-        for assembly in loader.assemblies() {
-            for type_def in &assembly.definition().type_definitions {
-                let td = TypeDescription::new(assembly, type_def);
-                for method in &type_def.methods {
-                    let md = MethodDescription {
-                        parent: td,
-                        method_resolution: td.resolution,
-                        method,
-                    };
-                    caches
-                        .intrinsic_cache
-                        .insert(md, is_intrinsic(md, loader, &caches.intrinsic_registry));
-                }
-                for field in &type_def.fields {
-                    let fd = FieldDescription {
-                        parent: td,
-                        field_resolution: td.resolution,
-                        field,
-                    };
-                    caches.intrinsic_field_cache.insert(
-                        fd,
-                        is_intrinsic_field(fd, loader, &caches.intrinsic_registry),
-                    );
-                }
-            }
-        }
 
         let tracer_enabled = Arc::new(AtomicBool::new(tracer.is_enabled()));
 

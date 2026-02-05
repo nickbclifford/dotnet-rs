@@ -53,7 +53,7 @@ pub(crate) fn get_ptr<'gc>(val: &StackValue<'gc>) -> (*mut u8, Option<ObjectRef<
     }
 }
 
-#[dotnet_instruction(NewObject)]
+#[dotnet_instruction(NewObject(ctor))]
 pub fn new_object<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -174,7 +174,7 @@ pub fn new_object<'gc, 'm: 'gc>(
     }
 }
 
-#[dotnet_instruction(LoadObject)]
+#[dotnet_instruction(LoadObject { param0 })]
 pub fn ldobj<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -201,7 +201,7 @@ pub fn ldobj<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(StoreObject)]
+#[dotnet_instruction(StoreObject { param0 })]
 pub fn stobj<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -238,7 +238,7 @@ pub fn stobj<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(InitializeForObject)]
+#[dotnet_instruction(InitializeForObject(param0))]
 pub fn initobj<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -268,7 +268,7 @@ pub fn initobj<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(Sizeof)]
+#[dotnet_instruction(Sizeof(param0))]
 pub fn sizeof<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -281,7 +281,7 @@ pub fn sizeof<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-#[dotnet_instruction(LoadString)]
+#[dotnet_instruction(LoadString(chars))]
 pub fn ldstr<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,

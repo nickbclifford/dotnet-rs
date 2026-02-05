@@ -54,13 +54,14 @@ impl Parse for ParsedSignature {
 
 #[derive(Debug)]
 pub struct ParsedFieldSignature {
+    pub is_static: bool,
     pub class_name: String,
     pub field_name: String,
 }
 
 impl Parse for ParsedFieldSignature {
     fn parse(input: ParseStream) -> Result<Self> {
-        let _is_static = input.parse::<Token![static]>().is_ok();
+        let is_static = input.parse::<Token![static]>().is_ok();
 
         let _field_type = parse_type(input)?;
 
@@ -73,13 +74,14 @@ impl Parse for ParsedFieldSignature {
         // Fields do not have parameters/parentheses
 
         Ok(ParsedFieldSignature {
+            is_static,
             class_name,
             field_name,
         })
     }
 }
 
-fn parse_type(input: ParseStream) -> Result<String> {
+pub fn parse_type(input: ParseStream) -> Result<String> {
     let mut parts = Vec::new();
 
     loop {
@@ -174,7 +176,7 @@ fn parse_type(input: ParseStream) -> Result<String> {
     Ok(type_name)
 }
 
-fn parse_class_name(input: ParseStream) -> Result<String> {
+pub fn parse_class_name(input: ParseStream) -> Result<String> {
     let mut parts = Vec::new();
 
     loop {
@@ -220,7 +222,7 @@ fn parse_class_name(input: ParseStream) -> Result<String> {
     Ok(type_name + &suffix)
 }
 
-fn parse_generic_args_count(input: ParseStream) -> Result<usize> {
+pub fn parse_generic_args_count(input: ParseStream) -> Result<usize> {
     if input.peek(Token![<]) {
         input.parse::<Token![<]>()?;
         let mut count = 0;

@@ -8,7 +8,7 @@ use dotnet_utils::gc::GCHandle;
 use dotnet_value::StackValue;
 use dotnetdll::prelude::*;
 
-#[dotnet_instruction(Branch)]
+#[dotnet_instruction(Branch(target))]
 pub fn br<'gc, 'm: 'gc>(
     _ctx: &mut VesContext<'_, 'gc, 'm>,
     _gc: GCHandle<'gc>,
@@ -17,7 +17,7 @@ pub fn br<'gc, 'm: 'gc>(
     StepResult::Jump(target)
 }
 
-#[dotnet_instruction(BranchEqual)]
+#[dotnet_instruction(BranchEqual(target))]
 pub fn beq<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -32,7 +32,7 @@ pub fn beq<'gc, 'm: 'gc>(
     }
 }
 
-#[dotnet_instruction(BranchGreaterOrEqual)]
+#[dotnet_instruction(BranchGreaterOrEqual(sgn, target))]
 pub fn bge<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -52,7 +52,7 @@ pub fn bge<'gc, 'm: 'gc>(
     }
 }
 
-#[dotnet_instruction(BranchGreater)]
+#[dotnet_instruction(BranchGreater(sgn, target))]
 pub fn bgt<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -69,7 +69,7 @@ pub fn bgt<'gc, 'm: 'gc>(
     }
 }
 
-#[dotnet_instruction(BranchLessOrEqual)]
+#[dotnet_instruction(BranchLessOrEqual(sgn, target))]
 pub fn ble<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -89,7 +89,7 @@ pub fn ble<'gc, 'm: 'gc>(
     }
 }
 
-#[dotnet_instruction(BranchLess)]
+#[dotnet_instruction(BranchLess(sgn, target))]
 pub fn blt<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -106,7 +106,7 @@ pub fn blt<'gc, 'm: 'gc>(
     }
 }
 
-#[dotnet_instruction(BranchNotEqual)]
+#[dotnet_instruction(BranchNotEqual(target))]
 pub fn bne<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -121,7 +121,7 @@ pub fn bne<'gc, 'm: 'gc>(
     }
 }
 
-#[dotnet_instruction(BranchTruthy)]
+#[dotnet_instruction(BranchTruthy(target))]
 pub fn brtrue<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -135,7 +135,7 @@ pub fn brtrue<'gc, 'm: 'gc>(
     }
 }
 
-#[dotnet_instruction(BranchFalsy)]
+#[dotnet_instruction(BranchFalsy(target))]
 pub fn brfalse<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,

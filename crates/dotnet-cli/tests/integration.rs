@@ -183,13 +183,13 @@ fn test_cache_observability() {
     println!("Initial cache stats:\n{}", stats);
 
     // Some basic checks
-    assert!(
-        stats.intrinsic.size > 0,
-        "Intrinsic cache should be pre-populated"
+    assert_eq!(
+        stats.intrinsic.size, 0,
+        "Intrinsic cache should be lazy-loaded (zero-cost initialization)"
     );
-    assert!(
-        stats.intrinsic_field.size > 0,
-        "Intrinsic field cache should be pre-populated"
+    assert_eq!(
+        stats.intrinsic_field.size, 0,
+        "Intrinsic field cache should be lazy-loaded (zero-cost initialization)"
     );
 
     // Run it to see hit rates improve
