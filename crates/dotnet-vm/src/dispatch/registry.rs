@@ -8,11 +8,6 @@ pub type InstructionHandler = for<'gc, 'm> fn(
     &Instruction,
 ) -> StepResult;
 
-pub struct InstructionSlot {
-    pub opcode: usize,
-    pub handler: InstructionHandler,
-}
-
 pub type InstructionTable = [Option<InstructionHandler>; Instruction::VARIANT_COUNT];
 
 include!(concat!(env!("OUT_DIR"), "/instruction_table.rs"));
