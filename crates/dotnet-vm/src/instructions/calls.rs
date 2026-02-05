@@ -81,8 +81,8 @@ pub fn call_constrained<'gc, 'm: 'gc>(
     for o in td.definition().overrides.iter() {
         let target = ctx
             .current_context()
-            .locate_method(o.implementation, &lookup);
-        let declaration = ctx.current_context().locate_method(o.declaration, &lookup);
+            .locate_method(o.implementation, &lookup, None);
+        let declaration = ctx.current_context().locate_method(o.declaration, &lookup, None);
         if method == declaration {
             vm_trace!(ctx, "-- dispatching to {:?} --", target);
             // Note: Uses dispatch_method directly since method is already resolved

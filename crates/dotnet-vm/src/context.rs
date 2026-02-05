@@ -110,9 +110,10 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
         &self,
         handle: UserMethod,
         generic_inst: &GenericLookup,
+        pre_resolved_parent: Option<ConcreteType>,
     ) -> MethodDescription {
         self.resolver()
-            .locate_method(self.resolution, handle, generic_inst)
+            .locate_method(self.resolution, handle, generic_inst, pre_resolved_parent)
     }
 
     pub fn locate_field(&self, field: FieldSource) -> (FieldDescription, GenericLookup) {

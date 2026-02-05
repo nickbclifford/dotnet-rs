@@ -22,7 +22,10 @@ pub struct AssemblyLoader {
     external: RwLock<HashMap<String, Option<ResolutionS>>>,
     stubs: HashMap<String, TypeDescription>,
     type_cache: DashMap<(ResolutionS, UserType), TypeDescription>,
-    method_cache: DashMap<(ResolutionS, UserMethod, GenericLookup), MethodDescription>,
+    method_cache: DashMap<
+        (ResolutionS, UserMethod, GenericLookup, Option<ConcreteType>),
+        MethodDescription,
+    >,
     pub type_cache_hits: AtomicU64,
     pub type_cache_misses: AtomicU64,
     pub method_cache_hits: AtomicU64,
@@ -708,8 +711,14 @@ impl AssemblyLoader {
         resolution: ResolutionS,
         handle: UserMethod,
         generic_inst: &GenericLookup,
+        pre_resolved_parent: Option<ConcreteType>,
     ) -> MethodDescription {
-        let key = (resolution, handle, generic_inst.clone());
+        let key = (
+            resolution,
+            handle,
+            generic_inst.clone(),
+            pre_resolved_parent.clone(),
+        );
         if let Some(cached) = self.method_cache.get(&key) {
             self.method_cache_hits.fetch_add(1, Ordering::Relaxed);
             return *cached;
@@ -728,10 +737,13 @@ impl AssemblyLoader {
                 use MethodReferenceParent::*;
                 match &method_ref.parent {
                     Type(t) => {
-                        let concrete = generic_inst.make_concrete(resolution, t.clone());
-                        if method_ref.name == ".ctor"
-                            && let BaseType::Array(_, _) = concrete.get()
-                        {
+                        let concrete = if let Some(p) = pre_resolved_parent {
+                            p
+                        } else {
+                            generic_inst.make_concrete(resolution, t.clone())
+                        };
+
+                        if method_ref.name == ".ctor" && let BaseType::Array(_, _) = concrete.get() {
                             let array_type = self.corlib_type("DotnetRs.Array");
                             for method in &array_type.definition().methods {
                                 if method.name == "CtorArraySentinel" {
@@ -777,7 +789,12 @@ impl AssemblyLoader {
         resolution: ResolutionS,
         attribute: &Attribute,
     ) -> MethodDescription {
-        self.locate_method(resolution, attribute.constructor, &GenericLookup::default())
+        self.locate_method(
+            resolution,
+            attribute.constructor,
+            &GenericLookup::default(),
+            None,
+        )
     }
 
     pub fn locate_field(

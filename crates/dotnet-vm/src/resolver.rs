@@ -113,6 +113,7 @@ impl<'m> ResolverService<'m> {
             }
         };
 
+        let mut parent_type = None;
         if let UserMethod::Reference(r) = method
             && let MethodReferenceParent::Type(t) = &ctx.resolution[r].parent
         {
@@ -124,9 +125,10 @@ impl<'m> ResolverService<'m> {
             {
                 new_lookup.type_generics = parameters.clone().into();
             }
+            parent_type = Some(parent);
         }
 
-        (ctx.locate_method(method, &new_lookup), new_lookup)
+        (ctx.locate_method(method, &new_lookup, parent_type), new_lookup)
     }
 
     pub fn resolve_virtual_method(
@@ -301,8 +303,10 @@ impl<'m> ResolverService<'m> {
         resolution: ResolutionS,
         handle: UserMethod,
         generic_inst: &GenericLookup,
+        pre_resolved_parent: Option<ConcreteType>,
     ) -> MethodDescription {
-        self.loader.locate_method(resolution, handle, generic_inst)
+        self.loader
+            .locate_method(resolution, handle, generic_inst, pre_resolved_parent)
     }
 
     pub fn locate_field(
