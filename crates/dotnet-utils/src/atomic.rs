@@ -2,10 +2,10 @@
 use std::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, AtomicU64};
 
 use crate::is_ptr_aligned_to_field;
-use std::sync::atomic::Ordering;
-
-#[cfg(not(feature = "multithreading"))]
-use std::ptr;
+use std::{
+    sync::atomic::Ordering,
+    ptr
+};
 
 /// Unified atomic memory access operations.
 ///
@@ -55,20 +55,20 @@ pub struct StandardAtomicAccess;
 impl AtomicAccess for StandardAtomicAccess {
     unsafe fn load_atomic(ptr: *const u8, size: usize, ordering: Ordering) -> u64 {
         match size {
-            1 => unsafe { AtomicU8::from_ptr(ptr as *mut u8).load(ordering) as u64 },
-            2 => unsafe { AtomicU16::from_ptr(ptr as *mut u16).load(ordering) as u64 },
-            4 => unsafe { AtomicU32::from_ptr(ptr as *mut u32).load(ordering) as u64 },
-            8 => unsafe { AtomicU64::from_ptr(ptr as *mut u64).load(ordering) },
+            1 => unsafe { AtomicU8::from_ptr(ptr as *mut u8) }.load(ordering) as u64,
+            2 => unsafe { AtomicU16::from_ptr(ptr as *mut u16) }.load(ordering) as u64,
+            4 => unsafe { AtomicU32::from_ptr(ptr as *mut u32) }.load(ordering) as u64,
+            8 => unsafe { AtomicU64::from_ptr(ptr as *mut u64) }.load(ordering),
             _ => panic!("Unsupported atomic size: {}", size),
         }
     }
 
     unsafe fn store_atomic(ptr: *mut u8, size: usize, value: u64, ordering: Ordering) {
         match size {
-            1 => unsafe { AtomicU8::from_ptr(ptr).store(value as u8, ordering) },
-            2 => unsafe { AtomicU16::from_ptr(ptr as *mut u16).store(value as u16, ordering) },
-            4 => unsafe { AtomicU32::from_ptr(ptr as *mut u32).store(value as u32, ordering) },
-            8 => unsafe { AtomicU64::from_ptr(ptr as *mut u64).store(value, ordering) },
+            1 => unsafe { AtomicU8::from_ptr(ptr) }.store(value as u8, ordering),
+            2 => unsafe { AtomicU16::from_ptr(ptr as *mut u16) }.store(value as u16, ordering),
+            4 => unsafe { AtomicU32::from_ptr(ptr as *mut u32) }.store(value as u32, ordering),
+            8 => unsafe { AtomicU64::from_ptr(ptr as *mut u64) }.store(value, ordering),
             _ => panic!("Unsupported atomic size: {}", size),
         }
     }
@@ -82,38 +82,30 @@ impl AtomicAccess for StandardAtomicAccess {
         failure: Ordering,
     ) -> Result<u64, u64> {
         match size {
-            1 => unsafe {
-                AtomicU8::from_ptr(ptr)
-                    .compare_exchange(expected as u8, new as u8, success, failure)
-                    .map(|x| x as u64)
-                    .map_err(|x| x as u64)
-            },
-            2 => unsafe {
-                AtomicU16::from_ptr(ptr as *mut u16)
-                    .compare_exchange(expected as u16, new as u16, success, failure)
-                    .map(|x| x as u64)
-                    .map_err(|x| x as u64)
-            },
-            4 => unsafe {
-                AtomicU32::from_ptr(ptr as *mut u32)
-                    .compare_exchange(expected as u32, new as u32, success, failure)
-                    .map(|x| x as u64)
-                    .map_err(|x| x as u64)
-            },
-            8 => unsafe {
-                AtomicU64::from_ptr(ptr as *mut u64)
-                    .compare_exchange(expected, new, success, failure)
-            },
+            1 => unsafe { AtomicU8::from_ptr(ptr) }
+                .compare_exchange(expected as u8, new as u8, success, failure)
+                .map(|x| x as u64)
+                .map_err(|x| x as u64),
+            2 => unsafe { AtomicU16::from_ptr(ptr as *mut u16) }
+                .compare_exchange(expected as u16, new as u16, success, failure)
+                .map(|x| x as u64)
+                .map_err(|x| x as u64),
+            4 => unsafe { AtomicU32::from_ptr(ptr as *mut u32) }
+                .compare_exchange(expected as u32, new as u32, success, failure)
+                .map(|x| x as u64)
+                .map_err(|x| x as u64),
+            8 => unsafe { AtomicU64::from_ptr(ptr as *mut u64) }
+                .compare_exchange(expected, new, success, failure),
             _ => panic!("Unsupported atomic size: {}", size),
         }
     }
 
     unsafe fn exchange_atomic(ptr: *mut u8, size: usize, new: u64, ordering: Ordering) -> u64 {
         match size {
-            1 => unsafe { AtomicU8::from_ptr(ptr).swap(new as u8, ordering) as u64 },
-            2 => unsafe { AtomicU16::from_ptr(ptr as *mut u16).swap(new as u16, ordering) as u64 },
-            4 => unsafe { AtomicU32::from_ptr(ptr as *mut u32).swap(new as u32, ordering) as u64 },
-            8 => unsafe { AtomicU64::from_ptr(ptr as *mut u64).swap(new, ordering) },
+            1 => unsafe { AtomicU8::from_ptr(ptr) }.swap(new as u8, ordering) as u64,
+            2 => unsafe { AtomicU16::from_ptr(ptr as *mut u16) }.swap(new as u16, ordering) as u64,
+            4 => unsafe { AtomicU32::from_ptr(ptr as *mut u32) }.swap(new as u32, ordering) as u64,
+            8 => unsafe { AtomicU64::from_ptr(ptr as *mut u64) }.swap(new, ordering),
             _ => panic!("Unsupported atomic size: {}", size),
         }
     }
@@ -175,8 +167,7 @@ impl Atomic {
     /// # Safety
     /// Caller must ensure `ptr` is valid for `size` bytes.
     pub unsafe fn load_field(ptr: *const u8, size: usize, ordering: Ordering) -> Vec<u8> {
-        if (size == 1 || size == 2 || size == 4 || size == 8) && is_ptr_aligned_to_field(ptr, size)
-        {
+        if is_ptr_aligned_to_field(ptr, size) {
             let val = unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) };
             match size {
                 1 => (val as u8).to_ne_bytes().to_vec(),
@@ -187,7 +178,7 @@ impl Atomic {
             }
         } else {
             let mut buf = vec![0u8; size];
-            unsafe { std::ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), size) };
+            unsafe { ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), size) };
             buf
         }
     }
@@ -196,8 +187,7 @@ impl Atomic {
     /// Caller must ensure `ptr` is valid for `value.len()` bytes.
     pub unsafe fn store_field(ptr: *mut u8, value: &[u8], ordering: Ordering) {
         let size = value.len();
-        if (size == 1 || size == 2 || size == 4 || size == 8) && is_ptr_aligned_to_field(ptr, size)
-        {
+        if is_ptr_aligned_to_field(ptr, size) {
             let val = match size {
                 1 => u8::from_ne_bytes(value.try_into().unwrap()) as u64,
                 2 => u16::from_ne_bytes(value.try_into().unwrap()) as u64,
@@ -207,7 +197,7 @@ impl Atomic {
             };
             unsafe { StandardAtomicAccess::store_atomic(ptr, size, val, ordering) };
         } else {
-            unsafe { std::ptr::copy_nonoverlapping(value.as_ptr(), ptr, size) };
+            unsafe { ptr::copy_nonoverlapping(value.as_ptr(), ptr, size) };
         }
     }
 }

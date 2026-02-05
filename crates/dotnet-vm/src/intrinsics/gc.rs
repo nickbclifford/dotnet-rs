@@ -101,7 +101,7 @@ pub fn intrinsic_gc_collect_0<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     ctx.heap().needs_full_collect.set(true);
-    StepResult::Continue
+    StepResult::Yield
 }
 
 /// System.GC::Collect(int)
@@ -114,7 +114,7 @@ pub fn intrinsic_gc_collect_1<'gc, 'm: 'gc>(
 ) -> StepResult {
     let _generation = ctx.pop_i32(gc);
     ctx.heap().needs_full_collect.set(true);
-    StepResult::Continue
+    StepResult::Yield
 }
 
 /// System.GC::Collect(int, GCCollectionMode)
@@ -128,7 +128,7 @@ pub fn intrinsic_gc_collect_2<'gc, 'm: 'gc>(
     let _mode = ctx.pop_i32(gc);
     let _generation = ctx.pop_i32(gc);
     ctx.heap().needs_full_collect.set(true);
-    StepResult::Continue
+    StepResult::Yield
 }
 
 #[dotnet_intrinsic("static void System.GC::WaitForPendingFinalizers()")]
@@ -143,7 +143,7 @@ pub fn intrinsic_gc_wait_for_pending_finalizers<'gc, 'm: 'gc>(
     if !ctx.heap().pending_finalization.borrow().is_empty() || ctx.heap().processing_finalizer.get()
     {
         ctx.back_up_ip();
-        return StepResult::Continue;
+        return StepResult::Yield;
     }
     StepResult::Continue
 }

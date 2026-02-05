@@ -224,6 +224,7 @@ impl LayoutFactory {
                 type_owner: Some(*base_td),
                 method_owner: None,
                 caches: context.caches.clone(),
+                shared: context.shared.clone(),
             };
 
             // Recursively compute base layout
@@ -297,6 +298,9 @@ impl LayoutFactory {
         let key = (td, context.generics.clone());
 
         if let Some(cached) = context.caches.instance_field_layout_cache.get(&key) {
+            if let Some(m) = metrics {
+                m.record_instance_field_layout_cache_hit();
+            }
             return Arc::clone(&cached);
         }
 
@@ -375,6 +379,9 @@ pub fn type_layout_with_metrics(
     let t = context.normalize_type(t);
 
     if let Some(cached) = context.caches.layout_cache.get(&t) {
+        if let Some(m) = metrics {
+            m.record_layout_cache_hit();
+        }
         return Arc::clone(&cached);
     }
 

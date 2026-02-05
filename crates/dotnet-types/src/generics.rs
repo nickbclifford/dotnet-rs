@@ -2,11 +2,12 @@ use crate::{TypeDescription, resolution::ResolutionS};
 use dotnetdll::prelude::{BaseType, MethodType, Resolution, ResolvedDebug, TypeSource, UserType};
 use gc_arena::{Collect, Collection};
 use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ConcreteType {
     source: ResolutionS,
-    base: Box<BaseType<Self>>,
+    base: Arc<BaseType<Self>>,
 }
 
 unsafe impl Collect for ConcreteType {
@@ -41,7 +42,7 @@ impl ConcreteType {
     pub fn new(source: ResolutionS, base: BaseType<Self>) -> Self {
         ConcreteType {
             source,
-            base: Box::new(base),
+            base: Arc::new(base),
         }
     }
 
@@ -50,7 +51,7 @@ impl ConcreteType {
     }
 
     pub fn get_mut(&mut self) -> &mut BaseType<Self> {
-        &mut self.base
+        Arc::make_mut(&mut self.base)
     }
 
     pub fn resolution(&self) -> ResolutionS {
@@ -76,22 +77,27 @@ impl ResolvedDebug for ConcreteType {
 
 #[derive(Clone, Default, PartialEq, Eq, Hash)]
 pub struct GenericLookup {
-    pub type_generics: Vec<ConcreteType>,
-    pub method_generics: Vec<ConcreteType>,
+    pub type_generics: Arc<[ConcreteType]>,
+    pub method_generics: Arc<[ConcreteType]>,
 }
 
 unsafe impl Collect for GenericLookup {
-    fn trace(&self, cc: &Collection) {
-        self.type_generics.trace(cc);
-        self.method_generics.trace(cc);
-    }
+    fn trace(&self, _cc: &Collection) {}
 }
 
 impl GenericLookup {
+    pub fn cache_key_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        let mut hasher = DefaultHasher::new();
+        self.hash(&mut hasher);
+        hasher.finish()
+    }
+
     pub fn new(type_generics: Vec<ConcreteType>) -> Self {
         Self {
-            type_generics,
-            method_generics: vec![],
+            type_generics: type_generics.into(),
+            method_generics: Arc::new([]),
         }
     }
 

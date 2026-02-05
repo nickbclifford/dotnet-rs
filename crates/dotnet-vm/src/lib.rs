@@ -92,7 +92,13 @@ impl MethodInfo<'static> {
             None => panic!("cannot call method with empty body"),
         };
 
-        let ctx = ResolutionContext::for_method(method, loader, generics, shared.caches.clone());
+        let ctx = ResolutionContext::for_method(
+            method,
+            loader,
+            generics,
+            shared.caches.clone(),
+            Some(shared),
+        );
 
         Self {
             is_cctor: method.method.runtime_special_name
@@ -118,5 +124,6 @@ pub enum StepResult {
     FramePushed, // Do not advance IP (new frame active)
     Return,      // Pop frame
     MethodThrew, // Exception unhandled in frame
+    Exception,   // Exception thrown, need to call handle_exception
     Yield,       // GC/Thread yield
 }

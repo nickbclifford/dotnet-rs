@@ -300,6 +300,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
             type_owner: Some(description),
             method_owner: None,
             caches: self.shared.caches.clone(),
+            shared: Some(self.shared.clone()),
         };
 
         loop {
@@ -474,6 +475,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                         type_owner: Some(method.parent),
                         method_owner: Some(method),
                         caches: self.shared.caches.clone(),
+                        shared: Some(self.shared.clone()),
                     };
 
                     let v = match ctx.make_concrete(var_type).get() {
@@ -483,7 +485,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
 
                             if desc.is_value_type(&ctx) {
                                 let new_lookup = GenericLookup {
-                                    type_generics,
+                                    type_generics: type_generics.into(),
                                     ..generics.clone()
                                 };
                                 let new_ctx = ctx.with_generics(&new_lookup);
@@ -627,8 +629,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(instance));
         self.register_new_object(&obj_ref);
         *self.exception_mode = ExceptionState::Throwing(obj_ref);
-        // self.handle_exception(gc) // Need to implement this
-        StepResult::Continue
+        StepResult::Exception
     }
 
     pub fn register_new_object(&self, instance: &ObjectRef<'gc>) {
@@ -681,6 +682,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                 type_owner: Some(f.state.info_handle.source.parent),
                 method_owner: Some(f.state.info_handle.source),
                 caches: self.shared.caches.clone(),
+                shared: Some(self.shared.clone()),
             }
         } else {
             ResolutionContext {
@@ -690,6 +692,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                 type_owner: None,
                 method_owner: None,
                 caches: self.shared.caches.clone(),
+                shared: Some(self.shared.clone()),
             }
         }
     }
@@ -955,6 +958,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
             caches: self.shared.caches.clone(),
             type_owner: None,
             method_owner: None,
+            shared: Some(self.shared.clone()),
         }
     }
 

@@ -122,7 +122,7 @@ impl<'m> ResolverService<'m> {
                 ..
             } = parent.get()
             {
-                new_lookup.type_generics = parameters.clone();
+                new_lookup.type_generics = parameters.clone().into();
             }
         }
 
@@ -137,6 +137,9 @@ impl<'m> ResolverService<'m> {
     ) -> MethodDescription {
         let cache_key = (base_method, this_type, ctx.generics.clone());
         if let Some(cached) = self.caches.vmt_cache.get(&cache_key) {
+            if let Some(metrics) = self.metrics() {
+                metrics.record_vmt_cache_hit();
+            }
             return *cached;
         }
 
@@ -154,6 +157,10 @@ impl<'m> ResolverService<'m> {
         for (parent, _) in ctx.get_ancestors(this_type) {
             if let Some(this_method) = self.find_and_cache_method(parent, base_method, ctx.generics)
             {
+                // Also cache for the originally requested type to improve hit rate
+                self.caches
+                    .vmt_cache
+                    .insert((base_method, this_type, ctx.generics.clone()), this_method);
                 return this_method;
             }
         }
@@ -242,6 +249,9 @@ impl<'m> ResolverService<'m> {
 
         let cache_key = (value.clone(), ancestor.clone());
         if let Some(cached) = self.caches.hierarchy_cache.get(&cache_key) {
+            if let Some(metrics) = self.metrics() {
+                metrics.record_hierarchy_cache_hit();
+            }
             return *cached;
         }
 
@@ -314,15 +324,36 @@ impl<'m> ResolverService<'m> {
     }
 
     pub fn is_value_type(&self, td: TypeDescription) -> bool {
+        if let Some(cached) = self.caches.value_type_cache.get(&td) {
+            if let Some(m) = self.metrics() {
+                m.record_value_type_cache_hit();
+            }
+            return *cached;
+        }
+        if let Some(m) = self.metrics() {
+            m.record_value_type_cache_miss();
+        }
         for (a, _) in self.loader.ancestors(td) {
             if matches!(a.type_name().as_str(), "System.Enum" | "System.ValueType") {
+                self.caches.value_type_cache.insert(td, true);
                 return true;
             }
         }
+        self.caches.value_type_cache.insert(td, false);
         false
     }
 
     pub fn has_finalizer(&self, td: TypeDescription) -> bool {
+        if let Some(cached) = self.caches.has_finalizer_cache.get(&td) {
+            if let Some(m) = self.metrics() {
+                m.record_has_finalizer_cache_hit();
+            }
+            return *cached;
+        }
+        if let Some(m) = self.metrics() {
+            m.record_has_finalizer_cache_miss();
+        }
+
         let check_type = |td: TypeDescription| {
             let def = td.definition();
             let ns = def.namespace.as_deref().unwrap_or("");
@@ -338,14 +369,17 @@ impl<'m> ResolverService<'m> {
         };
 
         if check_type(td) {
+            self.caches.has_finalizer_cache.insert(td, true);
             return true;
         }
 
         for (ancestor, _) in self.loader.ancestors(td) {
             if check_type(ancestor) {
+                self.caches.has_finalizer_cache.insert(td, true);
                 return true;
             }
         }
+        self.caches.has_finalizer_cache.insert(td, false);
         false
     }
 
@@ -374,7 +408,7 @@ impl<'m> ResolverService<'m> {
             .find_concrete_type(self.get_field_type(resolution, generics, field))
     }
 
-    pub fn get_heap_description<'gc>(&self, object: ObjectHandle<'gc>) -> TypeDescription {
+    pub fn get_heap_description(&self, object: ObjectHandle) -> TypeDescription {
         use dotnet_value::object::HeapStorage::*;
         match &object.as_ref().borrow().storage {
             Obj(o) => o.description,

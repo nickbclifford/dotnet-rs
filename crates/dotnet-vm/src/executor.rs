@@ -198,7 +198,7 @@ impl Executor {
                 arena.mutate_root(|gc, c| c.ves_context().process_pending_finalizers(gc));
             });
 
-            let step_result = self.with_arena(|arena| arena.mutate_root(|gc, c| c.step(gc)));
+            let step_result = self.with_arena(|arena| arena.mutate_root(|gc, c| c.run(gc)));
 
             match step_result {
                 StepResult::Return => {

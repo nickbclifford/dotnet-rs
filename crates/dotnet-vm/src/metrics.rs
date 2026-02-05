@@ -19,6 +19,8 @@ pub struct CacheStats {
     pub hierarchy: CacheStat,
     pub static_field_layout: CacheStat,
     pub instance_field_layout: CacheStat,
+    pub value_type: CacheStat,
+    pub has_finalizer: CacheStat,
     pub assembly_type: CacheStat,
     pub assembly_method: CacheStat,
 }
@@ -37,6 +39,8 @@ impl std::fmt::Display for CacheStats {
             "  Instance Field Layout:  {}",
             self.instance_field_layout
         )?;
+        writeln!(f, "  Value Type Cache:       {}", self.value_type)?;
+        writeln!(f, "  Has Finalizer Cache:    {}", self.has_finalizer)?;
         writeln!(f, "  Assembly Type Cache:    {}", self.assembly_type)?;
         writeln!(f, "  Assembly Method Cache:  {}", self.assembly_method)?;
         Ok(())
@@ -65,6 +69,8 @@ pub struct CacheSizes {
     pub hierarchy_size: usize,
     pub static_field_layout_size: usize,
     pub instance_field_layout_size: usize,
+    pub value_type_size: usize,
+    pub has_finalizer_size: usize,
     pub assembly_type_info: (u64, u64, usize),
     pub assembly_method_info: (u64, u64, usize),
 }
@@ -104,6 +110,10 @@ pub struct RuntimeMetrics {
     pub static_field_layout_cache_misses: AtomicU64,
     pub instance_field_layout_cache_hits: AtomicU64,
     pub instance_field_layout_cache_misses: AtomicU64,
+    pub value_type_cache_hits: AtomicU64,
+    pub value_type_cache_misses: AtomicU64,
+    pub has_finalizer_cache_hits: AtomicU64,
+    pub has_finalizer_cache_misses: AtomicU64,
 }
 
 impl RuntimeMetrics {
@@ -202,6 +212,27 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    #[inline]
+    pub fn record_value_type_cache_hit(&self) {
+        self.value_type_cache_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_value_type_cache_miss(&self) {
+        self.value_type_cache_misses.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_has_finalizer_cache_hit(&self) {
+        self.has_finalizer_cache_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_has_finalizer_cache_miss(&self) {
+        self.has_finalizer_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn cache_statistics(&self, sizes: CacheSizes) -> CacheStats {
         CacheStats {
             layout: self.stat(
@@ -241,6 +272,16 @@ impl RuntimeMetrics {
                 self.instance_field_layout_cache_misses
                     .load(Ordering::Relaxed),
                 sizes.instance_field_layout_size,
+            ),
+            value_type: self.stat(
+                self.value_type_cache_hits.load(Ordering::Relaxed),
+                self.value_type_cache_misses.load(Ordering::Relaxed),
+                sizes.value_type_size,
+            ),
+            has_finalizer: self.stat(
+                self.has_finalizer_cache_hits.load(Ordering::Relaxed),
+                self.has_finalizer_cache_misses.load(Ordering::Relaxed),
+                sizes.has_finalizer_size,
             ),
             assembly_type: self.stat(
                 sizes.assembly_type_info.0,

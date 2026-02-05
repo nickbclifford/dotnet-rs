@@ -11,6 +11,7 @@ use dotnet_value::{
     string::CLRString,
     with_string, with_string_mut,
 };
+use std::sync::Arc;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 /// System.String::Equals(string, string)
@@ -387,7 +388,7 @@ pub fn intrinsic_field_string_empty<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
     _field: FieldDescription,
-    _type_generics: Vec<ConcreteType>,
+    _type_generics: Arc<[ConcreteType]>,
     _is_address: bool,
 ) -> StepResult {
     ctx.push_string(gc, CLRString::new(vec![]));
@@ -399,7 +400,7 @@ pub fn intrinsic_field_string_length<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
     _field: FieldDescription,
-    _type_generics: Vec<ConcreteType>,
+    _type_generics: Arc<[ConcreteType]>,
     is_address: bool,
 ) -> StepResult {
     if is_address {

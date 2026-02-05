@@ -129,6 +129,22 @@ impl GCCoordinator {
         }
     }
 
+    fn send_command_to_other_arenas(&self, initiating_thread_id: u64, command: GCCommand) {
+        for handle in self.get_all_arenas() {
+            if handle.thread_id != initiating_thread_id {
+                let mut cmd = handle.current_command.lock();
+                *cmd = Some(command.clone());
+                handle.command_signal.notify_all();
+            }
+        }
+    }
+
+    fn send_command_to_all_and_wait(&self, initiating_thread_id: u64, command: GCCommand) {
+        self.send_command_to_other_arenas(initiating_thread_id, command.clone());
+        execute_gc_command_for_current_thread(command, self);
+        self.wait_on_other_arenas(initiating_thread_id);
+    }
+
     /// Perform a coordinated collection across all registered arenas.
     pub fn collect_all_arenas(&self, initiating_thread_id: u64) {
         // This is called by the thread that triggered the GC, after STW is established.
@@ -140,20 +156,8 @@ impl GCCoordinator {
             refs.clear();
         }
 
-        // Send MarkAll command to all OTHER arenas (not the initiating thread)
-        for handle in self.get_all_arenas() {
-            if handle.thread_id != initiating_thread_id {
-                let mut cmd = handle.current_command.lock();
-                *cmd = Some(GCCommand::MarkAll);
-                handle.command_signal.notify_all();
-            }
-        }
-
-        // The initiating thread performs its own collection directly
-        execute_gc_command_for_current_thread(GCCommand::MarkAll, self);
-
-        // Wait for all OTHER arenas to finish initial marking
-        self.wait_on_other_arenas(initiating_thread_id);
+        // Send MarkAll command to all arenas
+        self.send_command_to_all_and_wait(initiating_thread_id, GCCommand::MarkAll);
 
         // Phase 2: Fixed-point iteration for cross-arena resurrection
         // Keep iterating until no new cross-arena references are found
@@ -209,30 +213,10 @@ impl GCCoordinator {
         }
 
         // Phase 3: Finalize
-        for handle in self.get_all_arenas() {
-            if handle.thread_id != initiating_thread_id {
-                let mut cmd = handle.current_command.lock();
-                *cmd = Some(GCCommand::Finalize);
-                handle.command_signal.notify_all();
-            }
-        }
-
-        execute_gc_command_for_current_thread(GCCommand::Finalize, self);
-
-        self.wait_on_other_arenas(initiating_thread_id);
+        self.send_command_to_all_and_wait(initiating_thread_id, GCCommand::Finalize);
 
         // Phase 4: Sweep
-        for handle in self.get_all_arenas() {
-            if handle.thread_id != initiating_thread_id {
-                let mut cmd = handle.current_command.lock();
-                *cmd = Some(GCCommand::Sweep);
-                handle.command_signal.notify_all();
-            }
-        }
-
-        execute_gc_command_for_current_thread(GCCommand::Sweep, self);
-
-        self.wait_on_other_arenas(initiating_thread_id);
+        self.send_command_to_all_and_wait(initiating_thread_id, GCCommand::Sweep);
     }
 
     /// Check if a thread has a pending GC command.

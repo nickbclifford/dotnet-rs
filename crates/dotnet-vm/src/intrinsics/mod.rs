@@ -110,6 +110,7 @@ use dotnet_types::{
     members::{FieldDescription, MethodDescription},
 };
 use dotnet_utils::gc::GCHandle;
+use std::sync::Arc;
 use dotnet_value::{
     StackValue,
     object::{HeapStorage, ObjectRef},
@@ -166,7 +167,7 @@ pub type IntrinsicFieldHandler = for<'gc, 'm> fn(
     ctx: &mut crate::stack::VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
     field: FieldDescription,
-    type_generics: Vec<ConcreteType>,
+    type_generics: Arc<[ConcreteType]>,
     is_address: bool,
 ) -> StepResult;
 
@@ -327,7 +328,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let _res_ctx =
-        ResolutionContext::for_method(method, ctx.loader(), generics, ctx.shared.caches.clone());
+        ResolutionContext::for_method(method, ctx.loader(), generics, ctx.shared.caches.clone(), Some(ctx.shared.clone()));
 
     vm_trace_intrinsic!(
         ctx,
@@ -350,7 +351,7 @@ pub fn intrinsic_field<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     ctx: &mut crate::stack::VesContext<'_, 'gc, 'm>,
     field: FieldDescription,
-    type_generics: Vec<ConcreteType>,
+    type_generics: Arc<[ConcreteType]>,
     is_address: bool,
 ) -> StepResult {
     vm_trace_intrinsic!(

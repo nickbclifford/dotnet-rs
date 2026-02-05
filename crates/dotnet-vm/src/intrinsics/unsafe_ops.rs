@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use crate::{
     StepResult,
     context::ResolutionContext,
@@ -64,7 +65,7 @@ pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
     let dst = ctx.pop_ptr(gc);
 
     let res_ctx =
-        ResolutionContext::for_method(method, ctx.loader(), generics, ctx.shared.caches.clone());
+        ResolutionContext::for_method(method, ctx.loader(), generics, ctx.shared.caches.clone(), Some(ctx.shared.clone()));
     let total_count = if generics.method_generics.is_empty() {
         len as usize
     } else {
@@ -399,7 +400,7 @@ pub fn intrinsic_unsafe_size_of<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let res_ctx =
-        ResolutionContext::for_method(method, ctx.loader(), generics, ctx.shared.caches.clone());
+        ResolutionContext::for_method(method, ctx.loader(), generics, ctx.shared.caches.clone(), Some(ctx.shared.clone()));
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx.current_context());
     ctx.push_i32(gc, layout.size() as i32);
@@ -518,7 +519,7 @@ pub fn intrinsic_field_intptr_zero<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
     _field: FieldDescription,
-    _type_generics: Vec<ConcreteType>,
+    _type_generics: Arc<[ConcreteType]>,
     _is_address: bool,
 ) -> StepResult {
     ctx.push(gc, StackValue::NativeInt(0));

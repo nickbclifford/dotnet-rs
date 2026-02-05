@@ -189,7 +189,11 @@ impl ExceptionHandlingSystem {
         gc: GCHandle<'gc>,
     ) -> StepResult {
         match *ctx.exception_mode {
-            ExceptionState::None => StepResult::Continue,
+            // IMPORTANT: Never return Continue from exception handling states.
+            // Returning Continue allows the optimized batch loop to keep executing
+            // instructions without re-checking the current frame/exception state,
+            // which can lead to corruption after stack or state transitions.
+            ExceptionState::None => StepResult::Exception,
             ExceptionState::Throwing(exception) => self.begin_throwing(ctx, exception, gc),
             ExceptionState::Searching(state) => {
                 self.search_for_handler(ctx, gc, state.exception, state.cursor)
@@ -198,7 +202,7 @@ impl ExceptionHandlingSystem {
                 self.unwind(ctx, gc, state.exception, state.target, state.cursor)
             }
             ExceptionState::Filtering(_) | ExceptionState::ExecutingHandler(_) => {
-                StepResult::Continue
+                StepResult::Exception
             }
         }
     }
@@ -326,7 +330,7 @@ impl ExceptionHandlingSystem {
                                         handler_index: 0,
                                     },
                                 });
-                                return StepResult::Jump(ctx.state().ip);
+                                return StepResult::Exception;
                             }
                         }
                         HandlerKind::Filter { clause_offset } => {
@@ -355,7 +359,7 @@ impl ExceptionHandlingSystem {
                             frame.exception_stack.push(exception);
                             ctx.push_obj(gc, exception);
 
-                            return StepResult::Jump(*clause_offset);
+                            return StepResult::Exception;
                         }
                         _ => {} // finally and fault are ignored during the search phase
                     }
@@ -560,7 +564,7 @@ impl ExceptionHandlingSystem {
                         frame.state.ip = handler_start_ip;
                         frame.stack_height = 0;
 
-                        return StepResult::Jump(handler_start_ip);
+                        return StepResult::Exception;
                     }
                 }
             }
@@ -578,7 +582,7 @@ impl ExceptionHandlingSystem {
 
         // We have successfully unwound to the target!
         *ctx.exception_mode = ExceptionState::None;
-        let target_ip = match target {
+        match target {
             UnwindTarget::Handler(target_h) => {
                 let handler_start_ip = {
                     let section = &ctx.frame_stack.frames[target_h.frame_index]
@@ -597,7 +601,6 @@ impl ExceptionHandlingSystem {
                 let exception = exception.expect("Target handler reached but no exception present");
                 frame.exception_stack.push(exception);
                 ctx.push_obj(gc, exception);
-                handler_start_ip
             }
             UnwindTarget::Instruction(target_ip) => {
                 // Special case: usize::MAX indicates we should return from the method
@@ -609,11 +612,10 @@ impl ExceptionHandlingSystem {
                 let frame = &mut ctx.frame_stack.frames[target_frame];
                 frame.state.ip = target_ip;
                 frame.stack_height = 0;
-                target_ip
             }
         };
 
-        StepResult::Jump(target_ip)
+        StepResult::Exception
     }
 }
 

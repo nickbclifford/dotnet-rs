@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use crate::{
     StepResult, context::ResolutionContext, resolution::ValueResolution, stack::VesContext,
 };
@@ -37,7 +38,7 @@ pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc>(
 
     let new_lookup = GenericLookup::new(vec![target_type]);
     let res_ctx =
-        ResolutionContext::for_method(method, ctx.loader(), generics, ctx.shared.caches.clone())
+        ResolutionContext::for_method(method, ctx.loader(), generics, ctx.shared.caches.clone(), Some(ctx.shared.clone()))
             .with_generics(&new_lookup);
     let instance = ObjectRef::new(gc, HeapStorage::Obj(res_ctx.new_object(comparer_td)));
 
@@ -122,7 +123,7 @@ pub fn intrinsic_bitconverter_is_little_endian<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
     _field: dotnet_types::members::FieldDescription,
-    _type_generics: Vec<dotnet_types::generics::ConcreteType>,
+    _type_generics: Arc<[dotnet_types::generics::ConcreteType]>,
     _is_address: bool,
 ) -> StepResult {
     ctx.push_i32(gc, 1);

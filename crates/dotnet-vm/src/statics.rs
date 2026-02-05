@@ -129,6 +129,9 @@ impl StaticStorageManager {
         let key = (description, context.generics.clone());
 
         if let Some(cached) = context.caches.static_field_layout_cache.get(&key) {
+            if let Some(m) = metrics {
+                m.record_static_field_layout_cache_hit();
+            }
             return Arc::clone(&cached);
         }
 

@@ -171,7 +171,7 @@ include!(concat!(env!("OUT_DIR"), "/tests.rs"));
 fn test_cache_observability() {
     let harness = TestHarness::get();
     let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gc_finalization_42.cs");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cache_test_0.cs");
     let dll = harness.build(&fixture).unwrap();
 
     let dll_path_str = dll.to_str().unwrap().to_string();

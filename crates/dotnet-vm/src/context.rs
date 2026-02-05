@@ -1,4 +1,4 @@
-use crate::{MethodType, resolver::ResolverService, state::GlobalCaches, sync::Arc};
+use crate::{MethodType, resolver::ResolverService, state::{GlobalCaches, SharedGlobalState}, sync::Arc};
 use dotnet_assemblies::{Ancestor, AssemblyLoader};
 use dotnet_types::{
     TypeDescription,
@@ -17,6 +17,7 @@ pub struct ResolutionContext<'a, 'm> {
     pub type_owner: Option<TypeDescription>,
     pub method_owner: Option<MethodDescription>,
     pub caches: Arc<GlobalCaches>,
+    pub shared: Option<Arc<SharedGlobalState<'m>>>,
 }
 
 impl<'a, 'm> ResolutionContext<'a, 'm> {
@@ -25,6 +26,7 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
         loader: &'m AssemblyLoader,
         resolution: ResolutionS,
         caches: Arc<GlobalCaches>,
+        shared: Option<Arc<SharedGlobalState<'m>>>,
     ) -> Self {
         Self {
             generics,
@@ -33,6 +35,7 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
             type_owner: None,
             method_owner: None,
             caches,
+            shared,
         }
     }
 
@@ -41,6 +44,7 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
         loader: &'m AssemblyLoader,
         generics: &'a GenericLookup,
         caches: Arc<GlobalCaches>,
+        shared: Option<Arc<SharedGlobalState<'m>>>,
     ) -> Self {
         Self {
             generics,
@@ -49,11 +53,16 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
             type_owner: Some(method.parent),
             method_owner: Some(method),
             caches,
+            shared,
         }
     }
 
     pub fn resolver(&self) -> ResolverService<'m> {
-        ResolverService::from_parts(self.loader, self.caches.clone())
+        if let Some(shared) = &self.shared {
+            ResolverService::new(shared.clone())
+        } else {
+            ResolverService::from_parts(self.loader, self.caches.clone())
+        }
     }
 
     pub fn with_generics(&self, generics: &'a GenericLookup) -> ResolutionContext<'a, 'm> {
@@ -64,6 +73,7 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
             type_owner: self.type_owner,
             method_owner: self.method_owner,
             caches: self.caches.clone(),
+            shared: self.shared.clone(),
         }
     }
 
@@ -83,6 +93,7 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
             type_owner: Some(td),
             method_owner: None,
             caches: self.caches.clone(),
+            shared: self.shared.clone(),
         }
     }
 

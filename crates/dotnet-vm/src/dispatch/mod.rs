@@ -41,6 +41,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 }
 
+
 pub struct ExecutionEngine<'gc, 'm: 'gc> {
     pub stack: CallStack<'gc, 'm>,
 }
@@ -61,20 +62,22 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
     }
 
     pub fn step(&mut self, gc: GCHandle<'gc>) -> StepResult {
-        if matches!(
-            self.stack.execution.exception_mode,
-            ExceptionState::Throwing(_)
-                | ExceptionState::Searching { .. }
-                | ExceptionState::Unwinding { .. }
-        ) {
-            return self.ves_context().handle_exception(gc);
+        match self.stack.execution.exception_mode {
+            ExceptionState::None
+            | ExceptionState::ExecutingHandler(_)
+            | ExceptionState::Filtering(_) => self.step_normal(gc),
+            _ => self.ves_context().handle_exception(gc),
         }
+    }
 
+    pub fn step_normal(&mut self, gc: GCHandle<'gc>) -> StepResult {
         let i = &self.stack.state().info_handle.instructions[self.stack.state().ip];
-        let ip = self.stack.state().ip;
-        let i_res = self.stack.state().info_handle.source.resolution();
 
-        vm_trace_instruction!(self.stack, ip, &i.show(i_res.definition()));
+        if self.stack.tracer_enabled() {
+            let ip = self.stack.state().ip;
+            let i_res = self.stack.state().info_handle.source.resolution();
+            vm_trace_instruction!(self.stack, ip, &i.show(i_res.definition()));
+        }
 
         let res = if let Some(res) = InstructionRegistry::dispatch(gc, self, i) {
             res
@@ -91,8 +94,54 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
                 self.stack.branch(target);
                 StepResult::Continue
             }
+            StepResult::Yield => {
+                self.stack.increment_ip();
+                StepResult::Yield
+            }
             StepResult::Return => self.stack.handle_return(gc),
             _ => res,
+        }
+    }
+
+    /// Run the engine until it needs to yield, returns from the entry point, or throws an unhandled exception.
+    pub fn run(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        loop {
+            let res = match self.stack.execution.exception_mode {
+                ExceptionState::None
+                | ExceptionState::ExecutingHandler(_)
+                | ExceptionState::Filtering(_) => {
+                    // Optimized path for normal execution: run multiple instructions
+                    // without checking exception mode every time, relying on instructions
+                    // to return StepResult::Exception if they throw.
+                    let mut last_res = StepResult::Continue;
+                    // Batch multiple instructions to reduce dispatch overhead.
+                    // Safe because any state-changing instruction must return a non-Continue result
+                    // (e.g., Jump/Return/Exception), which breaks out of this loop.
+                    for _ in 0..128 {
+                        last_res = self.step_normal(gc);
+                        if last_res != StepResult::Continue {
+                            break;
+                        }
+                    }
+                    last_res
+                }
+                _ => {
+                    let res = self.ves_context().handle_exception(gc);
+                    match res {
+                        StepResult::Jump(target) => {
+                            self.stack.branch(target);
+                            StepResult::Continue
+                        }
+                        _ => res,
+                    }
+                }
+            };
+
+            if res == StepResult::Exception {
+                continue;
+            }
+
+            return res;
         }
     }
 

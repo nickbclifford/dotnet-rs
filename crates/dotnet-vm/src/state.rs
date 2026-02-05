@@ -55,6 +55,10 @@ pub struct GlobalCaches {
     /// Cache for static field layouts: (TypeDescription, GenericLookup) -> FieldLayoutManager
     pub static_field_layout_cache:
         DashMap<(TypeDescription, GenericLookup), Arc<FieldLayoutManager>>,
+    /// Cache for value type checks: TypeDescription -> bool
+    pub value_type_cache: DashMap<TypeDescription, bool>,
+    /// Cache for finalizer checks: TypeDescription -> bool
+    pub has_finalizer_cache: DashMap<TypeDescription, bool>,
     /// Registry of intrinsic methods
     pub intrinsic_registry: IntrinsicRegistry,
 }
@@ -70,6 +74,8 @@ impl GlobalCaches {
             intrinsic_cache: DashMap::new(),
             intrinsic_field_cache: DashMap::new(),
             static_field_layout_cache: DashMap::new(),
+            value_type_cache: DashMap::new(),
+            has_finalizer_cache: DashMap::new(),
             intrinsic_registry,
         }
     }
@@ -164,6 +170,8 @@ impl<'m> SharedGlobalState<'m> {
             hierarchy_size: self.caches.hierarchy_cache.len(),
             static_field_layout_size: self.caches.static_field_layout_cache.len(),
             instance_field_layout_size: self.caches.instance_field_layout_cache.len(),
+            value_type_size: self.caches.value_type_cache.len(),
+            has_finalizer_size: self.caches.has_finalizer_cache.len(),
             assembly_type_info: (
                 self.loader.type_cache_hits.load(Ordering::Relaxed),
                 self.loader.type_cache_misses.load(Ordering::Relaxed),

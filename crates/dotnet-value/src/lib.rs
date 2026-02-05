@@ -394,8 +394,8 @@ impl<'gc> StackValue<'gc> {
                 LoadType::Int16 | LoadType::UInt16 => 2,
                 LoadType::Int32 | LoadType::UInt32 | LoadType::Float32 => 4,
                 LoadType::Int64 | LoadType::Float64 => 8,
-                LoadType::IntPtr => std::mem::size_of::<isize>(),
-                LoadType::Object => std::mem::size_of::<usize>(),
+                LoadType::IntPtr => size_of::<isize>(),
+                LoadType::Object => size_of::<usize>(),
             };
 
             let val = StandardAtomicAccess::load_atomic(ptr, size, ordering);
@@ -453,14 +453,14 @@ impl<'gc> StackValue<'gc> {
                 StoreType::Int64 => (self.as_i64() as u64, 8),
                 StoreType::Float32 => ((self.as_f64() as f32).to_bits() as u64, 4),
                 StoreType::Float64 => (self.as_f64().to_bits(), 8),
-                StoreType::IntPtr => (self.as_isize() as u64, std::mem::size_of::<isize>()),
+                StoreType::IntPtr => (self.as_isize() as u64, size_of::<isize>()),
                 StoreType::Object => {
                     let obj = self.as_object_ref();
                     let val = match obj.0 {
                         Some(h) => Gc::as_ptr(h) as usize,
                         None => 0,
                     };
-                    (val as u64, std::mem::size_of::<usize>())
+                    (val as u64, size_of::<usize>())
                 }
             };
 
