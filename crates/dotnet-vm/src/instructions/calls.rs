@@ -136,8 +136,8 @@ pub fn callvirt_constrained<'gc, 'm: 'gc>(
             let m = args[0].as_managed_ptr();
             let ptr = m
                 .pointer()
-                .map(|p: std::ptr::NonNull<u8>| p.as_ptr())
-                .unwrap_or(std::ptr::null_mut());
+                .map(|p: ptr::NonNull<u8>| p.as_ptr())
+                .unwrap_or(ptr::null_mut());
             if ptr.is_null() {
                 return ctx.throw_by_name(gc, "System.NullReferenceException");
             }

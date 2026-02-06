@@ -15,7 +15,7 @@ gc-arena = { workspace = true }
 libffi = "5.0.0"
 libloading = "0.9.0"
 parking_lot = { workspace = true }
-phf = "0.11"
+phf = "0.13"
 serde = { version = "1.0", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
@@ -28,7 +28,7 @@ memory-validation = ["dotnet-value/memory-validation"]
 
 [build-dependencies]
 dotnet-macros-core = { workspace = true }
-phf_codegen = "0.11"
+phf_codegen = "0.13"
 syn = { version = "2", features = ["full"] }
 walkdir = "2"
 dotnetdll = { workspace = true }

@@ -9,7 +9,7 @@ use dotnet_utils::{
     atomic::{AtomicAccess, StandardAtomicAccess},
     gc::GCHandle,
 };
-use dotnet_value::{StackValue, object::ObjectRef};
+use dotnet_value::{ManagedPtr, StackValue, object::ObjectRef};
 use dotnetdll::prelude::{BaseType, Parameter, ParameterType};
 use gc_arena::Gc;
 use std::thread;
@@ -144,7 +144,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
                 .expect("Target pointer should not be null")
                 .as_ptr();
 
-            let size = std::mem::size_of::<usize>();
+            let size = size_of::<usize>();
             let prev = match unsafe {
                 StandardAtomicAccess::compare_exchange_atomic(
                     target,
@@ -180,7 +180,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
                 None => 0,
             };
 
-            let size = std::mem::size_of::<usize>();
+            let size = size_of::<usize>();
             let prev_raw = match unsafe {
                 StandardAtomicAccess::compare_exchange_atomic(
                     target,
@@ -273,7 +273,7 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
                 .expect("Target pointer should not be null")
                 .as_ptr();
 
-            let size = std::mem::size_of::<usize>();
+            let size = size_of::<usize>();
             let prev = unsafe {
                 StandardAtomicAccess::exchange_atomic(target, size, value as u64, Ordering::SeqCst)
             } as isize;
@@ -301,7 +301,7 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
                 ),
             };
 
-            let size = std::mem::size_of::<usize>();
+            let size = size_of::<usize>();
             let prev_raw = unsafe {
                 StandardAtomicAccess::exchange_atomic(
                     target,
@@ -311,13 +311,7 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
                 )
             } as usize;
 
-            let prev = if prev_raw == 0 {
-                ObjectRef(None)
-            } else {
-                // SAFETY: We just read this from an atomic access where we stored valid Gc payload pointers.
-                // The object is kept alive because we are in an intrinsic call and the stack roots it.
-                ObjectRef(Some(unsafe { Gc::from_ptr(prev_raw as *const _) }))
-            };
+            let prev = unsafe { ObjectRef::read_branded(&prev_raw.to_ne_bytes(), gc) };
             ctx.push_obj(gc, prev);
         }
     }
@@ -341,6 +335,20 @@ fn get_or_create_sync_block<'gc, T: SyncManagerOps>(
     result
 }
 
+fn find_success_flag_index(ctx: &VesContext, success_ptr: ManagedPtr) -> Option<usize> {
+    let mut success_flag_index = None;
+    if let (None, Some(p)) = (success_ptr.owner, success_ptr.pointer()) {
+        let raw_ptr = p.as_ptr();
+        for i in 0..ctx.evaluation_stack.top_of_stack() {
+            if ctx.evaluation_stack.get_slot_address(i).as_ptr() == raw_ptr {
+                success_flag_index = Some(i);
+                break;
+            }
+        }
+    }
+    success_flag_index
+}
+
 /// System.Threading.Monitor::ReliableEnter(object, ref bool)
 #[dotnet_intrinsic("static void System.Threading.Monitor::ReliableEnter(object, bool&)")]
 pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
@@ -352,17 +360,7 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
     let success_ptr = ctx.evaluation_stack.peek_stack_at(0).as_managed_ptr();
     let obj_ref = ctx.evaluation_stack.peek_stack_at(1).as_object_ref();
 
-    // If it's a stack pointer, we need to track its index because the stack might reallocate
-    let mut success_flag_index = None;
-    if let (None, Some(p)) = (success_ptr.owner, success_ptr.pointer()) {
-        let raw_ptr = p.as_ptr();
-        for i in 0..ctx.evaluation_stack.top_of_stack() {
-            if ctx.evaluation_stack.get_slot_address(i).as_ptr() == raw_ptr {
-                success_flag_index = Some(i);
-                break;
-            }
-        }
-    }
+    let success_flag_index = find_success_flag_index(ctx, success_ptr);
 
     if obj_ref.0.is_some() {
         let thread_id = ctx.thread_id() as u64;
@@ -442,17 +440,7 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
     let timeout_ms = ctx.evaluation_stack.peek_stack_at(1).as_i32();
     let obj_ref = ctx.evaluation_stack.peek_stack_at(2).as_object_ref();
 
-    // If it's a stack pointer, we need to track its index because the stack might reallocate
-    let mut success_flag_index = None;
-    if let (None, Some(p)) = (success_ptr.owner, success_ptr.pointer()) {
-        let raw_ptr = p.as_ptr();
-        for i in 0..ctx.evaluation_stack.top_of_stack() {
-            if ctx.evaluation_stack.get_slot_address(i).as_ptr() == raw_ptr {
-                success_flag_index = Some(i);
-                break;
-            }
-        }
-    }
+    let success_flag_index = find_success_flag_index(ctx, success_ptr);
 
     if obj_ref.0.is_some() {
         let thread_id = ctx.thread_id() as u64;
@@ -627,7 +615,7 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
                 .expect("Target pointer should not be null")
                 .as_ptr();
 
-            let size = std::mem::size_of::<usize>();
+            let size = size_of::<usize>();
             let val = unsafe { StandardAtomicAccess::load_atomic(target, size, Ordering::Acquire) };
             ctx.push_isize(gc, val as isize);
         }
@@ -639,8 +627,9 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
                 .expect("Target pointer should not be null")
                 .as_ptr();
 
-            let size = std::mem::size_of::<usize>();
-            let val = unsafe { StandardAtomicAccess::load_atomic(target, size, Ordering::Acquire) };
+            let val = unsafe {
+                StandardAtomicAccess::load_atomic(target, ObjectRef::SIZE, Ordering::Acquire)
+            };
             let obj = if val == 0 {
                 ObjectRef(None)
             } else {
@@ -729,7 +718,7 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
                 StackValue::NativeInt(i) => i as u64,
                 _ => panic!("Expected NativeInt for Volatile.Write"),
             };
-            let size = std::mem::size_of::<usize>();
+            let size = size_of::<usize>();
             unsafe { StandardAtomicAccess::store_atomic(target, size, val, Ordering::Release) };
         }
         _ => {
@@ -740,7 +729,7 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
                 StackValue::NativeInt(i) => i as u64,
                 _ => panic!("Expected ObjectRef or NativeInt for Volatile.Write"),
             };
-            let size = std::mem::size_of::<usize>();
+            let size = size_of::<usize>();
             unsafe { StandardAtomicAccess::store_atomic(target, size, val_raw, Ordering::Release) };
         }
     }

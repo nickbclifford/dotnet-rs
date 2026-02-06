@@ -546,9 +546,11 @@ impl PartialOrd for StackValue<'_> {
             (NativeInt(l), NativeInt(r)) => l.partial_cmp(r),
             (NativeFloat(l), NativeFloat(r)) => l.partial_cmp(r),
             (ManagedPtr(l), ManagedPtr(r)) => l.partial_cmp(r),
-            (ManagedPtr(l), NativeInt(r)) => {
-                (l.pointer().map(|p| p.as_ptr() as isize).unwrap_or(0)).partial_cmp(r)
-            }
+            (ManagedPtr(l), NativeInt(r)) => l
+                .pointer()
+                .map(|p| p.as_ptr() as isize)
+                .unwrap_or(0)
+                .partial_cmp(r),
             (NativeInt(l), ManagedPtr(r)) => {
                 l.partial_cmp(&(r.pointer().map(|p| p.as_ptr() as isize).unwrap_or(0)))
             }

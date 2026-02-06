@@ -367,7 +367,7 @@ pub fn ldflda<'gc, 'm: 'gc>(
                 } else if field.field.name == "Length" {
                     (&vector.layout.length as *const usize) as *mut u8
                 } else {
-                    std::ptr::null_mut()
+                    ptr::null_mut()
                 };
 
                 if !ptr.is_null() {

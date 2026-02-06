@@ -94,7 +94,7 @@ pub fn localloc<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'g
 
     ctx.push(
         gc,
-        StackValue::UnmanagedPtr(UnmanagedPtr(std::ptr::NonNull::new(ptr).unwrap())),
+        StackValue::UnmanagedPtr(UnmanagedPtr(ptr::NonNull::new(ptr).unwrap())),
     );
     StepResult::Continue
 }

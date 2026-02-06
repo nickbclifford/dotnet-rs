@@ -44,13 +44,13 @@ pub trait SyncManagerOps {
         &self,
         get_index: impl FnOnce() -> Option<usize>,
         set_index: impl FnOnce(usize),
-    ) -> (usize, std::sync::Arc<Self::Block>);
+    ) -> (usize, Arc<Self::Block>);
 
-    fn get_sync_block(&self, index: usize) -> Option<std::sync::Arc<Self::Block>>;
+    fn get_sync_block(&self, index: usize) -> Option<Arc<Self::Block>>;
 
     fn try_enter_block(
         &self,
-        block: std::sync::Arc<Self::Block>,
+        block: Arc<Self::Block>,
         thread_id: u64,
         metrics: &RuntimeMetrics,
     ) -> bool;

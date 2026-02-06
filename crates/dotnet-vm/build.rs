@@ -253,7 +253,7 @@ fn generate_intrinsic_phf(out_dir: &std::ffi::OsStr, entries: &[IntrinsicEntry])
 
     let mut phf_map = phf_codegen::Map::new();
     for (key, (start, len)) in group_ranges {
-        phf_map.entry(key, &format!("Range {{ start: {}, len: {} }}", start, len));
+        phf_map.entry(key, format!("Range {{ start: {}, len: {} }}", start, len));
     }
     table_code.push_str("#[allow(dead_code)]\n");
     table_code.push_str("pub static INTRINSIC_LOOKUP: phf::Map<&'static str, Range> = ");

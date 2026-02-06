@@ -762,7 +762,9 @@ fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(data: StackVal
         StackValue::UnmanagedPtr(p) => (p.0.as_ptr() as usize)
             .try_into()
             .unwrap_or_else(|_| panic!("failed to convert from pointer")),
-        StackValue::ManagedPtr(p) => (p.pointer().map_or(0, |x| x.as_ptr() as usize))
+        StackValue::ManagedPtr(p) => p
+            .pointer()
+            .map_or(0, |x| x.as_ptr() as usize)
             .try_into()
             .unwrap_or_else(|_| panic!("failed to convert from pointer")),
         other => panic!(

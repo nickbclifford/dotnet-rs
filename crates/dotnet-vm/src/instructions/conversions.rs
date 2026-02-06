@@ -66,7 +66,7 @@ pub fn conv<'gc, 'm: 'gc>(
                 StackValue::NativeInt(i) => i as usize as u64,
                 StackValue::UnmanagedPtr(UnmanagedPtr(p)) => (p.as_ptr() as usize) as u64,
                 StackValue::ManagedPtr(m) => {
-                    (m.pointer().map_or(0, |ptr| ptr.as_ptr() as usize)) as u64
+                    m.pointer().map_or(0, |ptr| ptr.as_ptr() as usize) as u64
                 }
                 StackValue::NativeFloat(f) => {
                     todo!("truncate {} towards zero for conversion to u64", f)
