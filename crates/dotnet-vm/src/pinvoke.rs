@@ -107,21 +107,63 @@ impl NativeLibraries {
             return Ok(lib);
         }
 
-        let path = self
-            .find_library_path(name)
-            .ok_or_else(|| PInvokeError::LibraryNotFound(name.to_string()))?;
+        let path = self.find_library_path(name);
 
         if let Some(t) = &mut tracer {
             t.trace_interop(0, "RESOLVE", &format!("Resolving library '{}'...", name));
             t.trace_interop(
                 0,
                 "RESOLVE",
-                &format!("Loading library from path: {:?}", path),
+                &if let Some(p) = &path {
+                    format!("Library '{}' found at '{}', now loading", name, p.display())
+                } else {
+                    format!("Library '{}' not found in root, trying system paths", name)
+                },
             );
         }
 
-        let lib = unsafe { Library::new(&path) }
-            .map_err(|e| PInvokeError::LoadError(name.to_string(), e.to_string()))?;
+        let mut names_to_try = vec![];
+        if let Some(p) = path {
+            names_to_try.push(p.to_string_lossy().to_string());
+        } else {
+            names_to_try.push(name.to_string());
+            #[cfg(target_os = "linux")]
+            {
+                if name == "libc" {
+                    names_to_try.push("libc.so.6".to_string());
+                } else if name == "libm" {
+                    names_to_try.push("libm.so.6".to_string());
+                } else if name == "libdl" {
+                    names_to_try.push("libdl.so.2".to_string());
+                } else if name == "libpthread" {
+                    names_to_try.push("libpthread.so.0".to_string());
+                }
+            }
+        }
+
+        let mut lib = None;
+        let mut last_error = None;
+
+        for n in &names_to_try {
+            match unsafe { Library::new(n) } {
+                Ok(l) => {
+                    lib = Some(l);
+                    break;
+                }
+                Err(e) => {
+                    last_error = Some(e);
+                }
+            }
+        }
+
+        let lib = lib.ok_or_else(|| {
+            PInvokeError::LoadError(
+                name.to_string(),
+                last_error
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "Unknown error".to_string()),
+            )
+        })?;
 
         if let Some(t) = tracer {
             t.trace_interop(0, "RESOLVE", &format!("Successfully loaded '{}'", name));
@@ -218,10 +260,64 @@ fn type_to_ffi(t: &ConcreteType, ctx: &ResolutionContext) -> Type {
 }
 
 fn param_to_type(p: &ParameterType<MethodType>, ctx: &ResolutionContext) -> Type {
-    let ParameterType::Value(t) = p else {
-        todo!("marshalling ref/typedref parameters")
-    };
-    type_to_ffi(&ctx.make_concrete(t), ctx)
+    match p {
+        ParameterType::Value(t) => type_to_ffi(&ctx.make_concrete(t), ctx),
+        ParameterType::Ref(_) => Type::pointer(),
+        ParameterType::TypedReference => todo!("marshalling typedref parameters"),
+    }
+}
+
+enum TempBuffer {
+    I32(Box<i32>),
+    I64(Box<i64>),
+    Isize(Box<isize>),
+    F64(Box<f64>),
+    Ptr(Box<*mut u8>),
+    Bytes(Vec<u8>),
+}
+
+impl TempBuffer {
+    fn as_i32(&self) -> &i32 {
+        match self {
+            TempBuffer::I32(val) => val,
+            _ => panic!("P/Invoke temp buffer type mismatch (i32)"),
+        }
+    }
+
+    fn as_i64(&self) -> &i64 {
+        match self {
+            TempBuffer::I64(val) => val,
+            _ => panic!("P/Invoke temp buffer type mismatch (i64)"),
+        }
+    }
+
+    fn as_isize(&self) -> &isize {
+        match self {
+            TempBuffer::Isize(val) => val,
+            _ => panic!("P/Invoke temp buffer type mismatch (isize)"),
+        }
+    }
+
+    fn as_f64(&self) -> &f64 {
+        match self {
+            TempBuffer::F64(val) => val,
+            _ => panic!("P/Invoke temp buffer type mismatch (f64)"),
+        }
+    }
+
+    fn as_ptr(&self) -> &*mut u8 {
+        match self {
+            TempBuffer::Ptr(val) => val,
+            _ => panic!("P/Invoke temp buffer type mismatch (ptr)"),
+        }
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        match self {
+            TempBuffer::Bytes(buf) => buf,
+            _ => panic!("P/Invoke temp buffer type mismatch (bytes)"),
+        }
+    }
 }
 
 impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
@@ -308,6 +404,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                 });
 
                 *self.exception_mode = ExceptionState::Throwing(exception);
+                self.pop_multiple(gc, arg_count);
                 return;
             }
         };
@@ -328,15 +425,50 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                 t
             }
         };
-        let mut ptr_args: Vec<*mut c_void> = vec![];
-        let mut temp_buffers: Vec<Vec<u8>> = vec![];
+        let mut temp_buffers: Vec<TempBuffer> = vec![];
         let mut write_backs: Vec<(std::ptr::NonNull<u8>, usize, usize)> = vec![];
         let mut arg_buffer_map: Vec<Option<usize>> = vec![None; stack_values.len()];
+        let mut arg_ptrs: Vec<*mut c_void> = vec![std::ptr::null_mut(); stack_values.len()];
 
         // Pass 1: Prepare buffers
         for (i, v) in stack_values.iter().enumerate() {
             let ffi_size = unsafe { (*args[i].as_raw_ptr()).size };
             match v {
+                StackValue::Int32(val) => {
+                    temp_buffers.push(TempBuffer::I32(Box::new(*val)));
+                    let idx = temp_buffers.len() - 1;
+                    arg_buffer_map[i] = Some(idx);
+                    arg_ptrs[i] =
+                        temp_buffers[idx].as_i32() as *const i32 as *mut i32 as *mut c_void;
+                }
+                StackValue::Int64(val) => {
+                    temp_buffers.push(TempBuffer::I64(Box::new(*val)));
+                    let idx = temp_buffers.len() - 1;
+                    arg_buffer_map[i] = Some(idx);
+                    arg_ptrs[i] =
+                        temp_buffers[idx].as_i64() as *const i64 as *mut i64 as *mut c_void;
+                }
+                StackValue::NativeInt(val) => {
+                    temp_buffers.push(TempBuffer::Isize(Box::new(*val)));
+                    let idx = temp_buffers.len() - 1;
+                    arg_buffer_map[i] = Some(idx);
+                    arg_ptrs[i] =
+                        temp_buffers[idx].as_isize() as *const isize as *mut isize as *mut c_void;
+                }
+                StackValue::NativeFloat(val) => {
+                    temp_buffers.push(TempBuffer::F64(Box::new(*val)));
+                    let idx = temp_buffers.len() - 1;
+                    arg_buffer_map[i] = Some(idx);
+                    arg_ptrs[i] =
+                        temp_buffers[idx].as_f64() as *const f64 as *mut f64 as *mut c_void;
+                }
+                StackValue::UnmanagedPtr(val) => {
+                    temp_buffers.push(TempBuffer::Ptr(Box::new(val.0.as_ptr())));
+                    let idx = temp_buffers.len() - 1;
+                    arg_buffer_map[i] = Some(idx);
+                    arg_ptrs[i] =
+                        temp_buffers[idx].as_ptr() as *const *mut u8 as *mut *mut u8 as *mut c_void;
+                }
                 StackValue::ValueType(o) => {
                     let mut data = o.instance_storage.get().to_vec();
                     if data.len() < ffi_size {
@@ -344,11 +476,16 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                     }
 
                     if data.is_empty() {
-                        temp_buffers.push(vec![0]);
+                        temp_buffers.push(TempBuffer::Bytes(vec![0]));
                     } else {
-                        temp_buffers.push(data);
+                        temp_buffers.push(TempBuffer::Bytes(data));
                     }
-                    arg_buffer_map[i] = Some(temp_buffers.len() - 1);
+                    let idx = temp_buffers.len() - 1;
+                    arg_buffer_map[i] = Some(idx);
+                    arg_ptrs[i] = temp_buffers[idx].as_bytes().as_ptr() as *mut c_void;
+                }
+                StackValue::ObjectRef(_) => {
+                    todo!("marshalling object references to native code is not supported yet")
                 }
                 StackValue::ManagedPtr(p) => {
                     let mut handled = false;
@@ -357,13 +494,17 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                         let current_ptr = val_ptr.as_ptr();
                         let buf_len = ffi_size;
                         let mut buf = vec![0u8; buf_len];
+                        if buf.is_empty() {
+                            buf.push(0);
+                        }
                         unsafe {
                             std::ptr::copy_nonoverlapping(current_ptr, buf.as_mut_ptr(), buf_len);
                         }
-                        temp_buffers.push(buf);
+                        temp_buffers.push(TempBuffer::Bytes(buf));
                         let buf_idx = temp_buffers.len() - 1;
                         arg_buffer_map[i] = Some(buf_idx);
                         write_backs.push((val_ptr, buf_idx, buf_len));
+                        arg_ptrs[i] = temp_buffers[buf_idx].as_bytes().as_ptr() as *mut c_void;
                         handled = true;
                     }
 
@@ -372,7 +513,12 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                             .pointer()
                             .map(|x| x.as_ptr() as *mut c_void)
                             .unwrap_or(std::ptr::null_mut());
-                        ptr_args.push(ptr);
+                        temp_buffers.push(TempBuffer::Ptr(Box::new(ptr as *mut u8)));
+                        let idx = temp_buffers.len() - 1;
+                        arg_buffer_map[i] = Some(idx);
+                        arg_ptrs[i] = temp_buffers[idx].as_ptr() as *const *mut u8
+                            as *mut *mut u8
+                            as *mut c_void;
                     }
                 }
                 _ => {}
@@ -381,42 +527,14 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
 
         let cif = Cif::new(args, return_type.clone());
 
-        let mut ptr_args_iter = ptr_args.iter();
-        let mut arg_values: Vec<Arg> = vec![];
-
-        for (i, v) in stack_values.iter().enumerate() {
-            let arg = match v {
-                StackValue::Int32(i) => Arg::new(i),
-                StackValue::Int64(i) => Arg::new(i),
-                StackValue::NativeInt(i) => Arg::new(i),
-                StackValue::NativeFloat(f) => Arg::new(f),
-                StackValue::UnmanagedPtr(p) => Arg::new(&p.0),
-                StackValue::ManagedPtr(_) => {
-                    if let Some(idx) = arg_buffer_map[i] {
-                        Arg::new(&temp_buffers[idx][0])
-                    } else {
-                        let ptr_ref = ptr_args_iter.next().unwrap();
-                        Arg::new(ptr_ref)
-                    }
-                }
-                StackValue::ValueType(_) => {
-                    let idx = arg_buffer_map[i].unwrap();
-                    Arg::new(&temp_buffers[idx][0])
-                }
-                rest => panic!(
-                    "marshalling not yet supported for {:?} in P/Invoke calling {}::{}",
-                    rest, module, function
-                ),
-            };
-            arg_values.push(arg);
-        }
-
         let do_write_back = || unsafe {
             for (dest_ptr, buf_idx, len) in &write_backs {
-                let buf = &temp_buffers[*buf_idx];
+                let buf = temp_buffers[*buf_idx].as_bytes();
                 std::ptr::copy_nonoverlapping(buf.as_ptr(), dest_ptr.as_ptr(), *len);
             }
         };
+
+        let target_fn = *target.as_fun();
 
         vm_trace_interop!(
             self,
@@ -424,12 +542,20 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
             "{}::{} with {} args",
             module,
             function,
-            arg_values.len()
+            arg_ptrs.len()
         );
+
         match &method.method.signature.return_type.1 {
             None => {
                 vm_trace_interop!(self, "PRE-CALL", "(void) {}::{}", module, function);
-                let _: c_void = unsafe { cif.call(target, &arg_values) };
+                unsafe {
+                    libffi::raw::ffi_call(
+                        cif.as_raw_ptr(),
+                        Some(target_fn),
+                        std::ptr::null_mut(),
+                        arg_ptrs.as_mut_ptr(),
+                    );
+                }
                 do_write_back();
                 vm_trace_interop!(self, "POST-CALL", "(void) {}::{}", module, function);
                 self.pop_multiple(gc, arg_count);
@@ -441,16 +567,26 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
 
                 macro_rules! read_return {
                     ($t:ty) => {{
+                        let mut ret: $t = unsafe { std::mem::zeroed() };
                         vm_trace_interop!(self, "PRE-CALL", "(ret) {}::{}", module, function);
-                        let res = unsafe { cif.call::<$t>(target, &arg_values) };
+                        unsafe {
+                            libffi::raw::ffi_call(
+                                cif.as_raw_ptr(),
+                                Some(target_fn),
+                                &mut ret as *mut _ as *mut c_void,
+                                arg_ptrs.as_mut_ptr(),
+                            );
+                        }
                         do_write_back();
                         vm_trace_interop!(self, "POST-CALL", "(ret) {}::{}", module, function);
-                        res
+                        ret
                     }};
                 }
 
                 macro_rules! read_into_i32 {
-                    ($t:ty) => {{ StackValue::Int32(read_return!($t) as i32) }};
+                    ($t:ty) => {{
+                        StackValue::Int32(read_return!($t) as i32)
+                    }};
                 }
 
                 let t = ctx.make_concrete(t);
@@ -478,18 +614,6 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
 
                         let instance = new_ctx.new_object(td);
 
-                        // We need an array of pointers to the arguments for ffi_call.
-                        // Since arg_values: Vec<Arg> already contains these pointers,
-                        // we can just collect them into a new Vec.
-                        let mut arg_ptrs: Vec<*mut c_void> = arg_values
-                            .iter()
-                            .map(|arg| unsafe {
-                                // SAFETY: libffi::middle::Arg is a wrapper around a raw pointer.
-                                // We cast it to a raw pointer to pass to the raw ffi_call.
-                                *(arg as *const _ as *const *mut c_void)
-                            })
-                            .collect();
-
                         vm_trace_interop!(
                             self,
                             "CALLING",
@@ -515,7 +639,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                             unsafe {
                                 libffi::raw::ffi_call(
                                     cif.as_raw_ptr(),
-                                    Some(*target.as_fun()),
+                                    Some(target_fn),
                                     temp_buffer.as_mut_ptr() as *mut c_void,
                                     arg_ptrs.as_mut_ptr(),
                                 );
@@ -527,7 +651,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                             unsafe {
                                 libffi::raw::ffi_call(
                                     cif.as_raw_ptr(),
-                                    Some(*target.as_fun()),
+                                    Some(target_fn),
                                     instance.instance_storage.get_mut().as_mut_ptr() as *mut c_void,
                                     arg_ptrs.as_mut_ptr(),
                                 );

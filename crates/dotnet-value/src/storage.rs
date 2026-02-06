@@ -145,7 +145,7 @@ impl FieldStorage {
         unsafe { Atomic::store_field(field_ptr, value, ord) }
     }
 
-    unsafe fn raw_data_unsynchronized(&self) -> &[u8] {
+    pub(crate) unsafe fn raw_data_unsynchronized(&self) -> &[u8] {
         unsafe { &*self.data.data_ptr() }
     }
 

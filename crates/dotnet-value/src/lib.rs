@@ -66,9 +66,9 @@ unsafe impl<'gc> Collect for StackValue<'gc> {
 macro_rules! checked_arithmetic_op {
     ($l:expr, $r:expr, $sgn:expr, $op:ident) => {
         match ($l, $r, $sgn) {
-            (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Signed) => (l as u32)
-                .$op(r as u32)
-                .map(|v| StackValue::Int32(v as i32))
+            (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Signed) => l
+                .$op(r)
+                .map(StackValue::Int32)
                 .ok_or("System.OverflowException"),
             (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Unsigned) => (l as u32)
                 .$op(r as u32)
@@ -254,15 +254,16 @@ impl<'gc> StackValue<'gc> {
             Self::Int64(i) => ref_to_ptr(i),
             Self::NativeInt(i) => ref_to_ptr(i),
             Self::NativeFloat(f) => ref_to_ptr(f),
-            Self::ObjectRef(ObjectRef(o)) => ref_to_ptr(o),
-            Self::UnmanagedPtr(UnmanagedPtr(u)) => *u,
-            Self::ManagedPtr(m) => m.pointer().unwrap_or(NonNull::dangling()),
+            Self::ObjectRef(o) => ref_to_ptr(o),
+            Self::UnmanagedPtr(u) => ref_to_ptr(u),
+            Self::ManagedPtr(m) => ref_to_ptr(m),
             Self::ValueType(o) => {
-                let ptr = o.instance_storage.get().as_ptr() as *mut u8;
+                // SAFETY: Returning a pointer to the internal buffer. 
+                // This is used by ldloca/ldarga to get a byref to the value type.
+                let ptr = unsafe { o.instance_storage.raw_data_unsynchronized().as_ptr() as *mut u8 };
                 NonNull::new(ptr).unwrap()
             }
-            #[cfg(feature = "multithreaded-gc")]
-            Self::CrossArenaObjectRef(_, _) => todo!("handle CrossArenaObjectRef in data_location"),
+            Self::CrossArenaObjectRef(p, _) => ref_to_ptr(p),
         }
     }
 

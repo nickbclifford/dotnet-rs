@@ -170,7 +170,7 @@ include!(concat!(env!("OUT_DIR"), "/tests.rs"));
 #[test]
 fn test_cache_observability() {
     let harness = TestHarness::get();
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cache_test_0.cs");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gc/cache_test_0.cs");
     let dll = harness.build(&fixture).unwrap();
 
     let dll_path_str = dll.to_str().unwrap().to_string();
@@ -240,7 +240,7 @@ fn test_multiple_arenas_basic() {
     use std::thread;
 
     let harness = TestHarness::get();
-    let fixture_path = Path::new("tests/fixtures/basic_42.cs");
+    let fixture_path = Path::new("tests/fixtures/basic/basic_42.cs");
     let dll_path = harness.build(fixture_path).unwrap();
 
     // Spawn multiple threads, each creating its own arena and running the same program
@@ -267,7 +267,7 @@ fn test_multiple_arenas_with_gc() {
     use std::thread;
 
     let harness = TestHarness::get();
-    let fixture_path = Path::new("tests/fixtures/gc_finalization_42.cs");
+    let fixture_path = Path::new("tests/fixtures/gc/gc_finalization_42.cs");
     let dll_path = harness.build(fixture_path).unwrap();
 
     // Run GC tests in parallel threads to test cross-arena coordination
@@ -294,7 +294,7 @@ fn test_multiple_arenas_static_fields() {
     use std::thread;
 
     let harness = TestHarness::get();
-    let fixture_path = Path::new("tests/fixtures/static_field_42.cs");
+    let fixture_path = Path::new("tests/fixtures/fields/static_field_42.cs");
     let dll_path = harness.build(fixture_path).unwrap();
 
     // Test that static fields work correctly across multiple arenas
@@ -321,7 +321,7 @@ fn test_multiple_arenas_allocation_stress() {
     use std::thread;
 
     let harness = TestHarness::get();
-    let fixture_path = Path::new("tests/fixtures/array_0.cs");
+    let fixture_path = Path::new("tests/fixtures/arrays/array_0.cs");
     let dll_path = harness.build(fixture_path).unwrap();
 
     // Stress test allocation across multiple arenas simultaneously
@@ -351,7 +351,7 @@ fn test_arena_local_state_isolation() {
     use std::thread;
 
     let harness = TestHarness::get();
-    let fixture_path = Path::new("tests/fixtures/generic_0.cs");
+    let fixture_path = Path::new("tests/fixtures/generics/generic_0.cs");
     let dll_path = harness.build(fixture_path).unwrap();
 
     // Test that arena-local state (reflection caches, etc.) is properly isolated
@@ -404,7 +404,7 @@ fn test_multiple_arenas_simple() {
     use std::thread;
 
     let harness = TestHarness::get();
-    let fixture_path = Path::new("tests/fixtures/threading_simple_0.cs");
+    let fixture_path = Path::new("tests/fixtures/threading/threading_simple_0.cs");
     let dll_path = harness.build(fixture_path).unwrap();
 
     let shared = Arc::new(state::SharedGlobalState::new(harness.loader));
@@ -494,7 +494,7 @@ fn test_reflection_race_condition() {
     use std::thread;
 
     let harness = TestHarness::get();
-    let fixture_path = Path::new("tests/fixtures/reflection_stress_0.cs");
+    let fixture_path = Path::new("tests/fixtures/reflection/reflection_stress_0.cs");
     let dll_path = harness.build(fixture_path).unwrap();
 
     let shared = Arc::new(state::SharedGlobalState::new(harness.loader));
@@ -574,7 +574,7 @@ fn test_volatile_sharing() {
     use dotnet_vm::state;
     use std::thread;
     let harness = TestHarness::get();
-    let fixture_path = Path::new("tests/fixtures/volatile_sharing_42.cs");
+    let fixture_path = Path::new("tests/fixtures/threading/volatile_sharing_42.cs");
     let dll_path = harness.build(fixture_path).unwrap();
 
     let shared = std::sync::Arc::new(state::SharedGlobalState::new(harness.loader));

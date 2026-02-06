@@ -108,11 +108,12 @@ use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
+    runtime::RuntimeType,
 };
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     StackValue,
-    object::{HeapStorage, ObjectRef},
+    object::{HeapStorage, ObjectRef, ValueType},
     string::CLRString,
 };
 use std::sync::Arc;
@@ -399,5 +400,52 @@ fn object_to_string<'gc, 'm: 'gc>(
     let storage = HeapStorage::Str(str_val);
     let obj_ref = ObjectRef::new(gc, storage);
     ctx.push_obj(gc, obj_ref);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("System.Type System.Object::GetType()")]
+fn object_get_type<'gc, 'm: 'gc>(
+    ctx: &mut crate::stack::VesContext<'_, 'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let this = ctx.pop_obj(gc);
+    if this.0.is_none() {
+        return ctx.throw_by_name(gc, "System.NullReferenceException");
+    }
+
+    let rt: RuntimeType = this.as_heap_storage(|storage| match storage {
+        HeapStorage::Obj(o) => RuntimeType::Type(o.description),
+        HeapStorage::Str(_) => RuntimeType::String,
+        // For arrays, return System.Array as a conservative fallback.
+        // TODO: encode exact element type and rank into RuntimeType (Vector/Array)
+        HeapStorage::Vec(_v) => {
+            let arr_td = ctx.loader().corlib_type("System.Array");
+            RuntimeType::Type(arr_td)
+        }
+        HeapStorage::Boxed(v) => match v {
+            ValueType::Struct(o) => RuntimeType::Type(o.description),
+            ValueType::Bool(_) => RuntimeType::Boolean,
+            ValueType::Char(_) => RuntimeType::Char,
+            ValueType::Int8(_) => RuntimeType::Int8,
+            ValueType::UInt8(_) => RuntimeType::UInt8,
+            ValueType::Int16(_) => RuntimeType::Int16,
+            ValueType::UInt16(_) => RuntimeType::UInt16,
+            ValueType::Int32(_) => RuntimeType::Int32,
+            ValueType::UInt32(_) => RuntimeType::UInt32,
+            ValueType::Int64(_) => RuntimeType::Int64,
+            ValueType::UInt64(_) => RuntimeType::UInt64,
+            ValueType::NativeInt(_) => RuntimeType::IntPtr,
+            ValueType::NativeUInt(_) => RuntimeType::UIntPtr,
+            ValueType::Pointer(_) => RuntimeType::IntPtr,
+            ValueType::Float32(_) => RuntimeType::Float32,
+            ValueType::Float64(_) => RuntimeType::Float64,
+            ValueType::TypedRef => RuntimeType::Object,
+        },
+    });
+
+    let typ_obj = ctx.get_runtime_type(gc, rt);
+    ctx.push_obj(gc, typ_obj);
     StepResult::Continue
 }

@@ -166,7 +166,11 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
             crate::intrinsics::intrinsic_call(gc, &mut ctx, method, &lookup)
         } else if method.method.pinvoke.is_some() {
             ctx.external_call(method, gc);
-            StepResult::Continue
+            if matches!(*ctx.exception_mode, ExceptionState::Throwing(_)) {
+                StepResult::Exception
+            } else {
+                StepResult::Continue
+            }
         } else {
             if method.method.internal_call {
                 panic!("intrinsic not found: {:?}", method);

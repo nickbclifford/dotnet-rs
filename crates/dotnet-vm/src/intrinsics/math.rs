@@ -107,7 +107,83 @@ pub fn intrinsic_math_min_double<'gc, 'm: 'gc>(
 ) -> StepResult {
     let b = ctx.pop_f64(gc);
     let a = ctx.pop_f64(gc);
-    ctx.push_f64(gc, a.min(b));
+    ctx.push_f64(gc, f64::min(a, b));
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static double System.Math::Max(double, double)")]
+pub fn intrinsic_math_max_double<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let b = ctx.pop_f64(gc);
+    let a = ctx.pop_f64(gc);
+    ctx.push_f64(gc, f64::max(a, b));
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static double System.Math::Abs(double)")]
+pub fn intrinsic_math_abs_double<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let val = ctx.pop_f64(gc);
+    ctx.push_f64(gc, val.abs());
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static double System.Math::Pow(double, double)")]
+pub fn intrinsic_math_pow_double<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let y = ctx.pop_f64(gc);
+    let x = ctx.pop_f64(gc);
+    ctx.push_f64(gc, x.powf(y));
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static int System.Math::Min(int, int)")]
+pub fn intrinsic_math_min_int<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let b = ctx.pop_i32(gc);
+    let a = ctx.pop_i32(gc);
+    ctx.push_i32(gc, std::cmp::min(a, b));
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static int System.Math::Max(int, int)")]
+pub fn intrinsic_math_max_int<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let b = ctx.pop_i32(gc);
+    let a = ctx.pop_i32(gc);
+    ctx.push_i32(gc, std::cmp::max(a, b));
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static int System.Math::Abs(int)")]
+pub fn intrinsic_math_abs_int<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let val = ctx.pop_i32(gc);
+    ctx.push_i32(gc, val.abs());
     StepResult::Continue
 }
 

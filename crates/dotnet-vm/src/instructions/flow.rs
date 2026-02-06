@@ -149,6 +149,25 @@ pub fn brfalse<'gc, 'm: 'gc>(
     }
 }
 
+#[dotnet_instruction(Switch(targets))]
+pub fn switch<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
+    gc: GCHandle<'gc>,
+    targets: &[usize],
+) -> StepResult {
+    let index = match ctx.pop(gc) {
+        StackValue::Int32(i) => i as u32 as usize,
+        StackValue::NativeInt(i) => i as usize,
+        v => panic!("invalid type on stack ({:?}) for switch instruction", v),
+    };
+
+    if index < targets.len() {
+        StepResult::Jump(targets[index])
+    } else {
+        StepResult::Continue
+    }
+}
+
 #[dotnet_instruction(Return)]
 pub fn ret<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
     let frame_index = ctx.frame_stack.len() - 1;

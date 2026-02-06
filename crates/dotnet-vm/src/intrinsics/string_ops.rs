@@ -424,9 +424,9 @@ pub fn intrinsic_string_copy_string_content<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let dest_val = ctx.pop_obj(gc);
-    let dest_pos = ctx.pop_i32(gc);
     let src_val = ctx.pop_obj(gc);
+    let dest_pos = ctx.pop_i32(gc);
+    let dest_val = ctx.pop_obj(gc);
 
     let src = with_string!(ctx, gc, StackValue::ObjectRef(src_val), |s| s.to_vec());
     with_string_mut!(ctx, gc, StackValue::ObjectRef(dest_val), |dest| {

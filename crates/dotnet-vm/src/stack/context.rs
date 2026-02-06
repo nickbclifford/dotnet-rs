@@ -145,41 +145,43 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
 
     #[inline]
     pub fn pop(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>) -> StackValue<'gc> {
+        // Important: enforce the IL evaluation stack underflow check *before* mutating the
+        // underlying stack storage, since locals/args share the same backing vector.
+        self.on_pop();
         let val = self.evaluation_stack.pop(gc);
         self.trace_pop(&val);
-        self.on_pop();
         val
     }
 
     #[inline]
     pub fn pop_i32(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>) -> i32 {
+        self.on_pop();
         let val = self.evaluation_stack.pop_i32(gc);
         self.trace_pop(&StackValue::Int32(val));
-        self.on_pop();
         val
     }
 
     #[inline]
     pub fn pop_i64(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>) -> i64 {
+        self.on_pop();
         let val = self.evaluation_stack.pop_i64(gc);
         self.trace_pop(&StackValue::Int64(val));
-        self.on_pop();
         val
     }
 
     #[inline]
     pub fn pop_f64(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>) -> f64 {
+        self.on_pop();
         let val = self.evaluation_stack.pop_f64(gc);
         self.trace_pop(&StackValue::NativeFloat(val));
-        self.on_pop();
         val
     }
 
     #[inline]
     pub fn pop_isize(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>) -> isize {
+        self.on_pop();
         let val = self.evaluation_stack.pop_isize(gc);
         self.trace_pop(&StackValue::NativeInt(val));
-        self.on_pop();
         val
     }
 
@@ -192,25 +194,25 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
 
     #[inline]
     pub fn pop_obj(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>) -> ObjectRef<'gc> {
+        self.on_pop();
         let val = self.evaluation_stack.pop_obj(gc);
         self.trace_pop(&StackValue::ObjectRef(val));
-        self.on_pop();
         val
     }
 
     #[inline]
     pub fn pop_ptr(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>) -> *mut u8 {
+        self.on_pop();
         let val = self.evaluation_stack.pop_ptr(gc);
         self.trace_pop(&StackValue::NativeInt(val as isize));
-        self.on_pop();
         val
     }
 
     #[inline]
     pub fn pop_value_type(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>) -> ObjectInstance<'gc> {
+        self.on_pop();
         let val = self.evaluation_stack.pop_value_type(gc);
         self.trace_pop(&StackValue::ValueType(val.clone()));
-        self.on_pop();
         val
     }
 
@@ -832,7 +834,11 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
             crate::intrinsics::intrinsic_call(gc, self, method, &lookup)
         } else if method.method.pinvoke.is_some() {
             self.external_call(method, gc);
-            StepResult::Continue
+            if matches!(*self.exception_mode, ExceptionState::Throwing(_)) {
+                StepResult::Exception
+            } else {
+                StepResult::Continue
+            }
         } else {
             if method.method.internal_call {
                 panic!("intrinsic not found: {:?}", method);
@@ -875,7 +881,8 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
         gc: dotnet_utils::gc::GCHandle<'gc>,
         count: usize,
     ) -> Vec<StackValue<'gc>> {
-        let res = self.evaluation_stack.pop_multiple(gc, count);
+        // Same rationale as `pop`: check/decrement IL stack height before touching the backing
+        // stack storage (which also contains locals/args slots).
         if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
             if frame.stack_height < count {
                 panic!(
@@ -885,7 +892,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
             }
             frame.stack_height -= count;
         }
-        res
+        self.evaluation_stack.pop_multiple(gc, count)
     }
 
     pub fn stack_value_type(&self, val: &StackValue<'gc>) -> TypeDescription {

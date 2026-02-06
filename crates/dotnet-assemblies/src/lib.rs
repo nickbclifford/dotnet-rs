@@ -21,6 +21,7 @@ pub struct AssemblyLoader {
     assembly_root: String,
     external: RwLock<HashMap<String, Option<ResolutionS>>>,
     stubs: HashMap<String, TypeDescription>,
+    corlib_cache: DashMap<String, TypeDescription>,
     type_cache: DashMap<(ResolutionS, UserType), TypeDescription>,
     method_cache:
         DashMap<(ResolutionS, UserMethod, GenericLookup, Option<ConcreteType>), MethodDescription>,
@@ -83,6 +84,7 @@ impl AssemblyLoader {
             assembly_root,
             external: RwLock::new(resolutions),
             stubs: HashMap::new(),
+            corlib_cache: DashMap::new(),
             type_cache: DashMap::new(),
             method_cache: DashMap::new(),
             type_cache_hits: AtomicU64::new(0),
@@ -227,6 +229,16 @@ impl AssemblyLoader {
     }
 
     pub fn corlib_type(&self, name: &str) -> TypeDescription {
+        if let Some(t) = self.corlib_cache.get(name) {
+            return *t;
+        }
+
+        let result = self.corlib_type_internal(name);
+        self.corlib_cache.insert(name.to_string(), result);
+        result
+    }
+
+    fn corlib_type_internal(&self, name: &str) -> TypeDescription {
         if let Some(t) = self.stubs.get(name) {
             return *t;
         }
@@ -917,8 +929,10 @@ impl Resolver<'static> for AssemblyLoader {
 }
 
 pub fn static_res_from_file(path: impl AsRef<Path>) -> ResolutionS {
-    let mut file = fs::File::open(&path)
-        .unwrap_or_else(|e| panic!("could not open file {} ({:?})", path.as_ref().display(), e));
+    let start = std::time::Instant::now();
+    let path_ref = path.as_ref();
+    let mut file = fs::File::open(path_ref)
+        .unwrap_or_else(|e| panic!("could not open file {} ({:?})", path_ref.display(), e));
     let mut buf = vec![];
     file.read_to_end(&mut buf)
         .expect("failed to read_unchecked file");
@@ -939,7 +953,12 @@ pub fn static_res_from_file(path: impl AsRef<Path>) -> ResolutionS {
 
     let resolution = Resolution::parse(byte_slice, ReadOptions::default())
         .expect("failed to parse file as .NET metadata");
-    ResolutionS::new(Box::leak(Box::new(resolution)) as *const _)
+    let res = ResolutionS::new(Box::leak(Box::new(resolution)) as *const _);
+    let elapsed = start.elapsed();
+    if elapsed.as_secs() > 1 {
+        eprintln!("WARNING: Resolution of {} took {:?}", path_ref.display(), elapsed);
+    }
+    res
 }
 
 pub fn find_dotnet_sdk_path() -> Option<PathBuf> {
