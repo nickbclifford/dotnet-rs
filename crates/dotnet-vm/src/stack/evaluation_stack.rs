@@ -23,7 +23,67 @@ impl<'gc> EvaluationStack<'gc> {
     pub fn push(&mut self, _gc: GCHandle<'gc>, value: StackValue<'gc>) {
         #[cfg(feature = "multithreaded-gc")]
         crate::gc::coordinator::record_allocation(value.size_bytes());
+        let old_capacity = self.stack.capacity();
         self.stack.push(value);
+        if self.stack.capacity() > old_capacity {
+            self.update_stack_pointers();
+        }
+    }
+
+    fn update_stack_pointers(&mut self) {
+        let slot_locations: Vec<NonNull<u8>> =
+            self.stack.iter().map(|v| v.data_location()).collect();
+        let suspended_locations: Vec<NonNull<u8>> = self
+            .suspended_stack
+            .iter()
+            .map(|v| v.data_location())
+            .collect();
+
+        let update_val = |val: &mut StackValue<'gc>| match val {
+            StackValue::ManagedPtr(m) => {
+                if let Some((idx, off)) = m.stack_slot_origin {
+                    let slot_ptr = if idx < slot_locations.len() {
+                        slot_locations[idx]
+                    } else {
+                        suspended_locations[idx - slot_locations.len()]
+                    };
+                    let new_ptr = unsafe { NonNull::new_unchecked(slot_ptr.as_ptr().add(off)) };
+                    m.update_cached_ptr(new_ptr);
+                }
+            }
+            StackValue::ValueType(obj) => {
+                let layout = obj.instance_storage.layout().clone();
+                let mut data = obj.instance_storage.get_mut();
+                layout.visit_managed_ptrs(0, &mut |offset| {
+                    if offset + 16 <= data.len() {
+                        let slice = &mut data[offset..offset + 16];
+                        let (_, _, off, origin) = unsafe { ManagedPtr::read_from_bytes(slice) };
+                        if let Some((idx, _)) = origin {
+                            let slot_ptr = if idx < slot_locations.len() {
+                                slot_locations[idx]
+                            } else {
+                                suspended_locations[idx - slot_locations.len()]
+                            };
+                            let new_ptr =
+                                unsafe { NonNull::new_unchecked(slot_ptr.as_ptr().add(off)) };
+                            let word0 = 1 | ((idx & 0xFFFFFFFF) << 1) | (off << 33);
+                            let word1 = new_ptr.as_ptr() as usize;
+                            slice[0..8].copy_from_slice(&word0.to_ne_bytes());
+                            slice[8..16].copy_from_slice(&word1.to_ne_bytes());
+                        }
+                    }
+                });
+            }
+            _ => {}
+        };
+
+        for val in self.stack.iter_mut() {
+            update_val(val);
+        }
+
+        for val in self.suspended_stack.iter_mut() {
+            update_val(val);
+        }
     }
 
     pub fn pop(&mut self, _gc: GCHandle<'gc>) -> StackValue<'gc> {
@@ -144,6 +204,10 @@ impl<'gc> EvaluationStack<'gc> {
         self.stack[index].clone()
     }
 
+    pub fn get_slot_ref(&self, index: usize) -> &StackValue<'gc> {
+        &self.stack[index]
+    }
+
     pub fn get_slot_address(&self, index: usize) -> NonNull<u8> {
         self.stack[index].data_location()
     }
@@ -182,9 +246,11 @@ impl<'gc> EvaluationStack<'gc> {
 
     pub fn suspend_above(&mut self, index: usize) {
         self.suspended_stack = self.stack.split_off(index);
+        self.update_stack_pointers();
     }
 
     pub fn restore_suspended(&mut self) {
         self.stack.append(&mut self.suspended_stack);
+        self.update_stack_pointers();
     }
 }

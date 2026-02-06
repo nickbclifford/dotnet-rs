@@ -349,8 +349,20 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let success_flag = ctx.pop(gc).as_ptr();
-    let obj_ref = ctx.pop_obj(gc);
+    let success_ptr = ctx.evaluation_stack.peek_stack_at(0).as_managed_ptr();
+    let obj_ref = ctx.evaluation_stack.peek_stack_at(1).as_object_ref();
+
+    // If it's a stack pointer, we need to track its index because the stack might reallocate
+    let mut success_flag_index = None;
+    if let (None, Some(p)) = (success_ptr.owner, success_ptr.pointer()) {
+        let raw_ptr = p.as_ptr();
+        for i in 0..ctx.evaluation_stack.top_of_stack() {
+            if ctx.evaluation_stack.get_slot_address(i).as_ptr() == raw_ptr {
+                success_flag_index = Some(i);
+                break;
+            }
+        }
+    }
 
     if obj_ref.0.is_some() {
         let thread_id = ctx.thread_id() as u64;
@@ -370,10 +382,21 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
             thread::yield_now();
         }
 
+        let ptr = if let Some(index) = success_flag_index {
+            ctx.evaluation_stack.get_slot_address(index)
+        } else {
+            success_ptr.pointer().expect("null success flag")
+        };
         unsafe {
-            *success_flag = 1u8;
+            *ptr.as_ptr() = 1u8;
         }
+
+        // Pop arguments now that we're done with things that might trigger GC or reallocation
+        ctx.pop(gc); // success_ptr
+        ctx.pop(gc); // obj_ref
     } else {
+        ctx.pop(gc);
+        ctx.pop(gc);
         return ctx.throw_by_name(gc, "System.NullReferenceException");
     }
 
@@ -415,9 +438,21 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let success_flag = ctx.pop(gc).as_ptr();
-    let timeout_ms = ctx.pop_i32(gc);
-    let obj_ref = ctx.pop_obj(gc);
+    let success_ptr = ctx.evaluation_stack.peek_stack_at(0).as_managed_ptr();
+    let timeout_ms = ctx.evaluation_stack.peek_stack_at(1).as_i32();
+    let obj_ref = ctx.evaluation_stack.peek_stack_at(2).as_object_ref();
+
+    // If it's a stack pointer, we need to track its index because the stack might reallocate
+    let mut success_flag_index = None;
+    if let (None, Some(p)) = (success_ptr.owner, success_ptr.pointer()) {
+        let raw_ptr = p.as_ptr();
+        for i in 0..ctx.evaluation_stack.top_of_stack() {
+            if ctx.evaluation_stack.get_slot_address(i).as_ptr() == raw_ptr {
+                success_flag_index = Some(i);
+                break;
+            }
+        }
+    }
 
     if obj_ref.0.is_some() {
         let thread_id = ctx.thread_id() as u64;
@@ -440,10 +475,23 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
         let success =
             sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &ctx.shared.metrics);
 
+        let ptr = if let Some(index) = success_flag_index {
+            ctx.evaluation_stack.get_slot_address(index)
+        } else {
+            success_ptr.pointer().expect("null success flag")
+        };
         unsafe {
-            *success_flag = if success { 1u8 } else { 0u8 };
+            *ptr.as_ptr() = if success { 1u8 } else { 0u8 };
         }
+
+        // Pop arguments now that we're done
+        ctx.pop(gc); // success_ptr
+        ctx.pop(gc); // timeout_ms
+        ctx.pop(gc); // obj_ref
     } else {
+        ctx.pop(gc);
+        ctx.pop(gc);
+        ctx.pop(gc);
         return ctx.throw_by_name(gc, "System.NullReferenceException");
     }
 

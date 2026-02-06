@@ -128,7 +128,10 @@ impl<'m> ResolverService<'m> {
             parent_type = Some(parent);
         }
 
-        (ctx.locate_method(method, &new_lookup, parent_type), new_lookup)
+        (
+            ctx.locate_method(method, &new_lookup, parent_type),
+            new_lookup,
+        )
     }
 
     pub fn resolve_virtual_method(
@@ -671,13 +674,12 @@ impl<'m> ResolverService<'m> {
                 };
 
                 if data.len() >= 16 {
-                    let (ptr, owner, _offset) = unsafe { ManagedPtr::read_from_bytes(data) };
-                    CTSValue::Value(Pointer(ManagedPtr::new(
-                        ptr,
-                        inner_type,
-                        Some(owner),
-                        false,
-                    )))
+                    let (ptr, owner, offset, stack_origin) =
+                        unsafe { ManagedPtr::read_from_bytes(data) };
+                    let mut m = ManagedPtr::new(ptr, inner_type, Some(owner), false);
+                    m.offset = offset;
+                    m.stack_slot_origin = stack_origin;
+                    CTSValue::Value(Pointer(m))
                 } else {
                     let mut ptr_bytes = [0u8; 8];
                     ptr_bytes.copy_from_slice(&data[0..8]);

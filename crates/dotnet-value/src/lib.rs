@@ -217,6 +217,18 @@ impl<'gc> StackValue<'gc> {
             pinned,
         ))
     }
+    pub fn managed_stack_ptr(
+        index: usize,
+        offset: usize,
+        ptr: *mut u8,
+        target_type: TypeDescription,
+        pinned: bool,
+    ) -> Self {
+        let mut m = ManagedPtr::new(NonNull::new(ptr), target_type, None, pinned);
+        m.stack_slot_origin = Some((index, offset));
+        m.offset = offset;
+        Self::ManagedPtr(m)
+    }
     pub fn null() -> Self {
         Self::ObjectRef(ObjectRef(None))
     }

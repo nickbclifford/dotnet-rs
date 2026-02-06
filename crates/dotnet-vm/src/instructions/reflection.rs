@@ -7,6 +7,51 @@ use dotnet_utils::gc::GCHandle;
 use dotnet_value::StackValue;
 use dotnetdll::prelude::*;
 
+#[dotnet_instruction(LoadMethodPointer(param0))]
+pub fn ldftn<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
+    gc: GCHandle<'gc>,
+    param0: &MethodSource,
+) -> StepResult {
+    let (method, lookup) = ctx
+        .resolver()
+        .find_generic_method(param0, &ctx.current_context());
+
+    let index = ctx.get_runtime_method_index(method, lookup);
+    ctx.push_isize(gc, index as isize);
+    StepResult::Continue
+}
+
+#[dotnet_instruction(LoadVirtualMethodPointer { param0, skip_null_check })]
+pub fn ldvirtftn<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
+    gc: GCHandle<'gc>,
+    param0: &MethodSource,
+    skip_null_check: bool,
+) -> StepResult {
+    let obj = ctx.pop_obj(gc);
+    if !skip_null_check && obj.0.is_none() {
+        return ctx.throw_by_name(gc, "System.NullReferenceException");
+    }
+
+    let (base_method, lookup) = ctx
+        .resolver()
+        .find_generic_method(param0, &ctx.current_context());
+
+    let this_type = ctx.get_heap_description(obj.0.unwrap());
+
+    // Virtual dispatch
+    let resolved_method = {
+        let res_ctx = ctx.current_context();
+        ctx.resolver()
+            .resolve_virtual_method(base_method, this_type, &res_ctx)
+    };
+
+    let index = ctx.get_runtime_method_index(resolved_method, lookup);
+    ctx.push_isize(gc, index as isize);
+    StepResult::Continue
+}
+
 #[dotnet_instruction(LoadTokenType(param0))]
 pub fn ldtoken_type<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,

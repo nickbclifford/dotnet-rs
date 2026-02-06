@@ -23,7 +23,14 @@ pub mod boxing;
 pub mod casting;
 pub mod fields;
 
-pub(crate) fn get_ptr<'gc>(val: &StackValue<'gc>) -> (*mut u8, Option<ObjectRef<'gc>>) {
+pub(crate) fn get_ptr<'gc>(
+    val: &StackValue<'gc>,
+) -> (
+    *mut u8,
+    Option<ObjectRef<'gc>>,
+    Option<(usize, usize)>,
+    usize,
+) {
     match val {
         StackValue::ObjectRef(o @ ObjectRef(Some(h))) => {
             let inner = h.borrow();
@@ -38,18 +45,55 @@ pub(crate) fn get_ptr<'gc>(val: &StackValue<'gc>) -> (*mut u8, Option<ObjectRef<
                     _ => ptr::null_mut(),
                 },
             };
-            (ptr, Some(*o))
+            (ptr, Some(*o), None, 0)
         }
         StackValue::ValueType(o) => {
             let ptr = o.instance_storage.get().as_ptr() as *mut u8;
-            (ptr, None)
+            (ptr, None, None, 0)
         }
         StackValue::ManagedPtr(m) => (
             m.pointer().map(|p| p.as_ptr()).unwrap_or(ptr::null_mut()),
             m.owner,
+            m.stack_slot_origin,
+            m.offset,
         ),
-        StackValue::UnmanagedPtr(UnmanagedPtr(p)) => (p.as_ptr(), None),
+        StackValue::UnmanagedPtr(UnmanagedPtr(p)) => (p.as_ptr(), None, None, p.as_ptr() as usize),
+        StackValue::NativeInt(p) => (*p as *mut u8, None, None, *p as usize),
         _ => panic!("Invalid parent for field/element access: {:?}", val),
+    }
+}
+
+pub(crate) fn get_ptr_context<'gc, 'm: 'gc>(
+    ctx: &VesContext<'_, 'gc, 'm>,
+    val: &StackValue<'gc>,
+) -> (
+    *mut u8,
+    Option<ObjectRef<'gc>>,
+    Option<(usize, usize)>,
+    usize,
+) {
+    match val {
+        StackValue::ManagedPtr(m) => {
+            if let Some((idx, offset)) = m.stack_slot_origin {
+                let slot_val = ctx.evaluation_stack.get_slot_ref(idx);
+                if let StackValue::ValueType(v) = slot_val {
+                    let ptr = v.instance_storage.get().as_ptr() as *mut u8;
+                    return (
+                        unsafe { ptr.add(offset) },
+                        None,
+                        Some((idx, offset)),
+                        offset,
+                    );
+                }
+            }
+            (
+                m.pointer().map(|p| p.as_ptr()).unwrap_or(ptr::null_mut()),
+                m.owner,
+                m.stack_slot_origin,
+                m.offset,
+            )
+        }
+        _ => get_ptr(val),
     }
 }
 
@@ -181,7 +225,7 @@ pub fn ldobj<'gc, 'm: 'gc>(
     param0: &MethodType,
 ) -> StepResult {
     let addr = ctx.pop(gc);
-    let source_ptr = addr.as_ptr();
+    let (source_ptr, _owner, _origin, _offset) = get_ptr_context(ctx, &addr);
 
     if source_ptr.is_null() {
         return ctx.throw_by_name(gc, "System.NullReferenceException");
@@ -212,20 +256,10 @@ pub fn stobj<'gc, 'm: 'gc>(
 
     let concrete_t = ctx.make_concrete(param0);
 
-    let dest_ptr = match &addr {
-        StackValue::NativeInt(i) => {
-            if *i == 0 {
-                return ctx.throw_by_name(gc, "System.NullReferenceException");
-            }
-            *i as *mut u8
-        }
-        StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-        StackValue::ManagedPtr(m) => match m.pointer() {
-            Some(ptr) => ptr.as_ptr(),
-            None => return ctx.throw_by_name(gc, "System.NullReferenceException"),
-        },
-        _ => panic!("stobj: expected pointer on stack, got {:?}", addr),
-    };
+    let (dest_ptr, _owner, _origin, _offset) = get_ptr_context(ctx, &addr);
+    if dest_ptr.is_null() {
+        return ctx.throw_by_name(gc, "System.NullReferenceException");
+    }
 
     let res_ctx = ctx.current_context();
     let layout = type_layout(concrete_t.clone(), &res_ctx);
@@ -245,20 +279,10 @@ pub fn initobj<'gc, 'm: 'gc>(
     param0: &MethodType,
 ) -> StepResult {
     let addr = ctx.pop(gc);
-    let target = match addr {
-        StackValue::NativeInt(i) => {
-            if i == 0 {
-                return ctx.throw_by_name(gc, "System.NullReferenceException");
-            }
-            i as *mut u8
-        }
-        StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-        StackValue::ManagedPtr(m) => match m.pointer() {
-            Some(ptr) => ptr.as_ptr(),
-            None => return ctx.throw_by_name(gc, "System.NullReferenceException"),
-        },
-        _ => panic!("initobj: expected pointer on stack, got {:?}", addr),
-    };
+    let (target, _owner, _origin, _offset) = get_ptr_context(ctx, &addr);
+    if target.is_null() {
+        return ctx.throw_by_name(gc, "System.NullReferenceException");
+    }
 
     let ct = ctx.make_concrete(param0);
     let res_ctx = ctx.current_context();

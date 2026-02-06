@@ -372,13 +372,11 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
 
         if desc.is_value_type(&self.current_context()) {
             self.push(gc, value);
+            let index = self.evaluation_stack.top_of_stack() - 1;
+            let ptr = self.evaluation_stack.get_slot_address(index).as_ptr() as *mut _;
             self.push(
                 gc,
-                StackValue::managed_ptr(
-                    self.top_of_stack_address().as_ptr() as *mut _,
-                    desc,
-                    false,
-                ),
+                StackValue::managed_stack_ptr(index, 0, ptr, desc, false),
             );
         } else {
             self.push(gc, value.clone());

@@ -164,7 +164,8 @@ impl Atomic {
     /// # Safety
     /// Caller must ensure `ptr` is valid for `size` bytes.
     pub unsafe fn load_field(ptr: *const u8, size: usize, ordering: Ordering) -> Vec<u8> {
-        if is_ptr_aligned_to_field(ptr, size) {
+        if (size == 1 || size == 2 || size == 4 || size == 8) && is_ptr_aligned_to_field(ptr, size)
+        {
             let val = unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) };
             match size {
                 1 => (val as u8).to_ne_bytes().to_vec(),
@@ -184,7 +185,8 @@ impl Atomic {
     /// Caller must ensure `ptr` is valid for `value.len()` bytes.
     pub unsafe fn store_field(ptr: *mut u8, value: &[u8], ordering: Ordering) {
         let size = value.len();
-        if is_ptr_aligned_to_field(ptr, size) {
+        if (size == 1 || size == 2 || size == 4 || size == 8) && is_ptr_aligned_to_field(ptr, size)
+        {
             let val = match size {
                 1 => u8::from_ne_bytes(value.try_into().unwrap()) as u64,
                 2 => u16::from_ne_bytes(value.try_into().unwrap()) as u64,

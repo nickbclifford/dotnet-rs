@@ -25,7 +25,7 @@ pub fn span_to_slice<'gc, 'a>(span: Object<'gc>, element_size: usize) -> &'a [u8
     let mut len_data = [0u8; size_of::<i32>()];
 
     // Read the 16-byte ManagedPtr from memory.
-    let (ptr, _owner, _offset) = unsafe { ManagedPtr::read_from_bytes(&ptr_data) };
+    let (ptr, _owner, _offset, _stack_origin) = unsafe { ManagedPtr::read_from_bytes(&ptr_data) };
     len_data.copy_from_slice(
         &span
             .instance_storage
@@ -46,7 +46,9 @@ pub fn span_to_slice<'gc, 'a>(span: Object<'gc>, element_size: usize) -> &'a [u8
         return &[];
     }
 
-    let raw_ptr = ptr.map(|p| p.as_ptr()).unwrap_or(std::ptr::null_mut());
+    let raw_ptr = ptr
+        .map(|p: NonNull<u8>| p.as_ptr())
+        .unwrap_or(std::ptr::null_mut());
     if raw_ptr.is_null() {
         panic!("Null pointer in non-empty span");
     }

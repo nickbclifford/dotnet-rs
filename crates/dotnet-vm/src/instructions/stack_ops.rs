@@ -64,12 +64,16 @@ pub fn ldarga<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     index: u16,
 ) -> StepResult {
+    let frame = ctx.current_frame();
+    let abs_idx = frame.base.arguments + index as usize;
     let arg = ctx.get_argument(index as usize);
     let resolution_ctx = ctx.current_context();
     let live_type = resolution_ctx.stack_value_type(&arg);
     ctx.push(
         gc,
-        StackValue::managed_ptr(
+        StackValue::managed_stack_ptr(
+            abs_idx,
+            0,
             ctx.get_argument_address(index as usize).as_ptr() as *mut _,
             live_type,
             true,
@@ -95,6 +99,8 @@ pub fn ldloca<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     index: u16,
 ) -> StepResult {
+    let frame = ctx.current_frame();
+    let abs_idx = frame.base.locals + index as usize;
     let local = ctx.get_local(index as usize);
     let resolution_ctx = ctx.current_context();
     let live_type = resolution_ctx.stack_value_type(&local);
@@ -103,7 +109,7 @@ pub fn ldloca<'gc, 'm: 'gc>(
 
     ctx.push(
         gc,
-        StackValue::managed_ptr_with_owner(ptr.as_ptr() as *mut _, live_type, None, pinned),
+        StackValue::managed_stack_ptr(abs_idx, 0, ptr.as_ptr() as *mut _, live_type, pinned),
     );
     StepResult::Continue
 }

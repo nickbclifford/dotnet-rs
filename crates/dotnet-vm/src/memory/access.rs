@@ -308,21 +308,21 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         StackValue::ObjectRef(ObjectRef::read_unchecked(&buf))
                     }
                     Scalar::ManagedPtr => {
-                        let (ptr_val, owner_ref, _offset) = ManagedPtr::read_from_bytes(
-                            std::slice::from_raw_parts(ptr, ManagedPtr::MEMORY_SIZE),
-                        );
+                        let (ptr_val, owner_ref, offset, stack_origin) =
+                            ManagedPtr::read_from_bytes(std::slice::from_raw_parts(
+                                ptr,
+                                ManagedPtr::MEMORY_SIZE,
+                            ));
 
                         let void_desc = TypeDescription::from_raw(
                             dotnet_types::resolution::ResolutionS::new(ptr::null()),
                             None,
                         );
 
-                        StackValue::ManagedPtr(ManagedPtr::new(
-                            ptr_val,
-                            void_desc,
-                            Some(owner_ref),
-                            false,
-                        ))
+                        let mut m = ManagedPtr::new(ptr_val, void_desc, Some(owner_ref), false);
+                        m.offset = offset;
+                        m.stack_slot_origin = stack_origin;
+                        StackValue::ManagedPtr(m)
                     }
                 },
                 LayoutManager::Field(flm) => {

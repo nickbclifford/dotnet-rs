@@ -22,10 +22,8 @@ pub struct AssemblyLoader {
     external: RwLock<HashMap<String, Option<ResolutionS>>>,
     stubs: HashMap<String, TypeDescription>,
     type_cache: DashMap<(ResolutionS, UserType), TypeDescription>,
-    method_cache: DashMap<
-        (ResolutionS, UserMethod, GenericLookup, Option<ConcreteType>),
-        MethodDescription,
-    >,
+    method_cache:
+        DashMap<(ResolutionS, UserMethod, GenericLookup, Option<ConcreteType>), MethodDescription>,
     pub type_cache_hits: AtomicU64,
     pub type_cache_misses: AtomicU64,
     pub method_cache_hits: AtomicU64,
@@ -743,7 +741,9 @@ impl AssemblyLoader {
                             generic_inst.make_concrete(resolution, t.clone())
                         };
 
-                        if method_ref.name == ".ctor" && let BaseType::Array(_, _) = concrete.get() {
+                        if method_ref.name == ".ctor"
+                            && let BaseType::Array(_, _) = concrete.get()
+                        {
                             let array_type = self.corlib_type("DotnetRs.Array");
                             for method in &array_type.definition().methods {
                                 if method.name == "CtorArraySentinel" {

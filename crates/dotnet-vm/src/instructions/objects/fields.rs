@@ -13,7 +13,7 @@ use dotnet_value::{
 use dotnetdll::prelude::*;
 use std::ptr::{self, NonNull};
 
-use super::get_ptr;
+use super::get_ptr_context;
 
 #[dotnet_instruction(LoadField { param0, volatile })]
 pub fn ldfld<'gc, 'm: 'gc>(
@@ -103,7 +103,10 @@ pub fn ldfld<'gc, 'm: 'gc>(
             }
         }
         StackValue::ValueType(v) => v.instance_storage.get().as_ptr() as *mut u8,
-        StackValue::ManagedPtr(m) => m.pointer().map(|p| p.as_ptr()).unwrap_or(ptr::null_mut()),
+        StackValue::ManagedPtr(_) => {
+            let (ptr, _, _, _) = get_ptr_context(ctx, &parent);
+            ptr
+        }
         StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
         StackValue::NativeInt(i) => {
             if *i == 0 {
@@ -181,7 +184,10 @@ pub fn stfld<'gc, 'm: 'gc>(
             }
         }
         StackValue::ValueType(v) => v.instance_storage.get().as_ptr() as *mut u8,
-        StackValue::ManagedPtr(m) => m.pointer().map(|p| p.as_ptr()).unwrap_or(ptr::null_mut()),
+        StackValue::ManagedPtr(_) => {
+            let (ptr, _, _, _) = get_ptr_context(ctx, &parent);
+            ptr
+        }
         StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
         StackValue::NativeInt(i) => {
             if *i == 0 {
@@ -385,7 +391,7 @@ pub fn ldflda<'gc, 'm: 'gc>(
     if let StackValue::ObjectRef(ObjectRef(None)) = &parent {
         return ctx.throw_by_name(gc, "System.NullReferenceException");
     }
-    let (ptr, owner) = get_ptr(&parent);
+    let (ptr, owner, stack_slot_origin, base_offset) = get_ptr_context(ctx, &parent);
 
     let res_ctx = ctx
         .current_context()
@@ -409,15 +415,23 @@ pub fn ldflda<'gc, 'm: 'gc>(
     let t = res_ctx.get_field_type(field);
     let target_type = ctx.loader().find_concrete_type(t);
 
-    ctx.push(
-        gc,
-        StackValue::ManagedPtr(ManagedPtr::new(
-            NonNull::new(field_ptr),
-            target_type,
-            owner,
-            false,
-        )),
-    );
+    if let Some((idx, _)) = stack_slot_origin {
+        let new_offset = base_offset + field_layout.position;
+        ctx.push(
+            gc,
+            StackValue::managed_stack_ptr(idx, new_offset, field_ptr, target_type, false),
+        );
+    } else {
+        ctx.push(
+            gc,
+            StackValue::ManagedPtr(ManagedPtr::new(
+                NonNull::new(field_ptr),
+                target_type,
+                owner,
+                false,
+            )),
+        );
+    }
 
     StepResult::Continue
 }

@@ -44,6 +44,27 @@ impl From<Scalar> for LayoutManager {
 }
 
 impl LayoutManager {
+    pub fn visit_managed_ptrs(&self, offset: usize, visitor: &mut dyn FnMut(usize)) {
+        match self {
+            Self::Scalar(Scalar::ManagedPtr) => visitor(offset),
+            Self::Field(flm) => {
+                for field in flm.fields.values() {
+                    field
+                        .layout
+                        .visit_managed_ptrs(offset + field.position, visitor);
+                }
+            }
+            Self::Array(alm) => {
+                let elem_size = alm.element_layout.size();
+                for i in 0..alm.length {
+                    alm.element_layout
+                        .visit_managed_ptrs(offset + i * elem_size, visitor);
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn is_gc_ptr(&self) -> bool {
         matches!(
             self,
@@ -230,6 +251,14 @@ impl HasLayout for FieldLayoutManager {
 }
 
 impl FieldLayoutManager {
+    pub fn visit_managed_ptrs(&self, offset: usize, visitor: &mut dyn FnMut(usize)) {
+        for field in self.fields.values() {
+            field
+                .layout
+                .visit_managed_ptrs(offset + field.position, visitor);
+        }
+    }
+
     pub fn trace(&self, storage: &[u8], cc: &Collection) {
         self.gc_desc.trace(storage, cc);
     }

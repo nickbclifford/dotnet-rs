@@ -108,6 +108,23 @@ pub fn stind<'gc, 'm: 'gc>(
     let val = ctx.pop(gc);
     let addr_val = ctx.pop(gc);
 
+    if let StackValue::ManagedPtr(m) = &addr_val
+        && let Some((slot_idx, 0)) = m.stack_slot_origin
+    {
+        // Direct write to slot - use typed write to maintain StackValue discriminant correctness.
+        // Exception: if the slot currently contains a ValueType, we must use raw write to
+        // avoid replacing the entire struct with a scalar. Structs on the stack have stable
+        // FieldStorage that can be partially overwritten.
+        if !matches!(
+            ctx.evaluation_stack.get_slot_ref(slot_idx),
+            StackValue::ValueType(_)
+        ) {
+            let typed_val = convert_to_stack_value(val, param0);
+            ctx.evaluation_stack.set_slot(gc, slot_idx, typed_val);
+            return StepResult::Continue;
+        }
+    }
+
     let (ptr, owner) = match addr_val {
         StackValue::NativeInt(p) => (p as *mut u8, None),
         StackValue::ManagedPtr(m) => (m.pointer().map_or(ptr::null_mut(), |p| p.as_ptr()), m.owner),
@@ -142,6 +159,19 @@ pub fn ldind<'gc, 'm: 'gc>(
     param0: LoadType,
 ) -> StepResult {
     let addr_val = ctx.pop(gc);
+
+    if let StackValue::ManagedPtr(m) = &addr_val
+        && let Some((slot_idx, 0)) = m.stack_slot_origin
+        && !matches!(
+            ctx.evaluation_stack.get_slot_ref(slot_idx),
+            StackValue::ValueType(_)
+        )
+    {
+        let val = convert_from_stack_value(ctx.evaluation_stack.get_slot(slot_idx), param0);
+        ctx.push(gc, val);
+        return StepResult::Continue;
+    }
+
     let (ptr, owner) = match addr_val {
         StackValue::NativeInt(p) => (p as *const u8, None),
         StackValue::ManagedPtr(m) => (
@@ -175,4 +205,28 @@ pub fn ldind<'gc, 'm: 'gc>(
     };
     ctx.push(gc, val);
     StepResult::Continue
+}
+
+fn convert_to_stack_value(val: StackValue, store_type: StoreType) -> StackValue {
+    match store_type {
+        StoreType::Int8 | StoreType::Int16 | StoreType::Int32 => StackValue::Int32(val.as_i32()),
+        StoreType::Int64 => StackValue::Int64(val.as_i64()),
+        StoreType::IntPtr => StackValue::NativeInt(val.as_isize()),
+        StoreType::Float32 | StoreType::Float64 => StackValue::NativeFloat(val.as_f64()),
+        StoreType::Object => val, // Already correct type
+    }
+}
+
+fn convert_from_stack_value(val: StackValue, load_type: LoadType) -> StackValue {
+    match load_type {
+        LoadType::Int8 => StackValue::Int32(val.as_i32() as i8 as i32),
+        LoadType::UInt8 => StackValue::Int32(val.as_i32() as u8 as i32),
+        LoadType::Int16 => StackValue::Int32(val.as_i32() as i16 as i32),
+        LoadType::UInt16 => StackValue::Int32(val.as_i32() as u16 as i32),
+        LoadType::Int32 | LoadType::UInt32 => StackValue::Int32(val.as_i32()),
+        LoadType::Int64 => StackValue::Int64(val.as_i64()),
+        LoadType::Float32 | LoadType::Float64 => StackValue::NativeFloat(val.as_f64()),
+        LoadType::IntPtr => StackValue::NativeInt(val.as_isize()),
+        LoadType::Object => val,
+    }
 }

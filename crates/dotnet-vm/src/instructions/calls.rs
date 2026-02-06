@@ -82,7 +82,9 @@ pub fn call_constrained<'gc, 'm: 'gc>(
         let target = ctx
             .current_context()
             .locate_method(o.implementation, &lookup, None);
-        let declaration = ctx.current_context().locate_method(o.declaration, &lookup, None);
+        let declaration = ctx
+            .current_context()
+            .locate_method(o.declaration, &lookup, None);
         if method == declaration {
             vm_trace!(ctx, "-- dispatching to {:?} --", target);
             // Note: Uses dispatch_method directly since method is already resolved
