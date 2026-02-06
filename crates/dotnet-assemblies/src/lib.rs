@@ -956,7 +956,11 @@ pub fn static_res_from_file(path: impl AsRef<Path>) -> ResolutionS {
     let res = ResolutionS::new(Box::leak(Box::new(resolution)) as *const _);
     let elapsed = start.elapsed();
     if elapsed.as_secs() > 1 {
-        eprintln!("WARNING: Resolution of {} took {:?}", path_ref.display(), elapsed);
+        eprintln!(
+            "WARNING: Resolution of {} took {:?}",
+            path_ref.display(),
+            elapsed
+        );
     }
     res
 }

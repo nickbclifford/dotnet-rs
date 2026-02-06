@@ -516,8 +516,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                         temp_buffers.push(TempBuffer::Ptr(Box::new(ptr as *mut u8)));
                         let idx = temp_buffers.len() - 1;
                         arg_buffer_map[i] = Some(idx);
-                        arg_ptrs[i] = temp_buffers[idx].as_ptr() as *const *mut u8
-                            as *mut *mut u8
+                        arg_ptrs[i] = temp_buffers[idx].as_ptr() as *const *mut u8 as *mut *mut u8
                             as *mut c_void;
                     }
                 }
@@ -584,9 +583,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                 }
 
                 macro_rules! read_into_i32 {
-                    ($t:ty) => {{
-                        StackValue::Int32(read_return!($t) as i32)
-                    }};
+                    ($t:ty) => {{ StackValue::Int32(read_return!($t) as i32) }};
                 }
 
                 let t = ctx.make_concrete(t);

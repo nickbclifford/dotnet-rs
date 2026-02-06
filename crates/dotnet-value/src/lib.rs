@@ -258,9 +258,10 @@ impl<'gc> StackValue<'gc> {
             Self::UnmanagedPtr(u) => ref_to_ptr(u),
             Self::ManagedPtr(m) => ref_to_ptr(m),
             Self::ValueType(o) => {
-                // SAFETY: Returning a pointer to the internal buffer. 
+                // SAFETY: Returning a pointer to the internal buffer.
                 // This is used by ldloca/ldarga to get a byref to the value type.
-                let ptr = unsafe { o.instance_storage.raw_data_unsynchronized().as_ptr() as *mut u8 };
+                let ptr =
+                    unsafe { o.instance_storage.raw_data_unsynchronized().as_ptr() as *mut u8 };
                 NonNull::new(ptr).unwrap()
             }
             Self::CrossArenaObjectRef(p, _) => ref_to_ptr(p),

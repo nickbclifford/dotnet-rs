@@ -103,35 +103,45 @@ pub fn conv_ovf<'gc, 'm: 'gc>(
     let value = ctx.pop(gc);
 
     macro_rules! do_conv {
-        ($target:ty, $stack_variant:ident) => {
-            {
-                let result = match (value.clone(), sgn) {
-                    (StackValue::Int32(i), NumberSign::Signed) => <$target>::try_from(i).map_err(|_| ()),
-                    (StackValue::Int32(i), NumberSign::Unsigned) => <$target>::try_from(i as u32).map_err(|_| ()),
-                    (StackValue::Int64(i), NumberSign::Signed) => <$target>::try_from(i).map_err(|_| ()),
-                    (StackValue::Int64(i), NumberSign::Unsigned) => <$target>::try_from(i as u64).map_err(|_| ()),
-                    (StackValue::NativeInt(i), NumberSign::Signed) => <$target>::try_from(i).map_err(|_| ()),
-                    (StackValue::NativeInt(i), NumberSign::Unsigned) => <$target>::try_from(i as usize).map_err(|_| ()),
-                    (StackValue::NativeFloat(f), _) => {
-                        // ECMA-335: truncation towards zero
-                        if f.is_nan() || f < (<$target>::MIN as f64) || f > (<$target>::MAX as f64) {
-                            Err(())
-                        } else {
-                            Ok(f as $target)
-                        }
-                    }
-                    _ => panic!("invalid type on stack ({:?}) for checked conversion", value),
-                };
-
-                match result {
-                    Ok(v) => {
-                        ctx.push(gc, StackValue::$stack_variant(v as _));
-                        StepResult::Continue
-                    }
-                    Err(_) => ctx.throw_by_name(gc, "System.OverflowException"),
+        ($target:ty, $stack_variant:ident) => {{
+            let result = match (value.clone(), sgn) {
+                (StackValue::Int32(i), NumberSign::Signed) => {
+                    <$target>::try_from(i).map_err(|_| ())
                 }
+                (StackValue::Int32(i), NumberSign::Unsigned) => {
+                    <$target>::try_from(i as u32).map_err(|_| ())
+                }
+                (StackValue::Int64(i), NumberSign::Signed) => {
+                    <$target>::try_from(i).map_err(|_| ())
+                }
+                (StackValue::Int64(i), NumberSign::Unsigned) => {
+                    <$target>::try_from(i as u64).map_err(|_| ())
+                }
+                (StackValue::NativeInt(i), NumberSign::Signed) => {
+                    <$target>::try_from(i).map_err(|_| ())
+                }
+                (StackValue::NativeInt(i), NumberSign::Unsigned) => {
+                    <$target>::try_from(i as usize).map_err(|_| ())
+                }
+                (StackValue::NativeFloat(f), _) => {
+                    // ECMA-335: truncation towards zero
+                    if f.is_nan() || f < (<$target>::MIN as f64) || f > (<$target>::MAX as f64) {
+                        Err(())
+                    } else {
+                        Ok(f as $target)
+                    }
+                }
+                _ => panic!("invalid type on stack ({:?}) for checked conversion", value),
+            };
+
+            match result {
+                Ok(v) => {
+                    ctx.push(gc, StackValue::$stack_variant(v as _));
+                    StepResult::Continue
+                }
+                Err(_) => ctx.throw_by_name(gc, "System.OverflowException"),
             }
-        };
+        }};
     }
 
     match t {
