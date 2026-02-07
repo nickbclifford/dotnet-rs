@@ -349,8 +349,43 @@ fn find_success_flag_index(ctx: &VesContext, success_ptr: ManagedPtr) -> Option<
     success_flag_index
 }
 
+/// System.Threading.Monitor::Enter(object)
+#[dotnet_intrinsic("static void System.Threading.Monitor::Enter(object)")]
+pub fn intrinsic_monitor_enter_obj<'gc, 'm: 'gc>(
+    ctx: &mut VesContext<'_, 'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let obj_ref = ctx.pop_obj(gc);
+
+    if obj_ref.0.is_some() {
+        let thread_id = ctx.thread_id() as u64;
+        assert_ne!(
+            thread_id, 0,
+            "Monitor.Enter called from unregistered thread"
+        );
+
+        let sync_block = get_or_create_sync_block(&ctx.shared.sync_blocks, obj_ref, gc);
+
+        while !ctx.shared.sync_blocks.try_enter_block(
+            sync_block.clone(),
+            thread_id,
+            &ctx.shared.metrics,
+        ) {
+            ctx.check_gc_safe_point();
+            thread::yield_now();
+        }
+    } else {
+        return ctx.throw_by_name(gc, "System.NullReferenceException");
+    }
+
+    StepResult::Continue
+}
+
 /// System.Threading.Monitor::ReliableEnter(object, ref bool)
 #[dotnet_intrinsic("static void System.Threading.Monitor::ReliableEnter(object, bool&)")]
+#[dotnet_intrinsic("static void System.Threading.Monitor::Enter(object, bool&)")]
 pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,

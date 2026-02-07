@@ -178,11 +178,18 @@ pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
 pub fn intrinsic_unsafe_as_pointer<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
     gc: GCHandle<'gc>,
-    method: MethodDescription,
+    _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let ptr = ctx.pop_managed_ptr(gc);
-    ctx.push(gc, StackValue::ManagedPtr(ptr));
+    let val = ctx.pop(gc);
+    let ptr = match val {
+        StackValue::ManagedPtr(m) => m.pointer().map_or(ptr::null_mut(), |p| p.as_ptr()),
+        StackValue::NativeInt(i) => i as *mut u8,
+        StackValue::UnmanagedPtr(p) => p.0.as_ptr(),
+        StackValue::ObjectRef(ObjectRef(None)) => ptr::null_mut(),
+        _ => panic!("Unsafe.AsPointer expected pointer, got {:?}", val),
+    };
+    ctx.push_isize(gc, ptr as isize);
     StepResult::Continue
 }
 

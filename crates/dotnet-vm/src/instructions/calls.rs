@@ -160,8 +160,12 @@ pub fn callvirt_constrained<'gc, 'm: 'gc>(
 
             args[0] = StackValue::ObjectRef(boxed);
             let this_type = ctx.get_heap_description(boxed.0.unwrap());
-            ctx.resolver()
-                .resolve_virtual_method(base_method, this_type, &ctx.current_context())
+            ctx.resolver().resolve_virtual_method(
+                base_method,
+                this_type,
+                &lookup,
+                &ctx.current_context(),
+            )
         }
     } else {
         // Reference type: dereference the managed pointer
@@ -200,8 +204,12 @@ pub fn callvirt_constrained<'gc, 'm: 'gc>(
         } else {
             // Fall back to normal virtual dispatch
             let this_type = ctx.get_heap_description(obj_ref.0.unwrap());
-            ctx.resolver()
-                .resolve_virtual_method(base_method, this_type, &ctx.current_context())
+            ctx.resolver().resolve_virtual_method(
+                base_method,
+                this_type,
+                &lookup,
+                &ctx.current_context(),
+            )
         }
     };
 

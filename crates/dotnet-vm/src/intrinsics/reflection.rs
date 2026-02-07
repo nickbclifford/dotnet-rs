@@ -514,12 +514,14 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             }
 
             let support_res = ctx.loader().get_assembly(SUPPORT_ASSEMBLY);
-            let definition = support_res
+            let (index, definition) = support_res
                 .definition()
                 .type_definitions
                 .iter()
-                .find(|a| a.type_name() == "DotnetRs.Assembly")
+                .enumerate()
+                .find(|(_, a)| a.type_name() == "DotnetRs.Assembly")
                 .expect("could find DotnetRs.Assembly in support library");
+            let type_index = support_res.type_definition_index(index).unwrap();
             let res_ctx = ResolutionContext::new(
                 generics,
                 ctx.loader(),
@@ -527,7 +529,8 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 ctx.shared.caches.clone(),
                 Some(ctx.shared.clone()),
             );
-            let asm_handle = res_ctx.new_object(TypeDescription::new(support_res, definition));
+            let asm_handle =
+                res_ctx.new_object(TypeDescription::new(support_res, definition, type_index));
             let data = (resolution.as_raw() as usize).to_ne_bytes();
             asm_handle
                 .instance_storage
@@ -1070,7 +1073,7 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic(
-    "static bool System.Runtime.CompilerServices.RuntimeHelpers::IsBitwiseEquatable(System.RuntimeTypeHandle)"
+    "static bool System.Runtime.CompilerServices.RuntimeHelpers::IsBitwiseEquatable<T>()"
 )]
 pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc>(
     ctx: &mut VesContext<'_, 'gc, 'm>,
@@ -1133,8 +1136,9 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc>(
     let target_ct = target_type.to_concrete(ctx.loader());
     let target_desc = ctx.loader().find_concrete_type(target_ct);
 
-    if ctx.initialize_static_storage(gc, target_desc, generics.clone()) {
-        return StepResult::FramePushed;
+    let res = ctx.initialize_static_storage(gc, target_desc, generics.clone());
+    if res != StepResult::Continue {
+        return res;
     }
 
     // Initialization complete, pop the argument

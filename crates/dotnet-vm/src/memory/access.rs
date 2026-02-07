@@ -317,6 +317,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         let void_desc = TypeDescription::from_raw(
                             dotnet_types::resolution::ResolutionS::new(ptr::null()),
                             None,
+                            std::mem::zeroed(),
                         );
 
                         let mut m = ManagedPtr::new(ptr_val, void_desc, Some(owner_ref), false);

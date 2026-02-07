@@ -264,6 +264,7 @@ impl<'gc> StackValue<'gc> {
                     unsafe { o.instance_storage.raw_data_unsynchronized().as_ptr() as *mut u8 };
                 NonNull::new(ptr).unwrap()
             }
+            #[cfg(feature = "multithreaded-gc")]
             Self::CrossArenaObjectRef(p, _) => ref_to_ptr(p),
         }
     }
@@ -320,6 +321,10 @@ impl<'gc> StackValue<'gc> {
             Self::ManagedPtr(m) => *m,
             v => panic!("expected ManagedPtr, received {:?}", v),
         }
+    }
+
+    pub fn is_managed_ptr(&self) -> bool {
+        matches!(self, Self::ManagedPtr(_))
     }
 
     pub fn as_value_type(&self) -> Object<'gc> {

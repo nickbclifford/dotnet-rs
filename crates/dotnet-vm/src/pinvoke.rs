@@ -520,7 +520,10 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                             as *mut c_void;
                     }
                 }
-                _ => {}
+                #[cfg(feature = "multithreaded-gc")]
+                StackValue::CrossArenaObjectRef(_, _) => {
+                    todo!("marshalling cross-arena object references is not supported yet")
+                }
             }
         }
 

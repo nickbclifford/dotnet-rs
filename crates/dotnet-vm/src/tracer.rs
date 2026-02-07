@@ -49,6 +49,7 @@ impl Tracer {
     }
 
     pub fn msg(&mut self, level: TraceLevel, indent: usize, args: std::fmt::Arguments) {
+        let indent = indent.min(100);
         let msg = format!("{:indent$}{}", "", args, indent = indent * 2);
         match level {
             TraceLevel::Error => error!("{}", msg),
@@ -64,6 +65,7 @@ impl Tracer {
     }
 
     pub fn trace_instruction(&mut self, indent: usize, ip: usize, instruction: &str) {
+        let indent = indent.min(100);
         trace!(
             target: "instruction",
             indent = indent,
@@ -78,6 +80,7 @@ impl Tracer {
     }
 
     pub fn trace_method_entry(&mut self, indent: usize, name: &str, signature: &str) {
+        let indent = indent.min(100);
         debug!(
             target: "method",
             indent = indent,
@@ -92,6 +95,7 @@ impl Tracer {
     }
 
     pub fn trace_method_exit(&mut self, indent: usize, name: &str) {
+        let indent = indent.min(100);
         debug!(
             target: "method",
             indent = indent,

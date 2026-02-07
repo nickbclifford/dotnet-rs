@@ -258,9 +258,16 @@ impl ExceptionHandlingSystem {
             }
         });
 
-        // Preempt any existing exception handling state (nested exceptions)
-        ctx.evaluation_stack.clear_suspended();
-        ctx.frame_stack.clear_suspended();
+        // Preempt any existing exception handling state (nested exceptions).
+        // If we are already in the middle of a search or filter, we MUST NOT clear the suspended state,
+        // as it contains the state of the outer exception we need to resume later.
+        if matches!(
+            *ctx.exception_mode,
+            ExceptionState::None | ExceptionState::Throwing(_)
+        ) {
+            ctx.evaluation_stack.clear_suspended();
+            ctx.frame_stack.clear_suspended();
+        }
 
         *ctx.exception_mode = ExceptionState::Searching(SearchState {
             exception,
@@ -488,11 +495,20 @@ impl ExceptionHandlingSystem {
                     UnwindTarget::Handler(_) => in_try,
                     // When unwinding due to 'leave', we check if the target is outside the try block.
                     UnwindTarget::Instruction(target_ip) => {
-                        let in_handler = section
-                            .handlers
-                            .iter()
-                            .any(|h| h.instructions.contains(&ip));
-                        (in_try || in_handler) && !section.instructions.contains(&target_ip)
+                        let mut jumping_within_handler = false;
+                        let in_handler = section.handlers.iter().any(|h| {
+                            let in_h = h.instructions.contains(&ip);
+                            if in_h && h.instructions.contains(&target_ip) {
+                                jumping_within_handler = true;
+                            }
+                            in_h
+                        });
+
+                        if jumping_within_handler {
+                            false
+                        } else {
+                            (in_try || in_handler) && !section.instructions.contains(&target_ip)
+                        }
                     }
                 };
 
@@ -572,11 +588,8 @@ impl ExceptionHandlingSystem {
             // If we have finished all sections in this frame and it's not the target frame,
             // we pop it and continue unwinding in the caller.
             if frame_index > target_frame {
-                ctx.frame_stack.unwind_frame(
-                    gc,
-                    ctx.evaluation_stack,
-                    &ctx.local.heap.processing_finalizer,
-                );
+                ctx.frame_stack
+                    .unwind_frame(gc, ctx.evaluation_stack, ctx.shared, &ctx.local.heap);
             }
         }
 
@@ -601,6 +614,9 @@ impl ExceptionHandlingSystem {
                 let exception = exception.expect("Target handler reached but no exception present");
                 frame.exception_stack.push(exception);
                 ctx.push_obj(gc, exception);
+
+                // Continue execution at the handler
+                StepResult::Exception
             }
             UnwindTarget::Instruction(target_ip) => {
                 // Special case: usize::MAX indicates we should return from the method
@@ -612,10 +628,14 @@ impl ExceptionHandlingSystem {
                 let frame = &mut ctx.frame_stack.frames[target_frame];
                 frame.state.ip = target_ip;
                 frame.stack_height = 0;
-            }
-        };
 
-        StepResult::Exception
+                // Return Exception to signal completion, but mode is now None so next iteration
+                // will go to normal execution. We set the IP directly rather than returning Jump
+                // because Jump would be converted to Continue by the dispatch, potentially skipping
+                // necessary exception mode checks.
+                StepResult::Exception
+            }
+        }
     }
 }
 

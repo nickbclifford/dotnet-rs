@@ -240,8 +240,9 @@ pub fn ldsfld<'gc, 'm: 'gc>(
         );
     }
 
-    if ctx.initialize_static_storage(gc, field.parent, lookup.clone()) {
-        return StepResult::FramePushed;
+    let res = ctx.initialize_static_storage(gc, field.parent, lookup.clone());
+    if res != StepResult::Continue {
+        return res;
     }
 
     let res_ctx = ctx
@@ -277,8 +278,9 @@ pub fn stsfld<'gc, 'm: 'gc>(
     let (field, lookup) = ctx.locate_field(*param0);
     let name = &field.field.name;
 
-    if ctx.initialize_static_storage(gc, field.parent, lookup.clone()) {
-        return StepResult::FramePushed;
+    let res = ctx.initialize_static_storage(gc, field.parent, lookup.clone());
+    if res != StepResult::Continue {
+        return res;
     }
 
     let value = ctx.pop(gc);
@@ -444,8 +446,9 @@ pub fn ldsflda<'gc, 'm: 'gc>(
 ) -> StepResult {
     let (field, lookup) = ctx.locate_field(*param0);
 
-    if ctx.initialize_static_storage(gc, field.parent, lookup.clone()) {
-        return StepResult::FramePushed;
+    let res = ctx.initialize_static_storage(gc, field.parent, lookup.clone());
+    if res != StepResult::Continue {
+        return res;
     }
 
     let res_ctx = ctx

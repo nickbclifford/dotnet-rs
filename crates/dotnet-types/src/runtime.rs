@@ -88,20 +88,8 @@ runtime_type_impls! {
         Void => ConcreteType::from(loader.corlib_type("System.Void")),
         Type(td) => ConcreteType::from(*td),
         Generic(td, args) => {
-            let index = td
-                .resolution
-                .definition()
-                .type_definitions
-                .iter()
-                .position(|t| std::ptr::eq(t, td.definition()))
-                .unwrap();
             let source = TypeSource::Generic {
-                base: dotnetdll::prelude::UserType::Definition(
-                    td.resolution
-                        .definition()
-                        .type_definition_index(index)
-                        .expect("invalid type definition"),
-                ),
+                base: dotnetdll::prelude::UserType::Definition(td.index),
                 parameters: args.iter().map(|a| a.to_concrete(loader)).collect(),
             };
             ConcreteType::new(

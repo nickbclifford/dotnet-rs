@@ -44,7 +44,7 @@ pub fn ldvirtftn<'gc, 'm: 'gc>(
     let resolved_method = {
         let res_ctx = ctx.current_context();
         ctx.resolver()
-            .resolve_virtual_method(base_method, this_type, &res_ctx)
+            .resolve_virtual_method(base_method, this_type, &lookup, &res_ctx)
     };
 
     let index = ctx.get_runtime_method_index(resolved_method, lookup);

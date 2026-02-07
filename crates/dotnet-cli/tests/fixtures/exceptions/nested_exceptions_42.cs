@@ -45,10 +45,10 @@ public class Program {
     }
 
     static void ThrowOuter() {
-        throw new InvalidOperationException();
+        throw new InvalidOperationException("Outer");
     }
 
     static void ThrowInner() {
-        throw new ArgumentException();
+        throw new ArgumentException("Inner");
     }
 }

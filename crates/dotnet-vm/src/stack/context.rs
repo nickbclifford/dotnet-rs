@@ -292,7 +292,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
         gc: dotnet_utils::gc::GCHandle<'gc>,
         description: TypeDescription,
         generics: GenericLookup,
-    ) -> bool {
+    ) -> StepResult {
         self.check_gc_safe_point();
 
         let ctx = ResolutionContext {
@@ -325,10 +325,13 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                         MethodInfo::new(m, &generics, self.shared.clone()),
                         generics.clone(),
                     );
-                    return true;
+                    return StepResult::FramePushed;
                 }
                 Initialized | Recursive => {
-                    return false;
+                    return StepResult::Continue;
+                }
+                Failed => {
+                    return self.throw_by_name(gc, "System.TypeInitializationException");
                 }
                 Waiting => {
                     #[cfg(feature = "multithreaded-gc")]
@@ -594,10 +597,12 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                         method_resolution: object_type.resolution,
                     };
 
-                    Some(
-                        self.resolver()
-                            .resolve_virtual_method(method_desc, obj_type, &ctx),
-                    )
+                    Some(self.resolver().resolve_virtual_method(
+                        method_desc,
+                        obj_type,
+                        &GenericLookup::default(),
+                        &ctx,
+                    ))
                 } else {
                     None
                 }
@@ -868,7 +873,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
         let (base_method, lookup) = resolver.find_generic_method(source, ctx);
 
         let method = if let Some(runtime_type) = this_type {
-            resolver.resolve_virtual_method(base_method, runtime_type, ctx)
+            resolver.resolve_virtual_method(base_method, runtime_type, &lookup, ctx)
         } else {
             base_method
         };

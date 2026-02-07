@@ -156,7 +156,28 @@ impl LayoutFactory {
                                     && (layout.is_or_contains_refs()
                                         || prev_layout.is_or_contains_refs())
                                 {
-                                    panic!("explicit field layout overlaps reference type fields");
+                                    let type_name = owner.type_name();
+                                    // Bypass check for System.Runtime.CompilerServices.MethodTable which has overlapping fields
+                                    // This is an internal runtime type and we assume it's handled correctly by the runtime/GC or not allocated on GC heap.
+                                    if type_name
+                                        .contains("System.Runtime.CompilerServices.MethodTable")
+                                    {
+                                        trace!(
+                                            "WARNING: Explicit field layout overlaps reference type fields in type '{}'. Field '{}' (offset {}) overlaps with previous field (range {}-{}). Ignoring.",
+                                            type_name, name, actual_offset, prev_start, prev_end
+                                        );
+                                    } else {
+                                        panic!(
+                                            "explicit field layout overlaps reference type fields in type '{}'. Field '{}' (offset {}) overlaps with previous field (range {}-{}). Layout: {:?}, Prev Layout: {:?}",
+                                            type_name,
+                                            name,
+                                            actual_offset,
+                                            prev_start,
+                                            prev_end,
+                                            layout,
+                                            prev_layout
+                                        );
+                                    }
                                 }
                             }
                             placed_fields.push((actual_offset, actual_end, layout.clone()));

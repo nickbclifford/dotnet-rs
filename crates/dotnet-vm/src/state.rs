@@ -59,6 +59,9 @@ pub struct GlobalCaches {
     pub value_type_cache: DashMap<TypeDescription, bool>,
     /// Cache for finalizer checks: TypeDescription -> bool
     pub has_finalizer_cache: DashMap<TypeDescription, bool>,
+    /// Cache for resolved overrides: (TypeDescription, GenericLookup) -> Map<DeclMethod, ImplMethod>
+    pub overrides_cache:
+        DashMap<(TypeDescription, GenericLookup), Arc<HashMap<usize, MethodDescription>>>,
     /// Registry of intrinsic methods
     pub intrinsic_registry: IntrinsicRegistry,
 }
@@ -76,6 +79,7 @@ impl GlobalCaches {
             static_field_layout_cache: DashMap::new(),
             value_type_cache: DashMap::new(),
             has_finalizer_cache: DashMap::new(),
+            overrides_cache: DashMap::new(),
             intrinsic_registry,
         }
     }

@@ -13,25 +13,20 @@ pub fn leave<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
     jump_target: usize,
 ) -> StepResult {
-    // If we're already executing a handler (e.g., a finally block during unwinding),
-    // we need to preserve that state. The Leave instruction in this case just means
-    // "exit this finally block and continue unwinding".
-    *ctx.exception_mode = match ctx.exception_mode {
-        // We're inside a finally/fault handler. Transition back to Unwinding
-        // to continue processing remaining handlers.
-        ExceptionState::ExecutingHandler(state) => ExceptionState::Unwinding(*state),
-        // Normal Leave: start a new unwind operation
-        _ => ExceptionState::Unwinding(UnwindState {
-            exception: None,
-            // Cast i32 to usize for instruction offset
-            target: UnwindTarget::Instruction(jump_target),
-            cursor: HandlerAddress {
-                frame_index: ctx.frame_stack.len() - 1,
-                section_index: 0,
-                handler_index: 0,
-            },
-        }),
+    // Always start unwinding from the beginning of the current frame to ensure
+    // that any nested handlers (e.g. finally blocks within the current handler)
+    // are properly discovered and executed.
+    let cursor = HandlerAddress {
+        frame_index: ctx.frame_stack.len() - 1,
+        section_index: 0,
+        handler_index: 0,
     };
+
+    *ctx.exception_mode = ExceptionState::Unwinding(UnwindState {
+        exception: None,
+        target: UnwindTarget::Instruction(jump_target),
+        cursor,
+    });
     ctx.handle_exception(gc)
 }
 
@@ -54,31 +49,49 @@ pub fn endfinally<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(EndFilter)]
 pub fn endfilter<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
-    let _result_val = ctx.pop_i32(gc);
+    use crate::exceptions::SearchState;
 
-    let (_exception, _handler) = match ctx.exception_mode {
+    let result_val = ctx.pop_i32(gc);
+
+    let (exception, handler) = match ctx.exception_mode {
         ExceptionState::Filtering(state) => (state.exception, state.handler),
         _ => panic!("EndFilter called but not in Filtering mode"),
     };
 
-    // Restore suspended state
-    // Note: we use handler.frame_index because the filter ran in that frame.
-    // It might have called other methods, but those should have returned by now.
-    // let original_ip = ctx.execution().original_ip;
-    // let original_stack_height = ctx.execution().original_stack_height;
-    // ...
-    // Wait, original_ip is in ThreadContext.
-    // I should probably add it to VesContext or have a way to access it.
-    // But for now, let's just use ctx.frame_stack and ctx.evaluation_stack directly.
+    // Restore state of the frame where filter ran
+    let frame = &mut ctx.frame_stack.frames[handler.frame_index];
+    frame.state.ip = *ctx.original_ip;
+    frame.stack_height = *ctx.original_stack_height;
+    frame.exception_stack.pop();
 
-    // I'll need to figure out where original_ip/original_stack_height are.
-    // They are in ThreadContext.
+    // Restore suspended evaluation and frame stacks
+    ctx.evaluation_stack.restore_suspended();
+    ctx.frame_stack.restore_suspended();
 
-    // Let's check how to get them.
-    // ctx has access to evaluation_stack and frame_stack.
+    if result_val == 1 {
+        // Result is 1: This handler is the one. Begin unwinding towards it.
+        *ctx.exception_mode = ExceptionState::Unwinding(UnwindState {
+            exception: Some(exception),
+            target: UnwindTarget::Handler(handler),
+            cursor: HandlerAddress {
+                frame_index: ctx.frame_stack.len() - 1,
+                section_index: 0,
+                handler_index: 0,
+            },
+        });
+    } else {
+        // Result is 0: Continue searching after this handler.
+        *ctx.exception_mode = ExceptionState::Searching(SearchState {
+            exception,
+            cursor: HandlerAddress {
+                frame_index: handler.frame_index,
+                section_index: handler.section_index,
+                handler_index: handler.handler_index + 1,
+            },
+        });
+    }
 
-    // I'll skip complex EndFilter for a moment or implement it carefully.
-    StepResult::Continue
+    StepResult::Exception
 }
 
 #[dotnet_instruction(Throw)]

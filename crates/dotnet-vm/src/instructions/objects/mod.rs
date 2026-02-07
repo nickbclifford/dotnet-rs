@@ -199,8 +199,9 @@ pub fn new_object<'gc, 'm: 'gc>(
             return intrinsic_call(gc, ctx, method, &lookup);
         }
 
-        if ctx.initialize_static_storage(gc, parent, lookup.clone()) {
-            return StepResult::FramePushed;
+        let res = ctx.initialize_static_storage(gc, parent, lookup.clone());
+        if res != StepResult::Continue {
+            return res;
         }
 
         let res_ctx = ctx

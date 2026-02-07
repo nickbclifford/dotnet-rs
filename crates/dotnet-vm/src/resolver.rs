@@ -138,10 +138,19 @@ impl<'m> ResolverService<'m> {
         &self,
         base_method: MethodDescription,
         this_type: TypeDescription,
+        generics: &GenericLookup,
         ctx: &ResolutionContext<'_, 'm>,
     ) -> MethodDescription {
-        let cache_key = (base_method, this_type, ctx.generics.clone());
-        if let Some(cached) = self.caches.vmt_cache.get(&cache_key) {
+        let mut normalized_generics = generics.clone();
+        if this_type.definition().generic_parameters.is_empty() {
+            normalized_generics.type_generics = Arc::new([]);
+        }
+        if base_method.method.generic_parameters.is_empty() {
+            normalized_generics.method_generics = Arc::new([]);
+        }
+
+        let key = (base_method, this_type, normalized_generics);
+        if let Some(cached) = self.caches.vmt_cache.get(&key) {
             if let Some(metrics) = self.metrics() {
                 metrics.record_vmt_cache_hit();
             }
@@ -152,26 +161,17 @@ impl<'m> ResolverService<'m> {
             metrics.record_vmt_cache_miss();
         }
 
-        // First, check if this_type itself has the method
-        if let Some(this_method) = self.find_and_cache_method(this_type, base_method, ctx.generics)
-        {
-            return this_method;
-        }
-
         // Standard virtual method resolution: search ancestors
         for (parent, _) in ctx.get_ancestors(this_type) {
-            if let Some(this_method) = self.find_and_cache_method(parent, base_method, ctx.generics)
-            {
-                // Also cache for the originally requested type to improve hit rate
-                self.caches
-                    .vmt_cache
-                    .insert((base_method, this_type, ctx.generics.clone()), this_method);
+            if let Some(this_method) = self.find_and_cache_method(parent, base_method, &key.2) {
+                self.caches.vmt_cache.insert(key, this_method);
                 return this_method;
             }
         }
+
         panic!(
-            "could not find virtual method implementation of {:?} in {:?}",
-            base_method, this_type
+            "could not find virtual method implementation of {:?} in {:?} with generics {:?}",
+            base_method, this_type, generics
         )
     }
 
@@ -181,16 +181,57 @@ impl<'m> ResolverService<'m> {
         method: MethodDescription,
         generics: &GenericLookup,
     ) -> Option<MethodDescription> {
-        let this_method = self.loader.find_method_in_type(
+        let def = this_type.definition();
+        if !def.overrides.is_empty() {
+            let cache_key = (this_type, generics.clone());
+            let overrides = if let Some(map) = self.caches.overrides_cache.get(&cache_key) {
+                map.clone()
+            } else {
+                let mut map = std::collections::HashMap::new();
+                for ovr in def.overrides.iter() {
+                    let decl = self.loader.locate_method(
+                        this_type.resolution,
+                        ovr.declaration,
+                        generics,
+                        None,
+                    );
+                    let impl_m = self.loader.locate_method(
+                        this_type.resolution,
+                        ovr.implementation,
+                        generics,
+                        Some(this_type.into()),
+                    );
+                    map.insert(decl.method as *const _ as usize, impl_m);
+                }
+                let arc_map = Arc::new(map);
+                self.caches
+                    .overrides_cache
+                    .insert(cache_key, arc_map.clone());
+                arc_map
+            };
+
+            if let Some(impl_m) = overrides.get(&(method.method as *const _ as usize)) {
+                self.caches
+                    .vmt_cache
+                    .insert((method, this_type, generics.clone()), *impl_m);
+                return Some(*impl_m);
+            }
+        }
+
+        if let Some(this_method) = self.loader.find_method_in_type_with_substitution(
             this_type,
             &method.method.name,
             &method.method.signature,
             method.resolution(),
-        )?;
-        self.caches
-            .vmt_cache
-            .insert((method, this_type, generics.clone()), this_method);
-        Some(this_method)
+            generics,
+        ) {
+            self.caches
+                .vmt_cache
+                .insert((method, this_type, generics.clone()), this_method);
+            return Some(this_method);
+        }
+
+        None
     }
 
     pub fn type_layout_cached(
@@ -340,8 +381,12 @@ impl<'m> ResolverService<'m> {
         if let Some(m) = self.metrics() {
             m.record_value_type_cache_miss();
         }
+
+        let enum_type = self.loader.corlib_type("System.Enum");
+        let value_type = self.loader.corlib_type("System.ValueType");
+
         for (a, _) in self.loader.ancestors(td) {
-            if matches!(a.type_name().as_str(), "System.Enum" | "System.ValueType") {
+            if a == enum_type || a == value_type {
                 self.caches.value_type_cache.insert(td, true);
                 return true;
             }

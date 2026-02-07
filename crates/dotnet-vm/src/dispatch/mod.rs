@@ -1,4 +1,3 @@
-use crate::vm_trace_instruction;
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnetdll::prelude::*;
@@ -70,13 +69,8 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
     }
 
     pub fn step_normal(&mut self, gc: GCHandle<'gc>) -> StepResult {
-        let i = &self.stack.state().info_handle.instructions[self.stack.state().ip];
-
-        if self.stack.tracer_enabled() {
-            let ip = self.stack.state().ip;
-            let i_res = self.stack.state().info_handle.source.resolution();
-            vm_trace_instruction!(self.stack, ip, &i.show(i_res.definition()));
-        }
+        let ip = self.stack.state().ip;
+        let i = &self.stack.state().info_handle.instructions[ip];
 
         let res = if let Some(res) = InstructionRegistry::dispatch(gc, self, i) {
             res
@@ -131,6 +125,7 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
                             self.stack.branch(target);
                             StepResult::Continue
                         }
+                        StepResult::Return => self.stack.handle_return(gc),
                         _ => res,
                     }
                 }

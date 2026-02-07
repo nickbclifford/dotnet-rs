@@ -18,22 +18,10 @@ unsafe impl Collect for ConcreteType {
 
 impl From<TypeDescription> for ConcreteType {
     fn from(td: TypeDescription) -> Self {
-        let index = td
-            .resolution
-            .definition()
-            .type_definitions
-            .iter()
-            .position(|t| std::ptr::eq(t, td.definition()))
-            .expect("TypeDescription has invalid definition pointer");
         Self::new(
             td.resolution,
             BaseType::Type {
-                source: TypeSource::User(UserType::Definition(
-                    td.resolution
-                        .definition()
-                        .type_definition_index(index)
-                        .unwrap(),
-                )),
+                source: TypeSource::User(UserType::Definition(td.index)),
                 value_kind: None,
             },
         )

@@ -22,3 +22,4 @@ dotnetdll = { path = "../dotnetdll", version = "0.1.2" }
 gc-arena = "0.5"
 parking_lot = "0.12"
 dashmap = "6.1"
+tracing = "0.1"

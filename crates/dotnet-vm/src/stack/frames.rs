@@ -6,7 +6,6 @@ use dotnet_utils::gc::GCHandle;
 use dotnet_value::StackValue;
 use dotnetdll::prelude::ReturnType;
 use gc_arena::Collect;
-use std::cell::Cell;
 
 use super::evaluation_stack::EvaluationStack;
 
@@ -100,11 +99,18 @@ impl<'gc, 'm> FrameStack<'gc, 'm> {
         &mut self,
         gc: GCHandle<'gc>,
         evaluation_stack: &mut EvaluationStack<'gc>,
-        processing_finalizer: &Cell<bool>,
+        shared: &SharedGlobalState<'m>,
+        heap: &HeapManager<'gc>,
     ) {
         let frame = self.pop().expect("unwind_frame called with empty stack");
+
+        if frame.state.info_handle.is_cctor {
+            let type_desc = frame.state.info_handle.source.parent;
+            shared.statics.mark_failed(type_desc, &frame.generic_inst);
+        }
+
         if frame.is_finalizer {
-            processing_finalizer.set(false);
+            heap.processing_finalizer.set(false);
         }
         for i in frame.base.arguments..evaluation_stack.top_of_stack() {
             evaluation_stack.set_slot(gc, i, StackValue::null());

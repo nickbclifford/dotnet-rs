@@ -105,6 +105,11 @@ impl TestHarness {
         let dll_path_str = dll_path.to_str().unwrap().to_string();
         let resolution = static_res_from_file(&dll_path_str);
         let shared = std::sync::Arc::new(state::SharedGlobalState::new(self.loader));
+        if dll_path_str.contains("nested_exceptions_42") {
+            shared
+                .tracer_enabled
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         self.run_with_shared(resolution, shared)
     }
 
@@ -124,6 +129,7 @@ impl TestHarness {
             parent: TypeDescription::new(
                 resolution,
                 &resolution.definition()[entry_method.parent_type()],
+                entry_method.parent_type(),
             ),
             method_resolution: resolution,
             method: &resolution.definition()[entry_method],
@@ -201,6 +207,7 @@ fn test_cache_observability() {
         parent: TypeDescription::new(
             resolution,
             &resolution.definition()[entry_method.parent_type()],
+            entry_method.parent_type(),
         ),
         method_resolution: resolution,
         method: &resolution.definition()[entry_method],
@@ -460,13 +467,18 @@ fn test_multiple_arenas_simple() {
     assert_eq!(results.len(), 5);
 
     // Verify that the static field Counter was incremented by all threads
-    let type_def = resolution
+    let (index, type_def) = resolution
         .definition()
         .type_definitions
         .iter()
-        .find(|t| t.name == "Program")
+        .enumerate()
+        .find(|(_, t)| t.name == "Program")
         .unwrap();
-    let type_desc = TypeDescription::new(resolution, type_def);
+    let type_index = resolution
+        .definition()
+        .type_definition_index(index)
+        .unwrap();
+    let type_desc = TypeDescription::new(resolution, type_def, type_index);
 
     let storage_arc = shared.statics.get(type_desc, &shared.empty_generics);
     let storage = &storage_arc.storage;

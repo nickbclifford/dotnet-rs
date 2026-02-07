@@ -93,7 +93,7 @@ impl AssemblyLoader {
             method_cache_misses: AtomicU64::new(0),
         };
 
-        for t in &support_res.type_definitions {
+        for (index, t) in support_res.type_definitions.iter().enumerate() {
             for a in &t.attributes {
                 // the target stub attribute is internal to the support library,
                 // so the constructor reference will always be a Definition variant
@@ -110,9 +110,14 @@ impl AssemblyLoader {
                             NamedArg::Field(name, FixedArg::String(Some(target)))
                                 if name == "InPlaceOf" =>
                             {
+                                let type_index = support_res.type_definition_index(index).unwrap();
                                 this.stubs.insert(
                                     target.to_string(),
-                                    TypeDescription::new(ResolutionS::new(support_res), t),
+                                    TypeDescription::new(
+                                        ResolutionS::new(support_res),
+                                        t,
+                                        type_index,
+                                    ),
                                 );
                             }
                             _ => {}
@@ -203,28 +208,47 @@ impl AssemblyLoader {
     pub fn find_in_assembly(
         &self,
         assembly: &ExternalAssemblyReference,
-        name: &str,
+        full_name: &str,
     ) -> TypeDescription {
-        if let Some(t) = self.stubs.get(name) {
+        if let Some(t) = self.stubs.get(full_name) {
             return *t;
         }
 
         let res = self.get_assembly(assembly.name.as_ref());
+
+        let (namespace, name) = if let Some(idx) = full_name.rfind('.') {
+            (&full_name[..idx], &full_name[idx + 1..])
+        } else {
+            ("", full_name)
+        };
+
         match res
             .definition()
             .type_definitions
             .iter()
-            .find(|t| t.type_name() == name)
+            .find(|t| t.name == name && t.namespace.as_deref().unwrap_or("") == namespace)
         {
             None => {
                 for e in &res.definition().exported_types {
-                    if e.type_name() == name {
+                    if e.name == name && e.namespace.as_deref().unwrap_or("") == namespace {
                         return self.find_exported_type(res, e);
                     }
                 }
-                panic!("could not find type {} in assembly {}", name, assembly.name)
+                panic!(
+                    "could find type {} in assembly {}",
+                    full_name, assembly.name
+                )
             }
-            Some(t) => TypeDescription::new(res, t),
+            Some(t) => {
+                let index = res
+                    .definition()
+                    .type_definitions
+                    .iter()
+                    .position(|td| ptr::eq(td, t))
+                    .unwrap();
+                let type_index = res.definition().type_definition_index(index).unwrap();
+                TypeDescription::new(res, t, type_index)
+            }
         }
     }
 
@@ -274,18 +298,38 @@ impl AssemblyLoader {
         }
     }
 
-    fn try_find_in_assembly(&self, resolution: ResolutionS, name: &str) -> Option<TypeDescription> {
+    fn try_find_in_assembly(
+        &self,
+        resolution: ResolutionS,
+        full_name: &str,
+    ) -> Option<TypeDescription> {
+        let (namespace, name) = if let Some(idx) = full_name.rfind('.') {
+            (&full_name[..idx], &full_name[idx + 1..])
+        } else {
+            ("", full_name)
+        };
+
         if let Some(t) = resolution
             .definition()
             .type_definitions
             .iter()
-            .find(|t| t.type_name() == name)
+            .find(|t| t.name == name && t.namespace.as_deref().unwrap_or("") == namespace)
         {
-            return Some(TypeDescription::new(resolution, t));
+            let index = resolution
+                .definition()
+                .type_definitions
+                .iter()
+                .position(|td| ptr::eq(td, t))
+                .unwrap();
+            let type_index = resolution
+                .definition()
+                .type_definition_index(index)
+                .unwrap();
+            return Some(TypeDescription::new(resolution, t, type_index));
         }
 
         for e in &resolution.definition().exported_types {
-            if e.type_name() == name {
+            if e.name == name && e.namespace.as_deref().unwrap_or("") == namespace {
                 return Some(self.find_exported_type(resolution, e));
             }
         }
@@ -307,7 +351,7 @@ impl AssemblyLoader {
                 if let Some(t) = self.stubs.get(&definition.type_name()) {
                     *t
                 } else {
-                    TypeDescription::new(resolution, definition)
+                    TypeDescription::new(resolution, definition, d)
                 }
             }
             UserType::Reference(r) => self.locate_type_ref(resolution, r),
@@ -336,7 +380,14 @@ impl AssemblyLoader {
                         && t.type_name() == type_ref.type_name()
                         && ptr::eq(&res[enc], owner)
                     {
-                        return TypeDescription::new(res, t);
+                        let index = res
+                            .definition()
+                            .type_definitions
+                            .iter()
+                            .position(|td| ptr::eq(td, t))
+                            .unwrap();
+                        let type_index = res.definition().type_definition_index(index).unwrap();
+                        return TypeDescription::new(res, t, type_index);
                     }
                 }
 
@@ -387,12 +438,13 @@ impl AssemblyLoader {
         generics1: Option<&GenericLookup>,
         res2: ResolutionS,
         b: &[MethodType],
+        generics2: Option<&GenericLookup>,
     ) -> bool {
         if a.len() != b.len() {
             return false;
         }
         for (a, b) in a.iter().zip(b.iter()) {
-            if !self.types_equal(res1, a, generics1, res2, b) {
+            if !self.types_equal(res1, a, generics1, res2, b, generics2) {
                 return false;
             }
         }
@@ -406,17 +458,18 @@ impl AssemblyLoader {
         generics1: Option<&GenericLookup>,
         res2: ResolutionS,
         b: &MethodType,
+        generics2: Option<&GenericLookup>,
     ) -> bool {
         if let Some(generics) = generics1 {
             match a {
                 MethodType::TypeGeneric(idx) => {
                     if let Some(concrete) = generics.type_generics.get(*idx) {
-                        return self.concrete_equals_method_type(concrete, res2, b);
+                        return self.concrete_equals_method_type(concrete, res2, b, generics2);
                     }
                 }
                 MethodType::MethodGeneric(idx) => {
                     if let Some(concrete) = generics.method_generics.get(*idx) {
-                        return self.concrete_equals_method_type(concrete, res2, b);
+                        return self.concrete_equals_method_type(concrete, res2, b, generics2);
                     }
                 }
                 _ => {}
@@ -430,13 +483,14 @@ impl AssemblyLoader {
                     let (ut2, generics2_list) = decompose_type_source(ts2);
                     let td1 = self.locate_type(res1, ut1);
                     let td2 = self.locate_type(res2, ut2);
-                    td1.type_name() == td2.type_name()
+                    td1 == td2
                         && self.type_slices_equal(
                             res1,
                             &generics1_list,
                             generics1,
                             res2,
                             &generics2_list,
+                            generics2,
                         )
                 }
                 (BaseType::Boolean, BaseType::Boolean) => true,
@@ -457,26 +511,72 @@ impl AssemblyLoader {
                 (BaseType::String, BaseType::String) => true,
                 (BaseType::Vector(_, l), BaseType::Vector(_, r)) => {
                     // TODO: CustomTypeModifiers
-                    self.types_equal(res1, l, generics1, res2, r)
+                    self.types_equal(res1, l, generics1, res2, r, generics2)
                 }
                 (BaseType::Array(l, _), BaseType::Array(r, _)) => {
                     // TODO: ArrayShapes
-                    self.types_equal(res1, l, generics1, res2, r)
+                    self.types_equal(res1, l, generics1, res2, r, generics2)
                 }
                 (BaseType::ValuePointer(_, l), BaseType::ValuePointer(_, r)) => {
                     // TODO: CustomTypeModifiers
                     match (l.as_ref(), r.as_ref()) {
                         (None, None) => true,
-                        (Some(t1), Some(t2)) => self.types_equal(res1, t1, generics1, res2, t2),
+                        (Some(t1), Some(t2)) => {
+                            self.types_equal(res1, t1, generics1, res2, t2, generics2)
+                        }
                         _ => false,
                     }
                 }
                 (BaseType::FunctionPointer(_l), BaseType::FunctionPointer(_r)) => todo!(),
                 _ => false,
             },
-            (MethodType::TypeGeneric(i1), MethodType::TypeGeneric(i2)) => i1 == i2,
-            (MethodType::MethodGeneric(i1), MethodType::MethodGeneric(i2)) => i1 == i2,
-            _ => false,
+            (MethodType::TypeGeneric(i1), MethodType::TypeGeneric(i2)) => {
+                if i1 == i2 {
+                    return true;
+                }
+                // Check for substitution on both sides
+                if let (Some(g1), Some(g2)) = (generics1, generics2)
+                    && let (Some(c1), Some(c2)) =
+                        (g1.type_generics.get(*i1), g2.type_generics.get(*i2))
+                {
+                    return c1 == c2;
+                }
+                false
+            }
+            (MethodType::MethodGeneric(i1), MethodType::MethodGeneric(i2)) => {
+                if i1 == i2 {
+                    return true;
+                }
+                // Check for substitution on both sides
+                if let (Some(g1), Some(g2)) = (generics1, generics2)
+                    && let (Some(c1), Some(c2)) =
+                        (g1.method_generics.get(*i1), g2.method_generics.get(*i2))
+                {
+                    return c1 == c2;
+                }
+                false
+            }
+            _ => {
+                // Check if one side is a substituted generic that matches the other side
+                if let Some(generics) = generics2 {
+                    match b {
+                        MethodType::TypeGeneric(idx) => {
+                            if let Some(concrete) = generics.type_generics.get(*idx) {
+                                return self
+                                    .concrete_equals_method_type(concrete, res1, a, generics1);
+                            }
+                        }
+                        MethodType::MethodGeneric(idx) => {
+                            if let Some(concrete) = generics.method_generics.get(*idx) {
+                                return self
+                                    .concrete_equals_method_type(concrete, res1, a, generics1);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                false
+            }
         }
     }
 
@@ -487,11 +587,12 @@ impl AssemblyLoader {
         generics1: Option<&GenericLookup>,
         res2: ResolutionS,
         b: &ParameterType<MethodType>,
+        generics2: Option<&GenericLookup>,
     ) -> bool {
         match (a, b) {
             (ParameterType::Value(l), ParameterType::Value(r))
             | (ParameterType::Ref(l), ParameterType::Ref(r)) => {
-                self.types_equal(res1, l, generics1, res2, r)
+                self.types_equal(res1, l, generics1, res2, r, generics2)
             }
             (ParameterType::TypedReference, ParameterType::TypedReference) => true,
             _ => false,
@@ -505,13 +606,13 @@ impl AssemblyLoader {
         generics1: Option<&GenericLookup>,
         res2: ResolutionS,
         b: &[Parameter<MethodType>],
+        generics2: Option<&GenericLookup>,
     ) -> bool {
         if a.len() != b.len() {
             return false;
         }
         for (Parameter(_, a), Parameter(_, b)) in a.iter().zip(b.iter()) {
-            // TODO: CustomTypeModifiers
-            if !self.param_types_equal(res1, a, generics1, res2, b) {
+            if !self.param_types_equal(res1, a, generics1, res2, b, generics2) {
                 return false;
             }
         }
@@ -525,18 +626,31 @@ impl AssemblyLoader {
         generics1: Option<&GenericLookup>,
         res2: ResolutionS,
         b: &ManagedMethod<MethodType>,
+        generics2: Option<&GenericLookup>,
     ) -> bool {
         if a.instance != b.instance {
             return false;
         }
         match (&a.return_type, &b.return_type) {
-            (ReturnType(_, None), ReturnType(_, None)) => {
-                self.params_equal(res1, &a.parameters, generics1, res2, &b.parameters)
-            }
+            (ReturnType(_, None), ReturnType(_, None)) => self.params_equal(
+                res1,
+                &a.parameters,
+                generics1,
+                res2,
+                &b.parameters,
+                generics2,
+            ),
             (ReturnType(_, Some(l)), ReturnType(_, Some(r)))
-                if self.param_types_equal(res1, l, generics1, res2, r) =>
+                if self.param_types_equal(res1, l, generics1, res2, r, generics2) =>
             {
-                self.params_equal(res1, &a.parameters, generics1, res2, &b.parameters)
+                self.params_equal(
+                    res1,
+                    &a.parameters,
+                    generics1,
+                    res2,
+                    &b.parameters,
+                    generics2,
+                )
             }
             _ => false,
         }
@@ -548,11 +662,27 @@ impl AssemblyLoader {
         concrete: &ConcreteType,
         res2: ResolutionS,
         b: &MethodType,
+        generics2: Option<&GenericLookup>,
     ) -> bool {
+        if let Some(generics) = generics2 {
+            match b {
+                MethodType::TypeGeneric(idx) => {
+                    if let Some(other) = generics.type_generics.get(*idx) {
+                        return concrete == other;
+                    }
+                }
+                MethodType::MethodGeneric(idx) => {
+                    if let Some(other) = generics.method_generics.get(*idx) {
+                        return concrete == other;
+                    }
+                }
+                _ => {}
+            }
+        }
         match b {
             MethodType::Base(b_base) => {
                 // Compare concrete type with a base type
-                self.concrete_equals_base_type(concrete, res2, b_base)
+                self.concrete_equals_base_type(concrete, res2, b_base, generics2)
             }
             _ => false,
         }
@@ -564,6 +694,7 @@ impl AssemblyLoader {
         concrete: &ConcreteType,
         res2: ResolutionS,
         b: &BaseType<MethodType>,
+        generics2: Option<&GenericLookup>,
     ) -> bool {
         let res1 = concrete.resolution();
         let a = concrete.get();
@@ -571,23 +702,27 @@ impl AssemblyLoader {
         match (a, b) {
             (BaseType::Type { source: ts1, .. }, BaseType::Type { source: ts2, .. }) => {
                 let (ut1, generics1) = decompose_type_source(ts1);
-                let (ut2, generics2) = decompose_type_source(ts2);
+                let (ut2, generics2_list) = decompose_type_source(ts2);
                 let td1 = self.locate_type(res1, ut1);
                 let td2 = self.locate_type(res2, ut2);
 
-                if td1.type_name() != td2.type_name() {
-                    return false;
+                if td1 != td2 {
+                    let d1 = td1.definition();
+                    let d2 = td2.definition();
+                    if d1.name != d2.name || d1.namespace != d2.namespace {
+                        return false;
+                    }
                 }
 
                 // Check that generic parameters match (ConcreteTypes on left, MethodTypes on right)
-                if generics1.len() != generics2.len() {
+                if generics1.len() != generics2_list.len() {
                     return false;
                 }
 
-                for (g1, g2) in generics1.iter().zip(generics2.iter()) {
+                for (g1, g2) in generics1.iter().zip(generics2_list.iter()) {
                     // g1 is ConcreteType, g2 is MethodType
                     // Compare the ConcreteType with the MethodType
-                    if !self.concrete_equals_method_type(g1, res2, g2) {
+                    if !self.concrete_equals_method_type(g1, res2, g2, generics2) {
                         return false;
                     }
                 }
@@ -610,16 +745,16 @@ impl AssemblyLoader {
             (BaseType::Object, BaseType::Object) => true,
             (BaseType::String, BaseType::String) => true,
             (BaseType::Vector(_, l), BaseType::Vector(_, r)) => {
-                self.concrete_equals_method_type(l, res2, r)
+                self.concrete_equals_method_type(l, res2, r, generics2)
             }
             (BaseType::Array(l, _), BaseType::Array(r, _)) => {
-                self.concrete_equals_method_type(l, res2, r)
+                self.concrete_equals_method_type(l, res2, r, generics2)
             }
             (BaseType::ValuePointer(_, l), BaseType::ValuePointer(_, r)) => {
                 match (l.as_ref(), r.as_ref()) {
                     (None, None) => true,
                     (Some(l_concrete), Some(r_method)) => {
-                        self.concrete_equals_method_type(l_concrete, res2, r_method)
+                        self.concrete_equals_method_type(l_concrete, res2, r_method, generics2)
                     }
                     _ => false,
                 }
@@ -627,43 +762,6 @@ impl AssemblyLoader {
             (BaseType::FunctionPointer(_l), BaseType::FunctionPointer(_r)) => todo!(),
             _ => false,
         }
-    }
-
-    fn get_methods_to_search<'a>(
-        &self,
-        def: &'a TypeDefinition<'static>,
-        name: &str,
-    ) -> Vec<&'a Method<'static>> {
-        let mut methods_to_search: Vec<_> = vec![];
-        let filter = |n: &str| n.contains('_');
-
-        let (has_underscore, rest): (Vec<_>, _) =
-            def.methods.iter().partition(|m| filter(m.name.as_ref()));
-
-        // prefixes required by the standard for properties and events:
-        // get_, set_, add_, remove_, raise_
-        if filter(name) {
-            for p in &def.properties {
-                if let Some(m) = &p.getter {
-                    methods_to_search.push(m);
-                }
-                if let Some(m) = &p.setter {
-                    methods_to_search.push(m);
-                }
-            }
-            for e in &def.events {
-                methods_to_search.push(&e.add_listener);
-                methods_to_search.push(&e.remove_listener);
-                if let Some(r) = &e.raise_event {
-                    methods_to_search.push(r);
-                }
-            }
-            methods_to_search.extend(has_underscore);
-        } else {
-            methods_to_search.extend(rest);
-        }
-        methods_to_search.extend(def.events.iter().flat_map(|e| &e.other));
-        methods_to_search
     }
 
     pub fn find_method_in_type_with_substitution(
@@ -695,21 +793,102 @@ impl AssemblyLoader {
         sig_res: ResolutionS,
         generics: Option<&GenericLookup>,
     ) -> Option<MethodDescription> {
-        for method in self.get_methods_to_search(desc.definition(), name) {
-            if method.name == name
-                && self.signatures_equal(
-                    sig_res,
-                    signature,
-                    generics,
-                    desc.resolution,
-                    &method.signature,
-                )
-            {
-                return Some(MethodDescription {
-                    parent: desc,
-                    method_resolution: desc.resolution,
-                    method,
-                });
+        let def = desc.definition();
+
+        macro_rules! check {
+            ($method:expr) => {
+                let m = $method;
+                if m.name == name
+                    && m.signature.parameters.len() == signature.parameters.len()
+                    && self.signatures_equal(
+                        sig_res,
+                        signature,
+                        generics,
+                        desc.resolution,
+                        &m.signature,
+                        generics,
+                    )
+                {
+                    return Some(MethodDescription {
+                        parent: desc,
+                        method_resolution: desc.resolution,
+                        method: m,
+                    });
+                }
+            };
+        }
+
+        // 1. Search regular methods
+        for method in &def.methods {
+            check!(method);
+        }
+
+        // 2. Optimized property search
+        if let Some(prop_name) = name.strip_prefix("get_") {
+            for prop in &def.properties {
+                if prop.name == prop_name
+                    && let Some(m) = &prop.getter
+                {
+                    check!(m);
+                }
+            }
+        } else if let Some(prop_name) = name.strip_prefix("set_") {
+            for prop in &def.properties {
+                if prop.name == prop_name
+                    && let Some(m) = &prop.setter
+                {
+                    check!(m);
+                }
+            }
+        }
+
+        // 3. Optimized event search
+        if let Some(event_name) = name.strip_prefix("add_") {
+            for event in &def.events {
+                if event.name == event_name {
+                    check!(&event.add_listener);
+                }
+            }
+        } else if let Some(event_name) = name.strip_prefix("remove_") {
+            for event in &def.events {
+                if event.name == event_name {
+                    check!(&event.remove_listener);
+                }
+            }
+        } else if let Some(event_name) = name.strip_prefix("raise_") {
+            for event in &def.events {
+                if event.name == event_name
+                    && let Some(m) = &event.raise_event
+                {
+                    check!(m);
+                }
+            }
+        }
+
+        // 4. Exhaustive search for property/event methods (including 'other' and non-standard names)
+
+        for prop in &def.properties {
+            for method in &prop.other {
+                check!(method);
+            }
+            // Check getter/setter again if name didn't follow convention
+            if let Some(m) = &prop.getter {
+                check!(m);
+            }
+            if let Some(m) = &prop.setter {
+                check!(m);
+            }
+        }
+
+        for event in &def.events {
+            for method in &event.other {
+                check!(method);
+            }
+            // Check listeners again if name didn't follow convention
+            check!(&event.add_listener);
+            check!(&event.remove_listener);
+            if let Some(m) = &event.raise_event {
+                check!(m);
             }
         }
 
@@ -929,7 +1108,6 @@ impl Resolver<'static> for AssemblyLoader {
 }
 
 pub fn static_res_from_file(path: impl AsRef<Path>) -> ResolutionS {
-    let start = std::time::Instant::now();
     let path_ref = path.as_ref();
     let mut file = fs::File::open(path_ref)
         .unwrap_or_else(|e| panic!("could not open file {} ({:?})", path_ref.display(), e));
@@ -953,16 +1131,7 @@ pub fn static_res_from_file(path: impl AsRef<Path>) -> ResolutionS {
 
     let resolution = Resolution::parse(byte_slice, ReadOptions::default())
         .expect("failed to parse file as .NET metadata");
-    let res = ResolutionS::new(Box::leak(Box::new(resolution)) as *const _);
-    let elapsed = start.elapsed();
-    if elapsed.as_secs() > 1 {
-        eprintln!(
-            "WARNING: Resolution of {} took {:?}",
-            path_ref.display(),
-            elapsed
-        );
-    }
-    res
+    ResolutionS::new(Box::leak(Box::new(resolution)) as *const _)
 }
 
 pub fn find_dotnet_sdk_path() -> Option<PathBuf> {

@@ -1,6 +1,6 @@
 use crate::{
     StepResult,
-    exceptions::{ExceptionState, HandlerAddress, UnwindState, UnwindTarget},
+    exceptions::{ExceptionState, HandlerAddress, HandlerKind, UnwindState, UnwindTarget},
     stack::VesContext,
 };
 use dotnet_macros::dotnet_instruction;
@@ -182,7 +182,19 @@ pub fn ret<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -
         return ctx.handle_exception(gc);
     }
 
-    let has_finally_blocks = !ctx.state().info_handle.exceptions.is_empty();
+    let ip = ctx.state().ip;
+    let mut has_finally_blocks = false;
+    for section in &ctx.state().info_handle.exceptions {
+        if section.instructions.contains(&ip)
+            && section
+                .handlers
+                .iter()
+                .any(|h| matches!(h.kind, HandlerKind::Finally | HandlerKind::Fault))
+        {
+            has_finally_blocks = true;
+            break;
+        }
+    }
 
     if has_finally_blocks {
         *ctx.exception_mode = ExceptionState::Unwinding(UnwindState {

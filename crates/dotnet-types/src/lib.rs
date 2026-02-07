@@ -1,5 +1,5 @@
 use crate::{members::MethodDescription, resolution::ResolutionS};
-use dotnetdll::prelude::{MemberType, ResolvedDebug, TypeDefinition, TypeSource};
+use dotnetdll::prelude::{MemberType, ResolvedDebug, TypeDefinition, TypeIndex, TypeSource};
 use gc_arena::{Collect, unsafe_empty_collect};
 use std::{
     fmt::{Debug, Formatter},
@@ -23,6 +23,7 @@ pub trait TypeResolver {
 pub struct TypeDescription {
     pub resolution: ResolutionS,
     definition_ptr: Option<NonNull<TypeDefinition<'static>>>,
+    pub index: TypeIndex,
 }
 
 unsafe_empty_collect!(TypeDescription);
@@ -34,20 +35,24 @@ impl TypeDescription {
     pub const fn new(
         resolution: ResolutionS,
         definition: &'static TypeDefinition<'static>,
+        index: TypeIndex,
     ) -> Self {
         Self {
             resolution,
             definition_ptr: NonNull::new(definition as *const _ as *mut _),
+            index,
         }
     }
 
     pub const fn from_raw(
         resolution: ResolutionS,
         definition_ptr: Option<NonNull<TypeDefinition<'static>>>,
+        index: TypeIndex,
     ) -> Self {
         Self {
             resolution,
             definition_ptr,
+            index,
         }
     }
 

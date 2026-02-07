@@ -51,6 +51,7 @@ pub fn run_cli() -> ExitCode {
         parent: TypeDescription::new(
             resolution,
             &resolution.definition()[entry_method.parent_type()],
+            entry_method.parent_type(),
         ),
         method_resolution: resolution,
         method: &resolution.definition()[entry_method],

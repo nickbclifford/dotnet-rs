@@ -22,6 +22,7 @@ use std::{
 pub const INIT_STATE_UNINITIALIZED: u8 = 0;
 pub const INIT_STATE_INITIALIZING: u8 = 1;
 pub const INIT_STATE_INITIALIZED: u8 = 2;
+pub const INIT_STATE_FAILED: u8 = 3;
 
 pub struct StaticStorage {
     /// Atomic initialization state for thread-safe .cctor execution.
@@ -109,6 +110,8 @@ pub enum StaticInitResult {
     Initialized,
     /// This is a recursive call on the same thread; proceed as if initialized.
     Recursive,
+    /// Type initialization failed previously.
+    Failed,
     /// Another thread is currently initializing this type.
     Waiting,
 }
@@ -179,6 +182,19 @@ impl StaticStorageManager {
             .unwrap_or(INIT_STATE_UNINITIALIZED)
     }
 
+    /// Mark a type as failed after its .cctor throws an exception.
+    pub fn mark_failed(&self, description: TypeDescription, generics: &GenericLookup) {
+        let types = self.types.read();
+        if let Some(storage) = types.get(&(description, generics.clone())) {
+            storage
+                .init_state
+                .store(INIT_STATE_FAILED, Ordering::Release);
+            // Notify any threads waiting for initialization
+            let _lock = storage.init_mutex.lock();
+            storage.init_cond.notify_all();
+        }
+    }
+
     /// Initialize static storage for a type and determine if a .cctor needs to run.
     /// This implementation ensures that a type's static constructor is only assigned
     /// to exactly one thread for execution, even if multiple threads race to initialize
@@ -218,6 +234,10 @@ impl StaticStorageManager {
 
         if state == INIT_STATE_INITIALIZED {
             return StaticInitResult::Initialized;
+        }
+
+        if state == INIT_STATE_FAILED {
+            return StaticInitResult::Failed;
         }
 
         if state == INIT_STATE_INITIALIZING

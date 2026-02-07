@@ -98,7 +98,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.execution.frame_stack.unwind_frame(
             gc,
             &mut self.execution.evaluation_stack,
-            &self.local.heap.processing_finalizer,
+            &self.shared,
+            &self.local.heap,
         );
     }
 
@@ -139,7 +140,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn indent(&self) -> usize {
-        self.execution.frame_stack.len().saturating_sub(1) % 10
+        self.execution.frame_stack.len().saturating_sub(1)
     }
 
     pub fn tracer(&self) -> MutexGuard<'_, Tracer> {
