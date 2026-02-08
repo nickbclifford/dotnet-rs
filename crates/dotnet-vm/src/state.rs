@@ -202,6 +202,10 @@ pub struct ArenaLocalState<'gc> {
     pub runtime_field_objs: RefCell<HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>>,
 }
 
+// SAFETY: `ArenaLocalState` correctly traces all GC-managed fields in its `trace` implementation.
+// This includes the `heap` and all `ObjectRef<'gc>` values stored in the various RefCell-wrapped
+// collections. The non-GC fields (e.g., `runtime_types_list`, `runtime_methods`, `runtime_fields`)
+// contain only metadata and do not need tracing.
 unsafe impl<'gc> Collect for ArenaLocalState<'gc> {
     fn trace(&self, cc: &Collection) {
         self.heap.trace(cc);

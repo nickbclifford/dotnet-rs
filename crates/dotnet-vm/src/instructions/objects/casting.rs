@@ -1,12 +1,12 @@
-use crate::{StepResult, stack::VesContext};
+use crate::{StepResult, stack::ops::VesOps};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{StackValue, object::ObjectRef};
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(CastClass { param0 })]
-pub fn castclass<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn castclass<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {
@@ -36,8 +36,8 @@ pub fn castclass<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(IsInstance(param0))]
-pub fn isinst<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn isinst<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {

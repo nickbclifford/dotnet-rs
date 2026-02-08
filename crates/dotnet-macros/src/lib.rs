@@ -353,7 +353,7 @@ pub fn dotnet_instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
         #func
 
         pub(crate) fn #wrapper_name<'gc, 'm: 'gc>(
-            ctx: &mut crate::stack::VesContext<'_, 'gc, 'm>,
+            ctx: &mut dyn crate::stack::ops::VesOps<'gc, 'm>,
             gc: dotnet_utils::gc::GCHandle<'gc>,
             instr: &Instruction
         ) -> crate::StepResult {

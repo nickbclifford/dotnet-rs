@@ -1,5 +1,5 @@
 use crate::{
-    StepResult, layout::type_layout, resolution::TypeResolutionExt, stack::VesContext, vm_trace,
+    StepResult, layout::type_layout, resolution::TypeResolutionExt, stack::ops::VesOps, vm_trace,
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
@@ -12,8 +12,8 @@ use dotnetdll::prelude::*;
 use std::{mem::align_of, ptr};
 
 #[dotnet_instruction(Call { param0 })]
-pub fn call<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn call<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     param0: &MethodSource,
 ) -> StepResult {
@@ -22,8 +22,8 @@ pub fn call<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(CallVirtual { param0 })]
-pub fn callvirt<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn callvirt<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     param0: &MethodSource,
 ) -> StepResult {
@@ -61,8 +61,8 @@ pub fn callvirt<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(CallConstrained(constraint, source))]
-pub fn call_constrained<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn call_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     constraint: &MethodType,
     source: &MethodSource,
@@ -100,8 +100,8 @@ pub fn call_constrained<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(CallVirtualConstrained(constraint, source))]
-pub fn callvirt_constrained<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     constraint: &MethodType,
     source: &MethodSource,

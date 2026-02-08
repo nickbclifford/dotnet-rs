@@ -57,7 +57,7 @@
 //!     ```rust,ignore
 //!     #[dotnet_intrinsic("static double System.Math::Min(double, double)")]
 //!     pub fn math_min_double<'gc, 'm: 'gc>(
-//!         ctx: &mut VesContext<'_, 'gc, 'm>,
+//!         ctx: &mut dyn VesOps<'gc, 'm>,
 //!         gc: GCHandle<'gc>,
 //!         method: MethodDescription,
 //!         generics: &GenericLookup,
@@ -102,7 +102,10 @@
 //!   ├─→ external_call() [if P/Invoke]
 //!   └─→ call_frame() [managed CIL]
 //! ```
-use crate::vm_trace_intrinsic;
+use crate::{
+    vm_trace_intrinsic,
+    stack::ops::VesOps,
+};
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
@@ -134,7 +137,6 @@ pub mod threading;
 pub mod unsafe_ops;
 
 pub use metadata::{IntrinsicKind, IntrinsicMetadata, classify_intrinsic};
-pub use reflection::ReflectionExtensions;
 
 use super::{StepResult, context::ResolutionContext, tracer::Tracer};
 
@@ -158,14 +160,14 @@ pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttri
 ///
 /// GenericLookup is passed by reference to avoid cloning on every intrinsic call.
 pub type IntrinsicHandler = for<'gc, 'm> fn(
-    ctx: &mut crate::stack::VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult;
 
 pub type IntrinsicFieldHandler = for<'gc, 'm> fn(
-    ctx: &mut crate::stack::VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     field: FieldDescription,
     type_generics: Arc<[ConcreteType]>,
@@ -324,7 +326,7 @@ pub fn is_intrinsic_field(
 
 pub fn intrinsic_call<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
-    ctx: &mut crate::stack::VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
@@ -332,8 +334,8 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         method,
         ctx.loader(),
         generics,
-        ctx.shared.caches.clone(),
-        Some(ctx.shared.clone()),
+        ctx.shared().caches.clone(),
+        Some(ctx.shared().clone()),
     );
 
     vm_trace_intrinsic!(
@@ -345,7 +347,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
     if let Some(metadata) = classify_intrinsic(
         method,
         ctx.loader(),
-        Some(&ctx.shared.caches.intrinsic_registry),
+        Some(&ctx.shared().caches.intrinsic_registry),
     ) {
         return (metadata.handler)(ctx, gc, method, generics);
     }
@@ -355,7 +357,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
 
 pub fn intrinsic_field<'gc, 'm: 'gc>(
     gc: GCHandle<'gc>,
-    ctx: &mut crate::stack::VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     field: FieldDescription,
     type_generics: Arc<[ConcreteType]>,
     is_address: bool,
@@ -365,7 +367,7 @@ pub fn intrinsic_field<'gc, 'm: 'gc>(
         "FIELD-LOAD",
         &format!("{}.{}", field.parent.type_name(), field.field.name)
     );
-    if let Some(handler) = ctx.shared.caches.intrinsic_registry.get_field(&field) {
+    if let Some(handler) = ctx.shared().caches.intrinsic_registry.get_field(&field) {
         handler(ctx, gc, field, type_generics, is_address)
     } else {
         panic!("unsupported load from intrinsic field: {:?}", field);
@@ -374,7 +376,7 @@ pub fn intrinsic_field<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic("string System.Object::ToString()")]
 fn object_to_string<'gc, 'm: 'gc>(
-    ctx: &mut crate::stack::VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -405,7 +407,7 @@ fn object_to_string<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic("System.Type System.Object::GetType()")]
 fn object_get_type<'gc, 'm: 'gc>(
-    ctx: &mut crate::stack::VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,

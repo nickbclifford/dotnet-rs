@@ -139,6 +139,10 @@ impl<'gc> HeapManager<'gc> {
     }
 }
 
+// SAFETY: `HeapManager::trace` correctly traces GC-managed object references based on their
+// handle type. Normal and Pinned handles trace their objects to keep them alive. Weak handles
+// do not trace to allow collection. The finalization queues and cross-arena roots are also
+// traced. All other fields are non-GC metadata or control state that does not need tracing.
 unsafe impl<'gc> Collect for HeapManager<'gc> {
     fn trace(&self, cc: &Collection) {
         // Normal and Pinned handles keep objects alive.

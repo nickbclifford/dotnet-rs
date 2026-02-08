@@ -45,7 +45,14 @@ impl Tracer {
         // but checking if INFO is enabled is a reasonable proxy for "tracing is on".
         // However, if the user set level=ERROR, INFO might be disabled.
         // Let's use ERROR.
-        tracing::enabled!(Level::ERROR)
+        let enabled = tracing::enabled!(Level::ERROR);
+        if !enabled {
+            // Fallback: if DOTNET_RS_TRACE is set, we probably want it enabled
+            if std::env::var("DOTNET_RS_TRACE").is_ok() {
+                return true;
+            }
+        }
+        enabled
     }
 
     pub fn msg(&mut self, level: TraceLevel, indent: usize, args: std::fmt::Arguments) {
@@ -558,7 +565,23 @@ fn init_tracing() {
             "instruction" => Level::TRACE,
             _ => Level::INFO,
         };
-        EnvFilter::default().add_directive(target_level.into())
+        // Only enable the specified level for dotnet_vm targets, not all crates (like dotnetdll)
+        // Also enable specific trace targets used by the tracer (instruction, method, etc.)
+        EnvFilter::default()
+            .add_directive(format!("dotnet_vm={}", target_level).parse().unwrap())
+            .add_directive(format!("dotnet_cli={}", target_level).parse().unwrap())
+            .add_directive(format!("instruction={}", target_level).parse().unwrap())
+            .add_directive(format!("method={}", target_level).parse().unwrap())
+            .add_directive(format!("stack={}", target_level).parse().unwrap())
+            .add_directive(format!("field={}", target_level).parse().unwrap())
+            .add_directive(format!("branch={}", target_level).parse().unwrap())
+            .add_directive(format!("type={}", target_level).parse().unwrap())
+            .add_directive(format!("intrinsic={}", target_level).parse().unwrap())
+            .add_directive(format!("interop={}", target_level).parse().unwrap())
+            .add_directive(format!("gc={}", target_level).parse().unwrap())
+            .add_directive(format!("thread={}", target_level).parse().unwrap())
+            .add_directive(format!("exception={}", target_level).parse().unwrap())
+            .add_directive("dotnetdll=warn".parse().unwrap()) // Suppress verbose dotnetdll logs
     } else {
         EnvFilter::from_default_env()
     };

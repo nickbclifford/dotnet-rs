@@ -3,7 +3,7 @@ use dotnet_utils::gc::GCHandle;
 use dotnetdll::prelude::Instruction;
 
 pub type InstructionHandler = for<'gc, 'm> fn(
-    &mut crate::stack::VesContext<'_, 'gc, 'm>,
+    &mut dyn crate::stack::ops::VesOps<'gc, 'm>,
     GCHandle<'gc>,
     &Instruction,
 ) -> StepResult;

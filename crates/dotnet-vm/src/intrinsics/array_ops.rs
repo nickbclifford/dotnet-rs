@@ -1,4 +1,4 @@
-use crate::{StepResult, resolution::ValueResolution, stack::VesContext};
+use crate::{StepResult, resolution::ValueResolution, stack::ops::VesOps};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
@@ -11,7 +11,7 @@ use dotnet_value::{
 #[dotnet_intrinsic("int System.Array::get_Length()")]
 #[dotnet_intrinsic("int DotnetRs.Array::get_Length()")]
 pub fn intrinsic_array_get_length<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -34,7 +34,7 @@ pub fn intrinsic_array_get_length<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("int System.Array::get_Rank()")]
 #[dotnet_intrinsic("int DotnetRs.Array::get_Rank()")]
 pub fn intrinsic_array_get_rank<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -61,7 +61,7 @@ pub fn intrinsic_array_get_rank<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("object DotnetRs.Array::GetValue(long)")]
 #[dotnet_intrinsic("object DotnetRs.Array::GetValue(int[])")]
 pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -118,7 +118,7 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("void DotnetRs.Array::SetValue(object, long)")]
 #[dotnet_intrinsic("void DotnetRs.Array::SetValue(object, int[])")]
 pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,

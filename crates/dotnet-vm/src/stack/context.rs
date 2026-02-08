@@ -1,63 +1,50 @@
+use super::ops::{StackOps, ExceptionOps, ResolutionOps, PoolOps, RawMemoryOps, ReflectionOps, VesOps, CallOps};
 use crate::{
     MethodInfo, MethodState, MethodType, ResolutionContext, StepResult,
-    memory::heap::HeapManager,
+    memory::ops::MemoryOps,
     resolution::{TypeResolutionExt, ValueResolution},
     resolver::ResolverService,
-    stack::ExceptionState,
-    state::{ArenaLocalState, ReflectionRegistry, SharedGlobalState, StaticStorageManager},
+    exceptions::{ExceptionState, HandlerAddress, UnwindState, UnwindTarget, HandlerKind, SearchState},
+    state::{ArenaLocalState, SharedGlobalState, StaticStorageManager},
     sync::{Arc, MutexGuard},
     threading::ThreadManagerOps,
     tracer::Tracer,
 };
-use dotnet_assemblies::{AssemblyLoader, decompose_type_source};
+use dotnet_utils::gc::GCHandle;
+use dotnet_utils::sync::Ordering;
+use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{
     TypeDescription,
+    comparer::decompose_type_source,
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     resolution::ResolutionS,
+    runtime::RuntimeType,
 };
 use dotnet_value::{
-    StackValue,
-    layout::HasLayout,
-    object::{CTSValue, HeapStorage, Object as ObjectInstance, ObjectRef, ValueType, Vector},
+    StackValue, CLRString,
+    object::{CTSValue, HeapStorage, Object as ObjectInstance, ObjectRef, ObjectHandle, ValueType, Vector},
     pointer::ManagedPtr,
     storage::FieldStorage,
 };
 use dotnetdll::prelude::*;
 use gc_arena::Collect;
-use std::{ptr::NonNull, sync::atomic::Ordering};
+use std::ptr::NonNull;
 
 use super::{evaluation_stack::EvaluationStack, frames::FrameStack};
 
 pub struct VesContext<'a, 'gc, 'm> {
-    pub evaluation_stack: &'a mut EvaluationStack<'gc>,
-    pub frame_stack: &'a mut FrameStack<'gc, 'm>,
-    pub shared: &'a Arc<SharedGlobalState<'m>>,
-    pub local: &'a mut ArenaLocalState<'gc>,
-    pub exception_mode: &'a mut ExceptionState<'gc>,
-    pub thread_id: &'a std::cell::Cell<u64>,
-    pub original_ip: &'a mut usize,
-    pub original_stack_height: &'a mut usize,
+    pub(crate) evaluation_stack: &'a mut EvaluationStack<'gc>,
+    pub(crate) frame_stack: &'a mut FrameStack<'gc, 'm>,
+    pub(crate) shared: &'a Arc<SharedGlobalState<'m>>,
+    pub(crate) local: &'a mut ArenaLocalState<'gc>,
+    pub(crate) exception_mode: &'a mut ExceptionState<'gc>,
+    pub(crate) thread_id: &'a std::cell::Cell<u64>,
+    pub(crate) original_ip: &'a mut usize,
+    pub(crate) original_stack_height: &'a mut usize,
 }
 
 impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
-    pub fn resolver(&self) -> ResolverService<'m> {
-        ResolverService::new(self.shared.clone())
-    }
-
-    pub fn check_gc_safe_point(&self) {
-        let thread_manager = &self.shared.thread_manager;
-        if thread_manager.is_gc_stop_requested() {
-            let managed_id = self.thread_id.get();
-            if managed_id != 0 {
-                #[cfg(feature = "multithreaded-gc")]
-                thread_manager.safe_point(managed_id, &self.shared.gc_coordinator);
-                #[cfg(not(feature = "multithreaded-gc"))]
-                thread_manager.safe_point(managed_id, &Default::default());
-            }
-        }
-    }
-
     #[inline]
     fn on_push(&mut self) {
         if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
@@ -95,58 +82,172 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
         }
     }
 
+    pub fn top_of_stack_address(&self) -> NonNull<u8> {
+        self.evaluation_stack
+            .get_slot_address(self.evaluation_stack.top_of_stack().saturating_sub(1))
+    }
+
+    fn init_locals(
+        &mut self,
+        method: MethodDescription,
+        locals: &'m [LocalVariable],
+        generics: &GenericLookup,
+    ) -> (Vec<StackValue<'gc>>, Vec<bool>) {
+        let mut values = vec![];
+        let mut pinned_locals = vec![];
+
+        for l in locals {
+            use BaseType::*;
+            use LocalVariable::*;
+            match l {
+                TypedReference => {
+                    values.push(StackValue::null());
+                    pinned_locals.push(false);
+                }
+                Variable {
+                    by_ref: _,
+                    var_type,
+                    pinned,
+                    ..
+                } => {
+                    pinned_locals.push(*pinned);
+                    let ctx = ResolutionContext {
+                        generics,
+                        loader: self.shared.loader,
+                        resolution: method.resolution(),
+                        type_owner: Some(method.parent),
+                        method_owner: Some(method),
+                        caches: self.shared.caches.clone(),
+                        shared: Some(self.shared.clone()),
+                    };
+
+                    let v = match ctx.make_concrete(var_type).get() {
+                        Type { source, .. } => {
+                            let (ut, type_generics) = decompose_type_source::<ConcreteType>(source);
+                            let desc = ctx.locate_type(ut);
+
+                            if desc.is_value_type(&ctx) {
+                                let new_lookup = GenericLookup {
+                                    type_generics: type_generics.into(),
+                                    ..generics.clone()
+                                };
+                                let new_ctx = ctx.with_generics(&new_lookup);
+                                let instance = new_ctx.new_object(desc);
+                                StackValue::ValueType(instance)
+                            } else {
+                                StackValue::null()
+                            }
+                        }
+                        _ => StackValue::null(),
+                    };
+                    values.push(v);
+                }
+            }
+        }
+        (values, pinned_locals)
+    }
+
+    pub fn handle_return(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>) -> StepResult {
+        let tracer_enabled = self.tracer_enabled();
+        let shared = &self.shared;
+        let heap = &self.local.heap;
+        self.frame_stack
+            .handle_return(gc, self.evaluation_stack, shared, heap, tracer_enabled)
+    }
+
+
+
+    pub fn locate_type(&self, handle: UserType) -> TypeDescription {
+        let f = self.current_frame();
+        self.resolver().locate_type(f.source_resolution, handle)
+    }
+
+    pub fn new_instance_fields(&self, td: TypeDescription) -> FieldStorage {
+        self.resolver()
+            .new_instance_fields(td, &self.current_context())
+    }
+
+    pub fn new_static_fields(&self, td: TypeDescription) -> FieldStorage {
+        self.resolver()
+            .new_static_fields(td, &self.current_context())
+    }
+
+
+}
+
+impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     #[inline]
-    pub fn push(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>, value: StackValue<'gc>) {
+    fn push(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {
         self.trace_push(&value);
         self.evaluation_stack.push(gc, value);
         self.on_push();
     }
 
     #[inline]
-    pub fn push_i32(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>, value: i32) {
+    fn push_i32(&mut self, gc: GCHandle<'gc>, value: i32) {
         self.trace_push(&StackValue::Int32(value));
         self.evaluation_stack.push_i32(gc, value);
         self.on_push();
     }
 
     #[inline]
-    pub fn push_i64(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>, value: i64) {
+    fn push_i64(&mut self, gc: GCHandle<'gc>, value: i64) {
         self.trace_push(&StackValue::Int64(value));
         self.evaluation_stack.push_i64(gc, value);
         self.on_push();
     }
 
     #[inline]
-    pub fn push_f64(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>, value: f64) {
+    fn push_f64(&mut self, gc: GCHandle<'gc>, value: f64) {
         self.trace_push(&StackValue::NativeFloat(value));
         self.evaluation_stack.push_f64(gc, value);
         self.on_push();
     }
 
     #[inline]
-    pub fn push_obj(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>, value: ObjectRef<'gc>) {
+    fn push_obj(&mut self, gc: GCHandle<'gc>, value: ObjectRef<'gc>) {
         self.trace_push(&StackValue::ObjectRef(value));
         self.evaluation_stack.push_obj(gc, value);
         self.on_push();
     }
 
     #[inline]
-    pub fn push_ptr(
-        &mut self,
-        gc: dotnet_utils::gc::GCHandle<'gc>,
-        ptr: *mut u8,
-        t: TypeDescription,
-        is_pinned: bool,
-    ) {
+    fn push_ptr(&mut self, gc: GCHandle<'gc>, ptr: *mut u8, t: TypeDescription, is_pinned: bool) {
         self.trace_push(&StackValue::managed_ptr(ptr, t, is_pinned));
         self.evaluation_stack.push_ptr(gc, ptr, t, is_pinned);
         self.on_push();
     }
 
     #[inline]
-    pub fn pop(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>) -> StackValue<'gc> {
-        // Important: enforce the IL evaluation stack underflow check *before* mutating the
-        // underlying stack storage, since locals/args share the same backing vector.
+    fn push_isize(&mut self, gc: GCHandle<'gc>, value: isize) {
+        self.trace_push(&StackValue::NativeInt(value));
+        self.evaluation_stack.push_isize(gc, value);
+        self.on_push();
+    }
+
+    #[inline]
+    fn push_value_type(&mut self, gc: GCHandle<'gc>, value: ObjectInstance<'gc>) {
+        self.trace_push(&StackValue::ValueType(value.clone()));
+        self.evaluation_stack.push_value_type(gc, value);
+        self.on_push();
+    }
+
+    #[inline]
+    fn push_managed_ptr(&mut self, gc: GCHandle<'gc>, value: ManagedPtr<'gc>) {
+        self.trace_push(&StackValue::ManagedPtr(value));
+        self.evaluation_stack.push_managed_ptr(gc, value);
+        self.on_push();
+    }
+
+    #[inline]
+    fn push_string(&mut self, gc: GCHandle<'gc>, value: CLRString) {
+        let in_heap = ObjectRef::new(gc, HeapStorage::Str(value));
+        self.register_new_object(&in_heap);
+        self.push(gc, StackValue::ObjectRef(in_heap));
+    }
+
+    #[inline]
+    fn pop(&mut self, gc: GCHandle<'gc>) -> StackValue<'gc> {
         self.on_pop();
         let val = self.evaluation_stack.pop(gc);
         self.trace_pop(&val);
@@ -154,7 +255,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    pub fn pop_i32(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>) -> i32 {
+    fn pop_i32(&mut self, gc: GCHandle<'gc>) -> i32 {
         self.on_pop();
         let val = self.evaluation_stack.pop_i32(gc);
         self.trace_pop(&StackValue::Int32(val));
@@ -162,7 +263,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    pub fn pop_i64(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>) -> i64 {
+    fn pop_i64(&mut self, gc: GCHandle<'gc>) -> i64 {
         self.on_pop();
         let val = self.evaluation_stack.pop_i64(gc);
         self.trace_pop(&StackValue::Int64(val));
@@ -170,7 +271,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    pub fn pop_f64(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>) -> f64 {
+    fn pop_f64(&mut self, gc: GCHandle<'gc>) -> f64 {
         self.on_pop();
         let val = self.evaluation_stack.pop_f64(gc);
         self.trace_pop(&StackValue::NativeFloat(val));
@@ -178,7 +279,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    pub fn pop_isize(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>) -> isize {
+    fn pop_isize(&mut self, gc: GCHandle<'gc>) -> isize {
         self.on_pop();
         let val = self.evaluation_stack.pop_isize(gc);
         self.trace_pop(&StackValue::NativeInt(val));
@@ -186,14 +287,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    pub fn push_isize(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>, value: isize) {
-        self.trace_push(&StackValue::NativeInt(value));
-        self.evaluation_stack.push_isize(gc, value);
-        self.on_push();
-    }
-
-    #[inline]
-    pub fn pop_obj(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>) -> ObjectRef<'gc> {
+    fn pop_obj(&mut self, gc: GCHandle<'gc>) -> ObjectRef<'gc> {
         self.on_pop();
         let val = self.evaluation_stack.pop_obj(gc);
         self.trace_pop(&StackValue::ObjectRef(val));
@@ -201,7 +295,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    pub fn pop_ptr(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>) -> *mut u8 {
+    fn pop_ptr(&mut self, gc: GCHandle<'gc>) -> *mut u8 {
         self.on_pop();
         let val = self.evaluation_stack.pop_ptr(gc);
         self.trace_pop(&StackValue::NativeInt(val as isize));
@@ -209,7 +303,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    pub fn pop_value_type(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>) -> ObjectInstance<'gc> {
+    fn pop_value_type(&mut self, gc: GCHandle<'gc>) -> ObjectInstance<'gc> {
         self.on_pop();
         let val = self.evaluation_stack.pop_value_type(gc);
         self.trace_pop(&StackValue::ValueType(val.clone()));
@@ -217,79 +311,578 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    pub fn push_value_type(
-        &mut self,
-        gc: dotnet_utils::gc::GCHandle<'gc>,
-        value: ObjectInstance<'gc>,
-    ) {
-        self.trace_push(&StackValue::ValueType(value.clone()));
-        self.evaluation_stack.push_value_type(gc, value);
-        self.on_push();
-    }
-
-    #[inline]
-    pub fn push_managed_ptr(
-        &mut self,
-        gc: dotnet_utils::gc::GCHandle<'gc>,
-        value: ManagedPtr<'gc>,
-    ) {
-        self.trace_push(&StackValue::ManagedPtr(value));
-        self.evaluation_stack.push_managed_ptr(gc, value);
-        self.on_push();
-    }
-
-    #[inline]
-    pub fn pop_managed_ptr(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>) -> ManagedPtr<'gc> {
+    fn pop_managed_ptr(&mut self, gc: GCHandle<'gc>) -> ManagedPtr<'gc> {
         let val = self.evaluation_stack.pop_managed_ptr(gc);
         self.trace_pop(&StackValue::ManagedPtr(val));
         self.on_pop();
         val
     }
 
-    pub fn push_string(
-        &mut self,
-        gc: dotnet_utils::gc::GCHandle<'gc>,
-        value: impl Into<dotnet_value::string::CLRString>,
-    ) {
-        let s: dotnet_value::string::CLRString = value.into();
-        let in_heap = ObjectRef::new(gc, HeapStorage::Str(s));
-        self.register_new_object(&in_heap);
-        self.push(gc, StackValue::ObjectRef(in_heap));
+    #[inline]
+    fn pop_multiple(&mut self, gc: GCHandle<'gc>, count: usize) -> Vec<StackValue<'gc>> {
+        let mut results = Vec::with_capacity(count);
+        for _ in 0..count {
+            results.push(self.pop(gc));
+        }
+        results.reverse();
+        results
     }
 
-    pub fn peek_stack(&self) -> StackValue<'gc> {
+    #[inline]
+    fn peek_multiple(&self, count: usize) -> Vec<StackValue<'gc>> {
+        self.evaluation_stack.peek_multiple(count)
+    }
+
+    #[inline]
+    fn dup(&mut self, gc: GCHandle<'gc>) {
+        let val = self.pop(gc);
+        self.push(gc, val.clone());
+        self.push(gc, val);
+    }
+
+    #[inline]
+    fn peek(&self) -> Option<StackValue<'gc>> {
+        self.evaluation_stack.stack.last().cloned()
+    }
+
+    #[inline]
+    fn peek_stack(&self) -> StackValue<'gc> {
         self.evaluation_stack.peek_stack()
     }
 
-    pub fn peek_stack_at(&self, offset: usize) -> StackValue<'gc> {
+    #[inline]
+    fn peek_stack_at(&self, offset: usize) -> StackValue<'gc> {
         self.evaluation_stack.peek_stack_at(offset)
     }
 
-    pub fn top_of_stack_address(&self) -> NonNull<u8> {
+    #[inline]
+    fn get_local(&self, index: usize) -> StackValue<'gc> {
+        let frame = self.frame_stack.current_frame();
+        self.evaluation_stack.get_slot(frame.base.locals + index)
+    }
+
+    #[inline]
+    fn set_local(&mut self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
+        let bp = self.frame_stack.current_frame().base;
+        self.evaluation_stack.set_slot(gc, bp.locals + index, value);
+    }
+
+    #[inline]
+    fn get_argument(&self, index: usize) -> StackValue<'gc> {
+        let frame = self.frame_stack.current_frame();
+        self.evaluation_stack.get_slot(frame.base.arguments + index)
+    }
+
+    #[inline]
+    fn set_argument(&mut self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
+        let bp = self.frame_stack.current_frame().base;
+        self.evaluation_stack.set_slot(gc, bp.arguments + index, value);
+    }
+
+    #[inline]
+    fn get_local_address(&self, index: usize) -> std::ptr::NonNull<u8> {
+        let frame = self.frame_stack.current_frame();
         self.evaluation_stack
-            .get_slot_address(self.evaluation_stack.top_of_stack().saturating_sub(1))
+            .get_slot_address(frame.base.locals + index)
     }
 
-    pub fn branch(&mut self, target: usize) {
-        self.frame_stack.current_frame_mut().state.ip = target;
+    #[inline]
+    fn get_argument_address(&self, index: usize) -> std::ptr::NonNull<u8> {
+        let frame = self.frame_stack.current_frame();
+        self.evaluation_stack
+            .get_slot_address(frame.base.arguments + index)
     }
 
-    pub fn conditional_branch(&mut self, condition: bool, target: usize) -> bool {
-        if condition {
-            self.branch(target);
-            true
-        } else {
-            false
+    #[inline]
+    fn current_frame(&self) -> &crate::stack::StackFrame<'gc, 'm> {
+        self.frame_stack.current_frame()
+    }
+
+    #[inline]
+    fn current_frame_mut(&mut self) -> &mut crate::stack::StackFrame<'gc, 'm> {
+        self.frame_stack.current_frame_mut()
+    }
+
+    #[inline]
+    fn get_local_info_for_managed_ptr(&self, index: usize) -> (std::ptr::NonNull<u8>, bool) {
+        let frame = self.frame_stack.current_frame();
+        let addr = self
+            .evaluation_stack
+            .get_slot_address(frame.base.locals + index);
+        let is_pinned = frame.pinned_locals.get(index).copied().unwrap_or(false);
+        (addr, is_pinned)
+    }
+
+    #[inline]
+    fn get_slot(&self, index: usize) -> StackValue<'gc> {
+        self.evaluation_stack.get_slot(index)
+    }
+
+    #[inline]
+    fn get_slot_ref(&self, index: usize) -> &StackValue<'gc> {
+        self.evaluation_stack.get_slot_ref(index)
+    }
+
+    #[inline]
+    fn set_slot(&mut self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
+        self.evaluation_stack.set_slot(gc, index, value)
+    }
+
+    #[inline]
+    fn top_of_stack(&self) -> usize {
+        self.evaluation_stack.top_of_stack()
+    }
+
+    #[inline]
+    fn get_slot_address(&self, index: usize) -> std::ptr::NonNull<u8> {
+        self.evaluation_stack.get_slot_address(index)
+    }
+}
+
+impl<'a, 'gc, 'm: 'gc> MemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
+    #[inline]
+    fn new_vector(&self, element: ConcreteType, size: usize) -> Vector<'gc> {
+        self.resolver().new_vector(element, size, &self.current_context())
+    }
+
+    #[inline]
+    fn new_object(&self, td: TypeDescription) -> ObjectInstance<'gc> {
+        self.resolver().new_object(td, &self.current_context())
+    }
+
+    #[inline]
+    fn new_value_type(&self, t: &ConcreteType, data: StackValue<'gc>) -> ValueType<'gc> {
+        self.resolver().new_value_type(t, data, &self.current_context())
+    }
+
+    #[inline]
+    fn new_cts_value(&self, t: &ConcreteType, data: StackValue<'gc>) -> CTSValue<'gc> {
+        self.resolver().new_cts_value(t, data, &self.current_context())
+    }
+
+    #[inline]
+    fn read_cts_value(
+        &self,
+        t: &ConcreteType,
+        data: &[u8],
+        gc: GCHandle<'gc>,
+    ) -> CTSValue<'gc> {
+        self.resolver().read_cts_value(t, data, gc, &self.current_context())
+    }
+
+    #[inline]
+    fn register_new_object(&self, instance: &ObjectRef<'gc>) {
+        if let Some(ptr) = instance.0 {
+            let addr = gc_arena::Gc::as_ptr(ptr) as usize;
+            self.local.heap._all_objs.borrow_mut().insert(addr, *instance);
+
+            // Add to finalization queue if it has a finalizer
+            if let HeapStorage::Obj(o) = &ptr.borrow().storage
+                && (o.description.static_initializer().is_some() || o.description.definition().methods.iter().any(|m| m.name == "Finalize")) {
+                 self.local.heap.finalization_queue.borrow_mut().push(*instance);
+            }
         }
     }
 
-    pub fn increment_ip(&mut self) {
-        self.frame_stack.current_frame_mut().state.ip += 1;
+    #[inline]
+    fn heap(&self) -> &crate::memory::heap::HeapManager<'gc> {
+        &self.local.heap
+    }
+}
+
+impl<'a, 'gc, 'm: 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc, 'm> {
+    #[inline]
+    fn throw_by_name(&mut self, gc: GCHandle<'gc>, name: &str) -> StepResult {
+        let exception_type = self.shared.loader.corlib_type(name);
+        let instance = self.new_object(exception_type);
+        let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(instance));
+        self.register_new_object(&obj_ref);
+        *self.exception_mode = ExceptionState::Throwing(obj_ref);
+        StepResult::Exception
     }
 
-    pub fn initialize_static_storage(
+    #[inline]
+    fn throw(&mut self, gc: GCHandle<'gc>, exception: ObjectRef<'gc>) -> StepResult {
+        *self.exception_mode = ExceptionState::Throwing(exception);
+        self.handle_exception(gc)
+    }
+
+    #[inline]
+    fn rethrow(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        let exception = self
+            .current_frame()
+            .exception_stack
+            .last()
+            .cloned()
+            .expect("rethrow without active exception");
+        *self.exception_mode = ExceptionState::Throwing(exception);
+        self.handle_exception(gc)
+    }
+
+    #[inline]
+    fn leave(&mut self, gc: GCHandle<'gc>, target_ip: usize) -> StepResult {
+        let cursor = HandlerAddress {
+            frame_index: self.frame_stack.len() - 1,
+            section_index: 0,
+            handler_index: 0,
+        };
+
+        *self.exception_mode = ExceptionState::Unwinding(UnwindState {
+            exception: None,
+            target: UnwindTarget::Instruction(target_ip),
+            cursor,
+        });
+        self.handle_exception(gc)
+    }
+
+    #[inline]
+    fn endfinally(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        match self.exception_mode {
+            ExceptionState::ExecutingHandler(state) => {
+                *self.exception_mode = ExceptionState::Unwinding(*state);
+                self.handle_exception(gc)
+            }
+            _ => panic!(
+                "endfinally called outside of handler, state: {:?}",
+                self.exception_mode
+            ),
+        }
+    }
+
+    #[inline]
+    fn endfilter(&mut self, _gc: GCHandle<'gc>, result: i32) -> StepResult {
+        let (exception, handler) = match self.exception_mode {
+            ExceptionState::Filtering(state) => (state.exception, state.handler),
+            _ => panic!("EndFilter called but not in Filtering mode"),
+        };
+
+        // Restore state of the frame where filter ran
+        let frame = &mut self.frame_stack.frames[handler.frame_index];
+        frame.state.ip = *self.original_ip;
+        frame.stack_height = *self.original_stack_height;
+        frame.exception_stack.pop();
+
+        // Restore suspended evaluation and frame stacks
+        self.evaluation_stack.restore_suspended();
+        self.frame_stack.restore_suspended();
+
+        if result == 1 {
+            // Result is 1: This handler is the one. Begin unwinding towards it.
+            *self.exception_mode = ExceptionState::Unwinding(UnwindState {
+                exception: Some(exception),
+                target: UnwindTarget::Handler(handler),
+                cursor: HandlerAddress {
+                    frame_index: self.frame_stack.len() - 1,
+                    section_index: 0,
+                    handler_index: 0,
+                },
+            });
+        } else {
+            // Result is 0: Continue searching after this handler.
+            *self.exception_mode = ExceptionState::Searching(SearchState {
+                exception,
+                cursor: HandlerAddress {
+                    frame_index: handler.frame_index,
+                    section_index: handler.section_index,
+                    handler_index: handler.handler_index + 1,
+                },
+            });
+        }
+
+        StepResult::Exception
+    }
+
+    #[inline]
+    fn ret(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        let frame_index = self.frame_stack.len() - 1;
+        if let ExceptionState::ExecutingHandler(state) = *self.exception_mode
+            && state.cursor.frame_index == frame_index
+        {
+            *self.exception_mode = ExceptionState::Unwinding(UnwindState {
+                exception: state.exception,
+                target: UnwindTarget::Instruction(usize::MAX),
+                cursor: state.cursor,
+            });
+            return self.handle_exception(gc);
+        }
+
+        let ip = self.current_frame().state.ip;
+        let mut has_finally_blocks = false;
+        for section in &self.current_frame().state.info_handle.exceptions {
+            if section.instructions.contains(&ip)
+                && section
+                    .handlers
+                    .iter()
+                    .any(|h| matches!(h.kind, HandlerKind::Finally | HandlerKind::Fault))
+            {
+                has_finally_blocks = true;
+                break;
+            }
+        }
+
+        if has_finally_blocks {
+            *self.exception_mode = ExceptionState::Unwinding(UnwindState {
+                exception: None,
+                target: UnwindTarget::Instruction(usize::MAX),
+                cursor: HandlerAddress {
+                    frame_index,
+                    section_index: 0,
+                    handler_index: 0,
+                },
+            });
+            return self.handle_exception(gc);
+        }
+
+        StepResult::Return
+    }
+}
+
+impl<'a, 'gc, 'm: 'gc> ResolutionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
+    #[inline]
+    fn stack_value_type(&self, val: &StackValue<'gc>) -> TypeDescription {
+        self.resolver().stack_value_type(val)
+    }
+
+    #[inline]
+    fn make_concrete(&self, t: &MethodType) -> ConcreteType {
+        let f = self.current_frame();
+        self.resolver()
+            .make_concrete(f.source_resolution, &f.generic_inst, t)
+    }
+
+    #[inline]
+    fn current_context(&self) -> ResolutionContext<'_, 'm> {
+        if !self.frame_stack.is_empty() {
+            let f = self.frame_stack.current_frame();
+            ResolutionContext {
+                generics: &f.generic_inst,
+                loader: self.shared.loader,
+                resolution: f.source_resolution,
+                type_owner: Some(f.state.info_handle.source.parent),
+                method_owner: Some(f.state.info_handle.source),
+                caches: self.shared.caches.clone(),
+                shared: Some(self.shared.clone()),
+            }
+        } else {
+            ResolutionContext {
+                generics: &self.shared.empty_generics,
+                loader: self.shared.loader,
+                resolution: self.shared.loader.corlib_type("System.Object").resolution,
+                type_owner: None,
+                method_owner: None,
+                caches: self.shared.caches.clone(),
+                shared: Some(self.shared.clone()),
+            }
+        }
+    }
+
+    #[inline]
+    fn with_generics<'b>(&self, lookup: &'b GenericLookup) -> ResolutionContext<'b, 'm> {
+        let frame = self.frame_stack.current_frame();
+        ResolutionContext {
+            loader: self.shared.loader,
+            resolution: frame.source_resolution,
+            generics: lookup,
+            caches: self.shared.caches.clone(),
+            type_owner: None,
+            method_owner: None,
+            shared: Some(self.shared.clone()),
+        }
+    }
+}
+
+impl<'a, 'gc, 'm: 'gc> PoolOps for VesContext<'a, 'gc, 'm> {
+    /// # Safety
+    ///
+    /// The returned pointer is valid for the duration of the current method frame.
+    /// It must not be stored in a way that outlives the frame.
+    #[inline]
+    fn localloc(&mut self, size: usize) -> *mut u8 {
+        let s = self.state_mut();
+        let loc = s.memory_pool.len();
+        s.memory_pool.extend(vec![0; size]);
+        s.memory_pool[loc..].as_mut_ptr()
+    }
+}
+
+impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
+    /// # Safety
+    ///
+    /// The caller must ensure that `ptr` is valid for writes and properly represents the memory location.
+    /// If `owner` is provided, it must be the object that contains `ptr` to ensure GC safety.
+    /// The `layout` must match the expected type of `value`.
+    #[inline]
+    unsafe fn write_unaligned(
         &mut self,
-        gc: dotnet_utils::gc::GCHandle<'gc>,
+        ptr: *mut u8,
+        owner: Option<ObjectRef<'gc>>,
+        value: StackValue<'gc>,
+        layout: &dotnet_value::layout::LayoutManager,
+    ) -> Result<(), String> {
+        let heap = &self.local.heap;
+        let mut memory = crate::memory::RawMemoryAccess::new(heap);
+        unsafe { memory.write_unaligned(ptr, owner, value, layout) }
+    }
+
+    /// # Safety
+    ///
+    /// The caller must ensure that `ptr` is valid for reads and points to a memory location.
+    /// If `owner` is provided, it must be the object that contains `ptr` to ensure GC safety.
+    /// The `layout` must match the expected type stored at `ptr`.
+    #[inline]
+    unsafe fn read_unaligned(
+        &self,
+        ptr: *const u8,
+        owner: Option<ObjectRef<'gc>>,
+        layout: &dotnet_value::layout::LayoutManager,
+        type_desc: Option<TypeDescription>,
+    ) -> Result<StackValue<'gc>, String> {
+        let heap = &self.local.heap;
+        let memory = crate::memory::RawMemoryAccess::new(heap);
+        unsafe { memory.read_unaligned(ptr, owner, layout, type_desc) }
+    }
+
+    #[inline]
+    fn check_gc_safe_point(&self) {
+        let thread_manager = &self.shared.thread_manager;
+        if thread_manager.is_gc_stop_requested() {
+            let managed_id = self.thread_id.get();
+            if managed_id != 0 {
+                #[cfg(feature = "multithreaded-gc")]
+                thread_manager.safe_point(managed_id, &self.shared.gc_coordinator);
+                #[cfg(not(feature = "multithreaded-gc"))]
+                thread_manager.safe_point(managed_id, &Default::default());
+            }
+        }
+    }
+}
+
+impl<'a, 'gc, 'm: 'gc> ReflectionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
+    #[inline]
+    fn pre_initialize_reflection(&mut self, gc: GCHandle<'gc>) {
+        crate::intrinsics::reflection::common::pre_initialize_reflection(self, gc)
+    }
+
+    #[inline]
+    fn get_runtime_method_index(
+        &mut self,
+        method: MethodDescription,
+        lookup: GenericLookup,
+    ) -> usize {
+        crate::intrinsics::reflection::common::get_runtime_method_index(
+            self, method, lookup,
+        ) as usize
+    }
+
+    #[inline]
+    fn get_runtime_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> ObjectRef<'gc> {
+        crate::intrinsics::reflection::common::get_runtime_type(self, gc, target)
+    }
+
+    #[inline]
+    fn get_runtime_method_obj(
+        &mut self,
+        gc: GCHandle<'gc>,
+        method: MethodDescription,
+        lookup: GenericLookup,
+    ) -> ObjectRef<'gc> {
+        crate::intrinsics::reflection::common::get_runtime_method_obj(
+            self, gc, method, lookup,
+        )
+    }
+
+    #[inline]
+    fn get_runtime_field_obj(
+        &mut self,
+        gc: GCHandle<'gc>,
+        field: FieldDescription,
+        lookup: GenericLookup,
+    ) -> ObjectRef<'gc> {
+        crate::intrinsics::reflection::common::get_runtime_field_obj(
+            self, gc, field, lookup,
+        )
+    }
+
+    #[inline]
+    fn make_runtime_type(
+        &self,
+        ctx: &ResolutionContext<'_, 'm>,
+        source: &MethodType,
+    ) -> RuntimeType {
+        crate::intrinsics::reflection::common::make_runtime_type(ctx, source)
+    }
+
+    #[inline]
+    fn get_heap_description(&self, object: ObjectHandle<'gc>) -> TypeDescription {
+        self.resolver().get_heap_description(object)
+    }
+
+    #[inline]
+    fn locate_field(&self, handle: FieldSource) -> (FieldDescription, GenericLookup) {
+        let context = self.current_context();
+        self.resolver()
+            .locate_field(context.resolution, handle, context.generics)
+    }
+
+    #[inline]
+    fn loader(&self) -> &'m AssemblyLoader {
+        self.shared.loader
+    }
+
+    #[inline]
+    fn resolver(&self) -> ResolverService<'m> {
+        ResolverService::new(self.shared.clone())
+    }
+
+    #[inline]
+    fn shared(&self) -> &Arc<SharedGlobalState<'m>> {
+        self.shared
+    }
+
+    #[inline]
+    fn statics(&self) -> &StaticStorageManager {
+        &self.shared.statics
+    }
+
+    #[inline]
+    fn is_intrinsic_field_cached(&self, field: FieldDescription) -> bool {
+        self.resolver().is_intrinsic_field_cached(field)
+    }
+
+    #[inline]
+    fn is_intrinsic_cached(&self, method: MethodDescription) -> bool {
+        self.resolver().is_intrinsic_cached(method)
+    }
+
+    #[inline]
+    fn resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> RuntimeType {
+        crate::intrinsics::reflection::common::resolve_runtime_type(self, obj)
+    }
+
+    #[inline]
+    fn resolve_runtime_method(&self, obj: ObjectRef<'gc>) -> (MethodDescription, GenericLookup) {
+        crate::intrinsics::reflection::common::resolve_runtime_method(self, obj)
+    }
+
+    #[inline]
+    fn resolve_runtime_field(&self, obj: ObjectRef<'gc>) -> (FieldDescription, GenericLookup) {
+        crate::intrinsics::reflection::common::resolve_runtime_field(self, obj)
+    }
+
+    #[inline]
+    fn reflection(&self) -> crate::state::ReflectionRegistry<'_, 'gc> {
+        crate::state::ReflectionRegistry::new(self.local)
+    }
+
+    #[inline]
+    fn thread_id(&self) -> usize {
+        self.thread_id.get() as usize
+    }
+
+    #[inline]
+    fn initialize_static_storage(
+        &mut self,
+        gc: GCHandle<'gc>,
         description: TypeDescription,
         generics: GenericLookup,
     ) -> StepResult {
@@ -354,12 +947,15 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
             }
         }
     }
+}
 
-    pub fn constructor_frame(
+impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
+    #[inline]
+    fn constructor_frame(
         &mut self,
-        gc: dotnet_utils::gc::GCHandle<'gc>,
+        gc: GCHandle<'gc>,
         instance: ObjectInstance<'gc>,
-        method: MethodInfo<'m>,
+        method: crate::MethodInfo<'m>,
         generic_inst: GenericLookup,
     ) {
         let desc = instance.description;
@@ -394,10 +990,11 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
         self.call_frame(gc, method, generic_inst);
     }
 
-    pub fn call_frame(
+    #[inline]
+    fn call_frame(
         &mut self,
-        gc: dotnet_utils::gc::GCHandle<'gc>,
-        method: MethodInfo<'m>,
+        gc: GCHandle<'gc>,
+        method: crate::MethodInfo<'m>,
         generic_inst: GenericLookup,
     ) {
         if self.tracer_enabled() {
@@ -447,78 +1044,11 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
         ));
     }
 
-    fn init_locals(
+    #[inline]
+    fn entrypoint_frame(
         &mut self,
-        method: MethodDescription,
-        locals: &'m [LocalVariable],
-        generics: &GenericLookup,
-    ) -> (Vec<StackValue<'gc>>, Vec<bool>) {
-        let mut values = vec![];
-        let mut pinned_locals = vec![];
-
-        for l in locals {
-            use BaseType::*;
-            use LocalVariable::*;
-            match l {
-                TypedReference => {
-                    values.push(StackValue::null());
-                    pinned_locals.push(false);
-                }
-                Variable {
-                    by_ref: _,
-                    var_type,
-                    pinned,
-                    ..
-                } => {
-                    pinned_locals.push(*pinned);
-                    let ctx = ResolutionContext {
-                        generics,
-                        loader: self.shared.loader,
-                        resolution: method.resolution(),
-                        type_owner: Some(method.parent),
-                        method_owner: Some(method),
-                        caches: self.shared.caches.clone(),
-                        shared: Some(self.shared.clone()),
-                    };
-
-                    let v = match ctx.make_concrete(var_type).get() {
-                        Type { source, .. } => {
-                            let (ut, type_generics) = decompose_type_source(source);
-                            let desc = ctx.locate_type(ut);
-
-                            if desc.is_value_type(&ctx) {
-                                let new_lookup = GenericLookup {
-                                    type_generics: type_generics.into(),
-                                    ..generics.clone()
-                                };
-                                let new_ctx = ctx.with_generics(&new_lookup);
-                                let instance = new_ctx.new_object(desc);
-                                StackValue::ValueType(instance)
-                            } else {
-                                StackValue::null()
-                            }
-                        }
-                        _ => StackValue::null(),
-                    };
-                    values.push(v);
-                }
-            }
-        }
-        (values, pinned_locals)
-    }
-
-    pub fn handle_return(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>) -> StepResult {
-        let tracer_enabled = self.tracer_enabled();
-        let shared = &self.shared;
-        let heap = &self.local.heap;
-        self.frame_stack
-            .handle_return(gc, self.evaluation_stack, shared, heap, tracer_enabled)
-    }
-
-    pub fn entrypoint_frame(
-        &mut self,
-        gc: dotnet_utils::gc::GCHandle<'gc>,
-        method: MethodInfo<'m>,
+        gc: GCHandle<'gc>,
+        method: crate::MethodInfo<'m>,
         generic_inst: GenericLookup,
         args: Vec<StackValue<'gc>>,
     ) {
@@ -546,10 +1076,222 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
         ));
     }
 
-    pub fn process_pending_finalizers(
+    #[inline]
+    fn dispatch_method(
         &mut self,
-        gc: dotnet_utils::gc::GCHandle<'gc>,
+        gc: GCHandle<'gc>,
+        method: MethodDescription,
+        lookup: GenericLookup,
     ) -> StepResult {
+        if let Some(intrinsic) = self.shared.caches.intrinsic_registry.get(&method) {
+            intrinsic(self, gc, method, &lookup)
+        } else if method.method.pinvoke.is_some() {
+            crate::pinvoke::external_call(self, method, gc);
+            if matches!(*self.exception_mode, ExceptionState::Throwing(_)) {
+                StepResult::Exception
+            } else {
+                StepResult::Continue
+            }
+        } else {
+            let info = MethodInfo::new(method, &lookup, self.shared.clone());
+            self.call_frame(gc, info, lookup);
+            StepResult::FramePushed
+        }
+    }
+
+    #[inline]
+    fn unified_dispatch(
+        &mut self,
+        gc: GCHandle<'gc>,
+        source: &MethodSource,
+        this_type: Option<TypeDescription>,
+        ctx: Option<&ResolutionContext<'_, 'm>>,
+    ) -> StepResult {
+        let context = ctx.cloned().unwrap_or_else(|| self.current_context());
+        let (resolved, lookup) = self.resolver().find_generic_method(source, &context);
+
+        let final_method = if let Some(this_type) = this_type {
+            self.resolver()
+                .resolve_virtual_method(resolved, this_type, &lookup, &context)
+        } else {
+            resolved
+        };
+
+        self.dispatch_method(gc, final_method, lookup)
+    }
+}
+
+impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
+    #[inline]
+    fn run(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        loop {
+            let res = match self.exception_mode {
+                ExceptionState::None
+                | ExceptionState::ExecutingHandler(_)
+                | ExceptionState::Filtering(_) => {
+                    let mut last_res = StepResult::Continue;
+                    for _ in 0..128 {
+                        let ip = self.state().ip;
+                        let i = &self.state().info_handle.instructions[ip];
+
+                        last_res = if let Some(res) =
+                            crate::dispatch::InstructionRegistry::dispatch(gc, self, i)
+                        {
+                            res
+                        } else {
+                            panic!("Unregistered instruction: {:?}", i);
+                        };
+
+                        match last_res {
+                            StepResult::Continue => {
+                                self.increment_ip();
+                            }
+                            StepResult::Jump(target) => {
+                                self.branch(target);
+                                last_res = StepResult::Continue;
+                            }
+                            StepResult::Yield => {
+                                break;
+                            }
+                            StepResult::Return => {
+                                last_res = self.handle_return(gc);
+                                break;
+                            }
+                            _ => break,
+                        }
+                    }
+                    last_res
+                }
+                _ => {
+                    let res = self.handle_exception(gc);
+                    match res {
+                        StepResult::Jump(target) => {
+                            self.branch(target);
+                            StepResult::Continue
+                        }
+                        StepResult::Return => self.handle_return(gc),
+                        _ => res,
+                    }
+                }
+            };
+
+            if res == StepResult::Exception {
+                continue;
+            }
+
+            return res;
+        }
+    }
+
+    #[inline]
+    fn handle_exception(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        crate::exceptions::ExceptionHandlingSystem.handle_exception(self, gc)
+    }
+
+    #[inline]
+    fn branch(&mut self, target: usize) {
+        crate::vm_trace_branch!(self, "BR", target, true);
+        self.frame_stack.branch(target);
+    }
+
+    #[inline]
+    fn conditional_branch(&mut self, condition: bool, target: usize) -> bool {
+        crate::vm_trace_branch!(self, "BR_COND", target, condition);
+        self.frame_stack.conditional_branch(condition, target)
+    }
+
+    #[inline]
+    fn increment_ip(&mut self) {
+        self.frame_stack.increment_ip();
+    }
+
+    #[inline]
+    fn state(&self) -> &crate::MethodState<'m> {
+        self.frame_stack.state()
+    }
+
+    #[inline]
+    fn state_mut(&mut self) -> &mut crate::MethodState<'m> {
+        self.frame_stack.state_mut()
+    }
+
+    #[inline]
+    fn exception_mode(&self) -> &ExceptionState<'gc> {
+        self.exception_mode
+    }
+
+    #[inline]
+    fn exception_mode_mut(&mut self) -> &mut ExceptionState<'gc> {
+        self.exception_mode
+    }
+
+    #[inline]
+    fn evaluation_stack(&self) -> &EvaluationStack<'gc> {
+        self.evaluation_stack
+    }
+
+    #[inline]
+    fn evaluation_stack_mut(&mut self) -> &mut EvaluationStack<'gc> {
+        self.evaluation_stack
+    }
+
+    #[inline]
+    fn frame_stack(&self) -> &FrameStack<'gc, 'm> {
+        self.frame_stack
+    }
+
+    #[inline]
+    fn frame_stack_mut(&mut self) -> &mut FrameStack<'gc, 'm> {
+        self.frame_stack
+    }
+
+    #[inline]
+    fn original_ip(&self) -> usize {
+        *self.original_ip
+    }
+
+    #[inline]
+    fn original_ip_mut(&mut self) -> &mut usize {
+        self.original_ip
+    }
+
+    #[inline]
+    fn original_stack_height(&self) -> usize {
+        *self.original_stack_height
+    }
+
+    #[inline]
+    fn original_stack_height_mut(&mut self) -> &mut usize {
+        self.original_stack_height
+    }
+
+    #[inline]
+    fn unwind_frame(&mut self, gc: GCHandle<'gc>) {
+        self.frame_stack.unwind_frame(
+            gc,
+            self.evaluation_stack,
+            self.shared,
+            &self.local.heap,
+        );
+    }
+
+    #[inline]
+    fn tracer_enabled(&self) -> bool {
+        self.shared.tracer_enabled.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    fn tracer(&self) -> MutexGuard<'_, Tracer> {
+        self.shared.tracer.lock()
+    }
+
+    #[inline]
+    fn indent(&self) -> usize {
+        self.frame_stack.len()
+    }
+
+    #[inline]
+    fn process_pending_finalizers(&mut self, gc: GCHandle<'gc>) -> StepResult {
         if self.local.heap.processing_finalizer.get() {
             return StepResult::Continue;
         }
@@ -627,353 +1369,13 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
         StepResult::Continue
     }
 
-    pub fn throw_by_name(&mut self, gc: dotnet_utils::gc::GCHandle<'gc>, name: &str) -> StepResult {
-        let ctx = self.current_context();
-        let exception_type = self.shared.loader.corlib_type(name);
-        let instance = ctx.new_object(exception_type);
-        let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(instance));
-        self.register_new_object(&obj_ref);
-        *self.exception_mode = ExceptionState::Throwing(obj_ref);
-        StepResult::Exception
-    }
-
-    pub fn register_new_object(&self, instance: &ObjectRef<'gc>) {
-        let ObjectRef(Some(ptr)) = instance else {
-            return;
-        };
-
-        let heap = &self.local.heap;
-
-        {
-            let addr = gc_arena::Gc::as_ptr(*ptr) as usize;
-            heap._all_objs.borrow_mut().insert(addr, *instance);
-        }
-
-        let ctx = self.current_context();
-        let borrowed = ptr.borrow();
-
-        if self.tracer_enabled() {
-            let (type_name, size) = match &borrowed.storage {
-                HeapStorage::Obj(o) => {
-                    let name = o.description.type_name();
-                    let size = self
-                        .resolver()
-                        .type_layout_cached(o.description.into(), &ctx)
-                        .size();
-                    (name, size)
-                }
-                HeapStorage::Vec(v) => ("System.Array".to_string(), v.size_bytes()),
-                HeapStorage::Str(s) => ("System.String".to_string(), s.size_bytes()),
-                HeapStorage::Boxed(b) => ("Boxed".to_string(), b.size_bytes()),
-            };
-            crate::vm_trace_gc_allocation!(self, &type_name, size);
-        }
-
-        if let HeapStorage::Obj(o) = &borrowed.storage
-            && o.description.has_finalizer(&ctx)
-        {
-            let mut queue = heap.finalization_queue.borrow_mut();
-            queue.push(*instance);
-        }
-    }
-
-    pub fn current_context(&self) -> ResolutionContext<'_, 'm> {
-        if !self.frame_stack.is_empty() {
-            let f = self.frame_stack.current_frame();
-            ResolutionContext {
-                generics: &f.generic_inst,
-                loader: self.shared.loader,
-                resolution: f.source_resolution,
-                type_owner: Some(f.state.info_handle.source.parent),
-                method_owner: Some(f.state.info_handle.source),
-                caches: self.shared.caches.clone(),
-                shared: Some(self.shared.clone()),
-            }
-        } else {
-            ResolutionContext {
-                generics: &self.shared.empty_generics,
-                loader: self.shared.loader,
-                resolution: self.shared.loader.corlib_type("System.Object").resolution,
-                type_owner: None,
-                method_owner: None,
-                caches: self.shared.caches.clone(),
-                shared: Some(self.shared.clone()),
-            }
-        }
-    }
-
-    pub fn locate_type(&self, handle: UserType) -> TypeDescription {
-        let f = self.current_frame();
-        self.resolver().locate_type(f.source_resolution, handle)
-    }
-
-    pub fn locate_field(&self, handle: FieldSource) -> (FieldDescription, GenericLookup) {
-        let f = self.current_frame();
-        self.resolver()
-            .locate_field(f.source_resolution, handle, &f.generic_inst)
-    }
-
-    pub fn get_local(&self, index: usize) -> StackValue<'gc> {
-        let frame = self.frame_stack.current_frame();
-        self.evaluation_stack.get_slot(frame.base.locals + index)
-    }
-
-    pub fn set_local(
-        &mut self,
-        gc: dotnet_utils::gc::GCHandle<'gc>,
-        index: usize,
-        value: StackValue<'gc>,
-    ) {
-        let frame = self.frame_stack.current_frame();
-        self.evaluation_stack
-            .set_slot(gc, frame.base.locals + index, value);
-    }
-
-    pub fn get_argument(&self, index: usize) -> StackValue<'gc> {
-        let frame = self.frame_stack.current_frame();
-        self.evaluation_stack.get_slot(frame.base.arguments + index)
-    }
-
-    pub fn set_argument(
-        &mut self,
-        gc: dotnet_utils::gc::GCHandle<'gc>,
-        index: usize,
-        value: StackValue<'gc>,
-    ) {
-        let frame = self.frame_stack.current_frame();
-        self.evaluation_stack
-            .set_slot(gc, frame.base.arguments + index, value);
-    }
-
-    pub fn get_local_address(&self, index: usize) -> NonNull<u8> {
-        let frame = self.frame_stack.current_frame();
-        self.evaluation_stack
-            .get_slot_address(frame.base.locals + index)
-    }
-
-    pub fn get_argument_address(&self, index: usize) -> NonNull<u8> {
-        let frame = self.frame_stack.current_frame();
-        self.evaluation_stack
-            .get_slot_address(frame.base.arguments + index)
-    }
-
-    pub fn get_local_info_for_managed_ptr(&self, index: usize) -> (NonNull<u8>, bool) {
-        let frame = self.frame_stack.current_frame();
-        let addr = self
-            .evaluation_stack
-            .get_slot_address(frame.base.locals + index);
-        let is_pinned = frame.pinned_locals[index];
-        (addr, is_pinned)
-    }
-
-    pub fn state(&self) -> &MethodState<'m> {
-        &self.frame_stack.current_frame().state
-    }
-
-    pub fn state_mut(&mut self) -> &mut MethodState<'m> {
-        &mut self.frame_stack.current_frame_mut().state
-    }
-
-    pub fn current_frame(&self) -> &StackFrame<'gc, 'm> {
-        self.frame_stack.current_frame()
-    }
-
-    pub fn current_frame_mut(&mut self) -> &mut StackFrame<'gc, 'm> {
-        self.frame_stack.current_frame_mut()
-    }
-
-    pub fn reflection(&self) -> ReflectionRegistry<'_, 'gc> {
-        ReflectionRegistry::new(self.local)
-    }
-
-    pub fn get_heap_description(
-        &self,
-        object: dotnet_value::object::ObjectHandle<'gc>,
-    ) -> TypeDescription {
-        self.resolver().get_heap_description(object)
-    }
-
-    pub fn make_concrete<T: Clone + Into<MethodType>>(&self, t: &T) -> ConcreteType {
-        let f = self.current_frame();
-        self.resolver()
-            .make_concrete(f.source_resolution, &f.generic_inst, t)
-    }
-
-    pub fn tracer_enabled(&self) -> bool {
-        self.shared.tracer_enabled.load(Ordering::Relaxed)
-    }
-
-    pub fn tracer(&self) -> MutexGuard<'_, Tracer> {
-        self.shared.tracer.lock()
-    }
-
     #[inline]
-    pub fn heap(&self) -> &HeapManager<'gc> {
-        &self.local.heap
-    }
-
-    #[inline]
-    pub fn back_up_ip(&mut self) {
-        self.frame_stack.current_frame_mut().state.ip -= 1;
-    }
-
-    pub fn indent(&self) -> usize {
-        self.frame_stack.len().saturating_sub(1)
-    }
-
-    pub fn loader(&self) -> &'m AssemblyLoader {
-        self.shared.loader
-    }
-
-    pub fn is_intrinsic_cached(&self, method: MethodDescription) -> bool {
-        self.resolver().is_intrinsic_cached(method)
-    }
-
-    pub fn dispatch_method(
-        &mut self,
-        gc: dotnet_utils::gc::GCHandle<'gc>,
-        method: MethodDescription,
-        lookup: GenericLookup,
-    ) -> StepResult {
-        if self.is_intrinsic_cached(method) {
-            crate::intrinsics::intrinsic_call(gc, self, method, &lookup)
-        } else if method.method.pinvoke.is_some() {
-            self.external_call(method, gc);
-            if matches!(*self.exception_mode, ExceptionState::Throwing(_)) {
-                StepResult::Exception
-            } else {
-                StepResult::Continue
-            }
-        } else {
-            if method.method.internal_call {
-                panic!("intrinsic not found: {:?}", method);
-            }
-            let info = MethodInfo::new(method, &lookup, self.shared.clone());
-            self.call_frame(gc, info, lookup);
-            StepResult::FramePushed
-        }
-    }
-
-    pub fn unified_dispatch(
-        &mut self,
-        gc: dotnet_utils::gc::GCHandle<'gc>,
-        source: &MethodSource,
-        this_type: Option<TypeDescription>,
-        ctx: Option<&ResolutionContext<'_, 'm>>,
-    ) -> StepResult {
-        let default_ctx;
-        let ctx = if let Some(ctx) = ctx {
-            ctx
-        } else {
-            default_ctx = self.current_context();
-            &default_ctx
-        };
-
-        let resolver = self.resolver();
-        let (base_method, lookup) = resolver.find_generic_method(source, ctx);
-
-        let method = if let Some(runtime_type) = this_type {
-            resolver.resolve_virtual_method(base_method, runtime_type, &lookup, ctx)
-        } else {
-            base_method
-        };
-
-        self.dispatch_method(gc, method, lookup)
-    }
-
-    pub fn pop_multiple(
-        &mut self,
-        gc: dotnet_utils::gc::GCHandle<'gc>,
-        count: usize,
-    ) -> Vec<StackValue<'gc>> {
-        // Same rationale as `pop`: check/decrement IL stack height before touching the backing
-        // stack storage (which also contains locals/args slots).
+    fn back_up_ip(&mut self) {
+        self.frame_stack.current_frame_mut().state.ip = *self.original_ip;
+        self.evaluation_stack.truncate(*self.original_stack_height);
         if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
-            if frame.stack_height < count {
-                panic!(
-                    "Stack height underflow in pop_multiple: height={}, count={} in {:?}",
-                    frame.stack_height, count, frame.state.info_handle.source
-                );
-            }
-            frame.stack_height -= count;
+            frame.stack_height = (*self.original_stack_height).saturating_sub(frame.base.stack);
         }
-        self.evaluation_stack.pop_multiple(gc, count)
-    }
-
-    pub fn stack_value_type(&self, val: &StackValue<'gc>) -> TypeDescription {
-        self.resolver().stack_value_type(val)
-    }
-
-    pub fn new_instance_fields(&self, td: TypeDescription) -> FieldStorage {
-        self.resolver()
-            .new_instance_fields(td, &self.current_context())
-    }
-
-    pub fn new_static_fields(&self, td: TypeDescription) -> FieldStorage {
-        self.resolver()
-            .new_static_fields(td, &self.current_context())
-    }
-
-    pub fn new_value_type(&self, t: &ConcreteType, data: StackValue<'gc>) -> ValueType<'gc> {
-        self.resolver()
-            .new_value_type(t, data, &self.current_context())
-    }
-
-    pub fn value_type_description(&self, vt: &ValueType<'gc>) -> TypeDescription {
-        self.resolver().value_type_description(vt)
-    }
-
-    pub fn new_cts_value(&self, t: &ConcreteType, data: StackValue<'gc>) -> CTSValue<'gc> {
-        self.resolver()
-            .new_cts_value(t, data, &self.current_context())
-    }
-
-    pub fn read_cts_value(
-        &self,
-        t: &ConcreteType,
-        data: &[u8],
-        gc: dotnet_utils::gc::GCHandle<'gc>,
-    ) -> CTSValue<'gc> {
-        self.resolver()
-            .read_cts_value(t, data, gc, &self.current_context())
-    }
-
-    pub fn new_vector(&self, element: ConcreteType, size: usize) -> Vector<'gc> {
-        self.resolver()
-            .new_vector(element, size, &self.current_context())
-    }
-
-    pub fn new_object(&self, td: TypeDescription) -> ObjectInstance<'gc> {
-        self.resolver().new_object(td, &self.current_context())
-    }
-
-    pub fn shared(&self) -> &Arc<SharedGlobalState<'m>> {
-        self.shared
-    }
-
-    pub fn is_intrinsic_field_cached(&self, field: FieldDescription) -> bool {
-        self.resolver().is_intrinsic_field_cached(field)
-    }
-
-    pub fn statics(&self) -> &StaticStorageManager {
-        &self.shared.statics
-    }
-
-    pub fn with_generics<'b>(&self, lookup: &'b GenericLookup) -> ResolutionContext<'b, 'm> {
-        let frame = self.frame_stack.current_frame();
-        ResolutionContext {
-            loader: self.shared.loader,
-            resolution: frame.source_resolution,
-            generics: lookup,
-            caches: self.shared.caches.clone(),
-            type_owner: None,
-            method_owner: None,
-            shared: Some(self.shared.clone()),
-        }
-    }
-
-    pub fn thread_id(&self) -> usize {
-        self.thread_id.get() as usize
     }
 }
 
@@ -999,6 +1401,10 @@ pub struct StackFrame<'gc, 'm> {
     pub is_finalizer: bool,
 }
 
+// SAFETY: `StackFrame` correctly traces all GC-managed fields (`exception_stack` and `state`)
+// in its `trace` implementation. All other fields are either primitives or non-GC references
+// and do not need tracing. This implementation is safe because it delegates to the `Collect`
+// implementations of its components.
 unsafe impl<'gc, 'm> Collect for StackFrame<'gc, 'm> {
     fn trace(&self, cc: &gc_arena::Collection) {
         self.exception_stack.trace(cc);
@@ -1027,7 +1433,7 @@ impl<'gc, 'm> StackFrame<'gc, 'm> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct BasePointer {
     pub arguments: usize,
     pub locals: usize,

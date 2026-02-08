@@ -1,4 +1,4 @@
-use crate::{StepResult, layout::type_layout, resolution::ValueResolution, stack::VesContext};
+use crate::{StepResult, layout::type_layout, resolution::ValueResolution, stack::ops::VesOps};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
@@ -11,8 +11,8 @@ use dotnetdll::prelude::*;
 use std::ptr::NonNull;
 
 #[dotnet_instruction(LoadElement { param0 })]
-pub fn ldelem<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn ldelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {
@@ -50,8 +50,8 @@ pub fn ldelem<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(LoadElementPrimitive { param0 })]
-pub fn ldelem_primitive<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn ldelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     param0: LoadType,
 ) -> StepResult {
@@ -119,8 +119,8 @@ pub fn ldelem_primitive<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(LoadElementAddress { param0 })]
-pub fn ldelema<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn ldelema<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {
@@ -128,17 +128,17 @@ pub fn ldelema<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(LoadElementAddressReadonly(param0))]
-pub fn ldelema_readonly<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn ldelema_readonly<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {
     ldelema_internal(gc, ctx, param0, true)
 }
 
-fn ldelema_internal<'gc, 'm: 'gc>(
+fn ldelema_internal<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     gc: GCHandle<'gc>,
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut T,
     param0: &MethodType,
     readonly: bool,
 ) -> StepResult {
@@ -188,8 +188,8 @@ fn ldelema_internal<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(StoreElement { param0 })]
-pub fn stelem<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn stelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {
@@ -226,8 +226,8 @@ pub fn stelem<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(StoreElementPrimitive { param0 })]
-pub fn stelem_primitive<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn stelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     param0: StoreType,
 ) -> StepResult {
@@ -335,8 +335,8 @@ pub fn stelem_primitive<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(NewArray(param0))]
-pub fn newarr<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn newarr<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {
@@ -375,7 +375,7 @@ pub fn newarr<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(LoadLength)]
-pub fn ldlen<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+pub fn ldlen<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(ctx: &mut T, gc: GCHandle<'gc>) -> StepResult {
     let array = ctx.pop(gc);
     let StackValue::ObjectRef(obj) = array else {
         panic!("ldlen: expected object on stack, got {:?}", array);

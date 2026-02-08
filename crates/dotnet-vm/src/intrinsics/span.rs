@@ -1,6 +1,6 @@
 use crate::{
-    StepResult, context::ResolutionContext, layout::type_layout, resolution::ValueResolution,
-    stack::VesContext,
+    StepResult, layout::type_layout, resolution::ValueResolution,
+    stack::ops::VesOps,
 };
 use dotnet_types::{
     generics::GenericLookup,
@@ -16,7 +16,6 @@ use dotnet_value::{
 use dotnetdll::prelude::ParameterType;
 use std::{mem::size_of, ptr::NonNull, slice};
 
-use super::ReflectionExtensions;
 
 pub fn span_to_slice<'gc, 'a>(span: Object<'gc>, element_size: usize) -> &'a [u8] {
     let ptr_data = span
@@ -62,7 +61,7 @@ use dotnet_macros::dotnet_intrinsic;
     "static bool System.MemoryExtensions::Equals(System.ReadOnlySpan<char>, System.ReadOnlySpan<char>, System.StringComparison)"
 )]
 pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -85,7 +84,7 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
     "static System.ReadOnlySpan<char> System.MemoryExtensions::AsSpan(string, int, int)"
 )]
 pub fn intrinsic_as_span<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
@@ -124,13 +123,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
 
     let obj_val = ctx.pop(gc);
 
-    let res_ctx = ResolutionContext::for_method(
-        method,
-        ctx.loader(),
-        generics,
-        ctx.shared.caches.clone(),
-        Some(ctx.shared.clone()),
-    );
+    let res_ctx = ctx.with_generics(generics);
 
     let (base_ptr, total_len, h_opt, element_type, element_size) = match obj_val {
         StackValue::ObjectRef(ObjectRef(Some(h))) => {
@@ -238,19 +231,13 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
     "static System.Span<T> System.Runtime.CompilerServices.RuntimeHelpers::CreateSpan<T>(System.RuntimeFieldHandle)"
 )]
 pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
-    method: MethodDescription,
+    _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let element_type = &generics.method_generics[0];
-    let res_ctx = ResolutionContext::for_method(
-        method,
-        ctx.loader(),
-        generics,
-        ctx.shared.caches.clone(),
-        Some(ctx.shared.clone()),
-    );
+    let res_ctx = ctx.with_generics(generics);
     let element_size = type_layout(element_type.clone(), &res_ctx).size();
 
     let field_handle = ctx.pop_value_type(gc);
@@ -321,7 +308,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
     "static T& System.Runtime.CompilerServices.RuntimeHelpers::GetSpanDataFrom<T>(T&, System.Type, int&)"
 )]
 pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,
@@ -357,13 +344,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
     let element_type: dotnet_types::generics::ConcreteType =
         element_type_runtime.to_concrete(ctx.loader());
 
-    let res_ctx = ResolutionContext::for_method(
-        _method,
-        ctx.loader(),
-        generics,
-        ctx.shared.caches.clone(),
-        Some(ctx.shared.clone()),
-    );
+    let res_ctx = ctx.with_generics(generics);
     let element_size = type_layout(element_type, &res_ctx).size();
 
     let Some(initial_data) = &field.initial_value else {
@@ -399,7 +380,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic("static byte& DotnetRs.Internal::GetArrayData(System.Array)")]
 pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,

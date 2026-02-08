@@ -105,7 +105,7 @@ impl TestHarness {
         let dll_path_str = dll_path.to_str().unwrap().to_string();
         let resolution = static_res_from_file(&dll_path_str);
         let shared = std::sync::Arc::new(state::SharedGlobalState::new(self.loader));
-        if dll_path_str.contains("nested_exceptions_42") {
+        if dll_path_str.contains("nested_exceptions_42") || dll_path_str.contains("static_field_42") || dll_path_str.contains("generic_0") || dll_path_str.contains("basic_42") || dll_path_str.contains("gc_resurrection_0") {
             shared
                 .tracer_enabled
                 .store(true, std::sync::atomic::Ordering::SeqCst);

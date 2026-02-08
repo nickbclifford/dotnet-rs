@@ -18,7 +18,7 @@ dotnet-value = { path = "crates/dotnet-value", default-features = false }
 dotnet-assemblies = { path = "crates/dotnet-assemblies" }
 dotnet-macros-core = { path = "crates/dotnet-macros-core" }
 dotnet-vm = { path = "crates/dotnet-vm", default-features = false }
-dotnetdll = { path = "../dotnetdll", version = "0.1.2" }
+dotnetdll = { git = "https://github.com/nickbclifford/dotnetdll" }
 gc-arena = "0.5"
 parking_lot = "0.12"
 dashmap = "6.1"

@@ -1,4 +1,7 @@
-use crate::{StepResult, stack::VesContext};
+use crate::{
+    StepResult,
+    ops::{ExceptionOps, PoolOps, RawMemoryOps, StackOps, VesOps},
+};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
@@ -10,28 +13,13 @@ use dotnetdll::prelude::*;
 use std::ptr;
 
 #[dotnet_instruction(CopyMemoryBlock { })]
-pub fn cpblk<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+pub fn cpblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ?Sized>(
+    ctx: &mut T,
+    gc: GCHandle<'gc>,
+) -> StepResult {
     let size = ctx.pop_isize(gc) as usize;
-    let src_val = ctx.pop(gc);
-    let src = match &src_val {
-        StackValue::NativeInt(i) => *i as *const u8,
-        StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr() as *const u8,
-        StackValue::ManagedPtr(m) => m.pointer().map_or(ptr::null(), |p| p.as_ptr()),
-        rest => panic!(
-            "invalid type for src in cpblk (expected pointer, received {:?})",
-            rest
-        ),
-    };
-    let dest_val = ctx.pop(gc);
-    let dest = match &dest_val {
-        StackValue::NativeInt(i) => *i as *mut u8,
-        StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-        StackValue::ManagedPtr(m) => m.pointer().map_or(ptr::null_mut(), |p| p.as_ptr()),
-        rest => panic!(
-            "invalid type for dest in cpblk (expected pointer, received {:?})",
-            rest
-        ),
-    };
+    let src = ctx.pop_ptr(gc);
+    let dest = ctx.pop_ptr(gc);
 
     // Check GC safe point before large memory block copy operations
     // Threshold: copying more than 4KB of data
@@ -47,19 +35,13 @@ pub fn cpblk<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>)
 }
 
 #[dotnet_instruction(InitializeMemoryBlock { })]
-pub fn initblk<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+pub fn initblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ?Sized>(
+    ctx: &mut T,
+    gc: GCHandle<'gc>,
+) -> StepResult {
     let size = ctx.pop_isize(gc) as usize;
     let val = ctx.pop_isize(gc) as u8;
-    let addr_val = ctx.pop(gc);
-    let addr = match &addr_val {
-        StackValue::NativeInt(i) => *i as *mut u8,
-        StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-        StackValue::ManagedPtr(m) => m.pointer().map_or(ptr::null_mut(), |p| p.as_ptr()),
-        rest => panic!(
-            "invalid type for addr in initblk (expected pointer, received {:?})",
-            rest
-        ),
-    };
+    let addr = ctx.pop_ptr(gc);
 
     // Check GC safe point before large memory block initialization
     if size > 4096 {
@@ -73,7 +55,10 @@ pub fn initblk<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc
 }
 
 #[dotnet_instruction(LocalMemoryAllocate)]
-pub fn localloc<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+pub fn localloc<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + PoolOps + ExceptionOps<'gc> + ?Sized>(
+    ctx: &mut T,
+    gc: GCHandle<'gc>,
+) -> StepResult {
     let size_isize = ctx.pop_isize(gc);
     if size_isize < 0 {
         return ctx.throw_by_name(gc, "System.OverflowException");
@@ -85,12 +70,7 @@ pub fn localloc<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'g
         return ctx.throw_by_name(gc, "System.OutOfMemoryException");
     }
 
-    let ptr = {
-        let s = ctx.state_mut();
-        let loc = s.memory_pool.len();
-        s.memory_pool.extend(vec![0; size]);
-        s.memory_pool[loc..].as_mut_ptr()
-    };
+    let ptr = ctx.localloc(size);
 
     ctx.push(
         gc,
@@ -101,7 +81,7 @@ pub fn localloc<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'g
 
 #[dotnet_instruction(StoreIndirect { param0 })]
 pub fn stind<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     param0: StoreType,
 ) -> StepResult {
@@ -115,12 +95,9 @@ pub fn stind<'gc, 'm: 'gc>(
         // Exception: if the slot currently contains a ValueType, we must use raw write to
         // avoid replacing the entire struct with a scalar. Structs on the stack have stable
         // FieldStorage that can be partially overwritten.
-        if !matches!(
-            ctx.evaluation_stack.get_slot_ref(slot_idx),
-            StackValue::ValueType(_)
-        ) {
+        if !matches!(ctx.get_slot_ref(slot_idx), StackValue::ValueType(_)) {
             let typed_val = convert_to_stack_value(val, param0);
-            ctx.evaluation_stack.set_slot(gc, slot_idx, typed_val);
+            ctx.set_slot(gc, slot_idx, typed_val);
             return StepResult::Continue;
         }
     }
@@ -143,18 +120,21 @@ pub fn stind<'gc, 'm: 'gc>(
         StoreType::Object => LayoutManager::Scalar(Scalar::ObjectRef),
     };
 
-    let heap = &ctx.local.heap;
-    let mut memory = crate::memory::RawMemoryAccess::new(heap);
-    match unsafe { memory.write_unaligned(ptr, owner, val, &layout) } {
+    match unsafe { ctx.write_unaligned(ptr, owner, val, &layout) } {
         Ok(_) => {}
-        Err(e) => panic!("StoreIndirect failed: {}", e),
+        Err(e) => {
+            if ptr.is_null() {
+                return ctx.throw_by_name(gc, "System.NullReferenceException");
+            }
+            panic!("StoreIndirect failed: {}", e);
+        }
     }
     StepResult::Continue
 }
 
 #[dotnet_instruction(LoadIndirect { param0 })]
 pub fn ldind<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     param0: LoadType,
 ) -> StepResult {
@@ -162,12 +142,9 @@ pub fn ldind<'gc, 'm: 'gc>(
 
     if let StackValue::ManagedPtr(m) = &addr_val
         && let Some((slot_idx, 0)) = m.stack_slot_origin
-        && !matches!(
-            ctx.evaluation_stack.get_slot_ref(slot_idx),
-            StackValue::ValueType(_)
-        )
+        && !matches!(ctx.get_slot_ref(slot_idx), StackValue::ValueType(_))
     {
-        let val = convert_from_stack_value(ctx.evaluation_stack.get_slot(slot_idx), param0);
+        let val = convert_from_stack_value(ctx.get_slot(slot_idx), param0);
         ctx.push(gc, val);
         return StepResult::Continue;
     }
@@ -196,12 +173,14 @@ pub fn ldind<'gc, 'm: 'gc>(
         LoadType::Object => LayoutManager::Scalar(Scalar::ObjectRef),
     };
 
-    let heap = &ctx.local.heap;
-    let memory = crate::memory::RawMemoryAccess::new(heap);
-    let val = unsafe {
-        memory
-            .read_unaligned(ptr, owner, &layout, None)
-            .expect("Read failed")
+    let val = match unsafe { ctx.read_unaligned(ptr, owner, &layout, None) } {
+        Ok(v) => v,
+        Err(e) => {
+            if ptr.is_null() {
+                return ctx.throw_by_name(gc, "System.NullReferenceException");
+            }
+            panic!("LoadIndirect failed: {}", e);
+        }
     };
     ctx.push(gc, val);
     StepResult::Continue

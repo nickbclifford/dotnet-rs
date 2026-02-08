@@ -5,7 +5,8 @@ use dotnet_value::StackValue;
 #[cfg(feature = "multithreaded-gc")]
 use crate::vm_debug;
 
-use super::{
+use crate::{
+    stack::ops::{CallOps, ReflectionOps, VesOps},
     MethodInfo, StepResult,
     dispatch::ExecutionEngine,
     metrics::CacheStats,
@@ -101,9 +102,7 @@ impl Executor {
         arena.mutate_root(|gc, c| {
             c.stack.thread_id.set(thread_id);
             let mut ctx = c.stack.ves_context();
-            crate::intrinsics::reflection::ReflectionExtensions::pre_initialize_reflection(
-                &mut ctx, gc,
-            );
+            ctx.pre_initialize_reflection(gc);
         });
 
         #[cfg(feature = "multithreaded-gc")]

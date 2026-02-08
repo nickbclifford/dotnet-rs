@@ -1,5 +1,6 @@
 use crate::{
-    StepResult, context::ResolutionContext, resolution::ValueResolution, stack::VesContext,
+    StepResult, resolution::ValueResolution,
+    stack::ops::VesOps,
 };
 use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
@@ -14,7 +15,7 @@ use std::sync::Arc;
 #[dotnet_intrinsic("static bool System.Runtime.Intrinsics.Vector256::get_IsHardwareAccelerated()")]
 #[dotnet_intrinsic("static bool System.Numerics.Vector::get_IsHardwareAccelerated()")]
 pub fn intrinsic_vector_is_hardware_accelerated<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -27,9 +28,9 @@ pub fn intrinsic_vector_is_hardware_accelerated<'gc, 'm: 'gc>(
     "static System.Collections.Generic.EqualityComparer<T> System.Collections.Generic.EqualityComparer<T>::get_Default()"
 )]
 pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
-    method: MethodDescription,
+    _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let target_type = generics.type_generics[0].clone();
@@ -37,14 +38,7 @@ pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc>(
     let comparer_td = ctx.loader().corlib_type(comparer_type_name);
 
     let new_lookup = GenericLookup::new(vec![target_type]);
-    let res_ctx = ResolutionContext::for_method(
-        method,
-        ctx.loader(),
-        generics,
-        ctx.shared.caches.clone(),
-        Some(ctx.shared.clone()),
-    )
-    .with_generics(&new_lookup);
+    let res_ctx = ctx.with_generics(generics).with_generics(&new_lookup);
     let instance = ObjectRef::new(gc, HeapStorage::Obj(res_ctx.new_object(comparer_td)));
 
     ctx.push_obj(gc, instance);
@@ -62,7 +56,7 @@ pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static nuint System.UIntPtr::CreateTruncating<T>(T)")]
 #[dotnet_intrinsic("static nint System.IntPtr::CreateTruncating<T>(T)")]
 pub fn intrinsic_numeric_create_truncating<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     method: MethodDescription,
     _generics: &GenericLookup,
@@ -100,7 +94,7 @@ pub fn intrinsic_numeric_create_truncating<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic("static double System.Math::Min(double, double)")]
 pub fn intrinsic_math_min_double<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -113,7 +107,7 @@ pub fn intrinsic_math_min_double<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic("static double System.Math::Max(double, double)")]
 pub fn intrinsic_math_max_double<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -126,7 +120,7 @@ pub fn intrinsic_math_max_double<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic("static double System.Math::Abs(double)")]
 pub fn intrinsic_math_abs_double<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -138,7 +132,7 @@ pub fn intrinsic_math_abs_double<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic("static double System.Math::Pow(double, double)")]
 pub fn intrinsic_math_pow_double<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -151,7 +145,7 @@ pub fn intrinsic_math_pow_double<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic("static int System.Math::Min(int, int)")]
 pub fn intrinsic_math_min_int<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -164,7 +158,7 @@ pub fn intrinsic_math_min_int<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic("static int System.Math::Max(int, int)")]
 pub fn intrinsic_math_max_int<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -177,7 +171,7 @@ pub fn intrinsic_math_max_int<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic("static int System.Math::Abs(int)")]
 pub fn intrinsic_math_abs_int<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -189,7 +183,7 @@ pub fn intrinsic_math_abs_int<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic("static double System.Math::Sqrt(double)")]
 pub fn intrinsic_math_sqrt<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -201,7 +195,7 @@ pub fn intrinsic_math_sqrt<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic_field("static bool System.BitConverter::IsLittleEndian")]
 pub fn intrinsic_bitconverter_is_little_endian<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _field: dotnet_types::members::FieldDescription,
     _type_generics: Arc<[dotnet_types::generics::ConcreteType]>,

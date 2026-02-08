@@ -1,5 +1,5 @@
 use crate::{members::MethodDescription, resolution::ResolutionS};
-use dotnetdll::prelude::{MemberType, ResolvedDebug, TypeDefinition, TypeIndex, TypeSource};
+use dotnetdll::prelude::{MemberType, ResolvedDebug, TypeDefinition, TypeIndex, TypeSource, UserType};
 use gc_arena::{Collect, unsafe_empty_collect};
 use std::{
     fmt::{Debug, Formatter},
@@ -7,6 +7,7 @@ use std::{
     ptr::NonNull,
 };
 
+pub mod comparer;
 pub mod generics;
 #[macro_use]
 mod macros;
@@ -16,6 +17,7 @@ pub mod runtime;
 
 pub trait TypeResolver {
     fn corlib_type(&self, name: &str) -> TypeDescription;
+    fn locate_type(&self, resolution: ResolutionS, handle: UserType) -> TypeDescription;
 }
 
 #[repr(C)]

@@ -1,6 +1,6 @@
 use crate::{
     StepResult, intrinsics::intrinsic_field, layout::LayoutFactory, memory::Atomic,
-    resolution::ValueResolution, stack::VesContext, sync::Ordering as AtomicOrdering,
+    resolution::ValueResolution, stack::ops::VesOps, sync::Ordering as AtomicOrdering,
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
@@ -17,7 +17,7 @@ use super::get_ptr_context;
 
 #[dotnet_instruction(LoadField { param0, volatile })]
 pub fn ldfld<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     param0: &FieldSource,
     volatile: bool,
@@ -26,11 +26,12 @@ pub fn ldfld<'gc, 'm: 'gc>(
 
     // Special fields check (intrinsic fields)
     if ctx.is_intrinsic_field_cached(field) {
+        let type_generics = ctx.current_context().generics.type_generics.clone();
         return intrinsic_field(
             gc,
             ctx,
             field,
-            ctx.current_context().generics.type_generics.clone(),
+            type_generics,
             false,
         );
     }
@@ -140,7 +141,7 @@ pub fn ldfld<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(StoreField { param0, volatile })]
 pub fn stfld<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     param0: &FieldSource,
     volatile: bool,
@@ -222,7 +223,7 @@ pub fn stfld<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(LoadStaticField { param0, volatile })]
 pub fn ldsfld<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     param0: &FieldSource,
     volatile: bool,
@@ -231,11 +232,12 @@ pub fn ldsfld<'gc, 'm: 'gc>(
 
     // Special fields check (intrinsic fields)
     if ctx.is_intrinsic_field_cached(field) {
+        let type_generics = ctx.current_context().generics.type_generics.clone();
         return intrinsic_field(
             gc,
             ctx,
             field,
-            ctx.current_context().generics.type_generics.clone(),
+            type_generics,
             false,
         );
     }
@@ -270,7 +272,7 @@ pub fn ldsfld<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(StoreStaticField { param0, volatile })]
 pub fn stsfld<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     param0: &FieldSource,
     volatile: bool,
@@ -311,7 +313,7 @@ pub fn stsfld<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(LoadFieldAddress(param0))]
 pub fn ldflda<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     param0: &FieldSource,
 ) -> StepResult {
@@ -319,11 +321,12 @@ pub fn ldflda<'gc, 'm: 'gc>(
 
     // Special fields check (intrinsic fields)
     if ctx.is_intrinsic_field_cached(field) {
+        let type_generics = ctx.current_context().generics.type_generics.clone();
         return intrinsic_field(
             gc,
             ctx,
             field,
-            ctx.current_context().generics.type_generics.clone(),
+            type_generics,
             true,
         );
     }
@@ -440,7 +443,7 @@ pub fn ldflda<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(LoadStaticFieldAddress(param0))]
 pub fn ldsflda<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     param0: &FieldSource,
 ) -> StepResult {

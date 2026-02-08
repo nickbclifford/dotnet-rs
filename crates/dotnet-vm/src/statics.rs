@@ -58,6 +58,11 @@ impl Clone for StaticStorage {
     }
 }
 
+// SAFETY: `StaticStorage::trace` correctly traces its `storage` field, which contains all
+// GC-managed references. The atomic fields (`init_state`, `initializing_thread`) and
+// synchronization primitives (`init_cond`, `init_mutex`) are not GC-managed and do not need
+// tracing. FieldStorage::trace uses atomic reads for ObjectRefs, ensuring thread-safe tracing
+// during stop-the-world GC pauses.
 unsafe impl Collect for StaticStorage {
     fn trace(&self, cc: &Collection) {
         // Tracing is safe because FieldStorage::trace uses atomic reads for ObjectRefs
@@ -84,6 +89,10 @@ pub struct StaticStorageManager {
     types: RwLock<HashMap<(TypeDescription, GenericLookup), Arc<StaticStorage>>>,
 }
 
+// SAFETY: `StaticStorageManager::trace` correctly traces all `StaticStorage` values in its map.
+// The map keys are non-GC metadata and do not need tracing. Each `StaticStorage` value is traced,
+// which in turn traces all GC-managed references in static fields. The RwLock is acquired for
+// reading during tracing, which is safe during stop-the-world GC pauses.
 unsafe impl Collect for StaticStorageManager {
     fn trace(&self, cc: &Collection) {
         let types = self.types.read();

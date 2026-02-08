@@ -1,9 +1,8 @@
 use crate::{
     StepResult,
-    context::ResolutionContext,
     layout::type_layout,
     memory::{RawMemoryAccess, check_read_safety},
-    stack::VesContext,
+    stack::ops::VesOps,
 };
 use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{
@@ -20,12 +19,11 @@ use dotnet_value::{
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use std::{ptr, sync::Arc};
 
-use super::ReflectionExtensions;
 
 #[dotnet_intrinsic("static int System.Runtime.InteropServices.Marshal::GetLastPInvokeError()")]
 #[allow(unused_variables)]
 pub fn intrinsic_marshal_get_last_pinvoke_error<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     method: MethodDescription,
     _generics: &GenericLookup,
@@ -38,7 +36,7 @@ pub fn intrinsic_marshal_get_last_pinvoke_error<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static void System.Runtime.InteropServices.Marshal::SetLastPInvokeError(int)")]
 #[allow(unused_variables)]
 pub fn intrinsic_marshal_set_last_pinvoke_error<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     method: MethodDescription,
     _generics: &GenericLookup,
@@ -54,7 +52,7 @@ pub fn intrinsic_marshal_set_last_pinvoke_error<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static void System.Buffer::Memmove<T>(T&, T&, ulong)")]
 #[allow(unused_variables)]
 pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
@@ -63,18 +61,12 @@ pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
     let src = ctx.pop_ptr(gc);
     let dst = ctx.pop_ptr(gc);
 
-    let res_ctx = ResolutionContext::for_method(
-        method,
-        ctx.loader(),
-        generics,
-        ctx.shared.caches.clone(),
-        Some(ctx.shared.clone()),
-    );
+    let res_ctx = ctx.with_generics(generics);
     let total_count = if generics.method_generics.is_empty() {
         len as usize
     } else {
         let target = &generics.method_generics[0];
-        let layout = type_layout(target.clone(), &ctx.current_context());
+        let layout = type_layout(target.clone(), &res_ctx);
         len as usize * layout.size()
     };
 
@@ -95,7 +87,7 @@ pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
 )]
 #[allow(unused_variables)]
 pub fn intrinsic_memory_marshal_get_array_data_reference<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
@@ -122,7 +114,7 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static int System.Runtime.InteropServices.Marshal::SizeOf<T>(T)")]
 #[dotnet_intrinsic("static int System.Runtime.InteropServices.Marshal::SizeOf<T>()")]
 pub fn intrinsic_marshal_size_of<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
@@ -143,7 +135,7 @@ pub fn intrinsic_marshal_size_of<'gc, 'm: 'gc>(
 )]
 #[dotnet_intrinsic("static IntPtr System.Runtime.InteropServices.Marshal::OffsetOf<T>(string)")]
 pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
@@ -176,7 +168,7 @@ pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static void* System.Runtime.CompilerServices.Unsafe::AsPointer<T>(T&)")]
 #[allow(unused_variables)]
 pub fn intrinsic_unsafe_as_pointer<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -196,7 +188,7 @@ pub fn intrinsic_unsafe_as_pointer<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::Add<T>(T&, int)")]
 #[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::Add<T>(T&, IntPtr)")]
 pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,
@@ -234,7 +226,7 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     "static T& System.Runtime.CompilerServices.Unsafe::AddByteOffset<T>(T&, IntPtr)"
 )]
 pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,
@@ -269,7 +261,7 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
 // System.Runtime.CompilerServices.Unsafe::AreSame<T>(ref T left, ref T right)
 #[dotnet_intrinsic("static bool System.Runtime.CompilerServices.Unsafe::AreSame<T>(T&, T&)")]
 pub fn intrinsic_unsafe_are_same<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -286,7 +278,7 @@ pub fn intrinsic_unsafe_are_same<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::AsRef<T>(T&)")]
 #[allow(unused_variables)]
 pub fn intrinsic_unsafe_as<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     method: MethodDescription,
     _generics: &GenericLookup,
@@ -298,7 +290,7 @@ pub fn intrinsic_unsafe_as<'gc, 'm: 'gc>(
 // System.Runtime.CompilerServices.Unsafe::As<TFrom, TTo>(ref TFrom source)
 #[dotnet_intrinsic("static TTo& System.Runtime.CompilerServices.Unsafe::As<TFrom, TTo>(TFrom&)")]
 pub fn intrinsic_unsafe_as_generic<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,
@@ -332,7 +324,7 @@ pub fn intrinsic_unsafe_as_generic<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::AsRef<T>(T&)")] // in T
 #[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::AsRef<T>(void*)")]
 pub fn intrinsic_unsafe_as_ref_any<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
@@ -351,7 +343,7 @@ pub fn intrinsic_unsafe_as_ref_any<'gc, 'm: 'gc>(
 // Note: This is a helper, registration is on intrinsic_unsafe_as_ref_any or separate if needed.
 // But as_ref_any handles dispatch.
 pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,
@@ -405,20 +397,14 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static int System.Runtime.CompilerServices.Unsafe::SizeOf<T>()")]
 #[allow(unused_variables)]
 pub fn intrinsic_unsafe_size_of<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let res_ctx = ResolutionContext::for_method(
-        method,
-        ctx.loader(),
-        generics,
-        ctx.shared.caches.clone(),
-        Some(ctx.shared.clone()),
-    );
+    let res_ctx = ctx.with_generics(generics);
     let target = &generics.method_generics[0];
-    let layout = type_layout(target.clone(), &ctx.current_context());
+    let layout = type_layout(target.clone(), &res_ctx);
     ctx.push_i32(gc, layout.size() as i32);
     StepResult::Continue
 }
@@ -426,7 +412,7 @@ pub fn intrinsic_unsafe_size_of<'gc, 'm: 'gc>(
 // System.Runtime.CompilerServices.Unsafe::ByteOffset<T>(ref T origin, ref T target)
 #[dotnet_intrinsic("static IntPtr System.Runtime.CompilerServices.Unsafe::ByteOffset<T>(T&, T&)")]
 pub fn intrinsic_unsafe_byte_offset<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -443,7 +429,7 @@ pub fn intrinsic_unsafe_byte_offset<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static T System.Runtime.CompilerServices.Unsafe::ReadUnaligned<T>(void*)")]
 #[dotnet_intrinsic("static T System.Runtime.CompilerServices.Unsafe::ReadUnaligned<T>(byte&)")]
 pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,
@@ -496,7 +482,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
     "static void System.Runtime.CompilerServices.Unsafe::WriteUnaligned<T>(byte&, T)"
 )]
 pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,
@@ -532,7 +518,7 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic_field("static IntPtr System.IntPtr::Zero")]
 pub fn intrinsic_field_intptr_zero<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _field: FieldDescription,
     _type_generics: Arc<[ConcreteType]>,

@@ -1,11 +1,11 @@
-use crate::{StepResult, instructions::macros::*, stack::VesContext};
+use crate::{StepResult, instructions::macros::*, stack::ops::VesOps};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnetdll::prelude::*;
 use std::cmp::Ordering as CmpOrdering;
 
 #[dotnet_instruction(CompareEqual)]
-pub fn ceq<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+pub fn ceq<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(ctx: &mut T, gc: GCHandle<'gc>) -> StepResult {
     let v2 = ctx.pop(gc);
     let v1 = ctx.pop(gc);
     let val = (v1 == v2) as i32;
@@ -25,7 +25,7 @@ comparison_op!(
 );
 
 #[dotnet_instruction(CheckFinite)]
-pub fn ckfinite<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+pub fn ckfinite<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(ctx: &mut T, gc: GCHandle<'gc>) -> StepResult {
     let f = ctx.pop_f64(gc);
     if f.is_infinite() || f.is_nan() {
         return ctx.throw_by_name(gc, "System.ArithmeticException");

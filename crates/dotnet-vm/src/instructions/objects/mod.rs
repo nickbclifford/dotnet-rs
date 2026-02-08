@@ -3,14 +3,13 @@ use crate::{
     intrinsics::intrinsic_call,
     layout::{LayoutFactory, type_layout},
     resolution::ValueResolution,
-    stack::VesContext,
+    stack::{ops::{StackOps, VesOps}},
 };
-use dotnet_assemblies::decompose_type_source;
 use dotnet_macros::dotnet_instruction;
-use dotnet_types::members::MethodDescription;
+use dotnet_types::{comparer::decompose_type_source, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
-    StackValue,
+    StackValue, CLRString,
     layout::HasLayout,
     object::{HeapStorage, ObjectRef},
     pointer::UnmanagedPtr,
@@ -63,8 +62,8 @@ pub(crate) fn get_ptr<'gc>(
     }
 }
 
-pub(crate) fn get_ptr_context<'gc, 'm: 'gc>(
-    ctx: &VesContext<'_, 'gc, 'm>,
+pub(crate) fn get_ptr_context<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+    ctx: &T,
     val: &StackValue<'gc>,
 ) -> (
     *mut u8,
@@ -75,7 +74,7 @@ pub(crate) fn get_ptr_context<'gc, 'm: 'gc>(
     match val {
         StackValue::ManagedPtr(m) => {
             if let Some((idx, offset)) = m.stack_slot_origin {
-                let slot_val = ctx.evaluation_stack.get_slot_ref(idx);
+                let slot_val = ctx.get_slot_ref(idx);
                 if let StackValue::ValueType(v) = slot_val {
                     let ptr = v.instance_storage.get().as_ptr() as *mut u8;
                     return (
@@ -99,7 +98,7 @@ pub(crate) fn get_ptr_context<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(NewObject(ctor))]
 pub fn new_object<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     ctor: &UserMethod,
 ) -> StepResult {
@@ -158,7 +157,7 @@ pub fn new_object<'gc, 'm: 'gc>(
 
     let parent = method.parent;
     if let (None, Some(ts)) = (&method.method.body, &parent.definition().extends) {
-        let (ut, _) = decompose_type_source(ts);
+        let (ut, _) = decompose_type_source::<MemberType>(ts);
         let type_name = ut.type_name(parent.resolution.definition());
         // delegate types are only allowed to have these base types
         if matches!(
@@ -221,7 +220,7 @@ pub fn new_object<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(LoadObject { param0 })]
 pub fn ldobj<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {
@@ -248,7 +247,7 @@ pub fn ldobj<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(StoreObject { param0 })]
 pub fn stobj<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {
@@ -275,7 +274,7 @@ pub fn stobj<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(InitializeForObject(param0))]
 pub fn initobj<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {
@@ -295,7 +294,7 @@ pub fn initobj<'gc, 'm: 'gc>(
 
 #[dotnet_instruction(Sizeof(param0))]
 pub fn sizeof<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {
@@ -307,16 +306,11 @@ pub fn sizeof<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(LoadString(chars))]
-pub fn ldstr<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn ldstr<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     chars: &[u16],
 ) -> StepResult {
-    use dotnet_value::string::CLRString;
-
-    let s = CLRString::new(chars.to_owned());
-    let storage = HeapStorage::Str(s);
-    let obj_ref = ObjectRef::new(gc, storage);
-    ctx.push(gc, StackValue::ObjectRef(obj_ref));
+    ctx.push_string(gc, CLRString::new(chars.to_owned()));
     StepResult::Continue
 }

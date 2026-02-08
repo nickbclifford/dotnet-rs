@@ -1,3 +1,9 @@
+//! Execution engine and instruction dispatch.
+//!
+//! This module implements the main VM execution loop in [`ExecutionEngine`],
+//! which orchestrates the fetch-decode-execute cycle. It also provides
+//! the [`InstructionRegistry`] for looking up instruction handlers.
+
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnetdll::prelude::*;
@@ -5,8 +11,12 @@ use gc_arena::Collect;
 
 pub mod registry;
 
-use super::{
-    CallStack, MethodInfo, ResolutionContext, StepResult, exceptions::ExceptionState,
+use crate::stack::ops::{CallOps, ReflectionOps, VesOps};
+use crate::{
+    vm_trace_instruction,
+    stack::CallStack,
+    MethodInfo, ResolutionContext, StepResult,
+    exceptions::ExceptionState,
     threading::ThreadManagerOps,
 };
 
@@ -15,12 +25,11 @@ pub struct InstructionRegistry;
 impl InstructionRegistry {
     pub fn dispatch<'gc, 'm>(
         gc: GCHandle<'gc>,
-        interp: &mut ExecutionEngine<'gc, 'm>,
+        ctx: &mut dyn VesOps<'gc, 'm>,
         instr: &Instruction,
     ) -> Option<StepResult> {
         let handler = registry::get_handler(instr.opcode())?;
-        let mut ctx = interp.ves_context();
-        Some(handler(&mut ctx, gc, instr))
+        Some(handler(ctx, gc, instr))
     }
 }
 
@@ -44,6 +53,9 @@ pub struct ExecutionEngine<'gc, 'm: 'gc> {
     pub stack: CallStack<'gc, 'm>,
 }
 
+// SAFETY: `ExecutionEngine` correctly traces its only GC-managed field (`stack`) in its
+// `trace` implementation. This implementation is safe because it delegates to the `Collect`
+// implementation of `CallStack`, which correctly traces all GC-managed references.
 unsafe impl<'gc, 'm: 'gc> Collect for ExecutionEngine<'gc, 'm> {
     fn trace(&self, cc: &gc_arena::Collection) {
         self.stack.trace(cc);
@@ -68,15 +80,43 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
         }
     }
 
+    /// Executes a single instruction in the current frame.
+    ///
+    /// This method:
+    /// 1. Fetches the instruction at the current IP.
+    /// 2. Records the original IP and stack height for suspension/retry.
+    /// 3. Traces the instruction if enabled.
+    /// 4. Dispatches the instruction to its handler.
+    /// 5. Handles the result (Continue, Jump, Call, Return, etc.).
     pub fn step_normal(&mut self, gc: GCHandle<'gc>) -> StepResult {
         let ip = self.stack.state().ip;
         let i = &self.stack.state().info_handle.instructions[ip];
 
-        let res = if let Some(res) = InstructionRegistry::dispatch(gc, self, i) {
+        // Synchronize original IP and stack height for suspension/retry logic (e.g. Yield)
+        self.stack.execution.original_ip = ip;
+        self.stack.execution.original_stack_height = self.stack.execution.evaluation_stack.top_of_stack();
+
+        vm_trace_instruction!(
+            self.stack,
+            ip,
+            &i.show(self.stack.state().info_handle.source.resolution().definition())
+        );
+
+        tracing::debug!(
+            "step_normal: frame={}, ip={}, instr={:?}",
+            self.stack.execution.frame_stack.len(),
+            ip,
+            i.opcode()
+        );
+
+        let mut ctx = self.ves_context();
+        let res = if let Some(res) = InstructionRegistry::dispatch(gc, &mut ctx, i) {
             res
         } else {
             panic!("Unregistered instruction: {:?}", i);
         };
+
+        tracing::debug!("step_normal: res={:?}", res);
 
         match res {
             StepResult::Continue => {
@@ -88,10 +128,16 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
                 StepResult::Continue
             }
             StepResult::Yield => {
-                self.stack.increment_ip();
                 StepResult::Yield
             }
-            StepResult::Return => self.stack.handle_return(gc),
+            StepResult::Exception => {
+                StepResult::Exception
+            }
+            StepResult::Return => {
+                let res = self.stack.handle_return(gc);
+                tracing::debug!("step_normal: handle_return result={:?}", res);
+                res
+            }
             _ => res,
         }
     }
@@ -144,7 +190,7 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
         gc: GCHandle<'gc>,
         source: &MethodSource,
         this_type: Option<TypeDescription>,
-        ctx: Option<&ResolutionContext<'gc, 'm>>,
+        ctx: Option<&ResolutionContext<'_, 'm>>,
     ) -> StepResult {
         self.ves_context()
             .unified_dispatch(gc, source, this_type, ctx)
@@ -157,10 +203,11 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
         lookup: GenericLookup,
     ) -> StepResult {
         let mut ctx = self.stack.ves_context();
+        tracing::debug!("dispatch_method: method={:?}, pinvoke={:?}, internal_call={}", method, method.method.pinvoke, method.method.internal_call);
         if ctx.is_intrinsic_cached(method) {
             crate::intrinsics::intrinsic_call(gc, &mut ctx, method, &lookup)
         } else if method.method.pinvoke.is_some() {
-            ctx.external_call(method, gc);
+            crate::pinvoke::external_call(&mut ctx, method, gc);
             if matches!(*ctx.exception_mode, ExceptionState::Throwing(_)) {
                 StepResult::Exception
             } else {

@@ -1,6 +1,6 @@
 use crate::{
-    StepResult, intrinsics::reflection::ReflectionExtensions, resolution::ValueResolution,
-    stack::VesContext,
+    StepResult, resolution::ValueResolution,
+    stack::ops::VesOps,
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
@@ -8,8 +8,8 @@ use dotnet_value::StackValue;
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(LoadMethodPointer(param0))]
-pub fn ldftn<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn ldftn<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     param0: &MethodSource,
 ) -> StepResult {
@@ -23,8 +23,8 @@ pub fn ldftn<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(LoadVirtualMethodPointer { param0, skip_null_check })]
-pub fn ldvirtftn<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn ldvirtftn<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     param0: &MethodSource,
     skip_null_check: bool,
@@ -53,8 +53,8 @@ pub fn ldvirtftn<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(LoadTokenType(param0))]
-pub fn ldtoken_type<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn ldtoken_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {
@@ -75,8 +75,8 @@ pub fn ldtoken_type<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(LoadTokenMethod(param0))]
-pub fn ldtoken_method<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn ldtoken_method<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     param0: &MethodSource,
 ) -> StepResult {
@@ -86,8 +86,9 @@ pub fn ldtoken_method<'gc, 'm: 'gc>(
 
     let method_obj = ctx.get_runtime_method_obj(gc, method, lookup);
 
+    let res_ctx = ctx.current_context();
     let rmh = ctx.loader().corlib_type("System.RuntimeMethodHandle");
-    let instance = ctx.current_context().new_object(rmh);
+    let instance = res_ctx.new_object(rmh);
     method_obj.write(&mut instance.instance_storage.get_field_mut_local(rmh, "_value"));
 
     ctx.push(gc, StackValue::ValueType(instance));
@@ -95,8 +96,8 @@ pub fn ldtoken_method<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(LoadTokenField(param0))]
-pub fn ldtoken_field<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn ldtoken_field<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     param0: &FieldSource,
 ) -> StepResult {

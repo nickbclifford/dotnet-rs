@@ -1,4 +1,4 @@
-use crate::{StepResult, StoreType, context::ResolutionContext, stack::VesContext, vm_error};
+use crate::{StepResult, StoreType, context::ResolutionContext, stack::ops::*, vm_error};
 use dotnet_types::generics::ConcreteType;
 use dotnet_utils::{DebugStr, gc::GCHandle};
 use dotnet_value::{
@@ -183,12 +183,12 @@ pub fn parse<'a>(
 pub struct ExceptionHandlingSystem;
 
 impl ExceptionHandlingSystem {
-    pub fn handle_exception<'a, 'gc, 'm: 'gc>(
+    pub fn handle_exception<'gc, 'm: 'gc>(
         &self,
-        ctx: &mut VesContext<'a, 'gc, 'm>,
+        ctx: &mut dyn VesOps<'gc, 'm>,
         gc: GCHandle<'gc>,
     ) -> StepResult {
-        match *ctx.exception_mode {
+        match *ctx.exception_mode() {
             // IMPORTANT: Never return Continue from exception handling states.
             // Returning Continue allows the optimized batch loop to keep executing
             // instructions without re-checking the current frame/exception state,
@@ -207,13 +207,13 @@ impl ExceptionHandlingSystem {
         }
     }
 
-    fn begin_throwing<'a, 'gc, 'm: 'gc>(
+    fn begin_throwing<'gc, 'm: 'gc>(
         &self,
-        ctx: &mut VesContext<'a, 'gc, 'm>,
+        ctx: &mut dyn VesOps<'gc, 'm>,
         exception: ObjectRef<'gc>,
         gc: GCHandle<'gc>,
     ) -> StepResult {
-        let frame = ctx.frame_stack.current_frame();
+        let frame = ctx.frame_stack().current_frame();
         if ctx.tracer_enabled() {
             ctx.tracer().trace_exception(
                 ctx.indent(),
@@ -227,7 +227,7 @@ impl ExceptionHandlingSystem {
 
         // Capture and store stack trace
         let mut trace = String::new();
-        for frame in ctx.frame_stack.frames.iter().rev() {
+        for frame in ctx.frame_stack().frames.iter().rev() {
             let method = &frame.state.info_handle.source;
             let type_name = method.parent.type_name();
             let method_name = method.method.name.to_string();
@@ -262,17 +262,17 @@ impl ExceptionHandlingSystem {
         // If we are already in the middle of a search or filter, we MUST NOT clear the suspended state,
         // as it contains the state of the outer exception we need to resume later.
         if matches!(
-            *ctx.exception_mode,
+            *ctx.exception_mode(),
             ExceptionState::None | ExceptionState::Throwing(_)
         ) {
-            ctx.evaluation_stack.clear_suspended();
-            ctx.frame_stack.clear_suspended();
+            ctx.evaluation_stack_mut().clear_suspended();
+            ctx.frame_stack_mut().clear_suspended();
         }
 
-        *ctx.exception_mode = ExceptionState::Searching(SearchState {
+        *ctx.exception_mode_mut() = ExceptionState::Searching(SearchState {
             exception,
             cursor: HandlerAddress {
-                frame_index: ctx.frame_stack.len() - 1,
+                frame_index: ctx.frame_stack().len() - 1,
                 section_index: 0,
                 handler_index: 0,
             },
@@ -280,16 +280,16 @@ impl ExceptionHandlingSystem {
         self.handle_exception(ctx, gc)
     }
 
-    fn search_for_handler<'a, 'gc, 'm: 'gc>(
+    fn search_for_handler<'gc, 'm: 'gc>(
         &self,
-        ctx: &mut VesContext<'a, 'gc, 'm>,
+        ctx: &mut dyn VesOps<'gc, 'm>,
         gc: GCHandle<'gc>,
         exception: ObjectRef<'gc>,
         cursor: HandlerAddress,
     ) -> StepResult {
         // Search from the cursor's frame down to the bottom of the stack
         for frame_index in (0..=cursor.frame_index).rev() {
-            let frame = &ctx.frame_stack.frames[frame_index];
+            let frame = &ctx.frame_stack().frames[frame_index];
             let ip = frame.state.ip;
             let exceptions = frame.state.info_handle.exceptions.clone();
 
@@ -324,7 +324,7 @@ impl ExceptionHandlingSystem {
 
                             if ctx.current_context().is_a(exc_type.into(), catch_type) {
                                 // Match found! Start the unwind phase towards this handler.
-                                *ctx.exception_mode = ExceptionState::Unwinding(UnwindState {
+                                *ctx.exception_mode_mut() = ExceptionState::Unwinding(UnwindState {
                                     exception: Some(exception),
                                     target: UnwindTarget::Handler(HandlerAddress {
                                         frame_index,
@@ -332,7 +332,7 @@ impl ExceptionHandlingSystem {
                                         handler_index,
                                     }),
                                     cursor: HandlerAddress {
-                                        frame_index: ctx.frame_stack.len() - 1,
+                                        frame_index: ctx.frame_stack().len() - 1,
                                         section_index: 0,
                                         handler_index: 0,
                                     },
@@ -347,20 +347,24 @@ impl ExceptionHandlingSystem {
                                 section_index,
                                 handler_index,
                             };
-                            *ctx.exception_mode = ExceptionState::Filtering(FilterState {
+                            *ctx.exception_mode_mut() = ExceptionState::Filtering(FilterState {
                                 exception,
                                 handler: handler_addr,
                             });
 
                             // To run the filter, we must suspend the frames and stack above it.
-                            let stack_base = ctx.frame_stack.frames[frame_index].base.stack;
-                            ctx.evaluation_stack.suspend_above(stack_base);
-                            ctx.frame_stack.suspend_above(frame_index);
+                            let stack_base = ctx.frame_stack().frames[frame_index].base.stack;
+                            ctx.evaluation_stack_mut().suspend_above(stack_base);
+                            ctx.frame_stack_mut().suspend_above(frame_index);
 
-                            let frame = &mut ctx.frame_stack.frames[frame_index];
-                            *ctx.original_ip = frame.state.ip;
-                            *ctx.original_stack_height = frame.stack_height;
+                            let (ip, height) = {
+                                let frame = &ctx.frame_stack().frames[frame_index];
+                                (frame.state.ip, frame.stack_height)
+                            };
+                            *ctx.original_ip_mut() = ip;
+                            *ctx.original_stack_height_mut() = height;
 
+                            let frame = &mut ctx.frame_stack_mut().frames[frame_index];
                             frame.state.ip = *clause_offset;
                             frame.stack_height = 0;
                             frame.exception_stack.push(exception);
@@ -435,7 +439,7 @@ impl ExceptionHandlingSystem {
         if let Some(st) = stack_trace {
             vm_error!(ctx, "Stack Trace:\n{}", st);
         } else {
-            for (frame_idx, frame) in ctx.frame_stack.frames.iter().enumerate() {
+            for (frame_idx, frame) in ctx.frame_stack().frames.iter().enumerate() {
                 vm_error!(
                     ctx,
                     "  Frame #{}: {:?} at IP {}",
@@ -446,15 +450,15 @@ impl ExceptionHandlingSystem {
             }
         }
 
-        *ctx.exception_mode = ExceptionState::None;
-        ctx.frame_stack.clear();
-        ctx.evaluation_stack.clear();
+        *ctx.exception_mode_mut() = ExceptionState::None;
+        ctx.frame_stack_mut().clear();
+        ctx.evaluation_stack_mut().clear();
         StepResult::MethodThrew
     }
 
-    fn unwind<'a, 'gc, 'm: 'gc>(
+    fn unwind<'gc, 'm: 'gc>(
         &self,
-        ctx: &mut VesContext<'a, 'gc, 'm>,
+        ctx: &mut dyn VesOps<'gc, 'm>,
         gc: GCHandle<'gc>,
         exception: Option<ObjectRef<'gc>>,
         target: UnwindTarget,
@@ -468,7 +472,7 @@ impl ExceptionHandlingSystem {
         // Unwind from the cursor's frame down to the target frame
         for frame_index in (target_frame..=cursor.frame_index).rev() {
             let (ip, exceptions) = {
-                let frame = &ctx.frame_stack.frames[frame_index];
+                let frame = &ctx.frame_stack().frames[frame_index];
                 (frame.state.ip, frame.state.info_handle.exceptions.clone())
             };
 
@@ -539,7 +543,7 @@ impl ExceptionHandlingSystem {
                             handler_kind,
                             HandlerKind::Catch(_) | HandlerKind::Filter { .. }
                         ) {
-                            ctx.frame_stack.frames[frame_index].exception_stack.pop();
+                            ctx.frame_stack_mut().frames[frame_index].exception_stack.pop();
                         }
                         continue;
                     }
@@ -570,13 +574,13 @@ impl ExceptionHandlingSystem {
                             }
                         };
 
-                        *ctx.exception_mode = ExceptionState::ExecutingHandler(UnwindState {
+                        *ctx.exception_mode_mut() = ExceptionState::ExecutingHandler(UnwindState {
                             exception,
                             target,
                             cursor: next_cursor,
                         });
 
-                        let frame = &mut ctx.frame_stack.frames[frame_index];
+                        let frame = &mut ctx.frame_stack_mut().frames[frame_index];
                         frame.state.ip = handler_start_ip;
                         frame.stack_height = 0;
 
@@ -588,17 +592,16 @@ impl ExceptionHandlingSystem {
             // If we have finished all sections in this frame and it's not the target frame,
             // we pop it and continue unwinding in the caller.
             if frame_index > target_frame {
-                ctx.frame_stack
-                    .unwind_frame(gc, ctx.evaluation_stack, ctx.shared, &ctx.local.heap);
+                ctx.unwind_frame(gc);
             }
         }
 
         // We have successfully unwound to the target!
-        *ctx.exception_mode = ExceptionState::None;
+        *ctx.exception_mode_mut() = ExceptionState::None;
         match target {
             UnwindTarget::Handler(target_h) => {
                 let handler_start_ip = {
-                    let section = &ctx.frame_stack.frames[target_h.frame_index]
+                    let section = &ctx.frame_stack().frames[target_h.frame_index]
                         .state
                         .info_handle
                         .exceptions[target_h.section_index];
@@ -606,7 +609,7 @@ impl ExceptionHandlingSystem {
                     handler.instructions.start
                 };
 
-                let frame = &mut ctx.frame_stack.frames[target_h.frame_index];
+                let frame = &mut ctx.frame_stack_mut().frames[target_h.frame_index];
                 frame.state.ip = handler_start_ip;
                 frame.stack_height = 0;
 
@@ -625,7 +628,7 @@ impl ExceptionHandlingSystem {
                     return StepResult::Return;
                 }
 
-                let frame = &mut ctx.frame_stack.frames[target_frame];
+                let frame = &mut ctx.frame_stack_mut().frames[target_frame];
                 frame.state.ip = target_ip;
                 frame.stack_height = 0;
 
@@ -639,8 +642,3 @@ impl ExceptionHandlingSystem {
     }
 }
 
-impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
-    pub fn handle_exception(&mut self, gc: GCHandle<'gc>) -> StepResult {
-        ExceptionHandlingSystem.handle_exception(self, gc)
-    }
-}

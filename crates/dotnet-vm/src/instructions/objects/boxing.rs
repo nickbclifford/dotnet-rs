@@ -1,7 +1,7 @@
 use crate::{
     StepResult,
     resolution::{TypeResolutionExt, ValueResolution},
-    stack::VesContext,
+    stack::ops::VesOps,
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
@@ -14,8 +14,8 @@ use dotnetdll::prelude::*;
 use std::ptr::NonNull;
 
 #[dotnet_instruction(BoxValue(param0))]
-pub fn box_value<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn box_value<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {
@@ -36,8 +36,8 @@ pub fn box_value<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(UnboxIntoValue(param0))]
-pub fn unbox_any<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn unbox_any<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {
@@ -99,8 +99,8 @@ pub fn unbox_any<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(UnboxIntoAddress { param0 })]
-pub fn unbox<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn unbox<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {

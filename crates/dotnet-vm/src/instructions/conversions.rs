@@ -1,12 +1,15 @@
-use crate::{StepResult, stack::VesContext};
+use crate::{
+    StepResult,
+    stack::ops::{ExceptionOps, StackOps},
+};
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{StackValue, pointer::UnmanagedPtr};
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(Convert(t))]
-pub fn conv<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn conv<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     t: ConversionType,
 ) -> StepResult {
@@ -94,8 +97,8 @@ pub fn conv<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(ConvertOverflow(t, sgn))]
-pub fn conv_ovf<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn conv_ovf<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     t: ConversionType,
     sgn: NumberSign,
@@ -159,7 +162,7 @@ pub fn conv_ovf<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(ConvertFloat32)]
-pub fn conv_r4<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+pub fn conv_r4<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T, gc: GCHandle<'gc>) -> StepResult {
     let v = match ctx.pop(gc) {
         StackValue::Int32(i) => i as f32,
         StackValue::Int64(i) => i as f32,
@@ -175,7 +178,7 @@ pub fn conv_r4<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc
 }
 
 #[dotnet_instruction(ConvertFloat64)]
-pub fn conv_r8<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+pub fn conv_r8<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T, gc: GCHandle<'gc>) -> StepResult {
     let v = match ctx.pop(gc) {
         StackValue::Int32(i) => i as f64,
         StackValue::Int64(i) => i as f64,
@@ -191,7 +194,7 @@ pub fn conv_r8<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc
 }
 
 #[dotnet_instruction(ConvertUnsignedToFloat)]
-pub fn conv_r_un<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
+pub fn conv_r_un<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T, gc: GCHandle<'gc>) -> StepResult {
     let value = ctx.pop(gc);
     let f = match value {
         StackValue::Int32(i) => (i as u32) as f64,

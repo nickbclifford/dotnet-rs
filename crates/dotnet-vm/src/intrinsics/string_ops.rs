@@ -1,4 +1,4 @@
-use crate::{StepResult, intrinsics::span::span_to_slice, stack::VesContext};
+use crate::{StepResult, intrinsics::span::span_to_slice, stack::ops::VesOps};
 use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
@@ -21,7 +21,7 @@ use std::{
 #[dotnet_intrinsic("static bool System.String::Equals(string, string)")]
 #[dotnet_intrinsic("bool System.String::Equals(string)")]
 pub fn intrinsic_string_equals<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -59,7 +59,7 @@ pub fn intrinsic_string_equals<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static string System.String::FastAllocateString(int)")]
 #[dotnet_intrinsic("static string System.String::FastAllocateString(int, IntPtr)")]
 pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     method: MethodDescription,
     _generics: &GenericLookup,
@@ -99,7 +99,7 @@ pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc>(
 /// System.String::.ctor(char[])
 #[dotnet_intrinsic("void System.String::.ctor(char[])")]
 pub fn intrinsic_string_ctor_char_array<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -133,7 +133,7 @@ pub fn intrinsic_string_ctor_char_array<'gc, 'm: 'gc>(
 /// System.String::.ctor(char*)
 #[dotnet_intrinsic("void System.String::.ctor(char*)")]
 pub fn intrinsic_string_ctor_char_ptr<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -173,7 +173,7 @@ pub fn intrinsic_string_ctor_char_ptr<'gc, 'm: 'gc>(
 /// System.String::get_Chars(int)
 #[dotnet_intrinsic("char System.String::get_Chars(int)")]
 pub fn intrinsic_string_get_chars<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -188,7 +188,7 @@ pub fn intrinsic_string_get_chars<'gc, 'm: 'gc>(
 /// System.String::get_Length()
 #[dotnet_intrinsic("int System.String::get_Length()")]
 pub fn intrinsic_string_get_length<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -204,7 +204,7 @@ pub fn intrinsic_string_get_length<'gc, 'm: 'gc>(
     "static string System.String::Concat(System.ReadOnlySpan<char>, System.ReadOnlySpan<char>, System.ReadOnlySpan<char>)"
 )]
 pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -238,7 +238,7 @@ pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
 /// System.String::GetHashCodeOrdinalIgnoreCase()
 #[dotnet_intrinsic("int System.String::GetHashCodeOrdinalIgnoreCase()")]
 pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -260,7 +260,7 @@ pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("char& System.String::GetPinnableReference()")]
 #[dotnet_intrinsic("char& System.String::GetRawStringData()")]
 pub fn intrinsic_string_get_raw_data<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -276,7 +276,7 @@ pub fn intrinsic_string_get_raw_data<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("int System.String::IndexOf(char)")]
 #[dotnet_intrinsic("int System.String::IndexOf(char, int)")]
 pub fn intrinsic_string_index_of<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     method: MethodDescription,
     _generics: &GenericLookup,
@@ -311,7 +311,7 @@ pub fn intrinsic_string_index_of<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("string System.String::Substring(int)")]
 #[dotnet_intrinsic("string System.String::Substring(int, int)")]
 pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     method: MethodDescription,
     _generics: &GenericLookup,
@@ -341,7 +341,7 @@ pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
 /// System.String::IsNullOrEmpty(string)
 #[dotnet_intrinsic("static bool System.String::IsNullOrEmpty(string)")]
 pub fn intrinsic_string_is_null_or_empty<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -365,7 +365,7 @@ pub fn intrinsic_string_is_null_or_empty<'gc, 'm: 'gc>(
 /// System.String::IsNullOrWhiteSpace(string)
 #[dotnet_intrinsic("static bool System.String::IsNullOrWhiteSpace(string)")]
 pub fn intrinsic_string_is_null_or_white_space<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -387,7 +387,7 @@ pub fn intrinsic_string_is_null_or_white_space<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic_field("static string System.String::Empty")]
 pub fn intrinsic_field_string_empty<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _field: FieldDescription,
     _type_generics: Arc<[ConcreteType]>,
@@ -399,7 +399,7 @@ pub fn intrinsic_field_string_empty<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic_field("int System.String::_stringLength")]
 pub fn intrinsic_field_string_length<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _field: FieldDescription,
     _type_generics: Arc<[ConcreteType]>,
@@ -419,7 +419,7 @@ pub fn intrinsic_field_string_length<'gc, 'm: 'gc>(
 /// System.String::CopyStringContent(string, int, string)
 #[dotnet_intrinsic("static void System.String::CopyStringContent(string, int, string)")]
 pub fn intrinsic_string_copy_string_content<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,

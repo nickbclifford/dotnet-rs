@@ -1,7 +1,6 @@
 use crate::{
     StepResult,
-    exceptions::{ExceptionState, HandlerAddress, HandlerKind, UnwindState, UnwindTarget},
-    stack::VesContext,
+    stack::ops::{ExceptionOps, StackOps},
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
@@ -9,8 +8,8 @@ use dotnet_value::StackValue;
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(Branch(target))]
-pub fn br<'gc, 'm: 'gc>(
-    _ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn br<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+    _ctx: &mut T,
     _gc: GCHandle<'gc>,
     target: usize,
 ) -> StepResult {
@@ -18,8 +17,8 @@ pub fn br<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(BranchEqual(target))]
-pub fn beq<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn beq<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     target: usize,
 ) -> StepResult {
@@ -33,8 +32,8 @@ pub fn beq<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(BranchGreaterOrEqual(sgn, target))]
-pub fn bge<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn bge<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     sgn: NumberSign,
     target: usize,
@@ -53,8 +52,8 @@ pub fn bge<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(BranchGreater(sgn, target))]
-pub fn bgt<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn bgt<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     sgn: NumberSign,
     target: usize,
@@ -70,8 +69,8 @@ pub fn bgt<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(BranchLessOrEqual(sgn, target))]
-pub fn ble<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn ble<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     sgn: NumberSign,
     target: usize,
@@ -90,8 +89,8 @@ pub fn ble<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(BranchLess(sgn, target))]
-pub fn blt<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn blt<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     sgn: NumberSign,
     target: usize,
@@ -107,8 +106,8 @@ pub fn blt<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(BranchNotEqual(target))]
-pub fn bne<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn bne<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     target: usize,
 ) -> StepResult {
@@ -122,8 +121,8 @@ pub fn bne<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(BranchTruthy(target))]
-pub fn brtrue<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn brtrue<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     target: usize,
 ) -> StepResult {
@@ -136,8 +135,8 @@ pub fn brtrue<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(BranchFalsy(target))]
-pub fn brfalse<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn brfalse<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     target: usize,
 ) -> StepResult {
@@ -150,8 +149,8 @@ pub fn brfalse<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(Switch(targets))]
-pub fn switch<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+pub fn switch<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
     gc: GCHandle<'gc>,
     targets: &[usize],
 ) -> StepResult {
@@ -169,47 +168,8 @@ pub fn switch<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(Return)]
-pub fn ret<'gc, 'm: 'gc>(ctx: &mut VesContext<'_, 'gc, 'm>, gc: GCHandle<'gc>) -> StepResult {
-    let frame_index = ctx.frame_stack.len() - 1;
-    if let ExceptionState::ExecutingHandler(state) = *ctx.exception_mode
-        && state.cursor.frame_index == frame_index
-    {
-        *ctx.exception_mode = ExceptionState::Unwinding(UnwindState {
-            exception: state.exception,
-            target: UnwindTarget::Instruction(usize::MAX),
-            cursor: state.cursor,
-        });
-        return ctx.handle_exception(gc);
-    }
-
-    let ip = ctx.state().ip;
-    let mut has_finally_blocks = false;
-    for section in &ctx.state().info_handle.exceptions {
-        if section.instructions.contains(&ip)
-            && section
-                .handlers
-                .iter()
-                .any(|h| matches!(h.kind, HandlerKind::Finally | HandlerKind::Fault))
-        {
-            has_finally_blocks = true;
-            break;
-        }
-    }
-
-    if has_finally_blocks {
-        *ctx.exception_mode = ExceptionState::Unwinding(UnwindState {
-            exception: None,
-            target: UnwindTarget::Instruction(usize::MAX),
-            cursor: HandlerAddress {
-                frame_index,
-                section_index: 0,
-                handler_index: 0,
-            },
-        });
-        return ctx.handle_exception(gc);
-    }
-
-    StepResult::Return
+pub fn ret<'gc, 'm: 'gc, T: ExceptionOps<'gc> + ?Sized>(ctx: &mut T, gc: GCHandle<'gc>) -> StepResult {
+    ctx.ret(gc)
 }
 
 fn is_nullish(val: StackValue) -> bool {

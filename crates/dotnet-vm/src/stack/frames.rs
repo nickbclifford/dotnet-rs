@@ -182,6 +182,7 @@ impl<'gc, 'm> FrameStack<'gc, 'm> {
         tracer_enabled: bool,
     ) -> StepResult {
         if self.is_empty() {
+            tracing::debug!("handle_return: stack empty, returning Return");
             return StepResult::Return;
         }
 
@@ -190,21 +191,31 @@ impl<'gc, 'm> FrameStack<'gc, 'm> {
             frame.state.info_handle.is_cctor || frame.is_finalizer
         };
 
+        tracing::debug!(
+            "handle_return: popping frame, was_auto_invoked={}",
+            was_auto_invoked
+        );
+
         self.return_frame(gc, evaluation_stack, shared, heap, tracer_enabled);
 
         if self.is_empty() {
+            tracing::debug!("handle_return: stack empty after pop, returning Return");
             return StepResult::Return;
         }
 
         if !was_auto_invoked {
+            tracing::debug!("handle_return: incrementing IP of caller");
             self.increment_ip();
             let out_of_bounds = {
                 let frame = self.current_frame();
                 frame.state.ip >= frame.state.info_handle.instructions.len()
             };
             if out_of_bounds {
+                tracing::debug!("handle_return: out of bounds, recursive return");
                 return self.handle_return(gc, evaluation_stack, shared, heap, tracer_enabled);
             }
+        } else {
+            tracing::debug!("handle_return: NOT incrementing IP (was auto-invoked)");
         }
 
         StepResult::Continue

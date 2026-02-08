@@ -1,6 +1,6 @@
 use crate::{
     StepResult,
-    stack::VesContext,
+    stack::ops::VesOps,
     sync::{Arc, Ordering, SyncBlockOps, SyncManagerOps},
 };
 use dotnet_macros::dotnet_intrinsic;
@@ -17,7 +17,7 @@ use std::thread;
 /// System.Threading.Monitor::Exit(object) - Releases the lock on an object.
 #[dotnet_intrinsic("static void System.Threading.Monitor::Exit(object)")]
 pub fn intrinsic_monitor_exit<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -32,7 +32,7 @@ pub fn intrinsic_monitor_exit<'gc, 'm: 'gc>(
         // Get the sync block if it exists
         if let Some(index) = obj_ref.as_object(|o| o.sync_block_index) {
             let sync_block = ctx
-                .shared
+                .shared()
                 .sync_blocks
                 .get_sync_block(index)
                 .expect("Sync block missing");
@@ -64,7 +64,7 @@ pub fn intrinsic_monitor_exit<'gc, 'm: 'gc>(
 )]
 #[dotnet_intrinsic("static T System.Threading.Interlocked::CompareExchange<T>(T&, T, T)")]
 pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
@@ -214,7 +214,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static object System.Threading.Interlocked::Exchange(object&, object)")]
 #[dotnet_intrinsic("static T System.Threading.Interlocked::Exchange<T>(T&, T)")]
 pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
@@ -335,12 +335,12 @@ fn get_or_create_sync_block<'gc, T: SyncManagerOps>(
     result
 }
 
-fn find_success_flag_index(ctx: &VesContext, success_ptr: ManagedPtr) -> Option<usize> {
+fn find_success_flag_index(ctx: &dyn VesOps, success_ptr: ManagedPtr) -> Option<usize> {
     let mut success_flag_index = None;
     if let (None, Some(p)) = (success_ptr.owner, success_ptr.pointer()) {
         let raw_ptr = p.as_ptr();
-        for i in 0..ctx.evaluation_stack.top_of_stack() {
-            if ctx.evaluation_stack.get_slot_address(i).as_ptr() == raw_ptr {
+        for i in 0..ctx.top_of_stack() {
+            if ctx.get_slot_address(i).as_ptr() == raw_ptr {
                 success_flag_index = Some(i);
                 break;
             }
@@ -352,7 +352,7 @@ fn find_success_flag_index(ctx: &VesContext, success_ptr: ManagedPtr) -> Option<
 /// System.Threading.Monitor::Enter(object)
 #[dotnet_intrinsic("static void System.Threading.Monitor::Enter(object)")]
 pub fn intrinsic_monitor_enter_obj<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -366,12 +366,12 @@ pub fn intrinsic_monitor_enter_obj<'gc, 'm: 'gc>(
             "Monitor.Enter called from unregistered thread"
         );
 
-        let sync_block = get_or_create_sync_block(&ctx.shared.sync_blocks, obj_ref, gc);
+        let sync_block = get_or_create_sync_block(&ctx.shared().sync_blocks, obj_ref, gc);
 
-        while !ctx.shared.sync_blocks.try_enter_block(
+        while !ctx.shared().sync_blocks.try_enter_block(
             sync_block.clone(),
             thread_id,
-            &ctx.shared.metrics,
+            &ctx.shared().metrics,
         ) {
             ctx.check_gc_safe_point();
             thread::yield_now();
@@ -387,13 +387,13 @@ pub fn intrinsic_monitor_enter_obj<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static void System.Threading.Monitor::ReliableEnter(object, bool&)")]
 #[dotnet_intrinsic("static void System.Threading.Monitor::Enter(object, bool&)")]
 pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let success_ptr = ctx.evaluation_stack.peek_stack_at(0).as_managed_ptr();
-    let obj_ref = ctx.evaluation_stack.peek_stack_at(1).as_object_ref();
+    let success_ptr = ctx.peek_stack_at(0).as_managed_ptr();
+    let obj_ref = ctx.peek_stack_at(1).as_object_ref();
 
     let success_flag_index = find_success_flag_index(ctx, success_ptr);
 
@@ -404,19 +404,19 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
             "Monitor.ReliableEnter called from unregistered thread"
         );
 
-        let sync_block = get_or_create_sync_block(&ctx.shared.sync_blocks, obj_ref, gc);
+        let sync_block = get_or_create_sync_block(&ctx.shared().sync_blocks, obj_ref, gc);
 
-        while !ctx.shared.sync_blocks.try_enter_block(
+        while !ctx.shared().sync_blocks.try_enter_block(
             sync_block.clone(),
             thread_id,
-            &ctx.shared.metrics,
+            &ctx.shared().metrics,
         ) {
             ctx.check_gc_safe_point();
             thread::yield_now();
         }
 
         let ptr = if let Some(index) = success_flag_index {
-            ctx.evaluation_stack.get_slot_address(index)
+            ctx.get_slot_address(index)
         } else {
             success_ptr.pointer().expect("null success flag")
         };
@@ -439,7 +439,7 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
 /// System.Threading.Monitor::TryEnter_FastPath(object)
 #[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter_FastPath(object)")]
 pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -453,7 +453,7 @@ pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc>(
             "Monitor.TryEnter_FastPath called from unregistered thread"
         );
 
-        let sync_block = get_or_create_sync_block(&ctx.shared.sync_blocks, obj_ref, gc);
+        let sync_block = get_or_create_sync_block(&ctx.shared().sync_blocks, obj_ref, gc);
         let success = sync_block.try_enter(thread_id);
         ctx.push_i32(gc, if success { 1 } else { 0 });
     } else {
@@ -466,14 +466,14 @@ pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc>(
 /// System.Threading.Monitor::TryEnter(object, int, ref bool)
 #[dotnet_intrinsic("static void System.Threading.Monitor::TryEnter(object, int, bool&)")]
 pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let success_ptr = ctx.evaluation_stack.peek_stack_at(0).as_managed_ptr();
-    let timeout_ms = ctx.evaluation_stack.peek_stack_at(1).as_i32();
-    let obj_ref = ctx.evaluation_stack.peek_stack_at(2).as_object_ref();
+    let success_ptr = ctx.peek_stack_at(0).as_managed_ptr();
+    let timeout_ms = ctx.peek_stack_at(1).as_i32();
+    let obj_ref = ctx.peek_stack_at(2).as_object_ref();
 
     let success_flag_index = find_success_flag_index(ctx, success_ptr);
 
@@ -484,22 +484,22 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
             "Monitor.TryEnter called from unregistered thread"
         );
 
-        let sync_block = get_or_create_sync_block(&ctx.shared.sync_blocks, obj_ref, gc);
+        let sync_block = get_or_create_sync_block(&ctx.shared().sync_blocks, obj_ref, gc);
 
         #[cfg(feature = "multithreaded-gc")]
         let success = sync_block.enter_with_timeout_safe(
             thread_id,
             timeout_ms as u64,
-            &ctx.shared.metrics,
-            ctx.shared.thread_manager.as_ref(),
-            &ctx.shared.gc_coordinator,
+            &ctx.shared().metrics,
+            ctx.shared().thread_manager.as_ref(),
+            &ctx.shared().gc_coordinator,
         );
         #[cfg(not(feature = "multithreaded-gc"))]
         let success =
-            sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &ctx.shared.metrics);
+            sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &ctx.shared().metrics);
 
         let ptr = if let Some(index) = success_flag_index {
-            ctx.evaluation_stack.get_slot_address(index)
+            ctx.get_slot_address(index)
         } else {
             success_ptr.pointer().expect("null success flag")
         };
@@ -524,7 +524,7 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
 /// System.Threading.Monitor::TryEnter(object, int)
 #[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter(object, int)")]
 pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -539,19 +539,19 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
             "Monitor.TryEnter called from unregistered thread"
         );
 
-        let sync_block = get_or_create_sync_block(&ctx.shared.sync_blocks, obj_ref, gc);
+        let sync_block = get_or_create_sync_block(&ctx.shared().sync_blocks, obj_ref, gc);
 
         #[cfg(feature = "multithreaded-gc")]
         let success = sync_block.enter_with_timeout_safe(
             thread_id,
             timeout_ms as u64,
-            &ctx.shared.metrics,
-            ctx.shared.thread_manager.as_ref(),
-            &ctx.shared.gc_coordinator,
+            &ctx.shared().metrics,
+            ctx.shared().thread_manager.as_ref(),
+            &ctx.shared().gc_coordinator,
         );
         #[cfg(not(feature = "multithreaded-gc"))]
         let success =
-            sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &ctx.shared.metrics);
+            sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &ctx.shared().metrics);
 
         ctx.push_i32(gc, if success { 1 } else { 0 });
     } else {
@@ -577,7 +577,7 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static float System.Threading.Volatile::Read(float&)")]
 #[dotnet_intrinsic("static double System.Threading.Volatile::Read(double&)")]
 pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
@@ -693,7 +693,7 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static void System.Threading.Volatile::Write(float&, float)")]
 #[dotnet_intrinsic("static void System.Threading.Volatile::Write(double&, double)")]
 pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
-    ctx: &mut VesContext<'_, 'gc, 'm>,
+    ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
