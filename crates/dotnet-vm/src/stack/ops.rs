@@ -182,10 +182,6 @@ pub trait ReflectionOps<'gc, 'm>: crate::memory::ops::MemoryOps<'gc> {
     ) -> RuntimeType;
     fn get_heap_description(&self, object: ObjectHandle<'gc>) -> TypeDescription;
     fn locate_field(&self, handle: FieldSource) -> (FieldDescription, GenericLookup);
-    fn loader(&self) -> &'m dotnet_assemblies::AssemblyLoader;
-    fn resolver(&self) -> crate::resolver::ResolverService<'m>;
-    fn shared(&self) -> &Arc<SharedGlobalState<'m>>;
-    fn statics(&self) -> &crate::state::StaticStorageManager;
     fn is_intrinsic_field_cached(&self, field: FieldDescription) -> bool;
     fn is_intrinsic_cached(&self, method: MethodDescription) -> bool;
     fn resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> RuntimeType;
@@ -193,13 +189,26 @@ pub trait ReflectionOps<'gc, 'm>: crate::memory::ops::MemoryOps<'gc> {
     fn resolve_runtime_field(&self, obj: ObjectRef<'gc>) -> (FieldDescription, GenericLookup);
     fn lookup_method_by_index(&self, index: usize) -> (MethodDescription, GenericLookup);
     fn reflection(&self) -> crate::state::ReflectionRegistry<'_, 'gc>;
-    fn thread_id(&self) -> usize;
+}
+
+pub trait LoaderOps<'m> {
+    fn loader(&self) -> &'m dotnet_assemblies::AssemblyLoader;
+    fn resolver(&self) -> crate::resolver::ResolverService<'m>;
+    fn shared(&self) -> &Arc<SharedGlobalState<'m>>;
+}
+
+pub trait StaticsOps<'gc> {
+    fn statics(&self) -> &crate::state::StaticStorageManager;
     fn initialize_static_storage(
         &mut self,
         gc: GCHandle<'gc>,
         description: TypeDescription,
         generics: GenericLookup,
     ) -> crate::StepResult;
+}
+
+pub trait ThreadOps {
+    fn thread_id(&self) -> usize;
 }
 
 pub trait CallOps<'gc, 'm> {
@@ -247,6 +256,9 @@ pub trait VesOps<'gc, 'm>:
     + ExceptionOps<'gc>
     + ResolutionOps<'gc, 'm>
     + ReflectionOps<'gc, 'm>
+    + LoaderOps<'m>
+    + StaticsOps<'gc>
+    + ThreadOps
     + CallOps<'gc, 'm>
     + MemoryOps<'gc>
     + PoolOps

@@ -41,8 +41,8 @@ use super::{
     evaluation_stack::EvaluationStack,
     frames::FrameStack,
     ops::{
-        CallOps, ExceptionOps, PoolOps, RawMemoryOps, ReflectionOps, ResolutionOps, StackOps,
-        VesOps,
+        CallOps, ExceptionOps, LoaderOps, PoolOps, RawMemoryOps, ReflectionOps, ResolutionOps,
+        StackOps, StaticsOps, ThreadOps, VesOps,
     },
 };
 
@@ -833,6 +833,92 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
     }
 }
 
+impl<'a, 'gc, 'm: 'gc> LoaderOps<'m> for VesContext<'a, 'gc, 'm> {
+    #[inline]
+    fn loader(&self) -> &'m AssemblyLoader {
+        self.shared.loader
+    }
+
+    #[inline]
+    fn resolver(&self) -> ResolverService<'m> {
+        ResolverService::new(self.shared.clone())
+    }
+
+    #[inline]
+    fn shared(&self) -> &Arc<SharedGlobalState<'m>> {
+        self.shared
+    }
+}
+
+impl<'a, 'gc, 'm: 'gc> StaticsOps<'gc> for VesContext<'a, 'gc, 'm> {
+    #[inline]
+    fn statics(&self) -> &StaticStorageManager {
+        &self.shared.statics
+    }
+
+    #[inline]
+    fn initialize_static_storage(
+        &mut self,
+        gc: GCHandle<'gc>,
+        description: TypeDescription,
+        generics: GenericLookup,
+    ) -> StepResult {
+        self.check_gc_safe_point();
+
+        let ctx = ResolutionContext {
+            resolution: description.resolution,
+            generics: &generics,
+            loader: self.loader(),
+            type_owner: Some(description),
+            method_owner: None,
+            caches: self.shared.caches.clone(),
+            shared: Some(self.shared.clone()),
+        };
+
+        loop {
+            let tid = self.thread_id.get();
+            let init_result =
+                self.shared
+                    .statics
+                    .init(description, &ctx, tid, Some(&self.shared.metrics));
+
+            use crate::statics::StaticInitResult::*;
+            match init_result {
+                Execute(m) => {
+                    crate::vm_trace!(
+                        self,
+                        "-- calling static constructor (will return to ip {}) --",
+                        self.current_frame().state.ip
+                    );
+                    self.call_frame(
+                        gc,
+                        MethodInfo::new(m, &generics, self.shared.clone()),
+                        generics.clone(),
+                    );
+                    return StepResult::FramePushed;
+                }
+                Initialized | Recursive => {
+                    return StepResult::Continue;
+                }
+                Waiting => {
+                    self.check_gc_safe_point();
+                    std::thread::yield_now();
+                }
+                Failed => {
+                    return self.throw_by_name(gc, "System.TypeInitializationException");
+                }
+            }
+        }
+    }
+}
+
+impl<'a, 'gc, 'm: 'gc> ThreadOps for VesContext<'a, 'gc, 'm> {
+    #[inline]
+    fn thread_id(&self) -> usize {
+        self.thread_id.get() as usize
+    }
+}
+
 impl<'a, 'gc, 'm: 'gc> ReflectionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn pre_initialize_reflection(&mut self, gc: GCHandle<'gc>) {
@@ -896,26 +982,6 @@ impl<'a, 'gc, 'm: 'gc> ReflectionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn loader(&self) -> &'m AssemblyLoader {
-        self.shared.loader
-    }
-
-    #[inline]
-    fn resolver(&self) -> ResolverService<'m> {
-        ResolverService::new(self.shared.clone())
-    }
-
-    #[inline]
-    fn shared(&self) -> &Arc<SharedGlobalState<'m>> {
-        self.shared
-    }
-
-    #[inline]
-    fn statics(&self) -> &StaticStorageManager {
-        &self.shared.statics
-    }
-
-    #[inline]
     fn is_intrinsic_field_cached(&self, field: FieldDescription) -> bool {
         self.resolver().is_intrinsic_field_cached(field)
     }
@@ -957,80 +1023,6 @@ impl<'a, 'gc, 'm: 'gc> ReflectionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn reflection(&self) -> crate::state::ReflectionRegistry<'_, 'gc> {
         crate::state::ReflectionRegistry::new(self.local)
-    }
-
-    #[inline]
-    fn thread_id(&self) -> usize {
-        self.thread_id.get() as usize
-    }
-
-    #[inline]
-    fn initialize_static_storage(
-        &mut self,
-        gc: GCHandle<'gc>,
-        description: TypeDescription,
-        generics: GenericLookup,
-    ) -> StepResult {
-        self.check_gc_safe_point();
-
-        let ctx = ResolutionContext {
-            resolution: description.resolution,
-            generics: &generics,
-            loader: self.loader(),
-            type_owner: Some(description),
-            method_owner: None,
-            caches: self.shared.caches.clone(),
-            shared: Some(self.shared.clone()),
-        };
-
-        loop {
-            let tid = self.thread_id.get();
-            let init_result =
-                self.shared
-                    .statics
-                    .init(description, &ctx, tid, Some(&self.shared.metrics));
-
-            use crate::statics::StaticInitResult::*;
-            match init_result {
-                Execute(m) => {
-                    crate::vm_trace!(
-                        self,
-                        "-- calling static constructor (will return to ip {}) --",
-                        self.current_frame().state.ip
-                    );
-                    self.call_frame(
-                        gc,
-                        MethodInfo::new(m, &generics, self.shared.clone()),
-                        generics.clone(),
-                    );
-                    return StepResult::FramePushed;
-                }
-                Initialized | Recursive => {
-                    return StepResult::Continue;
-                }
-                Failed => {
-                    return self.throw_by_name(gc, "System.TypeInitializationException");
-                }
-                Waiting => {
-                    #[cfg(feature = "multithreaded-gc")]
-                    self.shared.statics.wait_for_init(
-                        description,
-                        &generics,
-                        self.shared.thread_manager.as_ref(),
-                        self.thread_id.get(),
-                        &self.shared.gc_coordinator,
-                    );
-                    #[cfg(not(feature = "multithreaded-gc"))]
-                    self.shared.statics.wait_for_init(
-                        description,
-                        &generics,
-                        self.shared.thread_manager.as_ref(),
-                        self.thread_id.get(),
-                        &Default::default(),
-                    );
-                }
-            }
-        }
     }
 }
 
