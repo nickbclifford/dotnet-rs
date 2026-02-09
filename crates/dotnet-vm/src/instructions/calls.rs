@@ -45,10 +45,14 @@ pub fn callvirt<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         }
         StackValue::ObjectRef(ObjectRef(Some(o))) => ctx.current_context().get_heap_description(o),
         StackValue::ManagedPtr(m) => m.inner_type,
-        rest => panic!(
-            "invalid this argument for virtual call (expected ObjectRef or ManagedPtr, received {:?})",
-            rest
-        ),
+        rest => {
+            return StepResult::Error(crate::error::VmError::Execution(
+                crate::error::ExecutionError::TypeMismatch {
+                    expected: "ObjectRef or ManagedPtr".to_string(),
+                    actual: format!("{:?}", rest),
+                },
+            ));
+        }
     };
 
     // TODO: check explicit overrides
@@ -93,10 +97,12 @@ pub fn call_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         }
     }
 
-    panic!(
-        "could not find method to dispatch to for constrained call({:?}, {:?})",
-        constraint_type, method
-    );
+    StepResult::Error(crate::error::VmError::Execution(
+        crate::error::ExecutionError::NotImplemented(format!(
+            "could not find method to dispatch to for constrained call({:?}, {:?})",
+            constraint_type, method
+        )),
+    ))
 }
 
 #[dotnet_instruction(CallVirtualConstrained(constraint, source))]

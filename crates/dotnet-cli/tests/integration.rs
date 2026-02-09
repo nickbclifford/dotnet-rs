@@ -147,6 +147,9 @@ impl TestHarness {
             vm::ExecutorResult::Threw => {
                 panic!("VM threw an exception while running {:?}", resolution)
             }
+            vm::ExecutorResult::Error(e) => {
+                panic!("VM internal error while running {:?}: {}", resolution, e)
+            }
         }
     }
 }

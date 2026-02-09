@@ -85,6 +85,19 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
         }
     }
 
+    #[inline]
+    pub(crate) fn on_pop_safe(&mut self) -> Result<(), crate::error::VmError> {
+        if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
+            if frame.stack_height == 0 {
+                return Err(crate::error::VmError::Execution(
+                    crate::error::ExecutionError::StackUnderflow,
+                ));
+            }
+            frame.stack_height -= 1;
+        }
+        Ok(())
+    }
+
     pub fn top_of_stack_address(&self) -> NonNull<u8> {
         self.evaluation_stack
             .get_slot_address(self.evaluation_stack.top_of_stack().saturating_sub(1))

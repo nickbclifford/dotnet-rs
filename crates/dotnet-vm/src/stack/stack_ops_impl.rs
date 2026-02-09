@@ -87,6 +87,14 @@ impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
+    fn pop_safe(&mut self, gc: GCHandle<'gc>) -> Result<StackValue<'gc>, crate::error::VmError> {
+        self.on_pop_safe()?;
+        let val = self.evaluation_stack.pop_safe(gc)?;
+        self.trace_pop(&val);
+        Ok(val)
+    }
+
+    #[inline]
     fn pop_i32(&mut self, gc: GCHandle<'gc>) -> i32 {
         self.on_pop();
         let val = self.evaluation_stack.pop_i32(gc);

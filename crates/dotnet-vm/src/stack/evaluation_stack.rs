@@ -90,6 +90,15 @@ impl<'gc> EvaluationStack<'gc> {
         self.stack.pop().expect("Evaluation stack underflow")
     }
 
+    pub fn pop_safe(
+        &mut self,
+        _gc: GCHandle<'gc>,
+    ) -> Result<StackValue<'gc>, crate::error::VmError> {
+        self.stack
+            .pop()
+            .ok_or(crate::error::VmError::Execution(crate::error::ExecutionError::StackUnderflow))
+    }
+
     pub fn pop_i32(&mut self, gc: GCHandle<'gc>) -> i32 {
         self.pop(gc).as_i32()
     }

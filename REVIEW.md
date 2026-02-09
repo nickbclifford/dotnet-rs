@@ -1163,13 +1163,21 @@ Checkpoint (2026-02-09):
    }
    ```
 
-4. **Handle `StepResult::Error` in execution loop** (`executor.rs`)
+4. **Handle `StepResult::Error` in execution loop** (`executor.rs`) - DONE
 
-5. **Migrate high-priority unwrap/expect calls** (see Error Handling section)
+5. **Migrate high-priority unwrap/expect calls** (see Error Handling section) - DONE (migrated stack underflow, call/constrained dispatch, and memory allocation panics)
 
-6. **Run full test suite** to ensure no panics converted to errors break tests
+6. **Run full test suite** to ensure no panics converted to errors break tests - DONE
 
 ---
+
+### Checkpoint 2.4 Complete
+The VM now has a structured error hierarchy using `thiserror`. 
+- `VmError` covers assembly loading, type resolution, execution, and memory access.
+- `StepResult` and `ExecutorResult` now propagate these errors instead of panicking.
+- `pop_safe` added to `StackOps` to handle stack underflow gracefully.
+- Common instruction macros updated to use `pop_safe`.
+- Integration tests updated to handle the new `Error` variant.
 
 ### Phase 3: Architectural Changes (1-2 weeks each)
 

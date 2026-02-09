@@ -33,6 +33,7 @@ pub struct Executor {
 pub enum ExecutorResult {
     Exited(u8),
     Threw, // TODO: well-typed exceptions
+    Error(crate::error::VmError),
 }
 
 impl Executor {
@@ -215,6 +216,9 @@ impl Executor {
                 }
                 StepResult::MethodThrew => {
                     break ExecutorResult::Threw;
+                }
+                StepResult::Error(e) => {
+                    break ExecutorResult::Error(e);
                 }
                 _ => {}
             }

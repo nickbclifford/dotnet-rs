@@ -62,5 +62,9 @@ pub fn run_cli() -> ExitCode {
     match result {
         ExecutorResult::Exited(i) => ExitCode::from(i),
         ExecutorResult::Threw => todo!("pretty output for crashing on unhandled exception"),
+        ExecutorResult::Error(e) => {
+            eprintln!("Internal VM error: {}", e);
+            ExitCode::from(1)
+        }
     }
 }

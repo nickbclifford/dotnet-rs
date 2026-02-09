@@ -1,6 +1,5 @@
 use crate::{
     StepResult,
-    instructions::macros::*,
     stack::ops::{ResolutionOps, StackOps},
 };
 use dotnet_macros::dotnet_instruction;
@@ -20,8 +19,10 @@ pub fn pop<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
     gc: GCHandle<'gc>,
 ) -> StepResult {
-    let _ = ctx.pop(gc);
-    StepResult::Continue
+    match ctx.pop_safe(gc) {
+        Ok(_) => StepResult::Continue,
+        Err(e) => StepResult::Error(e),
+    }
 }
 
 #[dotnet_instruction(Duplicate)]
@@ -29,8 +30,14 @@ pub fn duplicate<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
     gc: GCHandle<'gc>,
 ) -> StepResult {
-    ctx.dup(gc);
-    StepResult::Continue
+    match ctx.pop_safe(gc) {
+        Ok(val) => {
+            ctx.push(gc, val.clone());
+            ctx.push(gc, val);
+            StepResult::Continue
+        }
+        Err(e) => StepResult::Error(e),
+    }
 }
 
 load_const!(

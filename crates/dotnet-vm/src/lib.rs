@@ -19,6 +19,7 @@ use std::rc::Rc;
 
 pub mod context;
 pub mod dispatch;
+pub mod error;
 mod exceptions;
 mod executor;
 pub mod gc;
@@ -130,7 +131,7 @@ impl MethodInfo<'static> {
 }
 
 #[must_use]
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum StepResult {
     Continue,    // Advance IP
     Jump(usize), // Set IP to X
@@ -139,4 +140,5 @@ pub enum StepResult {
     MethodThrew, // Exception unhandled in frame
     Exception,   // Exception thrown, need to call handle_exception
     Yield,       // GC/Thread yield
+    Error(error::VmError), // Internal VM error
 }

@@ -17,9 +17,9 @@ pub fn cpblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ?Sized>(
     ctx: &mut T,
     gc: GCHandle<'gc>,
 ) -> StepResult {
-    let size = ctx.pop_isize(gc) as usize;
-    let src = ctx.pop_ptr(gc);
-    let dest = ctx.pop_ptr(gc);
+    let size = vm_pop!(ctx, gc).as_isize() as usize;
+    let src = vm_pop!(ctx, gc).as_ptr();
+    let dest = vm_pop!(ctx, gc).as_ptr();
 
     // Check GC safe point before large memory block copy operations
     // Threshold: copying more than 4KB of data
@@ -42,9 +42,9 @@ pub fn initblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ?Sized>(
     ctx: &mut T,
     gc: GCHandle<'gc>,
 ) -> StepResult {
-    let size = ctx.pop_isize(gc) as usize;
-    let val = ctx.pop_isize(gc) as u8;
-    let addr = ctx.pop_ptr(gc);
+    let size = vm_pop!(ctx, gc).as_isize() as usize;
+    let val = vm_pop!(ctx, gc).as_isize() as u8;
+    let addr = vm_pop!(ctx, gc).as_ptr();
 
     // Check GC safe point before large memory block initialization
     if size > 4096 {
@@ -64,7 +64,7 @@ pub fn localloc<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + PoolOps + ExceptionOps<'gc>
     ctx: &mut T,
     gc: GCHandle<'gc>,
 ) -> StepResult {
-    let size_isize = ctx.pop_isize(gc);
+    let size_isize = vm_pop!(ctx, gc).as_isize();
     if size_isize < 0 {
         return ctx.throw_by_name(gc, "System.OverflowException");
     }
@@ -76,6 +76,9 @@ pub fn localloc<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + PoolOps + ExceptionOps<'gc>
     }
 
     let ptr = ctx.localloc(size);
+    if ptr.is_null() {
+        return ctx.throw_by_name(gc, "System.OutOfMemoryException");
+    }
 
     ctx.push(
         gc,

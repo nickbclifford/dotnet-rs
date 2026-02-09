@@ -55,6 +55,7 @@ pub trait StackOps<'gc, 'm> {
 
     #[must_use]
     fn pop(&mut self, gc: GCHandle<'gc>) -> StackValue<'gc>;
+    fn pop_safe(&mut self, gc: GCHandle<'gc>) -> Result<StackValue<'gc>, crate::error::VmError>;
     #[must_use]
     fn pop_i32(&mut self, gc: GCHandle<'gc>) -> i32;
     #[must_use]
