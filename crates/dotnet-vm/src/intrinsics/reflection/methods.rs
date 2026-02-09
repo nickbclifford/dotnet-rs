@@ -270,7 +270,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
         _ => None,
     };
 
-    result.expect("unimplemented method info intrinsic");
+    let _ = result.expect("unimplemented method info intrinsic");
     StepResult::Continue
 }
 

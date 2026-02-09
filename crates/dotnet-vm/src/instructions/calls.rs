@@ -146,6 +146,8 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
                 type_layout(constraint_type_source.clone(), &ctx.current_context()).size();
 
             let mut value_vec = vec![0u8; value_size];
+            // SAFETY: Memory is allocated with sufficient size (value_size) and ptr is valid
+            // for the current thread's evaluation stack.
             unsafe { ptr::copy_nonoverlapping(ptr, value_vec.as_mut_ptr(), value_size) };
             let value_data = &value_vec;
             let value = ctx.read_cts_value(&constraint_type_source, value_data, gc);
@@ -170,10 +172,10 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     } else {
         // Reference type: dereference the managed pointer
         let m = args[0].as_managed_ptr();
-        let ptr = match m.pointer() {
-            Some(p) => p.as_ptr(),
-            None => return ctx.throw_by_name(gc, "System.NullReferenceException"),
+        let Some(p) = m.pointer() else {
+            return ctx.throw_by_name(gc, "System.NullReferenceException");
         };
+        let ptr = p.as_ptr();
         debug_assert!(
             (ptr as usize).is_multiple_of(align_of::<ObjectRef>()),
             "ManagedPtr value is not aligned for ObjectRef"
@@ -181,8 +183,11 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         // Create a slice from the pointer. We know ObjectRef is pointer-sized.
 
         let mut value_vec = vec![0u8; ObjectRef::SIZE];
+        // SAFETY: ObjectRef size is fixed and ptr is valid for the current thread's evaluation stack.
         unsafe { ptr::copy_nonoverlapping(ptr, value_vec.as_mut_ptr(), ObjectRef::SIZE) };
         let value_bytes = &value_vec;
+
+        // SAFETY: value_bytes contains a valid ObjectRef from the stack and gc is the current arena.
         let obj_ref = unsafe { ObjectRef::read_branded(value_bytes, gc) };
 
         if obj_ref.0.is_none() {

@@ -20,7 +20,7 @@ pub fn pop<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
     gc: GCHandle<'gc>,
 ) -> StepResult {
-    ctx.pop(gc);
+    let _ = ctx.pop(gc);
     StepResult::Continue
 }
 

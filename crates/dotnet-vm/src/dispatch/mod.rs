@@ -276,7 +276,7 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
 
             let next_index = frame.multicast_state.as_ref().unwrap().next_index;
             if next_index < targets_len && has_return_value {
-                ctx.pop(gc);
+                let _ = ctx.pop(gc);
             }
         }
 

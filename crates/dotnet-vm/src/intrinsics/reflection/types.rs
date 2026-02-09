@@ -38,7 +38,7 @@ pub fn intrinsic_assembly_get_custom_attributes<'gc, 'm: 'gc>(
             0
         };
     for _ in 0..num_args {
-        ctx.pop(gc);
+        let _ = ctx.pop(gc);
     }
 
     // Return an empty array of Attribute
@@ -67,7 +67,7 @@ pub fn intrinsic_attribute_get_custom_attributes<'gc, 'm: 'gc>(
             0
         };
     for _ in 0..num_args {
-        ctx.pop(gc);
+        let _ = ctx.pop(gc);
     }
 
     // Return an empty array of Attribute
@@ -594,8 +594,8 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
             Some(StepResult::Continue)
         }
         ("CreateInstanceDefaultCtor", 2) => {
-            ctx.pop(gc); // skipCheck
-            ctx.pop(gc); // publicOnly
+            let _ = ctx.pop(gc); // skipCheck
+            let _ = ctx.pop(gc); // publicOnly
             let target_obj = ctx.pop_obj(gc);
 
             // Check GC safe point before object instantiation
@@ -877,7 +877,7 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc>(
     }
 
     // Initialization complete, pop the argument
-    ctx.pop(gc);
+    let _ = ctx.pop(gc);
     StepResult::Continue
 }
 

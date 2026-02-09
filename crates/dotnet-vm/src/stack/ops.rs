@@ -53,16 +53,27 @@ pub trait StackOps<'gc, 'm> {
     fn push_managed_ptr(&mut self, gc: GCHandle<'gc>, value: ManagedPtr<'gc>);
     fn push_string(&mut self, gc: GCHandle<'gc>, value: CLRString);
 
+    #[must_use]
     fn pop(&mut self, gc: GCHandle<'gc>) -> StackValue<'gc>;
+    #[must_use]
     fn pop_i32(&mut self, gc: GCHandle<'gc>) -> i32;
+    #[must_use]
     fn pop_i64(&mut self, gc: GCHandle<'gc>) -> i64;
+    #[must_use]
     fn pop_f64(&mut self, gc: GCHandle<'gc>) -> f64;
+    #[must_use]
     fn pop_isize(&mut self, gc: GCHandle<'gc>) -> isize;
+    #[must_use]
     fn pop_obj(&mut self, gc: GCHandle<'gc>) -> ObjectRef<'gc>;
+    #[must_use]
     fn pop_ptr(&mut self, gc: GCHandle<'gc>) -> *mut u8;
+    #[must_use]
     fn pop_value_type(&mut self, gc: GCHandle<'gc>) -> ObjectInstance<'gc>;
+    #[must_use]
     fn pop_managed_ptr(&mut self, gc: GCHandle<'gc>) -> ManagedPtr<'gc>;
+    #[must_use]
     fn pop_multiple(&mut self, gc: GCHandle<'gc>, count: usize) -> Vec<StackValue<'gc>>;
+    #[must_use]
     fn peek_multiple(&self, count: usize) -> Vec<StackValue<'gc>>;
 
     fn dup(&mut self, gc: GCHandle<'gc>);

@@ -1,3 +1,8 @@
+//! # dotnet-utils
+//!
+//! Shared utilities for the dotnet-rs project, including GC handles,
+//! synchronization primitives, and memory alignment helpers.
+
 use std::{
     fmt::{Debug, Formatter},
     mem::align_of,

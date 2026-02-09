@@ -1,3 +1,15 @@
+//! # dotnet-types
+//!
+//! Runtime representation of .NET types, methods, and fields.
+//! This crate provides the descriptors and resolution logic used by the VM.
+//!
+//! ## Core Types
+//!
+//! - **[`TypeDescription`]**: Represents a resolved .NET type.
+//! - **[`MethodDescription`]**: Represents a resolved .NET method.
+//! - **[`FieldDescription`]**: Represents a resolved .NET field.
+//! - **[`TypeComparer`](comparer::TypeComparer)**: Handles type equality and assignability.
+
 use crate::{members::MethodDescription, resolution::ResolutionS};
 use dotnetdll::prelude::{
     MemberType, ResolvedDebug, TypeDefinition, TypeIndex, TypeSource, UserType,
@@ -32,6 +44,10 @@ pub struct TypeDescription {
 
 unsafe_empty_collect!(TypeDescription);
 
+// SAFETY: TypeDescription only contains a ResolutionS (which is a raw pointer wrapper)
+// and a NonNull pointer to a TypeDefinition. Both point to data with 'static lifetime
+// managed by the VM's assembly loader. Thread-safety is guaranteed by the read-only
+// nature of metadata once loaded.
 unsafe impl Send for TypeDescription {}
 unsafe impl Sync for TypeDescription {}
 
@@ -66,7 +82,11 @@ impl TypeDescription {
 
     pub fn definition(&self) -> &'static TypeDefinition<'static> {
         match self.definition_ptr {
-            Some(p) => unsafe { &*p.as_ptr() },
+            Some(p) => {
+                // SAFETY: definition_ptr is derived from a &'static reference during construction,
+                // ensuring it points to valid metadata that persists for the program lifetime.
+                unsafe { &*p.as_ptr() }
+            }
             None => {
                 panic!("Attempted to access definition of a null or uninitialized TypeDescription")
             }

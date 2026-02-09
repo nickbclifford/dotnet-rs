@@ -425,11 +425,11 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
         }
 
         // Pop arguments now that we're done with things that might trigger GC or reallocation
-        ctx.pop(gc); // success_ptr
-        ctx.pop(gc); // obj_ref
+        let _ = ctx.pop(gc); // success_ptr
+        let _ = ctx.pop(gc); // obj_ref
     } else {
-        ctx.pop(gc);
-        ctx.pop(gc);
+        let _ = ctx.pop(gc);
+        let _ = ctx.pop(gc);
         return ctx.throw_by_name(gc, "System.NullReferenceException");
     }
 
@@ -508,13 +508,13 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
         }
 
         // Pop arguments now that we're done
-        ctx.pop(gc); // success_ptr
-        ctx.pop(gc); // timeout_ms
-        ctx.pop(gc); // obj_ref
+        let _ = ctx.pop(gc); // success_ptr
+        let _ = ctx.pop(gc); // timeout_ms
+        let _ = ctx.pop(gc); // obj_ref
     } else {
-        ctx.pop(gc);
-        ctx.pop(gc);
-        ctx.pop(gc);
+        let _ = ctx.pop(gc);
+        let _ = ctx.pop(gc);
+        let _ = ctx.pop(gc);
         return ctx.throw_by_name(gc, "System.NullReferenceException");
     }
 

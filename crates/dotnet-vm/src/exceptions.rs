@@ -252,6 +252,8 @@ impl ExceptionHandlingSystem {
                     .instance_storage
                     .get_field_mut_local(exception_type, "_stackTraceString");
                 let val = StackValue::ObjectRef(str_obj);
+                // SAFETY: field_data is a valid mutable slice of the object's instance storage,
+                // and val is a valid StackValue::ObjectRef. StoreType matches the field type.
                 unsafe {
                     val.store(field_data.as_mut_ptr(), StoreType::Object);
                 }
@@ -396,6 +398,7 @@ impl ExceptionHandlingSystem {
                 let message_bytes = obj
                     .instance_storage
                     .get_field_local(exception_type, "_message");
+                // SAFETY: message_bytes contains a valid ObjectRef from the object's storage.
                 let message_ref = unsafe { ObjectRef::read_branded(&message_bytes, gc) };
                 if let Some(msg_inner) = message_ref.0 {
                     let storage = &msg_inner.borrow().storage;
@@ -411,6 +414,7 @@ impl ExceptionHandlingSystem {
                 let st_bytes = obj
                     .instance_storage
                     .get_field_local(exception_type, "_stackTraceString");
+                // SAFETY: st_bytes contains a valid ObjectRef from the object's storage.
                 let st_ref = unsafe { ObjectRef::read_branded(&st_bytes, gc) };
                 if let Some(st_inner) = st_ref.0 {
                     let storage = &st_inner.borrow().storage;

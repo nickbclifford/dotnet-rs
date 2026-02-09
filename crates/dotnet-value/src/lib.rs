@@ -1,3 +1,16 @@
+//! # dotnet-value
+//!
+//! Representation of .NET values, objects, and pointers.
+//! This crate defines the fundamental types used by the VM's evaluation stack and heap.
+//!
+//! ## Core Types
+//!
+//! - **[`StackValue`]**: Unified representation of values on the execution stack.
+//! - **[`ObjectRef`]**: GC-managed reference to a heap object.
+//! - **[`ManagedPtr`]**: Pointer to a location within a managed object or the stack.
+//! - **[`Object`]**: Internal representation of an object's instance data and layout.
+//! - **[`CLRString`]**: Specialized representation for .NET strings.
+
 #[cfg(feature = "multithreaded-gc")]
 use dotnet_utils::gc::record_cross_arena_ref;
 
@@ -49,6 +62,9 @@ pub enum StackValue<'gc> {
     CrossArenaObjectRef(ObjectPtr, u64),
 }
 
+// SAFETY: StackValue contains several variants that hold GC-managed references.
+// We manually implement trace to ensure all such references (ObjectRef, ManagedPtr, ValueType)
+// are correctly visited by the GC. Cross-arena references are recorded for coordinated GC.
 unsafe impl<'gc> Collect for StackValue<'gc> {
     fn trace(&self, cc: &Collection) {
         match self {
@@ -575,10 +591,12 @@ impl<'gc> Add for StackValue<'gc> {
             (Int32(i), ManagedPtr(m)) | (ManagedPtr(m), Int32(i)) => {
                 // SAFETY: Pointer arithmetic is performed within the bounds of the managed object
                 // or stack slot it points to. The VM ensures that pointers stay within allocated regions.
+                // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
                 unsafe { ManagedPtr(m.offset(i as isize)) }
             }
             (NativeInt(i), ManagedPtr(m)) | (ManagedPtr(m), NativeInt(i)) => {
                 // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
+                // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
                 unsafe { ManagedPtr(m.offset(i)) }
             }
             (l, r) => wrapping_arithmetic_op!(l, r, wrapping_add, +),
@@ -593,14 +611,17 @@ impl<'gc> Sub for StackValue<'gc> {
         match (self, rhs) {
             (ManagedPtr(m), Int32(i)) => {
                 // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
+                // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
                 unsafe { ManagedPtr(m.offset(-(i as isize))) }
             }
             (ManagedPtr(m), NativeInt(i)) => {
                 // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
+                // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
                 unsafe { ManagedPtr(m.offset(-i)) }
             }
             (ManagedPtr(m), Int64(i)) => {
                 // SAFETY: Pointer arithmetic is performed within the bounds of the managed object.
+                // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
                 unsafe { ManagedPtr(m.offset(-(i as isize))) }
             }
             (ManagedPtr(m1), ManagedPtr(m2)) => {

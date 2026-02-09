@@ -1,3 +1,17 @@
+//! # dotnet-vm
+//!
+//! The core virtual machine implementation for the `dotnet-rs` runtime.
+//! This crate implements the Virtual Execution System (VES) as defined by ECMA-335.
+//!
+//! ## Subsystems
+//!
+//! - **Stack System** (`stack/`): Evaluation stack, call frames, and operational traits.
+//! - **Instruction Set** (`instructions/`): Handlers for CIL instructions.
+//! - **Intrinsics** (`intrinsics/`): Native implementations of BCL methods.
+//! - **Memory Management** (`memory/`, `gc/`): Heap management and garbage collection.
+//! - **Dispatch** (`dispatch/`): Method resolution and execution engine.
+//! - **Threading** (`threading/`): Support for multi-threaded execution.
+
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, unsafe_empty_collect};
@@ -115,6 +129,7 @@ impl MethodInfo<'static> {
     }
 }
 
+#[must_use]
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum StepResult {
     Continue,    // Advance IP

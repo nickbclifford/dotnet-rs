@@ -1,3 +1,8 @@
+//! # dotnet-assemblies
+//!
+//! Assembly loading and metadata resolution for the dotnet-rs VM.
+//! This crate handles finding, loading, and caching .NET assemblies from the file system.
+
 use dashmap::DashMap;
 use dotnet_types::{
     TypeDescription, TypeResolver,
@@ -67,6 +72,9 @@ impl AssemblyLoader {
         let len = SUPPORT_LIBRARY.len();
         let cap = len.div_ceil(8);
         let mut aligned: Vec<u64> = vec![0u64; cap];
+        // SAFETY: The source and destination are both valid for 'len' bytes.
+        // The destination buffer 'aligned' has enough capacity as it's allocated with 'div_ceil(8)'.
+        // Both buffers are non-overlapping as 'aligned' is newly allocated.
         unsafe {
             ptr::copy_nonoverlapping(
                 SUPPORT_LIBRARY.as_ptr(),
@@ -76,6 +84,9 @@ impl AssemblyLoader {
         }
         let aligned_slice = Box::leak(aligned.into_boxed_slice());
         let byte_slice =
+            // SAFETY: 'aligned_slice' is a leaked Box<[u64]> which is valid for its entire length.
+            // Converting it to a *const u8 slice of length 'len' is safe because it was initialized
+            // with exactly 'len' bytes from SUPPORT_LIBRARY.
             unsafe { std::slice::from_raw_parts(aligned_slice.as_ptr() as *const u8, len) };
 
         let support_res = Box::leak(Box::new(
@@ -706,6 +717,8 @@ pub fn static_res_from_file(path: impl AsRef<Path>) -> ResolutionS {
     let len = buf.len();
     let cap = len.div_ceil(8);
     let mut aligned: Vec<u64> = vec![0u64; cap];
+    // SAFETY: source and destination are valid for 'len' bytes.
+    // 'aligned' is newly allocated with sufficient capacity.
     unsafe {
         ptr::copy_nonoverlapping(buf.as_ptr(), aligned.as_mut_ptr() as *mut u8, len);
     }
@@ -714,6 +727,8 @@ pub fn static_res_from_file(path: impl AsRef<Path>) -> ResolutionS {
     let aligned_slice = Box::leak(aligned.into_boxed_slice());
     // Create the byte slice view
     let byte_slice =
+        // SAFETY: 'aligned_slice' is valid for its entire length.
+        // It contains 'len' bytes of data from 'buf'.
         unsafe { std::slice::from_raw_parts(aligned_slice.as_ptr() as *const u8, len) };
 
     let resolution = Resolution::parse(byte_slice, ReadOptions::default())

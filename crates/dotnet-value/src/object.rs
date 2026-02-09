@@ -41,6 +41,9 @@ pub struct ObjectInner<'gc> {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ObjectPtr(pub NonNull<ThreadSafeLock<ObjectInner<'static>>>);
 
+// SAFETY: ObjectPtr is a transparent wrapper around a NonNull pointer to an ObjectInner.
+// ObjectInner is managed by the VM and thread-safety is handled via ThreadSafeLock.
+// This type is used primarily for cross-arena references where raw pointers are required.
 unsafe impl Send for ObjectPtr {}
 unsafe impl Sync for ObjectPtr {}
 
@@ -337,6 +340,8 @@ pub enum HeapStorage<'gc> {
     Boxed(ValueType<'gc>),
 }
 
+// SAFETY: HeapStorage is an enum where each variant either implements Collect or
+// contains no GC references (like CLRString). We manually trace each variant.
 unsafe impl<'gc> Collect for HeapStorage<'gc> {
     fn trace(&self, cc: &Collection) {
         match self {
@@ -411,6 +416,8 @@ pub enum ValueType<'gc> {
     Struct(Object<'gc>),
 }
 
+// SAFETY: ValueType is an enum where only Pointer and Struct variants contain
+// potential GC references. We manually trace these variants.
 unsafe impl<'gc> Collect for ValueType<'gc> {
     fn trace(&self, cc: &Collection) {
         match self {
@@ -530,6 +537,8 @@ impl<'gc> PartialEq for Vector<'gc> {
     }
 }
 
+// SAFETY: Vector contains raw byte storage that may hold GC pointers (ObjectRef).
+// We use the layout manager to identify and trace any such pointers.
 unsafe impl Collect for Vector<'_> {
     #[inline]
     fn trace(&self, cc: &Collection) {
@@ -651,6 +660,8 @@ impl<'gc> PartialEq for Object<'gc> {
     }
 }
 
+// SAFETY: Object contains field storage that may hold GC pointers.
+// We use the layout manager associated with the type description to trace fields.
 unsafe impl<'gc> Collect for Object<'gc> {
     fn trace(&self, cc: &Collection) {
         self.instance_storage.trace(cc);

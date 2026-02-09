@@ -405,8 +405,8 @@ pub fn external_call<'gc, 'm: 'gc>(
                 }
             });
 
-            ctx.throw(gc, exception);
-            ctx.pop_multiple(gc, arg_count);
+            let _ = ctx.throw(gc, exception);
+            let _ = ctx.pop_multiple(gc, arg_count);
             return;
         }
     };
@@ -559,7 +559,7 @@ pub fn external_call<'gc, 'm: 'gc>(
             }
             do_write_back();
             vm_trace_interop!(ctx, "POST-CALL", "(void) {}::{}", module, function);
-            ctx.pop_multiple(gc, arg_count);
+            let _ = ctx.pop_multiple(gc, arg_count);
         }
         Some(p) => {
             let ParameterType::Value(t) = p else {
@@ -664,7 +664,7 @@ pub fn external_call<'gc, 'm: 'gc>(
                 rest => todo!("marshalling not yet supported for {:?}", rest),
             };
             vm_trace!(ctx, "-- returning {v:?} --");
-            ctx.pop_multiple(gc, arg_count);
+            let _ = ctx.pop_multiple(gc, arg_count);
             ctx.push(gc, v);
         }
     }

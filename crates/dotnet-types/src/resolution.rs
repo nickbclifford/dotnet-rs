@@ -12,6 +12,9 @@ use std::{
 #[derive(Clone, Copy)]
 pub struct ResolutionS(Option<NonNull<Resolution<'static>>>);
 unsafe_empty_collect!(ResolutionS);
+// SAFETY: ResolutionS is a transparent wrapper around a NonNull pointer to Resolution.
+// Resolution data is managed by the VM and persists for the program lifetime.
+// Thread-safety is guaranteed by the read-only nature of metadata once loaded.
 unsafe impl Send for ResolutionS {}
 unsafe impl Sync for ResolutionS {}
 impl ResolutionS {
@@ -42,7 +45,11 @@ impl ResolutionS {
 
     pub fn definition(&self) -> &'static Resolution<'static> {
         match self.0 {
-            Some(p) => unsafe { &*p.as_ptr() },
+            Some(p) => {
+                // SAFETY: The pointer in ResolutionS is derived from a reference during construction,
+                // ensuring it points to valid metadata that persists for the program lifetime.
+                unsafe { &*p.as_ptr() }
+            }
             None => {
                 panic!("ResolutionS NULL");
             }

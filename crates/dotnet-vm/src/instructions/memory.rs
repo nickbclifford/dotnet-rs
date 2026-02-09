@@ -28,6 +28,9 @@ pub fn cpblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ?Sized>(
         ctx.check_gc_safe_point();
     }
 
+    // SAFETY: The source and destination pointers are obtained from the evaluation stack
+    // and are assumed to be valid for the specified size. In .NET, it is the responsibility
+    // of the compiler/programmer to ensure these are valid when using cpblk.
     unsafe {
         ptr::copy(src, dest, size);
     }
@@ -48,6 +51,8 @@ pub fn initblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ?Sized>(
         ctx.check_gc_safe_point();
     }
 
+    // SAFETY: The address and size are obtained from the evaluation stack.
+    // Validity of the memory range is the responsibility of the caller in CIL.
     unsafe {
         ptr::write_bytes(addr, val, size);
     }
@@ -120,6 +125,8 @@ pub fn stind<'gc, 'm: 'gc>(
         StoreType::Object => LayoutManager::Scalar(Scalar::ObjectRef),
     };
 
+    // SAFETY: The pointer and owner are validated by the instruction handler.
+    // write_unaligned handles GC-specific write barriers if an owner is provided.
     match unsafe { ctx.write_unaligned(ptr, owner, val, &layout) } {
         Ok(_) => {}
         Err(e) => {
@@ -173,6 +180,8 @@ pub fn ldind<'gc, 'm: 'gc>(
         LoadType::Object => LayoutManager::Scalar(Scalar::ObjectRef),
     };
 
+    // SAFETY: The pointer and owner are validated by the instruction handler.
+    // read_unaligned handles GC-safe reading from the heap if an owner is provided.
     let val = match unsafe { ctx.read_unaligned(ptr, owner, &layout, None) } {
         Ok(v) => v,
         Err(e) => {

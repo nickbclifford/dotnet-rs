@@ -73,7 +73,7 @@ pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc>(
     } else {
         // Overload with MethodTable* as first param
         let i = ctx.pop_isize(gc);
-        ctx.pop(gc); // pop method table pointer
+        let _ = ctx.pop(gc); // pop method table pointer
         if i < 0 {
             return ctx.throw_by_name(gc, "System.OverflowException");
         }

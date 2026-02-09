@@ -195,7 +195,7 @@ impl Executor {
             }
 
             self.with_arena(|arena| {
-                arena.mutate_root(|gc, c| c.ves_context().process_pending_finalizers(gc));
+                let _ = arena.mutate_root(|gc, c| c.ves_context().process_pending_finalizers(gc));
             });
 
             let step_result = self.with_arena(|arena| arena.mutate_root(|gc, c| c.run(gc)));
@@ -267,9 +267,8 @@ impl Executor {
 
             // 1. Mark that we are starting collection (acquires coordinator lock)
             let coordinator = Arc::clone(&self.shared.gc_coordinator);
-            let _gc_lock = match coordinator.start_collection() {
-                Some(guard) => guard,
-                None => return, // Another thread is already collecting
+            let Some(_gc_lock) = coordinator.start_collection() else {
+                return; // Another thread is already collecting
             };
 
             self.with_arena(|arena| {
