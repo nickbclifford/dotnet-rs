@@ -27,13 +27,7 @@ pub fn ldfld<'gc, 'm: 'gc>(
     // Special fields check (intrinsic fields)
     if ctx.is_intrinsic_field_cached(field) {
         let type_generics = ctx.current_context().generics.type_generics.clone();
-        return intrinsic_field(
-            gc,
-            ctx,
-            field,
-            type_generics,
-            false,
-        );
+        return intrinsic_field(gc, ctx, field, type_generics, false);
     }
 
     let parent = ctx.pop(gc);
@@ -233,13 +227,7 @@ pub fn ldsfld<'gc, 'm: 'gc>(
     // Special fields check (intrinsic fields)
     if ctx.is_intrinsic_field_cached(field) {
         let type_generics = ctx.current_context().generics.type_generics.clone();
-        return intrinsic_field(
-            gc,
-            ctx,
-            field,
-            type_generics,
-            false,
-        );
+        return intrinsic_field(gc, ctx, field, type_generics, false);
     }
 
     let res = ctx.initialize_static_storage(gc, field.parent, lookup.clone());
@@ -322,13 +310,7 @@ pub fn ldflda<'gc, 'm: 'gc>(
     // Special fields check (intrinsic fields)
     if ctx.is_intrinsic_field_cached(field) {
         let type_generics = ctx.current_context().generics.type_generics.clone();
-        return intrinsic_field(
-            gc,
-            ctx,
-            field,
-            type_generics,
-            true,
-        );
+        return intrinsic_field(gc, ctx, field, type_generics, true);
     }
 
     let parent = ctx.pop(gc);

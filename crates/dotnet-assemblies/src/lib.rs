@@ -1,6 +1,7 @@
 use dashmap::DashMap;
 use dotnet_types::{
-    TypeDescription, TypeResolver, comparer::TypeComparer,
+    TypeDescription, TypeResolver,
+    comparer::TypeComparer,
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     resolution::ResolutionS,
@@ -415,8 +416,8 @@ impl AssemblyLoader {
             }
             BaseType::Boolean => self.corlib_type("System.Boolean"),
             BaseType::Char => self.corlib_type("System.Char"),
-            BaseType::Int8 => self.corlib_type("System.Byte"),
-            BaseType::UInt8 => self.corlib_type("System.SByte"),
+            BaseType::Int8 => self.corlib_type("System.SByte"),
+            BaseType::UInt8 => self.corlib_type("System.Byte"),
             BaseType::Int16 => self.corlib_type("System.Int16"),
             BaseType::UInt16 => self.corlib_type("System.UInt16"),
             BaseType::Int32 => self.corlib_type("System.Int32"),
@@ -435,12 +436,6 @@ impl AssemblyLoader {
         }
     }
 
-
-
-
-
-
-
     fn comparer(&self) -> TypeComparer<'_, Self> {
         TypeComparer::new(self)
     }
@@ -453,7 +448,27 @@ impl AssemblyLoader {
         sig_res: ResolutionS,
         generics: &GenericLookup,
     ) -> Option<MethodDescription> {
-        self.comparer().find_method_in_type_with_substitution(desc, name, signature, sig_res, generics)
+        self.comparer()
+            .find_method_in_type_with_substitution(desc, name, signature, sig_res, generics)
+    }
+
+    pub fn find_method_in_type_internal(
+        &self,
+        desc: TypeDescription,
+        name: &str,
+        signature: &ManagedMethod<MethodType>,
+        sig_res: ResolutionS,
+        sig_generics: Option<&GenericLookup>,
+        type_generics: Option<&GenericLookup>,
+    ) -> Option<MethodDescription> {
+        self.comparer().find_method_in_type_internal(
+            desc,
+            name,
+            signature,
+            sig_res,
+            sig_generics,
+            type_generics,
+        )
     }
 
     pub fn find_method_in_type(
@@ -463,9 +478,9 @@ impl AssemblyLoader {
         signature: &ManagedMethod<MethodType>,
         sig_res: ResolutionS,
     ) -> Option<MethodDescription> {
-        self.comparer().find_method_in_type(desc, name, signature, sig_res)
+        self.comparer()
+            .find_method_in_type(desc, name, signature, sig_res)
     }
-
 
     pub fn locate_method(
         &self,
@@ -742,4 +757,3 @@ pub fn find_dotnet_sdk_path() -> Option<PathBuf> {
 
     None
 }
-

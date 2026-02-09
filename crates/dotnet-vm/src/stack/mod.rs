@@ -62,7 +62,6 @@
 //! // Pop result
 //! let result = ctx.pop_i32()?;
 //! ```
-
 use crate::{
     MethodState, StepResult,
     dispatch::ExecutionEngine,
@@ -143,14 +142,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn handle_return(&mut self, gc: GCHandle<'gc>) -> StepResult {
-        let tracer_enabled = self.tracer_enabled();
-        self.execution.frame_stack.handle_return(
-            gc,
-            &mut self.execution.evaluation_stack,
-            &self.shared,
-            &self.local.heap,
-            tracer_enabled,
-        )
+        self.ves_context().handle_return(gc)
     }
 
     pub fn return_frame(&mut self, gc: GCHandle<'gc>) {

@@ -1,17 +1,16 @@
-use super::ops::{StackOps, ExceptionOps, ResolutionOps, PoolOps, RawMemoryOps, ReflectionOps, VesOps, CallOps};
 use crate::{
     MethodInfo, MethodState, MethodType, ResolutionContext, StepResult,
+    exceptions::{
+        ExceptionState, HandlerAddress, HandlerKind, SearchState, UnwindState, UnwindTarget,
+    },
     memory::ops::MemoryOps,
     resolution::{TypeResolutionExt, ValueResolution},
     resolver::ResolverService,
-    exceptions::{ExceptionState, HandlerAddress, UnwindState, UnwindTarget, HandlerKind, SearchState},
     state::{ArenaLocalState, SharedGlobalState, StaticStorageManager},
     sync::{Arc, MutexGuard},
     threading::ThreadManagerOps,
     tracer::Tracer,
 };
-use dotnet_utils::gc::GCHandle;
-use dotnet_utils::sync::Ordering;
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{
     TypeDescription,
@@ -21,9 +20,16 @@ use dotnet_types::{
     resolution::ResolutionS,
     runtime::RuntimeType,
 };
+use dotnet_utils::{
+    gc::{GCHandle, ThreadSafeLock},
+    sync::Ordering,
+};
 use dotnet_value::{
-    StackValue, CLRString,
-    object::{CTSValue, HeapStorage, Object as ObjectInstance, ObjectRef, ObjectHandle, ValueType, Vector},
+    CLRString, StackValue,
+    object::{
+        CTSValue, HeapStorage, Object as ObjectInstance, ObjectHandle, ObjectInner, ObjectRef,
+        ValueType, Vector,
+    },
     pointer::ManagedPtr,
     storage::FieldStorage,
 };
@@ -31,7 +37,14 @@ use dotnetdll::prelude::*;
 use gc_arena::Collect;
 use std::ptr::NonNull;
 
-use super::{evaluation_stack::EvaluationStack, frames::FrameStack};
+use super::{
+    evaluation_stack::EvaluationStack,
+    frames::FrameStack,
+    ops::{
+        CallOps, ExceptionOps, PoolOps, RawMemoryOps, ReflectionOps, ResolutionOps, StackOps,
+        VesOps,
+    },
+};
 
 pub struct VesContext<'a, 'gc, 'm> {
     pub(crate) evaluation_stack: &'a mut EvaluationStack<'gc>,
@@ -151,11 +164,40 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
         let tracer_enabled = self.tracer_enabled();
         let shared = &self.shared;
         let heap = &self.local.heap;
-        self.frame_stack
-            .handle_return(gc, self.evaluation_stack, shared, heap, tracer_enabled)
+        let res =
+            self.frame_stack
+                .handle_return(gc, self.evaluation_stack, shared, heap, tracer_enabled);
+
+        if let Some(return_type) = self
+            .frame_stack
+            .current_frame_opt()
+            .and_then(|f| f.awaiting_invoke_return.clone())
+        {
+            self.frame_stack.current_frame_mut().awaiting_invoke_return = None;
+
+            let is_void = matches!(return_type, RuntimeType::Void);
+            if is_void {
+                self.push(gc, StackValue::null());
+            } else {
+                let val = self.pop(gc);
+                let return_concrete = return_type.to_concrete(self.loader());
+                let td = self.loader().find_concrete_type(return_concrete.clone());
+                if td.is_value_type(&self.current_context()) {
+                    let boxed = ObjectRef::new(
+                        gc,
+                        HeapStorage::Boxed(self.new_value_type(&return_concrete, val)),
+                    );
+                    self.register_new_object(&boxed);
+                    self.push_obj(gc, boxed);
+                } else {
+                    // already a reference type (or null)
+                    self.push(gc, val);
+                }
+            }
+        }
+
+        res
     }
-
-
 
     pub fn locate_type(&self, handle: UserType) -> TypeDescription {
         let f = self.current_frame();
@@ -171,8 +213,6 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
         self.resolver()
             .new_static_fields(td, &self.current_context())
     }
-
-
 }
 
 impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
@@ -376,7 +416,8 @@ impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn set_argument(&mut self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
         let bp = self.frame_stack.current_frame().base;
-        self.evaluation_stack.set_slot(gc, bp.arguments + index, value);
+        self.evaluation_stack
+            .set_slot(gc, bp.arguments + index, value);
     }
 
     #[inline]
@@ -442,7 +483,8 @@ impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
 impl<'a, 'gc, 'm: 'gc> MemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn new_vector(&self, element: ConcreteType, size: usize) -> Vector<'gc> {
-        self.resolver().new_vector(element, size, &self.current_context())
+        self.resolver()
+            .new_vector(element, size, &self.current_context())
     }
 
     #[inline]
@@ -452,34 +494,64 @@ impl<'a, 'gc, 'm: 'gc> MemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
 
     #[inline]
     fn new_value_type(&self, t: &ConcreteType, data: StackValue<'gc>) -> ValueType<'gc> {
-        self.resolver().new_value_type(t, data, &self.current_context())
+        self.resolver()
+            .new_value_type(t, data, &self.current_context())
     }
 
     #[inline]
     fn new_cts_value(&self, t: &ConcreteType, data: StackValue<'gc>) -> CTSValue<'gc> {
-        self.resolver().new_cts_value(t, data, &self.current_context())
+        self.resolver()
+            .new_cts_value(t, data, &self.current_context())
     }
 
     #[inline]
-    fn read_cts_value(
-        &self,
-        t: &ConcreteType,
-        data: &[u8],
-        gc: GCHandle<'gc>,
-    ) -> CTSValue<'gc> {
-        self.resolver().read_cts_value(t, data, gc, &self.current_context())
+    fn read_cts_value(&self, t: &ConcreteType, data: &[u8], gc: GCHandle<'gc>) -> CTSValue<'gc> {
+        self.resolver()
+            .read_cts_value(t, data, gc, &self.current_context())
+    }
+
+    fn clone_object(&self, gc: GCHandle<'gc>, obj: ObjectRef<'gc>) -> ObjectRef<'gc> {
+        let h = obj.0.expect("cannot clone null object");
+        let inner = h.borrow();
+        let cloned_storage = inner.storage.clone();
+
+        let new_inner = ObjectInner {
+            #[cfg(any(feature = "memory-validation", debug_assertions))]
+            magic: inner.magic,
+            owner_id: self.thread_id.get(),
+            storage: cloned_storage,
+        };
+
+        let new_h = gc_arena::Gc::new(gc, ThreadSafeLock::new(new_inner));
+        let new_ref = ObjectRef(Some(new_h));
+        self.register_new_object(&new_ref);
+        new_ref
     }
 
     #[inline]
     fn register_new_object(&self, instance: &ObjectRef<'gc>) {
         if let Some(ptr) = instance.0 {
             let addr = gc_arena::Gc::as_ptr(ptr) as usize;
-            self.local.heap._all_objs.borrow_mut().insert(addr, *instance);
+            self.local
+                .heap
+                ._all_objs
+                .borrow_mut()
+                .insert(addr, *instance);
 
             // Add to finalization queue if it has a finalizer
             if let HeapStorage::Obj(o) = &ptr.borrow().storage
-                && (o.description.static_initializer().is_some() || o.description.definition().methods.iter().any(|m| m.name == "Finalize")) {
-                 self.local.heap.finalization_queue.borrow_mut().push(*instance);
+                && (o.description.static_initializer().is_some()
+                    || o.description
+                        .definition()
+                        .methods
+                        .iter()
+                        .any(|m| m.name == "Finalize"))
+            {
+                self.local
+                    .heap
+                    .finalization_queue
+                    .borrow_mut()
+                    .push(*instance);
             }
         }
     }
@@ -769,9 +841,8 @@ impl<'a, 'gc, 'm: 'gc> ReflectionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         method: MethodDescription,
         lookup: GenericLookup,
     ) -> usize {
-        crate::intrinsics::reflection::common::get_runtime_method_index(
-            self, method, lookup,
-        ) as usize
+        crate::intrinsics::reflection::common::get_runtime_method_index(self, method, lookup)
+            as usize
     }
 
     #[inline]
@@ -786,9 +857,7 @@ impl<'a, 'gc, 'm: 'gc> ReflectionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         method: MethodDescription,
         lookup: GenericLookup,
     ) -> ObjectRef<'gc> {
-        crate::intrinsics::reflection::common::get_runtime_method_obj(
-            self, gc, method, lookup,
-        )
+        crate::intrinsics::reflection::common::get_runtime_method_obj(self, gc, method, lookup)
     }
 
     #[inline]
@@ -798,9 +867,7 @@ impl<'a, 'gc, 'm: 'gc> ReflectionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         field: FieldDescription,
         lookup: GenericLookup,
     ) -> ObjectRef<'gc> {
-        crate::intrinsics::reflection::common::get_runtime_field_obj(
-            self, gc, field, lookup,
-        )
+        crate::intrinsics::reflection::common::get_runtime_field_obj(self, gc, field, lookup)
     }
 
     #[inline]
@@ -867,6 +934,20 @@ impl<'a, 'gc, 'm: 'gc> ReflectionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn resolve_runtime_field(&self, obj: ObjectRef<'gc>) -> (FieldDescription, GenericLookup) {
         crate::intrinsics::reflection::common::resolve_runtime_field(self, obj)
+    }
+
+    #[inline]
+    fn lookup_method_by_index(&self, index: usize) -> (MethodDescription, GenericLookup) {
+        #[cfg(feature = "multithreaded-gc")]
+        return self
+            .shared
+            .shared_runtime_methods_rev
+            .get(&index)
+            .map(|e| e.clone())
+            .expect("invalid method index in delegate");
+
+        #[cfg(not(feature = "multithreaded-gc"))]
+        self.reflection().methods_read()[index].clone()
     }
 
     #[inline]
@@ -1093,6 +1174,20 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
                 StepResult::Continue
             }
         } else {
+            if method.method.body.is_none() {
+                if let Some(result) =
+                    crate::intrinsics::delegates::try_delegate_dispatch(self, gc, method, &lookup)
+                {
+                    return result;
+                }
+
+                panic!(
+                    "no body in executing method: {}.{}",
+                    method.parent.type_name(),
+                    method.method.name
+                );
+            }
+
             let info = MethodInfo::new(method, &lookup, self.shared.clone());
             self.call_frame(gc, info, lookup);
             StepResult::FramePushed
@@ -1267,12 +1362,8 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
 
     #[inline]
     fn unwind_frame(&mut self, gc: GCHandle<'gc>) {
-        self.frame_stack.unwind_frame(
-            gc,
-            self.evaluation_stack,
-            self.shared,
-            &self.local.heap,
-        );
+        self.frame_stack
+            .unwind_frame(gc, self.evaluation_stack, self.shared, &self.local.heap);
     }
 
     #[inline]
@@ -1389,6 +1480,14 @@ pub struct ThreadContext<'gc, 'm> {
     pub original_stack_height: usize,
 }
 
+#[derive(Collect)]
+#[collect(no_drop)]
+pub struct MulticastState<'gc> {
+    pub targets: ObjectHandle<'gc>,
+    pub next_index: usize,
+    pub args: Vec<StackValue<'gc>>,
+}
+
 pub struct StackFrame<'gc, 'm> {
     pub stack_height: usize,
     pub base: BasePointer,
@@ -1399,9 +1498,11 @@ pub struct StackFrame<'gc, 'm> {
     pub exception_stack: Vec<ObjectRef<'gc>>,
     pub pinned_locals: Vec<bool>,
     pub is_finalizer: bool,
+    pub multicast_state: Option<MulticastState<'gc>>,
+    pub awaiting_invoke_return: Option<RuntimeType>,
 }
 
-// SAFETY: `StackFrame` correctly traces all GC-managed fields (`exception_stack` and `state`)
+// SAFETY: `StackFrame` correctly traces all GC-managed fields (`exception_stack`, `state`, `generic_inst`, and `multicast_state`)
 // in its `trace` implementation. All other fields are either primitives or non-GC references
 // and do not need tracing. This implementation is safe because it delegates to the `Collect`
 // implementations of its components.
@@ -1410,6 +1511,8 @@ unsafe impl<'gc, 'm> Collect for StackFrame<'gc, 'm> {
         self.exception_stack.trace(cc);
         self.state.trace(cc);
         self.generic_inst.trace(cc);
+        self.multicast_state.trace(cc);
+        self.awaiting_invoke_return.trace(cc);
     }
 }
 
@@ -1429,6 +1532,8 @@ impl<'gc, 'm> StackFrame<'gc, 'm> {
             exception_stack: Vec::new(),
             pinned_locals,
             is_finalizer: false,
+            multicast_state: None,
+            awaiting_invoke_return: None,
         }
     }
 }

@@ -20,8 +20,9 @@ use dotnet_value::{
     layout::{LayoutManager, Scalar},
     object::{HeapStorage, ObjectRef},
 };
-use dotnetdll::prelude::{BaseType, Kind, MemberType, TypeSource};
-
+use dotnetdll::prelude::{
+    Accessibility, BaseType, Kind, MemberAccessibility, MemberType, TypeSource,
+};
 
 #[dotnet_intrinsic("object[] System.Reflection.Assembly::GetCustomAttributes(System.Type, bool)")]
 pub fn intrinsic_assembly_get_custom_attributes<'gc, 'm: 'gc>(
@@ -79,6 +80,38 @@ pub fn intrinsic_attribute_get_custom_attributes<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
+#[dotnet_intrinsic("static System.Type System.Type::GetType(string)")]
+pub fn intrinsic_type_get_type<'gc, 'm: 'gc>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let name_obj = ctx.pop_obj(gc);
+    if name_obj.0.is_none() {
+        ctx.push(gc, StackValue::null());
+        return StepResult::Continue;
+    }
+
+    let name = name_obj.as_heap_storage(|s| {
+        if let HeapStorage::Str(s) = s {
+            s.as_string()
+        } else {
+            panic!("GetType argument is not a string")
+        }
+    });
+
+    let td = ctx.loader().corlib_type(&name);
+    if !td.is_null() {
+        let rt_obj = ctx.get_runtime_type(gc, RuntimeType::Type(td));
+        ctx.push_obj(gc, rt_obj);
+    } else {
+        ctx.push(gc, StackValue::null());
+    }
+
+    StepResult::Continue
+}
+
 #[dotnet_intrinsic("string System.Type::get_Name()")]
 #[dotnet_intrinsic("string System.Type::get_Namespace()")]
 #[dotnet_intrinsic("System.Reflection.Assembly System.Type::get_Assembly()")]
@@ -103,6 +136,30 @@ pub fn intrinsic_attribute_get_custom_attributes<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("System.Type[] DotnetRs.RuntimeType::GetGenericArguments()")]
 #[dotnet_intrinsic("System.RuntimeTypeHandle DotnetRs.RuntimeType::get_TypeHandle()")]
 #[dotnet_intrinsic("System.Type DotnetRs.RuntimeType::MakeGenericType(System.Type[])")]
+#[dotnet_intrinsic(
+    "System.Reflection.MethodInfo[] DotnetRs.RuntimeType::GetMethods(System.Reflection.BindingFlags)"
+)]
+#[dotnet_intrinsic(
+    "System.Reflection.MethodInfo DotnetRs.RuntimeType::GetMethodImpl(string, System.Reflection.BindingFlags, System.Reflection.Binder, System.Reflection.CallingConventions, System.Type[], System.Reflection.ParameterModifier[])"
+)]
+#[dotnet_intrinsic(
+    "System.Reflection.ConstructorInfo[] DotnetRs.RuntimeType::GetConstructors(System.Reflection.BindingFlags)"
+)]
+#[dotnet_intrinsic(
+    "System.Reflection.ConstructorInfo DotnetRs.RuntimeType::GetConstructorImpl(System.Reflection.BindingFlags, System.Reflection.Binder, System.Reflection.CallingConventions, System.Type[], System.Reflection.ParameterModifier[])"
+)]
+#[dotnet_intrinsic(
+    "System.Reflection.FieldInfo[] DotnetRs.RuntimeType::GetFields(System.Reflection.BindingFlags)"
+)]
+#[dotnet_intrinsic(
+    "System.Reflection.FieldInfo DotnetRs.RuntimeType::GetField(string, System.Reflection.BindingFlags)"
+)]
+#[dotnet_intrinsic(
+    "System.Reflection.PropertyInfo[] DotnetRs.RuntimeType::GetProperties(System.Reflection.BindingFlags)"
+)]
+#[dotnet_intrinsic(
+    "System.Reflection.PropertyInfo DotnetRs.RuntimeType::GetPropertyImpl(string, System.Reflection.BindingFlags, System.Reflection.Binder, System.Type, System.Type[], System.Reflection.ParameterModifier[])"
+)]
 pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     gc: GCHandle<'gc>,
@@ -173,6 +230,193 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
                 }
                 _ => ctx.push_string(gc, "System".into()),
             }
+            Some(StepResult::Continue)
+        }
+        ("GetMethods", 1) => {
+            let flags = ctx.pop_i32(gc);
+            let obj = ctx.pop_obj(gc);
+            let target_type = ctx.resolve_runtime_type(obj);
+
+            const BINDING_FLAGS_INSTANCE: i32 = 4;
+            const BINDING_FLAGS_STATIC: i32 = 8;
+            const BINDING_FLAGS_PUBLIC: i32 = 16;
+            const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
+
+            let mut methods_objs = Vec::new();
+            if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
+                for m in td.definition().methods.iter() {
+                    let is_public =
+                        m.accessibility == MemberAccessibility::Access(Accessibility::Public);
+                    let is_static = !m.signature.instance;
+
+                    let match_public = if is_public {
+                        (flags & BINDING_FLAGS_PUBLIC) != 0
+                    } else {
+                        (flags & BINDING_FLAGS_NON_PUBLIC) != 0
+                    };
+                    let match_static = if is_static {
+                        (flags & BINDING_FLAGS_STATIC) != 0
+                    } else {
+                        (flags & BINDING_FLAGS_INSTANCE) != 0
+                    };
+
+                    if match_public && match_static && m.name != ".ctor" && m.name != ".cctor" {
+                        let desc = MethodDescription {
+                            parent: td,
+                            method: m,
+                            method_resolution: td.resolution,
+                        };
+                        let mut lookup = GenericLookup::default();
+                        if let RuntimeType::Generic(_, args) = &target_type {
+                            lookup.type_generics = args
+                                .iter()
+                                .map(|a| a.to_concrete(ctx.loader()))
+                                .collect::<Vec<_>>()
+                                .into();
+                        }
+                        methods_objs.push(ctx.get_runtime_method_obj(gc, desc, lookup));
+                    }
+                }
+            }
+
+            let method_info_type = ctx.loader().corlib_type("System.Reflection.MethodInfo");
+            let mut vector =
+                ctx.new_vector(ConcreteType::from(method_info_type), methods_objs.len());
+            for (i, m) in methods_objs.into_iter().enumerate() {
+                m.write(&mut vector.get_mut()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
+            }
+            ctx.push_obj(gc, ObjectRef::new(gc, HeapStorage::Vec(vector)));
+            Some(StepResult::Continue)
+        }
+        ("GetMethodImpl", 6) => {
+            let _modifiers = ctx.pop(gc);
+            let _types = ctx.pop(gc); // TODO: match by parameter types
+            let _call_convention = ctx.pop(gc);
+            let _binder = ctx.pop(gc);
+            let flags = ctx.pop_i32(gc);
+            let name_obj = ctx.pop_obj(gc);
+            let obj = ctx.pop_obj(gc);
+
+            let name = name_obj.as_heap_storage(|s| {
+                if let HeapStorage::Str(s) = s {
+                    s.as_string()
+                } else {
+                    panic!("name is not a string")
+                }
+            });
+            let target_type = ctx.resolve_runtime_type(obj);
+
+            const BINDING_FLAGS_INSTANCE: i32 = 4;
+            const BINDING_FLAGS_STATIC: i32 = 8;
+            const BINDING_FLAGS_PUBLIC: i32 = 16;
+            const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
+
+            let mut found_method = None;
+            if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
+                for m in td.definition().methods.iter() {
+                    if m.name != name {
+                        continue;
+                    }
+                    let is_public =
+                        m.accessibility == MemberAccessibility::Access(Accessibility::Public);
+                    let is_static = !m.signature.instance;
+
+                    let match_public = if is_public {
+                        (flags & BINDING_FLAGS_PUBLIC) != 0
+                    } else {
+                        (flags & BINDING_FLAGS_NON_PUBLIC) != 0
+                    };
+                    let match_static = if is_static {
+                        (flags & BINDING_FLAGS_STATIC) != 0
+                    } else {
+                        (flags & BINDING_FLAGS_INSTANCE) != 0
+                    };
+
+                    if match_public && match_static {
+                        let desc = MethodDescription {
+                            parent: td,
+                            method: m,
+                            method_resolution: td.resolution,
+                        };
+                        let mut lookup = GenericLookup::default();
+                        if let RuntimeType::Generic(_, args) = &target_type {
+                            lookup.type_generics = args
+                                .iter()
+                                .map(|a| a.to_concrete(ctx.loader()))
+                                .collect::<Vec<_>>()
+                                .into();
+                        }
+                        found_method = Some(ctx.get_runtime_method_obj(gc, desc, lookup));
+                        break;
+                    }
+                }
+            }
+
+            if let Some(m) = found_method {
+                ctx.push_obj(gc, m);
+            } else {
+                ctx.push(gc, StackValue::null());
+            }
+            Some(StepResult::Continue)
+        }
+        ("GetConstructors", 1) => {
+            let flags = ctx.pop_i32(gc);
+            let obj = ctx.pop_obj(gc);
+            let target_type = ctx.resolve_runtime_type(obj);
+
+            const BINDING_FLAGS_INSTANCE: i32 = 4;
+            const BINDING_FLAGS_STATIC: i32 = 8;
+            const BINDING_FLAGS_PUBLIC: i32 = 16;
+            const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
+
+            let mut methods_objs = Vec::new();
+            if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
+                for m in td.definition().methods.iter() {
+                    let is_public =
+                        m.accessibility == MemberAccessibility::Access(Accessibility::Public);
+                    let is_static = !m.signature.instance;
+
+                    let match_public = if is_public {
+                        (flags & BINDING_FLAGS_PUBLIC) != 0
+                    } else {
+                        (flags & BINDING_FLAGS_NON_PUBLIC) != 0
+                    };
+                    let match_static = if is_static {
+                        (flags & BINDING_FLAGS_STATIC) != 0
+                    } else {
+                        (flags & BINDING_FLAGS_INSTANCE) != 0
+                    };
+
+                    if match_public && match_static && m.name == ".ctor" {
+                        let desc = MethodDescription {
+                            parent: td,
+                            method: m,
+                            method_resolution: td.resolution,
+                        };
+                        let mut lookup = GenericLookup::default();
+                        if let RuntimeType::Generic(_, args) = &target_type {
+                            lookup.type_generics = args
+                                .iter()
+                                .map(|a| a.to_concrete(ctx.loader()))
+                                .collect::<Vec<_>>()
+                                .into();
+                        }
+                        methods_objs.push(ctx.get_runtime_method_obj(gc, desc, lookup));
+                    }
+                }
+            }
+
+            let constructor_info_type = ctx
+                .loader()
+                .corlib_type("System.Reflection.ConstructorInfo");
+            let mut vector = ctx.new_vector(
+                ConcreteType::from(constructor_info_type),
+                methods_objs.len(),
+            );
+            for (i, m) in methods_objs.into_iter().enumerate() {
+                m.write(&mut vector.get_mut()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
+            }
+            ctx.push_obj(gc, ObjectRef::new(gc, HeapStorage::Vec(vector)));
             Some(StepResult::Continue)
         }
         ("GetName" | "get_Name", 0) => {

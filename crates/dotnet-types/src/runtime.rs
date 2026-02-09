@@ -3,6 +3,7 @@ use crate::{
     resolution::ResolutionS,
 };
 use dotnetdll::prelude::{BaseType, TypeSource};
+use gc_arena::{Collect, unsafe_empty_collect};
 use std::{fmt::Debug, hash::Hash};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -126,3 +127,5 @@ runtime_type_impls! {
         rest => todo!("convert {rest:?} to ConcreteType"),
     }
 }
+
+unsafe_empty_collect!(RuntimeType);

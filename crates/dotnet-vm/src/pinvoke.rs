@@ -1,6 +1,6 @@
 use crate::{
-    context::ResolutionContext, layout::LayoutFactory,
-    resolution::ValueResolution, stack::ops::VesOps, tracer::Tracer,
+    context::ResolutionContext, layout::LayoutFactory, resolution::ValueResolution,
+    stack::ops::VesOps, tracer::Tracer,
 };
 use dashmap::DashMap;
 use dotnet_types::{
@@ -452,7 +452,8 @@ pub fn external_call<'gc, 'm: 'gc>(
                 temp_buffers.push(TempBuffer::Isize(Box::new(*val)));
                 let idx = temp_buffers.len() - 1;
                 arg_buffer_map[i] = Some(idx);
-                arg_ptrs[i] = temp_buffers[idx].as_isize() as *const isize as *mut isize as *mut c_void;
+                arg_ptrs[i] =
+                    temp_buffers[idx].as_isize() as *const isize as *mut isize as *mut c_void;
             }
             StackValue::NativeFloat(val) => {
                 temp_buffers.push(TempBuffer::F64(Box::new(*val)));
@@ -464,7 +465,8 @@ pub fn external_call<'gc, 'm: 'gc>(
                 temp_buffers.push(TempBuffer::Ptr(Box::new(val.0.as_ptr())));
                 let idx = temp_buffers.len() - 1;
                 arg_buffer_map[i] = Some(idx);
-                arg_ptrs[i] = temp_buffers[idx].as_ptr() as *const *mut u8 as *mut *mut u8 as *mut c_void;
+                arg_ptrs[i] =
+                    temp_buffers[idx].as_ptr() as *const *mut u8 as *mut *mut u8 as *mut c_void;
             }
             StackValue::ValueType(o) => {
                 let mut data = o.instance_storage.get().to_vec();
@@ -513,8 +515,8 @@ pub fn external_call<'gc, 'm: 'gc>(
                     temp_buffers.push(TempBuffer::Ptr(Box::new(ptr as *mut u8)));
                     let idx = temp_buffers.len() - 1;
                     arg_buffer_map[i] = Some(idx);
-                    arg_ptrs[i] = temp_buffers[idx].as_ptr() as *const *mut u8 as *mut *mut u8
-                        as *mut c_void;
+                    arg_ptrs[i] =
+                        temp_buffers[idx].as_ptr() as *const *mut u8 as *mut *mut u8 as *mut c_void;
                 }
             }
             #[cfg(feature = "multithreaded-gc")]

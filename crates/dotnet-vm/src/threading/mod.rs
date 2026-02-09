@@ -60,7 +60,6 @@
 //! // Unregister when thread exits
 //! thread_manager.unregister_thread(thread_id);
 //! ```
-
 use crate::{
     gc::coordinator::{GCCommand, GCCoordinator},
     tracer::Tracer,

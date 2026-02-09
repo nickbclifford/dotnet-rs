@@ -18,7 +18,7 @@ pub fn intrinsic_is_event_source_logging_enabled<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic(
-    "static ulong System.Diagnostics.Tracing.EventPipeInternal::CreateProvider(string, IntPtr, IntPtr)"
+    "static nint System.Diagnostics.Tracing.EventPipeInternal::CreateProvider(string, void*, void*)"
 )]
 pub fn intrinsic_eventpipe_create_provider<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
@@ -26,15 +26,15 @@ pub fn intrinsic_eventpipe_create_provider<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    // static extern ulong CreateProvider(string providerName, IntPtr callback, IntPtr callbackContext);
+    // static extern nint CreateProvider(string providerName, delegate* callback, void* callbackContext);
     // Arguments are popped in reverse order.
     let _context = ctx.pop(gc);
     let _callback = ctx.pop(gc);
     let _provider_name = ctx.pop(gc);
 
-    // Return value: likely ulong (handle).
+    // Return value: nint (handle).
     // Pushing 0 (invalid handle) to satisfy caller.
-    ctx.push_i64(gc, 0);
+    ctx.push_isize(gc, 0);
 
     StepResult::Continue
 }

@@ -168,7 +168,10 @@ pub fn switch<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(Return)]
-pub fn ret<'gc, 'm: 'gc, T: ExceptionOps<'gc> + ?Sized>(ctx: &mut T, gc: GCHandle<'gc>) -> StepResult {
+pub fn ret<'gc, 'm: 'gc, T: ExceptionOps<'gc> + ?Sized>(
+    ctx: &mut T,
+    gc: GCHandle<'gc>,
+) -> StepResult {
     ctx.ret(gc)
 }
 

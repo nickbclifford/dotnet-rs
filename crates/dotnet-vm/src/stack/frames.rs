@@ -204,6 +204,11 @@ impl<'gc, 'm> FrameStack<'gc, 'm> {
         }
 
         if !was_auto_invoked {
+            if self.current_frame().multicast_state.is_some() {
+                tracing::debug!("handle_return: in multicast state, stopping return");
+                return StepResult::Continue;
+            }
+
             tracing::debug!("handle_return: incrementing IP of caller");
             self.increment_ip();
             let out_of_bounds = {

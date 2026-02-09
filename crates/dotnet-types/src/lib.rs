@@ -1,5 +1,7 @@
 use crate::{members::MethodDescription, resolution::ResolutionS};
-use dotnetdll::prelude::{MemberType, ResolvedDebug, TypeDefinition, TypeIndex, TypeSource, UserType};
+use dotnetdll::prelude::{
+    MemberType, ResolvedDebug, TypeDefinition, TypeIndex, TypeSource, UserType,
+};
 use gc_arena::{Collect, unsafe_empty_collect};
 use std::{
     fmt::{Debug, Formatter},

@@ -324,19 +324,20 @@ impl ExceptionHandlingSystem {
 
                             if ctx.current_context().is_a(exc_type.into(), catch_type) {
                                 // Match found! Start the unwind phase towards this handler.
-                                *ctx.exception_mode_mut() = ExceptionState::Unwinding(UnwindState {
-                                    exception: Some(exception),
-                                    target: UnwindTarget::Handler(HandlerAddress {
-                                        frame_index,
-                                        section_index,
-                                        handler_index,
-                                    }),
-                                    cursor: HandlerAddress {
-                                        frame_index: ctx.frame_stack().len() - 1,
-                                        section_index: 0,
-                                        handler_index: 0,
-                                    },
-                                });
+                                *ctx.exception_mode_mut() =
+                                    ExceptionState::Unwinding(UnwindState {
+                                        exception: Some(exception),
+                                        target: UnwindTarget::Handler(HandlerAddress {
+                                            frame_index,
+                                            section_index,
+                                            handler_index,
+                                        }),
+                                        cursor: HandlerAddress {
+                                            frame_index: ctx.frame_stack().len() - 1,
+                                            section_index: 0,
+                                            handler_index: 0,
+                                        },
+                                    });
                                 return StepResult::Exception;
                             }
                         }
@@ -543,7 +544,9 @@ impl ExceptionHandlingSystem {
                             handler_kind,
                             HandlerKind::Catch(_) | HandlerKind::Filter { .. }
                         ) {
-                            ctx.frame_stack_mut().frames[frame_index].exception_stack.pop();
+                            ctx.frame_stack_mut().frames[frame_index]
+                                .exception_stack
+                                .pop();
                         }
                         continue;
                     }
@@ -641,4 +644,3 @@ impl ExceptionHandlingSystem {
         }
     }
 }
-

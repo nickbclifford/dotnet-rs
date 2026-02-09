@@ -82,11 +82,11 @@
 //! // Compute type layout for value type
 //! let layout = resolver.compute_layout(value_type_desc)?;
 //! ```
-
 use crate::{
     context::ResolutionContext,
     layout::type_layout_with_metrics,
     metrics::RuntimeMetrics,
+    resolution::TypeResolutionExt,
     state::{GlobalCaches, SharedGlobalState},
 };
 use dotnet_assemblies::AssemblyLoader;
@@ -330,7 +330,10 @@ impl<'m> ResolverService<'m> {
 
     pub fn normalize_type(&self, mut t: ConcreteType) -> ConcreteType {
         let (ut, res) = match t.get() {
-            BaseType::Type { source, .. } => (decompose_type_source::<ConcreteType>(source).0, t.resolution()),
+            BaseType::Type { source, .. } => (
+                decompose_type_source::<ConcreteType>(source).0,
+                t.resolution(),
+            ),
             _ => return t,
         };
 
@@ -726,6 +729,14 @@ impl<'m> ResolverService<'m> {
                 let new_ctx = ctx.with_generics(&new_lookup);
                 let td = new_ctx.locate_type(ut);
 
+                if !td.is_value_type(&new_ctx) {
+                    return CTSValue::Ref(if let StackValue::ObjectRef(r) = data {
+                        r
+                    } else {
+                        panic!("expected ObjectRef, got {:?}", data)
+                    });
+                }
+
                 if let Some(e) = td.is_enum() {
                     let enum_type = new_ctx.make_concrete(e);
                     return self.new_cts_value(&enum_type, data, &new_ctx);
@@ -841,6 +852,12 @@ impl<'m> ResolverService<'m> {
                 let new_lookup = GenericLookup::new(type_generics);
                 let new_ctx = ctx.with_generics(&new_lookup);
                 let td = new_ctx.locate_type(ut);
+
+                if !td.is_value_type(&new_ctx) {
+                    return CTSValue::Ref(unsafe {
+                        dotnet_value::object::ObjectRef::read_branded(data, gc)
+                    });
+                }
 
                 if let Some(e) = td.is_enum() {
                     let enum_type = new_ctx.make_concrete(e);

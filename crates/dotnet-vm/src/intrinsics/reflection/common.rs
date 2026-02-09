@@ -1,7 +1,4 @@
-use crate::{
-    context::ResolutionContext,
-    stack::ops::ReflectionOps,
-};
+use crate::{context::ResolutionContext, stack::ops::ReflectionOps};
 use dotnet_types::{
     comparer::decompose_type_source,
     generics::GenericLookup,
@@ -15,6 +12,7 @@ use dotnetdll::prelude::{BaseType, MethodType};
 #[cfg(feature = "multithreaded-gc")]
 use dotnet_utils::sync::Ordering;
 
+#[cfg(not(feature = "multithreaded-gc"))]
 pub(crate) fn get_runtime_member_index<T: PartialEq>(
     members: &mut Vec<(T, GenericLookup)>,
     member: T,
@@ -116,7 +114,7 @@ pub(crate) fn resolve_runtime_type<'gc, 'm: 'gc>(
         let ct = instance
             .instance_storage
             .get_field_local(instance.description, "index");
-        let index = usize::from_ne_bytes((& *ct).try_into().unwrap());
+        let index = usize::from_ne_bytes((&*ct).try_into().unwrap());
         #[cfg(feature = "multithreaded-gc")]
         return ctx
             .shared()
@@ -145,9 +143,7 @@ pub(crate) fn resolve_runtime_method<'gc, 'm: 'gc>(
             .shared_runtime_methods_rev
             .get(&index)
             .map(
-                |e: dashmap::mapref::one::Ref<usize, (MethodDescription, GenericLookup)>| {
-                    e.clone()
-                },
+                |e: dashmap::mapref::one::Ref<usize, (MethodDescription, GenericLookup)>| e.clone(),
             )
             .expect("invalid runtime method index");
 
@@ -170,11 +166,7 @@ pub(crate) fn resolve_runtime_field<'gc, 'm: 'gc>(
             .shared()
             .shared_runtime_fields_rev
             .get(&index)
-            .map(
-                |e: dashmap::mapref::one::Ref<usize, (FieldDescription, GenericLookup)>| {
-                    e.clone()
-                },
-            )
+            .map(|e: dashmap::mapref::one::Ref<usize, (FieldDescription, GenericLookup)>| e.clone())
             .expect("invalid runtime field index");
 
         #[cfg(not(feature = "multithreaded-gc"))]
@@ -182,10 +174,7 @@ pub(crate) fn resolve_runtime_field<'gc, 'm: 'gc>(
     })
 }
 
-pub(crate) fn make_runtime_type(
-    res_ctx: &ResolutionContext,
-    t: &MethodType,
-) -> RuntimeType {
+pub(crate) fn make_runtime_type(res_ctx: &ResolutionContext, t: &MethodType) -> RuntimeType {
     match t {
         MethodType::Base(b) => match &**b {
             BaseType::Boolean => RuntimeType::Boolean,
@@ -232,9 +221,7 @@ pub(crate) fn make_runtime_type(
                 }
                 None => RuntimeType::IntPtr,
             },
-            BaseType::FunctionPointer(_sig) => {
-                RuntimeType::FunctionPointer(RuntimeMethodSignature)
-            }
+            BaseType::FunctionPointer(_sig) => RuntimeType::FunctionPointer(RuntimeMethodSignature),
         },
         MethodType::TypeGeneric(i) => RuntimeType::TypeParameter {
             owner: res_ctx.type_owner.expect("missing type owner"),
@@ -247,26 +234,68 @@ pub(crate) fn make_runtime_type(
     }
 }
 
-
 pub(crate) fn get_runtime_method_index<'gc, 'm: 'gc>(
     ctx: &dyn ReflectionOps<'gc, 'm>,
     method: MethodDescription,
     lookup: GenericLookup,
 ) -> u16 {
-    let mut methods = ctx.reflection().methods_write();
-    let idx = get_runtime_member_index(&mut methods, method, lookup);
-    idx as u16
+    #[cfg(feature = "multithreaded-gc")]
+    {
+        let index = *ctx
+            .shared()
+            .shared_runtime_methods
+            .entry((method, lookup.clone()))
+            .or_insert_with(|| {
+                let idx = ctx
+                    .shared()
+                    .next_runtime_method_index
+                    .fetch_add(1, Ordering::Relaxed);
+                ctx.shared()
+                    .shared_runtime_methods_rev
+                    .insert(idx, (method, lookup.clone()));
+                idx
+            });
+        index as u16
+    }
+
+    #[cfg(not(feature = "multithreaded-gc"))]
+    {
+        let mut methods = ctx.reflection().methods_write();
+        let idx = get_runtime_member_index(&mut methods, method, lookup);
+        idx as u16
+    }
 }
 
-#[cfg(not(feature = "multithreaded-gc"))]
 pub(crate) fn get_runtime_field_index<'gc, 'm: 'gc>(
     ctx: &dyn ReflectionOps<'gc, 'm>,
     field: FieldDescription,
     lookup: GenericLookup,
 ) -> u16 {
-    let mut fields = ctx.reflection().fields_write();
-    let idx = get_runtime_member_index(&mut fields, field, lookup);
-    idx as u16
+    #[cfg(feature = "multithreaded-gc")]
+    {
+        let index = *ctx
+            .shared()
+            .shared_runtime_fields
+            .entry((field, lookup.clone()))
+            .or_insert_with(|| {
+                let idx = ctx
+                    .shared()
+                    .next_runtime_field_index
+                    .fetch_add(1, Ordering::Relaxed);
+                ctx.shared()
+                    .shared_runtime_fields_rev
+                    .insert(idx, (field, lookup.clone()));
+                idx
+            });
+        index as u16
+    }
+
+    #[cfg(not(feature = "multithreaded-gc"))]
+    {
+        let mut fields = ctx.reflection().fields_write();
+        let idx = get_runtime_member_index(&mut fields, field, lookup);
+        idx as u16
+    }
 }
 
 pub(crate) fn get_runtime_method_obj<'gc, 'm: 'gc>(
@@ -283,23 +312,6 @@ pub(crate) fn get_runtime_method_obj<'gc, 'm: 'gc>(
         return *obj;
     }
 
-    #[cfg(feature = "multithreaded-gc")]
-    let index = *ctx
-        .shared()
-        .shared_runtime_methods
-        .entry((method, lookup.clone()))
-        .or_insert_with(|| {
-            let idx = ctx
-                .shared()
-                .next_runtime_method_index
-                .fetch_add(1, Ordering::Relaxed);
-            ctx.shared()
-                .shared_runtime_methods_rev
-                .insert(idx, (method, lookup.clone()));
-            idx
-        });
-
-    #[cfg(not(feature = "multithreaded-gc"))]
     let index = get_runtime_method_index(ctx, method, lookup.clone()) as usize;
 
     let is_ctor = method.method.name == ".ctor" || method.method.name == ".cctor";
@@ -342,23 +354,6 @@ pub(crate) fn get_runtime_field_obj<'gc, 'm: 'gc>(
         return *obj;
     }
 
-    #[cfg(feature = "multithreaded-gc")]
-    let index = *ctx
-        .shared()
-        .shared_runtime_fields
-        .entry((field, lookup.clone()))
-        .or_insert_with(|| {
-            let idx = ctx
-                .shared()
-                .next_runtime_field_index
-                .fetch_add(1, Ordering::Relaxed);
-            ctx.shared()
-                .shared_runtime_fields_rev
-                .insert(idx, (field, lookup.clone()));
-            idx
-        });
-
-    #[cfg(not(feature = "multithreaded-gc"))]
     let index = get_runtime_field_index(ctx, field, lookup.clone()) as usize;
 
     let rt = ctx.loader().corlib_type("DotnetRs.FieldInfo");

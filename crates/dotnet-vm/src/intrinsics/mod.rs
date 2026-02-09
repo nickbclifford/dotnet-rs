@@ -102,10 +102,7 @@
 //!   ├─→ external_call() [if P/Invoke]
 //!   └─→ call_frame() [managed CIL]
 //! ```
-use crate::{
-    vm_trace_intrinsic,
-    stack::ops::VesOps,
-};
+use crate::{stack::ops::VesOps, vm_trace_intrinsic};
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
@@ -122,10 +119,13 @@ use dotnet_value::{
 use std::sync::Arc;
 
 pub mod array_ops;
+pub mod cpu_intrinsics;
+pub mod delegates;
 pub mod diagnostics;
 pub mod gc;
 pub mod math;
 pub mod metadata;
+pub mod object_ops;
 pub mod reflection;
 pub mod span;
 pub mod static_registry;
@@ -256,14 +256,8 @@ impl IntrinsicRegistry {
         } else {
             method.method.signature.parameters.len()
         };
-        write!(
-            w,
-            "M:{}::{}#{}",
-            method.parent.type_name(),
-            &*method.method.name,
-            arity
-        )
-        .ok()?;
+        let type_name = method.parent.type_name().replace('/', "+");
+        write!(w, "M:{}::{}#{}", type_name, &*method.method.name, arity).ok()?;
         let pos = w.pos;
         std::str::from_utf8(&buf[..pos]).ok()
     }
@@ -271,7 +265,8 @@ impl IntrinsicRegistry {
     fn build_field_key<'a>(&self, field: &FieldDescription, buf: &'a mut [u8]) -> Option<&'a str> {
         use std::fmt::Write;
         let mut w = StackWrite { buf, pos: 0 };
-        write!(w, "F:{}::{}", field.parent.type_name(), &*field.field.name).ok()?;
+        let type_name = field.parent.type_name().replace('/', "+");
+        write!(w, "F:{}::{}", type_name, &*field.field.name).ok()?;
         let pos = w.pos;
         std::str::from_utf8(&buf[..pos]).ok()
     }

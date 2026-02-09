@@ -3,13 +3,13 @@ use crate::{
     intrinsics::intrinsic_call,
     layout::{LayoutFactory, type_layout},
     resolution::ValueResolution,
-    stack::{ops::{StackOps, VesOps}},
+    stack::ops::{StackOps, VesOps},
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_types::{comparer::decompose_type_source, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
-    StackValue, CLRString,
+    CLRString, StackValue,
     layout::HasLayout,
     object::{HeapStorage, ObjectRef},
     pointer::UnmanagedPtr,

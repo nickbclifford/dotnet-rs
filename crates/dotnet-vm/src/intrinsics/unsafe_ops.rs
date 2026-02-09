@@ -19,7 +19,6 @@ use dotnet_value::{
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
 use std::{ptr, sync::Arc};
 
-
 #[dotnet_intrinsic("static int System.Runtime.InteropServices.Marshal::GetLastPInvokeError()")]
 #[allow(unused_variables)]
 pub fn intrinsic_marshal_get_last_pinvoke_error<'gc, 'm: 'gc>(

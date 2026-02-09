@@ -68,30 +68,6 @@ impl MethodInfo<'static> {
         shared: Arc<SharedGlobalState>,
     ) -> Self {
         let loader = shared.loader;
-        let body = match &method.method.body {
-            Some(b) => b,
-            None => panic!(
-                "no body in executing method: {}.{}",
-                method.parent.type_name(),
-                method.method.name
-            ),
-        };
-        let mut exceptions: &[body::Exception] = &[];
-        for sec in &body.data_sections {
-            use body::DataSection::*;
-            match sec {
-                Unrecognized { .. } => {}
-                ExceptionHandlers(e) => {
-                    exceptions = e;
-                }
-            }
-        }
-
-        let instructions = match &method.method.body {
-            Some(b) => b.instructions.as_slice(),
-            None => panic!("cannot call method with empty body"),
-        };
-
         let ctx = ResolutionContext::for_method(
             method,
             loader,
@@ -100,19 +76,41 @@ impl MethodInfo<'static> {
             Some(shared),
         );
 
-        Self {
-            is_cctor: method.method.runtime_special_name
-                && method.method.name == ".cctor"
-                && !method.method.signature.instance
-                && method.method.signature.parameters.is_empty(),
-            signature: &method.method.signature,
-            locals: &body.header.local_variables,
-            exceptions: exceptions::parse(exceptions, &ctx)
-                .into_iter()
-                .map(Rc::new)
-                .collect(),
-            instructions,
-            source: method,
+        if let Some(body) = &method.method.body {
+            let mut exceptions: &[body::Exception] = &[];
+            for sec in &body.data_sections {
+                use body::DataSection::*;
+                match sec {
+                    Unrecognized { .. } => {}
+                    ExceptionHandlers(e) => {
+                        exceptions = e;
+                    }
+                }
+            }
+
+            Self {
+                is_cctor: method.method.runtime_special_name
+                    && method.method.name == ".cctor"
+                    && !method.method.signature.instance
+                    && method.method.signature.parameters.is_empty(),
+                signature: &method.method.signature,
+                locals: &body.header.local_variables,
+                exceptions: exceptions::parse(exceptions, &ctx)
+                    .into_iter()
+                    .map(Rc::new)
+                    .collect(),
+                instructions: body.instructions.as_slice(),
+                source: method,
+            }
+        } else {
+            Self {
+                is_cctor: false,
+                signature: &method.method.signature,
+                locals: &[],
+                exceptions: vec![],
+                instructions: &[],
+                source: method,
+            }
         }
     }
 }

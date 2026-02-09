@@ -1,7 +1,4 @@
-use crate::{
-    StepResult, layout::type_layout, resolution::ValueResolution,
-    stack::ops::VesOps,
-};
+use crate::{StepResult, layout::type_layout, resolution::ValueResolution, stack::ops::VesOps};
 use dotnet_types::{
     generics::GenericLookup,
     members::{FieldDescription, MethodDescription},
@@ -15,7 +12,6 @@ use dotnet_value::{
 };
 use dotnetdll::prelude::ParameterType;
 use std::{mem::size_of, ptr::NonNull, slice};
-
 
 pub fn span_to_slice<'gc, 'a>(span: Object<'gc>, element_size: usize) -> &'a [u8] {
     let ptr_data = span

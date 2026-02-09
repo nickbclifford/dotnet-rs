@@ -1,21 +1,22 @@
+use crate::{
+    MethodInfo, StepResult,
+    dispatch::ExecutionEngine,
+    metrics::CacheStats,
+    stack::{
+        CallStack, GCArena,
+        ops::{CallOps, ReflectionOps, VesOps},
+    },
+    state::{ArenaLocalState, SharedGlobalState},
+    sync::MutexGuard,
+    threading::ThreadManagerOps,
+    tracer::Tracer,
+};
 use dotnet_types::members::MethodDescription;
 use dotnet_utils::sync::{Arc, Ordering};
 use dotnet_value::StackValue;
 
 #[cfg(feature = "multithreaded-gc")]
 use crate::vm_debug;
-
-use crate::{
-    stack::ops::{CallOps, ReflectionOps, VesOps},
-    MethodInfo, StepResult,
-    dispatch::ExecutionEngine,
-    metrics::CacheStats,
-    stack::{CallStack, GCArena},
-    state::{ArenaLocalState, SharedGlobalState},
-    sync::MutexGuard,
-    threading::ThreadManagerOps,
-    tracer::Tracer,
-};
 
 #[cfg(feature = "multithreaded-gc")]
 use super::gc::{arena::THREAD_ARENA, coordinator::*};

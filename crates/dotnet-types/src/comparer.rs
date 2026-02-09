@@ -1,4 +1,9 @@
-use crate::{TypeDescription, TypeResolver, generics::{ConcreteType, GenericLookup}, members::MethodDescription, resolution::ResolutionS};
+use crate::{
+    TypeDescription, TypeResolver,
+    generics::{ConcreteType, GenericLookup},
+    members::MethodDescription,
+    resolution::ResolutionS,
+};
 use dotnetdll::prelude::*;
 
 pub struct TypeComparer<'a, R: TypeResolver> {
@@ -135,12 +140,14 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                     match b {
                         MethodType::TypeGeneric(idx) => {
                             if let Some(concrete) = generics.type_generics.get(*idx) {
-                                return self.concrete_equals_method_type(concrete, res1, a, generics1);
+                                return self
+                                    .concrete_equals_method_type(concrete, res1, a, generics1);
                             }
                         }
                         MethodType::MethodGeneric(idx) => {
                             if let Some(concrete) = generics.method_generics.get(*idx) {
-                                return self.concrete_equals_method_type(concrete, res1, a, generics1);
+                                return self
+                                    .concrete_equals_method_type(concrete, res1, a, generics1);
                             }
                         }
                         _ => {}
@@ -203,12 +210,24 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
             return false;
         }
         match (&a.return_type, &b.return_type) {
-            (ReturnType(_, None), ReturnType(_, None)) => {
-                self.params_equal(res1, &a.parameters, generics1, res2, &b.parameters, generics2)
-            }
+            (ReturnType(_, None), ReturnType(_, None)) => self.params_equal(
+                res1,
+                &a.parameters,
+                generics1,
+                res2,
+                &b.parameters,
+                generics2,
+            ),
             (ReturnType(_, Some(l)), ReturnType(_, Some(r))) => {
                 if self.param_types_equal(res1, l, generics1, res2, r, generics2) {
-                    self.params_equal(res1, &a.parameters, generics1, res2, &b.parameters, generics2)
+                    self.params_equal(
+                        res1,
+                        &a.parameters,
+                        generics1,
+                        res2,
+                        &b.parameters,
+                        generics2,
+                    )
                 } else {
                     false
                 }
@@ -327,7 +346,14 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         sig_res: ResolutionS,
         generics: &GenericLookup,
     ) -> Option<MethodDescription> {
-        self.find_method_in_type_internal(desc, name, signature, sig_res, Some(generics))
+        self.find_method_in_type_internal(
+            desc,
+            name,
+            signature,
+            sig_res,
+            Some(generics),
+            Some(generics),
+        )
     }
 
     pub fn find_method_in_type(
@@ -337,7 +363,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         signature: &ManagedMethod<MethodType>,
         sig_res: ResolutionS,
     ) -> Option<MethodDescription> {
-        self.find_method_in_type_internal(desc, name, signature, sig_res, None)
+        self.find_method_in_type_internal(desc, name, signature, sig_res, None, None)
     }
 
     pub fn find_method_in_type_internal(
@@ -346,7 +372,8 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         name: &str,
         signature: &ManagedMethod<MethodType>,
         sig_res: ResolutionS,
-        generics: Option<&GenericLookup>,
+        sig_generics: Option<&GenericLookup>,
+        type_generics: Option<&GenericLookup>,
     ) -> Option<MethodDescription> {
         let def = desc.definition();
 
@@ -358,10 +385,10 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                     && self.signatures_equal(
                         sig_res,
                         signature,
-                        None,
+                        sig_generics,
                         desc.resolution,
                         &m.signature,
-                        generics,
+                        type_generics,
                     )
                 {
                     return Some(MethodDescription {
@@ -458,10 +485,14 @@ mod tests {
     struct MockResolver;
     impl TypeResolver for MockResolver {
         fn corlib_type(&self, _name: &str) -> TypeDescription {
-            TypeDescription::from_raw(ResolutionS::new(std::ptr::null()), None, unsafe { std::mem::transmute::<usize, dotnetdll::resolution::TypeIndex>(0usize) })
+            TypeDescription::from_raw(ResolutionS::new(std::ptr::null()), None, unsafe {
+                std::mem::transmute::<usize, dotnetdll::resolution::TypeIndex>(0usize)
+            })
         }
         fn locate_type(&self, res: ResolutionS, _handle: UserType) -> TypeDescription {
-            TypeDescription::from_raw(res, None, unsafe { std::mem::transmute::<usize, dotnetdll::resolution::TypeIndex>(0usize) })
+            TypeDescription::from_raw(res, None, unsafe {
+                std::mem::transmute::<usize, dotnetdll::resolution::TypeIndex>(0usize)
+            })
         }
     }
 

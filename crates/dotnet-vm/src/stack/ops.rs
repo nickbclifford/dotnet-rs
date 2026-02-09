@@ -21,20 +21,24 @@
 //! Handlers should typically take a generic parameter `T: VesOps<'gc, 'm> + ?Sized`.
 //! This allows them to work with both `VesContext` and potentially other implementations
 //! for testing or specialized execution.
-
-use crate::memory::ops::MemoryOps;
-use crate::state::SharedGlobalState;
-use crate::sync::{Arc, MutexGuard};
-use crate::tracer::Tracer;
-use dotnet_value::StackValue;
-use dotnet_value::object::{Object as ObjectInstance, ObjectRef, ObjectHandle};
-use dotnet_value::pointer::ManagedPtr;
-use dotnet_value::CLRString;
+use crate::{
+    memory::ops::MemoryOps,
+    state::SharedGlobalState,
+    sync::{Arc, MutexGuard},
+    tracer::Tracer,
+};
+use dotnet_types::{
+    TypeDescription,
+    generics::{ConcreteType, GenericLookup},
+    members::{FieldDescription, MethodDescription},
+    runtime::RuntimeType,
+};
 use dotnet_utils::gc::GCHandle;
-use dotnet_types::TypeDescription;
-use dotnet_types::generics::{GenericLookup, ConcreteType};
-use dotnet_types::members::{MethodDescription, FieldDescription};
-use dotnet_types::runtime::RuntimeType;
+use dotnet_value::{
+    CLRString, StackValue,
+    object::{Object as ObjectInstance, ObjectHandle, ObjectRef},
+    pointer::ManagedPtr,
+};
 use dotnetdll::prelude::{FieldSource, MethodType};
 
 pub trait StackOps<'gc, 'm> {
@@ -142,7 +146,11 @@ pub trait RawMemoryOps<'gc> {
 
 pub trait ReflectionOps<'gc, 'm>: crate::memory::ops::MemoryOps<'gc> {
     fn pre_initialize_reflection(&mut self, gc: GCHandle<'gc>);
-    fn get_runtime_method_index(&mut self, method: MethodDescription, lookup: GenericLookup) -> usize;
+    fn get_runtime_method_index(
+        &mut self,
+        method: MethodDescription,
+        lookup: GenericLookup,
+    ) -> usize;
     fn get_runtime_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> ObjectRef<'gc>;
     fn get_runtime_method_obj(
         &mut self,
@@ -172,6 +180,7 @@ pub trait ReflectionOps<'gc, 'm>: crate::memory::ops::MemoryOps<'gc> {
     fn resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> RuntimeType;
     fn resolve_runtime_method(&self, obj: ObjectRef<'gc>) -> (MethodDescription, GenericLookup);
     fn resolve_runtime_field(&self, obj: ObjectRef<'gc>) -> (FieldDescription, GenericLookup);
+    fn lookup_method_by_index(&self, index: usize) -> (MethodDescription, GenericLookup);
     fn reflection(&self) -> crate::state::ReflectionRegistry<'_, 'gc>;
     fn thread_id(&self) -> usize;
     fn initialize_static_storage(
@@ -248,7 +257,8 @@ pub trait VesOps<'gc, 'm>:
     fn exception_mode(&self) -> &crate::exceptions::ExceptionState<'gc>;
     fn exception_mode_mut(&mut self) -> &mut crate::exceptions::ExceptionState<'gc>;
     fn evaluation_stack(&self) -> &crate::stack::evaluation_stack::EvaluationStack<'gc>;
-    fn evaluation_stack_mut(&mut self) -> &mut crate::stack::evaluation_stack::EvaluationStack<'gc>;
+    fn evaluation_stack_mut(&mut self)
+    -> &mut crate::stack::evaluation_stack::EvaluationStack<'gc>;
     fn frame_stack(&self) -> &crate::stack::frames::FrameStack<'gc, 'm>;
     fn frame_stack_mut(&mut self) -> &mut crate::stack::frames::FrameStack<'gc, 'm>;
     fn original_ip(&self) -> usize;

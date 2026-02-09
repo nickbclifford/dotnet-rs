@@ -1,5 +1,4 @@
-use crate::StepResult;
-use crate::stack::ops::VesOps;
+use crate::{StepResult, stack::ops::VesOps};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::{GCHandle, GCHandleType};
@@ -223,12 +222,8 @@ pub fn intrinsic_gchandle_internal_free<'gc, 'm: 'gc>(
             {
                 let handle_type_str = format!("{:?}", handle_type);
                 let addr = obj.0.map(|p| gc_arena::Gc::as_ptr(p) as usize).unwrap_or(0);
-                ctx.tracer().trace_gc_handle(
-                    ctx.indent(),
-                    "FREE",
-                    &handle_type_str,
-                    addr,
-                );
+                ctx.tracer()
+                    .trace_gc_handle(ctx.indent(), "FREE", &handle_type_str, addr);
             }
             handles[index] = None;
         }

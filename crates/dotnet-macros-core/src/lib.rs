@@ -82,26 +82,33 @@ impl Parse for ParsedFieldSignature {
 }
 
 pub fn parse_type(input: ParseStream) -> Result<String> {
-    let mut parts = Vec::new();
+    let mut segments = Vec::new();
+    let mut separators = Vec::new();
 
     loop {
         let ident: Ident = input.parse()?;
-        let mut part_name = ident.to_string();
+        let mut segment = ident.to_string();
 
         // Check for generics <T, U> -> `2
-        // We need to look ahead for <
-        // Note: We need to handle this carefully to avoid infinite recursion if parse_type calls this.
-        // But parse_generic_args_count calls parse_type, which is fine as it consumes tokens.
         let count = parse_generic_args_count(input)?;
         if count > 0 {
-            part_name.push('`');
-            part_name.push_str(&count.to_string());
+            segment.push('`');
+            segment.push_str(&count.to_string());
         }
 
-        parts.push(part_name);
+        segments.push(segment);
 
         if input.peek(Token![.]) {
             input.parse::<Token![.]>()?;
+            separators.push('.');
+            continue;
+        } else if input.peek(Token![/]) {
+            input.parse::<Token![/]>()?;
+            separators.push('+');
+            continue;
+        } else if input.peek(Token![+]) {
+            input.parse::<Token![+]>()?;
+            separators.push('+');
             continue;
         } else {
             break;
@@ -125,51 +132,61 @@ pub fn parse_type(input: ParseStream) -> Result<String> {
         }
     }
 
-    // Normalize
-    let mut type_name = if parts.len() == 1 {
-        match parts[0].as_str() {
-            "void" => String::from("Void"),
-            "bool" => String::from("Boolean"),
-            "byte" => String::from("UInt8"),
-            "sbyte" => String::from("Int8"),
-            "char" => String::from("Char"),
-            "short" => String::from("Int16"),
-            "ushort" => String::from("UInt16"),
-            "int" => String::from("Int32"),
-            "uint" => String::from("UInt32"),
-            "long" => String::from("Int64"),
-            "ulong" => String::from("UInt64"),
-            "float" => String::from("Float32"),
-            "double" => String::from("Float64"),
-            "string" => String::from("String"),
-            "object" => String::from("Object"),
-            "nint" => String::from("IntPtr"),
-            "nuint" => String::from("UIntPtr"),
-            _ => parts[0].clone(),
-        }
-    } else if parts.len() == 2 && parts[0] == "System" {
-        match parts[1].as_str() {
-            "Void" => String::from("Void"),
-            "Boolean" => String::from("Boolean"),
-            "Byte" => String::from("UInt8"),
-            "SByte" => String::from("Int8"),
-            "Char" => String::from("Char"),
-            "Int16" => String::from("Int16"),
-            "UInt16" => String::from("UInt16"),
-            "Int32" => String::from("Int32"),
-            "UInt32" => String::from("UInt32"),
-            "Int64" => String::from("Int64"),
-            "UInt64" => String::from("UInt64"),
-            "Single" => String::from("Float32"),
-            "Double" => String::from("Float64"),
-            "String" => String::from("String"),
-            "Object" => String::from("Object"),
-            "IntPtr" => String::from("IntPtr"),
-            "UIntPtr" => String::from("UIntPtr"),
-            _ => parts.join("."),
+    // Normalize only if all separators were '.'
+    let mut type_name = if separators.iter().all(|&c| c == '.') {
+        if segments.len() == 1 {
+            match segments[0].as_str() {
+                "void" => String::from("Void"),
+                "bool" => String::from("Boolean"),
+                "byte" => String::from("UInt8"),
+                "sbyte" => String::from("Int8"),
+                "char" => String::from("Char"),
+                "short" => String::from("Int16"),
+                "ushort" => String::from("UInt16"),
+                "int" => String::from("Int32"),
+                "uint" => String::from("UInt32"),
+                "long" => String::from("Int64"),
+                "ulong" => String::from("UInt64"),
+                "float" => String::from("Float32"),
+                "double" => String::from("Float64"),
+                "string" => String::from("String"),
+                "object" => String::from("Object"),
+                "nint" => String::from("IntPtr"),
+                "nuint" => String::from("UIntPtr"),
+                _ => segments[0].clone(),
+            }
+        } else if segments.len() == 2 && segments[0] == "System" {
+            match segments[1].as_str() {
+                "Void" => String::from("Void"),
+                "Boolean" => String::from("Boolean"),
+                "Byte" => String::from("UInt8"),
+                "SByte" => String::from("Int8"),
+                "Char" => String::from("Char"),
+                "Int16" => String::from("Int16"),
+                "UInt16" => String::from("UInt16"),
+                "Int32" => String::from("Int32"),
+                "UInt32" => String::from("UInt32"),
+                "Int64" => String::from("Int64"),
+                "UInt64" => String::from("UInt64"),
+                "Single" => String::from("Float32"),
+                "Double" => String::from("Float64"),
+                "String" => String::from("String"),
+                "Object" => String::from("Object"),
+                "IntPtr" => String::from("IntPtr"),
+                "UIntPtr" => String::from("UIntPtr"),
+                _ => segments.join("."),
+            }
+        } else {
+            segments.join(".")
         }
     } else {
-        parts.join(".")
+        // Build with separators
+        let mut res = segments[0].clone();
+        for i in 0..separators.len() {
+            res.push(separators[i]);
+            res.push_str(&segments[i + 1]);
+        }
+        res
     };
 
     type_name.push_str(&suffix);
@@ -177,23 +194,33 @@ pub fn parse_type(input: ParseStream) -> Result<String> {
 }
 
 pub fn parse_class_name(input: ParseStream) -> Result<String> {
-    let mut parts = Vec::new();
+    let mut segments = Vec::new();
+    let mut separators = Vec::new();
 
     loop {
         let ident: Ident = input.parse()?;
-        let mut part_name = ident.to_string();
+        let mut segment = ident.to_string();
 
         // Generics
         let count = parse_generic_args_count(input)?;
         if count > 0 {
-            part_name.push('`');
-            part_name.push_str(&count.to_string());
+            segment.push('`');
+            segment.push_str(&count.to_string());
         }
 
-        parts.push(part_name);
+        segments.push(segment);
 
         if input.peek(Token![.]) {
             input.parse::<Token![.]>()?;
+            separators.push('.');
+            continue;
+        } else if input.peek(Token![/]) {
+            input.parse::<Token![/]>()?;
+            separators.push('+');
+            continue;
+        } else if input.peek(Token![+]) {
+            input.parse::<Token![+]>()?;
+            separators.push('+');
             continue;
         } else {
             break;
@@ -217,9 +244,13 @@ pub fn parse_class_name(input: ParseStream) -> Result<String> {
         }
     }
 
-    // No normalization for class name
-    let type_name = parts.join(".");
-    Ok(type_name + &suffix)
+    let mut res = segments[0].clone();
+    for i in 0..separators.len() {
+        res.push(separators[i]);
+        res.push_str(&segments[i + 1]);
+    }
+    res.push_str(&suffix);
+    Ok(res)
 }
 
 pub fn parse_generic_args_count(input: ParseStream) -> Result<usize> {
@@ -277,5 +308,28 @@ mod tests {
         assert_eq!(sig.return_type, "String"); // Normalized
 
         assert_eq!(sig.class_name, "System.Console");
+    }
+
+    #[test]
+    fn test_parse_nested_type() {
+        let sig: ParsedSignature =
+            parse_str("static bool System.Runtime.Intrinsics.X86.Sse2/X64::get_IsSupported()")
+                .unwrap();
+        assert_eq!(sig.class_name, "System.Runtime.Intrinsics.X86.Sse2+X64");
+    }
+
+    #[test]
+    fn test_parse_nested_type_parameter() {
+        let sig: ParsedSignature =
+            parse_str("static void MyClass::Method(Namespace.Parent/Nested)").unwrap();
+        assert_eq!(sig.parameters, vec!["Namespace.Parent+Nested"]);
+    }
+
+    #[test]
+    fn test_parse_field_nested_type() {
+        let sig: ParsedFieldSignature =
+            parse_str("static int Namespace.Parent/Nested::Field").unwrap();
+        assert_eq!(sig.class_name, "Namespace.Parent+Nested");
+        assert_eq!(sig.field_name, "Field");
     }
 }

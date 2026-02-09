@@ -58,8 +58,8 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
 
     int IList.Add(object? value) => throw new NotSupportedException();
     void IList.Clear() => throw new NotSupportedException();
-    bool IList.Contains(object? value) => IndexOf((Array)this, value) >= 0;
-    int IList.IndexOf(object? value) => IndexOf((Array)this, value);
+    bool IList.Contains(object? value) => IndexOf(this, value) >= 0;
+    int IList.IndexOf(object? value) => IndexOf(this, value);
     void IList.Insert(int index, object? value) => throw new NotSupportedException();
     void IList.Remove(object? value) => throw new NotSupportedException();
     void IList.RemoveAt(int index) => throw new NotSupportedException();
@@ -68,9 +68,9 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
 
     public void CopyTo(System.Array array, int index)
     {
-        if (array == null) throw new ArgumentNullException(nameof(array));
+        ArgumentNullException.ThrowIfNull(array);
         if (Rank != 1) throw new RankException();
-        if (index < 0) throw new ArgumentOutOfRangeException(nameof(index));
+        ArgumentOutOfRangeException.ThrowIfNegative(index);
         if (index + Length > array.Length) throw new ArgumentException();
 
         for (int i = 0; i < Length; i++)
@@ -87,19 +87,19 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
     // Static helper methods
     public static int IndexOf(Array array, object? value)
     {
-        if (array == null) throw new ArgumentNullException(nameof(array));
+        ArgumentNullException.ThrowIfNull(array);
         return IndexOf(array, value, 0, array.Length);
     }
 
     public static int IndexOf(Array array, object? value, int startIndex)
     {
-        if (array == null) throw new ArgumentNullException(nameof(array));
+        ArgumentNullException.ThrowIfNull(array);
         return IndexOf(array, value, startIndex, array.Length - startIndex);
     }
 
     public static int IndexOf(Array array, object? value, int startIndex, int count)
     {
-        if (array == null) throw new ArgumentNullException(nameof(array));
+        ArgumentNullException.ThrowIfNull(array);
         if (startIndex < 0 || startIndex > array.Length) throw new ArgumentOutOfRangeException(nameof(startIndex));
         if (count < 0 || startIndex + count > array.Length) throw new ArgumentOutOfRangeException(nameof(count));
 
@@ -114,19 +114,19 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
 
     public static int LastIndexOf(Array array, object? value)
     {
-        if (array == null) throw new ArgumentNullException(nameof(array));
+        ArgumentNullException.ThrowIfNull(array);
         return LastIndexOf(array, value, array.Length - 1, array.Length);
     }
 
     public static int LastIndexOf(Array array, object? value, int startIndex)
     {
-        if (array == null) throw new ArgumentNullException(nameof(array));
+        ArgumentNullException.ThrowIfNull(array);
         return LastIndexOf(array, value, startIndex, startIndex + 1);
     }
 
     public static int LastIndexOf(Array array, object? value, int startIndex, int count)
     {
-        if (array == null) throw new ArgumentNullException(nameof(array));
+        ArgumentNullException.ThrowIfNull(array);
         if (array.Length == 0) return -1;
         if (startIndex < 0 || startIndex >= array.Length) throw new ArgumentOutOfRangeException(nameof(startIndex));
         if (count < 0 || startIndex - count + 1 < 0) throw new ArgumentOutOfRangeException(nameof(count));
@@ -142,34 +142,34 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
 
     public static int IndexOf<T>(T[] array, T value)
     {
-        return IndexOf((Array)(object)array, (object?)value, 0, array.Length);
+        return IndexOf((Array)(object)array, value, 0, array.Length);
     }
 
     public static int IndexOf<T>(T[] array, T value, int startIndex)
     {
-        return IndexOf((Array)(object)array, (object?)value, startIndex, array.Length - startIndex);
+        return IndexOf((Array)(object)array, value, startIndex, array.Length - startIndex);
     }
 
     public static int IndexOf<T>(T[] array, T value, int startIndex, int count)
     {
-        return IndexOf((Array)(object)array, (object?)value, startIndex, count);
+        return IndexOf((Array)(object)array, value, startIndex, count);
     }
 
     public static int LastIndexOf<T>(T[] array, T value)
     {
-        if (array == null) throw new ArgumentNullException(nameof(array));
-        return LastIndexOf((Array)(object)array, (object?)value, array.Length - 1, array.Length);
+        ArgumentNullException.ThrowIfNull(array);
+        return LastIndexOf((Array)(object)array, value, array.Length - 1, array.Length);
     }
 
     public static int LastIndexOf<T>(T[] array, T value, int startIndex)
     {
-        if (array == null) throw new ArgumentNullException(nameof(array));
-        return LastIndexOf((Array)(object)array, (object?)value, startIndex, startIndex + 1);
+        ArgumentNullException.ThrowIfNull(array);
+        return LastIndexOf((Array)(object)array, value, startIndex, startIndex + 1);
     }
 
     public static int LastIndexOf<T>(T[] array, T value, int startIndex, int count)
     {
-        return LastIndexOf((Array)(object)array, (object?)value, startIndex, count);
+        return LastIndexOf((Array)(object)array, value, startIndex, count);
     }
 
     public static void Copy(Array sourceArray, Array destinationArray, int length)
@@ -179,13 +179,13 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
 
     public static void Copy(Array sourceArray, int sourceIndex, Array destinationArray, int destinationIndex, int length)
     {
-        if (sourceArray == null) throw new ArgumentNullException(nameof(sourceArray));
-        if (destinationArray == null) throw new ArgumentNullException(nameof(destinationArray));
-        if (length < 0) throw new ArgumentOutOfRangeException(nameof(length));
-        if (sourceIndex < 0) throw new ArgumentOutOfRangeException(nameof(sourceIndex));
-        if (destinationIndex < 0) throw new ArgumentOutOfRangeException(nameof(destinationIndex));
-        if (sourceIndex + length > sourceArray.Length) throw new ArgumentException();
-        if (destinationIndex + length > destinationArray.Length) throw new ArgumentException();
+        ArgumentNullException.ThrowIfNull(sourceArray);
+        ArgumentNullException.ThrowIfNull(destinationArray);
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        ArgumentOutOfRangeException.ThrowIfNegative(sourceIndex);
+        ArgumentOutOfRangeException.ThrowIfNegative(destinationIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(sourceIndex + length, sourceArray.Length);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(destinationIndex + length, destinationArray.Length);
 
         for (int i = 0; i < length; i++)
         {
@@ -195,15 +195,15 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
 
     public static void Clear(Array array)
     {
-        if (array == null) throw new ArgumentNullException(nameof(array));
+        ArgumentNullException.ThrowIfNull(array);
         Clear(array, 0, array.Length);
     }
 
     public static void Clear(Array array, int index, int length)
     {
-        if (array == null) throw new ArgumentNullException(nameof(array));
-        if (index < 0) throw new ArgumentOutOfRangeException(nameof(index));
-        if (length < 0) throw new ArgumentOutOfRangeException(nameof(length));
+        ArgumentNullException.ThrowIfNull(array);
+        ArgumentOutOfRangeException.ThrowIfNegative(index);
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
         if (index + length > array.Length) throw new ArgumentException();
 
         for (int i = index; i < index + length; i++)
@@ -214,21 +214,15 @@ public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquata
 
     public static T[] Empty<T>() => new T[0];
 
-    private class ArrayEnumerator : IEnumerator
+    private class ArrayEnumerator(Array array) : IEnumerator
     {
-        private readonly Array _array;
         private int _index = -1;
 
-        public ArrayEnumerator(Array array)
-        {
-            _array = array;
-        }
-
-        public object? Current => _array.GetValue(_index);
+        public object? Current => array.GetValue(_index);
 
         public bool MoveNext()
         {
-            if (_index < _array.Length - 1)
+            if (_index < array.Length - 1)
             {
                 _index++;
                 return true;

@@ -3,22 +3,23 @@
 //! This module implements the main VM execution loop in [`ExecutionEngine`],
 //! which orchestrates the fetch-decode-execute cycle. It also provides
 //! the [`InstructionRegistry`] for looking up instruction handlers.
-
+use crate::{
+    MethodInfo, ResolutionContext, StepResult,
+    exceptions::ExceptionState,
+    stack::{
+        CallStack,
+        ops::{CallOps, ReflectionOps, StackOps, VesOps},
+    },
+    threading::ThreadManagerOps,
+    vm_trace_instruction,
+};
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
+use dotnet_value::{StackValue, layout::HasLayout, object::ObjectRef};
 use dotnetdll::prelude::*;
 use gc_arena::Collect;
 
 pub mod registry;
-
-use crate::stack::ops::{CallOps, ReflectionOps, VesOps};
-use crate::{
-    vm_trace_instruction,
-    stack::CallStack,
-    MethodInfo, ResolutionContext, StepResult,
-    exceptions::ExceptionState,
-    threading::ThreadManagerOps,
-};
 
 pub struct InstructionRegistry;
 
@@ -89,17 +90,33 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
     /// 4. Dispatches the instruction to its handler.
     /// 5. Handles the result (Continue, Jump, Call, Return, etc.).
     pub fn step_normal(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        if self.stack.execution.frame_stack.is_empty() {
+            return StepResult::Return;
+        }
+
+        if self.stack.current_frame().multicast_state.is_some() {
+            return self.handle_multicast_step(gc);
+        }
+
         let ip = self.stack.state().ip;
         let i = &self.stack.state().info_handle.instructions[ip];
 
         // Synchronize original IP and stack height for suspension/retry logic (e.g. Yield)
         self.stack.execution.original_ip = ip;
-        self.stack.execution.original_stack_height = self.stack.execution.evaluation_stack.top_of_stack();
+        self.stack.execution.original_stack_height =
+            self.stack.execution.evaluation_stack.top_of_stack();
 
         vm_trace_instruction!(
             self.stack,
             ip,
-            &i.show(self.stack.state().info_handle.source.resolution().definition())
+            &i.show(
+                self.stack
+                    .state()
+                    .info_handle
+                    .source
+                    .resolution()
+                    .definition()
+            )
         );
 
         tracing::debug!(
@@ -127,12 +144,8 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
                 self.stack.branch(target);
                 StepResult::Continue
             }
-            StepResult::Yield => {
-                StepResult::Yield
-            }
-            StepResult::Exception => {
-                StepResult::Exception
-            }
+            StepResult::Yield => StepResult::Yield,
+            StepResult::Exception => StepResult::Exception,
             StepResult::Return => {
                 let res = self.stack.handle_return(gc);
                 tracing::debug!("step_normal: handle_return result={:?}", res);
@@ -203,7 +216,12 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
         lookup: GenericLookup,
     ) -> StepResult {
         let mut ctx = self.stack.ves_context();
-        tracing::debug!("dispatch_method: method={:?}, pinvoke={:?}, internal_call={}", method, method.method.pinvoke, method.method.internal_call);
+        tracing::debug!(
+            "dispatch_method: method={:?}, pinvoke={:?}, internal_call={}",
+            method,
+            method.method.pinvoke,
+            method.method.internal_call
+        );
         if ctx.is_intrinsic_cached(method) {
             crate::intrinsics::intrinsic_call(gc, &mut ctx, method, &lookup)
         } else if method.method.pinvoke.is_some() {
@@ -217,12 +235,80 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
             if method.method.internal_call {
                 panic!("intrinsic not found: {:?}", method);
             }
+
+            if method.method.body.is_none() {
+                if let Some(result) = crate::intrinsics::delegates::try_delegate_dispatch(
+                    &mut ctx, gc, method, &lookup,
+                ) {
+                    return result;
+                }
+
+                panic!(
+                    "no body in executing method: {}.{}",
+                    method.parent.type_name(),
+                    method.method.name
+                );
+            }
+
             ctx.call_frame(
                 gc,
                 MethodInfo::new(method, &lookup, ctx.shared.clone()),
                 lookup,
             );
             StepResult::FramePushed
+        }
+    }
+
+    fn handle_multicast_step(&mut self, gc: GCHandle<'gc>) -> StepResult {
+        let targets_len = {
+            let frame = self.stack.current_frame();
+            let state = frame.multicast_state.as_ref().unwrap();
+            ObjectRef(Some(state.targets)).as_vector(|v| v.layout.length)
+        };
+
+        let mut ctx = self.stack.ves_context();
+
+        // 1. Handle return from previous target
+        if ctx.frame_stack.current_frame().stack_height > 0 {
+            let frame = ctx.frame_stack.current_frame();
+            let invoke_method = frame.state.info_handle.source;
+            let has_return_value = invoke_method.method.signature.return_type.1.is_some();
+
+            let next_index = frame.multicast_state.as_ref().unwrap().next_index;
+            if next_index < targets_len && has_return_value {
+                ctx.pop(gc);
+            }
+        }
+
+        let (target_delegate, args, _next_index) = {
+            let frame = ctx.frame_stack.current_frame_mut();
+            let state = frame.multicast_state.as_mut().unwrap();
+            let index = state.next_index;
+            if index < targets_len {
+                let target = ObjectRef(Some(state.targets)).as_vector(|v| {
+                    let offset = index * v.layout.element_layout.as_ref().size();
+                    unsafe { ObjectRef::read_unchecked(&v.get()[offset..]) }
+                });
+                state.next_index += 1;
+                (Some(target), state.args.clone(), index)
+            } else {
+                (None, vec![], index)
+            }
+        };
+
+        if let Some(target_delegate) = target_delegate {
+            ctx.push(gc, StackValue::ObjectRef(target_delegate));
+            for arg in args {
+                ctx.push(gc, arg);
+            }
+
+            let invoke_method = ctx.frame_stack.current_frame().state.info_handle.source;
+            let lookup = ctx.frame_stack.current_frame().generic_inst.clone();
+
+            ctx.dispatch_method(gc, invoke_method, lookup)
+        } else {
+            // All targets called.
+            self.stack.handle_return(gc)
         }
     }
 }

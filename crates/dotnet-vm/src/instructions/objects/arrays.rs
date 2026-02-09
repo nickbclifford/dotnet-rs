@@ -375,7 +375,10 @@ pub fn newarr<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(LoadLength)]
-pub fn ldlen<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(ctx: &mut T, gc: GCHandle<'gc>) -> StepResult {
+pub fn ldlen<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
+    gc: GCHandle<'gc>,
+) -> StepResult {
     let array = ctx.pop(gc);
     let StackValue::ObjectRef(obj) = array else {
         panic!("ldlen: expected object on stack, got {:?}", array);

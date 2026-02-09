@@ -1,6 +1,7 @@
 use crate::{
-    StepResult, instructions::macros::*,
-    stack::ops::{StackOps, ResolutionOps},
+    StepResult,
+    instructions::macros::*,
+    stack::ops::{ResolutionOps, StackOps},
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::gc::GCHandle;
@@ -15,13 +16,19 @@ pub fn nop<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 #[dotnet_instruction(Pop)]
-pub fn pop<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T, gc: GCHandle<'gc>) -> StepResult {
+pub fn pop<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
+    gc: GCHandle<'gc>,
+) -> StepResult {
     ctx.pop(gc);
     StepResult::Continue
 }
 
 #[dotnet_instruction(Duplicate)]
-pub fn duplicate<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T, gc: GCHandle<'gc>) -> StepResult {
+pub fn duplicate<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
+    gc: GCHandle<'gc>,
+) -> StepResult {
     ctx.dup(gc);
     StepResult::Continue
 }
@@ -51,7 +58,10 @@ load_const!(
     StackValue::NativeFloat
 );
 #[dotnet_instruction(LoadNull)]
-pub fn ldnull<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T, gc: GCHandle<'gc>) -> StepResult {
+pub fn ldnull<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+    ctx: &mut T,
+    gc: GCHandle<'gc>,
+) -> StepResult {
     ctx.push(gc, StackValue::null());
     StepResult::Continue
 }

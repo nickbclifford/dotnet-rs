@@ -1,13 +1,8 @@
 use crate::{StepResult, stack::ops::VesOps};
 use dotnet_macros::dotnet_intrinsic;
-use dotnet_types::{
-    generics::GenericLookup,
-    members::MethodDescription,
-    runtime::RuntimeType,
-};
+use dotnet_types::{generics::GenericLookup, members::MethodDescription, runtime::RuntimeType};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::StackValue;
-
 
 #[dotnet_intrinsic("string DotnetRs.FieldInfo::GetName()")]
 pub fn intrinsic_field_info_get_name<'gc, 'm: 'gc>(
