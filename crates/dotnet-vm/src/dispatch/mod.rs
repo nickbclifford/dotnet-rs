@@ -8,7 +8,7 @@ use crate::{
     exceptions::ExceptionState,
     stack::{
         CallStack,
-        ops::{CallOps, ReflectionOps, StackOps, VesOps},
+        ops::*,
     },
     threading::ThreadManagerOps,
     vm_trace_instruction,

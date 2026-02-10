@@ -427,44 +427,15 @@ VesOps (26 methods)
 - `VesOps` still has 26 methods (mostly coordination)
 - All traits still require `GCHandle` parameter threading (see Phase 3.1 analysis)
 
-### Potential Future Trait Refactoring (Phase 3.2)
+### Trait Refactoring (Phase 3.2) - ✅ COMPLETED
 
-**StackOps Decomposition Proposal:**
-```rust
-// Basic push/pop
-trait EvalStackOps<'gc> {
-    fn push(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>);
-    fn pop(&mut self, gc: GCHandle<'gc>) -> StackValue<'gc>;
-    fn pop_safe(&mut self, gc: GCHandle<'gc>) -> Option<StackValue<'gc>>;  // Added in Phase 2.4
-    fn dup(&mut self, gc: GCHandle<'gc>);
-    fn peek(&self) -> Option<StackValue<'gc>>;
-}
+**StackOps Decomposition:**
+- ✅ `EvalStackOps`: Basic push/pop/dup/peek operations.
+- ✅ `TypedStackOps`: Type-specific push/pop helpers (mostly default implementations).
+- ✅ `LocalOps`: Local variable access.
+- ✅ `ArgumentOps`: Argument access.
 
-// Typed push/pop helpers (default implementations)
-trait TypedStackOps<'gc>: EvalStackOps<'gc> {
-    fn push_i32(&mut self, gc: GCHandle<'gc>, value: i32) {
-        self.push(gc, StackValue::Int32(value))
-    }
-    fn pop_i32(&mut self, gc: GCHandle<'gc>) -> i32 { /* ... */ }
-    // Default implementations reduce boilerplate
-}
-
-// Local variable access
-trait LocalOps<'gc> {
-    fn get_local(&self, index: usize) -> StackValue<'gc>;
-    fn set_local(&mut self, index: usize, value: StackValue<'gc>);
-    fn get_local_address(&self, index: usize) -> NonNull<u8>;
-}
-
-// Argument access
-trait ArgumentOps<'gc> {
-    fn get_argument(&self, index: usize) -> StackValue<'gc>;
-    fn set_argument(&mut self, index: usize, value: StackValue<'gc>);
-    fn get_argument_address(&self, index: usize) -> NonNull<u8>;
-}
-```
-
-This decomposition allows instruction handlers to request only the capabilities they need, improving clarity and enabling more focused testing.
+The `StackOps` trait now inherits from these more focused traits, and `VesOps` has been updated accordingly. This allows instruction handlers to specify more granular requirements.
 
 ---
 

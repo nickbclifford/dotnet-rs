@@ -1,81 +1,18 @@
-use super::{context::VesContext, ops::StackOps};
-use dotnet_types::TypeDescription;
+use super::{
+    context::VesContext,
+    ops::{ArgumentOps, EvalStackOps, LocalOps, StackOps, TypedStackOps},
+};
 use dotnet_value::{
     CLRString, StackValue,
-    object::{HeapStorage, Object as ObjectInstance, ObjectRef},
-    pointer::ManagedPtr,
+    object::{HeapStorage, ObjectRef},
 };
 
-impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
+impl<'a, 'gc, 'm: 'gc> EvalStackOps<'gc> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn push(&mut self, value: StackValue<'gc>) {
         self.trace_push(&value);
         self.evaluation_stack.push(value);
         self.on_push();
-    }
-
-    #[inline]
-    fn push_i32(&mut self, value: i32) {
-        self.trace_push(&StackValue::Int32(value));
-        self.evaluation_stack.push_i32(value);
-        self.on_push();
-    }
-
-    #[inline]
-    fn push_i64(&mut self, value: i64) {
-        self.trace_push(&StackValue::Int64(value));
-        self.evaluation_stack.push_i64(value);
-        self.on_push();
-    }
-
-    #[inline]
-    fn push_f64(&mut self, value: f64) {
-        self.trace_push(&StackValue::NativeFloat(value));
-        self.evaluation_stack.push_f64(value);
-        self.on_push();
-    }
-
-    #[inline]
-    fn push_obj(&mut self, value: ObjectRef<'gc>) {
-        self.trace_push(&StackValue::ObjectRef(value));
-        self.evaluation_stack.push_obj(value);
-        self.on_push();
-    }
-
-    #[inline]
-    fn push_ptr(&mut self, ptr: *mut u8, t: TypeDescription, is_pinned: bool) {
-        self.trace_push(&StackValue::managed_ptr(ptr, t, is_pinned));
-        self.evaluation_stack.push_ptr(ptr, t, is_pinned);
-        self.on_push();
-    }
-
-    #[inline]
-    fn push_isize(&mut self, value: isize) {
-        self.trace_push(&StackValue::NativeInt(value));
-        self.evaluation_stack.push_isize(value);
-        self.on_push();
-    }
-
-    #[inline]
-    fn push_value_type(&mut self, value: ObjectInstance<'gc>) {
-        self.trace_push(&StackValue::ValueType(value.clone()));
-        self.evaluation_stack.push_value_type(value);
-        self.on_push();
-    }
-
-    #[inline]
-    fn push_managed_ptr(&mut self, value: ManagedPtr<'gc>) {
-        self.trace_push(&StackValue::ManagedPtr(value));
-        self.evaluation_stack.push_managed_ptr(value);
-        self.on_push();
-    }
-
-    #[inline]
-    fn push_string(&mut self, value: CLRString) {
-        let gc = self.gc;
-        let in_heap = ObjectRef::new(gc, HeapStorage::Str(value));
-        self.register_new_object(&in_heap);
-        self.push(StackValue::ObjectRef(in_heap));
     }
 
     #[inline]
@@ -92,70 +29,6 @@ impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         let val = self.evaluation_stack.pop_safe()?;
         self.trace_pop(&val);
         Ok(val)
-    }
-
-    #[inline]
-    fn pop_i32(&mut self) -> i32 {
-        self.on_pop();
-        let val = self.evaluation_stack.pop_i32();
-        self.trace_pop(&StackValue::Int32(val));
-        val
-    }
-
-    #[inline]
-    fn pop_i64(&mut self) -> i64 {
-        self.on_pop();
-        let val = self.evaluation_stack.pop_i64();
-        self.trace_pop(&StackValue::Int64(val));
-        val
-    }
-
-    #[inline]
-    fn pop_f64(&mut self) -> f64 {
-        self.on_pop();
-        let val = self.evaluation_stack.pop_f64();
-        self.trace_pop(&StackValue::NativeFloat(val));
-        val
-    }
-
-    #[inline]
-    fn pop_isize(&mut self) -> isize {
-        self.on_pop();
-        let val = self.evaluation_stack.pop_isize();
-        self.trace_pop(&StackValue::NativeInt(val));
-        val
-    }
-
-    #[inline]
-    fn pop_obj(&mut self) -> ObjectRef<'gc> {
-        self.on_pop();
-        let val = self.evaluation_stack.pop_obj();
-        self.trace_pop(&StackValue::ObjectRef(val));
-        val
-    }
-
-    #[inline]
-    fn pop_ptr(&mut self) -> *mut u8 {
-        self.on_pop();
-        let val = self.evaluation_stack.pop_ptr();
-        self.trace_pop(&StackValue::NativeInt(val as isize));
-        val
-    }
-
-    #[inline]
-    fn pop_value_type(&mut self) -> ObjectInstance<'gc> {
-        self.on_pop();
-        let val = self.evaluation_stack.pop_value_type();
-        self.trace_pop(&StackValue::ValueType(val.clone()));
-        val
-    }
-
-    #[inline]
-    fn pop_managed_ptr(&mut self) -> ManagedPtr<'gc> {
-        let val = self.evaluation_stack.pop_managed_ptr();
-        self.trace_pop(&StackValue::ManagedPtr(val));
-        self.on_pop();
-        val
     }
 
     #[inline]
@@ -196,6 +69,23 @@ impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
+    fn top_of_stack(&self) -> usize {
+        self.evaluation_stack.top_of_stack()
+    }
+}
+
+impl<'a, 'gc, 'm: 'gc> TypedStackOps<'gc> for VesContext<'a, 'gc, 'm> {
+    #[inline]
+    fn push_string(&mut self, value: CLRString) {
+        let gc = self.gc;
+        let in_heap = ObjectRef::new(gc, HeapStorage::Str(value));
+        self.register_new_object(&in_heap);
+        self.push(StackValue::ObjectRef(in_heap));
+    }
+}
+
+impl<'a, 'gc, 'm: 'gc> LocalOps<'gc> for VesContext<'a, 'gc, 'm> {
+    #[inline]
     fn get_local(&self, index: usize) -> StackValue<'gc> {
         let frame = self.frame_stack.current_frame();
         self.evaluation_stack.get_slot(frame.base.locals + index)
@@ -207,6 +97,25 @@ impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         self.evaluation_stack.set_slot(bp.locals + index, value);
     }
 
+    #[inline]
+    fn get_local_address(&self, index: usize) -> std::ptr::NonNull<u8> {
+        let frame = self.frame_stack.current_frame();
+        self.evaluation_stack
+            .get_slot_address(frame.base.locals + index)
+    }
+
+    #[inline]
+    fn get_local_info_for_managed_ptr(&self, index: usize) -> (std::ptr::NonNull<u8>, bool) {
+        let frame = self.frame_stack.current_frame();
+        let addr = self
+            .evaluation_stack
+            .get_slot_address(frame.base.locals + index);
+        let is_pinned = frame.pinned_locals.get(index).copied().unwrap_or(false);
+        (addr, is_pinned)
+    }
+}
+
+impl<'a, 'gc, 'm: 'gc> ArgumentOps<'gc> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn get_argument(&self, index: usize) -> StackValue<'gc> {
         let frame = self.frame_stack.current_frame();
@@ -221,19 +130,14 @@ impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn get_local_address(&self, index: usize) -> std::ptr::NonNull<u8> {
-        let frame = self.frame_stack.current_frame();
-        self.evaluation_stack
-            .get_slot_address(frame.base.locals + index)
-    }
-
-    #[inline]
     fn get_argument_address(&self, index: usize) -> std::ptr::NonNull<u8> {
         let frame = self.frame_stack.current_frame();
         self.evaluation_stack
             .get_slot_address(frame.base.arguments + index)
     }
+}
 
+impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn current_frame(&self) -> &crate::stack::StackFrame<'gc, 'm> {
         self.frame_stack.current_frame()
@@ -242,16 +146,6 @@ impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn current_frame_mut(&mut self) -> &mut crate::stack::StackFrame<'gc, 'm> {
         self.frame_stack.current_frame_mut()
-    }
-
-    #[inline]
-    fn get_local_info_for_managed_ptr(&self, index: usize) -> (std::ptr::NonNull<u8>, bool) {
-        let frame = self.frame_stack.current_frame();
-        let addr = self
-            .evaluation_stack
-            .get_slot_address(frame.base.locals + index);
-        let is_pinned = frame.pinned_locals.get(index).copied().unwrap_or(false);
-        (addr, is_pinned)
     }
 
     #[inline]
@@ -267,11 +161,6 @@ impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn set_slot(&mut self, index: usize, value: StackValue<'gc>) {
         self.evaluation_stack.set_slot(index, value)
-    }
-
-    #[inline]
-    fn top_of_stack(&self) -> usize {
-        self.evaluation_stack.top_of_stack()
     }
 
     #[inline]

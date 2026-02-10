@@ -30,10 +30,10 @@ use dotnetdll::prelude::*;
 use gc_arena::Collect;
 use std::ptr::NonNull;
 
+use crate::stack::ops::*;
 use super::{
     evaluation_stack::EvaluationStack,
     frames::FrameStack,
-    ops::{CallOps, LoaderOps, ResolutionOps, StackOps, VesOps},
 };
 
 pub struct VesContext<'a, 'gc, 'm> {

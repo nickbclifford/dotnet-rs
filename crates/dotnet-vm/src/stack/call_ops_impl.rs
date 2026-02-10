@@ -1,4 +1,5 @@
-use super::{context::{BasePointer, VesContext, StackFrame}, ops::{CallOps, ResolutionOps, StackOps, LoaderOps}};
+use crate::stack::ops::{ArgumentOps, EvalStackOps, LocalOps, TypedStackOps, CallOps, ResolutionOps, LoaderOps};
+use super::context::{BasePointer, VesContext, StackFrame};
 use crate::{StepResult, MethodInfo, ResolutionContext, resolution::TypeResolutionExt, stack::ExceptionState};
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
 use dotnet_value::{object::{HeapStorage, Object as ObjectInstance, ObjectRef}, StackValue};

@@ -40,63 +40,102 @@ use dotnet_value::{
 };
 use dotnetdll::prelude::{FieldSource, MethodType};
 
-pub trait StackOps<'gc, 'm> {
+pub trait EvalStackOps<'gc> {
     fn push(&mut self, value: StackValue<'gc>);
-    fn push_i32(&mut self, value: i32);
-    fn push_i64(&mut self, value: i64);
-    fn push_f64(&mut self, value: f64);
-    fn push_obj(&mut self, value: ObjectRef<'gc>);
-    fn push_ptr(&mut self, ptr: *mut u8, t: TypeDescription, is_pinned: bool);
-    fn push_isize(&mut self, value: isize);
-    fn push_value_type(&mut self, value: ObjectInstance<'gc>);
-    fn push_managed_ptr(&mut self, value: ManagedPtr<'gc>);
-    fn push_string(&mut self, value: CLRString);
-
-    #[must_use]
     fn pop(&mut self) -> StackValue<'gc>;
     fn pop_safe(&mut self) -> Result<StackValue<'gc>, crate::error::VmError>;
-    #[must_use]
-    fn pop_i32(&mut self) -> i32;
-    #[must_use]
-    fn pop_i64(&mut self) -> i64;
-    #[must_use]
-    fn pop_f64(&mut self) -> f64;
-    #[must_use]
-    fn pop_isize(&mut self) -> isize;
-    #[must_use]
-    fn pop_obj(&mut self) -> ObjectRef<'gc>;
-    #[must_use]
-    fn pop_ptr(&mut self) -> *mut u8;
-    #[must_use]
-    fn pop_value_type(&mut self) -> ObjectInstance<'gc>;
-    #[must_use]
-    fn pop_managed_ptr(&mut self) -> ManagedPtr<'gc>;
-    #[must_use]
     fn pop_multiple(&mut self, count: usize) -> Vec<StackValue<'gc>>;
-    #[must_use]
     fn peek_multiple(&self, count: usize) -> Vec<StackValue<'gc>>;
-
     fn dup(&mut self);
     fn peek(&self) -> Option<StackValue<'gc>>;
     fn peek_stack(&self) -> StackValue<'gc>;
     fn peek_stack_at(&self, offset: usize) -> StackValue<'gc>;
+    fn top_of_stack(&self) -> usize;
+}
 
+pub trait TypedStackOps<'gc>: EvalStackOps<'gc> {
+    fn push_i32(&mut self, value: i32) {
+        self.push(StackValue::Int32(value));
+    }
+    fn push_i64(&mut self, value: i64) {
+        self.push(StackValue::Int64(value));
+    }
+    fn push_f64(&mut self, value: f64) {
+        self.push(StackValue::NativeFloat(value));
+    }
+    fn push_obj(&mut self, value: ObjectRef<'gc>) {
+        self.push(StackValue::ObjectRef(value));
+    }
+    fn push_ptr(&mut self, ptr: *mut u8, t: TypeDescription, is_pinned: bool) {
+        self.push(StackValue::managed_ptr(ptr, t, is_pinned));
+    }
+    fn push_isize(&mut self, value: isize) {
+        self.push(StackValue::NativeInt(value));
+    }
+    fn push_value_type(&mut self, value: ObjectInstance<'gc>) {
+        self.push(StackValue::ValueType(value));
+    }
+    fn push_managed_ptr(&mut self, value: ManagedPtr<'gc>) {
+        self.push(StackValue::ManagedPtr(value));
+    }
+    fn push_string(&mut self, value: CLRString);
+
+    #[must_use]
+    fn pop_i32(&mut self) -> i32 {
+        self.pop().as_i32()
+    }
+    #[must_use]
+    fn pop_i64(&mut self) -> i64 {
+        self.pop().as_i64()
+    }
+    #[must_use]
+    fn pop_f64(&mut self) -> f64 {
+        self.pop().as_f64()
+    }
+    #[must_use]
+    fn pop_isize(&mut self) -> isize {
+        self.pop().as_isize()
+    }
+    #[must_use]
+    fn pop_obj(&mut self) -> ObjectRef<'gc> {
+        self.pop().as_object_ref()
+    }
+    #[must_use]
+    fn pop_ptr(&mut self) -> *mut u8 {
+        self.pop().as_ptr()
+    }
+    #[must_use]
+    fn pop_value_type(&mut self) -> ObjectInstance<'gc> {
+        self.pop().as_value_type()
+    }
+    #[must_use]
+    fn pop_managed_ptr(&mut self) -> ManagedPtr<'gc> {
+        self.pop().as_managed_ptr()
+    }
+}
+
+pub trait LocalOps<'gc> {
     fn get_local(&self, index: usize) -> StackValue<'gc>;
     fn set_local(&mut self, index: usize, value: StackValue<'gc>);
+    fn get_local_address(&self, index: usize) -> std::ptr::NonNull<u8>;
+    fn get_local_info_for_managed_ptr(&self, index: usize) -> (std::ptr::NonNull<u8>, bool);
+}
+
+pub trait ArgumentOps<'gc> {
     fn get_argument(&self, index: usize) -> StackValue<'gc>;
     fn set_argument(&mut self, index: usize, value: StackValue<'gc>);
-
-    fn get_local_address(&self, index: usize) -> std::ptr::NonNull<u8>;
     fn get_argument_address(&self, index: usize) -> std::ptr::NonNull<u8>;
+}
 
+pub trait StackOps<'gc, 'm>:
+    EvalStackOps<'gc> + TypedStackOps<'gc> + LocalOps<'gc> + ArgumentOps<'gc>
+{
     fn current_frame(&self) -> &crate::stack::StackFrame<'gc, 'm>;
     fn current_frame_mut(&mut self) -> &mut crate::stack::StackFrame<'gc, 'm>;
-    fn get_local_info_for_managed_ptr(&self, index: usize) -> (std::ptr::NonNull<u8>, bool);
 
     fn get_slot(&self, index: usize) -> StackValue<'gc>;
     fn get_slot_ref(&self, index: usize) -> &StackValue<'gc>;
     fn set_slot(&mut self, index: usize, value: StackValue<'gc>);
-    fn top_of_stack(&self) -> usize;
     fn get_slot_address(&self, index: usize) -> std::ptr::NonNull<u8>;
 }
 
@@ -245,6 +284,10 @@ pub trait CallOps<'gc, 'm> {
 
 pub trait VesOps<'gc, 'm>:
     StackOps<'gc, 'm>
+    + EvalStackOps<'gc>
+    + TypedStackOps<'gc>
+    + LocalOps<'gc>
+    + ArgumentOps<'gc>
     + ExceptionOps<'gc>
     + ResolutionOps<'gc, 'm>
     + ReflectionOps<'gc, 'm>

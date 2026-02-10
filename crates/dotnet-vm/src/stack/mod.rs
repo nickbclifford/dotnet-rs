@@ -79,6 +79,7 @@ pub mod context;
 pub mod evaluation_stack;
 pub mod frames;
 pub mod ops;
+pub use ops::*;
 
 mod call_ops_impl;
 mod exception_ops_impl;
