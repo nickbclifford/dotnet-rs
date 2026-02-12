@@ -6,37 +6,41 @@ use std::{
 
 #[macro_export]
 macro_rules! with_string {
-    ($stack:expr, $gc:expr, $value:expr, |$s:ident| $code:expr) => {{
+    ($stack:expr, $value:expr, |$s:ident| $code:expr) => {{
         let obj = $value.as_object_ref();
-        let $crate::object::ObjectRef(Some(obj)) = obj else {
-            return $stack.throw_by_name($gc, "System.NullReferenceException");
-        };
-        let heap = obj.borrow();
-        let $crate::object::HeapStorage::Str($s) = &heap.storage else {
-            panic!(
-                "invalid type on stack, expected string, received {:?}",
-                heap.storage
-            )
-        };
-        $code
+        if let Some(handle) = obj.0 {
+            let heap = handle.borrow();
+            if let $crate::object::HeapStorage::Str(ref $s) = heap.storage {
+                $code
+            } else {
+                panic!(
+                    "invalid type on stack, expected string, received {:?}",
+                    heap.storage
+                )
+            }
+        } else {
+            return $stack.throw_by_name("System.NullReferenceException");
+        }
     }};
 }
 
 #[macro_export]
 macro_rules! with_string_mut {
-    ($stack:expr, $gc:expr, $value:expr, |$s:ident| $code:expr) => {{
+    ($stack:expr, $value:expr, |$s:ident| $code:expr) => {{
         let obj = $value.as_object_ref();
-        let $crate::object::ObjectRef(Some(obj)) = obj else {
-            return $stack.throw_by_name($gc, "System.NullReferenceException");
-        };
-        let mut heap = obj.borrow_mut($gc);
-        let $crate::object::HeapStorage::Str($s) = &mut heap.storage else {
-            panic!(
-                "invalid type on stack, expected string, received {:?}",
-                heap.storage
-            )
-        };
-        $code
+        if let Some(handle) = obj.0 {
+            let mut heap = handle.borrow_mut($stack.gc());
+            if let $crate::object::HeapStorage::Str(ref mut $s) = heap.storage {
+                $code
+            } else {
+                panic!(
+                    "invalid type on stack, expected string, received {:?}",
+                    heap.storage
+                )
+            }
+        } else {
+            return $stack.throw_by_name("System.NullReferenceException");
+        }
     }};
 }
 

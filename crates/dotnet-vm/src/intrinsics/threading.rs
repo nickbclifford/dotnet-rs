@@ -18,11 +18,11 @@ use std::thread;
 #[dotnet_intrinsic("static void System.Threading.Monitor::Exit(object)")]
 pub fn intrinsic_monitor_exit<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj_ref = ctx.pop_obj(gc);
+    let _gc = ctx.gc();
+    let obj_ref = ctx.pop_obj();
 
     if obj_ref.0.is_some() {
         // Get the current thread ID from the call stack
@@ -65,17 +65,17 @@ pub fn intrinsic_monitor_exit<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static T System.Threading.Interlocked::CompareExchange<T>(T&, T, T)")]
 pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
+    let _gc = ctx.gc();
     let params = &method.method.signature.parameters;
     // CompareExchange(ref T, T, T) -> T
     // params[0] is 'ref T'.
     let Parameter(_, first_param_type) = &params[0];
 
     let target_type = if let ParameterType::Ref(inner) = first_param_type {
-        generics.make_concrete(method.resolution(), inner.clone())
+        vm_try!(generics.make_concrete(method.resolution(), inner.clone()))
     } else {
         panic!(
             "intrinsic_interlocked_compare_exchange: First parameter must be Ref, found {:?}",
@@ -85,9 +85,9 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
 
     match target_type.get() {
         BaseType::Int32 => {
-            let comparand = ctx.pop_i32(gc);
-            let value = ctx.pop_i32(gc);
-            let target_ptr = ctx.pop_managed_ptr(gc);
+            let comparand = ctx.pop_i32();
+            let value = ctx.pop_i32();
+            let target_ptr = ctx.pop_managed_ptr();
 
             let target = target_ptr
                 .pointer()
@@ -107,12 +107,12 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
                 Ok(prev) | Err(prev) => prev as i32,
             };
 
-            ctx.push_i32(gc, prev);
+            ctx.push_i32(prev);
         }
         BaseType::Int64 => {
-            let comparand = ctx.pop_i64(gc);
-            let value = ctx.pop_i64(gc);
-            let target_ptr = ctx.pop_managed_ptr(gc);
+            let comparand = ctx.pop_i64();
+            let value = ctx.pop_i64();
+            let target_ptr = ctx.pop_managed_ptr();
 
             let target = target_ptr
                 .pointer()
@@ -132,12 +132,12 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
                 Ok(prev) | Err(prev) => prev as i64,
             };
 
-            ctx.push_i64(gc, prev);
+            ctx.push_i64(prev);
         }
         BaseType::IntPtr | BaseType::UIntPtr => {
-            let comparand = ctx.pop_isize(gc);
-            let value = ctx.pop_isize(gc);
-            let target_ptr = ctx.pop_managed_ptr(gc);
+            let comparand = ctx.pop_isize();
+            let value = ctx.pop_isize();
+            let target_ptr = ctx.pop_managed_ptr();
 
             let target = target_ptr
                 .pointer()
@@ -158,13 +158,13 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
                 Ok(prev) | Err(prev) => prev as isize,
             };
 
-            ctx.push_isize(gc, prev);
+            ctx.push_isize(prev);
         }
         _ => {
             // Assume ObjectRef (pointer sized) for all other types for now.
-            let comparand = ctx.pop_obj(gc);
-            let value = ctx.pop_obj(gc);
-            let target_ptr = ctx.pop_managed_ptr(gc);
+            let comparand = ctx.pop_obj();
+            let value = ctx.pop_obj();
+            let target_ptr = ctx.pop_managed_ptr();
 
             let target = target_ptr
                 .pointer()
@@ -201,7 +201,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
                 // The object is kept alive because we are in an intrinsic call and the stack roots it (or the static field roots it).
                 ObjectRef(Some(unsafe { Gc::from_ptr(prev_raw as *const _) }))
             };
-            ctx.push_obj(gc, prev);
+            ctx.push_obj(prev);
         }
     }
 
@@ -215,17 +215,17 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static T System.Threading.Interlocked::Exchange<T>(T&, T)")]
 pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
+    let gc = ctx.gc();
     let params = &method.method.signature.parameters;
     // Exchange(ref T, T) -> T
     // params[0] is 'ref T'.
     let Parameter(_, first_param_type) = &params[0];
 
     let target_type = if let ParameterType::Ref(inner) = first_param_type {
-        generics.make_concrete(method.resolution(), inner.clone())
+        vm_try!(generics.make_concrete(method.resolution(), inner.clone()))
     } else {
         panic!(
             "intrinsic_interlocked_exchange: First parameter must be Ref, found {:?}",
@@ -235,8 +235,8 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
 
     match target_type.get() {
         BaseType::Int32 => {
-            let value = ctx.pop_i32(gc);
-            let target_ptr = ctx.pop_managed_ptr(gc);
+            let value = ctx.pop_i32();
+            let target_ptr = ctx.pop_managed_ptr();
 
             let target = target_ptr
                 .pointer()
@@ -247,11 +247,11 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
                 StandardAtomicAccess::exchange_atomic(target, 4, value as u64, Ordering::SeqCst)
             } as i32;
 
-            ctx.push_i32(gc, prev);
+            ctx.push_i32(prev);
         }
         BaseType::Int64 => {
-            let value = ctx.pop_i64(gc);
-            let target_ptr = ctx.pop_managed_ptr(gc);
+            let value = ctx.pop_i64();
+            let target_ptr = ctx.pop_managed_ptr();
 
             let target = target_ptr
                 .pointer()
@@ -262,11 +262,11 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
                 StandardAtomicAccess::exchange_atomic(target, 8, value as u64, Ordering::SeqCst)
             } as i64;
 
-            ctx.push_i64(gc, prev);
+            ctx.push_i64(prev);
         }
         BaseType::IntPtr | BaseType::UIntPtr => {
-            let value = ctx.pop_isize(gc);
-            let target_ptr = ctx.pop_managed_ptr(gc);
+            let value = ctx.pop_isize();
+            let target_ptr = ctx.pop_managed_ptr();
 
             let target = target_ptr
                 .pointer()
@@ -278,13 +278,13 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
                 StandardAtomicAccess::exchange_atomic(target, size, value as u64, Ordering::SeqCst)
             } as isize;
 
-            ctx.push_isize(gc, prev);
+            ctx.push_isize(prev);
         }
         _ => {
             // Assume ObjectRef (pointer sized) for all other types for now.
             // We use manual popping to handle both ObjectRef and NativeInt (which might be used for null or pointers).
-            let value = ctx.pop(gc);
-            let target_ptr = ctx.pop_managed_ptr(gc);
+            let value = ctx.pop();
+            let target_ptr = ctx.pop_managed_ptr();
 
             let target = target_ptr
                 .pointer()
@@ -312,7 +312,7 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
             } as usize;
 
             let prev = unsafe { ObjectRef::read_branded(&prev_raw.to_ne_bytes(), gc) };
-            ctx.push_obj(gc, prev);
+            ctx.push_obj(prev);
         }
     }
 
@@ -353,11 +353,11 @@ fn find_success_flag_index(ctx: &dyn VesOps, success_ptr: ManagedPtr) -> Option<
 #[dotnet_intrinsic("static void System.Threading.Monitor::Enter(object)")]
 pub fn intrinsic_monitor_enter_obj<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj_ref = ctx.pop_obj(gc);
+    let gc = ctx.gc();
+    let obj_ref = ctx.pop_obj();
 
     if obj_ref.0.is_some() {
         let thread_id = ctx.thread_id() as u64;
@@ -377,7 +377,7 @@ pub fn intrinsic_monitor_enter_obj<'gc, 'm: 'gc>(
             thread::yield_now();
         }
     } else {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     StepResult::Continue
@@ -388,10 +388,10 @@ pub fn intrinsic_monitor_enter_obj<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static void System.Threading.Monitor::Enter(object, bool&)")]
 pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
+    let gc = ctx.gc();
     let success_ptr = ctx.peek_stack_at(0).as_managed_ptr();
     let obj_ref = ctx.peek_stack_at(1).as_object_ref();
 
@@ -425,12 +425,12 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
         }
 
         // Pop arguments now that we're done with things that might trigger GC or reallocation
-        ctx.pop(gc); // success_ptr
-        ctx.pop(gc); // obj_ref
+        let _ = ctx.pop(); // success_ptr
+        let _ = ctx.pop(); // obj_ref
     } else {
-        ctx.pop(gc);
-        ctx.pop(gc);
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        let _ = ctx.pop();
+        let _ = ctx.pop();
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     StepResult::Continue
@@ -440,11 +440,11 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter_FastPath(object)")]
 pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj_ref = ctx.pop_obj(gc);
+    let gc = ctx.gc();
+    let obj_ref = ctx.pop_obj();
 
     if obj_ref.0.is_some() {
         let thread_id = ctx.thread_id() as u64;
@@ -455,9 +455,9 @@ pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc>(
 
         let sync_block = get_or_create_sync_block(&ctx.shared().sync_blocks, obj_ref, gc);
         let success = sync_block.try_enter(thread_id);
-        ctx.push_i32(gc, if success { 1 } else { 0 });
+        ctx.push_i32(if success { 1 } else { 0 });
     } else {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     StepResult::Continue
@@ -467,10 +467,10 @@ pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static void System.Threading.Monitor::TryEnter(object, int, bool&)")]
 pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
+    let gc = ctx.gc();
     let success_ptr = ctx.peek_stack_at(0).as_managed_ptr();
     let timeout_ms = ctx.peek_stack_at(1).as_i32();
     let obj_ref = ctx.peek_stack_at(2).as_object_ref();
@@ -508,14 +508,14 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
         }
 
         // Pop arguments now that we're done
-        ctx.pop(gc); // success_ptr
-        ctx.pop(gc); // timeout_ms
-        ctx.pop(gc); // obj_ref
+        let _ = ctx.pop(); // success_ptr
+        let _ = ctx.pop(); // timeout_ms
+        let _ = ctx.pop(); // obj_ref
     } else {
-        ctx.pop(gc);
-        ctx.pop(gc);
-        ctx.pop(gc);
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        let _ = ctx.pop();
+        let _ = ctx.pop();
+        let _ = ctx.pop();
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     StepResult::Continue
@@ -525,12 +525,12 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter(object, int)")]
 pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let timeout_ms = ctx.pop_i32(gc);
-    let obj_ref = ctx.pop_obj(gc);
+    let gc = ctx.gc();
+    let timeout_ms = ctx.pop_i32();
+    let obj_ref = ctx.pop_obj();
 
     if obj_ref.0.is_some() {
         let thread_id = ctx.thread_id() as u64;
@@ -553,9 +553,9 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
         let success =
             sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &ctx.shared().metrics);
 
-        ctx.push_i32(gc, if success { 1 } else { 0 });
+        ctx.push_i32(if success { 1 } else { 0 });
     } else {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     StepResult::Continue
@@ -578,15 +578,15 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static double System.Threading.Volatile::Read(double&)")]
 pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
+    let _gc = ctx.gc();
     let params = &method.method.signature.parameters;
     let Parameter(_, first_param_type) = &params[0];
 
     let target_type = if let ParameterType::Ref(inner) = first_param_type {
-        generics.make_concrete(method.resolution(), inner.clone())
+        vm_try!(generics.make_concrete(method.resolution(), inner.clone()))
     } else {
         panic!(
             "intrinsic_volatile_read: First parameter must be Ref, found {:?}",
@@ -596,27 +596,27 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
 
     match target_type.get() {
         BaseType::Boolean | BaseType::Int8 | BaseType::UInt8 => {
-            let target_ptr = ctx.pop_managed_ptr(gc);
+            let target_ptr = ctx.pop_managed_ptr();
             let target = target_ptr
                 .pointer()
                 .expect("Target pointer should not be null")
                 .as_ptr();
 
             let val = unsafe { StandardAtomicAccess::load_atomic(target, 1, Ordering::Acquire) };
-            ctx.push_i32(gc, val as i32);
+            ctx.push_i32(val as i32);
         }
         BaseType::Int16 | BaseType::UInt16 => {
-            let target_ptr = ctx.pop_managed_ptr(gc);
+            let target_ptr = ctx.pop_managed_ptr();
             let target = target_ptr
                 .pointer()
                 .expect("Target pointer should not be null")
                 .as_ptr();
 
             let val = unsafe { StandardAtomicAccess::load_atomic(target, 2, Ordering::Acquire) };
-            ctx.push_i32(gc, val as i32);
+            ctx.push_i32(val as i32);
         }
         BaseType::Int32 | BaseType::UInt32 | BaseType::Float32 => {
-            let target_ptr = ctx.pop_managed_ptr(gc);
+            let target_ptr = ctx.pop_managed_ptr();
             let target = target_ptr
                 .pointer()
                 .expect("Target pointer should not be null")
@@ -624,13 +624,13 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
 
             let val = unsafe { StandardAtomicAccess::load_atomic(target, 4, Ordering::Acquire) };
             if matches!(target_type.get(), BaseType::Float32) {
-                ctx.push_f64(gc, f32::from_bits(val as u32) as f64);
+                ctx.push_f64(f32::from_bits(val as u32) as f64);
             } else {
-                ctx.push_i32(gc, val as i32);
+                ctx.push_i32(val as i32);
             }
         }
         BaseType::Int64 | BaseType::UInt64 | BaseType::Float64 => {
-            let target_ptr = ctx.pop_managed_ptr(gc);
+            let target_ptr = ctx.pop_managed_ptr();
             let target = target_ptr
                 .pointer()
                 .expect("Target pointer should not be null")
@@ -638,13 +638,13 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
 
             let val = unsafe { StandardAtomicAccess::load_atomic(target, 8, Ordering::Acquire) };
             if matches!(target_type.get(), BaseType::Float64) {
-                ctx.push_f64(gc, f64::from_bits(val));
+                ctx.push_f64(f64::from_bits(val));
             } else {
-                ctx.push_i64(gc, val as i64);
+                ctx.push_i64(val as i64);
             }
         }
         BaseType::IntPtr | BaseType::UIntPtr => {
-            let target_ptr = ctx.pop_managed_ptr(gc);
+            let target_ptr = ctx.pop_managed_ptr();
             let target = target_ptr
                 .pointer()
                 .expect("Target pointer should not be null")
@@ -652,11 +652,11 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
 
             let size = size_of::<usize>();
             let val = unsafe { StandardAtomicAccess::load_atomic(target, size, Ordering::Acquire) };
-            ctx.push_isize(gc, val as isize);
+            ctx.push_isize(val as isize);
         }
         _ => {
             // Assume ObjectRef
-            let target_ptr = ctx.pop_managed_ptr(gc);
+            let target_ptr = ctx.pop_managed_ptr();
             let target = target_ptr
                 .pointer()
                 .expect("Target pointer should not be null")
@@ -670,7 +670,7 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
             } else {
                 ObjectRef(Some(unsafe { Gc::from_ptr(val as usize as *const _) }))
             };
-            ctx.push_obj(gc, obj);
+            ctx.push_obj(obj);
         }
     }
 
@@ -694,12 +694,12 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static void System.Threading.Volatile::Write(double&, double)")]
 pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let value = ctx.pop(gc);
-    let target_ptr = ctx.pop_managed_ptr(gc);
+    let _gc = ctx.gc();
+    let value = ctx.pop();
+    let target_ptr = ctx.pop_managed_ptr();
     let target = target_ptr
         .pointer()
         .expect("Target pointer should not be null")
@@ -709,7 +709,7 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
     let Parameter(_, target_ref_type) = &params[0];
 
     let target_type = if let ParameterType::Ref(inner) = target_ref_type {
-        generics.make_concrete(method.resolution(), inner.clone())
+        vm_try!(generics.make_concrete(method.resolution(), inner.clone()))
     } else {
         panic!(
             "intrinsic_volatile_write: First parameter must be Ref, found {:?}",

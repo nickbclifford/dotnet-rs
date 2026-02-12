@@ -1,6 +1,6 @@
 use crate::{
     context::ResolutionContext, layout::LayoutFactory, resolution::ValueResolution,
-    stack::ops::VesOps, tracer::Tracer,
+    stack::ops::VesOps, tracer::Tracer, StepResult,
 };
 use dashmap::DashMap;
 use dotnet_types::{
@@ -8,7 +8,6 @@ use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
 };
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     StackValue,
     layout::{FieldLayoutManager, LayoutManager, Scalar},
@@ -189,7 +188,7 @@ fn type_to_layout(t: &TypeSource<ConcreteType>, ctx: &ResolutionContext) -> Fiel
     let (ut, type_generics) = decompose_type_source::<ConcreteType>(t);
     let new_lookup = GenericLookup::new(type_generics);
     let new_ctx = ctx.with_generics(&new_lookup);
-    let td = new_ctx.locate_type(ut);
+    let td = new_ctx.locate_type(ut).expect("failed to locate type in pinvoke");
 
     if td.is_null() {
         panic!(
@@ -198,7 +197,7 @@ fn type_to_layout(t: &TypeSource<ConcreteType>, ctx: &ResolutionContext) -> Fiel
         );
     }
 
-    LayoutFactory::instance_fields(td, &new_ctx)
+    LayoutFactory::instance_fields(td, &new_ctx).expect("P/Invoke layout resolution failed")
 }
 
 fn layout_to_ffi(l: &LayoutManager) -> Type {
@@ -259,10 +258,10 @@ fn type_to_ffi(t: &ConcreteType, ctx: &ResolutionContext) -> Type {
     }
 }
 
-fn param_to_type(p: &ParameterType<MethodType>, ctx: &ResolutionContext) -> Type {
+fn param_to_type(p: &ParameterType<MethodType>, ctx: &ResolutionContext) -> Result<Type, dotnet_types::error::TypeResolutionError> {
     match p {
-        ParameterType::Value(t) => type_to_ffi(&ctx.make_concrete(t), ctx),
-        ParameterType::Ref(_) => Type::pointer(),
+        ParameterType::Value(t) => Ok(type_to_ffi(&ctx.make_concrete(t)?, ctx)),
+        ParameterType::Ref(_) => Ok(Type::pointer()),
         ParameterType::TypedReference => todo!("marshalling typedref parameters"),
     }
 }
@@ -323,8 +322,7 @@ impl TempBuffer {
 pub fn external_call<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     method: MethodDescription,
-    gc: GCHandle<'gc>,
-) {
+) -> StepResult {
     let Some(p) = &method.method.pinvoke else {
         unreachable!()
     };
@@ -391,12 +389,18 @@ pub fn external_call<'gc, 'm: 'gc>(
                 ),
             };
 
-            let exception_type = ctx.loader().corlib_type(exc_name);
-            let exception_instance = ctx.current_context().new_object(exception_type);
-            let exception = ObjectRef::new(gc, HeapStorage::Obj(exception_instance));
+            let exception_type = match ctx.loader().corlib_type(exc_name) {
+                Ok(v) => v,
+                Err(e) => return StepResult::Error(e.into()),
+            };
+            let exception_instance = match ctx.current_context().new_object(exception_type) {
+                Ok(v) => v,
+                Err(e) => return StepResult::Error(e.into()),
+            };
+            let exception = ObjectRef::new(ctx.gc(), HeapStorage::Obj(exception_instance));
 
-            let message_ref = StackValue::string(gc, CLRString::from(msg.as_str())).as_object_ref();
-            exception.as_object_mut(gc, |obj| {
+            let message_ref = StackValue::string(ctx.gc(), CLRString::from(msg.as_str())).as_object_ref();
+            exception.as_object_mut(ctx.gc(), |obj| {
                 if obj.instance_storage.has_field(exception_type, "_message") {
                     let mut field = obj
                         .instance_storage
@@ -405,16 +409,19 @@ pub fn external_call<'gc, 'm: 'gc>(
                 }
             });
 
-            ctx.throw(gc, exception);
-            ctx.pop_multiple(gc, arg_count);
-            return;
+            let _ = ctx.throw(exception);
+            let _ = ctx.pop_multiple(arg_count);
+            return StepResult::Exception;
         }
     };
 
     let res_ctx = ctx.current_context();
     let mut args: Vec<Type> = vec![];
     for Parameter(_, p) in &method.method.signature.parameters {
-        args.push(param_to_type(p, &res_ctx));
+        args.push(match param_to_type(p, &res_ctx) {
+            Ok(v) => v,
+            Err(e) => return StepResult::Error(e.into()),
+        });
     }
 
     vm_trace!(ctx, "  Preparing return type...");
@@ -422,7 +429,10 @@ pub fn external_call<'gc, 'm: 'gc>(
         None => Type::void(),
         Some(s) => {
             vm_trace!(ctx, "  Resolving return type: {:?}", s);
-            let t = param_to_type(s, &res_ctx);
+            let t = match param_to_type(s, &res_ctx) {
+                Ok(v) => v,
+                Err(e) => return StepResult::Error(e.into()),
+            };
             vm_trace!(ctx, "  Resolved return type to FFI type.");
             t
         }
@@ -559,7 +569,7 @@ pub fn external_call<'gc, 'm: 'gc>(
             }
             do_write_back();
             vm_trace_interop!(ctx, "POST-CALL", "(void) {}::{}", module, function);
-            ctx.pop_multiple(gc, arg_count);
+            let _ = ctx.pop_multiple(arg_count);
         }
         Some(p) => {
             let ParameterType::Value(t) = p else {
@@ -588,7 +598,7 @@ pub fn external_call<'gc, 'm: 'gc>(
                 ($t:ty) => {{ StackValue::Int32(read_return!($t) as i32) }};
             }
 
-            let t = res_ctx.make_concrete(t);
+            let t = vm_try!(res_ctx.make_concrete(t));
             let v = match t.get() {
                 BaseType::Int8 => read_into_i32!(i8),
                 BaseType::UInt8 => read_into_i32!(u8),
@@ -609,9 +619,12 @@ pub fn external_call<'gc, 'm: 'gc>(
                     let (ut, type_generics) = decompose_type_source::<ConcreteType>(source);
                     let new_lookup = GenericLookup::new(type_generics);
                     let new_ctx = res_ctx.with_generics(&new_lookup);
-                    let td = new_ctx.locate_type(ut);
+                    let td = new_ctx.locate_type(ut).expect("Failed to locate type in pinvoke interop");
 
-                    let instance = new_ctx.new_object(td);
+                    let instance = match new_ctx.new_object(td) {
+                        Ok(inst) => inst,
+                        Err(e) => return StepResult::Error(e.into()),
+                    };
 
                     vm_trace_interop!(
                         ctx,
@@ -664,9 +677,10 @@ pub fn external_call<'gc, 'm: 'gc>(
                 rest => todo!("marshalling not yet supported for {:?}", rest),
             };
             vm_trace!(ctx, "-- returning {v:?} --");
-            ctx.pop_multiple(gc, arg_count);
-            ctx.push(gc, v);
+            let _ = ctx.pop_multiple(arg_count);
+            ctx.push(v);
         }
     }
     vm_trace_interop!(ctx, "RETURN", "Returned from {}::{}", module, function);
+    StepResult::Continue
 }

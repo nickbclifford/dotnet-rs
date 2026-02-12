@@ -1,7 +1,7 @@
 use crate::{StepResult, stack::ops::VesOps};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
-use dotnet_utils::gc::{GCHandle, GCHandleType};
+use dotnet_utils::gc::GCHandleType;
 use dotnet_value::{
     object::{HeapStorage, ObjectRef},
     with_string,
@@ -11,14 +11,13 @@ use dotnet_value::{
 #[dotnet_intrinsic("static void System.ArgumentNullException::ThrowIfNull(object, string)")]
 pub fn intrinsic_argument_null_exception_throw_if_null<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _param_name_obj = ctx.pop_obj(gc);
-    let target = ctx.pop_obj(gc);
+    let _param_name_obj = ctx.pop_obj();
+    let target = ctx.pop_obj();
     if target.0.is_none() {
-        return ctx.throw_by_name(gc, "System.ArgumentNullException");
+        return ctx.throw_by_name("System.ArgumentNullException");
     }
     StepResult::Continue
 }
@@ -27,14 +26,13 @@ pub fn intrinsic_argument_null_exception_throw_if_null<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static string System.Environment::GetEnvironmentVariableCore(string)")]
 pub fn intrinsic_environment_get_variable_core<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let value = with_string!(ctx, gc, ctx.pop(gc), |s| std::env::var(s.as_string()));
+    let value = with_string!(ctx, ctx.pop(), |s| std::env::var(s.as_string()));
     match value.ok() {
-        Some(s) => ctx.push_string(gc, s.into()),
-        None => ctx.push_obj(gc, ObjectRef(None)),
+        Some(s) => ctx.push_string(s.into()),
+        None => ctx.push_obj(ObjectRef(None)),
     }
     StepResult::Continue
 }
@@ -44,11 +42,10 @@ pub fn intrinsic_environment_get_variable_core<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static void System.GC::KeepAlive(object)")]
 pub fn intrinsic_gc_keep_alive<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _obj = ctx.pop_obj(gc);
+    let _obj = ctx.pop_obj();
     StepResult::Continue
 }
 
@@ -56,13 +53,12 @@ pub fn intrinsic_gc_keep_alive<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static void System.GC::SuppressFinalize(object)")]
 pub fn intrinsic_gc_suppress_finalize<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj = ctx.pop_obj(gc);
+    let obj = ctx.pop_obj();
     if let Some(handle) = obj.0
-        && let Some(o) = handle.borrow_mut(gc).storage.as_obj_mut()
+        && let Some(o) = handle.borrow_mut(ctx.gc()).storage.as_obj_mut()
     {
         o.finalizer_suppressed = true;
     }
@@ -73,16 +69,15 @@ pub fn intrinsic_gc_suppress_finalize<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static void System.GC::ReRegisterForFinalize(object)")]
 pub fn intrinsic_gc_reregister_for_finalize<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj = ctx.pop_obj(gc);
+    let obj = ctx.pop_obj();
     if let Some(handle) = obj.0 {
         let is_obj = handle.borrow().storage.as_obj().is_some();
         if is_obj {
             handle
-                .borrow_mut(gc)
+                .borrow_mut(ctx.gc())
                 .storage
                 .as_obj_mut()
                 .unwrap()
@@ -96,7 +91,6 @@ pub fn intrinsic_gc_reregister_for_finalize<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static void System.GC::Collect()")]
 pub fn intrinsic_gc_collect_0<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    _gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -109,11 +103,10 @@ pub fn intrinsic_gc_collect_0<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static void System.GC::Collect(int)")]
 pub fn intrinsic_gc_collect_1<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _generation = ctx.pop_i32(gc);
+    let _generation = ctx.pop_i32();
     ctx.heap().needs_full_collect.set(true);
     ctx.increment_ip();
     StepResult::Yield
@@ -123,12 +116,11 @@ pub fn intrinsic_gc_collect_1<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static void System.GC::Collect(int, System.GCCollectionMode)")]
 pub fn intrinsic_gc_collect_2<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _mode = ctx.pop_i32(gc);
-    let _generation = ctx.pop_i32(gc);
+    let _mode = ctx.pop_i32();
+    let _generation = ctx.pop_i32();
     ctx.heap().needs_full_collect.set(true);
     ctx.increment_ip();
     StepResult::Yield
@@ -137,7 +129,6 @@ pub fn intrinsic_gc_collect_2<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static void System.GC::WaitForPendingFinalizers()")]
 pub fn intrinsic_gc_wait_for_pending_finalizers<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    _gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -155,12 +146,11 @@ pub fn intrinsic_gc_wait_for_pending_finalizers<'gc, 'm: 'gc>(
 )]
 pub fn intrinsic_gchandle_internal_alloc<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let handle_type = ctx.pop_i32(gc);
-    let obj = ctx.pop_obj(gc);
+    let handle_type = ctx.pop_i32();
+    let obj = ctx.pop_obj();
 
     let handle_type = GCHandleType::from(handle_type);
     let index = {
@@ -190,18 +180,17 @@ pub fn intrinsic_gchandle_internal_alloc<'gc, 'm: 'gc>(
             .trace_gc_handle(ctx.indent(), "ALLOC", &handle_type_str, addr);
     }
 
-    ctx.push_isize(gc, (index + 1) as isize);
+    ctx.push_isize((index + 1) as isize);
     StepResult::Continue
 }
 
 #[dotnet_intrinsic("static void System.Runtime.InteropServices.GCHandle::InternalFree(IntPtr)")]
 pub fn intrinsic_gchandle_internal_free<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let handle = ctx.pop_isize(gc);
+    let handle = ctx.pop_isize();
     if handle != 0 {
         let index = (handle - 1) as usize;
         let mut handles = ctx.heap().gchandles.borrow_mut();
@@ -234,11 +223,10 @@ pub fn intrinsic_gchandle_internal_free<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static object System.Runtime.InteropServices.GCHandle::InternalGet(IntPtr)")]
 pub fn intrinsic_gchandle_internal_get<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let handle = ctx.pop_isize(gc);
+    let handle = ctx.pop_isize();
     let result = if handle == 0 {
         ObjectRef(None)
     } else {
@@ -249,7 +237,7 @@ pub fn intrinsic_gchandle_internal_get<'gc, 'm: 'gc>(
             _ => ObjectRef(None),
         }
     };
-    ctx.push_obj(gc, result);
+    ctx.push_obj(result);
     StepResult::Continue
 }
 
@@ -258,12 +246,11 @@ pub fn intrinsic_gchandle_internal_get<'gc, 'm: 'gc>(
 )]
 pub fn intrinsic_gchandle_internal_set<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj = ctx.pop_obj(gc);
-    let handle = ctx.pop_isize(gc);
+    let obj = ctx.pop_obj();
+    let handle = ctx.pop_isize();
     if handle != 0 {
         let index = (handle - 1) as usize;
         let mut handles = ctx.heap().gchandles.borrow_mut();
@@ -286,11 +273,10 @@ pub fn intrinsic_gchandle_internal_set<'gc, 'm: 'gc>(
 )]
 pub fn intrinsic_gchandle_internal_addr_of_pinned_object<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let handle = ctx.pop_isize(gc);
+    let handle = ctx.pop_isize();
     let addr = if handle == 0 {
         0
     } else {
@@ -311,6 +297,6 @@ pub fn intrinsic_gchandle_internal_addr_of_pinned_object<'gc, 'm: 'gc>(
             0
         }
     };
-    ctx.push_isize(gc, addr);
+    ctx.push_isize(addr);
     StepResult::Continue
 }

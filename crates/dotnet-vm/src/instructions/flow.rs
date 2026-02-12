@@ -3,14 +3,13 @@ use crate::{
     stack::ops::{ExceptionOps, StackOps},
 };
 use dotnet_macros::dotnet_instruction;
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::StackValue;
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(Branch(target))]
 pub fn br<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
     _ctx: &mut T,
-    _gc: GCHandle<'gc>,
+
     target: usize,
 ) -> StepResult {
     StepResult::Jump(target)
@@ -19,11 +18,11 @@ pub fn br<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 #[dotnet_instruction(BranchEqual(target))]
 pub fn beq<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
+
     target: usize,
 ) -> StepResult {
-    let v2 = ctx.pop(gc);
-    let v1 = ctx.pop(gc);
+    let v2 = ctx.pop();
+    let v1 = ctx.pop();
     if v1 == v2 {
         StepResult::Jump(target)
     } else {
@@ -34,12 +33,12 @@ pub fn beq<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 #[dotnet_instruction(BranchGreaterOrEqual(sgn, target))]
 pub fn bge<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
+
     sgn: NumberSign,
     target: usize,
 ) -> StepResult {
-    let v2 = ctx.pop(gc);
-    let v1 = ctx.pop(gc);
+    let v2 = ctx.pop();
+    let v1 = ctx.pop();
     let cond = matches!(
         v1.compare(&v2, sgn),
         Some(std::cmp::Ordering::Greater) | Some(std::cmp::Ordering::Equal)
@@ -54,12 +53,12 @@ pub fn bge<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 #[dotnet_instruction(BranchGreater(sgn, target))]
 pub fn bgt<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
+
     sgn: NumberSign,
     target: usize,
 ) -> StepResult {
-    let v2 = ctx.pop(gc);
-    let v1 = ctx.pop(gc);
+    let v2 = ctx.pop();
+    let v1 = ctx.pop();
     let cond = matches!(v1.compare(&v2, sgn), Some(std::cmp::Ordering::Greater));
     if cond {
         StepResult::Jump(target)
@@ -71,12 +70,12 @@ pub fn bgt<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 #[dotnet_instruction(BranchLessOrEqual(sgn, target))]
 pub fn ble<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
+
     sgn: NumberSign,
     target: usize,
 ) -> StepResult {
-    let v2 = ctx.pop(gc);
-    let v1 = ctx.pop(gc);
+    let v2 = ctx.pop();
+    let v1 = ctx.pop();
     let cond = matches!(
         v1.compare(&v2, sgn),
         Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Equal)
@@ -91,12 +90,12 @@ pub fn ble<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 #[dotnet_instruction(BranchLess(sgn, target))]
 pub fn blt<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
+
     sgn: NumberSign,
     target: usize,
 ) -> StepResult {
-    let v2 = ctx.pop(gc);
-    let v1 = ctx.pop(gc);
+    let v2 = ctx.pop();
+    let v1 = ctx.pop();
     let cond = matches!(v1.compare(&v2, sgn), Some(std::cmp::Ordering::Less));
     if cond {
         StepResult::Jump(target)
@@ -108,11 +107,11 @@ pub fn blt<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 #[dotnet_instruction(BranchNotEqual(target))]
 pub fn bne<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
+
     target: usize,
 ) -> StepResult {
-    let v2 = ctx.pop(gc);
-    let v1 = ctx.pop(gc);
+    let v2 = ctx.pop();
+    let v1 = ctx.pop();
     if v1 != v2 {
         StepResult::Jump(target)
     } else {
@@ -123,10 +122,10 @@ pub fn bne<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 #[dotnet_instruction(BranchTruthy(target))]
 pub fn brtrue<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
+
     target: usize,
 ) -> StepResult {
-    let v = ctx.pop(gc);
+    let v = ctx.pop();
     if !is_nullish(v) {
         StepResult::Jump(target)
     } else {
@@ -137,10 +136,10 @@ pub fn brtrue<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 #[dotnet_instruction(BranchFalsy(target))]
 pub fn brfalse<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
+
     target: usize,
 ) -> StepResult {
-    let v = ctx.pop(gc);
+    let v = ctx.pop();
     if is_nullish(v) {
         StepResult::Jump(target)
     } else {
@@ -151,10 +150,10 @@ pub fn brfalse<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 #[dotnet_instruction(Switch(targets))]
 pub fn switch<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
+
     targets: &[usize],
 ) -> StepResult {
-    let index = match ctx.pop(gc) {
+    let index = match ctx.pop() {
         StackValue::Int32(i) => i as u32 as usize,
         StackValue::NativeInt(i) => i as usize,
         v => panic!("invalid type on stack ({:?}) for switch instruction", v),
@@ -170,9 +169,9 @@ pub fn switch<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 #[dotnet_instruction(Return)]
 pub fn ret<'gc, 'm: 'gc, T: ExceptionOps<'gc> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
+
 ) -> StepResult {
-    ctx.ret(gc)
+    ctx.ret()
 }
 
 fn is_nullish(val: StackValue) -> bool {

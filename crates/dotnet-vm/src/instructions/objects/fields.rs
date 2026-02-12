@@ -1,9 +1,8 @@
 use crate::{
-    StepResult, intrinsics::intrinsic_field, layout::LayoutFactory, memory::Atomic,
+    StepResult, layout::LayoutFactory, memory::Atomic,
     resolution::ValueResolution, stack::ops::VesOps, sync::Ordering as AtomicOrdering,
 };
 use dotnet_macros::dotnet_instruction;
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     StackValue,
     layout::HasLayout,
@@ -18,34 +17,30 @@ use super::get_ptr_context;
 #[dotnet_instruction(LoadField { param0, volatile })]
 pub fn ldfld<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     param0: &FieldSource,
     volatile: bool,
 ) -> StepResult {
-    let (field, lookup) = ctx.locate_field(*param0);
+    let (field, lookup) = vm_try!(ctx.locate_field(*param0));
 
     // Special fields check (intrinsic fields)
     if ctx.is_intrinsic_field_cached(field) {
         let type_generics = ctx.current_context().generics.type_generics.clone();
-        return intrinsic_field(gc, ctx, field, type_generics, false);
+        return crate::intrinsics::intrinsic_field(ctx, field, type_generics, false);
     }
 
-    let parent = ctx.pop(gc);
+    let parent = ctx.pop();
 
     let res_ctx = ctx
         .current_context()
         .for_type_with_generics(field.parent, &lookup);
     let name = &field.field.name;
-    let t = res_ctx.get_field_type(field);
+    let t = vm_try!(res_ctx.get_field_type(field));
 
     let ordering = if volatile {
         AtomicOrdering::SeqCst
     } else {
         AtomicOrdering::Acquire
     };
-
-    let read_data =
-        |d: &[u8]| -> dotnet_value::object::CTSValue<'gc> { res_ctx.read_cts_value(&t, d, gc) };
 
     if let StackValue::ObjectRef(ObjectRef(Some(h))) = &parent
         && field.parent.type_name() == "System.Runtime.CompilerServices.RawArrayData"
@@ -70,7 +65,7 @@ pub fn ldfld<'gc, 'm: 'gc>(
             };
 
             if let Some(val) = intercepted {
-                ctx.push(gc, val.into_stack(gc));
+                ctx.push(val.into_stack(ctx.gc()));
                 return StepResult::Continue;
             }
         }
@@ -105,51 +100,50 @@ pub fn ldfld<'gc, 'm: 'gc>(
         StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
         StackValue::NativeInt(i) => {
             if *i == 0 {
-                return ctx.throw_by_name(gc, "System.NullReferenceException");
+                return ctx.throw_by_name("System.NullReferenceException");
             }
             *i as *mut u8
         }
         StackValue::ObjectRef(ObjectRef(None)) => {
-            return ctx.throw_by_name(gc, "System.NullReferenceException");
+            return ctx.throw_by_name("System.NullReferenceException");
         }
         v => panic!("Invalid parent for ldfld: {:?}", v),
     };
 
     debug_assert!(!ptr.is_null(), "Attempted to read field from null pointer");
-    let layout = LayoutFactory::instance_field_layout_cached(
+    let layout = vm_try!(LayoutFactory::instance_field_layout_cached(
         field.parent,
         &res_ctx,
         Some(&ctx.shared().metrics),
-    );
+    ));
     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
 
     let size = field_layout.layout.size();
     let field_ptr = unsafe { ptr.add(field_layout.position) };
 
     let val_bytes = unsafe { Atomic::load_field(field_ptr, size, ordering) };
-    let value = read_data(&val_bytes);
+    let value = vm_try!(res_ctx.read_cts_value(&t, &val_bytes, ctx.gc()));
 
-    ctx.push(gc, value.into_stack(gc));
+    ctx.push(value.into_stack(ctx.gc()));
     StepResult::Continue
 }
 
 #[dotnet_instruction(StoreField { param0, volatile })]
 pub fn stfld<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     param0: &FieldSource,
     volatile: bool,
 ) -> StepResult {
-    let (field, lookup) = ctx.locate_field(*param0);
+    let (field, lookup) = vm_try!(ctx.locate_field(*param0));
 
-    let value = ctx.pop(gc);
-    let parent = ctx.pop(gc);
+    let value = ctx.pop();
+    let parent = ctx.pop();
 
     let res_ctx = ctx
         .current_context()
         .for_type_with_generics(field.parent, &lookup);
     let name = &field.field.name;
-    let t = res_ctx.get_field_type(field);
+    let t = vm_try!(res_ctx.get_field_type(field));
 
     let ordering = if volatile {
         AtomicOrdering::SeqCst
@@ -158,7 +152,7 @@ pub fn stfld<'gc, 'm: 'gc>(
     };
 
     let parent_data = if let StackValue::ObjectRef(ObjectRef(Some(h))) = &parent {
-        Some(h.borrow_mut(gc))
+        Some(h.borrow_mut(ctx.gc()))
     } else {
         None
     };
@@ -186,29 +180,29 @@ pub fn stfld<'gc, 'm: 'gc>(
         StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
         StackValue::NativeInt(i) => {
             if *i == 0 {
-                return ctx.throw_by_name(gc, "System.NullReferenceException");
+                return ctx.throw_by_name("System.NullReferenceException");
             }
             *i as *mut u8
         }
         StackValue::ObjectRef(ObjectRef(None)) => {
-            return ctx.throw_by_name(gc, "System.NullReferenceException");
+            return ctx.throw_by_name("System.NullReferenceException");
         }
         v => panic!("Invalid parent for stfld: {:?}", v),
     };
 
     debug_assert!(!ptr.is_null(), "Attempted to write field to null pointer");
-    let layout = LayoutFactory::instance_field_layout_cached(
+    let layout = vm_try!(LayoutFactory::instance_field_layout_cached(
         field.parent,
         &res_ctx,
         Some(&ctx.shared().metrics),
-    );
+    ));
     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
 
     let size = field_layout.layout.size();
     let field_ptr = unsafe { ptr.add(field_layout.position) };
 
     let mut val_bytes = vec![0u8; size];
-    res_ctx.new_cts_value(&t, value).write(&mut val_bytes);
+    vm_try!(ctx.new_cts_value(&t, value)).write(&mut val_bytes);
 
     unsafe { Atomic::store_field(field_ptr, &val_bytes, ordering) };
 
@@ -218,19 +212,18 @@ pub fn stfld<'gc, 'm: 'gc>(
 #[dotnet_instruction(LoadStaticField { param0, volatile })]
 pub fn ldsfld<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     param0: &FieldSource,
     volatile: bool,
 ) -> StepResult {
-    let (field, lookup) = ctx.locate_field(*param0);
+    let (field, lookup): (_, dotnet_types::generics::GenericLookup) = vm_try!(ctx.locate_field(*param0));
 
     // Special fields check (intrinsic fields)
     if ctx.is_intrinsic_field_cached(field) {
         let type_generics = ctx.current_context().generics.type_generics.clone();
-        return intrinsic_field(gc, ctx, field, type_generics, false);
+        return crate::intrinsics::intrinsic_field(ctx, field, type_generics, false);
     }
 
-    let res = ctx.initialize_static_storage(gc, field.parent, lookup.clone());
+    let res = ctx.initialize_static_storage(field.parent, lookup.clone());
     if res != StepResult::Continue {
         return res;
     }
@@ -248,32 +241,31 @@ pub fn ldsfld<'gc, 'm: 'gc>(
 
     // Thread-safe path: use GlobalState
     let storage = ctx.statics().get(field.parent, &lookup);
-    let t = res_ctx.make_concrete(&field.field.return_type);
+    let t = vm_try!(res_ctx.make_concrete(&field.field.return_type));
     let val_bytes = storage
         .storage
         .get_field_atomic(field.parent, name, ordering);
-    let value = res_ctx.read_cts_value(&t, &val_bytes, gc);
+    let value = vm_try!(res_ctx.read_cts_value(&t, &val_bytes, ctx.gc()));
 
-    ctx.push(gc, value.into_stack(gc));
+    ctx.push(value.into_stack(ctx.gc()));
     StepResult::Continue
 }
 
 #[dotnet_instruction(StoreStaticField { param0, volatile })]
 pub fn stsfld<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     param0: &FieldSource,
     volatile: bool,
 ) -> StepResult {
-    let (field, lookup) = ctx.locate_field(*param0);
+    let (field, lookup): (_, dotnet_types::generics::GenericLookup) = vm_try!(ctx.locate_field(*param0));
     let name = &field.field.name;
 
-    let res = ctx.initialize_static_storage(gc, field.parent, lookup.clone());
+    let res = ctx.initialize_static_storage(field.parent, lookup.clone());
     if res != StepResult::Continue {
         return res;
     }
 
-    let value = ctx.pop(gc);
+    let value = ctx.pop();
     let res_ctx = ctx
         .current_context()
         .for_type_with_generics(field.parent, &lookup);
@@ -286,12 +278,12 @@ pub fn stsfld<'gc, 'm: 'gc>(
 
     // Thread-safe path: use GlobalState
     let storage = ctx.statics().get(field.parent, &lookup);
-    let t = res_ctx.make_concrete(&field.field.return_type);
+    let t = vm_try!(res_ctx.make_concrete(&field.field.return_type));
 
     let layout = storage.layout();
     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
     let mut val_bytes = vec![0u8; field_layout.layout.size()];
-    res_ctx.new_cts_value(&t, value).write(&mut val_bytes);
+    vm_try!(ctx.new_cts_value(&t, value)).write(&mut val_bytes);
     storage
         .storage
         .set_field_atomic(field.parent, name, &val_bytes, ordering);
@@ -302,18 +294,17 @@ pub fn stsfld<'gc, 'm: 'gc>(
 #[dotnet_instruction(LoadFieldAddress(param0))]
 pub fn ldflda<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     param0: &FieldSource,
 ) -> StepResult {
-    let (field, lookup) = ctx.locate_field(*param0);
+    let (field, lookup) = vm_try!(ctx.locate_field(*param0));
 
     // Special fields check (intrinsic fields)
     if ctx.is_intrinsic_field_cached(field) {
         let type_generics = ctx.current_context().generics.type_generics.clone();
-        return intrinsic_field(gc, ctx, field, type_generics, true);
+        return crate::intrinsics::intrinsic_field(ctx, field, type_generics, true);
     }
 
-    let parent = ctx.pop(gc);
+    let parent = ctx.pop();
 
     if let StackValue::ObjectRef(ObjectRef(Some(h))) = &parent {
         if field.parent.type_name() == "System.Runtime.CompilerServices.RawData" {
@@ -331,10 +322,9 @@ pub fn ldflda<'gc, 'm: 'gc>(
             };
 
             if !ptr.is_null() {
-                let target_type = ctx.current_context().get_field_desc(field);
+                let target_type = vm_try!(ctx.current_context().get_field_desc(field));
                 drop(data);
                 ctx.push(
-                    gc,
                     StackValue::ManagedPtr(ManagedPtr::new(
                         NonNull::new(ptr),
                         target_type,
@@ -358,10 +348,9 @@ pub fn ldflda<'gc, 'm: 'gc>(
                 };
 
                 if !ptr.is_null() {
-                    let target_type = ctx.current_context().get_field_desc(field);
+                    let target_type = vm_try!(ctx.current_context().get_field_desc(field));
                     drop(data);
                     ctx.push(
-                        gc,
                         StackValue::ManagedPtr(ManagedPtr::new(
                             NonNull::new(ptr),
                             target_type,
@@ -376,7 +365,7 @@ pub fn ldflda<'gc, 'm: 'gc>(
     }
 
     if let StackValue::ObjectRef(ObjectRef(None)) = &parent {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     }
     let (ptr, owner, stack_slot_origin, base_offset) = get_ptr_context(ctx, &parent);
 
@@ -385,11 +374,11 @@ pub fn ldflda<'gc, 'm: 'gc>(
         .for_type_with_generics(field.parent, &lookup);
     let name = &field.field.name;
 
-    let layout = LayoutFactory::instance_field_layout_cached(
+    let layout = vm_try!(LayoutFactory::instance_field_layout_cached(
         field.parent,
         &res_ctx,
         Some(&ctx.shared().metrics),
-    );
+    ));
     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
 
     let ptr = if field.parent.type_name() == "System.String" && name == "_firstChar" {
@@ -399,18 +388,18 @@ pub fn ldflda<'gc, 'm: 'gc>(
     };
 
     let field_ptr = unsafe { ptr.add(field_layout.position) };
-    let t = res_ctx.get_field_type(field);
-    let target_type = ctx.loader().find_concrete_type(t);
+    let t = vm_try!(res_ctx.get_field_type(field));
+    let target_type = vm_try!(ctx
+        .loader()
+        .find_concrete_type(t));
 
     if let Some((idx, _)) = stack_slot_origin {
         let new_offset = base_offset + field_layout.position;
         ctx.push(
-            gc,
             StackValue::managed_stack_ptr(idx, new_offset, field_ptr, target_type, false),
         );
     } else {
         ctx.push(
-            gc,
             StackValue::ManagedPtr(ManagedPtr::new(
                 NonNull::new(field_ptr),
                 target_type,
@@ -426,12 +415,11 @@ pub fn ldflda<'gc, 'm: 'gc>(
 #[dotnet_instruction(LoadStaticFieldAddress(param0))]
 pub fn ldsflda<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     param0: &FieldSource,
 ) -> StepResult {
-    let (field, lookup) = ctx.locate_field(*param0);
+    let (field, lookup): (_, dotnet_types::generics::GenericLookup) = vm_try!(ctx.locate_field(*param0));
 
-    let res = ctx.initialize_static_storage(gc, field.parent, lookup.clone());
+    let res = ctx.initialize_static_storage(field.parent, lookup.clone());
     if res != StepResult::Continue {
         return res;
     }
@@ -448,11 +436,12 @@ pub fn ldsflda<'gc, 'm: 'gc>(
     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
     let field_ptr = unsafe { ptr.add(field_layout.position) };
 
-    let t = res_ctx.get_field_type(field);
-    let target_type = ctx.loader().find_concrete_type(t);
+    let t = vm_try!(res_ctx.get_field_type(field));
+    let target_type = vm_try!(ctx
+        .loader()
+        .find_concrete_type(t));
 
     ctx.push(
-        gc,
         StackValue::ManagedPtr(ManagedPtr::new(
             NonNull::new(field_ptr),
             target_type,

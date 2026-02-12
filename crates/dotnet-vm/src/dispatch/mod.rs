@@ -8,10 +8,9 @@ use crate::{
     exceptions::ExceptionState,
     stack::{
         CallStack,
-        ops::{CallOps, ReflectionOps, StackOps, VesOps},
+        ops::*,
     },
     threading::ThreadManagerOps,
-    vm_trace_instruction,
 };
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
@@ -25,12 +24,11 @@ pub struct InstructionRegistry;
 
 impl InstructionRegistry {
     pub fn dispatch<'gc, 'm>(
-        gc: GCHandle<'gc>,
         ctx: &mut dyn VesOps<'gc, 'm>,
         instr: &Instruction,
     ) -> Option<StepResult> {
         let handler = registry::get_handler(instr.opcode())?;
-        Some(handler(ctx, gc, instr))
+        Some(handler(ctx, instr))
     }
 }
 
@@ -68,8 +66,8 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
         Self { stack }
     }
 
-    pub fn ves_context(&mut self) -> crate::stack::VesContext<'_, 'gc, 'm> {
-        self.stack.ves_context()
+    pub fn ves_context(&mut self, gc: GCHandle<'gc>) -> crate::stack::VesContext<'_, 'gc, 'm> {
+        self.stack.ves_context(gc)
     }
 
     pub fn step(&mut self, gc: GCHandle<'gc>) -> StepResult {
@@ -77,7 +75,7 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
             ExceptionState::None
             | ExceptionState::ExecutingHandler(_)
             | ExceptionState::Filtering(_) => self.step_normal(gc),
-            _ => self.ves_context().handle_exception(gc),
+            _ => self.ves_context(gc).handle_exception(),
         }
     }
 
@@ -126,8 +124,8 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
             i.opcode()
         );
 
-        let mut ctx = self.ves_context();
-        let res = if let Some(res) = InstructionRegistry::dispatch(gc, &mut ctx, i) {
+        let mut ctx = self.ves_context(gc);
+        let res = if let Some(res) = InstructionRegistry::dispatch(&mut ctx, i) {
             res
         } else {
             panic!("Unregistered instruction: {:?}", i);
@@ -147,7 +145,7 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
             StepResult::Yield => StepResult::Yield,
             StepResult::Exception => StepResult::Exception,
             StepResult::Return => {
-                let res = self.stack.handle_return(gc);
+                let res = ctx.handle_return();
                 tracing::debug!("step_normal: handle_return result={:?}", res);
                 res
             }
@@ -178,13 +176,13 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
                     last_res
                 }
                 _ => {
-                    let res = self.ves_context().handle_exception(gc);
+                    let res = self.ves_context(gc).handle_exception();
                     match res {
                         StepResult::Jump(target) => {
                             self.stack.branch(target);
                             StepResult::Continue
                         }
-                        StepResult::Return => self.stack.handle_return(gc),
+                        StepResult::Return => self.ves_context(gc).handle_return(),
                         _ => res,
                     }
                 }
@@ -205,8 +203,8 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
         this_type: Option<TypeDescription>,
         ctx: Option<&ResolutionContext<'_, 'm>>,
     ) -> StepResult {
-        self.ves_context()
-            .unified_dispatch(gc, source, this_type, ctx)
+        self.ves_context(gc)
+            .unified_dispatch(source, this_type, ctx)
     }
 
     pub fn dispatch_method(
@@ -215,7 +213,7 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
         method: MethodDescription,
         lookup: GenericLookup,
     ) -> StepResult {
-        let mut ctx = self.stack.ves_context();
+        let mut ctx = self.stack.ves_context(gc);
         tracing::debug!(
             "dispatch_method: method={:?}, pinvoke={:?}, internal_call={}",
             method,
@@ -223,14 +221,9 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
             method.method.internal_call
         );
         if ctx.is_intrinsic_cached(method) {
-            crate::intrinsics::intrinsic_call(gc, &mut ctx, method, &lookup)
+            crate::intrinsics::intrinsic_call(&mut ctx, method, &lookup)
         } else if method.method.pinvoke.is_some() {
-            crate::pinvoke::external_call(&mut ctx, method, gc);
-            if matches!(*ctx.exception_mode, ExceptionState::Throwing(_)) {
-                StepResult::Exception
-            } else {
-                StepResult::Continue
-            }
+            crate::pinvoke::external_call(&mut ctx, method)
         } else {
             if method.method.internal_call {
                 panic!("intrinsic not found: {:?}", method);
@@ -238,7 +231,7 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
 
             if method.method.body.is_none() {
                 if let Some(result) = crate::intrinsics::delegates::try_delegate_dispatch(
-                    &mut ctx, gc, method, &lookup,
+                    &mut ctx, method, &lookup,
                 ) {
                     return result;
                 }
@@ -250,11 +243,10 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
                 );
             }
 
-            ctx.call_frame(
-                gc,
-                MethodInfo::new(method, &lookup, ctx.shared.clone()),
+            vm_try!(ctx.call_frame(
+                vm_try!(MethodInfo::new(method, &lookup, ctx.shared.clone())),
                 lookup,
-            );
+            ));
             StepResult::FramePushed
         }
     }
@@ -266,7 +258,7 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
             ObjectRef(Some(state.targets)).as_vector(|v| v.layout.length)
         };
 
-        let mut ctx = self.stack.ves_context();
+        let mut ctx = self.stack.ves_context(gc);
 
         // 1. Handle return from previous target
         if ctx.frame_stack.current_frame().stack_height > 0 {
@@ -276,7 +268,7 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
 
             let next_index = frame.multicast_state.as_ref().unwrap().next_index;
             if next_index < targets_len && has_return_value {
-                ctx.pop(gc);
+                let _ = ctx.pop();
             }
         }
 
@@ -297,18 +289,18 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
         };
 
         if let Some(target_delegate) = target_delegate {
-            ctx.push(gc, StackValue::ObjectRef(target_delegate));
+            ctx.push(StackValue::ObjectRef(target_delegate));
             for arg in args {
-                ctx.push(gc, arg);
+                ctx.push(arg);
             }
 
             let invoke_method = ctx.frame_stack.current_frame().state.info_handle.source;
             let lookup = ctx.frame_stack.current_frame().generic_inst.clone();
 
-            ctx.dispatch_method(gc, invoke_method, lookup)
+            ctx.dispatch_method(invoke_method, lookup)
         } else {
             // All targets called.
-            self.stack.handle_return(gc)
+            ctx.handle_return()
         }
     }
 }

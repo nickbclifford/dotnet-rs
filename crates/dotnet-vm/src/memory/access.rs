@@ -40,6 +40,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         self.check_integrity(ptr, owner, layout)?;
 
         // 3. Perform Write & Write Barrier
+        // SAFETY: Bounds and integrity checks were performed above.
+        // `ptr` is guaranteed to be within the bounds of `owner` (if present)
+        // or its validity is ensured by the caller.
         unsafe {
             self.perform_write(ptr, owner, value, layout)?;
         }
@@ -86,6 +89,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         }
 
         // 3. Perform Read
+        // SAFETY: Bounds and safety checks were performed above.
+        // `ptr` is guaranteed to be within the bounds of `owner` (if present)
+        // or its validity is ensured by the caller.
         unsafe { self.perform_read(ptr, owner, layout, type_desc) }
     }
 
@@ -193,6 +199,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         value: StackValue<'gc>,
         layout: &LayoutManager,
     ) -> Result<(), String> {
+        // SAFETY: The caller must ensure `ptr` is valid for writes and within bounds.
+        // This is verified by `write_unaligned` before calling this method.
         unsafe {
             if ptr.is_null() {
                 return Err("RawMemoryAccess::perform_write called with null pointer!".to_string());
@@ -276,6 +284,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         layout: &LayoutManager,
         type_desc: Option<TypeDescription>,
     ) -> Result<StackValue<'gc>, String> {
+        // SAFETY: The caller must ensure `ptr` is valid for reads and within bounds.
+        // This is verified by `read_unaligned` before calling this method.
         unsafe {
             if ptr.is_null() {
                 return Err("RawMemoryAccess::perform_read called with null pointer!".to_string());

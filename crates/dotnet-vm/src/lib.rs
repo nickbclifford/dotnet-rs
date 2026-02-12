@@ -1,18 +1,34 @@
+//! # dotnet-vm
+//!
+//! The core virtual machine implementation for the `dotnet-rs` runtime.
+//! This crate implements the Virtual Execution System (VES) as defined by ECMA-335.
+//!
+//! ## Subsystems
+//!
+//! - **Stack System** (`stack/`): Evaluation stack, call frames, and operational traits.
+//! - **Instruction Set** (`instructions/`): Handlers for CIL instructions.
+//! - **Intrinsics** (`intrinsics/`): Native implementations of BCL methods.
+//! - **Memory Management** (`memory/`, `gc/`): Heap management and garbage collection.
+//! - **Dispatch** (`dispatch/`): Method resolution and execution engine.
+//! - **Threading** (`threading/`): Support for multi-threaded execution.
+
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, unsafe_empty_collect};
 use std::rc::Rc;
 
+#[macro_use]
+mod macros;
+
 pub mod context;
 pub mod dispatch;
+pub mod error;
 mod exceptions;
 mod executor;
 pub mod gc;
 mod instructions;
 pub(crate) mod intrinsics;
 pub mod layout;
-#[macro_use]
-mod macros;
 pub mod memory;
 pub mod metrics;
 mod pinvoke;
@@ -66,7 +82,7 @@ impl MethodInfo<'static> {
         method: MethodDescription,
         generics: &GenericLookup,
         shared: Arc<SharedGlobalState>,
-    ) -> Self {
+    ) -> Result<Self, dotnet_types::error::TypeResolutionError> {
         let loader = shared.loader;
         let ctx = ResolutionContext::for_method(
             method,
@@ -88,34 +104,35 @@ impl MethodInfo<'static> {
                 }
             }
 
-            Self {
+            Ok(Self {
                 is_cctor: method.method.runtime_special_name
                     && method.method.name == ".cctor"
                     && !method.method.signature.instance
                     && method.method.signature.parameters.is_empty(),
                 signature: &method.method.signature,
                 locals: &body.header.local_variables,
-                exceptions: exceptions::parse(exceptions, &ctx)
+                exceptions: exceptions::parse(exceptions, &ctx)?
                     .into_iter()
                     .map(Rc::new)
                     .collect(),
                 instructions: body.instructions.as_slice(),
                 source: method,
-            }
+            })
         } else {
-            Self {
+            Ok(Self {
                 is_cctor: false,
                 signature: &method.method.signature,
                 locals: &[],
                 exceptions: vec![],
                 instructions: &[],
                 source: method,
-            }
+            })
         }
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[must_use]
+#[derive(Clone, Debug, PartialEq)]
 pub enum StepResult {
     Continue,    // Advance IP
     Jump(usize), // Set IP to X
@@ -124,4 +141,5 @@ pub enum StepResult {
     MethodThrew, // Exception unhandled in frame
     Exception,   // Exception thrown, need to call handle_exception
     Yield,       // GC/Thread yield
+    Error(error::VmError), // Internal VM error
 }

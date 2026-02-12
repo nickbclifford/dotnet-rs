@@ -169,7 +169,7 @@ fn create_test_loader() -> &'static dotnet_assemblies::AssemblyLoader {
     thread_local! {
         static LOADER: &'static dotnet_assemblies::AssemblyLoader = {
             let assemblies_path = find_dotnet_app_path().to_str().unwrap().to_string();
-            let loader = dotnet_assemblies::AssemblyLoader::new(assemblies_path);
+            let loader = dotnet_assemblies::AssemblyLoader::new(assemblies_path).expect("failed to create AssemblyLoader");
             Box::leak(Box::new(loader))
         };
     }

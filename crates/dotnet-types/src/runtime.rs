@@ -48,7 +48,10 @@ runtime_type_impls! {
         },
     },
     resolution: |loader| {
-        Void => loader.corlib_type("System.Object").resolution,
+        Void => loader
+            .corlib_type("System.Object")
+            .expect("System.Object must exist")
+            .resolution,
         Type(td) => td.resolution,
         Generic(td, _) => td.resolution,
         TypeParameter { owner, .. } => owner.resolution,
@@ -59,7 +62,10 @@ runtime_type_impls! {
         | Pointer(_)
         | ByRef(_)
         | ValuePointer(_, _)
-        | FunctionPointer(_) => loader.corlib_type("System.Object").resolution,
+        | FunctionPointer(_) => loader
+            .corlib_type("System.Object")
+            .expect("System.Object must exist")
+            .resolution,
     },
     get_name: {
         Void => "Void".to_string(),
@@ -86,7 +92,11 @@ runtime_type_impls! {
         FunctionPointer(_) => "method*".to_string(),
     },
     to_concrete: |loader, corlib_res| {
-        Void => ConcreteType::from(loader.corlib_type("System.Void")),
+        Void => ConcreteType::from(
+            loader
+                .corlib_type("System.Void")
+                .expect("System.Void must exist"),
+        ),
         Type(td) => ConcreteType::from(*td),
         Generic(td, args) => {
             let source = TypeSource::Generic {

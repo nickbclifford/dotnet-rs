@@ -16,9 +16,6 @@ use dotnet_utils::sync::{Arc, Ordering};
 use dotnet_value::StackValue;
 
 #[cfg(feature = "multithreaded-gc")]
-use crate::vm_debug;
-
-#[cfg(feature = "multithreaded-gc")]
 use super::gc::{arena::THREAD_ARENA, coordinator::*};
 
 pub struct Executor {
@@ -33,6 +30,7 @@ pub struct Executor {
 pub enum ExecutorResult {
     Exited(u8),
     Threw, // TODO: well-typed exceptions
+    Error(crate::error::VmError),
 }
 
 impl Executor {
@@ -102,8 +100,8 @@ impl Executor {
         // Set thread id in arena and pre-initialize reflection
         arena.mutate_root(|gc, c| {
             c.stack.thread_id.set(thread_id);
-            let mut ctx = c.stack.ves_context();
-            ctx.pre_initialize_reflection(gc);
+            let mut ctx = c.stack.ves_context(gc);
+            ctx.pre_initialize_reflection();
         });
 
         #[cfg(feature = "multithreaded-gc")]
@@ -124,9 +122,10 @@ impl Executor {
         self.with_arena(|arena| {
             arena.mutate_root(|gc, c| {
                 let shared = c.stack.shared.clone();
-                let info = MethodInfo::new(method, &Default::default(), shared);
-                c.ves_context()
-                    .entrypoint_frame(gc, info, Default::default(), vec![])
+                let info = MethodInfo::new(method, &Default::default(), shared).expect("Failed to resolve entrypoint");
+                c.ves_context(gc)
+                    .entrypoint_frame(info, Default::default(), vec![])
+                    .expect("Failed to set up entrypoint frame")
             });
         });
     }
@@ -195,7 +194,7 @@ impl Executor {
             }
 
             self.with_arena(|arena| {
-                arena.mutate_root(|gc, c| c.ves_context().process_pending_finalizers(gc));
+                let _ = arena.mutate_root(|gc, c| c.ves_context(gc).process_pending_finalizers());
             });
 
             let step_result = self.with_arena(|arena| arena.mutate_root(|gc, c| c.run(gc)));
@@ -215,6 +214,9 @@ impl Executor {
                 }
                 StepResult::MethodThrew => {
                     break ExecutorResult::Threw;
+                }
+                StepResult::Error(e) => {
+                    break ExecutorResult::Error(e);
                 }
                 _ => {}
             }
@@ -257,7 +259,6 @@ impl Executor {
 
     /// Perform a full GC collection with stop-the-world coordination.
     fn perform_full_gc(&mut self) {
-        use crate::{vm_trace_gc_collection_end, vm_trace_gc_collection_start};
         #[cfg(feature = "multithreaded-gc")]
         {
             use std::time::Instant;
@@ -267,9 +268,8 @@ impl Executor {
 
             // 1. Mark that we are starting collection (acquires coordinator lock)
             let coordinator = Arc::clone(&self.shared.gc_coordinator);
-            let _gc_lock = match coordinator.start_collection() {
-                Some(guard) => guard,
-                None => return, // Another thread is already collecting
+            let Some(_gc_lock) = coordinator.start_collection() else {
+                return; // Another thread is already collecting
             };
 
             self.with_arena(|arena| {

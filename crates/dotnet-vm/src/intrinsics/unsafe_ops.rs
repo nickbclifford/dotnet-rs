@@ -9,7 +9,6 @@ use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
 };
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     StackValue,
     layout::{HasLayout, LayoutManager},
@@ -23,12 +22,11 @@ use std::{ptr, sync::Arc};
 #[allow(unused_variables)]
 pub fn intrinsic_marshal_get_last_pinvoke_error<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
     let value = unsafe { crate::pinvoke::LAST_ERROR };
-    ctx.push_i32(gc, value);
+    ctx.push_i32(value);
     StepResult::Continue
 }
 
@@ -36,11 +34,10 @@ pub fn intrinsic_marshal_get_last_pinvoke_error<'gc, 'm: 'gc>(
 #[allow(unused_variables)]
 pub fn intrinsic_marshal_set_last_pinvoke_error<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let value = ctx.pop_i32(gc);
+    let value = ctx.pop_i32();
     unsafe {
         crate::pinvoke::LAST_ERROR = value;
     }
@@ -52,20 +49,19 @@ pub fn intrinsic_marshal_set_last_pinvoke_error<'gc, 'm: 'gc>(
 #[allow(unused_variables)]
 pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let len = ctx.pop_isize(gc);
-    let src = ctx.pop_ptr(gc);
-    let dst = ctx.pop_ptr(gc);
+    let len = ctx.pop_isize();
+    let src = ctx.pop_ptr();
+    let dst = ctx.pop_ptr();
 
     let res_ctx = ctx.with_generics(generics);
     let total_count = if generics.method_generics.is_empty() {
         len as usize
     } else {
         let target = &generics.method_generics[0];
-        let layout = type_layout(target.clone(), &res_ctx);
+        let layout = vm_try!(type_layout(target.clone(), &res_ctx));
         len as usize * layout.size()
     };
 
@@ -87,13 +83,12 @@ pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
 #[allow(unused_variables)]
 pub fn intrinsic_memory_marshal_get_array_data_reference<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let obj = ctx.pop_obj(gc);
+    let obj = ctx.pop_obj();
     let Some(array_handle) = obj.0 else {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     };
 
     let data_ptr = match &array_handle.borrow().storage {
@@ -103,8 +98,9 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<'gc, 'm: 'gc>(
 
     let element_type = ctx
         .loader()
-        .find_concrete_type(generics.method_generics[0].clone());
-    ctx.push_ptr(gc, data_ptr, element_type, false);
+        .find_concrete_type(generics.method_generics[0].clone())
+        .expect("Element type must exist for GetArrayDataReference");
+    ctx.push_ptr(data_ptr, element_type, false);
     StepResult::Continue
 }
 
@@ -114,18 +110,17 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static int System.Runtime.InteropServices.Marshal::SizeOf<T>()")]
 pub fn intrinsic_marshal_size_of<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let concrete_type = if method.method.signature.parameters.is_empty() {
         generics.method_generics[0].clone()
     } else {
-        let type_obj = ctx.pop_obj(gc);
+        let type_obj = ctx.pop_obj();
         ctx.resolve_runtime_type(type_obj).to_concrete(ctx.loader())
     };
-    let layout = type_layout(concrete_type, &ctx.current_context());
-    ctx.push_i32(gc, layout.size() as i32);
+    let layout = vm_try!(type_layout(concrete_type, &ctx.current_context()));
+    ctx.push_i32(layout.size() as i32);
     StepResult::Continue
 }
 
@@ -135,25 +130,25 @@ pub fn intrinsic_marshal_size_of<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static IntPtr System.Runtime.InteropServices.Marshal::OffsetOf<T>(string)")]
 pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     use dotnet_value::with_string;
-    let field_name_val = ctx.pop(gc);
-    let field_name = with_string!(ctx, gc, field_name_val, |s| s.as_string());
+    let field_name_val = ctx.pop();
+    let field_name = with_string!(ctx, field_name_val, |s| s.as_string());
     let concrete_type = if method.method.signature.parameters.len() == 1 {
         generics.method_generics[0].clone()
     } else {
-        let type_obj = ctx.pop_obj(gc);
+        let type_obj = ctx.pop_obj();
         ctx.resolve_runtime_type(type_obj).to_concrete(ctx.loader())
     };
-    let layout = type_layout(concrete_type.clone(), &ctx.current_context());
+    let layout = vm_try!(type_layout(concrete_type.clone(), &ctx.current_context()));
 
     if let LayoutManager::Field(flm) = &*layout {
-        let td = ctx.loader().find_concrete_type(concrete_type.clone());
+        let td = ctx.loader().find_concrete_type(concrete_type.clone())
+            .expect("Type must exist for Marshal.OffsetOf");
         if let Some(field) = flm.get_field(td, &field_name) {
-            ctx.push_isize(gc, field.position as isize);
+            ctx.push_isize(field.position as isize);
         } else {
             panic!("Field {} not found in type {:?}", field_name, concrete_type);
         }
@@ -168,11 +163,10 @@ pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
 #[allow(unused_variables)]
 pub fn intrinsic_unsafe_as_pointer<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let val = ctx.pop(gc);
+    let val = ctx.pop();
     let ptr = match val {
         StackValue::ManagedPtr(m) => m.pointer().map_or(ptr::null_mut(), |p| p.as_ptr()),
         StackValue::NativeInt(i) => i as *mut u8,
@@ -180,7 +174,7 @@ pub fn intrinsic_unsafe_as_pointer<'gc, 'm: 'gc>(
         StackValue::ObjectRef(ObjectRef(None)) => ptr::null_mut(),
         _ => panic!("Unsafe.AsPointer expected pointer, got {:?}", val),
     };
-    ctx.push_isize(gc, ptr as isize);
+    ctx.push_isize(ptr as isize);
     StepResult::Continue
 }
 
@@ -188,15 +182,14 @@ pub fn intrinsic_unsafe_as_pointer<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::Add<T>(T&, IntPtr)")]
 pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let target = &generics.method_generics[0];
-    let target_type = ctx.loader().find_concrete_type(target.clone());
-    let layout = type_layout(target.clone(), &ctx.current_context());
+    let target_type = vm_try!(ctx.loader().find_concrete_type(target.clone()));
+    let layout = vm_try!(type_layout(target.clone(), &ctx.current_context()));
 
-    let offset_val = ctx.pop(gc);
+    let offset_val = ctx.pop();
     let offset = match offset_val {
         StackValue::Int32(i) => i as isize,
         StackValue::NativeInt(i) => i,
@@ -206,7 +199,7 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
         ),
     };
 
-    let m_val = ctx.pop(gc);
+    let m_val = ctx.pop();
     let (pinned, owner) = if let StackValue::ManagedPtr(m) = &m_val {
         (m.pinned, m.owner)
     } else {
@@ -215,7 +208,6 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     let m = m_val.as_ptr();
     let result_ptr = unsafe { m.offset(offset * layout.size() as isize) };
     ctx.push(
-        gc,
         StackValue::managed_ptr_with_owner(result_ptr, target_type, owner, pinned),
     );
     StepResult::Continue
@@ -226,14 +218,14 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
 )]
 pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let target = &generics.method_generics[0];
-    let target_type = ctx.loader().find_concrete_type(target.clone());
+    let target_type = ctx.loader().find_concrete_type(target.clone())
+        .expect("Type must exist for Unsafe.AddByteOffset");
 
-    let offset_val = ctx.pop(gc);
+    let offset_val = ctx.pop();
     let offset = match offset_val {
         StackValue::Int32(i) => i as isize,
         StackValue::NativeInt(i) => i,
@@ -243,7 +235,7 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
         ),
     };
 
-    let m_val = ctx.pop(gc);
+    let m_val = ctx.pop();
     let (pinned, owner) = if let StackValue::ManagedPtr(m) = &m_val {
         (m.pinned, m.owner)
     } else {
@@ -251,7 +243,6 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
     };
     let m = m_val.as_ptr();
     ctx.push(
-        gc,
         StackValue::managed_ptr_with_owner(unsafe { m.offset(offset) }, target_type, owner, pinned),
     );
     StepResult::Continue
@@ -261,13 +252,12 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static bool System.Runtime.CompilerServices.Unsafe::AreSame<T>(T&, T&)")]
 pub fn intrinsic_unsafe_are_same<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let m1 = ctx.pop_ptr(gc);
-    let m2 = ctx.pop_ptr(gc);
-    ctx.push_i32(gc, (m1 == m2) as i32);
+    let m1 = ctx.pop_ptr();
+    let m2 = ctx.pop_ptr();
+    ctx.push_i32((m1 == m2) as i32);
     StepResult::Continue
 }
 
@@ -278,7 +268,6 @@ pub fn intrinsic_unsafe_are_same<'gc, 'm: 'gc>(
 #[allow(unused_variables)]
 pub fn intrinsic_unsafe_as<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -290,15 +279,14 @@ pub fn intrinsic_unsafe_as<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static TTo& System.Runtime.CompilerServices.Unsafe::As<TFrom, TTo>(TFrom&)")]
 pub fn intrinsic_unsafe_as_generic<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let src_type_gen = generics.method_generics[0].clone();
     let dest_type_gen = generics.method_generics[1].clone();
 
-    let src_layout = type_layout(src_type_gen, &ctx.current_context());
-    let dest_layout = type_layout(dest_type_gen, &ctx.current_context());
+    let src_layout = vm_try!(type_layout(src_type_gen, &ctx.current_context()));
+    let dest_layout = vm_try!(type_layout(dest_type_gen, &ctx.current_context()));
 
     // Safety Check: Casting ref TFrom to ref TTo
     // TTo must be compatible with TFrom's memory layout regarding References
@@ -306,15 +294,16 @@ pub fn intrinsic_unsafe_as_generic<'gc, 'm: 'gc>(
 
     let target_type = ctx
         .loader()
-        .find_concrete_type(generics.method_generics[1].clone());
-    let m_val = ctx.pop(gc);
+        .find_concrete_type(generics.method_generics[1].clone())
+        .expect("Type must exist for Unsafe.As");
+    let m_val = ctx.pop();
     let pinned = match &m_val {
         StackValue::ManagedPtr(m) => m.pinned,
         StackValue::ObjectRef(ObjectRef(Some(_))) => false,
         _ => false,
     };
     let m = m_val.as_ptr();
-    ctx.push(gc, StackValue::managed_ptr(m, target_type, pinned));
+    ctx.push(StackValue::managed_ptr(m, target_type, pinned));
     StepResult::Continue
 }
 
@@ -324,7 +313,6 @@ pub fn intrinsic_unsafe_as_generic<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::AsRef<T>(void*)")]
 pub fn intrinsic_unsafe_as_ref_any<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
@@ -332,10 +320,10 @@ pub fn intrinsic_unsafe_as_ref_any<'gc, 'm: 'gc>(
     if let ParameterType::Value(MethodType::Base(b)) = param_type
         && matches!(**b, BaseType::ValuePointer(_, _))
     {
-        return intrinsic_unsafe_as_ref_ptr(ctx, gc, method, generics);
+        return intrinsic_unsafe_as_ref_ptr(ctx, method, generics);
     }
     // Otherwise it's the "in T source" (ByRef) overload, which is a no-op
-    intrinsic_unsafe_as(ctx, gc, method, generics)
+    intrinsic_unsafe_as(ctx, method, generics)
 }
 
 // System.Runtime.CompilerServices.Unsafe::AsRef<T>(void* ptr)
@@ -343,16 +331,15 @@ pub fn intrinsic_unsafe_as_ref_any<'gc, 'm: 'gc>(
 // But as_ref_any handles dispatch.
 pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let target_type_gen = generics.method_generics[0].clone();
-    let dest_layout = type_layout(target_type_gen.clone(), &ctx.current_context());
+    let dest_layout = vm_try!(type_layout(target_type_gen.clone(), &ctx.current_context()));
 
-    let target_type = ctx.loader().find_concrete_type(target_type_gen);
+    let target_type = vm_try!(ctx.loader().find_concrete_type(target_type_gen));
 
-    let val = ctx.pop(gc);
+    let val = ctx.pop();
     let (ptr, pinned) = match val {
         StackValue::NativeInt(p) => (p as *mut u8, false),
         StackValue::ManagedPtr(m) => (
@@ -388,7 +375,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
         // panic!("Heap Corruption: Casting unmanaged pointer to Ref type is unsafe");
     }
 
-    ctx.push(gc, StackValue::managed_ptr(ptr, target_type, pinned));
+    ctx.push(StackValue::managed_ptr(ptr, target_type, pinned));
     StepResult::Continue
 }
 
@@ -397,14 +384,13 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
 #[allow(unused_variables)]
 pub fn intrinsic_unsafe_size_of<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let res_ctx = ctx.with_generics(generics);
     let target = &generics.method_generics[0];
-    let layout = type_layout(target.clone(), &res_ctx);
-    ctx.push_i32(gc, layout.size() as i32);
+    let layout = vm_try!(type_layout(target.clone(), &res_ctx));
+    ctx.push_i32(layout.size() as i32);
     StepResult::Continue
 }
 
@@ -412,14 +398,13 @@ pub fn intrinsic_unsafe_size_of<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static IntPtr System.Runtime.CompilerServices.Unsafe::ByteOffset<T>(T&, T&)")]
 pub fn intrinsic_unsafe_byte_offset<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let r = ctx.pop_ptr(gc);
-    let l = ctx.pop_ptr(gc);
+    let r = ctx.pop_ptr();
+    let l = ctx.pop_ptr();
     let offset = (l as isize) - (r as isize);
-    ctx.push_isize(gc, offset);
+    ctx.push_isize(offset);
     StepResult::Continue
 }
 
@@ -429,15 +414,14 @@ pub fn intrinsic_unsafe_byte_offset<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static T System.Runtime.CompilerServices.Unsafe::ReadUnaligned<T>(byte&)")]
 pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let source = ctx.pop(gc);
+    let source = ctx.pop();
     let (ptr, owner) = match source {
         StackValue::NativeInt(p) => {
             if p == 0 {
-                return ctx.throw_by_name(gc, "System.NullReferenceException");
+                return ctx.throw_by_name("System.NullReferenceException");
             }
             (p as *mut u8, None)
         }
@@ -449,9 +433,9 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
     };
 
     let target = &generics.method_generics[0];
-    let layout = type_layout(target.clone(), &ctx.current_context());
+    let layout = vm_try!(type_layout(target.clone(), &ctx.current_context()));
 
-    let target_type = ctx.loader().find_concrete_type(target.clone());
+    let target_type = vm_try!(ctx.loader().find_concrete_type(target.clone()));
 
     let memory = RawMemoryAccess::new(ctx.heap());
     match unsafe { memory.read_unaligned(ptr, owner, &layout, Some(target_type)) } {
@@ -459,11 +443,12 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
             // If we read a ManagedPtr, we need to supply the target type,
             // because memory.read_unaligned returns ManagedPtr with void/unknown type.
             if let StackValue::ManagedPtr(m) = v {
-                let target_type = ctx.loader().find_concrete_type(target.clone());
+                let target_type = ctx.loader().find_concrete_type(target.clone())
+                    .expect("Type must exist for Unsafe.ReadUnaligned ManagedPtr");
                 let new_m = ManagedPtr::new(m.pointer(), target_type, m.owner, m.pinned);
-                ctx.push(gc, StackValue::ManagedPtr(new_m));
+                ctx.push(StackValue::ManagedPtr(new_m));
             } else {
-                ctx.push(gc, v);
+                ctx.push(v);
             }
         }
         Err(e) => panic!("Unsafe.ReadUnaligned failed: {}", e),
@@ -482,19 +467,18 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
 )]
 pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let target = &generics.method_generics[0];
-    let layout = type_layout(target.clone(), &ctx.current_context());
-    let value = ctx.pop(gc);
+    let layout = vm_try!(type_layout(target.clone(), &ctx.current_context()));
+    let value = ctx.pop();
 
-    let dest = ctx.pop(gc);
+    let dest = ctx.pop();
     let (ptr, owner) = match dest {
         StackValue::NativeInt(p) => {
             if p == 0 {
-                return ctx.throw_by_name(gc, "System.NullReferenceException");
+                return ctx.throw_by_name("System.NullReferenceException");
             }
             (p as *mut u8, None)
         }
@@ -518,11 +502,10 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
 #[dotnet_intrinsic_field("static IntPtr System.IntPtr::Zero")]
 pub fn intrinsic_field_intptr_zero<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _field: FieldDescription,
     _type_generics: Arc<[ConcreteType]>,
     _is_address: bool,
 ) -> StepResult {
-    ctx.push(gc, StackValue::NativeInt(0));
+    ctx.push(StackValue::NativeInt(0));
     StepResult::Continue
 }

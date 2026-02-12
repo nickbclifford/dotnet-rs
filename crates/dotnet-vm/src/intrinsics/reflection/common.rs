@@ -1,11 +1,13 @@
-use crate::{context::ResolutionContext, stack::ops::ReflectionOps};
+use crate::{
+    context::ResolutionContext,
+    stack::ops::{LoaderOps, ReflectionOps},
+};
 use dotnet_types::{
     comparer::decompose_type_source,
     generics::GenericLookup,
     members::{FieldDescription, MethodDescription},
     runtime::{RuntimeMethodSignature, RuntimeType},
 };
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::object::{HeapStorage, ObjectRef};
 use dotnetdll::prelude::{BaseType, MethodType};
 
@@ -28,9 +30,9 @@ pub(crate) fn get_runtime_member_index<T: PartialEq>(
 }
 
 pub(crate) fn pre_initialize_reflection<'gc, 'm: 'gc>(
-    ctx: &mut dyn ReflectionOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
+    ctx: &mut (impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
 ) {
+    let _gc = ctx.gc();
     let blessed = [
         RuntimeType::Void,
         RuntimeType::Boolean,
@@ -52,15 +54,15 @@ pub(crate) fn pre_initialize_reflection<'gc, 'm: 'gc>(
     ];
 
     for t in blessed {
-        get_runtime_type(ctx, gc, t);
+        get_runtime_type(ctx, t);
     }
 }
 
 pub(crate) fn get_runtime_type<'gc, 'm: 'gc>(
-    ctx: &mut dyn ReflectionOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
+    ctx: &mut (impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
     target: RuntimeType,
 ) -> ObjectRef<'gc> {
+    let gc = ctx.gc();
     if let Some(obj) = ctx.reflection().types_read().get(&target) {
         return *obj;
     }
@@ -89,8 +91,8 @@ pub(crate) fn get_runtime_type<'gc, 'm: 'gc>(
         index
     };
 
-    let rt = ctx.loader().corlib_type("DotnetRs.RuntimeType");
-    let rt_obj = ctx.new_object(rt);
+    let rt = ctx.loader().corlib_type("DotnetRs.RuntimeType").expect("RuntimeType not found");
+    let rt_obj = ctx.new_object(rt).expect("Failed to create RuntimeType object");
     let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
     ctx.register_new_object(&obj_ref);
 
@@ -107,7 +109,7 @@ pub(crate) fn get_runtime_type<'gc, 'm: 'gc>(
 }
 
 pub(crate) fn resolve_runtime_type<'gc, 'm: 'gc>(
-    ctx: &dyn ReflectionOps<'gc, 'm>,
+    ctx: &(impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
     obj: ObjectRef<'gc>,
 ) -> RuntimeType {
     obj.as_object(|instance| {
@@ -129,7 +131,7 @@ pub(crate) fn resolve_runtime_type<'gc, 'm: 'gc>(
 }
 
 pub(crate) fn resolve_runtime_method<'gc, 'm: 'gc>(
-    ctx: &dyn ReflectionOps<'gc, 'm>,
+    ctx: &(impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
     obj: ObjectRef<'gc>,
 ) -> (MethodDescription, GenericLookup) {
     obj.as_object(|instance| {
@@ -153,7 +155,7 @@ pub(crate) fn resolve_runtime_method<'gc, 'm: 'gc>(
 }
 
 pub(crate) fn resolve_runtime_field<'gc, 'm: 'gc>(
-    ctx: &dyn ReflectionOps<'gc, 'm>,
+    ctx: &(impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
     obj: ObjectRef<'gc>,
 ) -> (FieldDescription, GenericLookup) {
     obj.as_object(|instance| {
@@ -195,7 +197,7 @@ pub(crate) fn make_runtime_type(res_ctx: &ResolutionContext, t: &MethodType) -> 
             BaseType::String => RuntimeType::String,
             BaseType::Type { source, .. } => {
                 let (ut, generics) = decompose_type_source::<MethodType>(source);
-                let td = res_ctx.locate_type(ut);
+                let td = res_ctx.locate_type(ut).expect("failed to locate type");
                 if generics.is_empty() {
                     RuntimeType::Type(td)
                 } else {
@@ -235,7 +237,7 @@ pub(crate) fn make_runtime_type(res_ctx: &ResolutionContext, t: &MethodType) -> 
 }
 
 pub(crate) fn get_runtime_method_index<'gc, 'm: 'gc>(
-    ctx: &dyn ReflectionOps<'gc, 'm>,
+    ctx: &mut (impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
     method: MethodDescription,
     lookup: GenericLookup,
 ) -> u16 {
@@ -267,7 +269,7 @@ pub(crate) fn get_runtime_method_index<'gc, 'm: 'gc>(
 }
 
 pub(crate) fn get_runtime_field_index<'gc, 'm: 'gc>(
-    ctx: &dyn ReflectionOps<'gc, 'm>,
+    ctx: &mut (impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
     field: FieldDescription,
     lookup: GenericLookup,
 ) -> u16 {
@@ -299,11 +301,11 @@ pub(crate) fn get_runtime_field_index<'gc, 'm: 'gc>(
 }
 
 pub(crate) fn get_runtime_method_obj<'gc, 'm: 'gc>(
-    ctx: &mut dyn ReflectionOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
+    ctx: &mut (impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
     method: MethodDescription,
     lookup: GenericLookup,
 ) -> ObjectRef<'gc> {
+    let gc = ctx.gc();
     if let Some(obj) = ctx
         .reflection()
         .method_objs_read()
@@ -321,8 +323,8 @@ pub(crate) fn get_runtime_method_obj<'gc, 'm: 'gc>(
         "DotnetRs.MethodInfo"
     };
 
-    let rt = ctx.loader().corlib_type(class_name);
-    let rt_obj = ctx.new_object(rt);
+    let rt = ctx.loader().corlib_type(class_name).expect("reflection type not found");
+    let rt_obj = ctx.new_object(rt).expect("Failed to create reflection object");
     let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
     ctx.register_new_object(&obj_ref);
 
@@ -341,11 +343,11 @@ pub(crate) fn get_runtime_method_obj<'gc, 'm: 'gc>(
 }
 
 pub(crate) fn get_runtime_field_obj<'gc, 'm: 'gc>(
-    ctx: &mut dyn ReflectionOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
+    ctx: &mut (impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
     field: FieldDescription,
     lookup: GenericLookup,
 ) -> ObjectRef<'gc> {
+    let gc = ctx.gc();
     if let Some(obj) = ctx
         .reflection()
         .field_objs_read()
@@ -356,8 +358,8 @@ pub(crate) fn get_runtime_field_obj<'gc, 'm: 'gc>(
 
     let index = get_runtime_field_index(ctx, field, lookup.clone()) as usize;
 
-    let rt = ctx.loader().corlib_type("DotnetRs.FieldInfo");
-    let rt_obj = ctx.new_object(rt);
+    let rt = ctx.loader().corlib_type("DotnetRs.FieldInfo").expect("FieldInfo not found");
+    let rt_obj = ctx.new_object(rt).expect("Failed to create FieldInfo object");
     let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
     ctx.register_new_object(&obj_ref);
 

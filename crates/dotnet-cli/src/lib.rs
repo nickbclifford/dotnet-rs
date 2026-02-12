@@ -9,7 +9,7 @@
 //! - `multithreaded-gc`: Enables stop-the-world coordinated garbage collection across
 //!   multiple thread-local arenas. Depends on `multithreading`.
 use clap::Parser;
-use dotnet_assemblies::static_res_from_file;
+use dotnet_assemblies::try_static_res_from_file;
 use dotnet_types::{TypeDescription, members::MethodDescription};
 use dotnet_vm::{self as vm, ExecutorResult};
 use dotnetdll::prelude::*;
@@ -32,7 +32,13 @@ pub struct Args {
 pub fn run_cli() -> ExitCode {
     let args = Args::parse();
 
-    let resolution = static_res_from_file(args.entrypoint);
+    let resolution = match try_static_res_from_file(args.entrypoint) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error loading entry point: {}", e);
+            return ExitCode::from(1);
+        }
+    };
 
     let entry_method = match resolution.entry_point {
         Some(EntryPoint::Method(m)) => m,
@@ -40,7 +46,13 @@ pub fn run_cli() -> ExitCode {
         None => panic!("expected input module to have an entry point, received one without"),
     };
 
-    let loader = dotnet_assemblies::AssemblyLoader::new(args.assemblies);
+    let loader = match dotnet_assemblies::AssemblyLoader::new(args.assemblies) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("Error initializing assembly loader: {}", e);
+            return ExitCode::from(1);
+        }
+    };
     let loader = Box::leak(Box::new(loader));
 
     #[allow(clippy::arc_with_non_send_sync)]
@@ -62,5 +74,9 @@ pub fn run_cli() -> ExitCode {
     match result {
         ExecutorResult::Exited(i) => ExitCode::from(i),
         ExecutorResult::Threw => todo!("pretty output for crashing on unhandled exception"),
+        ExecutorResult::Error(e) => {
+            eprintln!("Internal VM error: {}", e);
+            ExitCode::from(1)
+        }
     }
 }

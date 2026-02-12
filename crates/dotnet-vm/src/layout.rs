@@ -3,6 +3,7 @@ use dotnet_types::{
     TypeDescription,
     generics::{ConcreteType, GenericLookup},
     members::FieldDescription,
+    error::TypeResolutionError,
 };
 use dotnet_value::layout::{
     ArrayLayoutManager, FieldKey, FieldLayout, FieldLayoutManager, GcDesc, HasLayout,
@@ -53,7 +54,7 @@ impl LayoutFactory {
         layout: Layout,
         base_size: usize,
         base_alignment: usize,
-    ) -> FieldLayoutManager {
+    ) -> Result<FieldLayoutManager, TypeResolutionError> {
         let mut mapping = std::collections::HashMap::new();
         let mut gc_desc = GcDesc::default();
         let total_size;
@@ -140,9 +141,9 @@ impl LayoutFactory {
                 for (owner, name, o, layout) in fields {
                     max_alignment = max_alignment.max(layout.alignment());
                     match o {
-                        None => panic!(
-                            "explicit field layout requires all fields to have defined offsets"
-                        ),
+                        None => return Err(TypeResolutionError::InvalidLayout(
+                            "explicit field layout requires all fields to have defined offsets".to_string()
+                        )),
                         Some(o) => {
                             // Add base size to the explicit offset
                             let actual_offset = base_size + o;
@@ -167,16 +168,14 @@ impl LayoutFactory {
                                             type_name, name, actual_offset, prev_start, prev_end
                                         );
                                     } else {
-                                        panic!(
-                                            "explicit field layout overlaps reference type fields in type '{}'. Field '{}' (offset {}) overlaps with previous field (range {}-{}). Layout: {:?}, Prev Layout: {:?}",
+                                        return Err(TypeResolutionError::InvalidLayout(format!(
+                                            "explicit field layout overlaps reference type fields in type '{}'. Field '{}' (offset {}) overlaps with previous field (range {}-{}).",
                                             type_name,
                                             name,
                                             actual_offset,
                                             prev_start,
-                                            prev_end,
-                                            layout,
-                                            prev_layout
-                                        );
+                                            prev_end
+                                        )));
                                     }
                                 }
                             }
@@ -206,15 +205,15 @@ impl LayoutFactory {
         }
 
         if total_size > 0x1000_0000 {
-            panic!("massive field layout detected: {} bytes", total_size);
+            return Err(TypeResolutionError::MassiveAllocation(format!("massive field layout detected: {} bytes", total_size)));
         }
 
-        FieldLayoutManager {
+        Ok(FieldLayoutManager {
             fields: mapping,
             total_size,
             alignment: max_alignment,
             gc_desc,
-        }
+        })
     }
 
     fn collect_fields(
@@ -223,7 +222,7 @@ impl LayoutFactory {
         predicate: &mut dyn FnMut(&Field) -> bool,
         metrics: Option<&RuntimeMetrics>,
         include_base: bool,
-    ) -> FieldLayoutManager {
+    ) -> Result<FieldLayoutManager, TypeResolutionError> {
         let ancestors: Vec<_> = context.get_ancestors(td).collect();
 
         // Build layout hierarchically: first compute base class layout, then add derived fields
@@ -236,7 +235,7 @@ impl LayoutFactory {
                 base_generics
                     .iter()
                     .map(|t| context.make_concrete(*t))
-                    .collect(),
+                    .collect::<Result<Vec<_>, _>>()?,
             );
             let base_ctx = ResolutionContext {
                 generics: &new_lookup,
@@ -255,7 +254,7 @@ impl LayoutFactory {
                 predicate,
                 metrics,
                 include_base,
-            ))
+            )?)
         } else {
             None
         };
@@ -280,8 +279,8 @@ impl LayoutFactory {
                     parent: td,
                     field_resolution: td.resolution,
                     field: f,
-                });
-                type_layout_with_metrics(t, context, metrics)
+                })?;
+                type_layout_with_metrics(t, context, metrics)?
             };
 
             current_type_fields.push((td, f.name.as_ref(), f.offset, layout));
@@ -293,7 +292,7 @@ impl LayoutFactory {
             td.definition().flags.layout,
             base_size,
             base_alignment,
-        );
+        )?;
 
         // Add all base class fields to the result
         if let Some(base_layout) = base_layout {
@@ -304,10 +303,13 @@ impl LayoutFactory {
             result.gc_desc.merge(&base_layout.gc_desc);
         }
 
-        result
+        Ok(result)
     }
 
-    pub fn instance_fields(td: TypeDescription, context: &ResolutionContext) -> FieldLayoutManager {
+    pub fn instance_fields(
+        td: TypeDescription,
+        context: &ResolutionContext,
+    ) -> Result<FieldLayoutManager, TypeResolutionError> {
         Self::instance_fields_with_metrics(td, context, None)
     }
 
@@ -315,37 +317,40 @@ impl LayoutFactory {
         td: TypeDescription,
         context: &ResolutionContext,
         metrics: Option<&RuntimeMetrics>,
-    ) -> Arc<FieldLayoutManager> {
+    ) -> Result<Arc<FieldLayoutManager>, TypeResolutionError> {
         let key = (td, context.generics.clone());
 
         if let Some(cached) = context.caches.instance_field_layout_cache.get(&key) {
             if let Some(m) = metrics {
                 m.record_instance_field_layout_cache_hit();
             }
-            return Arc::clone(&cached);
+            return Ok(Arc::clone(&cached));
         }
 
         if let Some(m) = metrics {
             m.record_instance_field_layout_cache_miss();
         }
-        let result = Arc::new(Self::instance_fields_with_metrics(td, context, metrics));
+        let result = Arc::new(Self::instance_fields_with_metrics(td, context, metrics)?);
         context
             .caches
             .instance_field_layout_cache
             .insert(key, Arc::clone(&result));
-        result
+        Ok(result)
     }
 
     pub fn instance_fields_with_metrics(
         td: TypeDescription,
         context: &ResolutionContext,
         metrics: Option<&RuntimeMetrics>,
-    ) -> FieldLayoutManager {
+    ) -> Result<FieldLayoutManager, TypeResolutionError> {
         let context = context.for_type(td);
         Self::collect_fields(td, &context, &mut |f| !f.static_member, metrics, true)
     }
 
-    pub fn static_fields(td: TypeDescription, context: &ResolutionContext) -> FieldLayoutManager {
+    pub fn static_fields(
+        td: TypeDescription,
+        context: &ResolutionContext,
+    ) -> Result<FieldLayoutManager, TypeResolutionError> {
         Self::static_fields_with_metrics(td, context, None)
     }
 
@@ -353,7 +358,7 @@ impl LayoutFactory {
         td: TypeDescription,
         context: &ResolutionContext,
         metrics: Option<&RuntimeMetrics>,
-    ) -> FieldLayoutManager {
+    ) -> Result<FieldLayoutManager, TypeResolutionError> {
         let context = context.for_type(td);
         Self::collect_fields(td, &context, &mut |f| f.static_member, metrics, false)
     }
@@ -362,7 +367,7 @@ impl LayoutFactory {
         element: ConcreteType,
         length: usize,
         context: &ResolutionContext,
-    ) -> ArrayLayoutManager {
+    ) -> Result<ArrayLayoutManager, TypeResolutionError> {
         Self::create_array_layout_with_metrics(element, length, context, None)
     }
 
@@ -371,24 +376,27 @@ impl LayoutFactory {
         length: usize,
         context: &ResolutionContext,
         metrics: Option<&RuntimeMetrics>,
-    ) -> ArrayLayoutManager {
-        let element_layout = type_layout_with_metrics(element, context, metrics);
+    ) -> Result<ArrayLayoutManager, TypeResolutionError> {
+        let element_layout = type_layout_with_metrics(element, context, metrics)?;
         // Defensive check for massive allocations (e.g. from corrupted metadata/stack)
         if length > 0x4000_0000 || (length > 0 && element_layout.size() > usize::MAX / length) {
-            panic!(
+            return Err(TypeResolutionError::MassiveAllocation(format!(
                 "massive array allocation attempt: length={}, element_size={}",
                 length,
                 element_layout.size()
-            );
+            )));
         }
-        ArrayLayoutManager {
+        Ok(ArrayLayoutManager {
             element_layout,
             length,
-        }
+        })
     }
 }
 
-pub fn type_layout(t: ConcreteType, context: &ResolutionContext) -> Arc<LayoutManager> {
+pub fn type_layout(
+    t: ConcreteType,
+    context: &ResolutionContext,
+) -> Result<Arc<LayoutManager>, TypeResolutionError> {
     type_layout_with_metrics(t, context, None)
 }
 
@@ -396,32 +404,32 @@ pub fn type_layout_with_metrics(
     t: ConcreteType,
     context: &ResolutionContext,
     metrics: Option<&RuntimeMetrics>,
-) -> Arc<LayoutManager> {
-    let t = context.normalize_type(t);
+) -> Result<Arc<LayoutManager>, TypeResolutionError> {
+    let t = context.normalize_type(t)?;
 
     if let Some(cached) = context.caches.layout_cache.get(&t) {
         if let Some(m) = metrics {
             m.record_layout_cache_hit();
         }
-        return Arc::clone(&cached);
+        return Ok(Arc::clone(&cached));
     }
 
     if let Some(m) = metrics {
         m.record_layout_cache_miss();
     }
-    let result = Arc::new(type_layout_internal(t.clone(), context, metrics));
+    let result = Arc::new(type_layout_internal(t.clone(), context, metrics)?);
     context.caches.layout_cache.insert(t, Arc::clone(&result));
-    result
+    Ok(result)
 }
 
 fn type_layout_internal(
     t: ConcreteType,
     context: &ResolutionContext,
     metrics: Option<&RuntimeMetrics>,
-) -> LayoutManager {
+) -> Result<LayoutManager, TypeResolutionError> {
     let mut context = context.clone();
     context.resolution = t.resolution();
-    match t.get() {
+    Ok(match t.get() {
         BaseType::Boolean | BaseType::UInt8 => Scalar::UInt8.into(),
         BaseType::Int8 => Scalar::Int8.into(),
         BaseType::Char | BaseType::UInt16 => Scalar::UInt16.into(),
@@ -440,10 +448,10 @@ fn type_layout_internal(
         } => {
             let mut type_generics = vec![];
             let t = match source {
-                TypeSource::User(u) => context.locate_type(*u),
+                TypeSource::User(u) => context.locate_type(*u)?,
                 TypeSource::Generic { base, parameters } => {
                     type_generics = parameters.clone();
-                    context.locate_type(*base)
+                    context.locate_type(*base)?
                 }
             };
 
@@ -456,16 +464,16 @@ fn type_layout_internal(
                 || name == "System.Runtime.CompilerServices.ByReference`1"
                 || name == "System.Runtime.CompilerServices.ReadOnlyByReference`1"
             {
-                return Scalar::ManagedPtr.into();
+                return Ok(Scalar::ManagedPtr.into());
             }
 
             let new_lookup = GenericLookup::new(type_generics);
             let ctx = context.with_generics(&new_lookup);
 
             if let Some(inner) = t.is_enum() {
-                (*type_layout_with_metrics(ctx.make_concrete(inner), &ctx, metrics)).clone()
+                (*type_layout_with_metrics(ctx.make_concrete(inner)?, &ctx, metrics)?).clone()
             } else {
-                LayoutFactory::instance_fields_with_metrics(t, &ctx, metrics).into()
+                LayoutFactory::instance_fields_with_metrics(t, &ctx, metrics)?.into()
             }
         }
         BaseType::Type { .. }
@@ -473,6 +481,5 @@ fn type_layout_internal(
         | BaseType::String
         | BaseType::Vector(_, _)
         | BaseType::Array(_, _) => Scalar::ObjectRef.into(),
-        // note that arrays with specified sizes are still objects, not value types
-    }
+    })
 }

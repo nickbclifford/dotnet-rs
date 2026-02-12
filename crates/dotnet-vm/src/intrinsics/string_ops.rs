@@ -4,7 +4,6 @@ use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
 };
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     StackValue,
     object::{HeapStorage, Object, ObjectRef},
@@ -22,12 +21,11 @@ use std::{
 #[dotnet_intrinsic("bool System.String::Equals(string)")]
 pub fn intrinsic_string_equals<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let b_val = ctx.pop(gc);
-    let a_val = ctx.pop(gc);
+    let b_val = ctx.pop();
+    let a_val = ctx.pop();
 
     let res = match (a_val, b_val) {
         (StackValue::ObjectRef(ObjectRef(None)), StackValue::ObjectRef(ObjectRef(None))) => true,
@@ -51,7 +49,7 @@ pub fn intrinsic_string_equals<'gc, 'm: 'gc>(
         _ => false,
     };
 
-    ctx.push_i32(gc, if res { 1 } else { 0 });
+    ctx.push_i32(if res { 1 } else { 0 });
     StepResult::Continue
 }
 
@@ -60,29 +58,28 @@ pub fn intrinsic_string_equals<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static string System.String::FastAllocateString(int, IntPtr)")]
 pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
     let len = if method.method.signature.parameters.len() == 1 {
-        let i = ctx.pop_i32(gc);
+        let i = ctx.pop_i32();
         if i < 0 {
-            return ctx.throw_by_name(gc, "System.OverflowException");
+            return ctx.throw_by_name("System.OverflowException");
         }
         i as usize
     } else {
         // Overload with MethodTable* as first param
-        let i = ctx.pop_isize(gc);
-        ctx.pop(gc); // pop method table pointer
+        let i = ctx.pop_isize();
+        let _ = ctx.pop(); // pop method table pointer
         if i < 0 {
-            return ctx.throw_by_name(gc, "System.OverflowException");
+            return ctx.throw_by_name("System.OverflowException");
         }
         i as usize
     };
 
     // Defensive check: limit string size to 512MB characters
     if len > 0x2000_0000 {
-        return ctx.throw_by_name(gc, "System.OutOfMemoryException");
+        return ctx.throw_by_name("System.OutOfMemoryException");
     }
 
     // Check GC safe point before allocating large strings
@@ -92,7 +89,7 @@ pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc>(
     }
 
     let value = CLRString::new(vec![0u16; len]);
-    ctx.push_string(gc, value);
+    ctx.push_string(value);
     StepResult::Continue
 }
 
@@ -100,11 +97,10 @@ pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("void System.String::.ctor(char[])")]
 pub fn intrinsic_string_ctor_char_array<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let arg = ctx.pop(gc);
+    let arg = ctx.pop();
     let chars: Vec<u16> = match arg {
         StackValue::ObjectRef(ObjectRef(Some(handle))) => {
             let obj = handle.borrow();
@@ -126,7 +122,7 @@ pub fn intrinsic_string_ctor_char_array<'gc, 'm: 'gc>(
     };
 
     let value = CLRString::new(chars);
-    ctx.push_string(gc, value);
+    ctx.push_string(value);
     StepResult::Continue
 }
 
@@ -134,11 +130,10 @@ pub fn intrinsic_string_ctor_char_array<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("void System.String::.ctor(char*)")]
 pub fn intrinsic_string_ctor_char_ptr<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let arg = ctx.pop(gc);
+    let arg = ctx.pop();
     let ptr = match arg {
         StackValue::NativeInt(p) => p as *const u16,
         StackValue::Int32(p) => p as usize as *const u16,
@@ -166,7 +161,7 @@ pub fn intrinsic_string_ctor_char_ptr<'gc, 'm: 'gc>(
         CLRString::new(Vec::new())
     };
 
-    ctx.push_string(gc, value);
+    ctx.push_string(value);
     StepResult::Continue
 }
 
@@ -174,14 +169,13 @@ pub fn intrinsic_string_ctor_char_ptr<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("char System.String::get_Chars(int)")]
 pub fn intrinsic_string_get_chars<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let index = ctx.pop_i32(gc);
-    let val = ctx.pop(gc);
-    let value = with_string!(ctx, gc, val, |s| s[index as usize]);
-    ctx.push_i32(gc, value as i32);
+    let index = ctx.pop_i32();
+    let val = ctx.pop();
+    let value = with_string!(ctx, val, |s| s[index as usize]);
+    ctx.push_i32(value as i32);
     StepResult::Continue
 }
 
@@ -189,13 +183,12 @@ pub fn intrinsic_string_get_chars<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("int System.String::get_Length()")]
 pub fn intrinsic_string_get_length<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let val = ctx.pop(gc);
-    let len = with_string!(ctx, gc, val, |s| s.len());
-    ctx.push_i32(gc, len as i32);
+    let val = ctx.pop();
+    let len = with_string!(ctx, val, |s| s.len());
+    ctx.push_i32(len as i32);
     StepResult::Continue
 }
 
@@ -205,13 +198,12 @@ pub fn intrinsic_string_get_length<'gc, 'm: 'gc>(
 )]
 pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let span2 = ctx.pop_value_type(gc);
-    let span1 = ctx.pop_value_type(gc);
-    let span0 = ctx.pop_value_type(gc);
+    let span2 = ctx.pop_value_type();
+    let span1 = ctx.pop_value_type();
+    let span0 = ctx.pop_value_type();
 
     fn char_span_into_str(span: Object) -> Vec<u16> {
         span_to_slice(span, 2)
@@ -231,7 +223,7 @@ pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
     }
 
     let value = CLRString::new(data0.into_iter().chain(data1).chain(data2).collect());
-    ctx.push_string(gc, value);
+    ctx.push_string(value);
     StepResult::Continue
 }
 
@@ -239,19 +231,18 @@ pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("int System.String::GetHashCodeOrdinalIgnoreCase()")]
 pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let val = ctx.pop(gc);
+    let val = ctx.pop();
     let mut h = DefaultHasher::new();
-    let value = with_string!(ctx, gc, val, |s| String::from_utf16_lossy(s)
+    let value = with_string!(ctx, val, |s| String::from_utf16_lossy(s)
         .to_uppercase()
         .into_bytes());
     value.hash(&mut h);
     let code = h.finish();
 
-    ctx.push_i32(gc, code as i32);
+    ctx.push_i32(code as i32);
     StepResult::Continue
 }
 
@@ -261,13 +252,13 @@ pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("char& System.String::GetRawStringData()")]
 pub fn intrinsic_string_get_raw_data<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let val = ctx.pop(gc);
-    let ptr = with_string!(ctx, gc, val, |s| s.as_ptr() as *mut u8);
-    ctx.push_ptr(gc, ptr, ctx.loader().corlib_type("System.Char"), false);
+    let val = ctx.pop();
+    let ptr = with_string!(ctx, val, |s| s.as_ptr() as *mut u8);
+    let char_type = vm_try!(ctx.loader().corlib_type("System.Char"));
+    ctx.push_ptr(ptr, char_type, false);
     StepResult::Continue
 }
 
@@ -277,27 +268,25 @@ pub fn intrinsic_string_get_raw_data<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("int System.String::IndexOf(char, int)")]
 pub fn intrinsic_string_index_of<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
     let (c, start_at) = if method.method.signature.parameters.len() == 1 {
-        let c = ctx.pop_i32(gc);
+        let c = ctx.pop_i32();
         (c as u16, 0usize)
     } else {
-        let start_at = ctx.pop_i32(gc);
-        let c = ctx.pop_i32(gc);
+        let start_at = ctx.pop_i32();
+        let c = ctx.pop_i32();
         (c as u16, start_at as usize)
     };
 
-    let val = ctx.pop(gc);
-    let index = with_string!(ctx, gc, val, |s| s
+    let val = ctx.pop();
+    let index = with_string!(ctx, val, |s| s
         .iter()
         .skip(start_at)
         .position(|x| *x == c));
 
     ctx.push_i32(
-        gc,
         match index {
             None => -1,
             Some(i) => (i + start_at) as i32,
@@ -312,21 +301,20 @@ pub fn intrinsic_string_index_of<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("string System.String::Substring(int, int)")]
 pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
     let (start_at, length) = if method.method.signature.parameters.len() == 1 {
-        let start_at = ctx.pop_i32(gc);
+        let start_at = ctx.pop_i32();
         (start_at as usize, None)
     } else {
-        let length = ctx.pop_i32(gc);
-        let start_at = ctx.pop_i32(gc);
+        let length = ctx.pop_i32();
+        let start_at = ctx.pop_i32();
         (start_at as usize, Some(length as usize))
     };
 
-    let val = ctx.pop(gc);
-    let value = with_string!(ctx, gc, val, |s| {
+    let val = ctx.pop();
+    let value = with_string!(ctx, val, |s| {
         let sub = &s[start_at..];
         match length {
             None => sub.to_vec(),
@@ -334,7 +322,7 @@ pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
         }
     });
 
-    ctx.push_string(gc, CLRString::new(value));
+    ctx.push_string(CLRString::new(value));
     StepResult::Continue
 }
 
@@ -342,11 +330,10 @@ pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static bool System.String::IsNullOrEmpty(string)")]
 pub fn intrinsic_string_is_null_or_empty<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let str_val = ctx.pop(gc);
+    let str_val = ctx.pop();
     let is_null_or_empty = match &str_val {
         StackValue::ObjectRef(ObjectRef(None)) => true,
         StackValue::ObjectRef(ObjectRef(Some(obj))) => {
@@ -358,7 +345,7 @@ pub fn intrinsic_string_is_null_or_empty<'gc, 'm: 'gc>(
         }
         _ => panic!("System.String::IsNullOrEmpty called on invalid stack value"),
     };
-    ctx.push_i32(gc, is_null_or_empty as i32);
+    ctx.push_i32(is_null_or_empty as i32);
     StepResult::Continue
 }
 
@@ -366,14 +353,13 @@ pub fn intrinsic_string_is_null_or_empty<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static bool System.String::IsNullOrWhiteSpace(string)")]
 pub fn intrinsic_string_is_null_or_white_space<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let str_val = ctx.pop(gc);
+    let str_val = ctx.pop();
     let is_null_or_white_space = match &str_val {
         StackValue::ObjectRef(ObjectRef(None)) => true,
-        _ => with_string!(ctx, gc, str_val, |s| {
+        _ => with_string!(ctx, str_val, |s| {
             s.iter().all(|&c| {
                 char::from_u32(c as u32)
                     .map(|c| c.is_whitespace())
@@ -381,26 +367,24 @@ pub fn intrinsic_string_is_null_or_white_space<'gc, 'm: 'gc>(
             })
         }),
     };
-    ctx.push_i32(gc, is_null_or_white_space as i32);
+    ctx.push_i32(is_null_or_white_space as i32);
     StepResult::Continue
 }
 
 #[dotnet_intrinsic_field("static string System.String::Empty")]
 pub fn intrinsic_field_string_empty<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _field: FieldDescription,
     _type_generics: Arc<[ConcreteType]>,
     _is_address: bool,
 ) -> StepResult {
-    ctx.push_string(gc, CLRString::new(vec![]));
+    ctx.push_string(CLRString::new(vec![]));
     StepResult::Continue
 }
 
 #[dotnet_intrinsic_field("int System.String::_stringLength")]
 pub fn intrinsic_field_string_length<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _field: FieldDescription,
     _type_generics: Arc<[ConcreteType]>,
     is_address: bool,
@@ -408,11 +392,10 @@ pub fn intrinsic_field_string_length<'gc, 'm: 'gc>(
     if is_address {
         panic!("taking address of _stringLength is not supported");
     }
+    let val = ctx.pop();
+    let len = with_string!(ctx, val, |s| s.len());
 
-    let val = ctx.pop(gc);
-    let len = with_string!(ctx, gc, val, |s| s.len());
-
-    ctx.push_i32(gc, len as i32);
+    ctx.push_i32(len as i32);
     StepResult::Continue
 }
 
@@ -420,16 +403,15 @@ pub fn intrinsic_field_string_length<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static void System.String::CopyStringContent(string, int, string)")]
 pub fn intrinsic_string_copy_string_content<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let src_val = ctx.pop_obj(gc);
-    let dest_pos = ctx.pop_i32(gc);
-    let dest_val = ctx.pop_obj(gc);
+    let src_val = ctx.pop_obj();
+    let dest_pos = ctx.pop_i32();
+    let dest_val = ctx.pop_obj();
 
-    let src = with_string!(ctx, gc, StackValue::ObjectRef(src_val), |s| s.to_vec());
-    with_string_mut!(ctx, gc, StackValue::ObjectRef(dest_val), |dest| {
+    let src = with_string!(ctx, StackValue::ObjectRef(src_val), |s| s.to_vec());
+    with_string_mut!(ctx, StackValue::ObjectRef(dest_val), |dest| {
         let dest_pos = dest_pos as usize;
         let len = src.len();
         dest.as_mut_slice()[dest_pos..dest_pos + len].copy_from_slice(&src);

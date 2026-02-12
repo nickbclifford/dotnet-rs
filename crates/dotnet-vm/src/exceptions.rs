@@ -1,5 +1,5 @@
-use crate::{StepResult, StoreType, context::ResolutionContext, stack::ops::*, vm_error};
-use dotnet_types::generics::ConcreteType;
+use crate::{StepResult, StoreType, context::ResolutionContext, stack::ops::*};
+use dotnet_types::{error::TypeResolutionError, generics::ConcreteType};
 use dotnet_utils::{DebugStr, gc::GCHandle};
 use dotnet_value::{
     StackValue,
@@ -144,7 +144,7 @@ impl Debug for HandlerKind {
 pub fn parse<'a>(
     source: impl IntoIterator<Item = &'a body::Exception>,
     ctx: &ResolutionContext,
-) -> Vec<ProtectedSection> {
+) -> Result<Vec<ProtectedSection>, dotnet_types::error::TypeResolutionError> {
     let mut sections: HashMap<Range<usize>, Vec<Handler>> = HashMap::new();
     for exc in source {
         use body::ExceptionKind::*;
@@ -152,7 +152,7 @@ pub fn parse<'a>(
         let handler_range = exc.handler_offset..exc.handler_offset + exc.handler_length;
 
         let kind = match &exc.kind {
-            TypedException(t) => HandlerKind::Catch(ctx.make_concrete(t)),
+            TypedException(t) => HandlerKind::Catch(ctx.make_concrete(t)?),
             Filter { offset } => HandlerKind::Filter {
                 clause_offset: *offset,
             },
@@ -177,7 +177,7 @@ pub fn parse<'a>(
     // Sort sections such that inner blocks come before outer blocks.
     // This ensures that when searching for a handler, we find the most specific one first.
     v.sort_by_key(|s| (Reverse(s.instructions.start), s.instructions.end));
-    v
+    Ok(v)
 }
 
 pub struct ExceptionHandlingSystem;
@@ -238,7 +238,9 @@ impl ExceptionHandlingSystem {
             ));
         }
 
-        let exception_type = ctx.loader().corlib_type("System.Exception");
+        let exception_type = vm_try!(ctx
+            .loader()
+            .corlib_type("System.Exception"));
         exception.as_object(|obj| {
             if obj
                 .instance_storage
@@ -252,6 +254,8 @@ impl ExceptionHandlingSystem {
                     .instance_storage
                     .get_field_mut_local(exception_type, "_stackTraceString");
                 let val = StackValue::ObjectRef(str_obj);
+                // SAFETY: field_data is a valid mutable slice of the object's instance storage,
+                // and val is a valid StackValue::ObjectRef. StoreType matches the field type.
                 unsafe {
                     val.store(field_data.as_mut_ptr(), StoreType::Object);
                 }
@@ -317,12 +321,11 @@ impl ExceptionHandlingSystem {
                 {
                     match &handler.kind {
                         HandlerKind::Catch(t) => {
-                            let exc_type = ctx
-                                .current_context()
-                                .get_heap_description(exception.0.expect("throwing null"));
+                            let exc_ref = vm_try!(exception.0.ok_or(TypeResolutionError::InvalidHandle));
+                            let exc_type = vm_try!(ctx.current_context().get_heap_description(exc_ref));
                             let catch_type = t.clone();
 
-                            if ctx.current_context().is_a(exc_type.into(), catch_type) {
+                            if vm_try!(ctx.current_context().is_a(exc_type.into(), catch_type)) {
                                 // Match found! Start the unwind phase towards this handler.
                                 *ctx.exception_mode_mut() =
                                     ExceptionState::Unwinding(UnwindState {
@@ -369,7 +372,7 @@ impl ExceptionHandlingSystem {
                             frame.state.ip = *clause_offset;
                             frame.stack_height = 0;
                             frame.exception_stack.push(exception);
-                            ctx.push_obj(gc, exception);
+                            ctx.push_obj(exception);
 
                             return StepResult::Exception;
                         }
@@ -385,17 +388,19 @@ impl ExceptionHandlingSystem {
 
         let mut message = None;
         let mut stack_trace = None;
-        let exc_type = ctx
-            .current_context()
-            .get_heap_description(exception.0.expect("throwing null"));
+        let exc_ref = vm_try!(exception.0.ok_or(TypeResolutionError::InvalidHandle));
+        let exc_type = vm_try!(ctx.current_context().get_heap_description(exc_ref));
         let type_name = exc_type.type_name();
 
-        let exception_type = ctx.loader().corlib_type("System.Exception");
+        let exception_type = vm_try!(ctx
+            .loader()
+            .corlib_type("System.Exception"));
         exception.as_object(|obj| {
             if obj.instance_storage.has_field(exception_type, "_message") {
                 let message_bytes = obj
                     .instance_storage
                     .get_field_local(exception_type, "_message");
+                // SAFETY: message_bytes contains a valid ObjectRef from the object's storage.
                 let message_ref = unsafe { ObjectRef::read_branded(&message_bytes, gc) };
                 if let Some(msg_inner) = message_ref.0 {
                     let storage = &msg_inner.borrow().storage;
@@ -411,6 +416,7 @@ impl ExceptionHandlingSystem {
                 let st_bytes = obj
                     .instance_storage
                     .get_field_local(exception_type, "_stackTraceString");
+                // SAFETY: st_bytes contains a valid ObjectRef from the object's storage.
                 let st_ref = unsafe { ObjectRef::read_branded(&st_bytes, gc) };
                 if let Some(st_inner) = st_ref.0 {
                     let storage = &st_inner.borrow().storage;
@@ -460,7 +466,7 @@ impl ExceptionHandlingSystem {
     fn unwind<'gc, 'm: 'gc>(
         &self,
         ctx: &mut dyn VesOps<'gc, 'm>,
-        gc: GCHandle<'gc>,
+        _gc: GCHandle<'gc>,
         exception: Option<ObjectRef<'gc>>,
         target: UnwindTarget,
         cursor: HandlerAddress,
@@ -595,7 +601,7 @@ impl ExceptionHandlingSystem {
             // If we have finished all sections in this frame and it's not the target frame,
             // we pop it and continue unwinding in the caller.
             if frame_index > target_frame {
-                ctx.unwind_frame(gc);
+                ctx.unwind_frame();
             }
         }
 
@@ -619,7 +625,7 @@ impl ExceptionHandlingSystem {
                 // Push the exception object onto the stack for the catch/filter handler.
                 let exception = exception.expect("Target handler reached but no exception present");
                 frame.exception_stack.push(exception);
-                ctx.push_obj(gc, exception);
+                ctx.push_obj(exception);
 
                 // Continue execution at the handler
                 StepResult::Exception

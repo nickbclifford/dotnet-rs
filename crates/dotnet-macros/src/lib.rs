@@ -1,3 +1,8 @@
+//! # dotnet-macros
+//!
+//! Procedural macros for the dotnet-rs VM.
+//! Includes `#[dotnet_intrinsic]` for BCL methods and `#[dotnet_instruction]` for CIL instructions.
+
 extern crate proc_macro;
 
 use dotnet_macros_core::{ParsedFieldSignature, ParsedSignature};
@@ -157,7 +162,7 @@ impl InstructionMapping {
         match self {
             InstructionMapping::Unit(variant) => {
                 quote! {
-                    Instruction::#variant => #func_name(ctx, gc)
+                    Instruction::#variant => #func_name(ctx)
                 }
             }
             InstructionMapping::Tuple(variant, bindings) => {
@@ -170,7 +175,7 @@ impl InstructionMapping {
                     }
                 });
                 quote! {
-                    Instruction::#variant(#(#bindings_iter),*) => #func_name(ctx, gc, #(#calls),*)
+                    Instruction::#variant(#(#bindings_iter),*) => #func_name(ctx, #(#calls),*)
                 }
             }
             InstructionMapping::Struct(variant, fields) => {
@@ -198,7 +203,7 @@ impl InstructionMapping {
                 });
 
                 quote! {
-                    Instruction::#variant { #(#patterns,)* .. } => #func_name(ctx, gc, #(#calls),*)
+                    Instruction::#variant { #(#patterns,)* .. } => #func_name(ctx, #(#calls),*)
                 }
             }
         }
@@ -258,7 +263,7 @@ pub fn dotnet_instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
     let variant_name = variant_ident.to_string();
 
     let args = &func.sig.inputs;
-    let extra_args = args.iter().skip(2);
+    let extra_args = args.iter().skip(1);
     let mut extra_arg_info = Vec::new();
     let mut extra_arg_names = Vec::new();
     for arg in extra_args {
@@ -354,7 +359,6 @@ pub fn dotnet_instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
 
         pub(crate) fn #wrapper_name<'gc, 'm: 'gc>(
             ctx: &mut dyn crate::stack::ops::VesOps<'gc, 'm>,
-            gc: dotnet_utils::gc::GCHandle<'gc>,
             instr: &Instruction
         ) -> crate::StepResult {
             match instr {
@@ -426,7 +430,7 @@ mod tests {
         let mapping = InstructionMapping::Unit(Ident::new("Nop", proc_macro2::Span::call_site()));
         let arm = mapping.to_match_arm(&func_name, &[]);
         let expected = quote! {
-            Instruction::Nop => my_func(ctx, gc)
+            Instruction::Nop => my_func(ctx)
         };
         assert_eq!(arm.to_string(), expected.to_string());
 
@@ -441,7 +445,7 @@ mod tests {
         );
         let arm = mapping.to_match_arm(&func_name, &extra_arg_info);
         let expected = quote! {
-            Instruction::LoadIndirect(p0) => my_func(ctx, gc, *p0)
+            Instruction::LoadIndirect(p0) => my_func(ctx, *p0)
         };
         assert_eq!(arm.to_string(), expected.to_string());
 
@@ -457,7 +461,7 @@ mod tests {
             });
         let arm = mapping.to_match_arm(&func_name, &extra_arg_info);
         let expected = quote! {
-            Instruction::LoadField { param0: p0, .. } => my_func(ctx, gc, *p0)
+            Instruction::LoadField { param0: p0, .. } => my_func(ctx, *p0)
         };
         assert_eq!(arm.to_string(), expected.to_string());
     }

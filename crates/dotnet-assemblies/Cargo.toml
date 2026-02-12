@@ -9,4 +9,5 @@ dotnet-types = { workspace = true }
 dotnet-utils = { workspace = true, default-features = false }
 dotnetdll = { workspace = true }
 gc-arena = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
