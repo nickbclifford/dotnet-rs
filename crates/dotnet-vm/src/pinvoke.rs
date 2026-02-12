@@ -8,7 +8,6 @@ use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
 };
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     StackValue,
     layout::{FieldLayoutManager, LayoutManager, Scalar},
@@ -323,7 +322,6 @@ impl TempBuffer {
 pub fn external_call<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     method: MethodDescription,
-    gc: GCHandle<'gc>,
 ) {
     let Some(p) = &method.method.pinvoke else {
         unreachable!()
@@ -393,10 +391,10 @@ pub fn external_call<'gc, 'm: 'gc>(
 
             let exception_type = ctx.loader().corlib_type(exc_name);
             let exception_instance = ctx.current_context().new_object(exception_type);
-            let exception = ObjectRef::new(gc, HeapStorage::Obj(exception_instance));
+            let exception = ObjectRef::new(ctx.gc(), HeapStorage::Obj(exception_instance));
 
-            let message_ref = StackValue::string(gc, CLRString::from(msg.as_str())).as_object_ref();
-            exception.as_object_mut(gc, |obj| {
+            let message_ref = StackValue::string(ctx.gc(), CLRString::from(msg.as_str())).as_object_ref();
+            exception.as_object_mut(ctx.gc(), |obj| {
                 if obj.instance_storage.has_field(exception_type, "_message") {
                     let mut field = obj
                         .instance_storage
@@ -405,8 +403,8 @@ pub fn external_call<'gc, 'm: 'gc>(
                 }
             });
 
-            let _ = ctx.throw(gc, exception);
-            let _ = ctx.pop_multiple(gc, arg_count);
+            let _ = ctx.throw(exception);
+            let _ = ctx.pop_multiple(arg_count);
             return;
         }
     };
@@ -559,7 +557,7 @@ pub fn external_call<'gc, 'm: 'gc>(
             }
             do_write_back();
             vm_trace_interop!(ctx, "POST-CALL", "(void) {}::{}", module, function);
-            let _ = ctx.pop_multiple(gc, arg_count);
+            let _ = ctx.pop_multiple(arg_count);
         }
         Some(p) => {
             let ParameterType::Value(t) = p else {
@@ -664,8 +662,8 @@ pub fn external_call<'gc, 'm: 'gc>(
                 rest => todo!("marshalling not yet supported for {:?}", rest),
             };
             vm_trace!(ctx, "-- returning {v:?} --");
-            let _ = ctx.pop_multiple(gc, arg_count);
-            ctx.push(gc, v);
+            let _ = ctx.pop_multiple(arg_count);
+            ctx.push(v);
         }
     }
     vm_trace_interop!(ctx, "RETURN", "Returned from {}::{}", module, function);

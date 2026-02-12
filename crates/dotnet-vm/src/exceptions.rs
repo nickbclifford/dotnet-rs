@@ -371,7 +371,7 @@ impl ExceptionHandlingSystem {
                             frame.state.ip = *clause_offset;
                             frame.stack_height = 0;
                             frame.exception_stack.push(exception);
-                            ctx.push_obj(gc, exception);
+                            ctx.push_obj(exception);
 
                             return StepResult::Exception;
                         }
@@ -464,7 +464,7 @@ impl ExceptionHandlingSystem {
     fn unwind<'gc, 'm: 'gc>(
         &self,
         ctx: &mut dyn VesOps<'gc, 'm>,
-        gc: GCHandle<'gc>,
+        _gc: GCHandle<'gc>,
         exception: Option<ObjectRef<'gc>>,
         target: UnwindTarget,
         cursor: HandlerAddress,
@@ -599,7 +599,7 @@ impl ExceptionHandlingSystem {
             // If we have finished all sections in this frame and it's not the target frame,
             // we pop it and continue unwinding in the caller.
             if frame_index > target_frame {
-                ctx.unwind_frame(gc);
+                ctx.unwind_frame();
             }
         }
 
@@ -623,7 +623,7 @@ impl ExceptionHandlingSystem {
                 // Push the exception object onto the stack for the catch/filter handler.
                 let exception = exception.expect("Target handler reached but no exception present");
                 frame.exception_stack.push(exception);
-                ctx.push_obj(gc, exception);
+                ctx.push_obj(exception);
 
                 // Continue execution at the handler
                 StepResult::Exception

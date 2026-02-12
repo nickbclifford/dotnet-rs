@@ -2,7 +2,7 @@
 
 > **Document Purpose**: A comprehensive review identifying code quality improvements and a phased refactoring plan for future AI agents to implement.
 >
-> **Date**: 2026-02-08
+> **Date**: 2026-02-08 (Last updated: 2026-02-09)
 > **Codebase Stats**: 99 Rust files, ~27,600 lines across 8 crates
 
 ---
@@ -27,29 +27,57 @@ The dotnet-rs project is a well-structured Rust implementation of a .NET runtime
 
 ### Key Findings
 
-| Category               | Status                                                     | Priority |
-|------------------------|------------------------------------------------------------|----------|
-| **Code Organization**  | 14 files exceed 500 LOC; largest is 1,088 lines            | High     |
-| **Error Handling**     | 563 `unwrap()`/`expect()` calls; no unified error type     | High     |
-| **Documentation**      | 430+ doc comments, 44 SAFETY comments for 250+ unsafe blocks | Medium   |
-| **Trait Design**       | ReflectionOps has 18 methods; traits could be decomposed   | Medium   |
-| **C# Support Library** | Well-written with modern C# idioms                         | Low      |
-| **Testing**            | Good fixture-based approach; some gaps in unit tests       | Medium   |
+| Category               | Status                                                           | Priority |
+|------------------------|------------------------------------------------------------------|----------|
+| **Code Organization**  | Large files split in Phase 2; continued improvements needed      | Medium   |
+| **Error Handling**     | Error type hierarchy added in Phase 2.4; migration ongoing       | High     |
+| **Documentation**      | 430+ doc comments, 44 SAFETY comments for 250+ unsafe blocks     | Medium   |
+| **Trait Design**       | ReflectionOps split in Phase 2.1; further decomposition possible | Low      |
+| **C# Support Library** | Well-designed; focus should be runtime integration only          | Low      |
+| **Testing**            | Good fixture-based approach; some gaps in unit tests             | Medium   |
 
-### Critical Issues Requiring Immediate Attention
+### Implementation Progress (Phases 1-2.4 Complete)
 
-1. **`stack/context.rs` (592 lines)**: God Object has been mostly split; needs final cleanup and build fix
-2. **`intrinsics/reflection/types.rs`**: Contains a 534-line match statement that's hard to maintain
-3. **Panic-heavy code**: Many `expect()` calls could crash the VM instead of returning proper errors
-4. **Unsafe blocks lacking documentation**: Only 17% of unsafe blocks have SAFETY comments
+**✅ Phase 1 (Complete):**
+- SAFETY comments added to critical unsafe blocks
+- Let-else patterns adopted for cleaner early returns
+- Module-level documentation added
+- `#[must_use]` attributes added to critical types
+
+**✅ Phase 2.1 (Complete):**
+- `ReflectionOps` split into `LoaderOps`, `StaticsOps`, `ThreadOps`
+- All tests pass across feature combinations
+
+**✅ Phase 2.2 (Complete):**
+- `stack/context.rs` split into multiple impl files
+- Unused imports cleaned up
+- All feature combinations verified
+
+**✅ Phase 2.3 (Complete):**
+- `runtime_type_intrinsic_call()` mega-function extracted into handlers
+- 534-line match statement refactored
+- Tests verified across all features
+
+**✅ Phase 2.4 (Complete):**
+- VM error type hierarchy implemented using `thiserror`
+- `StepResult::Error` variant added
+- `pop_safe` method added for graceful stack underflow handling
+- High-priority panics converted to errors
+
+### Critical Issues Requiring Attention
+
+1. **GC Handle Threading**: Current pervasive `gc` parameter passing needs careful review (see Phase 3.1 analysis)
+2. **Error Migration**: ~400+ remaining `unwrap()`/`expect()` calls need categorization and conversion
+3. **Unsafe Documentation**: Still ~200+ unsafe blocks lacking SAFETY comments
 
 ### Positive Aspects
 
 - ✅ Clippy-clean codebase (no warnings)
-- ✅ Clear crate separation with defined responsibilities  
+- ✅ Clear crate separation with defined responsibilities
 - ✅ Well-designed trait hierarchy (`VesOps`, `StackOps`, etc.)
 - ✅ Modern C# support library using file-scoped namespaces and nullable reference types
 - ✅ Comprehensive integration test framework with auto-generated test runners
+- ✅ Structured error handling foundation now in place
 
 ---
 
@@ -59,48 +87,45 @@ The dotnet-rs project is a well-structured Rust implementation of a .NET runtime
 
 Files exceeding 500 lines that should be considered for splitting:
 
-| File                                           | Lines | Issue                                          | Recommended Action                                   |
-|------------------------------------------------|-------|------------------------------------------------|------------------------------------------------------|
-| `dotnet-vm/src/stack/context.rs`               | 592   | Core struct and VesOps implementation          | Further split VesOps if necessary                    |
-| `dotnet-vm/src/intrinsics/reflection/types.rs` | 1,088 | Single 534-line function with massive match    | Extract to dispatch table or individual handlers     |
-| `dotnet-vm/src/resolver.rs`                    | 947   | `ResolverService` has 28 methods               | Group related methods into sub-modules               |
-| `dotnet-vm/src/intrinsics/threading.rs`        | 773   | Many intrinsics in one file                    | Split by threading subsystem (Thread, Monitor, etc.) |
-| `dotnet-assemblies/src/lib.rs`                 | 759   | Mixed assembly loading and resolution          | Extract `AssemblyLoader` and `ResolutionHelper`      |
-| `dotnet-vm/src/tracer.rs`                      | 745   | Tracer logic interleaved with formatting       | Separate tracing core from output formatters         |
-| `dotnet-value/src/lib.rs`                      | 705   | `StackValue` + conversions + utilities         | Extract conversion logic to `conversions.rs`         |
-| `dotnet-value/src/object.rs`                   | 691   | Object types + heap storage + GC support       | Split into `object.rs`, `heap.rs`, `gc_support.rs`   |
-| `dotnet-vm/src/intrinsics/delegates.rs`        | 674   | Delegate intrinsics + multicast logic          | Separate `delegate_core.rs` and `multicast.rs`       |
-| `dotnet-vm/src/pinvoke.rs`                     | 672   | P/Invoke implementation                        | Group by P/Invoke category                           |
-| `dotnet-vm/src/exceptions.rs`                  | 646   | Exception handling state machine               | Well-structured; consider splitting only if grows    |
-| `dotnet-vm/src/memory/access.rs`               | 542   | Memory access patterns                         | Split read/write operations                          |
-| `dotnet-vm/src/threading/basic.rs`             | 540   | Threading primitives                           | Split into `thread_pool.rs`, `synchronization.rs`    |
-| `dotnet-vm/src/intrinsics/unsafe_ops.rs`       | 528   | System.Runtime.CompilerServices.Unsafe         | Consider grouping by operation type                  |
+| File                                           | Lines | Issue                                       | Status/Action                                        |
+|------------------------------------------------|-------|---------------------------------------------|------------------------------------------------------|
+| `dotnet-vm/src/stack/context.rs`               | 592   | Core struct and VesOps implementation       | ✅ Split in Phase 2.2                                 |
+| `dotnet-vm/src/intrinsics/reflection/types.rs` | 1,088 | Single 534-line function with massive match | ✅ Extracted in Phase 2.3                             |
+| `dotnet-vm/src/resolver.rs`                    | 947   | `ResolverService` has 28 methods            | Group related methods into sub-modules               |
+| `dotnet-vm/src/intrinsics/threading.rs`        | 773   | Many intrinsics in one file                 | Split by threading subsystem (Thread, Monitor, etc.) |
+| `dotnet-assemblies/src/lib.rs`                 | 759   | Mixed assembly loading and resolution       | Extract `AssemblyLoader` and `ResolutionHelper`      |
+| `dotnet-vm/src/tracer.rs`                      | 745   | Tracer logic interleaved with formatting    | Separate tracing core from output formatters         |
+| `dotnet-value/src/lib.rs`                      | 705   | `StackValue` + conversions + utilities      | Extract conversion logic to `conversions.rs`         |
+| `dotnet-value/src/object.rs`                   | 691   | Object types + heap storage + GC support    | Split into `object.rs`, `heap.rs`, `gc_support.rs`   |
+| `dotnet-vm/src/intrinsics/delegates.rs`        | 674   | Delegate intrinsics + multicast logic       | Separate `delegate_core.rs` and `multicast.rs`       |
+| `dotnet-vm/src/pinvoke.rs`                     | 672   | P/Invoke implementation                     | Group by P/Invoke category                           |
+| `dotnet-vm/src/exceptions.rs`                  | 646   | Exception handling state machine            | Well-structured; consider splitting only if grows    |
+| `dotnet-vm/src/memory/access.rs`               | 542   | Memory access patterns                      | Split read/write operations                          |
+| `dotnet-vm/src/threading/basic.rs`             | 540   | Threading primitives                        | Split into `thread_pool.rs`, `synchronization.rs`    |
+| `dotnet-vm/src/intrinsics/unsafe_ops.rs`       | 528   | System.Runtime.CompilerServices.Unsafe      | Consider grouping by operation type                  |
 
-### Module Structure Issues
+### Module Structure Improvements
 
-**1. God Object Pattern: `VesContext`**
+**1. ~~God Object Pattern: `VesContext`~~ (Phase 2 Complete)**
 ```
-Location: crates/dotnet-vm/src/stack/context.rs
-Problem: VesContext implements StackOps, MemoryOps, ExceptionOps, ResolutionOps, 
-         PoolOps, RawMemoryOps, ReflectionOps, CallOps, and VesOps
-Impact: Changes to any trait require modifying this single 1,546-line file
-```
-
-**2. Overloaded `ReflectionOps` Trait**
-```
-Location: crates/dotnet-vm/src/stack/ops.rs (lines 147-192)
-Problem: 18 methods mixing reflection, loader access, static storage, and thread info
-Impact: Violates Single Responsibility; makes testing difficult
-Recommendation: Split into ReflectionOps, LoaderOps, StaticsOps
+Status: Split in Phase 2.2
+- VesContext trait implementations extracted to separate files
+- LoaderOps, StaticsOps, ThreadOps split from ReflectionOps in Phase 2.1
 ```
 
-**3. Mega-Function in Reflection Intrinsics**
+**2. ~~Overloaded `ReflectionOps` Trait~~ (Phase 2.1 Complete)**
 ```
-Location: crates/dotnet-vm/src/intrinsics/reflection/types.rs
-Function: runtime_type_intrinsic_call() - lines 115-649 (534 lines)
-Problem: Handles 30+ intrinsic method signatures in one giant match
-Impact: Difficult to test individual methods; merge conflicts likely
-Recommendation: Use dispatch table pattern matching the `#[dotnet_intrinsic]` system
+Status: Completed
+- Split into LoaderOps, StaticsOps, ThreadOps, and reduced ReflectionOps
+- All tests pass across feature combinations
+```
+
+**3. ~~Mega-Function in Reflection Intrinsics~~ (Phase 2.3 Complete)**
+```
+Status: Completed
+- runtime_type_intrinsic_call() extracted into individual handler functions
+- Match arms refactored for clarity
+- Dispatch table consideration deferred (can add later with no behavior change)
 ```
 
 **4. Mixed Concerns in `dotnet-assemblies`**
@@ -136,7 +161,7 @@ However, there is **tight coupling within `dotnet-vm`**:
 
 ### Modern Rust Features Not Yet Utilized
 
-**1. Let-else (Rust 1.65+)**
+**1. Let-else (Rust 1.65+)** ✅ Applied in Phase 1
 Replace verbose match statements for extracting from Option/Result:
 ```rust
 // Before (common pattern in codebase)
@@ -145,7 +170,7 @@ let value = match some_option {
     None => return StepResult::Exception,
 };
 
-// After
+// After (Phase 1 complete)
 let Some(value) = some_option else {
     return StepResult::Exception;
 };
@@ -226,9 +251,11 @@ Some loops use index iteration where `iter_mut()` would be cleaner.
 **3. Early Returns in Loops**
 Several `for` loops could use `Iterator::find()` or `Iterator::position()`.
 
-### GC Handle Pattern Issue
+### GC Handle Pattern Analysis
 
-Currently, `GCHandle<'gc>` is passed as the first parameter to almost every method:
+**IMPORTANT**: `GCHandle<'gc>` is part of `gc-arena`'s lifetime-based branding system. It represents a **single mutation operation** within an arena and enforces invariants through Rust's borrow checker.
+
+Currently, `GCHandle<'gc>` is passed as a parameter to almost every method:
 ```rust
 fn push_i32(&mut self, gc: GCHandle<'gc>, value: i32);
 fn pop_i32(&mut self, gc: GCHandle<'gc>) -> i32;
@@ -236,148 +263,135 @@ fn push_obj(&mut self, gc: GCHandle<'gc>, value: ObjectRef<'gc>);
 // ... 40+ more methods
 ```
 
-**Recommended Improvement**: Store `gc` in the context:
-```rust
-// Before: 2 params everywhere
-ctx.push_i32(gc, value);
-ctx.pop_i32(gc);
+**Why gc is passed explicitly:**
+1. **Lifetime branding** - Objects allocated with `gc` are branded with the `'gc` lifetime
+2. **Mutation tracking** - Each `GCHandle` represents a distinct mutation "epoch"
+3. **Borrow checker enforcement** - Prevents use of objects after GC might have moved them
 
-// After: gc stored in context
-ctx.push_i32(value);
-ctx.pop_i32();
-// Or provide gc() accessor when needed for allocations
-```
+**Status for Phase 3.1 (Removing GC Handle threading):**
 
-This would reduce parameter noise significantly but requires careful analysis of lifetime implications.
+The project has partially implemented the transition of storing `GCHandle` directly in `VesContext`. While initially considered high risk, this path was chosen to significantly reduce boilerplate and improve readability.
+
+**Implementation Progress:**
+- `VesContext` has been updated to include `gc: GCHandle<'gc>`.
+- Core traits (`StackOps`, `VesOps`, etc.) now feature `_v2` method variants that omit the explicit `GCHandle` parameter.
+- Many instruction handlers have been migrated to use these `_v2` methods internally.
+
+**Safety Considerations:**
+- `VesContext` is a short-lived stack-allocated struct used during instruction execution steps.
+- Storing the `GCHandle` (which is a `Copy` wrapper around the mutation context) within `VesContext` is functionally equivalent to passing it as a separate argument to every method, provided the context itself does not outlive the mutation epoch.
+- Current usage patterns in `ExecutionEngine` ensure `VesContext` is created and destroyed within a single GC-safe point boundary.
 
 ---
 
 ## Error Handling Patterns
 
-### Current State Analysis
+### Current State Analysis (Post-Phase 2.4)
 
-**Total panic-prone calls: 563** (includes `unwrap()`, `expect()`, `panic!`)
+**Phase 2.4 accomplishments:**
+- ✅ VM error type hierarchy created using `thiserror`
+- ✅ `VmError` with variants: `AssemblyLoad`, `TypeResolution`, `Execution`, `Memory`
+- ✅ `StepResult::Error` variant added to execution flow
+- ✅ `ExecutorResult::VmError` added to top-level executor
+- ✅ Stack underflow converted from panic to error
+- ✅ `pop_safe` method added for graceful stack operations
+- ✅ Common instruction macros updated to use safe pop operations
 
-Distribution by crate:
+**Remaining work: ~400+ panic-prone calls still exist**
 
-| Crate               | Count | Severity | Notes                     |
-|---------------------|-------|----------|---------------------------|
-| `dotnet-vm`         | ~350  | High     | Core execution paths      |
-| `dotnet-assemblies` | ~80   | High     | Assembly loading can fail |
-| `dotnet-value`      | ~50   | Medium   | Value conversions         |
-| `dotnet-types`      | ~40   | Medium   | Type resolution           |
-| `dotnet-macros`     | ~30   | Low      | Compile-time only         |
-| `dotnet-cli`        | ~10   | Low      | Entry point               |
+Distribution by crate (estimated):
 
-**Categories of panics found:**
+| Crate               | Count | Severity | Priority   |
+|---------------------|-------|----------|------------|
+| `dotnet-vm`         | ~280  | High     | Phase 3.3  |
+| `dotnet-assemblies` | ~80   | High     | Phase 3.3  |
+| `dotnet-value`      | ~40   | Medium   | Later      |
+| `dotnet-types`      | ~30   | Medium   | Later      |
+| `dotnet-macros`     | ~10   | Low      | Keep as-is |
+| `dotnet-cli`        | ~10   | Low      | Keep as-is |
 
-1. **Legitimate Invariant Assertions** (~100)
-   ```rust
-   // OK: Internal invariant that indicates bug if violated
-   .expect("Method should always have a body at this point")
-   ```
+### Panic vs. Error Return Guidelines
 
-2. **Should Be User-Facing Errors** (~200)
-   ```rust
-   // BAD: Could fail with malformed assembly
-   Resolution::parse(byte_slice, ReadOptions::default()).unwrap()
-   // BAD: Could fail if type not found
-   res.definition().type_definition_index(index).unwrap()
-   ```
-
-3. **Missing Error Propagation** (~150)
-   ```rust
-   // BAD: File operations should return Result
-   let file_data = std::fs::read(&path).expect("failed to read file");
-   ```
-
-4. **Lazy Placeholders** (~100)
-   ```rust
-   // TODO markers that panic
-   throw new NotImplementedException();  // in C# stubs
-   unimplemented!()  // in Rust
-   ```
-
-### Proposed Error Type Strategy
-
-**Phase 1: Create VM Error Type Hierarchy**
-```rust
-// In dotnet-vm/src/error.rs
-#[derive(Debug, thiserror::Error)]
-pub enum VmError {
-    #[error("Assembly loading failed: {0}")]
-    AssemblyLoad(#[from] AssemblyLoadError),
-    
-    #[error("Type resolution failed: {0}")]
-    TypeResolution(#[from] TypeResolutionError),
-    
-    #[error("Method execution failed: {0}")]
-    Execution(#[from] ExecutionError),
-    
-    #[error("Memory access violation: {0}")]
-    Memory(#[from] MemoryError),
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum ExecutionError {
-    #[error("Stack underflow")]
-    StackUnderflow,
-    
-    #[error("Invalid instruction pointer: {0}")]
-    InvalidIP(usize),
-    
-    #[error("Type mismatch: expected {expected}, got {actual}")]
-    TypeMismatch { expected: String, actual: String },
-    
-    #[error("Null reference")]
-    NullReference,
-}
-```
-
-**Phase 2: Extend StepResult**
-```rust
-pub enum StepResult {
-    Continue,
-    Jump(usize),
-    FramePushed,
-    Return,
-    Exception,
-    MethodThrew,
-    Yield,
-    // NEW: For internal VM errors that aren't .NET exceptions
-    Error(VmError),
-}
-```
-
-**Phase 3: Gradual Migration**
-1. Add `#[must_use]` attributes to prevent ignored Results
-2. Replace `unwrap()` with `?` in functions returning `Result`
-3. Use `ok_or_else()` for Option-to-Result conversions
-4. Add context with `.context()` (from anyhow) or custom error variants
-
-### Critical vs. Non-Critical Panics
-
-**Keep as Panics (Invariants):**
-- Internal consistency checks in GC code
+**MUST PANIC (Internal Invariants):**
+- Programming errors that indicate bugs in the VM implementation
 - Unreachable code paths (use `unreachable!()`)
-- Programming errors that indicate bugs, not user input issues
+- Internal GC consistency checks
+- Data structure invariants that should never be violated
 
-**Convert to Errors:**
-- File I/O operations
-- Assembly parsing
-- Type resolution from metadata
-- Method dispatch failures
-- Field/array access bounds
-- Stack operations (underflow/overflow)
+Examples:
+```rust
+// OK: Internal invariant that indicates bug if violated
+.expect("Frame stack should never be empty in Return handler")
 
-**Specific High-Priority Conversions:**
+// OK: Unreachable due to type system guarantees
+unreachable!("Validated TypeDef index out of bounds")
+```
 
-| Location                 | Current                              | Should Be                                   |
-|--------------------------|--------------------------------------|---------------------------------------------|
-| `assemblies/lib.rs:82`   | `Resolution::parse().unwrap()`       | `Result<Resolution, ParseError>`            |
-| `assemblies/lib.rs:700`  | `File::read().unwrap_or_else(panic)` | `Result<Vec<u8>, IoError>`                  |
-| `vm/resolver.rs` various | `.expect("type not found")`          | `Option<T>` or `Result<T, ResolutionError>` |
-| `vm/dispatch/mod.rs`     | `.expect("method not found")`        | Return `StepResult::Error`                  |
+**MUST RETURN ERROR (External Inputs):**
+- Any operation that depends on assembly metadata content
+- Stack operations that could underflow/overflow
+- Memory bounds checks
+- Method/type/field resolution from user code
+- File I/O and assembly loading
+- Null dereference in managed code
+- Type mismatches in instruction execution
+
+Examples:
+```rust
+// GOOD: Stack underflow is user error (Phase 2.4 complete)
+ctx.pop_safe(gc).ok_or(ExecutionError::StackUnderflow)?
+
+// GOOD: Type not found in metadata
+resolution.find_type(name).ok_or(TypeResolutionError::NotFound(name))?
+
+// BAD: Should return error, not panic
+let file_data = std::fs::read(&path).expect("failed to read file");
+```
+
+**GRAY AREA (Requires Judgment):**
+- Operations that "should" succeed if earlier validation passed
+- Cached lookups where cache miss indicates inconsistency
+- **Guideline**: If triggered by malformed assembly → Error. If indicates VM bug → Panic.
+
+### Migration Strategy for Phase 3.3
+
+**Categories of remaining panics:**
+
+1. **Assembly Loading & Parsing** (~80 in `dotnet-assemblies`)
+   - All should become `AssemblyLoadError`
+   - Priority: High
+
+2. **Type/Method Resolution** (~100 in `dotnet-vm/resolver.rs`)
+   - Should become `TypeResolutionError`
+   - Priority: High
+
+3. **Instruction Execution** (~100 in `dotnet-vm/instructions/`)
+   - Most should become `ExecutionError`
+   - Some internal invariants can stay as panics
+   - Priority: High (requires careful categorization)
+
+4. **Memory Operations** (~50 in `dotnet-vm/memory/`)
+   - Bounds checks → `MemoryError`
+   - Internal heap invariants → panic
+   - Priority: Medium
+
+5. **Legitimate Invariants** (~100 scattered)
+   - Keep as `expect()` or `debug_assert!`/`assert!`
+   - Add clear comments explaining invariant
+   - Priority: Document only
+
+### Proposed Error Type Strategy (Phase 2.4 Complete)
+
+**✅ Phase 2.4: VM Error Type Hierarchy (Implemented)**
+
+The error hierarchy is now implemented in `crates/dotnet-vm/src/error.rs`:
+- `VmError` enum with variants for `AssemblyLoad`, `TypeResolution`, `Execution`, `Memory`
+- Sub-error types for each category using `thiserror`
+- `StepResult::Error(VmError)` variant added
+- `ExecutorResult::VmError(VmError)` added to top-level executor
+- Stack underflow and other high-priority panics converted
+
+See `crates/dotnet-vm/src/error.rs` for complete implementation.
 
 ---
 
@@ -385,151 +399,53 @@ pub enum StepResult {
 
 ### Trait Hierarchy Analysis
 
-The current trait hierarchy in `stack/ops.rs`:
+The current trait hierarchy in `stack/ops.rs` (Post-Phase 2.1):
 
 ```
-VesOps (26 methods) 
+VesOps (26 methods)
     : StackOps (27 methods)
-    + MemoryOps (8 methods) 
+    + MemoryOps (8 methods)
     + ExceptionOps (7 methods)
     + ResolutionOps (4 methods)
     + PoolOps (1 method)
     + RawMemoryOps (3 methods)
-    + ReflectionOps (18 methods)
+    + LoaderOps (3 methods)         ← Split from ReflectionOps in Phase 2.1
+    + StaticsOps (2 methods)        ← Split from ReflectionOps in Phase 2.1
+    + ThreadOps (1 method)          ← Split from ReflectionOps in Phase 2.1
+    + ReflectionOps (13 methods)    ← Reduced from 18 methods
     + CallOps (5 methods)
 ```
 
-**Strengths:**
-- Clear separation of concerns by operation type
-- Enables trait-based testing with mock implementations
-- Allows instruction handlers to specify minimal bounds
+**Phase 2.1 improvements:**
+- ✅ `ReflectionOps` decomposed into focused traits
+- ✅ Loader access separated from reflection
+- ✅ Static storage management isolated
+- ✅ Thread ID access separated
 
-**Weaknesses:**
-- `VesOps` has 26 methods, making implementations verbose
-- `ReflectionOps` mixes too many concerns (see below)
-- All traits require `GCHandle` parameter threading
+**Remaining concerns:**
+- `StackOps` still has 27 methods (could be split further)
+- `VesOps` still has 26 methods (mostly coordination)
+- All traits still require `GCHandle` parameter threading (see Phase 3.1 analysis)
 
-### Recommended Trait Refactoring
-
-**Split `ReflectionOps` (18 methods) into focused traits:**
-
-```rust
-// Current ReflectionOps methods that should be separate:
-
-// 1. New trait: LoaderOps (accessing assembly loader)
-trait LoaderOps<'m> {
-    fn loader(&self) -> &'m AssemblyLoader;
-    fn resolver(&self) -> ResolverService<'m>;
-    fn shared(&self) -> &Arc<SharedGlobalState<'m>>;
-}
-
-// 2. New trait: StaticsOps (static storage management)
-trait StaticsOps<'gc> {
-    fn statics(&self) -> &StaticStorageManager;
-    fn initialize_static_storage(&mut self, gc: GCHandle<'gc>, 
-        description: TypeDescription, generics: GenericLookup) -> StepResult;
-}
-
-// 3. New trait: ThreadOps (thread-specific operations)
-trait ThreadOps {
-    fn thread_id(&self) -> usize;
-}
-
-// 4. Reduced ReflectionOps (pure reflection)
-trait ReflectionOps<'gc, 'm> {
-    fn pre_initialize_reflection(&mut self, gc: GCHandle<'gc>);
-    fn get_runtime_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> ObjectRef<'gc>;
-    fn get_runtime_method_obj(&mut self, gc: GCHandle<'gc>, ...) -> ObjectRef<'gc>;
-    fn get_runtime_field_obj(&mut self, gc: GCHandle<'gc>, ...) -> ObjectRef<'gc>;
-    fn resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> RuntimeType;
-    fn resolve_runtime_method(&self, obj: ObjectRef<'gc>) -> (MethodDescription, GenericLookup);
-    fn resolve_runtime_field(&self, obj: ObjectRef<'gc>) -> (FieldDescription, GenericLookup);
-    fn reflection(&self) -> ReflectionRegistry<'_, 'gc>;
-}
-```
-
-### GCHandle Parameter Passing
-
-**Current Pattern (pervasive throughout codebase):**
-```rust
-pub trait StackOps<'gc, 'm: 'gc> {
-    fn push(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>);
-    fn push_i32(&mut self, gc: GCHandle<'gc>, value: i32);
-    fn push_i64(&mut self, gc: GCHandle<'gc>, value: i64);
-    fn pop(&mut self, gc: GCHandle<'gc>) -> StackValue<'gc>;
-    fn pop_i32(&mut self, gc: GCHandle<'gc>) -> i32;
-    // ... 22 more methods all taking gc
-}
-```
-
-**Problem:** The `gc` handle is passed to ~90% of all methods, creating visual noise and making signatures harder to read.
-
-**Analysis of why `gc` is passed everywhere:**
-1. `ObjectRef::new(gc, ...)` - needs gc to brand objects
-2. Tracing/debugging that logs with gc context
-3. GC-safe point checks during operations
-
-**Proposed Solutions:**
-
-**Option A: Store gc in context (Recommended)**
-```rust
-pub struct VesContext<'a, 'gc, 'm> {
-    gc: GCHandle<'gc>,  // Add field
-    // ... existing fields
-}
-
-impl<'a, 'gc, 'm> VesContext<'a, 'gc, 'm> {
-    pub fn gc(&self) -> GCHandle<'gc> { self.gc }
-}
-
-// Then simplify traits:
-pub trait StackOps<'gc, 'm: 'gc> {
-    fn push(&mut self, value: StackValue<'gc>);
-    fn push_i32(&mut self, value: i32);
-    // gc accessed via self.gc() when needed internally
-}
-```
-
-**Option B: Use a context wrapper for GC operations**
-```rust
-// Keep gc separate but provide a scoped API
-ctx.with_gc(gc, |gctx| {
-    gctx.push_i32(value);
-    gctx.pop_i32()
-});
-```
-
-**Migration Strategy:**
-1. Add `gc` field to `VesContext`
-2. Create new method signatures without `gc` parameter
-3. Deprecate old signatures
-4. Update all call sites (can be automated with sed/ripgrep)
-5. Remove deprecated methods
-
-### Large Trait Problem
-
-**Traits exceeding 10 methods:**
-
-| Trait           | Methods | Recommendation                                        |
-|-----------------|---------|-------------------------------------------------------|
-| `StackOps`      | 27      | Split into `PushOps`, `PopOps`, `LocalOps`, `SlotOps` |
-| `VesOps`        | 26      | Consider making some methods default implementations  |
-| `ReflectionOps` | 18      | Split as shown above                                  |
+### Potential Future Trait Refactoring (Phase 3.2)
 
 **StackOps Decomposition Proposal:**
 ```rust
 // Basic push/pop
 trait EvalStackOps<'gc> {
-    fn push(&mut self, value: StackValue<'gc>);
-    fn pop(&mut self) -> StackValue<'gc>;
-    fn dup(&mut self);
+    fn push(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>);
+    fn pop(&mut self, gc: GCHandle<'gc>) -> StackValue<'gc>;
+    fn pop_safe(&mut self, gc: GCHandle<'gc>) -> Option<StackValue<'gc>>;  // Added in Phase 2.4
+    fn dup(&mut self, gc: GCHandle<'gc>);
     fn peek(&self) -> Option<StackValue<'gc>>;
 }
 
-// Typed push/pop helpers
+// Typed push/pop helpers (default implementations)
 trait TypedStackOps<'gc>: EvalStackOps<'gc> {
-    fn push_i32(&mut self, value: i32) { self.push(StackValue::Int32(value)) }
-    fn pop_i32(&mut self) -> i32 { /* ... */ }
+    fn push_i32(&mut self, gc: GCHandle<'gc>, value: i32) {
+        self.push(gc, StackValue::Int32(value))
+    }
+    fn pop_i32(&mut self, gc: GCHandle<'gc>) -> i32 { /* ... */ }
     // Default implementations reduce boilerplate
 }
 
@@ -564,12 +480,12 @@ This decomposition allows instruction handlers to request only the capabilities 
 
 **Modules lacking `//!` documentation:**
 
-| Module                        | Lines  | Priority | Notes                         |
-|-------------------------------|--------|----------|-------------------------------|
-| `dotnet-assemblies/src/`      | 800+   | High     | Assembly loading and resolution |
-| `dotnet-utils/src/`           | 300+   | Medium   | Shared utility primitives     |
-| `dotnet-macros/src/`          | 450+   | Medium   | Procedural macro definitions  |
-| `dotnet-macros-core/src/`     | 200+   | Medium   | Macro expansion logic         |
+| Module                    | Lines | Priority | Notes                           |
+|---------------------------|-------|----------|---------------------------------|
+| `dotnet-assemblies/src/`  | 800+  | High     | Assembly loading and resolution |
+| `dotnet-utils/src/`       | 300+  | Medium   | Shared utility primitives       |
+| `dotnet-macros/src/`      | 450+  | Medium   | Procedural macro definitions    |
+| `dotnet-macros-core/src/` | 200+  | Medium   | Macro expansion logic           |
 
 **Recommended module docs template:**
 ```rust
@@ -656,70 +572,77 @@ unsafe impl Sync for TypeDescription {}
 
 ## C# Support Library Review
 
-### Current BCL Coverage
+### Design Philosophy
+
+**Core Principle:** The support library should contain **only** stubs for BCL features that require tight runtime integration (intrinsics, internal VM state access, or unsafe memory operations). All other BCL functionality should be provided by referencing Microsoft's official libraries when possible.
 
 **Location:** `crates/dotnet-assemblies/src/support/`
 
-**Files and their purpose:**
+**Current stubs (all require runtime integration):**
 
-| File                     | Lines | Purpose                                                  |
-|--------------------------|-------|----------------------------------------------------------|
-| `Array.cs`               | 236   | `System.Array` stub with IList, ICloneable               |
-| `RuntimeType.cs`         | 210   | Custom `DotnetRs.RuntimeType` implementing `System.Type` |
-| `Span.cs`                | 170   | `System.Span<T>` and `ReadOnlySpan<T>`                   |
-| `Comparers/Equality.cs`  | 100   | `EqualityComparer<T>` for collections                    |
-| `MulticastDelegate.cs`   | 70    | Delegate invocation list support                         |
-| `MethodInfo.cs`          | 60    | `System.Reflection.MethodInfo` stub                      |
-| `ConstructorInfo.cs`     | 55    | `System.Reflection.ConstructorInfo` stub                 |
-| `FieldInfo.cs`           | 50    | `System.Reflection.FieldInfo` stub                       |
-| `Delegate.cs`            | 45    | Base delegate support                                    |
-| `RuntimeMethodHandle.cs` | 45    | Method handle wrapper                                    |
-| `RuntimeTypeHandle.cs`   | 40    | Type handle wrapper                                      |
-| `RuntimeFieldHandle.cs`  | 40    | Field handle wrapper                                     |
-| `Assembly.cs`            | 5     | Assembly representation                                  |
-| `Module.cs`              | 3     | Module stub                                              |
-| `StubAttribute.cs`       | 7     | `[Stub]` attribute for type replacement                  |
+| File                     | Lines | Purpose                                                  | Why Runtime Integration Required             |
+|--------------------------|-------|----------------------------------------------------------|----------------------------------------------|
+| `Array.cs`               | 236   | `System.Array` stub with IList, ICloneable               | Direct heap layout knowledge, GC interaction |
+| `RuntimeType.cs`         | 210   | Custom `DotnetRs.RuntimeType` implementing `System.Type` | VM type system bridge, metadata access       |
+| `Span.cs`                | 170   | `System.Span<T>` and `ReadOnlySpan<T>`                   | ByRef-like types, stack-only semantics       |
+| `Comparers/Equality.cs`  | 100   | `EqualityComparer<T>` for collections                    | Generic type introspection                   |
+| `MulticastDelegate.cs`   | 70    | Delegate invocation list support                         | Invocation list manipulation                 |
+| `MethodInfo.cs`          | 60    | `System.Reflection.MethodInfo` stub                      | VM method descriptor bridge                  |
+| `ConstructorInfo.cs`     | 55    | `System.Reflection.ConstructorInfo` stub                 | VM constructor descriptor bridge             |
+| `FieldInfo.cs`           | 50    | `System.Reflection.FieldInfo` stub                       | VM field descriptor bridge                   |
+| `Delegate.cs`            | 45    | Base delegate support                                    | Function pointer semantics                   |
+| `RuntimeMethodHandle.cs` | 45    | Method handle wrapper                                    | Opaque VM handle                             |
+| `RuntimeTypeHandle.cs`   | 40    | Type handle wrapper                                      | Opaque VM handle                             |
+| `RuntimeFieldHandle.cs`  | 40    | Field handle wrapper                                     | Opaque VM handle                             |
+| `Assembly.cs`            | 5     | Assembly representation                                  | VM assembly loader bridge                    |
+| `Module.cs`              | 3     | Module stub                                              | VM module bridge                             |
+| `StubAttribute.cs`       | 7     | `[Stub]` attribute for type replacement                  | Compile-time marker                          |
 
 **Well-implemented areas:**
 - ✅ Array operations (indexing, copying, enumerating)
-- ✅ Reflection basics (Type, MethodInfo, FieldInfo)
+- ✅ Reflection primitives (Type, MethodInfo, FieldInfo)
 - ✅ Span/ReadOnlySpan with proper memory semantics
 - ✅ Delegate and MulticastDelegate
 
-### Missing Critical APIs
+### What NOT to Add to Support Library
 
-**High Priority (frequently used in .NET code):**
+The following should be provided via Microsoft's official BCL assemblies, not custom stubs:
 
-1. **`System.String` operations**
-   - Currently handled via intrinsics, but no C# stub
-   - Missing: `Substring`, `IndexOf`, `Split`, `Join`
+**Do NOT implement (use Microsoft's libraries instead):**
 
-2. **`System.Collections.Generic`**
-   - `List<T>` - very commonly used
-   - `Dictionary<TKey, TValue>` - hash table
-   - `HashSet<T>`
+1. **`System.Collections.Generic`** - `List<T>`, `Dictionary<TKey, TValue>`, `HashSet<T>`
+   - ❌ Pure managed code, no runtime integration needed
+   - ✅ Use Microsoft's implementation from System.Private.CoreLib
 
-3. **`System.Linq`**
-   - `Enumerable` extension methods
-   - Critical for modern C# code
+2. **`System.Linq`** - `Enumerable` extension methods
+   - ❌ Pure managed code
+   - ✅ Use Microsoft's System.Linq
 
-4. **`System.Threading.Tasks`**
-   - `Task` and `Task<T>`
-   - `async/await` machinery
+3. **`System.Threading.Tasks`** - `Task`, `Task<T>`, async/await
+   - ❌ Complex state machine, but no special VM support needed (beyond thread intrinsics)
+   - ✅ Use Microsoft's implementation
 
-5. **`System.IO`**
-   - `Stream`, `MemoryStream`
-   - File operations (if supporting filesystem access)
+4. **`System.IO`** - `Stream`, `MemoryStream`, file operations
+   - ❌ P/Invoke based, no special VM semantics
+   - ✅ Use Microsoft's implementation
 
-**Medium Priority:**
+5. **`System.Numerics`** - `Vector<T>`, `BigInteger`
+   - ❌ SIMD intrinsics can be provided via intrinsic handlers
+   - ✅ Use Microsoft's implementation for the managed wrapper
 
-6. **Exception types beyond base**
-   - `ArgumentNullException`, `InvalidOperationException`, etc.
-   - Currently many throw `NotImplementedException`
+6. **Exception types** - `ArgumentNullException`, `InvalidOperationException`, etc.
+   - ❌ Pure managed types, no special VM support needed
+   - ✅ Use Microsoft's implementations
 
-7. **`System.Numerics`**
-   - `Vector<T>` for SIMD
-   - `BigInteger`
+7. **`System.String` operations** - `Substring`, `IndexOf`, `Split`, `Join`
+   - ❌ Currently handled via intrinsics, but most operations are pure managed
+   - ✅ Use Microsoft's implementation (intrinsics only for length, allocation, indexing)
+
+**Only add stubs when:**
+- Type requires `extern` methods that call VM intrinsics
+- Type requires access to VM internal state (GC, type system, reflection)
+- Type has special layout or lifetime semantics (ByRef-like types)
+- Microsoft's implementation is not available for the minimal profile being targeted
 
 ### Code Style Consistency
 
@@ -728,10 +651,9 @@ unsafe impl Sync for TypeDescription {}
 - ✅ Nullable reference types enabled
 - ✅ `ArgumentNullException.ThrowIfNull()` (C# 10+)
 - ✅ `ArgumentOutOfRangeException.ThrowIfNegative()` (C# 10+)
-- ✅ Primary constructors in some places
 - ✅ Expression-bodied members where appropriate
 
-**Areas for improvement:**
+**Areas for improvement (low priority):**
 
 1. **Inconsistent `NotImplementedException` usage**
    ```csharp
@@ -744,26 +666,10 @@ unsafe impl Sync for TypeDescription {}
 
 2. **Missing XML documentation**
    ```csharp
-   // Current
-   public extern int Length { get; }
-   
-   // Better
+   // Better: Add XML doc comments
    /// <summary>Gets the total number of elements in the array.</summary>
    public extern int Length { get; }
    ```
-
-3. **Consider using `required` modifier (C# 11)**
-   For initialization-required properties in stubs
-
-4. **Consider `init` accessors** for immutable-after-construction properties
-
-### C# Modernization Opportunities
-
-The support library could benefit from:
-
-1. **Static abstract interface members (C# 11)** for numeric interfaces
-2. **Collection expressions (C# 12)** when implementing collection methods
-3. **Primary constructors (C# 12)** for simpler type definitions
 
 ---
 
@@ -781,17 +687,15 @@ The support library could benefit from:
 - ✅ Exception handling (throw, catch, finally, filter)
 - ✅ Struct layouts and value types
 - ✅ Unsafe operations and Span
+- ✅ Error handling paths (Phase 2.4 tests updated)
 
 **Under-tested areas:**
 
 | Area        | Current Tests | Recommended Additions              |
 |-------------|---------------|------------------------------------|
-| Collections | 0             | List, Dictionary operations        |
-| LINQ        | 0             | Basic query operations             |
-| Async/Await | 0             | Task-based async patterns          |
+| Edge cases  | Limited       | Stack underflow, overflow, NaN     |
 | Memory      | Partial       | Allocation patterns, large objects |
 | Interop     | Limited       | More P/Invoke scenarios            |
-| Edge cases  | Limited       | Overflow, NaN, infinity            |
 
 **Missing unit tests in Rust code:**
 
@@ -799,6 +703,7 @@ The support library could benefit from:
 2. **`dotnet-vm/src/layout.rs`** - Layout calculations could have pure unit tests
 3. **`dotnet-types/src/comparer.rs`** - Type comparison logic (526 lines, no tests)
 4. **`dotnet-value/src/`** - Value conversions could have isolated tests
+5. **`dotnet-vm/src/error.rs`** - Error conversion and propagation (Phase 2.4)
 
 ### Test Organization
 
@@ -818,12 +723,15 @@ crates/dotnet-cli/tests/
 - ✅ Automatic test generation from filenames (`build.rs`)
 - ✅ Clear naming convention: `<name>_<expected_exit_code>.cs`
 - ✅ Organized by feature area
+- ✅ Handles VM errors gracefully (Phase 2.4)
 
 **Improvement Opportunities:**
 
 1. **Add unit test modules to Rust crates**
    ```
    crates/dotnet-vm/src/
+   ├── error.rs
+   ├── error_tests.rs       # Add this
    ├── resolver.rs
    ├── resolver_tests.rs    # Add this
    ├── layout.rs
@@ -900,13 +808,12 @@ crates/dotnet-cli/tests/
 
 ### Suggested New Test Categories
 
-| Category       | Purpose             | Example Tests                            |
-|----------------|---------------------|------------------------------------------|
-| `edge_cases/`  | Boundary conditions | Max/min integers, empty arrays           |
-| `regression/`  | Bug fixes           | Tests for specific fixed issues          |
-| `performance/` | Timing-sensitive    | Tests with expected perf characteristics |
-| `stress/`      | High-load scenarios | Deep recursion, many allocations         |
-| `compat/`      | .NET compatibility  | Behavior matching CoreCLR                |
+| Category      | Purpose             | Example Tests                                      |
+|---------------|---------------------|----------------------------------------------------|
+| `edge_cases/` | Boundary conditions | Stack limits, empty arrays                         |
+| `regression/` | Bug fixes           | Tests for specific fixed issues                    |
+| `errors/`     | Error handling      | Tests expecting specific VmError types (Phase 2.4) |
+| `stress/`     | High-load scenarios | Deep recursion, many allocations                   |
 
 ---
 
@@ -1185,46 +1092,43 @@ These are significant refactors that touch many files.
 
 ---
 
-#### 3.1 Remove GC Handle Parameter Threading
+#### 3.1 Remove GC Handle Parameter Threading (CHECKPOINT)
 
-**Effort:** 1-2 weeks  
-**Risk:** High  
+**Effort:** 1-2 weeks
+**Risk:** High
 **Impact:** Nearly every file in dotnet-vm
+
+**Status (2026-02-10 - Checkpoint 8):**
+- ✅ **Phase 3.1 COMPLETE**: The removal of `GCHandle` parameters from `VesOps`, `EvaluationStack`, `external_call`, and instruction/intrinsic macros is finished and the codebase is clean.
+- ✅ **Massive Cleanup Finished**: All unused imports (`GCHandle`, `Mutation`) and unused variable assignments (`let gc = ctx.gc();`) flagged by clippy have been removed.
+- ✅ **Builds Passing**: `./check.sh` passes for all feature combinations without warnings.
+- ✅ **Verified Correctness**: All integration tests (87/87) passed successfully.
+
+**Next Actions for Next Agent:**
+1. Proceed to **Phase 3.2: Decompose `StackOps` Trait**.
 
 **Steps:**
 
-1. **Add `gc` field to `VesContext`**:
-   ```rust
-   pub struct VesContext<'a, 'gc, 'm> {
-       gc: GCHandle<'gc>,  // NEW
-       // ... existing fields
-   }
-   ```
+1. **Fix Trait Definition (Done):**
+   - ✅ Add `fn gc(&self) -> GCHandle<'gc>;` to `VesOps`.
 
-2. **Add `gc()` accessor**:
-   ```rust
-   impl VesContext {
-       pub fn gc(&self) -> GCHandle<'gc> { self.gc }
-   }
-   ```
+2. **Implement Missing Core Methods (Done):**
+   - ✅ `handle_return()`, `handle_exception()` implemented and renamed from `_v2`.
 
-3. **Create transitional API** - add new methods without `gc` param:
-   ```rust
-   // Old (keep for now)
-   fn push(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>);
-   // New
-   fn push_v2(&mut self, value: StackValue<'gc>);
-   ```
+3. **Update Macro Logic (Done):**
+   - ✅ `dotnet_instruction` updated to remove `GCHandle` from call generation.
+   - ✅ `InstructionHandler` type updated in registry.
+   - ✅ `with_string!` and `with_string_mut!` updated to use `ctx.gc()`.
 
-4. **Migrate call sites incrementally** by file/module
-
-5. **Update trait definitions** to remove `gc` parameter
-
-6. **Remove old methods** after all callers updated
-
-7. **Run full test suite** at each step
-
-**Alternative approach:** Use a feature flag to toggle between old/new API during migration.
+4. **Complete Instruction Handler Migration (Done):**
+   - ✅ All CIL instruction handlers (macro and manual) updated.
+5. **Fix Intrinsic Signatures (Done):**
+   - ✅ Function signatures and internal call sites updated.
+6. **Final API Cleanup (Done):**
+   - ✅ `_v2` suffixes removed.
+   - ✅ Cleanup of unused items finished.
+7. **Verify Safety (Done):**
+   - ✅ Run `./check.sh` after cleanup.
 
 ---
 
@@ -1410,6 +1314,7 @@ dotnet-cli (CLI entry point)
 **External dependencies:**
 - `dotnetdll` - .NET PE/metadata parsing (sister crate)
 - `gc-arena` - Garbage collection with `Arena`, `Gc`, `Collect` trait
+- `thiserror` - Error type derivation (added in Phase 2.4)
 - `phf` - Perfect hash functions for intrinsic dispatch
 - `log` - Logging facade
 - `parking_lot` - Efficient synchronization primitives
@@ -1436,5 +1341,5 @@ dotnet-cli (CLI entry point)
 
 ---
 
-*Document generated: 2026-02-08*  
-*Last updated: 2026-02-08*
+*Document generated: 2026-02-08*
+*Last updated: 2026-02-09 (Phase 2.4 complete)*

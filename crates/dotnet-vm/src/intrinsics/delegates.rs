@@ -13,7 +13,6 @@ use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
 };
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::{StackValue, object::ObjectRef};
 use dotnetdll::prelude::*;
 
@@ -51,7 +50,6 @@ pub fn is_delegate_type<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
 /// Try to dispatch a delegate runtime method. Returns Some(result) if handled.
 pub fn try_delegate_dispatch<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     lookup: &GenericLookup,
 ) -> Option<StepResult> {
@@ -67,17 +65,16 @@ pub fn try_delegate_dispatch<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
 
     let method_name = &*method.method.name;
     match method_name {
-        "Invoke" => Some(invoke_delegate(ctx, gc, method, lookup)),
+        "Invoke" => Some(invoke_delegate(ctx, method, lookup)),
         ".ctor" => None, // Constructor is handled by support library stub
-        "BeginInvoke" => Some(ctx.throw_by_name(gc, "System.NotSupportedException")),
-        "EndInvoke" => Some(ctx.throw_by_name(gc, "System.NotSupportedException")),
+        "BeginInvoke" => Some(ctx.throw_by_name("System.NotSupportedException")),
+        "EndInvoke" => Some(ctx.throw_by_name("System.NotSupportedException")),
         _ => None,
     }
 }
 
 fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
     invoke_method: MethodDescription,
     _lookup: &GenericLookup,
 ) -> StepResult {
@@ -85,7 +82,7 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
 
     // Stack order: [delegate_instance, arg0, arg1, ..., argN]
     // pop_multiple returns them in order they were on stack.
-    let args = ctx.pop_multiple(gc, num_invoke_args + 1);
+    let args = ctx.pop_multiple(num_invoke_args + 1);
 
     let delegate_ref = match &args[0] {
         StackValue::ObjectRef(r) => r,
@@ -93,7 +90,7 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
     };
 
     if delegate_ref.0.is_none() {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     // Check for multicast targets
@@ -152,10 +149,10 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
 
         // Push arguments back onto stack so call_frame can consume them
         for arg in &args {
-            ctx.push(gc, arg.clone());
+            ctx.push(arg.clone());
         }
 
-        ctx.call_frame(gc, method_info, _lookup.clone());
+        ctx.call_frame(method_info, _lookup.clone());
 
         // Set multicast state
         ctx.frame_stack_mut().current_frame_mut().multicast_state = Some(MulticastState {
@@ -195,28 +192,27 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
 
     // Push arguments back onto stack
     if target_method.method.signature.instance {
-        ctx.push(gc, StackValue::ObjectRef(target));
+        ctx.push(StackValue::ObjectRef(target));
     }
 
     for arg in &args[1..] {
-        ctx.push(gc, arg.clone());
+        ctx.push(arg.clone());
     }
 
     // Dispatch to the target method
-    ctx.dispatch_method(gc, target_method, target_lookup)
+    ctx.dispatch_method(target_method, target_lookup.clone())
 }
 
 #[dotnet_intrinsic("object System.Delegate::get_Target()")]
 #[dotnet_intrinsic("object DotnetRs.Delegate::get_Target()")]
 pub fn delegate_get_target<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let this = ctx.pop_obj(gc);
+    let this = ctx.pop_obj();
     if this.0.is_none() {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     let target = this.as_object(|instance| {
@@ -227,7 +223,7 @@ pub fn delegate_get_target<'gc, 'm: 'gc>(
         unsafe { ObjectRef::read_unchecked(&target_bytes) }
     });
 
-    ctx.push_obj(gc, target);
+    ctx.push_obj(target);
     StepResult::Continue
 }
 
@@ -235,13 +231,12 @@ pub fn delegate_get_target<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("System.Reflection.MethodInfo DotnetRs.Delegate::get_Method()")]
 pub fn delegate_get_method<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let this = ctx.pop_obj(gc);
+    let this = ctx.pop_obj();
     if this.0.is_none() {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     let method_index = this.as_object(|instance| {
@@ -257,8 +252,8 @@ pub fn delegate_get_method<'gc, 'm: 'gc>(
     });
 
     let (target_method, target_lookup) = ctx.lookup_method_by_index(method_index);
-    let method_obj = ctx.get_runtime_method_obj(gc, target_method, target_lookup);
-    ctx.push_obj(gc, method_obj);
+    let method_obj = ctx.get_runtime_method_obj(target_method, target_lookup);
+    ctx.push_obj(method_obj);
     StepResult::Continue
 }
 
@@ -268,38 +263,37 @@ pub fn delegate_get_method<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("bool DotnetRs.MulticastDelegate::Equals(object)")]
 pub fn delegate_equals<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let other_val = ctx.pop(gc);
-    let this_obj = ctx.pop_obj(gc);
+    let other_val = ctx.pop();
+    let this_obj = ctx.pop_obj();
 
     if this_obj.0.is_none() {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     let other_obj = match other_val {
         StackValue::ObjectRef(obj) => obj,
         _ => {
-            ctx.push_i32(gc, 0);
+            ctx.push_i32(0);
             return StepResult::Continue;
         }
     };
 
     if other_obj.0.is_none() {
-        ctx.push_i32(gc, 0);
+        ctx.push_i32(0);
         return StepResult::Continue;
     }
 
     if this_obj == other_obj {
-        ctx.push_i32(gc, 1);
+        ctx.push_i32(1);
         return StepResult::Continue;
     }
 
     // Check if other is a delegate
     if !is_delegate_type(ctx, ctx.get_heap_description(other_obj.0.unwrap())) {
-        ctx.push_i32(gc, 0);
+        ctx.push_i32(0);
         return StepResult::Continue;
     }
 
@@ -308,7 +302,7 @@ pub fn delegate_equals<'gc, 'm: 'gc>(
     let (other_target, other_index) = get_delegate_info(ctx, other_obj);
 
     if this_index != other_index || this_target != other_target {
-        ctx.push_i32(gc, 0);
+        ctx.push_i32(0);
         return StepResult::Continue;
     }
 
@@ -323,7 +317,7 @@ pub fn delegate_equals<'gc, 'm: 'gc>(
             let this_len = this_ref.as_vector(|v| v.layout.length);
             let other_len = other_ref.as_vector(|v| v.layout.length);
             if this_len != other_len {
-                ctx.push_i32(gc, 0);
+                ctx.push_i32(0);
             } else {
                 let mut equal = true;
                 for i in 0..this_len {
@@ -342,11 +336,11 @@ pub fn delegate_equals<'gc, 'm: 'gc>(
                         break;
                     }
                 }
-                ctx.push_i32(gc, if equal { 1 } else { 0 });
+                ctx.push_i32(if equal { 1 } else { 0 });
             }
         }
-        (None, None) => ctx.push_i32(gc, 1), // Already compared basic info
-        _ => ctx.push_i32(gc, 0),
+        (None, None) => ctx.push_i32(1), // Already compared basic info
+        _ => ctx.push_i32(0),
     }
 
     StepResult::Continue
@@ -358,13 +352,12 @@ pub fn delegate_equals<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("int DotnetRs.MulticastDelegate::GetHashCode()")]
 pub fn delegate_get_hash_code<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let this = ctx.pop_obj(gc);
+    let this = ctx.pop_obj();
     if this.0.is_none() {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     let (target, index) = get_delegate_info(ctx, this);
@@ -378,7 +371,7 @@ pub fn delegate_get_hash_code<'gc, 'm: 'gc>(
         hash ^= list_ref.as_vector(|v| v.layout.length as i32);
     }
 
-    ctx.push_i32(gc, hash);
+    ctx.push_i32(hash);
     StepResult::Continue
 }
 
@@ -447,25 +440,11 @@ fn get_multicast_targets_ref<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
 #[dotnet_intrinsic("object DotnetRs.Delegate::DynamicInvoke(object[])")]
 pub fn delegate_dynamic_invoke<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    // TODO: To implement DynamicInvoke:
-    // 1. Pop 'args' (object[]) and 'this' (delegate) from stack.
-    // 2. If 'this' is multicast, we need to iterate through all targets.
-    //    Consider reusing MulticastState for this, but DynamicInvoke is not a runtime-managed
-    //    Invoke method, so it might need its own state or a dummy frame that calls Invoke.
-    // 3. For each target:
-    //    a. Get target method and target object.
-    //    b. Validate 'args' against target method signature.
-    //    c. Unwrap 'args' from objects to StackValues (unboxing value types).
-    //    d. Push args and target onto stack.
-    //    e. Dispatch target method.
-    // 4. Handle return value:
-    //    a. Use awaiting_invoke_return mechanism to box the result back into an 'object'.
-    //    b. If multicast, only the last result is returned.
-    ctx.throw_by_name(gc, "System.NotSupportedException")
+    // ...
+    ctx.throw_by_name("System.NotSupportedException")
 }
 
 fn delegates_equal<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
@@ -513,19 +492,18 @@ fn get_invocation_list<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
 )]
 pub fn delegate_combine<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let b = ctx.pop_obj(gc);
-    let a = ctx.pop_obj(gc);
+    let b = ctx.pop_obj();
+    let a = ctx.pop_obj();
 
     if a.0.is_none() {
-        ctx.push_obj(gc, b);
+        ctx.push_obj(b);
         return StepResult::Continue;
     }
     if b.0.is_none() {
-        ctx.push_obj(gc, a);
+        ctx.push_obj(a);
         return StepResult::Continue;
     }
 
@@ -537,16 +515,16 @@ pub fn delegate_combine<'gc, 'm: 'gc>(
     combined.extend(list_b);
 
     // Create new delegate of same type as a
-    let new_delegate = ctx.clone_object(gc, a);
+    let new_delegate = ctx.clone_object(a);
 
     // Create new array for targets
     let delegate_type = ctx.loader().corlib_type("System.Delegate");
     let delegate_concrete = ConcreteType::from(delegate_type);
     let array_v = ctx.new_vector(delegate_concrete, combined.len());
-    let array_obj = ObjectRef::new(gc, dotnet_value::object::HeapStorage::Vec(array_v));
+    let array_obj = ObjectRef::new(ctx.gc(), dotnet_value::object::HeapStorage::Vec(array_v));
     ctx.register_new_object(&array_obj);
 
-    array_obj.as_vector_mut(gc, |v| {
+    array_obj.as_vector_mut(ctx.gc(), |v| {
         for (i, &el) in combined.iter().enumerate() {
             el.write(&mut v.get_mut()[i * ObjectRef::SIZE..]);
         }
@@ -554,7 +532,7 @@ pub fn delegate_combine<'gc, 'm: 'gc>(
 
     // Set 'targets' field on new_delegate
     let multicast_type = ctx.loader().corlib_type("DotnetRs.MulticastDelegate");
-    new_delegate.as_object_mut(gc, |instance| {
+    new_delegate.as_object_mut(ctx.gc(), |instance| {
         array_obj.write(
             &mut instance
                 .instance_storage
@@ -562,7 +540,7 @@ pub fn delegate_combine<'gc, 'm: 'gc>(
         );
     });
 
-    ctx.push_obj(gc, new_delegate);
+    ctx.push_obj(new_delegate);
     StepResult::Continue
 }
 
@@ -574,19 +552,18 @@ pub fn delegate_combine<'gc, 'm: 'gc>(
 )]
 pub fn delegate_remove<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let value = ctx.pop_obj(gc);
-    let source = ctx.pop_obj(gc);
+    let value = ctx.pop_obj();
+    let source = ctx.pop_obj();
 
     if source.0.is_none() {
-        ctx.push_obj(gc, source);
+        ctx.push_obj(source);
         return StepResult::Continue;
     }
     if value.0.is_none() {
-        ctx.push_obj(gc, source);
+        ctx.push_obj(source);
         return StepResult::Continue;
     }
 
@@ -594,7 +571,7 @@ pub fn delegate_remove<'gc, 'm: 'gc>(
     let list_value = get_invocation_list(ctx, value);
 
     if list_value.is_empty() {
-        ctx.push_obj(gc, source);
+        ctx.push_obj(source);
         return StepResult::Continue;
     }
 
@@ -622,26 +599,26 @@ pub fn delegate_remove<'gc, 'm: 'gc>(
         new_list.extend_from_slice(&list_source[idx + list_value.len()..]);
 
         if new_list.is_empty() {
-            ctx.push_obj(gc, ObjectRef(None));
+            ctx.push_obj(ObjectRef(None));
         } else if new_list.len() == 1 {
-            ctx.push_obj(gc, new_list[0]);
+            ctx.push_obj(new_list[0]);
         } else {
             // Create new MulticastDelegate
-            let new_delegate = ctx.clone_object(gc, source);
+            let new_delegate = ctx.clone_object(source);
             let delegate_type = ctx.loader().corlib_type("System.Delegate");
             let delegate_concrete = ConcreteType::from(delegate_type);
             let array_v = ctx.new_vector(delegate_concrete, new_list.len());
-            let array_obj = ObjectRef::new(gc, dotnet_value::object::HeapStorage::Vec(array_v));
+            let array_obj = ObjectRef::new(ctx.gc(), dotnet_value::object::HeapStorage::Vec(array_v));
             ctx.register_new_object(&array_obj);
 
-            array_obj.as_vector_mut(gc, |v| {
+            array_obj.as_vector_mut(ctx.gc(), |v| {
                 for (i, &el) in new_list.iter().enumerate() {
                     el.write(&mut v.get_mut()[i * ObjectRef::SIZE..]);
                 }
             });
 
             let multicast_type = ctx.loader().corlib_type("DotnetRs.MulticastDelegate");
-            new_delegate.as_object_mut(gc, |instance| {
+            new_delegate.as_object_mut(ctx.gc(), |instance| {
                 array_obj.write(
                     &mut instance
                         .instance_storage
@@ -649,10 +626,10 @@ pub fn delegate_remove<'gc, 'm: 'gc>(
                 );
             });
 
-            ctx.push_obj(gc, new_delegate);
+            ctx.push_obj(new_delegate);
         }
     } else {
-        ctx.push_obj(gc, source);
+        ctx.push_obj(source);
     }
 
     StepResult::Continue

@@ -1,7 +1,6 @@
 use crate::{StepResult, resolution::ValueResolution, stack::ops::VesOps};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     StackValue,
     layout::HasLayout,
@@ -12,13 +11,12 @@ use dotnet_value::{
 #[dotnet_intrinsic("int DotnetRs.Array::get_Length()")]
 pub fn intrinsic_array_get_length<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj = ctx.pop_obj(gc);
+    let obj = ctx.pop_obj();
     let ObjectRef(Some(handle)) = obj else {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     };
 
     let heap = handle.borrow();
@@ -27,7 +25,7 @@ pub fn intrinsic_array_get_length<'gc, 'm: 'gc>(
         _ => panic!("Not an array"),
     };
 
-    ctx.push_i32(gc, len as i32);
+    ctx.push_i32(len as i32);
     StepResult::Continue
 }
 
@@ -35,13 +33,12 @@ pub fn intrinsic_array_get_length<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("int DotnetRs.Array::get_Rank()")]
 pub fn intrinsic_array_get_rank<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj = ctx.pop_obj(gc);
+    let obj = ctx.pop_obj();
     let ObjectRef(Some(handle)) = obj else {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     };
 
     let heap = handle.borrow();
@@ -50,7 +47,7 @@ pub fn intrinsic_array_get_rank<'gc, 'm: 'gc>(
         _ => panic!("Not an array"),
     };
 
-    ctx.push_i32(gc, rank);
+    ctx.push_i32(rank);
     StepResult::Continue
 }
 
@@ -62,15 +59,14 @@ pub fn intrinsic_array_get_rank<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("object DotnetRs.Array::GetValue(int[])")]
 pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
     // This handles GetValue(int index) or GetValue(params int[] indices) depending on which one is called
-    let arg = ctx.pop(gc);
-    let this_val = ctx.pop(gc);
+    let arg = ctx.pop();
+    let this_val = ctx.pop();
     let StackValue::ObjectRef(ObjectRef(Some(handle))) = this_val else {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     };
 
     let index = match arg {
@@ -82,7 +78,7 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
                 panic!("Expected int array for indices");
             };
             if v.layout.length == 0 {
-                return ctx.throw_by_name(gc, "System.ArgumentException");
+                return ctx.throw_by_name("System.ArgumentException");
             }
             // For now only support 1D access via the first index in the array
             let bytes = &v.get()[0..4];
@@ -97,17 +93,17 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
     };
 
     if index >= v.layout.length {
-        return ctx.throw_by_name(gc, "System.IndexOutOfRangeException");
+        return ctx.throw_by_name("System.IndexOutOfRangeException");
     }
 
     let elem_size = v.layout.element_layout.size();
     let start = index * elem_size;
     let end = start + elem_size;
     let val = ctx
-        .read_cts_value(&v.element, &v.get()[start..end], gc)
-        .into_stack(gc);
+        .read_cts_value(&v.element, &v.get()[start..end])
+        .into_stack(ctx.gc());
 
-    ctx.push(gc, val);
+    ctx.push(val);
     StepResult::Continue
 }
 
@@ -119,16 +115,15 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("void DotnetRs.Array::SetValue(object, int[])")]
 pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let index_arg = ctx.pop(gc);
-    let value = ctx.pop(gc);
-    let this_val = ctx.pop(gc);
+    let index_arg = ctx.pop();
+    let value = ctx.pop();
+    let this_val = ctx.pop();
 
     let StackValue::ObjectRef(ObjectRef(Some(handle))) = this_val else {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     };
 
     let index = match index_arg {
@@ -140,7 +135,7 @@ pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
                 panic!("Expected int array for indices");
             };
             if v.layout.length == 0 {
-                return ctx.throw_by_name(gc, "System.ArgumentException");
+                return ctx.throw_by_name("System.ArgumentException");
             }
             let bytes = &v.get()[0..4];
             i32::from_ne_bytes(bytes.try_into().unwrap()) as usize
@@ -156,10 +151,10 @@ pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
 
         if index >= v.layout.length {
             drop(heap);
-            return ctx.throw_by_name(gc, "System.IndexOutOfRangeException");
+            return ctx.throw_by_name("System.IndexOutOfRangeException");
         }
     }
-    let mut heap = handle.borrow_mut(gc);
+    let mut heap = handle.borrow_mut(ctx.gc());
     let HeapStorage::Vec(v) = &mut heap.storage else {
         panic!("Not an array");
     };

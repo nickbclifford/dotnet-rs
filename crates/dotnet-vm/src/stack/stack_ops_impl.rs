@@ -1,6 +1,5 @@
 use super::{context::VesContext, ops::StackOps};
 use dotnet_types::TypeDescription;
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     CLRString, StackValue,
     object::{HeapStorage, Object as ObjectInstance, ObjectRef},
@@ -9,160 +8,161 @@ use dotnet_value::{
 
 impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     #[inline]
-    fn push(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>) {
+    fn push(&mut self, value: StackValue<'gc>) {
         self.trace_push(&value);
-        self.evaluation_stack.push(gc, value);
+        self.evaluation_stack.push(value);
         self.on_push();
     }
 
     #[inline]
-    fn push_i32(&mut self, gc: GCHandle<'gc>, value: i32) {
+    fn push_i32(&mut self, value: i32) {
         self.trace_push(&StackValue::Int32(value));
-        self.evaluation_stack.push_i32(gc, value);
+        self.evaluation_stack.push_i32(value);
         self.on_push();
     }
 
     #[inline]
-    fn push_i64(&mut self, gc: GCHandle<'gc>, value: i64) {
+    fn push_i64(&mut self, value: i64) {
         self.trace_push(&StackValue::Int64(value));
-        self.evaluation_stack.push_i64(gc, value);
+        self.evaluation_stack.push_i64(value);
         self.on_push();
     }
 
     #[inline]
-    fn push_f64(&mut self, gc: GCHandle<'gc>, value: f64) {
+    fn push_f64(&mut self, value: f64) {
         self.trace_push(&StackValue::NativeFloat(value));
-        self.evaluation_stack.push_f64(gc, value);
+        self.evaluation_stack.push_f64(value);
         self.on_push();
     }
 
     #[inline]
-    fn push_obj(&mut self, gc: GCHandle<'gc>, value: ObjectRef<'gc>) {
+    fn push_obj(&mut self, value: ObjectRef<'gc>) {
         self.trace_push(&StackValue::ObjectRef(value));
-        self.evaluation_stack.push_obj(gc, value);
+        self.evaluation_stack.push_obj(value);
         self.on_push();
     }
 
     #[inline]
-    fn push_ptr(&mut self, gc: GCHandle<'gc>, ptr: *mut u8, t: TypeDescription, is_pinned: bool) {
+    fn push_ptr(&mut self, ptr: *mut u8, t: TypeDescription, is_pinned: bool) {
         self.trace_push(&StackValue::managed_ptr(ptr, t, is_pinned));
-        self.evaluation_stack.push_ptr(gc, ptr, t, is_pinned);
+        self.evaluation_stack.push_ptr(ptr, t, is_pinned);
         self.on_push();
     }
 
     #[inline]
-    fn push_isize(&mut self, gc: GCHandle<'gc>, value: isize) {
+    fn push_isize(&mut self, value: isize) {
         self.trace_push(&StackValue::NativeInt(value));
-        self.evaluation_stack.push_isize(gc, value);
+        self.evaluation_stack.push_isize(value);
         self.on_push();
     }
 
     #[inline]
-    fn push_value_type(&mut self, gc: GCHandle<'gc>, value: ObjectInstance<'gc>) {
+    fn push_value_type(&mut self, value: ObjectInstance<'gc>) {
         self.trace_push(&StackValue::ValueType(value.clone()));
-        self.evaluation_stack.push_value_type(gc, value);
+        self.evaluation_stack.push_value_type(value);
         self.on_push();
     }
 
     #[inline]
-    fn push_managed_ptr(&mut self, gc: GCHandle<'gc>, value: ManagedPtr<'gc>) {
+    fn push_managed_ptr(&mut self, value: ManagedPtr<'gc>) {
         self.trace_push(&StackValue::ManagedPtr(value));
-        self.evaluation_stack.push_managed_ptr(gc, value);
+        self.evaluation_stack.push_managed_ptr(value);
         self.on_push();
     }
 
     #[inline]
-    fn push_string(&mut self, gc: GCHandle<'gc>, value: CLRString) {
+    fn push_string(&mut self, value: CLRString) {
+        let gc = self.gc;
         let in_heap = ObjectRef::new(gc, HeapStorage::Str(value));
         self.register_new_object(&in_heap);
-        self.push(gc, StackValue::ObjectRef(in_heap));
+        self.push(StackValue::ObjectRef(in_heap));
     }
 
     #[inline]
-    fn pop(&mut self, gc: GCHandle<'gc>) -> StackValue<'gc> {
+    fn pop(&mut self) -> StackValue<'gc> {
         self.on_pop();
-        let val = self.evaluation_stack.pop(gc);
+        let val = self.evaluation_stack.pop();
         self.trace_pop(&val);
         val
     }
 
     #[inline]
-    fn pop_safe(&mut self, gc: GCHandle<'gc>) -> Result<StackValue<'gc>, crate::error::VmError> {
+    fn pop_safe(&mut self) -> Result<StackValue<'gc>, crate::error::VmError> {
         self.on_pop_safe()?;
-        let val = self.evaluation_stack.pop_safe(gc)?;
+        let val = self.evaluation_stack.pop_safe()?;
         self.trace_pop(&val);
         Ok(val)
     }
 
     #[inline]
-    fn pop_i32(&mut self, gc: GCHandle<'gc>) -> i32 {
+    fn pop_i32(&mut self) -> i32 {
         self.on_pop();
-        let val = self.evaluation_stack.pop_i32(gc);
+        let val = self.evaluation_stack.pop_i32();
         self.trace_pop(&StackValue::Int32(val));
         val
     }
 
     #[inline]
-    fn pop_i64(&mut self, gc: GCHandle<'gc>) -> i64 {
+    fn pop_i64(&mut self) -> i64 {
         self.on_pop();
-        let val = self.evaluation_stack.pop_i64(gc);
+        let val = self.evaluation_stack.pop_i64();
         self.trace_pop(&StackValue::Int64(val));
         val
     }
 
     #[inline]
-    fn pop_f64(&mut self, gc: GCHandle<'gc>) -> f64 {
+    fn pop_f64(&mut self) -> f64 {
         self.on_pop();
-        let val = self.evaluation_stack.pop_f64(gc);
+        let val = self.evaluation_stack.pop_f64();
         self.trace_pop(&StackValue::NativeFloat(val));
         val
     }
 
     #[inline]
-    fn pop_isize(&mut self, gc: GCHandle<'gc>) -> isize {
+    fn pop_isize(&mut self) -> isize {
         self.on_pop();
-        let val = self.evaluation_stack.pop_isize(gc);
+        let val = self.evaluation_stack.pop_isize();
         self.trace_pop(&StackValue::NativeInt(val));
         val
     }
 
     #[inline]
-    fn pop_obj(&mut self, gc: GCHandle<'gc>) -> ObjectRef<'gc> {
+    fn pop_obj(&mut self) -> ObjectRef<'gc> {
         self.on_pop();
-        let val = self.evaluation_stack.pop_obj(gc);
+        let val = self.evaluation_stack.pop_obj();
         self.trace_pop(&StackValue::ObjectRef(val));
         val
     }
 
     #[inline]
-    fn pop_ptr(&mut self, gc: GCHandle<'gc>) -> *mut u8 {
+    fn pop_ptr(&mut self) -> *mut u8 {
         self.on_pop();
-        let val = self.evaluation_stack.pop_ptr(gc);
+        let val = self.evaluation_stack.pop_ptr();
         self.trace_pop(&StackValue::NativeInt(val as isize));
         val
     }
 
     #[inline]
-    fn pop_value_type(&mut self, gc: GCHandle<'gc>) -> ObjectInstance<'gc> {
+    fn pop_value_type(&mut self) -> ObjectInstance<'gc> {
         self.on_pop();
-        let val = self.evaluation_stack.pop_value_type(gc);
+        let val = self.evaluation_stack.pop_value_type();
         self.trace_pop(&StackValue::ValueType(val.clone()));
         val
     }
 
     #[inline]
-    fn pop_managed_ptr(&mut self, gc: GCHandle<'gc>) -> ManagedPtr<'gc> {
-        let val = self.evaluation_stack.pop_managed_ptr(gc);
+    fn pop_managed_ptr(&mut self) -> ManagedPtr<'gc> {
+        let val = self.evaluation_stack.pop_managed_ptr();
         self.trace_pop(&StackValue::ManagedPtr(val));
         self.on_pop();
         val
     }
 
     #[inline]
-    fn pop_multiple(&mut self, gc: GCHandle<'gc>, count: usize) -> Vec<StackValue<'gc>> {
+    fn pop_multiple(&mut self, count: usize) -> Vec<StackValue<'gc>> {
         let mut results = Vec::with_capacity(count);
         for _ in 0..count {
-            results.push(self.pop(gc));
+            results.push(self.pop());
         }
         results.reverse();
         results
@@ -174,10 +174,10 @@ impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn dup(&mut self, gc: GCHandle<'gc>) {
-        let val = self.pop(gc);
-        self.push(gc, val.clone());
-        self.push(gc, val);
+    fn dup(&mut self) {
+        let val = self.pop();
+        self.push(val.clone());
+        self.push(val);
     }
 
     #[inline]
@@ -202,9 +202,9 @@ impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn set_local(&mut self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
+    fn set_local(&mut self, index: usize, value: StackValue<'gc>) {
         let bp = self.frame_stack.current_frame().base;
-        self.evaluation_stack.set_slot(gc, bp.locals + index, value);
+        self.evaluation_stack.set_slot(bp.locals + index, value);
     }
 
     #[inline]
@@ -214,10 +214,10 @@ impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn set_argument(&mut self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
+    fn set_argument(&mut self, index: usize, value: StackValue<'gc>) {
         let bp = self.frame_stack.current_frame().base;
         self.evaluation_stack
-            .set_slot(gc, bp.arguments + index, value);
+            .set_slot(bp.arguments + index, value);
     }
 
     #[inline]
@@ -265,8 +265,8 @@ impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn set_slot(&mut self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>) {
-        self.evaluation_stack.set_slot(gc, index, value)
+    fn set_slot(&mut self, index: usize, value: StackValue<'gc>) {
+        self.evaluation_stack.set_slot(index, value)
     }
 
     #[inline]

@@ -110,7 +110,6 @@ use dotnet_types::{
     members::{FieldDescription, MethodDescription},
     runtime::RuntimeType,
 };
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     StackValue,
     object::{HeapStorage, ObjectRef, ValueType},
@@ -161,14 +160,12 @@ pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttri
 /// GenericLookup is passed by reference to avoid cloning on every intrinsic call.
 pub type IntrinsicHandler = for<'gc, 'm> fn(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult;
 
 pub type IntrinsicFieldHandler = for<'gc, 'm> fn(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     field: FieldDescription,
     type_generics: Arc<[ConcreteType]>,
     is_address: bool,
@@ -320,7 +317,6 @@ pub fn is_intrinsic_field(
 }
 
 pub fn intrinsic_call<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
     ctx: &mut dyn VesOps<'gc, 'm>,
     method: MethodDescription,
     generics: &GenericLookup,
@@ -344,14 +340,13 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         ctx.loader(),
         Some(&ctx.shared().caches.intrinsic_registry),
     ) {
-        return (metadata.handler)(ctx, gc, method, generics);
+        return (metadata.handler)(ctx, method, generics);
     }
 
     panic!("unsupported intrinsic {:?}", method);
 }
 
 pub fn intrinsic_field<'gc, 'm: 'gc>(
-    gc: GCHandle<'gc>,
     ctx: &mut dyn VesOps<'gc, 'm>,
     field: FieldDescription,
     type_generics: Arc<[ConcreteType]>,
@@ -363,7 +358,7 @@ pub fn intrinsic_field<'gc, 'm: 'gc>(
         &format!("{}.{}", field.parent.type_name(), field.field.name)
     );
     if let Some(handler) = ctx.shared().caches.intrinsic_registry.get_field(&field) {
-        handler(ctx, gc, field, type_generics, is_address)
+        handler(ctx, field, type_generics, is_address)
     } else {
         panic!("unsupported load from intrinsic field: {:?}", field);
     }
@@ -372,11 +367,10 @@ pub fn intrinsic_field<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("string System.Object::ToString()")]
 fn object_to_string<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let this = ctx.pop(gc);
+    let this = ctx.pop();
 
     let type_name = if let StackValue::ObjectRef(obj_ref) = this {
         if obj_ref.0.is_some() {
@@ -387,7 +381,7 @@ fn object_to_string<'gc, 'm: 'gc>(
                 HeapStorage::Boxed(_) => "System.ValueType".to_string(),
             })
         } else {
-            return ctx.throw_by_name(gc, "System.NullReferenceException");
+            return ctx.throw_by_name("System.NullReferenceException");
         }
     } else {
         "System.Object".to_string()
@@ -395,21 +389,20 @@ fn object_to_string<'gc, 'm: 'gc>(
 
     let str_val = CLRString::from(type_name);
     let storage = HeapStorage::Str(str_val);
-    let obj_ref = ObjectRef::new(gc, storage);
-    ctx.push_obj(gc, obj_ref);
+    let obj_ref = ObjectRef::new(ctx.gc(), storage);
+    ctx.push_obj(obj_ref);
     StepResult::Continue
 }
 
 #[dotnet_intrinsic("System.Type System.Object::GetType()")]
 fn object_get_type<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let this = ctx.pop_obj(gc);
+    let this = ctx.pop_obj();
     if this.0.is_none() {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     let rt: RuntimeType = this.as_heap_storage(|storage| match storage {
@@ -442,7 +435,7 @@ fn object_get_type<'gc, 'm: 'gc>(
         },
     });
 
-    let typ_obj = ctx.get_runtime_type(gc, rt);
-    ctx.push_obj(gc, typ_obj);
+    let typ_obj = ctx.get_runtime_type(rt);
+    ctx.push_obj(typ_obj);
     StepResult::Continue
 }

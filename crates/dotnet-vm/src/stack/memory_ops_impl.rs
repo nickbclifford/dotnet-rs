@@ -12,6 +12,11 @@ use dotnet_value::{
 
 impl<'a, 'gc, 'm: 'gc> MemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
     #[inline]
+    fn gc(&self) -> GCHandle<'gc> {
+        self.gc
+    }
+
+    #[inline]
     fn new_vector(&self, element: ConcreteType, size: usize) -> Vector<'gc> {
         self.resolver()
             .new_vector(element, size, &self.current_context())
@@ -35,12 +40,14 @@ impl<'a, 'gc, 'm: 'gc> MemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn read_cts_value(&self, t: &ConcreteType, data: &[u8], gc: GCHandle<'gc>) -> CTSValue<'gc> {
+    fn read_cts_value(&self, t: &ConcreteType, data: &[u8]) -> CTSValue<'gc> {
+        let gc = self.gc;
         self.resolver()
             .read_cts_value(t, data, gc, &self.current_context())
     }
 
-    fn clone_object(&self, gc: GCHandle<'gc>, obj: ObjectRef<'gc>) -> ObjectRef<'gc> {
+    fn clone_object(&self, obj: ObjectRef<'gc>) -> ObjectRef<'gc> {
+        let gc = self.gc;
         let h = obj.0.expect("cannot clone null object");
         let inner = h.borrow();
         let cloned_storage = inner.storage.clone();

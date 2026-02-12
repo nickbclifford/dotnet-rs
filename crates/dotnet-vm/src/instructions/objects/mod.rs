@@ -7,7 +7,6 @@ use crate::{
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_types::{comparer::decompose_type_source, members::MethodDescription};
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     CLRString, StackValue,
     layout::HasLayout,
@@ -99,7 +98,7 @@ pub(crate) fn get_ptr_context<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 #[dotnet_instruction(NewObject(ctor))]
 pub fn new_object<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
+
     ctor: &UserMethod,
 ) -> StepResult {
     let (mut method, lookup) = ctx
@@ -122,7 +121,7 @@ pub fn new_object<'gc, 'm: 'gc>(
                 let rank = shape.rank;
                 let mut dims: Vec<usize> = (0..rank)
                     .map(|_| {
-                        let v = ctx.pop(gc);
+                        let v = ctx.pop();
                         match v {
                             StackValue::Int32(i) => i as usize,
                             StackValue::NativeInt(i) => i as usize,
@@ -147,9 +146,9 @@ pub fn new_object<'gc, 'm: 'gc>(
                     vec![0; total_size_bytes],
                     dims,
                 );
-                let o = ObjectRef::new(gc, HeapStorage::Vec(vec_obj));
+                let o = ObjectRef::new(ctx.gc(), HeapStorage::Vec(vec_obj));
                 ctx.register_new_object(&o);
-                ctx.push(gc, StackValue::ObjectRef(o));
+                ctx.push(StackValue::ObjectRef(o));
                 return StepResult::Continue;
             }
         }
@@ -184,21 +183,21 @@ pub fn new_object<'gc, 'm: 'gc>(
         && method_name == ".ctor"
         && method.method.signature.parameters.len() == 1
     {
-        let val = ctx.pop(gc);
+        let val = ctx.pop();
         let native_val = match val {
             StackValue::Int32(i) => i as isize,
             StackValue::Int64(i) => i as isize,
             StackValue::NativeInt(i) => i,
             _ => panic!("Invalid argument for IntPtr constructor: {:?}", val),
         };
-        ctx.push(gc, StackValue::NativeInt(native_val));
+        ctx.push(StackValue::NativeInt(native_val));
         StepResult::Continue
     } else {
         if ctx.is_intrinsic_cached(method) {
-            return intrinsic_call(gc, ctx, method, &lookup);
+            return intrinsic_call(ctx, method, &lookup);
         }
 
-        let res = ctx.initialize_static_storage(gc, parent, lookup.clone());
+        let res = ctx.initialize_static_storage(parent, lookup.clone());
         if res != StepResult::Continue {
             return res;
         }
@@ -209,7 +208,6 @@ pub fn new_object<'gc, 'm: 'gc>(
         let instance = res_ctx.new_object(parent);
 
         ctx.constructor_frame(
-            gc,
             instance,
             crate::MethodInfo::new(method, &lookup, ctx.shared().clone()),
             lookup,
@@ -221,14 +219,14 @@ pub fn new_object<'gc, 'm: 'gc>(
 #[dotnet_instruction(LoadObject { param0 })]
 pub fn ldobj<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
+
     param0: &MethodType,
 ) -> StepResult {
-    let addr = ctx.pop(gc);
+    let addr = ctx.pop();
     let (source_ptr, _owner, _origin, _offset) = get_ptr_context(ctx, &addr);
 
     if source_ptr.is_null() {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     let load_type = ctx.make_concrete(param0);
@@ -238,27 +236,27 @@ pub fn ldobj<'gc, 'm: 'gc>(
     let mut source_vec = vec![0u8; layout.size()];
     unsafe { ptr::copy_nonoverlapping(source_ptr, source_vec.as_mut_ptr(), layout.size()) };
     let value = res_ctx
-        .read_cts_value(&load_type, &source_vec, gc)
-        .into_stack(gc);
+        .read_cts_value(&load_type, &source_vec, ctx.gc())
+        .into_stack(ctx.gc());
 
-    ctx.push(gc, value);
+    ctx.push(value);
     StepResult::Continue
 }
 
 #[dotnet_instruction(StoreObject { param0 })]
 pub fn stobj<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
+
     param0: &MethodType,
 ) -> StepResult {
-    let value = ctx.pop(gc);
-    let addr = ctx.pop(gc);
+    let value = ctx.pop();
+    let addr = ctx.pop();
 
     let concrete_t = ctx.make_concrete(param0);
 
     let (dest_ptr, _owner, _origin, _offset) = get_ptr_context(ctx, &addr);
     if dest_ptr.is_null() {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     let res_ctx = ctx.current_context();
@@ -275,13 +273,13 @@ pub fn stobj<'gc, 'm: 'gc>(
 #[dotnet_instruction(InitializeForObject(param0))]
 pub fn initobj<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
+
     param0: &MethodType,
 ) -> StepResult {
-    let addr = ctx.pop(gc);
+    let addr = ctx.pop();
     let (target, _owner, _origin, _offset) = get_ptr_context(ctx, &addr);
     if target.is_null() {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     let ct = ctx.make_concrete(param0);
@@ -295,22 +293,22 @@ pub fn initobj<'gc, 'm: 'gc>(
 #[dotnet_instruction(Sizeof(param0))]
 pub fn sizeof<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
+
     param0: &MethodType,
 ) -> StepResult {
     let target = ctx.make_concrete(param0);
     let res_ctx = ctx.current_context();
     let layout = type_layout(target, &res_ctx);
-    ctx.push(gc, StackValue::Int32(layout.size() as i32));
+    ctx.push(StackValue::Int32(layout.size() as i32));
     StepResult::Continue
 }
 
 #[dotnet_instruction(LoadString(chars))]
 pub fn ldstr<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
+
     chars: &[u16],
 ) -> StepResult {
-    ctx.push_string(gc, CLRString::new(chars.to_owned()));
+    ctx.push_string(CLRString::new(chars.to_owned()));
     StepResult::Continue
 }

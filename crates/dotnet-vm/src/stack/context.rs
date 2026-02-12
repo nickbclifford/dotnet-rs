@@ -37,6 +37,7 @@ use super::{
 };
 
 pub struct VesContext<'a, 'gc, 'm> {
+    pub(crate) gc: GCHandle<'gc>,
     pub(crate) evaluation_stack: &'a mut EvaluationStack<'gc>,
     pub(crate) frame_stack: &'a mut FrameStack<'gc, 'm>,
     pub(crate) shared: &'a Arc<SharedGlobalState<'m>>,
@@ -163,13 +164,13 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
         (values, pinned_locals)
     }
 
-    pub(crate) fn handle_return(&mut self, gc: GCHandle<'gc>) -> StepResult {
+    pub(crate) fn handle_return(&mut self) -> StepResult {
         let tracer_enabled = self.tracer_enabled();
         let shared = &self.shared;
         let heap = &self.local.heap;
         let res =
             self.frame_stack
-                .handle_return(gc, self.evaluation_stack, shared, heap, tracer_enabled);
+                .handle_return(self.evaluation_stack, shared, heap, tracer_enabled);
 
         if let Some(return_type) = self
             .frame_stack
@@ -180,21 +181,21 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
 
             let is_void = matches!(return_type, RuntimeType::Void);
             if is_void {
-                self.push(gc, StackValue::null());
+                self.push(StackValue::null());
             } else {
-                let val = self.pop(gc);
+                let val = self.pop();
                 let return_concrete = return_type.to_concrete(self.loader());
                 let td = self.loader().find_concrete_type(return_concrete.clone());
                 if td.is_value_type(&self.current_context()) {
                     let boxed = ObjectRef::new(
-                        gc,
+                        self.gc,
                         HeapStorage::Boxed(self.new_value_type(&return_concrete, val)),
                     );
                     self.register_new_object(&boxed);
-                    self.push_obj(gc, boxed);
+                    self.push_obj(boxed);
                 } else {
                     // already a reference type (or null)
-                    self.push(gc, val);
+                    self.push(val);
                 }
             }
         }
@@ -203,14 +204,15 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    pub(crate) fn handle_exception(&mut self, gc: GCHandle<'gc>) -> StepResult {
+    pub(crate) fn handle_exception(&mut self) -> StepResult {
+        let gc = self.gc;
         crate::exceptions::ExceptionHandlingSystem.handle_exception(self, gc)
     }
 
     #[inline]
-    pub(crate) fn unwind_frame(&mut self, gc: GCHandle<'gc>) {
+    pub(crate) fn unwind_frame(&mut self) {
         self.frame_stack
-            .unwind_frame(gc, self.evaluation_stack, self.shared, &self.local.heap);
+            .unwind_frame(self.evaluation_stack, self.shared, &self.local.heap);
     }
 
     #[inline]
@@ -274,7 +276,8 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
 
 impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     #[inline]
-    fn run(&mut self, gc: GCHandle<'gc>) -> StepResult {
+    fn run(&mut self) -> StepResult {
+        let _gc = self.gc;
         loop {
             let res = match self.exception_mode {
                 ExceptionState::None
@@ -286,7 +289,7 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
                         let i = &self.state().info_handle.instructions[ip];
 
                         last_res = if let Some(res) =
-                            crate::dispatch::InstructionRegistry::dispatch(gc, self, i)
+                            crate::dispatch::InstructionRegistry::dispatch(self, i)
                         {
                             res
                         } else {
@@ -305,7 +308,7 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
                                 break;
                             }
                             StepResult::Return => {
-                                last_res = self.handle_return(gc);
+                                last_res = self.handle_return();
                                 break;
                             }
                             _ => break,
@@ -314,13 +317,13 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
                     last_res
                 }
                 _ => {
-                    let res = self.handle_exception(gc);
+                    let res = self.handle_exception();
                     match res {
                         StepResult::Jump(target) => {
                             self.branch(target);
                             StepResult::Continue
                         }
-                        StepResult::Return => self.handle_return(gc),
+                        StepResult::Return => self.handle_return(),
                         _ => res,
                     }
                 }
@@ -335,8 +338,13 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn handle_exception(&mut self, gc: GCHandle<'gc>) -> StepResult {
-        self.handle_exception(gc)
+    fn handle_return(&mut self) -> StepResult {
+        self.handle_return()
+    }
+
+    #[inline]
+    fn handle_exception(&mut self) -> StepResult {
+        self.handle_exception()
     }
 
     #[inline]
@@ -417,8 +425,8 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn unwind_frame(&mut self, gc: GCHandle<'gc>) {
-        self.unwind_frame(gc)
+    fn unwind_frame(&mut self) {
+        self.unwind_frame()
     }
 
     #[inline]
@@ -437,11 +445,11 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn process_pending_finalizers(&mut self, gc: GCHandle<'gc>) -> StepResult {
+    fn process_pending_finalizers(&mut self) -> StepResult {
+        let _gc = self.gc;
         if self.local.heap.processing_finalizer.get() {
             return StepResult::Continue;
         }
-
         let instance = self.local.heap.pending_finalization.borrow_mut().pop();
 
         // Only run finalizers if we are at the bottom of the stack or in a safe state
@@ -505,9 +513,9 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
                 MethodInfo::new(finalizer, &self.shared.empty_generics, self.shared.clone());
 
             // Push the object as 'this'
-            self.push(gc, StackValue::ObjectRef(instance));
+            self.push(StackValue::ObjectRef(instance));
 
-            self.call_frame(gc, method_info, self.shared.empty_generics.clone());
+            self.call_frame(method_info, self.shared.empty_generics.clone());
             self.current_frame_mut().is_finalizer = true;
             return StepResult::FramePushed;
         }

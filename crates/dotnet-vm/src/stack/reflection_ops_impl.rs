@@ -12,7 +12,6 @@ use dotnet_types::{
     members::{FieldDescription, MethodDescription},
     runtime::RuntimeType,
 };
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::object::{ObjectRef, ObjectHandle};
 use dotnetdll::prelude::FieldSource;
 
@@ -42,10 +41,10 @@ impl<'a, 'gc, 'm: 'gc> StaticsOps<'gc> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn initialize_static_storage(
         &mut self,
-        gc: GCHandle<'gc>,
         description: TypeDescription,
         generics: GenericLookup,
     ) -> StepResult {
+        let _gc = self.gc;
         self.check_gc_safe_point();
 
         let ctx = ResolutionContext {
@@ -74,7 +73,6 @@ impl<'a, 'gc, 'm: 'gc> StaticsOps<'gc> for VesContext<'a, 'gc, 'm> {
                         self.current_frame().state.ip
                     );
                     self.call_frame(
-                        gc,
                         MethodInfo::new(m, &generics, self.shared.clone()),
                         generics.clone(),
                     );
@@ -88,7 +86,7 @@ impl<'a, 'gc, 'm: 'gc> StaticsOps<'gc> for VesContext<'a, 'gc, 'm> {
                     std::thread::yield_now();
                 }
                 Failed => {
-                    return self.throw_by_name(gc, "System.TypeInitializationException");
+                    return self.throw_by_name("System.TypeInitializationException");
                 }
             }
         }
@@ -104,8 +102,8 @@ impl<'a, 'gc, 'm: 'gc> ThreadOps for VesContext<'a, 'gc, 'm> {
 
 impl<'a, 'gc, 'm: 'gc> ReflectionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     #[inline]
-    fn pre_initialize_reflection(&mut self, gc: GCHandle<'gc>) {
-        crate::intrinsics::reflection::common::pre_initialize_reflection(self, gc)
+    fn pre_initialize_reflection(&mut self) {
+        crate::intrinsics::reflection::common::pre_initialize_reflection(self)
     }
 
     #[inline]
@@ -119,28 +117,26 @@ impl<'a, 'gc, 'm: 'gc> ReflectionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn get_runtime_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> ObjectRef<'gc> {
-        crate::intrinsics::reflection::common::get_runtime_type(self, gc, target)
+    fn get_runtime_type(&mut self, target: RuntimeType) -> ObjectRef<'gc> {
+        crate::intrinsics::reflection::common::get_runtime_type(self, target)
     }
 
     #[inline]
     fn get_runtime_method_obj(
         &mut self,
-        gc: GCHandle<'gc>,
         method: MethodDescription,
         lookup: GenericLookup,
     ) -> ObjectRef<'gc> {
-        crate::intrinsics::reflection::common::get_runtime_method_obj(self, gc, method, lookup)
+        crate::intrinsics::reflection::common::get_runtime_method_obj(self, method, lookup)
     }
 
     #[inline]
     fn get_runtime_field_obj(
         &mut self,
-        gc: GCHandle<'gc>,
         field: FieldDescription,
         lookup: GenericLookup,
     ) -> ObjectRef<'gc> {
-        crate::intrinsics::reflection::common::get_runtime_field_obj(self, gc, field, lookup)
+        crate::intrinsics::reflection::common::get_runtime_field_obj(self, field, lookup)
     }
 
     #[inline]

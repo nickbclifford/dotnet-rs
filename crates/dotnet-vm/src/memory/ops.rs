@@ -10,6 +10,7 @@ use dotnet_value::{
 };
 
 pub trait MemoryOps<'gc> {
+    fn gc(&self) -> GCHandle<'gc>;
     #[must_use]
     fn new_vector(&self, element: ConcreteType, size: usize) -> Vector<'gc>;
     #[must_use]
@@ -19,9 +20,9 @@ pub trait MemoryOps<'gc> {
     #[must_use]
     fn new_cts_value(&self, t: &ConcreteType, data: StackValue<'gc>) -> CTSValue<'gc>;
     #[must_use]
-    fn read_cts_value(&self, t: &ConcreteType, data: &[u8], gc: GCHandle<'gc>) -> CTSValue<'gc>;
+    fn read_cts_value(&self, t: &ConcreteType, data: &[u8]) -> CTSValue<'gc>;
     #[must_use]
-    fn clone_object(&self, gc: GCHandle<'gc>, obj: ObjectRef<'gc>) -> ObjectRef<'gc>;
+    fn clone_object(&self, obj: ObjectRef<'gc>) -> ObjectRef<'gc>;
     fn register_new_object(&self, instance: &ObjectRef<'gc>);
     fn heap(&self) -> &crate::memory::heap::HeapManager<'gc>;
 }

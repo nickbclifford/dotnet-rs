@@ -103,8 +103,8 @@ impl Executor {
         // Set thread id in arena and pre-initialize reflection
         arena.mutate_root(|gc, c| {
             c.stack.thread_id.set(thread_id);
-            let mut ctx = c.stack.ves_context();
-            ctx.pre_initialize_reflection(gc);
+            let mut ctx = c.stack.ves_context(gc);
+            ctx.pre_initialize_reflection();
         });
 
         #[cfg(feature = "multithreaded-gc")]
@@ -126,8 +126,8 @@ impl Executor {
             arena.mutate_root(|gc, c| {
                 let shared = c.stack.shared.clone();
                 let info = MethodInfo::new(method, &Default::default(), shared);
-                c.ves_context()
-                    .entrypoint_frame(gc, info, Default::default(), vec![])
+                c.ves_context(gc)
+                    .entrypoint_frame(info, Default::default(), vec![])
             });
         });
     }
@@ -196,7 +196,7 @@ impl Executor {
             }
 
             self.with_arena(|arena| {
-                let _ = arena.mutate_root(|gc, c| c.ves_context().process_pending_finalizers(gc));
+                let _ = arena.mutate_root(|gc, c| c.ves_context(gc).process_pending_finalizers());
             });
 
             let step_result = self.with_arena(|arena| arena.mutate_root(|gc, c| c.run(gc)));

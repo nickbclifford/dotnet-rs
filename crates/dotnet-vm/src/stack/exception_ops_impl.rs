@@ -6,12 +6,12 @@ use crate::{
     },
     memory::ops::MemoryOps,
 };
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::object::{HeapStorage, ObjectRef};
 
 impl<'a, 'gc, 'm: 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc, 'm> {
     #[inline]
-    fn throw_by_name(&mut self, gc: GCHandle<'gc>, name: &str) -> StepResult {
+    fn throw_by_name(&mut self, name: &str) -> StepResult {
+        let gc = self.gc;
         let exception_type = self.shared.loader.corlib_type(name);
         let instance = self.new_object(exception_type);
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(instance));
@@ -21,13 +21,13 @@ impl<'a, 'gc, 'm: 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn throw(&mut self, gc: GCHandle<'gc>, exception: ObjectRef<'gc>) -> StepResult {
+    fn throw(&mut self, exception: ObjectRef<'gc>) -> StepResult {
         *self.exception_mode = ExceptionState::Throwing(exception);
-        self.handle_exception(gc)
+        self.handle_exception()
     }
 
     #[inline]
-    fn rethrow(&mut self, gc: GCHandle<'gc>) -> StepResult {
+    fn rethrow(&mut self) -> StepResult {
         let exception = self
             .current_frame()
             .exception_stack
@@ -35,11 +35,11 @@ impl<'a, 'gc, 'm: 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc, 'm> {
             .cloned()
             .expect("rethrow without active exception");
         *self.exception_mode = ExceptionState::Throwing(exception);
-        self.handle_exception(gc)
+        self.handle_exception()
     }
 
     #[inline]
-    fn leave(&mut self, gc: GCHandle<'gc>, target_ip: usize) -> StepResult {
+    fn leave(&mut self, target_ip: usize) -> StepResult {
         let cursor = HandlerAddress {
             frame_index: self.frame_stack.len() - 1,
             section_index: 0,
@@ -51,15 +51,15 @@ impl<'a, 'gc, 'm: 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc, 'm> {
             target: UnwindTarget::Instruction(target_ip),
             cursor,
         });
-        self.handle_exception(gc)
+        self.handle_exception()
     }
 
     #[inline]
-    fn endfinally(&mut self, gc: GCHandle<'gc>) -> StepResult {
+    fn endfinally(&mut self) -> StepResult {
         match self.exception_mode {
             ExceptionState::ExecutingHandler(state) => {
                 *self.exception_mode = ExceptionState::Unwinding(*state);
-                self.handle_exception(gc)
+                self.handle_exception()
             }
             _ => panic!(
                 "endfinally called outside of handler, state: {:?}",
@@ -69,7 +69,7 @@ impl<'a, 'gc, 'm: 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn endfilter(&mut self, _gc: GCHandle<'gc>, result: i32) -> StepResult {
+    fn endfilter(&mut self, result: i32) -> StepResult {
         let (exception, handler) = match self.exception_mode {
             ExceptionState::Filtering(state) => (state.exception, state.handler),
             _ => panic!("EndFilter called but not in Filtering mode"),
@@ -112,7 +112,7 @@ impl<'a, 'gc, 'm: 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn ret(&mut self, gc: GCHandle<'gc>) -> StepResult {
+    fn ret(&mut self) -> StepResult {
         let frame_index = self.frame_stack.len() - 1;
         if let ExceptionState::ExecutingHandler(state) = *self.exception_mode
             && state.cursor.frame_index == frame_index
@@ -122,7 +122,7 @@ impl<'a, 'gc, 'm: 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc, 'm> {
                 target: UnwindTarget::Instruction(usize::MAX),
                 cursor: state.cursor,
             });
-            return self.handle_exception(gc);
+            return self.handle_exception();
         }
 
         let ip = self.current_frame().state.ip;
@@ -149,7 +149,7 @@ impl<'a, 'gc, 'm: 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc, 'm> {
                     handler_index: 0,
                 },
             });
-            return self.handle_exception(gc);
+            return self.handle_exception();
         }
 
         StepResult::Return

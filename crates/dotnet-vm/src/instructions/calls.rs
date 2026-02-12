@@ -2,7 +2,6 @@ use crate::{
     StepResult, layout::type_layout, resolution::TypeResolutionExt, stack::ops::VesOps, vm_trace,
 };
 use dotnet_macros::dotnet_instruction;
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     StackValue,
     layout::HasLayout,
@@ -14,17 +13,15 @@ use std::{mem::align_of, ptr};
 #[dotnet_instruction(Call { param0 })]
 pub fn call<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
     param0: &MethodSource,
 ) -> StepResult {
     // Use unified dispatch pipeline for static calls
-    ctx.unified_dispatch(gc, param0, None, None)
+    ctx.unified_dispatch(param0, None, None)
 }
 
 #[dotnet_instruction(CallVirtual { param0 })]
 pub fn callvirt<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
     param0: &MethodSource,
 ) -> StepResult {
     // Use unified dispatch pipeline for virtual calls
@@ -35,13 +32,13 @@ pub fn callvirt<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         .resolver()
         .find_generic_method(param0, &ctx.current_context());
     let num_args = 1 + base_method.method.signature.parameters.len();
-    let args = ctx.pop_multiple(gc, num_args);
+    let args = ctx.pop_multiple(num_args);
 
     // Extract runtime type from this argument (value types are passed as managed pointers - I.8.9.7)
     let this_value = args[0].clone();
     let this_type = match this_value {
         StackValue::ObjectRef(ObjectRef(None)) => {
-            return ctx.throw_by_name(gc, "System.NullReferenceException");
+            return ctx.throw_by_name("System.NullReferenceException");
         }
         StackValue::ObjectRef(ObjectRef(Some(o))) => ctx.current_context().get_heap_description(o),
         StackValue::ManagedPtr(m) => m.inner_type,
@@ -59,15 +56,14 @@ pub fn callvirt<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 
     // Push arguments back and dispatch
     for a in args {
-        ctx.push(gc, a);
+        ctx.push(a);
     }
-    ctx.unified_dispatch(gc, param0, Some(this_type), None)
+    ctx.unified_dispatch(param0, Some(this_type), None)
 }
 
 #[dotnet_instruction(CallConstrained(constraint, source))]
 pub fn call_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
     constraint: &MethodType,
     source: &MethodSource,
 ) -> StepResult {
@@ -93,7 +89,7 @@ pub fn call_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             vm_trace!(ctx, "-- dispatching to {:?} --", target);
             // Note: Uses dispatch_method directly since method is already resolved
             // via explicit override lookup (static interface dispatch pattern)
-            return ctx.dispatch_method(gc, target, lookup);
+            return ctx.dispatch_method(target, lookup);
         }
     }
 
@@ -108,7 +104,6 @@ pub fn call_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 #[dotnet_instruction(CallVirtualConstrained(constraint, source))]
 pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
     constraint: &MethodType,
     source: &MethodSource,
 ) -> StepResult {
@@ -118,7 +113,7 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 
     // Pop all arguments (this + parameters)
     let num_args = 1 + base_method.method.signature.parameters.len();
-    let mut args = ctx.pop_multiple(gc, num_args);
+    let mut args = ctx.pop_multiple(num_args);
 
     let constraint_type_source = ctx.make_concrete(constraint);
     let constraint_type = ctx
@@ -145,7 +140,7 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
                 .map(|p: ptr::NonNull<u8>| p.as_ptr())
                 .unwrap_or(ptr::null_mut());
             if ptr.is_null() {
-                return ctx.throw_by_name(gc, "System.NullReferenceException");
+                return ctx.throw_by_name("System.NullReferenceException");
             }
 
             let value_size =
@@ -156,12 +151,12 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             // for the current thread's evaluation stack.
             unsafe { ptr::copy_nonoverlapping(ptr, value_vec.as_mut_ptr(), value_size) };
             let value_data = &value_vec;
-            let value = ctx.read_cts_value(&constraint_type_source, value_data, gc);
+            let value = ctx.read_cts_value(&constraint_type_source, value_data);
 
             let boxed = ObjectRef::new(
-                gc,
+                ctx.gc(),
                 HeapStorage::Boxed(
-                    ctx.new_value_type(&constraint_type_source, value.into_stack(gc)),
+                    ctx.new_value_type(&constraint_type_source, value.into_stack(ctx.gc())),
                 ),
             );
             ctx.register_new_object(&boxed);
@@ -179,7 +174,7 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         // Reference type: dereference the managed pointer
         let m = args[0].as_managed_ptr();
         let Some(p) = m.pointer() else {
-            return ctx.throw_by_name(gc, "System.NullReferenceException");
+            return ctx.throw_by_name("System.NullReferenceException");
         };
         let ptr = p.as_ptr();
         debug_assert!(
@@ -194,10 +189,10 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         let value_bytes = &value_vec;
 
         // SAFETY: value_bytes contains a valid ObjectRef from the stack and gc is the current arena.
-        let obj_ref = unsafe { ObjectRef::read_branded(value_bytes, gc) };
+        let obj_ref = unsafe { ObjectRef::read_branded(value_bytes, ctx.gc()) };
 
         if obj_ref.0.is_none() {
-            return ctx.throw_by_name(gc, "System.NullReferenceException");
+            return ctx.throw_by_name("System.NullReferenceException");
         }
 
         args[0] = StackValue::ObjectRef(obj_ref);
@@ -225,12 +220,12 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     };
 
     for arg in args {
-        ctx.push(gc, arg);
+        ctx.push(arg);
     }
 
     // Note: CallVirtualConstrained uses dispatch_method directly
     // instead of unified_dispatch because it performs custom method resolution
     // (boxing value types, constraint-specific lookup) that doesn't fit the
     // standard virtual dispatch pattern. The method is already fully resolved here.
-    ctx.dispatch_method(gc, method, lookup)
+    ctx.dispatch_method(method, lookup)
 }

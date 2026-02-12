@@ -1,10 +1,9 @@
 use crate::{
     StepResult,
-    resolution::{TypeResolutionExt, ValueResolution},
+    resolution::TypeResolutionExt,
     stack::ops::VesOps,
 };
 use dotnet_macros::dotnet_instruction;
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     StackValue,
     object::{HeapStorage, ObjectRef},
@@ -16,21 +15,19 @@ use std::ptr::NonNull;
 #[dotnet_instruction(BoxValue(param0))]
 pub fn box_value<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {
     let res_ctx = ctx.current_context();
     let t = res_ctx.make_concrete(param0);
-    let value = ctx.pop(gc);
+    let value = ctx.pop();
 
     if let StackValue::ObjectRef(_) = value {
         // boxing is a noop for all reference types
-        ctx.push(gc, value);
+        ctx.push(value);
     } else {
-        let res_ctx = ctx.current_context();
-        let obj = ObjectRef::new(gc, HeapStorage::Boxed(res_ctx.new_value_type(&t, value)));
+        let obj = ObjectRef::new(ctx.gc(), HeapStorage::Boxed(ctx.new_value_type(&t, value)));
         ctx.register_new_object(&obj);
-        ctx.push(gc, StackValue::ObjectRef(obj));
+        ctx.push(StackValue::ObjectRef(obj));
     }
     StepResult::Continue
 }
@@ -38,10 +35,9 @@ pub fn box_value<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 #[dotnet_instruction(UnboxIntoValue(param0))]
 pub fn unbox_any<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {
-    let val = ctx.pop(gc);
+    let val = ctx.pop();
     let res_ctx = ctx.current_context();
     let target_ct = res_ctx.make_concrete(param0);
 
@@ -63,13 +59,13 @@ pub fn unbox_any<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         };
         if obj.0.is_none() {
             // unbox.any on null value type throws NullReferenceException (III.4.33)
-            return ctx.throw_by_name(gc, "System.NullReferenceException");
+            return ctx.throw_by_name("System.NullReferenceException");
         }
 
         let result = obj.as_heap_storage(|storage| {
             match storage {
                 HeapStorage::Boxed(v) => {
-                    dotnet_value::object::CTSValue::Value(v.clone()).into_stack(gc)
+                    dotnet_value::object::CTSValue::Value(v.clone()).into_stack(ctx.gc())
                 }
                 HeapStorage::Obj(o) => {
                     // Boxed struct is just an Object of that struct type.
@@ -78,7 +74,7 @@ pub fn unbox_any<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
                 _ => panic!("unbox.any: expected boxed value, got {:?}", storage),
             }
         });
-        ctx.push(gc, result);
+        ctx.push(result);
     } else {
         // Reference type: identical to castclass.
         let StackValue::ObjectRef(target_obj) = val else {
@@ -87,12 +83,12 @@ pub fn unbox_any<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         if let ObjectRef(Some(o)) = target_obj {
             let obj_type = res_ctx.get_heap_description(o);
             if res_ctx.is_a(obj_type.into(), target_ct) {
-                ctx.push(gc, StackValue::ObjectRef(target_obj));
+                ctx.push(StackValue::ObjectRef(target_obj));
             } else {
-                return ctx.throw_by_name(gc, "System.InvalidCastException");
+                return ctx.throw_by_name("System.InvalidCastException");
             }
         } else {
-            ctx.push(gc, StackValue::ObjectRef(ObjectRef(None)));
+            ctx.push(StackValue::ObjectRef(ObjectRef(None)));
         }
     }
     StepResult::Continue
@@ -101,10 +97,9 @@ pub fn unbox_any<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 #[dotnet_instruction(UnboxIntoAddress { param0 })]
 pub fn unbox<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {
-    let value = ctx.pop(gc);
+    let value = ctx.pop();
     let res_ctx = ctx.current_context();
     let target_ct = res_ctx.make_concrete(param0);
 
@@ -112,7 +107,7 @@ pub fn unbox<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         panic!("unbox on non-object: {:?}", value);
     };
     let Some(h) = obj.0 else {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     };
 
     let inner = h.borrow();
@@ -125,7 +120,6 @@ pub fn unbox<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 
     let target_type = ctx.loader().find_concrete_type(target_ct);
     ctx.push(
-        gc,
         StackValue::ManagedPtr(ManagedPtr::new(
             NonNull::new(ptr),
             target_type,

@@ -51,7 +51,7 @@
 //!
 //! ```ignore
 //! let mut call_stack = CallStack::new(shared, local);
-//! let mut ctx = call_stack.ves_context();
+//! let mut ctx = call_stack.ves_context(gc);
 //!
 //! // Push a value onto the evaluation stack
 //! ctx.push_i32(42);
@@ -132,8 +132,9 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         }
     }
 
-    pub fn ves_context(&mut self) -> VesContext<'_, 'gc, 'm> {
+    pub fn ves_context(&mut self, gc: GCHandle<'gc>) -> VesContext<'_, 'gc, 'm> {
         VesContext {
+            gc,
             evaluation_stack: &mut self.execution.evaluation_stack,
             frame_stack: &mut self.execution.frame_stack,
             shared: &self.shared,
@@ -150,13 +151,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 
     pub fn handle_return(&mut self, gc: GCHandle<'gc>) -> StepResult {
-        self.ves_context().handle_return(gc)
+        self.ves_context(gc).handle_return()
     }
 
-    pub fn return_frame(&mut self, gc: GCHandle<'gc>) {
+    pub fn return_frame(&mut self) {
         let tracer_enabled = self.tracer_enabled();
         self.execution.frame_stack.return_frame(
-            gc,
             &mut self.execution.evaluation_stack,
             &self.shared,
             &self.local.heap,
@@ -164,9 +164,8 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         );
     }
 
-    pub fn unwind_frame(&mut self, gc: GCHandle<'gc>) {
+    pub fn unwind_frame(&mut self) {
         self.execution.frame_stack.unwind_frame(
-            gc,
             &mut self.execution.evaluation_stack,
             &self.shared,
             &self.local.heap,

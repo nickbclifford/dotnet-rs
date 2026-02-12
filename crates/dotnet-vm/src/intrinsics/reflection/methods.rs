@@ -1,7 +1,6 @@
 use crate::{StepResult, resolution::TypeResolutionExt, stack::ops::VesOps};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription, runtime::RuntimeType};
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::{StackValue, object::ObjectRef};
 
 #[dotnet_intrinsic("string System.Reflection.MethodInfo::get_Name()")]
@@ -62,39 +61,39 @@ use dotnet_value::{StackValue, object::ObjectRef};
 )]
 pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
+    let gc = ctx.gc();
     let method_name = &*method.method.name;
     let param_count = method.method.signature.parameters.len();
 
     let result = match (method_name, param_count) {
         ("GetName" | "get_Name", 0) => {
-            let obj = ctx.pop_obj(gc);
+            let obj = ctx.pop_obj();
             let (method, _) = ctx.resolve_runtime_method(obj);
-            ctx.push_string(gc, method.method.name.clone().into());
+            ctx.push_string(method.method.name.clone().into());
             Some(StepResult::Continue)
         }
         ("GetDeclaringType" | "get_DeclaringType", 0) => {
-            let obj = ctx.pop_obj(gc);
+            let obj = ctx.pop_obj();
             let (method, _) = ctx.resolve_runtime_method(obj);
-            let rt_obj = ctx.get_runtime_type(gc, RuntimeType::Type(method.parent));
-            ctx.push_obj(gc, rt_obj);
+            let rt_obj = ctx.get_runtime_type(RuntimeType::Type(method.parent));
+            ctx.push_obj(rt_obj);
             Some(StepResult::Continue)
         }
         ("GetMethodHandle" | "get_MethodHandle", 0) => {
-            let obj = ctx.pop_obj(gc);
+            let obj = ctx.pop_obj();
 
             let rmh = ctx.loader().corlib_type("System.RuntimeMethodHandle");
             let instance = ctx.new_object(rmh);
             obj.write(&mut instance.instance_storage.get_field_mut_local(rmh, "_value"));
 
-            ctx.push(gc, StackValue::ValueType(instance));
+            ctx.push(StackValue::ValueType(instance));
             Some(StepResult::Continue)
         }
         ("get_ReturnType" | "GetReturnType", 0) => {
-            let obj = ctx.pop_obj(gc);
+            let obj = ctx.pop_obj();
             let (method, lookup) = ctx.resolve_runtime_method(obj);
             let res_ctx = ctx.with_generics(&lookup);
             let rt = match &method.method.signature.return_type.1 {
@@ -107,17 +106,17 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                 }
                 None => RuntimeType::Void,
             };
-            let rt_obj = ctx.get_runtime_type(gc, rt);
-            ctx.push_obj(gc, rt_obj);
+            let rt_obj = ctx.get_runtime_type(rt);
+            ctx.push_obj(rt_obj);
             Some(StepResult::Continue)
         }
         ("Invoke", 5) => {
-            let _culture = ctx.pop(gc); // CultureInfo
-            let parameters_obj = ctx.pop_obj(gc); // object[]
-            let _binder = ctx.pop(gc); // Binder
-            let _flags = ctx.pop_i32(gc); // BindingFlags
-            let this_obj = ctx.pop(gc); // object (can be null for static)
-            let method_obj = ctx.pop_obj(gc); // MethodInfo/ConstructorInfo
+            let _culture = ctx.pop(); // CultureInfo
+            let parameters_obj = ctx.pop_obj(); // object[]
+            let _binder = ctx.pop(); // Binder
+            let _flags = ctx.pop_i32(); // BindingFlags
+            let this_obj = ctx.pop(); // object (can be null for static)
+            let method_obj = ctx.pop_obj(); // MethodInfo/ConstructorInfo
 
             let (method, lookup) = ctx.resolve_runtime_method(method_obj);
 
@@ -189,17 +188,17 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                 .awaiting_invoke_return = Some(return_type);
 
             for arg in args {
-                ctx.push(gc, arg);
+                ctx.push(arg);
             }
 
-            return ctx.dispatch_method(gc, method, lookup);
+            return ctx.dispatch_method(method, lookup);
         }
         ("Invoke", 4) => {
-            let _culture = ctx.pop(gc); // CultureInfo
-            let parameters_obj = ctx.pop_obj(gc); // object[]
-            let _binder = ctx.pop(gc); // Binder
-            let _flags = ctx.pop_i32(gc); // BindingFlags
-            let method_obj = ctx.pop_obj(gc); // ConstructorInfo
+            let _culture = ctx.pop(); // CultureInfo
+            let parameters_obj = ctx.pop_obj(); // object[]
+            let _binder = ctx.pop(); // Binder
+            let _flags = ctx.pop_i32(); // BindingFlags
+            let method_obj = ctx.pop_obj(); // ConstructorInfo
 
             let (method, lookup) = ctx.resolve_runtime_method(method_obj);
 
@@ -262,10 +261,10 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                 .awaiting_invoke_return = Some(RuntimeType::Type(method.parent));
 
             for arg in args {
-                ctx.push(gc, arg);
+                ctx.push(arg);
             }
 
-            return ctx.dispatch_method(gc, method, lookup);
+            return ctx.dispatch_method(method, lookup);
         }
         _ => None,
     };
@@ -282,11 +281,11 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
 )]
 pub fn intrinsic_method_handle_get_function_pointer<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let handle = ctx.pop_value_type(gc);
+    let gc = ctx.gc();
+    let handle = ctx.pop_value_type();
     let method_obj = unsafe {
         ObjectRef::read_branded(
             &handle
@@ -297,6 +296,6 @@ pub fn intrinsic_method_handle_get_function_pointer<'gc, 'm: 'gc>(
     };
     let (method, lookup) = ctx.resolve_runtime_method(method_obj);
     let index = ctx.get_runtime_method_index(method, lookup);
-    ctx.push_isize(gc, index as isize);
+    ctx.push_isize(index as isize);
     StepResult::Continue
 }

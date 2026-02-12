@@ -1,6 +1,5 @@
-use crate::{StepResult, layout::type_layout, resolution::ValueResolution, stack::ops::VesOps};
+use crate::{StepResult, layout::type_layout, stack::ops::VesOps};
 use dotnet_macros::dotnet_instruction;
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     StackValue,
     layout::HasLayout,
@@ -13,21 +12,20 @@ use std::ptr::NonNull;
 #[dotnet_instruction(LoadElement { param0 })]
 pub fn ldelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {
-    let index = match ctx.pop(gc) {
+    let index = match ctx.pop() {
         StackValue::Int32(i) => i as usize,
         StackValue::NativeInt(i) => i as usize,
         rest => panic!("invalid index for ldelem: {:?}", rest),
     };
-    let val = ctx.pop(gc);
+    let val = ctx.pop();
     let StackValue::ObjectRef(obj) = val else {
         panic!("ldelem: expected object on stack, got {:?}", val);
     };
 
     if obj.0.is_none() {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     let res_ctx = ctx.current_context();
@@ -38,13 +36,13 @@ pub fn ldelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         }
         let elem_size = array.layout.element_layout.size();
         let target = &array.get()[(elem_size * index)..(elem_size * (index + 1))];
-        Ok(res_ctx
-            .read_cts_value(&load_type, target, gc)
-            .into_stack(gc))
+        Ok(ctx
+            .read_cts_value(&load_type, target)
+            .into_stack(ctx.gc()))
     });
     match value {
-        Ok(v) => ctx.push(gc, v),
-        Err(_) => return ctx.throw_by_name(gc, "System.IndexOutOfRangeException"),
+        Ok(v) => ctx.push(v),
+        Err(_) => return ctx.throw_by_name("System.IndexOutOfRangeException"),
     }
     StepResult::Continue
 }
@@ -52,10 +50,9 @@ pub fn ldelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 #[dotnet_instruction(LoadElementPrimitive { param0 })]
 pub fn ldelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
     param0: LoadType,
 ) -> StepResult {
-    let index = match ctx.pop(gc) {
+    let index = match ctx.pop() {
         StackValue::Int32(i) => i as usize,
         StackValue::NativeInt(i) => i as usize,
         rest => panic!(
@@ -63,14 +60,14 @@ pub fn ldelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             rest
         ),
     };
-    let array = ctx.pop(gc);
+    let array = ctx.pop();
 
     let StackValue::ObjectRef(obj) = array else {
         panic!("ldelem: expected object on stack, got {:?}", array);
     };
 
     if obj.0.is_none() {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     let elem_size: usize = match param0 {
@@ -107,13 +104,13 @@ pub fn ldelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             LoadType::Float64 => StackValue::NativeFloat(from_bytes!(f64)),
             LoadType::IntPtr => StackValue::NativeInt(from_bytes!(isize)),
             LoadType::Object => {
-                StackValue::ObjectRef(unsafe { ObjectRef::read_branded(target, gc) })
+                StackValue::ObjectRef(unsafe { ObjectRef::read_branded(target, ctx.gc()) })
             }
         })
     });
     match value {
-        Ok(v) => ctx.push(gc, v),
-        Err(_) => return ctx.throw_by_name(gc, "System.IndexOutOfRangeException"),
+        Ok(v) => ctx.push(v),
+        Err(_) => return ctx.throw_by_name("System.IndexOutOfRangeException"),
     }
     StepResult::Continue
 }
@@ -121,39 +118,37 @@ pub fn ldelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 #[dotnet_instruction(LoadElementAddress { param0 })]
 pub fn ldelema<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
+
     param0: &MethodType,
 ) -> StepResult {
-    ldelema_internal(gc, ctx, param0, false)
+    ldelema_internal(ctx, param0, false)
 }
 
 #[dotnet_instruction(LoadElementAddressReadonly(param0))]
 pub fn ldelema_readonly<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {
-    ldelema_internal(gc, ctx, param0, true)
+    ldelema_internal(ctx, param0, true)
 }
 
 fn ldelema_internal<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
-    gc: GCHandle<'gc>,
     ctx: &mut T,
     param0: &MethodType,
     readonly: bool,
 ) -> StepResult {
-    let index = match ctx.pop(gc) {
+    let index = match ctx.pop() {
         StackValue::Int32(i) => i as usize,
         StackValue::NativeInt(i) => i as usize,
         rest => panic!("invalid index for ldelema: {:?}", rest),
     };
-    let array = ctx.pop(gc);
+    let array = ctx.pop();
     let StackValue::ObjectRef(obj) = array else {
         panic!("ldelema: expected object on stack, got {:?}", array);
     };
 
     if obj.0.is_none() {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     let res_ctx = ctx.current_context();
@@ -170,12 +165,11 @@ fn ldelema_internal<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 
     let ptr = match value {
         Ok(p) => p,
-        Err(_) => return ctx.throw_by_name(gc, "System.IndexOutOfRangeException"),
+        Err(_) => return ctx.throw_by_name("System.IndexOutOfRangeException"),
     };
 
     let target_type = ctx.loader().find_concrete_type(concrete_t);
     ctx.push(
-        gc,
         StackValue::ManagedPtr(ManagedPtr::new(
             NonNull::new(ptr),
             target_type,
@@ -190,60 +184,58 @@ fn ldelema_internal<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 #[dotnet_instruction(StoreElement { param0 })]
 pub fn stelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {
-    let value = ctx.pop(gc);
-    let index = match ctx.pop(gc) {
+    let value = ctx.pop();
+    let index = match ctx.pop() {
         StackValue::Int32(i) => i as usize,
         StackValue::NativeInt(i) => i as usize,
         rest => panic!("invalid index for stelem: {:?}", rest),
     };
-    let array = ctx.pop(gc);
+    let array = ctx.pop();
     let StackValue::ObjectRef(obj) = array else {
         panic!("stelem: expected object on stack, got {:?}", array);
     };
 
     if obj.0.is_none() {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     let res_ctx = ctx.current_context();
     let store_type = res_ctx.make_concrete(param0);
-    let result = obj.as_vector_mut(gc, |array| {
+    let result = obj.as_vector_mut(ctx.gc(), |array| {
         if index >= array.layout.length {
             return Err(());
         }
         let elem_size = array.layout.element_layout.size();
         let target = &mut array.get_mut()[(elem_size * index)..(elem_size * (index + 1))];
-        res_ctx.new_cts_value(&store_type, value).write(target);
+        ctx.new_cts_value(&store_type, value).write(target);
         Ok(())
     });
     match result {
         Ok(_) => StepResult::Continue,
-        Err(_) => ctx.throw_by_name(gc, "System.IndexOutOfRangeException"),
+        Err(_) => ctx.throw_by_name("System.IndexOutOfRangeException"),
     }
 }
 
 #[dotnet_instruction(StoreElementPrimitive { param0 })]
 pub fn stelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
     param0: StoreType,
 ) -> StepResult {
-    let value = ctx.pop(gc);
-    let index = match ctx.pop(gc) {
+    let value = ctx.pop();
+    let index = match ctx.pop() {
         StackValue::Int32(i) => i as usize,
         StackValue::NativeInt(i) => i as usize,
         rest => panic!("invalid index for stelem: {:?}", rest),
     };
-    let array = ctx.pop(gc);
+    let array = ctx.pop();
     let StackValue::ObjectRef(obj) = array else {
         panic!("stelem: expected object on stack, got {:?}", array);
     };
 
     if obj.0.is_none() {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     let elem_size: usize = match param0 {
@@ -256,7 +248,7 @@ pub fn stelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         StoreType::IntPtr | StoreType::Object => ObjectRef::SIZE,
     };
 
-    let result = obj.as_vector_mut(gc, |array| {
+    let result = obj.as_vector_mut(ctx.gc(), |array| {
         if index >= array.layout.length {
             return Err(());
         }
@@ -330,30 +322,29 @@ pub fn stelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     });
     match result {
         Ok(_) => StepResult::Continue,
-        Err(_) => ctx.throw_by_name(gc, "System.IndexOutOfRangeException"),
+        Err(_) => ctx.throw_by_name("System.IndexOutOfRangeException"),
     }
 }
 
 #[dotnet_instruction(NewArray(param0))]
 pub fn newarr<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
     param0: &MethodType,
 ) -> StepResult {
     // Check for GC safe point before large allocations
     // Threshold: arrays with > 1024 elements
     const LARGE_ARRAY_THRESHOLD: usize = 1024;
 
-    let length = match ctx.pop(gc) {
+    let length = match ctx.pop() {
         StackValue::Int32(i) => {
             if i < 0 {
-                return ctx.throw_by_name(gc, "System.OverflowException");
+                return ctx.throw_by_name("System.OverflowException");
             }
             i as usize
         }
         StackValue::NativeInt(i) => {
             if i < 0 {
-                return ctx.throw_by_name(gc, "System.OverflowException");
+                return ctx.throw_by_name("System.OverflowException");
             }
             i as usize
         }
@@ -368,24 +359,23 @@ pub fn newarr<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let elem_type = res_ctx.normalize_type(res_ctx.make_concrete(param0));
 
     let v = ctx.new_vector(elem_type, length);
-    let o = ObjectRef::new(gc, HeapStorage::Vec(v));
+    let o = ObjectRef::new(ctx.gc(), HeapStorage::Vec(v));
     ctx.register_new_object(&o);
-    ctx.push(gc, StackValue::ObjectRef(o));
+    ctx.push(StackValue::ObjectRef(o));
     StepResult::Continue
 }
 
 #[dotnet_instruction(LoadLength)]
 pub fn ldlen<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
 ) -> StepResult {
-    let array = ctx.pop(gc);
+    let array = ctx.pop();
     let StackValue::ObjectRef(obj) = array else {
         panic!("ldlen: expected object on stack, got {:?}", array);
     };
 
     let Some(h) = obj.0 else {
-        return ctx.throw_by_name(gc, "System.NullReferenceException");
+        return ctx.throw_by_name("System.NullReferenceException");
     };
 
     let inner = h.borrow();
@@ -399,6 +389,6 @@ pub fn ldlen<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             panic!("ldlen called on Boxed value (expected Vec or Str): {:?}", b);
         }
     };
-    ctx.push(gc, StackValue::NativeInt(len));
+    ctx.push(StackValue::NativeInt(len));
     StepResult::Continue
 }

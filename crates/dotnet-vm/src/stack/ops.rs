@@ -21,8 +21,8 @@
 //! Handlers should typically take a generic parameter `T: VesOps<'gc, 'm> + ?Sized`.
 //! This allows them to work with both `VesContext` and potentially other implementations
 //! for testing or specialized execution.
+pub use crate::memory::ops::MemoryOps;
 use crate::{
-    memory::ops::MemoryOps,
     state::SharedGlobalState,
     sync::{Arc, MutexGuard},
     tracer::Tracer,
@@ -33,7 +33,6 @@ use dotnet_types::{
     members::{FieldDescription, MethodDescription},
     runtime::RuntimeType,
 };
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     CLRString, StackValue,
     object::{Object as ObjectInstance, ObjectHandle, ObjectRef},
@@ -42,50 +41,50 @@ use dotnet_value::{
 use dotnetdll::prelude::{FieldSource, MethodType};
 
 pub trait StackOps<'gc, 'm> {
-    fn push(&mut self, gc: GCHandle<'gc>, value: StackValue<'gc>);
-    fn push_i32(&mut self, gc: GCHandle<'gc>, value: i32);
-    fn push_i64(&mut self, gc: GCHandle<'gc>, value: i64);
-    fn push_f64(&mut self, gc: GCHandle<'gc>, value: f64);
-    fn push_obj(&mut self, gc: GCHandle<'gc>, value: ObjectRef<'gc>);
-    fn push_ptr(&mut self, gc: GCHandle<'gc>, ptr: *mut u8, t: TypeDescription, is_pinned: bool);
-    fn push_isize(&mut self, gc: GCHandle<'gc>, value: isize);
-    fn push_value_type(&mut self, gc: GCHandle<'gc>, value: ObjectInstance<'gc>);
-    fn push_managed_ptr(&mut self, gc: GCHandle<'gc>, value: ManagedPtr<'gc>);
-    fn push_string(&mut self, gc: GCHandle<'gc>, value: CLRString);
+    fn push(&mut self, value: StackValue<'gc>);
+    fn push_i32(&mut self, value: i32);
+    fn push_i64(&mut self, value: i64);
+    fn push_f64(&mut self, value: f64);
+    fn push_obj(&mut self, value: ObjectRef<'gc>);
+    fn push_ptr(&mut self, ptr: *mut u8, t: TypeDescription, is_pinned: bool);
+    fn push_isize(&mut self, value: isize);
+    fn push_value_type(&mut self, value: ObjectInstance<'gc>);
+    fn push_managed_ptr(&mut self, value: ManagedPtr<'gc>);
+    fn push_string(&mut self, value: CLRString);
 
     #[must_use]
-    fn pop(&mut self, gc: GCHandle<'gc>) -> StackValue<'gc>;
-    fn pop_safe(&mut self, gc: GCHandle<'gc>) -> Result<StackValue<'gc>, crate::error::VmError>;
+    fn pop(&mut self) -> StackValue<'gc>;
+    fn pop_safe(&mut self) -> Result<StackValue<'gc>, crate::error::VmError>;
     #[must_use]
-    fn pop_i32(&mut self, gc: GCHandle<'gc>) -> i32;
+    fn pop_i32(&mut self) -> i32;
     #[must_use]
-    fn pop_i64(&mut self, gc: GCHandle<'gc>) -> i64;
+    fn pop_i64(&mut self) -> i64;
     #[must_use]
-    fn pop_f64(&mut self, gc: GCHandle<'gc>) -> f64;
+    fn pop_f64(&mut self) -> f64;
     #[must_use]
-    fn pop_isize(&mut self, gc: GCHandle<'gc>) -> isize;
+    fn pop_isize(&mut self) -> isize;
     #[must_use]
-    fn pop_obj(&mut self, gc: GCHandle<'gc>) -> ObjectRef<'gc>;
+    fn pop_obj(&mut self) -> ObjectRef<'gc>;
     #[must_use]
-    fn pop_ptr(&mut self, gc: GCHandle<'gc>) -> *mut u8;
+    fn pop_ptr(&mut self) -> *mut u8;
     #[must_use]
-    fn pop_value_type(&mut self, gc: GCHandle<'gc>) -> ObjectInstance<'gc>;
+    fn pop_value_type(&mut self) -> ObjectInstance<'gc>;
     #[must_use]
-    fn pop_managed_ptr(&mut self, gc: GCHandle<'gc>) -> ManagedPtr<'gc>;
+    fn pop_managed_ptr(&mut self) -> ManagedPtr<'gc>;
     #[must_use]
-    fn pop_multiple(&mut self, gc: GCHandle<'gc>, count: usize) -> Vec<StackValue<'gc>>;
+    fn pop_multiple(&mut self, count: usize) -> Vec<StackValue<'gc>>;
     #[must_use]
     fn peek_multiple(&self, count: usize) -> Vec<StackValue<'gc>>;
 
-    fn dup(&mut self, gc: GCHandle<'gc>);
+    fn dup(&mut self);
     fn peek(&self) -> Option<StackValue<'gc>>;
     fn peek_stack(&self) -> StackValue<'gc>;
     fn peek_stack_at(&self, offset: usize) -> StackValue<'gc>;
 
     fn get_local(&self, index: usize) -> StackValue<'gc>;
-    fn set_local(&mut self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>);
+    fn set_local(&mut self, index: usize, value: StackValue<'gc>);
     fn get_argument(&self, index: usize) -> StackValue<'gc>;
-    fn set_argument(&mut self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>);
+    fn set_argument(&mut self, index: usize, value: StackValue<'gc>);
 
     fn get_local_address(&self, index: usize) -> std::ptr::NonNull<u8>;
     fn get_argument_address(&self, index: usize) -> std::ptr::NonNull<u8>;
@@ -96,19 +95,19 @@ pub trait StackOps<'gc, 'm> {
 
     fn get_slot(&self, index: usize) -> StackValue<'gc>;
     fn get_slot_ref(&self, index: usize) -> &StackValue<'gc>;
-    fn set_slot(&mut self, gc: GCHandle<'gc>, index: usize, value: StackValue<'gc>);
+    fn set_slot(&mut self, index: usize, value: StackValue<'gc>);
     fn top_of_stack(&self) -> usize;
     fn get_slot_address(&self, index: usize) -> std::ptr::NonNull<u8>;
 }
 
 pub trait ExceptionOps<'gc> {
-    fn throw_by_name(&mut self, gc: GCHandle<'gc>, name: &str) -> crate::StepResult;
-    fn throw(&mut self, gc: GCHandle<'gc>, exception: ObjectRef<'gc>) -> crate::StepResult;
-    fn rethrow(&mut self, gc: GCHandle<'gc>) -> crate::StepResult;
-    fn leave(&mut self, gc: GCHandle<'gc>, target_ip: usize) -> crate::StepResult;
-    fn endfinally(&mut self, gc: GCHandle<'gc>) -> crate::StepResult;
-    fn endfilter(&mut self, gc: GCHandle<'gc>, result: i32) -> crate::StepResult;
-    fn ret(&mut self, gc: GCHandle<'gc>) -> crate::StepResult;
+    fn throw_by_name(&mut self, name: &str) -> crate::StepResult;
+    fn throw(&mut self, exception: ObjectRef<'gc>) -> crate::StepResult;
+    fn rethrow(&mut self) -> crate::StepResult;
+    fn leave(&mut self, target_ip: usize) -> crate::StepResult;
+    fn endfinally(&mut self) -> crate::StepResult;
+    fn endfilter(&mut self, result: i32) -> crate::StepResult;
+    fn ret(&mut self) -> crate::StepResult;
 }
 
 pub trait ResolutionOps<'gc, 'm> {
@@ -157,22 +156,20 @@ pub trait RawMemoryOps<'gc> {
 }
 
 pub trait ReflectionOps<'gc, 'm>: crate::memory::ops::MemoryOps<'gc> {
-    fn pre_initialize_reflection(&mut self, gc: GCHandle<'gc>);
+    fn pre_initialize_reflection(&mut self);
     fn get_runtime_method_index(
         &mut self,
         method: MethodDescription,
         lookup: GenericLookup,
     ) -> usize;
-    fn get_runtime_type(&mut self, gc: GCHandle<'gc>, target: RuntimeType) -> ObjectRef<'gc>;
+    fn get_runtime_type(&mut self, target: RuntimeType) -> ObjectRef<'gc>;
     fn get_runtime_method_obj(
         &mut self,
-        gc: GCHandle<'gc>,
         method: MethodDescription,
         lookup: GenericLookup,
     ) -> ObjectRef<'gc>;
     fn get_runtime_field_obj(
         &mut self,
-        gc: GCHandle<'gc>,
         field: FieldDescription,
         lookup: GenericLookup,
     ) -> ObjectRef<'gc>;
@@ -202,7 +199,6 @@ pub trait StaticsOps<'gc> {
     fn statics(&self) -> &crate::state::StaticStorageManager;
     fn initialize_static_storage(
         &mut self,
-        gc: GCHandle<'gc>,
         description: TypeDescription,
         generics: GenericLookup,
     ) -> crate::StepResult;
@@ -215,7 +211,6 @@ pub trait ThreadOps {
 pub trait CallOps<'gc, 'm> {
     fn constructor_frame(
         &mut self,
-        gc: GCHandle<'gc>,
         instance: ObjectInstance<'gc>,
         method: crate::MethodInfo<'m>,
         generic_inst: GenericLookup,
@@ -223,14 +218,12 @@ pub trait CallOps<'gc, 'm> {
 
     fn call_frame(
         &mut self,
-        gc: GCHandle<'gc>,
         method: crate::MethodInfo<'m>,
         generic_inst: GenericLookup,
     );
 
     fn entrypoint_frame(
         &mut self,
-        gc: GCHandle<'gc>,
         method: crate::MethodInfo<'m>,
         generic_inst: GenericLookup,
         args: Vec<StackValue<'gc>>,
@@ -238,14 +231,12 @@ pub trait CallOps<'gc, 'm> {
 
     fn dispatch_method(
         &mut self,
-        gc: GCHandle<'gc>,
         method: MethodDescription,
         lookup: GenericLookup,
     ) -> crate::StepResult;
 
     fn unified_dispatch(
         &mut self,
-        gc: GCHandle<'gc>,
         source: &dotnetdll::prelude::MethodSource,
         this_type: Option<TypeDescription>,
         ctx: Option<&crate::ResolutionContext<'_, 'm>>,
@@ -265,12 +256,13 @@ pub trait VesOps<'gc, 'm>:
     + PoolOps
     + RawMemoryOps<'gc>
 {
-    fn run(&mut self, gc: GCHandle<'gc>) -> crate::StepResult;
-    fn handle_exception(&mut self, gc: GCHandle<'gc>) -> crate::StepResult;
+    fn run(&mut self) -> crate::StepResult;
+    fn handle_return(&mut self) -> crate::StepResult;
+    fn handle_exception(&mut self) -> crate::StepResult;
     fn tracer_enabled(&self) -> bool;
     fn tracer(&self) -> MutexGuard<'_, Tracer>;
     fn indent(&self) -> usize;
-    fn process_pending_finalizers(&mut self, gc: GCHandle<'gc>) -> crate::StepResult;
+    fn process_pending_finalizers(&mut self) -> crate::StepResult;
     fn back_up_ip(&mut self);
     fn branch(&mut self, target: usize);
     fn conditional_branch(&mut self, condition: bool, target: usize) -> bool;
@@ -290,5 +282,5 @@ pub trait VesOps<'gc, 'm>:
     fn original_stack_height(&self) -> usize;
     fn original_stack_height_mut(&mut self) -> &mut usize;
 
-    fn unwind_frame(&mut self, gc: GCHandle<'gc>);
+    fn unwind_frame(&mut self);
 }

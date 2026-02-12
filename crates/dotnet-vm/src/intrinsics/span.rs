@@ -3,7 +3,6 @@ use dotnet_types::{
     generics::GenericLookup,
     members::{FieldDescription, MethodDescription},
 };
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     StackValue,
     layout::HasLayout,
@@ -58,18 +57,18 @@ use dotnet_macros::dotnet_intrinsic;
 )]
 pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _culture_comparison = ctx.pop_i32(gc);
-    let b = ctx.pop_value_type(gc);
-    let a = ctx.pop_value_type(gc);
+    let _gc = ctx.gc();
+    let _culture_comparison = ctx.pop_i32();
+    let b = ctx.pop_value_type();
+    let a = ctx.pop_value_type();
 
     let a = span_to_slice(a, 2);
     let b = span_to_slice(b, 2);
 
-    ctx.push_i32(gc, (a == b) as i32);
+    ctx.push_i32((a == b) as i32);
     StepResult::Continue
 }
 
@@ -81,10 +80,10 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
 )]
 pub fn intrinsic_as_span<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
+    let _gc = ctx.gc();
     let param_count = method.method.signature.parameters.len();
 
     // AsSpan can have 1, 2, or 3 parameters:
@@ -97,18 +96,18 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
     let (start, length_override) = match param_count {
         1 => (0, None),
         2 => {
-            let start = match ctx.pop(gc) {
+            let start = match ctx.pop() {
                 StackValue::Int32(i) => i as usize,
                 v => panic!("AsSpan: expected Int32 for start parameter, got {:?}", v),
             };
             (start, None)
         }
         3 => {
-            let length = match ctx.pop(gc) {
+            let length = match ctx.pop() {
                 StackValue::Int32(i) => i as usize,
                 v => panic!("AsSpan: expected Int32 for length parameter, got {:?}", v),
             };
-            let start = match ctx.pop(gc) {
+            let start = match ctx.pop() {
                 StackValue::Int32(i) => i as usize,
                 v => panic!("AsSpan: expected Int32 for start parameter, got {:?}", v),
             };
@@ -117,7 +116,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
         _ => panic!("AsSpan: unexpected parameter count {}", param_count),
     };
 
-    let obj_val = ctx.pop(gc);
+    let obj_val = ctx.pop();
 
     let res_ctx = ctx.with_generics(generics);
 
@@ -219,7 +218,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
         .get_field_mut_local(span_type, "_length")
         .copy_from_slice(&(len as i32).to_ne_bytes());
 
-    ctx.push_value_type(gc, span);
+    ctx.push_value_type(span);
     StepResult::Continue
 }
 
@@ -228,15 +227,15 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
 )]
 pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
+    let gc = ctx.gc();
     let element_type = &generics.method_generics[0];
     let res_ctx = ctx.with_generics(generics);
     let element_size = type_layout(element_type.clone(), &res_ctx).size();
 
-    let field_handle = ctx.pop_value_type(gc);
+    let field_handle = ctx.pop_value_type();
 
     let (FieldDescription { field, .. }, lookup) = {
         let mut ptr_buf = [0u8; ObjectRef::SIZE];
@@ -252,7 +251,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
     let field_desc = ctx.loader().find_concrete_type(field_type.clone());
 
     let Some(initial_data) = &field.initial_value else {
-        return ctx.throw_by_name(gc, "System.ArgumentException");
+        return ctx.throw_by_name("System.ArgumentException");
     };
 
     if field_desc
@@ -293,7 +292,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
             .get_field_mut_local(span_type, "_length")
             .copy_from_slice(&element_count.to_ne_bytes());
 
-        ctx.push_value_type(gc, span_instance);
+        ctx.push_value_type(span_instance);
         StepResult::Continue
     } else {
         todo!("initial field data for {:?}", field_desc);
@@ -305,13 +304,13 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
 )]
 pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let length_ref = ctx.pop_managed_ptr(gc);
-    let type_handle = ctx.pop_value_type(gc);
-    let field_handle = ctx.pop_value_type(gc);
+    let gc = ctx.gc();
+    let length_ref = ctx.pop_managed_ptr();
+    let type_handle = ctx.pop_value_type();
+    let field_handle = ctx.pop_value_type();
 
     // Resolve field
     let (FieldDescription { field, .. }, _) = {
@@ -344,7 +343,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
     let element_size = type_layout(element_type, &res_ctx).size();
 
     let Some(initial_data) = &field.initial_value else {
-        ctx.push_isize(gc, 0);
+        ctx.push_isize(0);
         return StepResult::Continue;
     };
 
@@ -367,9 +366,9 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
         }
 
         let ptr = initial_data.as_ptr() as usize;
-        ctx.push_isize(gc, ptr as isize);
+        ctx.push_isize(ptr as isize);
     } else {
-        ctx.push_isize(gc, 0);
+        ctx.push_isize(0);
     }
     StepResult::Continue
 }
@@ -377,11 +376,11 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static byte& DotnetRs.Internal::GetArrayData(System.Array)")]
 pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let array_ref = ctx.pop_obj(gc);
+    let _gc = ctx.gc();
+    let array_ref = ctx.pop_obj();
 
     let element_type = if !generics.method_generics.is_empty() {
         generics.method_generics[0].clone()
@@ -401,13 +400,13 @@ pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc>(
                 Some(array_ref),
                 false,
             );
-            ctx.push_managed_ptr(gc, managed);
+            ctx.push_managed_ptr(managed);
         } else {
             panic!("GetArrayData called on non-vector object");
         }
     } else {
         let managed = ManagedPtr::new(None, element_type_desc, None, false);
-        ctx.push_managed_ptr(gc, managed);
+        ctx.push_managed_ptr(managed);
     }
     StepResult::Continue
 }

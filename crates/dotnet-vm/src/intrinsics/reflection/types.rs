@@ -14,7 +14,6 @@ use dotnet_types::{
     members::MethodDescription,
     runtime::RuntimeType,
 };
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     StackValue,
     layout::{LayoutManager, Scalar},
@@ -27,18 +26,18 @@ use dotnetdll::prelude::{
 #[dotnet_intrinsic("object[] System.Reflection.Assembly::GetCustomAttributes(System.Type, bool)")]
 pub fn intrinsic_assembly_get_custom_attributes<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
-    method: MethodDescription,
+    _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let num_args = method.method.signature.parameters.len()
-        + if method.method.signature.instance {
+    let gc = ctx.gc();
+    let num_args = _method.method.signature.parameters.len()
+        + if _method.method.signature.instance {
             1
         } else {
             0
         };
     for _ in 0..num_args {
-        let _ = ctx.pop(gc);
+        let _ = ctx.pop();
     }
 
     // Return an empty array of Attribute
@@ -46,7 +45,7 @@ pub fn intrinsic_assembly_get_custom_attributes<'gc, 'm: 'gc>(
     let array = ctx.current_context().new_vector(attribute_type.into(), 0);
     let obj = ObjectRef::new(gc, HeapStorage::Vec(array));
     ctx.register_new_object(&obj);
-    ctx.push_obj(gc, obj);
+    ctx.push_obj(obj);
 
     StepResult::Continue
 }
@@ -56,18 +55,18 @@ pub fn intrinsic_assembly_get_custom_attributes<'gc, 'm: 'gc>(
 )]
 pub fn intrinsic_attribute_get_custom_attributes<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
-    method: MethodDescription,
+    _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let num_args = method.method.signature.parameters.len()
-        + if method.method.signature.instance {
+    let gc = ctx.gc();
+    let num_args = _method.method.signature.parameters.len()
+        + if _method.method.signature.instance {
             1
         } else {
             0
         };
     for _ in 0..num_args {
-        let _ = ctx.pop(gc);
+        let _ = ctx.pop();
     }
 
     // Return an empty array of Attribute
@@ -75,7 +74,7 @@ pub fn intrinsic_attribute_get_custom_attributes<'gc, 'm: 'gc>(
     let array = ctx.current_context().new_vector(attribute_type.into(), 0);
     let obj = ObjectRef::new(gc, HeapStorage::Vec(array));
     ctx.register_new_object(&obj);
-    ctx.push_obj(gc, obj);
+    ctx.push_obj(obj);
 
     StepResult::Continue
 }
@@ -83,13 +82,12 @@ pub fn intrinsic_attribute_get_custom_attributes<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static System.Type System.Type::GetType(string)")]
 pub fn intrinsic_type_get_type<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let name_obj = ctx.pop_obj(gc);
+    let name_obj = ctx.pop_obj();
     if name_obj.0.is_none() {
-        ctx.push(gc, StackValue::null());
+        ctx.push(StackValue::null());
         return StepResult::Continue;
     }
 
@@ -103,10 +101,10 @@ pub fn intrinsic_type_get_type<'gc, 'm: 'gc>(
 
     let td = ctx.loader().corlib_type(&name);
     if !td.is_null() {
-        let rt_obj = ctx.get_runtime_type(gc, RuntimeType::Type(td));
-        ctx.push_obj(gc, rt_obj);
+        let rt_obj = ctx.get_runtime_type(RuntimeType::Type(td));
+        ctx.push_obj(rt_obj);
     } else {
-        ctx.push(gc, StackValue::null());
+        ctx.push(StackValue::null());
     }
 
     StepResult::Continue
@@ -162,7 +160,6 @@ pub fn intrinsic_type_get_type<'gc, 'm: 'gc>(
 )]
 pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
@@ -170,26 +167,26 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
     let param_count = method.method.signature.parameters.len();
 
     match (method_name, param_count) {
-        ("CreateInstanceCheckThis", 0) => handle_create_instance_check_this(ctx, gc, generics),
-        ("GetAssembly" | "get_Assembly", 0) => handle_get_assembly(ctx, gc, generics),
-        ("GetNamespace" | "get_Namespace", 0) => handle_get_namespace(ctx, gc, generics),
-        ("GetMethods", 1) => handle_get_methods(ctx, gc, generics),
-        ("GetMethodImpl", 6) => handle_get_method_impl(ctx, gc, generics),
-        ("GetConstructors", 1) => handle_get_constructors(ctx, gc, generics),
-        ("GetName" | "get_Name", 0) => handle_get_name(ctx, gc, generics),
-        ("GetBaseType" | "get_BaseType", 0) => handle_get_base_type(ctx, gc, generics),
+        ("CreateInstanceCheckThis", 0) => handle_create_instance_check_this(ctx, generics),
+        ("GetAssembly" | "get_Assembly", 0) => handle_get_assembly(ctx, generics),
+        ("GetNamespace" | "get_Namespace", 0) => handle_get_namespace(ctx, generics),
+        ("GetMethods", 1) => handle_get_methods(ctx, generics),
+        ("GetMethodImpl", 6) => handle_get_method_impl(ctx, generics),
+        ("GetConstructors", 1) => handle_get_constructors(ctx, generics),
+        ("GetName" | "get_Name", 0) => handle_get_name(ctx, generics),
+        ("GetBaseType" | "get_BaseType", 0) => handle_get_base_type(ctx, generics),
         ("GetIsGenericType" | "get_IsGenericType", 0) => {
-            handle_get_is_generic_type(ctx, gc, generics)
+            handle_get_is_generic_type(ctx, generics)
         }
         ("GetGenericTypeDefinition" | "get_GenericTypeDefinition", 0) => {
-            handle_get_generic_type_definition(ctx, gc, generics)
+            handle_get_generic_type_definition(ctx, generics)
         }
         ("GetGenericArguments" | "get_GenericArguments", 0) => {
-            handle_get_generic_arguments(ctx, gc, generics)
+            handle_get_generic_arguments(ctx, generics)
         }
-        ("GetTypeHandle" | "get_TypeHandle", 0) => handle_get_type_handle(ctx, gc, generics),
-        ("MakeGenericType", 1) => handle_make_generic_type(ctx, gc, generics),
-        ("CreateInstanceDefaultCtor", 2) => handle_create_instance_default_ctor(ctx, gc, generics),
+        ("GetTypeHandle" | "get_TypeHandle", 0) => handle_get_type_handle(ctx, generics),
+        ("MakeGenericType", 1) => handle_make_generic_type(ctx, generics),
+        ("CreateInstanceDefaultCtor", 2) => handle_create_instance_default_ctor(ctx, generics),
         _ => panic!("unimplemented runtime type intrinsic: {:?}", method),
     }
 }
@@ -202,22 +199,22 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
 )]
 pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
+    let gc = ctx.gc();
     let method_name = &*method.method.name;
     let param_count = method.method.signature.parameters.len();
 
     match (method_name, param_count) {
         ("GetActivationInfo", 5) => {
             // static extern void GetActivationInfo(RuntimeTypeHandle type, out IntPtr pfnAllocator, out IntPtr allocatorFirstArg, out IntPtr pfnCtor, out bool ctorIsPublic);
-            let ctor_is_public = ctx.pop_managed_ptr(gc);
-            let pfn_ctor = ctx.pop_managed_ptr(gc);
-            let allocator_first_arg = ctx.pop_managed_ptr(gc);
-            let pfn_allocator = ctx.pop_managed_ptr(gc);
+            let ctor_is_public = ctx.pop_managed_ptr();
+            let pfn_ctor = ctx.pop_managed_ptr();
+            let allocator_first_arg = ctx.pop_managed_ptr();
+            let pfn_allocator = ctx.pop_managed_ptr();
 
-            let rt_obj = match ctx.pop(gc) {
+            let rt_obj = match ctx.pop() {
                 StackValue::ValueType(rth_handle) => unsafe {
                     ObjectRef::read_branded(
                         &rth_handle
@@ -241,9 +238,9 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
             };
 
             // pfnAllocator = IntPtr.Zero
-            ctx.push(gc, StackValue::NativeInt(0));
+            ctx.push(StackValue::NativeInt(0));
             unsafe {
-                ctx.pop(gc).store(
+                ctx.pop().store(
                     pfn_allocator
                         .pointer()
                         .expect("pfn_allocator null")
@@ -253,9 +250,9 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
             };
 
             // allocatorFirstArg = IntPtr.Zero
-            ctx.push(gc, StackValue::NativeInt(0));
+            ctx.push(StackValue::NativeInt(0));
             unsafe {
-                ctx.pop(gc).store(
+                ctx.pop().store(
                     allocator_first_arg
                         .pointer()
                         .expect("allocator_first_arg null")
@@ -286,17 +283,17 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
                         },
                     );
 
-                    ctx.push(gc, StackValue::NativeInt(method_idx as isize));
+                    ctx.push(StackValue::NativeInt(method_idx as isize));
                     unsafe {
-                        ctx.pop(gc).store(
+                        ctx.pop().store(
                             pfn_ctor.pointer().expect("pfn_ctor null").as_ptr(),
                             dotnetdll::prelude::StoreType::IntPtr,
                         )
                     };
 
-                    ctx.push(gc, StackValue::Int32(1));
+                    ctx.push(StackValue::Int32(1));
                     unsafe {
-                        ctx.pop(gc).store(
+                        ctx.pop().store(
                             ctor_is_public
                                 .pointer()
                                 .expect("ctor_is_public null")
@@ -328,7 +325,6 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
 )]
 pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
@@ -339,17 +335,17 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc>(
         ctx.shared().caches.clone(),
         Some(ctx.shared().clone()),
     );
-    let obj = ctx.pop(gc);
+    let obj = ctx.pop();
     let object_type = match obj {
         StackValue::ObjectRef(ObjectRef(Some(h))) => res_ctx.get_heap_description(h),
         StackValue::ObjectRef(ObjectRef(None)) => {
-            return ctx.throw_by_name(gc, "System.NullReferenceException");
+            return ctx.throw_by_name("System.NullReferenceException");
         }
         _ => panic!("invalid type on stack"),
     };
 
     let mt_ptr = object_type.definition_ptr().unwrap().as_ptr();
-    ctx.push_isize(gc, mt_ptr as isize);
+    ctx.push_isize(mt_ptr as isize);
     StepResult::Continue
 }
 
@@ -358,7 +354,6 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc>(
 )]
 pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
@@ -369,7 +364,7 @@ pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc>(
         LayoutManager::Scalar(_) => true,
         _ => false,
     };
-    ctx.push_i32(gc, value as i32);
+    ctx.push_i32(value as i32);
     StepResult::Continue
 }
 
@@ -378,13 +373,12 @@ pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc>(
 )]
 pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let target = &generics.method_generics[0];
     let layout = type_layout(target.clone(), &ctx.current_context());
-    ctx.push_i32(gc, layout.is_or_contains_refs() as i32);
+    ctx.push_i32(layout.is_or_contains_refs() as i32);
     StepResult::Continue
 }
 
@@ -393,10 +387,10 @@ pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<'gc, 'm: 'g
 )]
 pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
+    let gc = ctx.gc();
     let arg = ctx.peek_stack();
     let StackValue::ValueType(handle) = arg else {
         panic!(
@@ -417,20 +411,19 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc>(
     let target_ct = target_type.to_concrete(ctx.loader());
     let target_desc = ctx.loader().find_concrete_type(target_ct);
 
-    let res = ctx.initialize_static_storage(gc, target_desc, generics.clone());
+    let res = ctx.initialize_static_storage(target_desc, generics.clone());
     if res != StepResult::Continue {
         return res;
     }
 
     // Initialization complete, pop the argument
-    let _ = ctx.pop(gc);
+    let _ = ctx.pop();
     StepResult::Continue
 }
 
 #[dotnet_intrinsic("static object System.Activator::CreateInstance()")]
 pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
@@ -446,7 +439,7 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
 
     if target_td.is_value_type(&ctx.current_context()) {
         let instance = res_ctx.new_object(target_td);
-        ctx.push_value_type(gc, instance);
+        ctx.push_value_type(instance);
         StepResult::Continue
     } else {
         let instance = res_ctx.new_object(target_td);
@@ -468,7 +461,6 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
                 };
 
                 ctx.constructor_frame(
-                    gc,
                     instance,
                     MethodInfo::new(desc, &new_lookup, ctx.shared().clone()),
                     new_lookup,
@@ -487,11 +479,11 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static System.Type System.Type::GetTypeFromHandle(System.RuntimeTypeHandle)")]
 pub fn intrinsic_get_from_handle<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let handle = ctx.pop_value_type(gc);
+    let gc = ctx.gc();
+    let handle = ctx.pop_value_type();
     let target = unsafe {
         ObjectRef::read_branded(
             &handle
@@ -500,7 +492,7 @@ pub fn intrinsic_get_from_handle<'gc, 'm: 'gc>(
             gc,
         )
     };
-    ctx.push_obj(gc, target);
+    ctx.push_obj(target);
     StepResult::Continue
 }
 
@@ -512,16 +504,15 @@ pub fn intrinsic_get_from_handle<'gc, 'm: 'gc>(
 )]
 pub fn intrinsic_type_handle_to_int_ptr<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let handle = ctx.pop_value_type(gc);
+    let handle = ctx.pop_value_type();
     let target = handle
         .instance_storage
         .get_field_local(handle.description, "_value");
     let val = usize::from_ne_bytes((&*target).try_into().unwrap());
-    ctx.push_isize(gc, val as isize);
+    ctx.push_isize(val as isize);
     StepResult::Continue
 }
 
@@ -530,16 +521,15 @@ pub fn intrinsic_type_handle_to_int_ptr<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("bool DotnetRs.RuntimeType::GetIsValueType()")]
 pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let o = ctx.pop_obj(gc);
+    let o = ctx.pop_obj();
     let target = ctx.resolve_runtime_type(o);
     let target_ct = target.to_concrete(ctx.loader());
     let target_desc = ctx.loader().find_concrete_type(target_ct);
     let value = target_desc.is_value_type(&ctx.current_context());
-    ctx.push_i32(gc, value as i32);
+    ctx.push_i32(value as i32);
     StepResult::Continue
 }
 
@@ -548,17 +538,16 @@ pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("bool DotnetRs.RuntimeType::GetIsEnum()")]
 pub fn intrinsic_type_get_is_enum<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let o = ctx.pop_obj(gc);
+    let o = ctx.pop_obj();
     let target = ctx.resolve_runtime_type(o);
     let value = match target {
         RuntimeType::Type(td) | RuntimeType::Generic(td, _) => td.is_enum().is_some(),
         _ => false,
     };
-    ctx.push_i32(gc, value as i32);
+    ctx.push_i32(value as i32);
     StepResult::Continue
 }
 
@@ -567,11 +556,10 @@ pub fn intrinsic_type_get_is_enum<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("bool DotnetRs.RuntimeType::GetIsInterface()")]
 pub fn intrinsic_type_get_is_interface<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let o = ctx.pop_obj(gc);
+    let o = ctx.pop_obj();
     let target = ctx.resolve_runtime_type(o);
     let value = match target {
         RuntimeType::Type(td) | RuntimeType::Generic(td, _) => {
@@ -579,44 +567,41 @@ pub fn intrinsic_type_get_is_interface<'gc, 'm: 'gc>(
         }
         _ => false,
     };
-    ctx.push_i32(gc, value as i32);
+    ctx.push_i32(value as i32);
     StepResult::Continue
 }
 
 #[dotnet_intrinsic("static bool System.Type::op_Equality(System.Type, System.Type)")]
 pub fn intrinsic_type_op_equality<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let o2 = ctx.pop_obj(gc);
-    let o1 = ctx.pop_obj(gc);
-    ctx.push_i32(gc, (o1 == o2) as i32);
+    let o2 = ctx.pop_obj();
+    let o1 = ctx.pop_obj();
+    ctx.push_i32((o1 == o2) as i32);
     StepResult::Continue
 }
 
 #[dotnet_intrinsic("static bool System.Type::op_Inequality(System.Type, System.Type)")]
 pub fn intrinsic_type_op_inequality<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let o2 = ctx.pop_obj(gc);
-    let o1 = ctx.pop_obj(gc);
-    ctx.push_i32(gc, (o1 != o2) as i32);
+    let o2 = ctx.pop_obj();
+    let o1 = ctx.pop_obj();
+    ctx.push_i32((o1 != o2) as i32);
     StepResult::Continue
 }
 
 #[dotnet_intrinsic("static System.RuntimeTypeHandle System.Type::GetTypeHandle(object)")]
 pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let obj = ctx.pop_obj(gc);
+    let obj = ctx.pop_obj();
 
     let rth = ctx.loader().corlib_type("System.RuntimeTypeHandle");
     let res_ctx = ResolutionContext::for_method(
@@ -629,16 +614,15 @@ pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc>(
     let instance = res_ctx.new_object(rth);
     obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 
-    ctx.push_value_type(gc, instance);
+    ctx.push_value_type(instance);
     StepResult::Continue
 }
 
 fn handle_create_instance_check_this<'gc, 'm>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _obj = ctx.pop_obj(gc);
+    let _obj = ctx.pop_obj();
     // For now, we don't perform any actual checks.
     // In a real VM, this would check if the type is abstract, has a ctor, etc.
     StepResult::Continue
@@ -646,17 +630,17 @@ fn handle_create_instance_check_this<'gc, 'm>(
 
 fn handle_get_assembly<'gc, 'm>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     generics: &GenericLookup,
 ) -> StepResult {
-    let obj = ctx.pop_obj(gc);
+    let gc = ctx.gc();
+    let obj = ctx.pop_obj();
 
     let target_type = ctx.resolve_runtime_type(obj);
     let resolution = target_type.resolution(ctx.loader());
 
     let cached_asm = ctx.reflection().asms_read().get(&resolution).copied();
     if let Some(o) = cached_asm {
-        ctx.push_obj(gc, o);
+        ctx.push_obj(o);
         return StepResult::Continue;
     }
 
@@ -686,36 +670,35 @@ fn handle_get_assembly<'gc, 'm>(
     ctx.register_new_object(&v);
 
     ctx.reflection().asms_write().insert(resolution, v);
-    ctx.push_obj(gc, v);
+    ctx.push_obj(v);
     StepResult::Continue
 }
 
 fn handle_get_namespace<'gc, 'm>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj = ctx.pop_obj(gc);
+    let obj = ctx.pop_obj();
     let target_type = ctx.resolve_runtime_type(obj);
     match target_type {
         RuntimeType::Type(td) | RuntimeType::Generic(td, _) => {
             match td.definition().namespace.as_ref() {
-                None => ctx.push(gc, StackValue::null()),
-                Some(n) => ctx.push_string(gc, n.clone().into()),
+                None => ctx.push(StackValue::null()),
+                Some(n) => ctx.push_string(n.clone().into()),
             }
         }
-        _ => ctx.push_string(gc, "System".into()),
+        _ => ctx.push_string("System".into()),
     }
     StepResult::Continue
 }
 
 fn handle_get_methods<'gc, 'm>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let flags = ctx.pop_i32(gc);
-    let obj = ctx.pop_obj(gc);
+    let gc = ctx.gc();
+    let flags = ctx.pop_i32();
+    let obj = ctx.pop_obj();
     let target_type = ctx.resolve_runtime_type(obj);
 
     const BINDING_FLAGS_INSTANCE: i32 = 4;
@@ -754,7 +737,7 @@ fn handle_get_methods<'gc, 'm>(
                         .collect::<Vec<_>>()
                         .into();
                 }
-                methods_objs.push(ctx.get_runtime_method_obj(gc, desc, lookup));
+                methods_objs.push(ctx.get_runtime_method_obj(desc, lookup));
             }
         }
     }
@@ -764,22 +747,21 @@ fn handle_get_methods<'gc, 'm>(
     for (i, m) in methods_objs.into_iter().enumerate() {
         m.write(&mut vector.get_mut()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
     }
-    ctx.push_obj(gc, ObjectRef::new(gc, HeapStorage::Vec(vector)));
+    ctx.push_obj(ObjectRef::new(gc, HeapStorage::Vec(vector)));
     StepResult::Continue
 }
 
 fn handle_get_method_impl<'gc, 'm>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _modifiers = ctx.pop(gc);
-    let _types = ctx.pop(gc); // TODO: match by parameter types
-    let _call_convention = ctx.pop(gc);
-    let _binder = ctx.pop(gc);
-    let flags = ctx.pop_i32(gc);
-    let name_obj = ctx.pop_obj(gc);
-    let obj = ctx.pop_obj(gc);
+    let _modifiers = ctx.pop();
+    let _types = ctx.pop(); // TODO: match by parameter types
+    let _call_convention = ctx.pop();
+    let _binder = ctx.pop();
+    let flags = ctx.pop_i32();
+    let name_obj = ctx.pop_obj();
+    let obj = ctx.pop_obj();
 
     let name = name_obj.as_heap_storage(|s| {
         if let HeapStorage::Str(s) = s {
@@ -829,27 +811,27 @@ fn handle_get_method_impl<'gc, 'm>(
                         .collect::<Vec<_>>()
                         .into();
                 }
-                found_method = Some(ctx.get_runtime_method_obj(gc, desc, lookup));
+                found_method = Some(ctx.get_runtime_method_obj(desc, lookup));
                 break;
             }
         }
     }
 
     if let Some(m) = found_method {
-        ctx.push_obj(gc, m);
+        ctx.push_obj(m);
     } else {
-        ctx.push(gc, StackValue::null());
+        ctx.push(StackValue::null());
     }
     StepResult::Continue
 }
 
 fn handle_get_constructors<'gc, 'm>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let flags = ctx.pop_i32(gc);
-    let obj = ctx.pop_obj(gc);
+    let gc = ctx.gc();
+    let flags = ctx.pop_i32();
+    let obj = ctx.pop_obj();
     let target_type = ctx.resolve_runtime_type(obj);
 
     const BINDING_FLAGS_INSTANCE: i32 = 4;
@@ -888,7 +870,7 @@ fn handle_get_constructors<'gc, 'm>(
                         .collect::<Vec<_>>()
                         .into();
                 }
-                methods_objs.push(ctx.get_runtime_method_obj(gc, desc, lookup));
+                methods_objs.push(ctx.get_runtime_method_obj(desc, lookup));
             }
         }
     }
@@ -898,27 +880,25 @@ fn handle_get_constructors<'gc, 'm>(
     for (i, m) in methods_objs.into_iter().enumerate() {
         m.write(&mut vector.get_mut()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
     }
-    ctx.push_obj(gc, ObjectRef::new(gc, HeapStorage::Vec(vector)));
+    ctx.push_obj(ObjectRef::new(gc, HeapStorage::Vec(vector)));
     StepResult::Continue
 }
 
 fn handle_get_name<'gc, 'm>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj = ctx.pop_obj(gc);
+    let obj = ctx.pop_obj();
     let target_type = ctx.resolve_runtime_type(obj);
-    ctx.push_string(gc, target_type.get_name().into());
+    ctx.push_string(target_type.get_name().into());
     StepResult::Continue
 }
 
 fn handle_get_base_type<'gc, 'm>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj = ctx.pop_obj(gc);
+    let obj = ctx.pop_obj();
     let target_type = ctx.resolve_runtime_type(obj);
     match target_type {
         RuntimeType::Type(td) | RuntimeType::Generic(td, _) if td.definition().extends.is_some() => {
@@ -975,35 +955,33 @@ fn handle_get_base_type<'gc, 'm>(
                         .collect();
                     RuntimeType::Generic(base_td, runtime_generics)
                 };
-                let rt_obj = ctx.get_runtime_type(gc, base_rt);
-                ctx.push_obj(gc, rt_obj);
+                let rt_obj = ctx.get_runtime_type(base_rt);
+                ctx.push_obj(rt_obj);
             } else {
-                ctx.push(gc, StackValue::null());
+                ctx.push(StackValue::null());
             }
         }
-        _ => ctx.push(gc, StackValue::null()),
+        _ => ctx.push(StackValue::null()),
     }
     StepResult::Continue
 }
 
 fn handle_get_is_generic_type<'gc, 'm>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj = ctx.pop_obj(gc);
+    let obj = ctx.pop_obj();
     let target_type = ctx.resolve_runtime_type(obj);
     let is_generic = matches!(target_type, RuntimeType::Generic(_, _));
-    ctx.push_i32(gc, if is_generic { 1 } else { 0 });
+    ctx.push_i32(if is_generic { 1 } else { 0 });
     StepResult::Continue
 }
 
 fn handle_get_generic_type_definition<'gc, 'm>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj = ctx.pop_obj(gc);
+    let obj = ctx.pop_obj();
     let target_type = ctx.resolve_runtime_type(obj);
     match target_type {
         RuntimeType::Generic(td, _) => {
@@ -1012,20 +990,20 @@ fn handle_get_generic_type_definition<'gc, 'm>(
                 .map(|index| RuntimeType::TypeParameter { owner: td, index })
                 .collect();
             let def_rt = RuntimeType::Generic(td, params);
-            let rt_obj = ctx.get_runtime_type(gc, def_rt);
-            ctx.push_obj(gc, rt_obj);
+            let rt_obj = ctx.get_runtime_type(def_rt);
+            ctx.push_obj(rt_obj);
             StepResult::Continue
         }
-        _ => ctx.throw_by_name(gc, "System.InvalidOperationException"),
+        _ => ctx.throw_by_name("System.InvalidOperationException"),
     }
 }
 
 fn handle_get_generic_arguments<'gc, 'm>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj = ctx.pop_obj(gc);
+    let gc = ctx.gc();
+    let obj = ctx.pop_obj();
     let target_type = ctx.resolve_runtime_type(obj);
     let args = match target_type {
         RuntimeType::Generic(_, args) => args.clone(),
@@ -1048,37 +1026,36 @@ fn handle_get_generic_arguments<'gc, 'm>(
         if i % 16 == 0 {
             ctx.check_gc_safe_point();
         }
-        let arg_obj = ctx.get_runtime_type(gc, arg);
+        let arg_obj = ctx.get_runtime_type(arg);
         arg_obj.write(chunk);
     }
     let obj = ObjectRef::new(gc, HeapStorage::Vec(vector));
     ctx.register_new_object(&obj);
-    ctx.push_obj(gc, obj);
+    ctx.push_obj(obj);
     StepResult::Continue
 }
 
 fn handle_get_type_handle<'gc, 'm>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let obj = ctx.pop_obj(gc);
+    let obj = ctx.pop_obj();
 
     let rth = ctx.loader().corlib_type("System.RuntimeTypeHandle");
     let instance = ctx.current_context().new_object(rth);
     obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 
-    ctx.push(gc, StackValue::ValueType(instance));
+    ctx.push(StackValue::ValueType(instance));
     StepResult::Continue
 }
 
 fn handle_make_generic_type<'gc, 'm>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let parameters = ctx.pop_obj(gc);
-    let target = ctx.pop_obj(gc);
+    let gc = ctx.gc();
+    let parameters = ctx.pop_obj();
+    let target = ctx.pop_obj();
 
     // Check GC safe point before potentially allocating generic type objects
     ctx.check_gc_safe_point();
@@ -1098,22 +1075,21 @@ fn handle_make_generic_type<'gc, 'm>(
             .collect();
         let new_rt = RuntimeType::Generic(td, new_generics);
 
-        let rt_obj = ctx.get_runtime_type(gc, new_rt);
-        ctx.push_obj(gc, rt_obj);
+        let rt_obj = ctx.get_runtime_type(new_rt);
+        ctx.push_obj(rt_obj);
         StepResult::Continue
     } else {
-        ctx.throw_by_name(gc, "System.InvalidOperationException")
+        ctx.throw_by_name("System.InvalidOperationException")
     }
 }
 
 fn handle_create_instance_default_ctor<'gc, 'm>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _ = ctx.pop(gc); // skipCheck
-    let _ = ctx.pop(gc); // publicOnly
-    let target_obj = ctx.pop_obj(gc);
+    let _ = ctx.pop(); // skipCheck
+    let _ = ctx.pop(); // publicOnly
+    let target_obj = ctx.pop_obj();
 
     // Check GC safe point before object instantiation
     ctx.check_gc_safe_point();
@@ -1148,7 +1124,6 @@ fn handle_create_instance_default_ctor<'gc, 'm>(
             };
 
             ctx.constructor_frame(
-                gc,
                 instance,
                 MethodInfo::new(desc, &new_lookup, ctx.shared().clone()),
                 new_lookup,

@@ -3,7 +3,6 @@ use crate::{
     ops::{ExceptionOps, PoolOps, RawMemoryOps, StackOps, VesOps},
 };
 use dotnet_macros::dotnet_instruction;
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     StackValue,
     layout::{LayoutManager, Scalar},
@@ -15,11 +14,10 @@ use std::ptr;
 #[dotnet_instruction(CopyMemoryBlock { })]
 pub fn cpblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
 ) -> StepResult {
-    let size = vm_pop!(ctx, gc).as_isize() as usize;
-    let src = vm_pop!(ctx, gc).as_ptr();
-    let dest = vm_pop!(ctx, gc).as_ptr();
+    let size = vm_pop!(ctx).as_isize() as usize;
+    let src = vm_pop!(ctx).as_ptr();
+    let dest = vm_pop!(ctx).as_ptr();
 
     // Check GC safe point before large memory block copy operations
     // Threshold: copying more than 4KB of data
@@ -40,11 +38,10 @@ pub fn cpblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ?Sized>(
 #[dotnet_instruction(InitializeMemoryBlock { })]
 pub fn initblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
 ) -> StepResult {
-    let size = vm_pop!(ctx, gc).as_isize() as usize;
-    let val = vm_pop!(ctx, gc).as_isize() as u8;
-    let addr = vm_pop!(ctx, gc).as_ptr();
+    let size = vm_pop!(ctx).as_isize() as usize;
+    let val = vm_pop!(ctx).as_isize() as u8;
+    let addr = vm_pop!(ctx).as_ptr();
 
     // Check GC safe point before large memory block initialization
     if size > 4096 {
@@ -62,26 +59,24 @@ pub fn initblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ?Sized>(
 #[dotnet_instruction(LocalMemoryAllocate)]
 pub fn localloc<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + PoolOps + ExceptionOps<'gc> + ?Sized>(
     ctx: &mut T,
-    gc: GCHandle<'gc>,
 ) -> StepResult {
-    let size_isize = vm_pop!(ctx, gc).as_isize();
+    let size_isize = ctx.pop_isize();
     if size_isize < 0 {
-        return ctx.throw_by_name(gc, "System.OverflowException");
+        return ctx.throw_by_name("System.OverflowException");
     }
     let size = size_isize as usize;
 
     // Defensive check: limit local allocation to 128MB
     if size > 0x800_0000 {
-        return ctx.throw_by_name(gc, "System.OutOfMemoryException");
+        return ctx.throw_by_name("System.OutOfMemoryException");
     }
 
     let ptr = ctx.localloc(size);
     if ptr.is_null() {
-        return ctx.throw_by_name(gc, "System.OutOfMemoryException");
+        return ctx.throw_by_name("System.OutOfMemoryException");
     }
 
     ctx.push(
-        gc,
         StackValue::UnmanagedPtr(UnmanagedPtr(ptr::NonNull::new(ptr).unwrap())),
     );
     StepResult::Continue
@@ -90,11 +85,10 @@ pub fn localloc<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + PoolOps + ExceptionOps<'gc>
 #[dotnet_instruction(StoreIndirect { param0 })]
 pub fn stind<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     param0: StoreType,
 ) -> StepResult {
-    let val = ctx.pop(gc);
-    let addr_val = ctx.pop(gc);
+    let val = ctx.pop();
+    let addr_val = ctx.pop();
 
     if let StackValue::ManagedPtr(m) = &addr_val
         && let Some((slot_idx, 0)) = m.stack_slot_origin
@@ -105,7 +99,7 @@ pub fn stind<'gc, 'm: 'gc>(
         // FieldStorage that can be partially overwritten.
         if !matches!(ctx.get_slot_ref(slot_idx), StackValue::ValueType(_)) {
             let typed_val = convert_to_stack_value(val, param0);
-            ctx.set_slot(gc, slot_idx, typed_val);
+            ctx.set_slot(slot_idx, typed_val);
             return StepResult::Continue;
         }
     }
@@ -134,7 +128,7 @@ pub fn stind<'gc, 'm: 'gc>(
         Ok(_) => {}
         Err(e) => {
             if ptr.is_null() {
-                return ctx.throw_by_name(gc, "System.NullReferenceException");
+                return ctx.throw_by_name("System.NullReferenceException");
             }
             panic!("StoreIndirect failed: {}", e);
         }
@@ -145,17 +139,16 @@ pub fn stind<'gc, 'm: 'gc>(
 #[dotnet_instruction(LoadIndirect { param0 })]
 pub fn ldind<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
-    gc: GCHandle<'gc>,
     param0: LoadType,
 ) -> StepResult {
-    let addr_val = ctx.pop(gc);
+    let addr_val = ctx.pop();
 
     if let StackValue::ManagedPtr(m) = &addr_val
         && let Some((slot_idx, 0)) = m.stack_slot_origin
         && !matches!(ctx.get_slot_ref(slot_idx), StackValue::ValueType(_))
     {
         let val = convert_from_stack_value(ctx.get_slot(slot_idx), param0);
-        ctx.push(gc, val);
+        ctx.push(val);
         return StepResult::Continue;
     }
 
@@ -189,12 +182,12 @@ pub fn ldind<'gc, 'm: 'gc>(
         Ok(v) => v,
         Err(e) => {
             if ptr.is_null() {
-                return ctx.throw_by_name(gc, "System.NullReferenceException");
+                return ctx.throw_by_name("System.NullReferenceException");
             }
             panic!("LoadIndirect failed: {}", e);
         }
     };
-    ctx.push(gc, val);
+    ctx.push(val);
     StepResult::Continue
 }
 

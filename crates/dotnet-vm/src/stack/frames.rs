@@ -2,7 +2,6 @@ use crate::{
     MethodState, StepResult, memory::heap::HeapManager, stack::context::StackFrame,
     state::SharedGlobalState,
 };
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::StackValue;
 use dotnetdll::prelude::ReturnType;
 use gc_arena::Collect;
@@ -97,7 +96,6 @@ impl<'gc, 'm> FrameStack<'gc, 'm> {
 
     pub fn unwind_frame(
         &mut self,
-        gc: GCHandle<'gc>,
         evaluation_stack: &mut EvaluationStack<'gc>,
         shared: &SharedGlobalState<'m>,
         heap: &HeapManager<'gc>,
@@ -113,14 +111,13 @@ impl<'gc, 'm> FrameStack<'gc, 'm> {
             heap.processing_finalizer.set(false);
         }
         for i in frame.base.arguments..evaluation_stack.top_of_stack() {
-            evaluation_stack.set_slot(gc, i, StackValue::null());
+            evaluation_stack.set_slot(i, StackValue::null());
         }
         evaluation_stack.truncate(frame.base.arguments);
     }
 
     pub fn return_frame(
         &mut self,
-        gc: GCHandle<'gc>,
         evaluation_stack: &mut EvaluationStack<'gc>,
         shared: &SharedGlobalState<'m>,
         heap: &HeapManager<'gc>,
@@ -156,7 +153,7 @@ impl<'gc, 'm> FrameStack<'gc, 'm> {
         };
 
         for i in frame.base.arguments..evaluation_stack.top_of_stack() {
-            evaluation_stack.set_slot(gc, i, StackValue::null());
+            evaluation_stack.set_slot(i, StackValue::null());
         }
         evaluation_stack.truncate(frame.base.arguments);
 
@@ -165,17 +162,16 @@ impl<'gc, 'm> FrameStack<'gc, 'm> {
                 // push to evaluation stack
                 // wait, how to push back to evaluation stack?
                 // we need to call push on evaluation_stack
-                evaluation_stack.push(gc, return_value);
+                evaluation_stack.push(return_value);
                 self.current_frame_mut().stack_height += 1;
             } else {
-                evaluation_stack.push(gc, return_value);
+                evaluation_stack.push(return_value);
             }
         }
     }
 
     pub fn handle_return(
         &mut self,
-        gc: GCHandle<'gc>,
         evaluation_stack: &mut EvaluationStack<'gc>,
         shared: &SharedGlobalState<'m>,
         heap: &HeapManager<'gc>,
@@ -196,7 +192,7 @@ impl<'gc, 'm> FrameStack<'gc, 'm> {
             was_auto_invoked
         );
 
-        self.return_frame(gc, evaluation_stack, shared, heap, tracer_enabled);
+        self.return_frame(evaluation_stack, shared, heap, tracer_enabled);
 
         if self.is_empty() {
             tracing::debug!("handle_return: stack empty after pop, returning Return");
@@ -217,7 +213,7 @@ impl<'gc, 'm> FrameStack<'gc, 'm> {
             };
             if out_of_bounds {
                 tracing::debug!("handle_return: out of bounds, recursive return");
-                return self.handle_return(gc, evaluation_stack, shared, heap, tracer_enabled);
+                return self.handle_return(evaluation_stack, shared, heap, tracer_enabled);
             }
         } else {
             tracing::debug!("handle_return: NOT incrementing IP (was auto-invoked)");

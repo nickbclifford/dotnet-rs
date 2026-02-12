@@ -8,7 +8,6 @@ use dotnet_types::{
     members::{FieldDescription, MethodDescription},
     runtime::{RuntimeMethodSignature, RuntimeType},
 };
-use dotnet_utils::gc::GCHandle;
 use dotnet_value::object::{HeapStorage, ObjectRef};
 use dotnetdll::prelude::{BaseType, MethodType};
 
@@ -32,8 +31,8 @@ pub(crate) fn get_runtime_member_index<T: PartialEq>(
 
 pub(crate) fn pre_initialize_reflection<'gc, 'm: 'gc>(
     ctx: &mut (impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
-    gc: GCHandle<'gc>,
 ) {
+    let _gc = ctx.gc();
     let blessed = [
         RuntimeType::Void,
         RuntimeType::Boolean,
@@ -55,15 +54,15 @@ pub(crate) fn pre_initialize_reflection<'gc, 'm: 'gc>(
     ];
 
     for t in blessed {
-        get_runtime_type(ctx, gc, t);
+        get_runtime_type(ctx, t);
     }
 }
 
 pub(crate) fn get_runtime_type<'gc, 'm: 'gc>(
     ctx: &mut (impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
-    gc: GCHandle<'gc>,
     target: RuntimeType,
 ) -> ObjectRef<'gc> {
+    let gc = ctx.gc();
     if let Some(obj) = ctx.reflection().types_read().get(&target) {
         return *obj;
     }
@@ -303,10 +302,10 @@ pub(crate) fn get_runtime_field_index<'gc, 'm: 'gc>(
 
 pub(crate) fn get_runtime_method_obj<'gc, 'm: 'gc>(
     ctx: &mut (impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
-    gc: GCHandle<'gc>,
     method: MethodDescription,
     lookup: GenericLookup,
 ) -> ObjectRef<'gc> {
+    let gc = ctx.gc();
     if let Some(obj) = ctx
         .reflection()
         .method_objs_read()
@@ -345,10 +344,10 @@ pub(crate) fn get_runtime_method_obj<'gc, 'm: 'gc>(
 
 pub(crate) fn get_runtime_field_obj<'gc, 'm: 'gc>(
     ctx: &mut (impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
-    gc: GCHandle<'gc>,
     field: FieldDescription,
     lookup: GenericLookup,
 ) -> ObjectRef<'gc> {
+    let gc = ctx.gc();
     if let Some(obj) = ctx
         .reflection()
         .field_objs_read()
