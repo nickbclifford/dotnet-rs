@@ -59,10 +59,12 @@ impl<'a, 'gc, 'm: 'gc> StaticsOps<'gc> for VesContext<'a, 'gc, 'm> {
 
         loop {
             let tid = self.thread_id.get();
-            let init_result =
-                self.shared
-                    .statics
-                    .init(description, &ctx, tid, Some(&self.shared.metrics));
+            let init_result = vm_try!(self.shared.statics.init(
+                description,
+                &ctx,
+                tid,
+                Some(&self.shared.metrics)
+            ));
 
             use crate::statics::StaticInitResult::*;
             match init_result {
@@ -72,10 +74,10 @@ impl<'a, 'gc, 'm: 'gc> StaticsOps<'gc> for VesContext<'a, 'gc, 'm> {
                         "-- calling static constructor (will return to ip {}) --",
                         self.current_frame().state.ip
                     );
-                    self.call_frame(
-                        MethodInfo::new(m, &generics, self.shared.clone()),
+                    vm_try!(self.call_frame(
+                        vm_try!(MethodInfo::new(m, &generics, self.shared.clone())),
                         generics.clone(),
-                    );
+                    ));
                     return StepResult::FramePushed;
                 }
                 Initialized | Recursive => {
@@ -149,12 +151,15 @@ impl<'a, 'gc, 'm: 'gc> ReflectionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn get_heap_description(&self, object: ObjectHandle<'gc>) -> TypeDescription {
+    fn get_heap_description(&self, object: ObjectHandle<'gc>) -> Result<TypeDescription, dotnet_types::error::TypeResolutionError> {
         self.resolver().get_heap_description(object)
     }
 
     #[inline]
-    fn locate_field(&self, handle: FieldSource) -> (FieldDescription, GenericLookup) {
+    fn locate_field(
+        &self,
+        handle: FieldSource,
+    ) -> Result<(FieldDescription, GenericLookup), dotnet_types::error::TypeResolutionError> {
         let context = self.current_context();
         self.resolver()
             .locate_field(context.resolution, handle, context.generics)

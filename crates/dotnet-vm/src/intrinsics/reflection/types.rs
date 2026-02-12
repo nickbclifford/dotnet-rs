@@ -20,7 +20,7 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
 };
 use dotnetdll::prelude::{
-    Accessibility, BaseType, Kind, MemberAccessibility, MemberType, TypeSource,
+    Accessibility, BaseType, Kind, MemberAccessibility, MemberType, TypeDefinition, TypeSource,
 };
 
 #[dotnet_intrinsic("object[] System.Reflection.Assembly::GetCustomAttributes(System.Type, bool)")]
@@ -41,8 +41,8 @@ pub fn intrinsic_assembly_get_custom_attributes<'gc, 'm: 'gc>(
     }
 
     // Return an empty array of Attribute
-    let attribute_type = ctx.loader().corlib_type("System.Attribute");
-    let array = ctx.current_context().new_vector(attribute_type.into(), 0);
+    let attribute_type = vm_try!(ctx.loader().corlib_type("System.Attribute"));
+    let array = vm_try!(ctx.current_context().new_vector(attribute_type.into(), 0));
     let obj = ObjectRef::new(gc, HeapStorage::Vec(array));
     ctx.register_new_object(&obj);
     ctx.push_obj(obj);
@@ -70,8 +70,8 @@ pub fn intrinsic_attribute_get_custom_attributes<'gc, 'm: 'gc>(
     }
 
     // Return an empty array of Attribute
-    let attribute_type = ctx.loader().corlib_type("System.Attribute");
-    let array = ctx.current_context().new_vector(attribute_type.into(), 0);
+    let attribute_type = vm_try!(ctx.loader().corlib_type("System.Attribute"));
+    let array = vm_try!(ctx.current_context().new_vector(attribute_type.into(), 0));
     let obj = ObjectRef::new(gc, HeapStorage::Vec(array));
     ctx.register_new_object(&obj);
     ctx.push_obj(obj);
@@ -99,12 +99,12 @@ pub fn intrinsic_type_get_type<'gc, 'm: 'gc>(
         }
     });
 
-    let td = ctx.loader().corlib_type(&name);
-    if !td.is_null() {
-        let rt_obj = ctx.get_runtime_type(RuntimeType::Type(td));
-        ctx.push_obj(rt_obj);
-    } else {
-        ctx.push(StackValue::null());
+    match ctx.loader().corlib_type(&name) {
+        Ok(td) => {
+            let rt_obj = ctx.get_runtime_type(RuntimeType::Type(td));
+            ctx.push_obj(rt_obj);
+        }
+        Err(_) => ctx.push(StackValue::null()),
     }
 
     StepResult::Continue
@@ -344,7 +344,7 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc>(
         _ => panic!("invalid type on stack"),
     };
 
-    let mt_ptr = object_type.definition_ptr().unwrap().as_ptr();
+    let mt_ptr = vm_try!(object_type).definition_ptr().unwrap().as_ptr();
     ctx.push_isize(mt_ptr as isize);
     StepResult::Continue
 }
@@ -358,7 +358,7 @@ pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let target = &generics.method_generics[0];
-    let layout = type_layout(target.clone(), &ctx.current_context());
+    let layout = vm_try!(type_layout(target.clone(), &ctx.current_context()));
     let value = match &*layout {
         LayoutManager::Scalar(Scalar::ObjectRef) => false,
         LayoutManager::Scalar(_) => true,
@@ -377,7 +377,7 @@ pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<'gc, 'm: 'g
     generics: &GenericLookup,
 ) -> StepResult {
     let target = &generics.method_generics[0];
-    let layout = type_layout(target.clone(), &ctx.current_context());
+    let layout = vm_try!(type_layout(target.clone(), &ctx.current_context()));
     ctx.push_i32(layout.is_or_contains_refs() as i32);
     StepResult::Continue
 }
@@ -409,7 +409,8 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc>(
     };
     let target_type = ctx.resolve_runtime_type(target_obj);
     let target_ct = target_type.to_concrete(ctx.loader());
-    let target_desc = ctx.loader().find_concrete_type(target_ct);
+    let target_desc = ctx.loader().find_concrete_type(target_ct)
+        .expect("Type must exist for RunClassConstructor");
 
     let res = ctx.initialize_static_storage(target_desc, generics.clone());
     if res != StepResult::Continue {
@@ -428,7 +429,8 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let target_ct = generics.method_generics[0].clone();
-    let target_td = ctx.loader().find_concrete_type(target_ct.clone());
+    let target_td = ctx.loader().find_concrete_type(target_ct.clone())
+        .expect("Type must exist for Activator.CreateInstance");
     let res_ctx = ResolutionContext::for_method(
         method,
         ctx.loader(),
@@ -437,12 +439,12 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
         Some(ctx.shared().clone()),
     );
 
-    if target_td.is_value_type(&ctx.current_context()) {
-        let instance = res_ctx.new_object(target_td);
+    if vm_try!(target_td.is_value_type(&ctx.current_context())) {
+        let instance = vm_try!(res_ctx.new_object(target_td));
         ctx.push_value_type(instance);
         StepResult::Continue
     } else {
-        let instance = res_ctx.new_object(target_td);
+        let instance = vm_try!(res_ctx.new_object(target_td));
         let mut new_lookup = GenericLookup::default();
         if let BaseType::Type {
             source: TypeSource::Generic { parameters, .. },
@@ -460,11 +462,11 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
                     method: m,
                 };
 
-                ctx.constructor_frame(
+                vm_try!(ctx.constructor_frame(
                     instance,
-                    MethodInfo::new(desc, &new_lookup, ctx.shared().clone()),
+                    vm_try!(MethodInfo::new(desc, &new_lookup, ctx.shared().clone())),
                     new_lookup,
-                );
+                ));
                 return StepResult::FramePushed;
             }
         }
@@ -527,8 +529,9 @@ pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc>(
     let o = ctx.pop_obj();
     let target = ctx.resolve_runtime_type(o);
     let target_ct = target.to_concrete(ctx.loader());
-    let target_desc = ctx.loader().find_concrete_type(target_ct);
-    let value = target_desc.is_value_type(&ctx.current_context());
+    let target_desc = ctx.loader().find_concrete_type(target_ct)
+        .expect("Type must exist for get_IsValueType");
+    let value = vm_try!(target_desc.is_value_type(&ctx.current_context()));
     ctx.push_i32(value as i32);
     StepResult::Continue
 }
@@ -603,7 +606,7 @@ pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc>(
 ) -> StepResult {
     let obj = ctx.pop_obj();
 
-    let rth = ctx.loader().corlib_type("System.RuntimeTypeHandle");
+    let rth = vm_try!(ctx.loader().corlib_type("System.RuntimeTypeHandle"));
     let res_ctx = ResolutionContext::for_method(
         _method,
         ctx.loader(),
@@ -611,7 +614,7 @@ pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc>(
         ctx.shared().caches.clone(),
         Some(ctx.shared().clone()),
     );
-    let instance = res_ctx.new_object(rth);
+    let instance = vm_try!(res_ctx.new_object(rth));
     obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 
     ctx.push_value_type(instance);
@@ -644,13 +647,13 @@ fn handle_get_assembly<'gc, 'm>(
         return StepResult::Continue;
     }
 
-    let support_res = ctx.loader().get_assembly(SUPPORT_ASSEMBLY);
+    let support_res = ctx.loader().get_assembly(SUPPORT_ASSEMBLY).expect("support library must be loadable");
     let (index, definition) = support_res
         .definition()
         .type_definitions
         .iter()
         .enumerate()
-        .find(|(_, a)| a.type_name() == "DotnetRs.Assembly")
+        .find(|(_, a): &(usize, &TypeDefinition)| a.type_name() == "DotnetRs.Assembly")
         .expect("could find DotnetRs.Assembly in support library");
     let type_index = support_res.type_definition_index(index).unwrap();
     let res_ctx = ResolutionContext::new(
@@ -660,7 +663,7 @@ fn handle_get_assembly<'gc, 'm>(
         ctx.shared().caches.clone(),
         Some(ctx.shared().clone()),
     );
-    let asm_handle = res_ctx.new_object(TypeDescription::new(support_res, definition, type_index));
+    let asm_handle = vm_try!(res_ctx.new_object(TypeDescription::new(support_res, definition, type_index)));
     let data = (resolution.as_raw() as usize).to_ne_bytes();
     asm_handle
         .instance_storage
@@ -742,8 +745,8 @@ fn handle_get_methods<'gc, 'm>(
         }
     }
 
-    let method_info_type = ctx.loader().corlib_type("System.Reflection.MethodInfo");
-    let mut vector = ctx.new_vector(ConcreteType::from(method_info_type), methods_objs.len());
+    let method_info_type = vm_try!(ctx.loader().corlib_type("System.Reflection.MethodInfo"));
+    let mut vector = vm_try!(ctx.new_vector(ConcreteType::from(method_info_type), methods_objs.len()));
     for (i, m) in methods_objs.into_iter().enumerate() {
         m.write(&mut vector.get_mut()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
     }
@@ -875,8 +878,8 @@ fn handle_get_constructors<'gc, 'm>(
         }
     }
 
-    let constructor_info_type = ctx.loader().corlib_type("System.Reflection.ConstructorInfo");
-    let mut vector = ctx.new_vector(ConcreteType::from(constructor_info_type), methods_objs.len());
+    let constructor_info_type = vm_try!(ctx.loader().corlib_type("System.Reflection.ConstructorInfo"));
+    let mut vector = vm_try!(ctx.new_vector(ConcreteType::from(constructor_info_type), methods_objs.len()));
     for (i, m) in methods_objs.into_iter().enumerate() {
         m.write(&mut vector.get_mut()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
     }
@@ -921,7 +924,7 @@ fn handle_get_base_type<'gc, 'm>(
                                 BaseType::Type { source, .. } => {
                                     let (ut, sub_generics) =
                                         decompose_type_source::<MemberType>(source);
-                                    let sub_td = ctx.loader().locate_type(td.resolution, ut);
+                                    let sub_td = ctx.loader().locate_type(td.resolution, ut).expect("base type must exist");
                                     if sub_generics.is_empty() {
                                         RuntimeType::Type(sub_td)
                                     } else {
@@ -1013,9 +1016,9 @@ fn handle_get_generic_arguments<'gc, 'm>(
     // Check GC safe point before allocating type array
     ctx.check_gc_safe_point();
 
-    let type_type_td = ctx.loader().corlib_type("System.Type");
+    let type_type_td = vm_try!(ctx.loader().corlib_type("System.Type"));
     let type_type = ConcreteType::from(type_type_td);
-    let mut vector = ctx.current_context().new_vector(type_type, args.len());
+    let mut vector = vm_try!(ctx.current_context().new_vector(type_type, args.len()));
     for (i, (arg, chunk)) in args
         .into_iter()
         .zip(vector.get_mut().chunks_exact_mut(ObjectRef::SIZE))
@@ -1041,8 +1044,8 @@ fn handle_get_type_handle<'gc, 'm>(
 ) -> StepResult {
     let obj = ctx.pop_obj();
 
-    let rth = ctx.loader().corlib_type("System.RuntimeTypeHandle");
-    let instance = ctx.current_context().new_object(rth);
+    let rth = vm_try!(ctx.loader().corlib_type("System.RuntimeTypeHandle"));
+    let instance = vm_try!(ctx.current_context().new_object(rth));
     obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 
     ctx.push(StackValue::ValueType(instance));
@@ -1109,7 +1112,7 @@ fn handle_create_instance_default_ctor<'gc, 'm>(
     let new_lookup = GenericLookup::new(type_generics_concrete);
     let new_ctx = ctx.current_context().with_generics(&new_lookup);
 
-    let instance = new_ctx.new_object(td);
+    let instance = vm_try!(new_ctx.new_object(td));
 
     for m in &td.definition().methods {
         if m.runtime_special_name
@@ -1123,11 +1126,11 @@ fn handle_create_instance_default_ctor<'gc, 'm>(
                 method: m,
             };
 
-            ctx.constructor_frame(
+            vm_try!(ctx.constructor_frame(
                 instance,
-                MethodInfo::new(desc, &new_lookup, ctx.shared().clone()),
+                vm_try!(MethodInfo::new(desc, &new_lookup, ctx.shared().clone())),
                 new_lookup,
-            );
+            ));
             return StepResult::FramePushed;
         }
     }

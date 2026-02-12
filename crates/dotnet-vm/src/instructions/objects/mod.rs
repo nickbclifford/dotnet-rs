@@ -101,9 +101,9 @@ pub fn new_object<'gc, 'm: 'gc>(
 
     ctor: &UserMethod,
 ) -> StepResult {
-    let (mut method, lookup) = ctx
+    let (mut method, lookup) = vm_try!(ctx
         .resolver()
-        .find_generic_method(&MethodSource::User(*ctor), &ctx.current_context());
+        .find_generic_method(&MethodSource::User(*ctor), &ctx.current_context()));
 
     if method.method.name == "CtorArraySentinel"
         && let UserMethod::Reference(r) = *ctor
@@ -117,6 +117,7 @@ pub fn new_object<'gc, 'm: 'gc>(
                 res_ctx.generics.make_concrete(resolution, t.clone())
             };
 
+            let concrete = vm_try!(concrete);
             if let BaseType::Array(element, shape) = concrete.get() {
                 let rank = shape.rank;
                 let mut dims: Vec<usize> = (0..rank)
@@ -134,10 +135,10 @@ pub fn new_object<'gc, 'm: 'gc>(
                 let total_len: usize = dims.iter().product();
 
                 let res_ctx = ctx.current_context();
-                let elem_type = res_ctx.normalize_type(element.clone());
+                let elem_type = vm_try!(res_ctx.normalize_type(element.clone()));
 
                 let layout =
-                    LayoutFactory::create_array_layout(elem_type.clone(), total_len, &res_ctx);
+                    vm_try!(LayoutFactory::create_array_layout(elem_type.clone(), total_len, &res_ctx));
                 let total_size_bytes = layout.element_layout.size() * total_len;
 
                 let vec_obj = dotnet_value::object::Vector::new(
@@ -163,7 +164,10 @@ pub fn new_object<'gc, 'm: 'gc>(
             type_name.as_ref(),
             "System.Delegate" | "System.MulticastDelegate"
         ) {
-            let base = ctx.loader().corlib_type(&type_name);
+            let base = ctx
+                .loader()
+                .corlib_type(&type_name)
+                .expect("Failed to locate corlib base for delegate");
             method = MethodDescription {
                 parent: base,
                 method_resolution: base.resolution,
@@ -205,13 +209,13 @@ pub fn new_object<'gc, 'm: 'gc>(
         let res_ctx = ctx
             .current_context()
             .for_type_with_generics(parent, &lookup);
-        let instance = res_ctx.new_object(parent);
+        let instance = vm_try!(res_ctx.new_object(parent));
 
-        ctx.constructor_frame(
+        vm_try!(ctx.constructor_frame(
             instance,
-            crate::MethodInfo::new(method, &lookup, ctx.shared().clone()),
+            vm_try!(crate::MethodInfo::new(method, &lookup, ctx.shared().clone())),
             lookup,
-        );
+        ));
         StepResult::FramePushed
     }
 }
@@ -229,14 +233,14 @@ pub fn ldobj<'gc, 'm: 'gc>(
         return ctx.throw_by_name("System.NullReferenceException");
     }
 
-    let load_type = ctx.make_concrete(param0);
+    let load_type = vm_try!(ctx.make_concrete(param0));
     let res_ctx = ctx.current_context();
-    let layout = type_layout(load_type.clone(), &res_ctx);
+    let layout = vm_try!(type_layout(load_type.clone(), &res_ctx));
 
     let mut source_vec = vec![0u8; layout.size()];
     unsafe { ptr::copy_nonoverlapping(source_ptr, source_vec.as_mut_ptr(), layout.size()) };
-    let value = res_ctx
-        .read_cts_value(&load_type, &source_vec, ctx.gc())
+    let value = vm_try!(res_ctx
+        .read_cts_value(&load_type, &source_vec, ctx.gc()))
         .into_stack(ctx.gc());
 
     ctx.push(value);
@@ -252,7 +256,7 @@ pub fn stobj<'gc, 'm: 'gc>(
     let value = ctx.pop();
     let addr = ctx.pop();
 
-    let concrete_t = ctx.make_concrete(param0);
+    let concrete_t = vm_try!(ctx.make_concrete(param0));
 
     let (dest_ptr, _owner, _origin, _offset) = get_ptr_context(ctx, &addr);
     if dest_ptr.is_null() {
@@ -260,9 +264,9 @@ pub fn stobj<'gc, 'm: 'gc>(
     }
 
     let res_ctx = ctx.current_context();
-    let layout = type_layout(concrete_t.clone(), &res_ctx);
+    let layout = vm_try!(type_layout(concrete_t.clone(), &res_ctx));
     let mut bytes = vec![0u8; layout.size()];
-    res_ctx.new_cts_value(&concrete_t, value).write(&mut bytes);
+    vm_try!(res_ctx.new_cts_value(&concrete_t, value)).write(&mut bytes);
 
     unsafe {
         ptr::copy_nonoverlapping(bytes.as_ptr(), dest_ptr, bytes.len());
@@ -282,9 +286,9 @@ pub fn initobj<'gc, 'm: 'gc>(
         return ctx.throw_by_name("System.NullReferenceException");
     }
 
-    let ct = ctx.make_concrete(param0);
+    let ct = vm_try!(ctx.make_concrete(param0));
     let res_ctx = ctx.current_context();
-    let layout = type_layout(ct.clone(), &res_ctx);
+    let layout = vm_try!(type_layout(ct.clone(), &res_ctx));
 
     unsafe { ptr::write_bytes(target, 0, layout.size()) };
     StepResult::Continue
@@ -296,9 +300,9 @@ pub fn sizeof<'gc, 'm: 'gc>(
 
     param0: &MethodType,
 ) -> StepResult {
-    let target = ctx.make_concrete(param0);
+    let target = vm_try!(ctx.make_concrete(param0));
     let res_ctx = ctx.current_context();
-    let layout = type_layout(target, &res_ctx);
+    let layout = vm_try!(type_layout(target, &res_ctx));
     ctx.push(StackValue::Int32(layout.size() as i32));
     StepResult::Continue
 }

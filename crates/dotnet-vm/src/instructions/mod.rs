@@ -81,14 +81,14 @@
 //!     Ok(StepResult::Continue)
 //! }
 //! ```
+#[macro_use]
+pub mod macros;
 pub mod arithmetic;
 pub mod calls;
 pub mod comparisons;
 pub mod conversions;
 pub mod exceptions;
 pub mod flow;
-#[macro_use]
-pub mod macros;
 pub mod memory;
 pub mod objects;
 pub mod reflection;

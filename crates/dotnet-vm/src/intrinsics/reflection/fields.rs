@@ -36,8 +36,8 @@ pub fn intrinsic_field_info_get_field_handle<'gc, 'm: 'gc>(
 ) -> StepResult {
     let obj_ref = ctx.pop_obj();
 
-    let rfh = ctx.loader().corlib_type("System.RuntimeFieldHandle");
-    let instance = ctx.new_object(rfh);
+    let rfh = vm_try!(ctx.loader().corlib_type("System.RuntimeFieldHandle"));
+    let instance = vm_try!(ctx.new_object(rfh));
     obj_ref.write(&mut instance.instance_storage.get_field_mut_local(rfh, "_value"));
 
     ctx.push(StackValue::ValueType(instance));

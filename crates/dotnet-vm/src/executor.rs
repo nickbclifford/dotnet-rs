@@ -16,9 +16,6 @@ use dotnet_utils::sync::{Arc, Ordering};
 use dotnet_value::StackValue;
 
 #[cfg(feature = "multithreaded-gc")]
-use crate::vm_debug;
-
-#[cfg(feature = "multithreaded-gc")]
 use super::gc::{arena::THREAD_ARENA, coordinator::*};
 
 pub struct Executor {
@@ -125,9 +122,10 @@ impl Executor {
         self.with_arena(|arena| {
             arena.mutate_root(|gc, c| {
                 let shared = c.stack.shared.clone();
-                let info = MethodInfo::new(method, &Default::default(), shared);
+                let info = MethodInfo::new(method, &Default::default(), shared).expect("Failed to resolve entrypoint");
                 c.ves_context(gc)
                     .entrypoint_frame(info, Default::default(), vec![])
+                    .expect("Failed to set up entrypoint frame")
             });
         });
     }
@@ -261,7 +259,6 @@ impl Executor {
 
     /// Perform a full GC collection with stop-the-world coordination.
     fn perform_full_gc(&mut self) {
-        use crate::{vm_trace_gc_collection_end, vm_trace_gc_collection_start};
         #[cfg(feature = "multithreaded-gc")]
         {
             use std::time::Instant;

@@ -280,8 +280,8 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
             (BaseType::Type { source: ts1, .. }, BaseType::Type { source: ts2, .. }) => {
                 let (ut1, generics1) = decompose_type_source(ts1);
                 let (ut2, generics2_list) = decompose_type_source(ts2);
-                let td1 = self.loader.locate_type(res1, ut1);
-                let td2 = self.loader.locate_type(res2, ut2);
+                let td1 = self.loader.locate_type(res1, ut1).expect("Type resolution failed during comparison");
+                let td2 = self.loader.locate_type(res2, ut2).expect("Type resolution failed during comparison");
 
                 if td1 != td2 {
                     let d1 = td1.definition();
@@ -480,19 +480,36 @@ pub fn decompose_type_source<T: Clone>(t: &TypeSource<T>) -> (UserType, Vec<T>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::TypeResolutionError;
     use crate::resolution::ResolutionS;
 
     struct MockResolver;
     impl TypeResolver for MockResolver {
-        fn corlib_type(&self, _name: &str) -> TypeDescription {
-            TypeDescription::from_raw(ResolutionS::new(std::ptr::null()), None, unsafe {
-                std::mem::transmute::<usize, dotnetdll::resolution::TypeIndex>(0usize)
-            })
+        fn corlib_type(&self, _name: &str) -> Result<TypeDescription, TypeResolutionError> {
+            Ok(TypeDescription::from_raw(
+                ResolutionS::new(std::ptr::null()),
+                None,
+                unsafe { std::mem::transmute::<usize, dotnetdll::resolution::TypeIndex>(0usize) },
+            ))
         }
-        fn locate_type(&self, res: ResolutionS, _handle: UserType) -> TypeDescription {
-            TypeDescription::from_raw(res, None, unsafe {
+        fn locate_type(
+            &self,
+            res: ResolutionS,
+            _handle: UserType,
+        ) -> Result<TypeDescription, TypeResolutionError> {
+            Ok(TypeDescription::from_raw(res, None, unsafe {
                 std::mem::transmute::<usize, dotnetdll::resolution::TypeIndex>(0usize)
-            })
+            }))
+        }
+        fn find_concrete_type(
+            &self,
+            _ty: crate::generics::ConcreteType,
+        ) -> Result<TypeDescription, TypeResolutionError> {
+            Ok(TypeDescription::from_raw(
+                ResolutionS::new(std::ptr::null()),
+                None,
+                unsafe { std::mem::transmute::<usize, dotnetdll::resolution::TypeIndex>(0usize) },
+            ))
         }
     }
 

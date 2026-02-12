@@ -137,14 +137,14 @@ impl StaticStorageManager {
         description: TypeDescription,
         context: &ResolutionContext,
         metrics: Option<&RuntimeMetrics>,
-    ) -> Arc<FieldLayoutManager> {
+    ) -> Result<Arc<FieldLayoutManager>, dotnet_types::error::TypeResolutionError> {
         let key = (description, context.generics.clone());
 
         if let Some(cached) = context.caches.static_field_layout_cache.get(&key) {
             if let Some(m) = metrics {
                 m.record_static_field_layout_cache_hit();
             }
-            return Arc::clone(&cached);
+            return Ok(Arc::clone(&cached));
         }
 
         if let Some(m) = metrics {
@@ -154,12 +154,12 @@ impl StaticStorageManager {
             description,
             context,
             metrics,
-        ));
+        )?);
         context
             .caches
             .static_field_layout_cache
             .insert(key, Arc::clone(&result));
-        result
+        Ok(result)
     }
 }
 
@@ -210,31 +210,33 @@ impl StaticStorageManager {
     /// the same type simultaneously.
     ///
     /// Returns a `StaticInitResult` indicating what the calling thread should do.
-    #[must_use]
     pub fn init(
         &self,
         description: TypeDescription,
         context: &ResolutionContext,
         thread_id: u64,
         metrics: Option<&RuntimeMetrics>,
-    ) -> StaticInitResult {
+    ) -> Result<StaticInitResult, dotnet_types::error::TypeResolutionError> {
         let key = (description, context.generics.clone());
         // Ensure the storage exists. We use a write lock on the types map for this.
         {
             let mut types = self.types.write();
-            types.entry(key.clone()).or_insert_with(|| {
+            if !types.contains_key(&key) {
                 // Use the cached layout if available, or create and cache it
-                let layout = self.get_static_field_layout(description, context, metrics);
+                let layout = self.get_static_field_layout(description, context, metrics)?;
                 let size = layout.size();
                 #[allow(clippy::arc_with_non_send_sync)]
-                Arc::new(StaticStorage {
-                    init_state: AtomicU8::new(INIT_STATE_UNINITIALIZED),
-                    initializing_thread: AtomicU64::new(0),
-                    storage: FieldStorage::new(layout, vec![0; size]),
-                    init_cond: Arc::new(Condvar::new()),
-                    init_mutex: Arc::new(Mutex::new(())),
-                })
-            });
+                types.insert(
+                    key.clone(),
+                    Arc::new(StaticStorage {
+                        init_state: AtomicU8::new(INIT_STATE_UNINITIALIZED),
+                        initializing_thread: AtomicU64::new(0),
+                        storage: FieldStorage::new(layout, vec![0; size]),
+                        init_cond: Arc::new(Condvar::new()),
+                        init_mutex: Arc::new(Mutex::new(())),
+                    }),
+                );
+            }
         }
 
         // Get the storage and check its state.
@@ -242,17 +244,17 @@ impl StaticStorageManager {
         let state = storage.init_state.load(Ordering::Acquire);
 
         if state == INIT_STATE_INITIALIZED {
-            return StaticInitResult::Initialized;
+            return Ok(StaticInitResult::Initialized);
         }
 
         if state == INIT_STATE_FAILED {
-            return StaticInitResult::Failed;
+            return Ok(StaticInitResult::Failed);
         }
 
         if state == INIT_STATE_INITIALIZING
             && storage.initializing_thread.load(Ordering::Acquire) == thread_id
         {
-            return StaticInitResult::Recursive;
+            return Ok(StaticInitResult::Recursive);
         }
 
         // Check if there's a static initializer
@@ -269,7 +271,7 @@ impl StaticStorageManager {
                     Ordering::Acquire,
                 )
                 .ok();
-            return StaticInitResult::Initialized;
+            return Ok(StaticInitResult::Initialized);
         }
 
         let cctor = cctor.unwrap();
@@ -285,15 +287,15 @@ impl StaticStorageManager {
                 storage
                     .initializing_thread
                     .store(thread_id, Ordering::Release);
-                StaticInitResult::Execute(cctor)
+                Ok(StaticInitResult::Execute(cctor))
             }
             Err(INIT_STATE_INITIALIZED) => {
                 // Already initialized by another thread
-                StaticInitResult::Initialized
+                Ok(StaticInitResult::Initialized)
             }
             Err(INIT_STATE_INITIALIZING) => {
                 // Another thread is currently initializing
-                StaticInitResult::Waiting
+                Ok(StaticInitResult::Waiting)
             }
             Err(_) => unreachable!("Invalid initialization state"),
         }

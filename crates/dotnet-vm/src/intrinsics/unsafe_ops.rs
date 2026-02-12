@@ -61,7 +61,7 @@ pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
         len as usize
     } else {
         let target = &generics.method_generics[0];
-        let layout = type_layout(target.clone(), &res_ctx);
+        let layout = vm_try!(type_layout(target.clone(), &res_ctx));
         len as usize * layout.size()
     };
 
@@ -98,7 +98,8 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<'gc, 'm: 'gc>(
 
     let element_type = ctx
         .loader()
-        .find_concrete_type(generics.method_generics[0].clone());
+        .find_concrete_type(generics.method_generics[0].clone())
+        .expect("Element type must exist for GetArrayDataReference");
     ctx.push_ptr(data_ptr, element_type, false);
     StepResult::Continue
 }
@@ -118,7 +119,7 @@ pub fn intrinsic_marshal_size_of<'gc, 'm: 'gc>(
         let type_obj = ctx.pop_obj();
         ctx.resolve_runtime_type(type_obj).to_concrete(ctx.loader())
     };
-    let layout = type_layout(concrete_type, &ctx.current_context());
+    let layout = vm_try!(type_layout(concrete_type, &ctx.current_context()));
     ctx.push_i32(layout.size() as i32);
     StepResult::Continue
 }
@@ -141,10 +142,11 @@ pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
         let type_obj = ctx.pop_obj();
         ctx.resolve_runtime_type(type_obj).to_concrete(ctx.loader())
     };
-    let layout = type_layout(concrete_type.clone(), &ctx.current_context());
+    let layout = vm_try!(type_layout(concrete_type.clone(), &ctx.current_context()));
 
     if let LayoutManager::Field(flm) = &*layout {
-        let td = ctx.loader().find_concrete_type(concrete_type.clone());
+        let td = ctx.loader().find_concrete_type(concrete_type.clone())
+            .expect("Type must exist for Marshal.OffsetOf");
         if let Some(field) = flm.get_field(td, &field_name) {
             ctx.push_isize(field.position as isize);
         } else {
@@ -184,8 +186,8 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let target = &generics.method_generics[0];
-    let target_type = ctx.loader().find_concrete_type(target.clone());
-    let layout = type_layout(target.clone(), &ctx.current_context());
+    let target_type = vm_try!(ctx.loader().find_concrete_type(target.clone()));
+    let layout = vm_try!(type_layout(target.clone(), &ctx.current_context()));
 
     let offset_val = ctx.pop();
     let offset = match offset_val {
@@ -220,7 +222,8 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let target = &generics.method_generics[0];
-    let target_type = ctx.loader().find_concrete_type(target.clone());
+    let target_type = ctx.loader().find_concrete_type(target.clone())
+        .expect("Type must exist for Unsafe.AddByteOffset");
 
     let offset_val = ctx.pop();
     let offset = match offset_val {
@@ -282,8 +285,8 @@ pub fn intrinsic_unsafe_as_generic<'gc, 'm: 'gc>(
     let src_type_gen = generics.method_generics[0].clone();
     let dest_type_gen = generics.method_generics[1].clone();
 
-    let src_layout = type_layout(src_type_gen, &ctx.current_context());
-    let dest_layout = type_layout(dest_type_gen, &ctx.current_context());
+    let src_layout = vm_try!(type_layout(src_type_gen, &ctx.current_context()));
+    let dest_layout = vm_try!(type_layout(dest_type_gen, &ctx.current_context()));
 
     // Safety Check: Casting ref TFrom to ref TTo
     // TTo must be compatible with TFrom's memory layout regarding References
@@ -291,7 +294,8 @@ pub fn intrinsic_unsafe_as_generic<'gc, 'm: 'gc>(
 
     let target_type = ctx
         .loader()
-        .find_concrete_type(generics.method_generics[1].clone());
+        .find_concrete_type(generics.method_generics[1].clone())
+        .expect("Type must exist for Unsafe.As");
     let m_val = ctx.pop();
     let pinned = match &m_val {
         StackValue::ManagedPtr(m) => m.pinned,
@@ -331,9 +335,9 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let target_type_gen = generics.method_generics[0].clone();
-    let dest_layout = type_layout(target_type_gen.clone(), &ctx.current_context());
+    let dest_layout = vm_try!(type_layout(target_type_gen.clone(), &ctx.current_context()));
 
-    let target_type = ctx.loader().find_concrete_type(target_type_gen);
+    let target_type = vm_try!(ctx.loader().find_concrete_type(target_type_gen));
 
     let val = ctx.pop();
     let (ptr, pinned) = match val {
@@ -385,7 +389,7 @@ pub fn intrinsic_unsafe_size_of<'gc, 'm: 'gc>(
 ) -> StepResult {
     let res_ctx = ctx.with_generics(generics);
     let target = &generics.method_generics[0];
-    let layout = type_layout(target.clone(), &res_ctx);
+    let layout = vm_try!(type_layout(target.clone(), &res_ctx));
     ctx.push_i32(layout.size() as i32);
     StepResult::Continue
 }
@@ -429,9 +433,9 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
     };
 
     let target = &generics.method_generics[0];
-    let layout = type_layout(target.clone(), &ctx.current_context());
+    let layout = vm_try!(type_layout(target.clone(), &ctx.current_context()));
 
-    let target_type = ctx.loader().find_concrete_type(target.clone());
+    let target_type = vm_try!(ctx.loader().find_concrete_type(target.clone()));
 
     let memory = RawMemoryAccess::new(ctx.heap());
     match unsafe { memory.read_unaligned(ptr, owner, &layout, Some(target_type)) } {
@@ -439,7 +443,8 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
             // If we read a ManagedPtr, we need to supply the target type,
             // because memory.read_unaligned returns ManagedPtr with void/unknown type.
             if let StackValue::ManagedPtr(m) = v {
-                let target_type = ctx.loader().find_concrete_type(target.clone());
+                let target_type = ctx.loader().find_concrete_type(target.clone())
+                    .expect("Type must exist for Unsafe.ReadUnaligned ManagedPtr");
                 let new_m = ManagedPtr::new(m.pointer(), target_type, m.owner, m.pinned);
                 ctx.push(StackValue::ManagedPtr(new_m));
             } else {
@@ -466,7 +471,7 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let target = &generics.method_generics[0];
-    let layout = type_layout(target.clone(), &ctx.current_context());
+    let layout = vm_try!(type_layout(target.clone(), &ctx.current_context()));
     let value = ctx.pop();
 
     let dest = ctx.pop();

@@ -29,16 +29,16 @@ pub fn ldelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     }
 
     let res_ctx = ctx.current_context();
-    let load_type = res_ctx.make_concrete(param0);
+    let load_type = vm_try!(res_ctx.make_concrete(param0));
     let value = obj.as_vector(|array| {
         if index >= array.layout.length {
             return Err(());
         }
         let elem_size = array.layout.element_layout.size();
         let target = &array.get()[(elem_size * index)..(elem_size * (index + 1))];
-        Ok(ctx
-            .read_cts_value(&load_type, target)
-            .into_stack(ctx.gc()))
+        ctx.read_cts_value(&load_type, target)
+            .map(|v| v.into_stack(ctx.gc()))
+            .map_err(|_| ())
     });
     match value {
         Ok(v) => ctx.push(v),
@@ -152,8 +152,8 @@ fn ldelema_internal<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     }
 
     let res_ctx = ctx.current_context();
-    let concrete_t = res_ctx.make_concrete(param0);
-    let element_layout = type_layout(concrete_t.clone(), &res_ctx);
+    let concrete_t = vm_try!(res_ctx.make_concrete(param0));
+    let element_layout = vm_try!(type_layout(concrete_t.clone(), &res_ctx));
 
     let value = obj.as_vector(|v| {
         if index >= v.layout.length {
@@ -168,7 +168,10 @@ fn ldelema_internal<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         Err(_) => return ctx.throw_by_name("System.IndexOutOfRangeException"),
     };
 
-    let target_type = ctx.loader().find_concrete_type(concrete_t);
+    let target_type: dotnet_types::TypeDescription = ctx
+        .loader()
+        .find_concrete_type(concrete_t)
+        .expect("Array element type must exist for ldelema");
     ctx.push(
         StackValue::ManagedPtr(ManagedPtr::new(
             NonNull::new(ptr),
@@ -202,15 +205,16 @@ pub fn stelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     }
 
     let res_ctx = ctx.current_context();
-    let store_type = res_ctx.make_concrete(param0);
+    let store_type = vm_try!(res_ctx.make_concrete(param0));
     let result = obj.as_vector_mut(ctx.gc(), |array| {
         if index >= array.layout.length {
             return Err(());
         }
         let elem_size = array.layout.element_layout.size();
         let target = &mut array.get_mut()[(elem_size * index)..(elem_size * (index + 1))];
-        ctx.new_cts_value(&store_type, value).write(target);
-        Ok(())
+        ctx.new_cts_value(&store_type, value)
+            .map(|v| v.write(target))
+            .map_err(|_| ())
     });
     match result {
         Ok(_) => StepResult::Continue,
@@ -356,9 +360,9 @@ pub fn newarr<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     }
 
     let res_ctx = ctx.current_context();
-    let elem_type = res_ctx.normalize_type(res_ctx.make_concrete(param0));
+    let elem_type = vm_try!(res_ctx.normalize_type(vm_try!(res_ctx.make_concrete(param0))));
 
-    let v = ctx.new_vector(elem_type, length);
+    let v = vm_try!(ctx.new_vector(elem_type, length));
     let o = ObjectRef::new(ctx.gc(), HeapStorage::Vec(v));
     ctx.register_new_object(&o);
     ctx.push(StackValue::ObjectRef(o));

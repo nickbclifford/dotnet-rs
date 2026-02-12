@@ -18,14 +18,14 @@ pub fn box_value<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     param0: &MethodType,
 ) -> StepResult {
     let res_ctx = ctx.current_context();
-    let t = res_ctx.make_concrete(param0);
+    let t = vm_try!(res_ctx.make_concrete(param0));
     let value = ctx.pop();
 
     if let StackValue::ObjectRef(_) = value {
         // boxing is a noop for all reference types
         ctx.push(value);
     } else {
-        let obj = ObjectRef::new(ctx.gc(), HeapStorage::Boxed(ctx.new_value_type(&t, value)));
+        let obj = ObjectRef::new(ctx.gc(), HeapStorage::Boxed(vm_try!(ctx.new_value_type(&t, value))));
         ctx.register_new_object(&obj);
         ctx.push(StackValue::ObjectRef(obj));
     }
@@ -39,12 +39,14 @@ pub fn unbox_any<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 ) -> StepResult {
     let val = ctx.pop();
     let res_ctx = ctx.current_context();
-    let target_ct = res_ctx.make_concrete(param0);
+    let target_ct = vm_try!(res_ctx.make_concrete(param0));
 
     let is_vt = match target_ct.get() {
         BaseType::Type { .. } => {
-            let td = ctx.loader().find_concrete_type(target_ct.clone());
-            td.is_value_type(&res_ctx)
+            let td = vm_try!(ctx
+                .loader()
+                .find_concrete_type(target_ct.clone()));
+            vm_try!(td.is_value_type(&res_ctx))
         }
         BaseType::Vector(_, _) | BaseType::Array(_, _) | BaseType::Object | BaseType::String => {
             false
@@ -81,8 +83,8 @@ pub fn unbox_any<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             panic!("unbox.any: expected object on stack, got {:?}", val);
         };
         if let ObjectRef(Some(o)) = target_obj {
-            let obj_type = res_ctx.get_heap_description(o);
-            if res_ctx.is_a(obj_type.into(), target_ct) {
+            let obj_type = vm_try!(res_ctx.get_heap_description(o));
+            if vm_try!(res_ctx.is_a(obj_type.into(), target_ct)) {
                 ctx.push(StackValue::ObjectRef(target_obj));
             } else {
                 return ctx.throw_by_name("System.InvalidCastException");
@@ -101,7 +103,7 @@ pub fn unbox<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 ) -> StepResult {
     let value = ctx.pop();
     let res_ctx = ctx.current_context();
-    let target_ct = res_ctx.make_concrete(param0);
+    let target_ct = vm_try!(res_ctx.make_concrete(param0));
 
     let StackValue::ObjectRef(obj) = value else {
         panic!("unbox on non-object: {:?}", value);
@@ -118,7 +120,9 @@ pub fn unbox<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         _ => panic!("unbox on non-boxed struct"),
     };
 
-    let target_type = ctx.loader().find_concrete_type(target_ct);
+    let target_type = vm_try!(ctx
+        .loader()
+        .find_concrete_type(target_ct));
     ctx.push(
         StackValue::ManagedPtr(ManagedPtr::new(
             NonNull::new(ptr),

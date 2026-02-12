@@ -18,10 +18,10 @@ pub fn castclass<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 
     if let ObjectRef(Some(o)) = target_obj {
         let res_ctx = ctx.current_context();
-        let obj_type = res_ctx.get_heap_description(o);
-        let target_ct = res_ctx.make_concrete(param0);
+        let obj_type = vm_try!(res_ctx.get_heap_description(o));
+        let target_ct = vm_try!(res_ctx.make_concrete(param0));
 
-        if res_ctx.is_a(obj_type.into(), target_ct) {
+        if vm_try!(res_ctx.is_a(obj_type.into(), target_ct)) {
             ctx.push(StackValue::ObjectRef(target_obj));
         } else {
             return ctx.throw_by_name("System.InvalidCastException");
@@ -45,10 +45,10 @@ pub fn isinst<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 
     if let ObjectRef(Some(o)) = target_obj {
         let res_ctx = ctx.current_context();
-        let obj_type = res_ctx.get_heap_description(o);
-        let target_ct = res_ctx.make_concrete(param0);
+        let obj_type = vm_try!(res_ctx.get_heap_description(o));
+        let target_ct = vm_try!(res_ctx.make_concrete(param0));
 
-        if res_ctx.is_a(obj_type.into(), target_ct) {
+        if vm_try!(res_ctx.is_a(obj_type.into(), target_ct)) {
             ctx.push(StackValue::ObjectRef(target_obj));
         } else {
             ctx.push(StackValue::ObjectRef(ObjectRef(None)));

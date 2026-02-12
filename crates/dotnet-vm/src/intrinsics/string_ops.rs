@@ -257,7 +257,8 @@ pub fn intrinsic_string_get_raw_data<'gc, 'm: 'gc>(
 ) -> StepResult {
     let val = ctx.pop();
     let ptr = with_string!(ctx, val, |s| s.as_ptr() as *mut u8);
-    ctx.push_ptr(ptr, ctx.loader().corlib_type("System.Char"), false);
+    let char_type = vm_try!(ctx.loader().corlib_type("System.Char"));
+    ctx.push_ptr(ptr, char_type, false);
     StepResult::Continue
 }
 

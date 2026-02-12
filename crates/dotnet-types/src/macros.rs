@@ -34,7 +34,12 @@ macro_rules! runtime_type_impls {
             pub fn resolution(&self, $res_loader: &impl TypeResolver) -> ResolutionS {
                 use RuntimeType::*;
                 match self {
-                    $( $variant => $res_loader.corlib_type("System.Object").resolution, )*
+                    $(
+                        $variant => $res_loader
+                            .corlib_type("System.Object")
+                            .expect("System.Object must exist")
+                            .resolution,
+                    )*
                     $( $res_pat => $res_expr, )*
                 }
             }
@@ -48,7 +53,10 @@ macro_rules! runtime_type_impls {
             }
 
             pub fn to_concrete(&self, $conc_loader: &impl TypeResolver) -> ConcreteType {
-                let $conc_res = $conc_loader.corlib_type("System.Object").resolution;
+                let $conc_res = $conc_loader
+                    .corlib_type("System.Object")
+                    .expect("System.Object must exist")
+                    .resolution;
                 use RuntimeType::*;
                 match self {
                     $( $variant => ConcreteType::new($conc_res, BaseType::$variant), )*

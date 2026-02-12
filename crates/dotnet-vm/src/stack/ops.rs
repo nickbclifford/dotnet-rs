@@ -29,6 +29,7 @@ use crate::{
 };
 use dotnet_types::{
     TypeDescription,
+    error::TypeResolutionError,
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     runtime::RuntimeType,
@@ -150,8 +151,8 @@ pub trait ExceptionOps<'gc> {
 }
 
 pub trait ResolutionOps<'gc, 'm> {
-    fn stack_value_type(&self, val: &StackValue<'gc>) -> TypeDescription;
-    fn make_concrete(&self, t: &MethodType) -> ConcreteType;
+    fn stack_value_type(&self, val: &StackValue<'gc>) -> Result<TypeDescription, TypeResolutionError>;
+    fn make_concrete(&self, t: &MethodType) -> Result<ConcreteType, TypeResolutionError>;
     fn current_context(&self) -> crate::ResolutionContext<'_, 'm>;
     fn with_generics<'b>(&self, lookup: &'b GenericLookup) -> crate::ResolutionContext<'b, 'm>;
 }
@@ -217,8 +218,11 @@ pub trait ReflectionOps<'gc, 'm>: crate::memory::ops::MemoryOps<'gc> {
         ctx: &crate::ResolutionContext<'_, 'm>,
         source: &MethodType,
     ) -> RuntimeType;
-    fn get_heap_description(&self, object: ObjectHandle<'gc>) -> TypeDescription;
-    fn locate_field(&self, handle: FieldSource) -> (FieldDescription, GenericLookup);
+    fn get_heap_description(&self, object: ObjectHandle<'gc>) -> Result<TypeDescription, TypeResolutionError>;
+    fn locate_field(
+        &self,
+        handle: FieldSource,
+    ) -> Result<(FieldDescription, GenericLookup), TypeResolutionError>;
     fn is_intrinsic_field_cached(&self, field: FieldDescription) -> bool;
     fn is_intrinsic_cached(&self, method: MethodDescription) -> bool;
     fn resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> RuntimeType;
@@ -253,20 +257,20 @@ pub trait CallOps<'gc, 'm> {
         instance: ObjectInstance<'gc>,
         method: crate::MethodInfo<'m>,
         generic_inst: GenericLookup,
-    );
+    ) -> Result<(), TypeResolutionError>;
 
     fn call_frame(
         &mut self,
         method: crate::MethodInfo<'m>,
         generic_inst: GenericLookup,
-    );
+    ) -> Result<(), TypeResolutionError>;
 
     fn entrypoint_frame(
         &mut self,
         method: crate::MethodInfo<'m>,
         generic_inst: GenericLookup,
         args: Vec<StackValue<'gc>>,
-    );
+    ) -> Result<(), TypeResolutionError>;
 
     fn dispatch_method(
         &mut self,

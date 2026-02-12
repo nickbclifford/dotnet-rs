@@ -1,5 +1,6 @@
 macro_rules! vm_pop {
     ($ctx:expr) => {{
+        #[allow(unused_imports)]
         use $crate::stack::ops::EvalStackOps;
         match $ctx.pop_safe() {
             Ok(v) => v,
@@ -14,6 +15,7 @@ macro_rules! binary_op {
         pub fn $func_name<'gc, 'm: 'gc, T: $crate::stack::ops::StackOps<'gc, 'm> + ?Sized>(
             ctx: &mut T,
         ) -> StepResult {
+            #[allow(unused_imports)]
             use $crate::stack::ops::EvalStackOps;
             let v2 = vm_pop!(ctx);
             let v1 = vm_pop!(ctx);
@@ -30,6 +32,7 @@ macro_rules! binary_op_result {
             ctx: &mut T,
             sgn: NumberSign,
         ) -> StepResult {
+            #[allow(unused_imports)]
             use $crate::stack::ops::EvalStackOps;
             let v2 = vm_pop!(ctx);
             let v1 = vm_pop!(ctx);
@@ -51,6 +54,7 @@ macro_rules! binary_op_sgn {
             ctx: &mut T,
             sgn: NumberSign,
         ) -> StepResult {
+            #[allow(unused_imports)]
             use $crate::stack::ops::EvalStackOps;
             let v2 = vm_pop!(ctx);
             let v1 = vm_pop!(ctx);
@@ -66,6 +70,7 @@ macro_rules! unary_op {
         pub fn $func_name<'gc, 'm: 'gc, T: $crate::stack::ops::StackOps<'gc, 'm> + ?Sized>(
             ctx: &mut T,
         ) -> StepResult {
+            #[allow(unused_imports)]
             use $crate::stack::ops::EvalStackOps;
             let v = vm_pop!(ctx);
             ctx.push($op v);
@@ -91,13 +96,6 @@ macro_rules! comparison_op {
         }
     };
 }
-
-pub(crate) use binary_op;
-pub(crate) use binary_op_result;
-pub(crate) use binary_op_sgn;
-pub(crate) use comparison_op;
-pub(crate) use unary_op;
-pub(crate) use vm_pop;
 
 macro_rules! load_var {
     ($(#[$attr:meta])* $func_name:ident, $get_method:ident) => {
@@ -138,6 +136,7 @@ macro_rules! load_const {
             ctx: &mut T,
             val: $arg_type,
         ) -> StepResult {
+            #[allow(unused_imports)]
             use $crate::stack::ops::EvalStackOps;
             ctx.push(($expr)(val));
             StepResult::Continue

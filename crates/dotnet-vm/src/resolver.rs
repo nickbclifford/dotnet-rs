@@ -93,6 +93,7 @@ use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{
     TypeDescription,
     comparer::decompose_type_source,
+    error::TypeResolutionError,
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     resolution::ResolutionS,
@@ -187,14 +188,14 @@ impl<'m> ResolverService<'m> {
         &self,
         source: &MethodSource,
         ctx: &ResolutionContext<'_, 'm>,
-    ) -> (MethodDescription, GenericLookup) {
+    ) -> Result<(MethodDescription, GenericLookup), TypeResolutionError> {
         let mut new_lookup = ctx.generics.clone();
 
         let method = match source {
             MethodSource::User(u) => *u,
             MethodSource::Generic(g) => {
-                new_lookup.method_generics =
-                    g.parameters.iter().map(|t| ctx.make_concrete(t)).collect();
+                let params: Vec<_> = g.parameters.iter().map(|t| ctx.make_concrete(t)).collect::<Result<Vec<_>, _>>()?;
+                new_lookup.method_generics = params.into();
                 g.base
             }
         };
@@ -203,7 +204,7 @@ impl<'m> ResolverService<'m> {
         if let UserMethod::Reference(r) = method
             && let MethodReferenceParent::Type(t) = &ctx.resolution[r].parent
         {
-            let parent = ctx.make_concrete(t);
+            let parent = ctx.make_concrete(t)?;
             if let BaseType::Type {
                 source: TypeSource::Generic { parameters, .. },
                 ..
@@ -214,10 +215,10 @@ impl<'m> ResolverService<'m> {
             parent_type = Some(parent);
         }
 
-        (
-            ctx.locate_method(method, &new_lookup, parent_type),
+        Ok((
+            ctx.locate_method(method, &new_lookup, parent_type)?,
             new_lookup,
-        )
+        ))
     }
 
     pub fn resolve_virtual_method(
@@ -226,7 +227,7 @@ impl<'m> ResolverService<'m> {
         this_type: TypeDescription,
         generics: &GenericLookup,
         ctx: &ResolutionContext<'_, 'm>,
-    ) -> MethodDescription {
+    ) -> Result<MethodDescription, TypeResolutionError> {
         let mut normalized_generics = generics.clone();
         if this_type.definition().generic_parameters.is_empty() {
             normalized_generics.type_generics = Arc::new([]);
@@ -240,7 +241,7 @@ impl<'m> ResolverService<'m> {
             if let Some(metrics) = self.metrics() {
                 metrics.record_vmt_cache_hit();
             }
-            return *cached;
+            return Ok(*cached);
         }
 
         if let Some(metrics) = self.metrics() {
@@ -249,16 +250,16 @@ impl<'m> ResolverService<'m> {
 
         // Standard virtual method resolution: search ancestors
         for (parent, _) in ctx.get_ancestors(this_type) {
-            if let Some(this_method) = self.find_and_cache_method(parent, base_method, &key.2) {
+            if let Some(this_method) = self.find_and_cache_method(parent, base_method, &key.2)? {
                 self.caches.vmt_cache.insert(key, this_method);
-                return this_method;
+                return Ok(this_method);
             }
         }
 
-        panic!(
+        Err(TypeResolutionError::MethodNotFound(format!(
             "could not find virtual method implementation of {:?} in {:?} with generics {:?}",
             base_method, this_type, generics
-        )
+        )))
     }
 
     fn find_and_cache_method(
@@ -266,7 +267,7 @@ impl<'m> ResolverService<'m> {
         this_type: TypeDescription,
         method: MethodDescription,
         generics: &GenericLookup,
-    ) -> Option<MethodDescription> {
+    ) -> Result<Option<MethodDescription>, TypeResolutionError> {
         let def = this_type.definition();
         if !def.overrides.is_empty() {
             let cache_key = (this_type, generics.clone());
@@ -280,13 +281,13 @@ impl<'m> ResolverService<'m> {
                         ovr.declaration,
                         generics,
                         None,
-                    );
+                    )?;
                     let impl_m = self.loader.locate_method(
                         this_type.resolution,
                         ovr.implementation,
                         generics,
                         Some(this_type.into()),
-                    );
+                    )?;
                     map.insert(decl.method as *const _ as usize, impl_m);
                 }
                 let arc_map = Arc::new(map);
@@ -300,7 +301,7 @@ impl<'m> ResolverService<'m> {
                 self.caches
                     .vmt_cache
                     .insert((method, this_type, generics.clone()), *impl_m);
-                return Some(*impl_m);
+                return Ok(Some(*impl_m));
             }
         }
 
@@ -314,27 +315,27 @@ impl<'m> ResolverService<'m> {
             self.caches
                 .vmt_cache
                 .insert((method, this_type, generics.clone()), this_method);
-            return Some(this_method);
+            return Ok(Some(this_method));
         }
 
-        None
+        Ok(None)
     }
 
     pub fn type_layout_cached(
         &self,
         t: ConcreteType,
         ctx: &ResolutionContext<'_, 'm>,
-    ) -> Arc<LayoutManager> {
+    ) -> Result<Arc<LayoutManager>, TypeResolutionError> {
         type_layout_with_metrics(t, ctx, self.metrics())
     }
 
-    pub fn normalize_type(&self, mut t: ConcreteType) -> ConcreteType {
+    pub fn normalize_type(&self, mut t: ConcreteType) -> Result<ConcreteType, TypeResolutionError> {
         let (ut, res) = match t.get() {
             BaseType::Type { source, .. } => (
                 decompose_type_source::<ConcreteType>(source).0,
                 t.resolution(),
             ),
-            _ => return t,
+            _ => return Ok(t),
         };
 
         let name = ut.type_name(res.definition());
@@ -359,27 +360,29 @@ impl<'m> ResolverService<'m> {
         };
 
         if let Some(base) = base {
-            ConcreteType::new(res, base)
+            Ok(ConcreteType::new(res, base))
         } else {
             if let BaseType::Type { source, value_kind } = t.get_mut()
                 && value_kind.is_none()
             {
                 let (ut, _) = decompose_type_source::<ConcreteType>(source);
-                let td = self.loader.locate_type(res, ut);
-                if self.is_value_type(td) {
+                let td = self
+                    .loader
+                    .locate_type(res, ut)?;
+                if self.is_value_type(td)? {
                     *value_kind = Some(ValueKind::ValueType);
                 }
             }
-            t
+            Ok(t)
         }
     }
 
-    pub fn is_a(&self, value: ConcreteType, ancestor: ConcreteType) -> bool {
-        let value = self.normalize_type(value);
-        let ancestor = self.normalize_type(ancestor);
+    pub fn is_a(&self, value: ConcreteType, ancestor: ConcreteType) -> Result<bool, TypeResolutionError> {
+        let value = self.normalize_type(value)?;
+        let ancestor = self.normalize_type(ancestor)?;
 
         if value == ancestor {
-            return true;
+            return Ok(true);
         }
 
         let cache_key = (value.clone(), ancestor.clone());
@@ -387,15 +390,19 @@ impl<'m> ResolverService<'m> {
             if let Some(metrics) = self.metrics() {
                 metrics.record_hierarchy_cache_hit();
             }
-            return *cached;
+            return Ok(*cached);
         }
 
         if let Some(metrics) = self.metrics() {
             metrics.record_hierarchy_cache_miss();
         }
 
-        let value_td = self.loader.find_concrete_type(value);
-        let ancestor_td = self.loader.find_concrete_type(ancestor);
+        let value_td = self
+            .loader
+            .find_concrete_type(value)?;
+        let ancestor_td = self
+            .loader
+            .find_concrete_type(ancestor)?;
 
         let mut seen = HashSet::new();
         let mut queue = VecDeque::new();
@@ -418,17 +425,20 @@ impl<'m> ResolverService<'m> {
                 let handle = match interface_source {
                     TypeSource::User(h) | TypeSource::Generic { base: h, .. } => *h,
                 };
-                let interface = self.loader.locate_type(current.resolution, handle);
+                let interface = self
+                    .loader
+                    .locate_type(current.resolution, handle)?;
                 queue.push_back(interface);
             }
         }
 
         self.caches.hierarchy_cache.insert(cache_key, result);
-        result
+        Ok(result)
     }
 
-    pub fn locate_type(&self, resolution: ResolutionS, handle: UserType) -> TypeDescription {
-        self.loader.locate_type(resolution, handle)
+    pub fn locate_type(&self, resolution: ResolutionS, handle: UserType) -> Result<TypeDescription, TypeResolutionError> {
+        self.loader
+            .locate_type(resolution, handle)
     }
 
     pub fn locate_method(
@@ -437,7 +447,7 @@ impl<'m> ResolverService<'m> {
         handle: UserMethod,
         generic_inst: &GenericLookup,
         pre_resolved_parent: Option<ConcreteType>,
-    ) -> MethodDescription {
+    ) -> Result<MethodDescription, TypeResolutionError> {
         self.loader
             .locate_method(resolution, handle, generic_inst, pre_resolved_parent)
     }
@@ -447,7 +457,7 @@ impl<'m> ResolverService<'m> {
         resolution: ResolutionS,
         field: FieldSource,
         generics: &GenericLookup,
-    ) -> (FieldDescription, GenericLookup) {
+    ) -> Result<(FieldDescription, GenericLookup), TypeResolutionError> {
         self.loader.locate_field(resolution, field, generics)
     }
 
@@ -456,40 +466,44 @@ impl<'m> ResolverService<'m> {
         resolution: ResolutionS,
         generics: &GenericLookup,
         t: &T,
-    ) -> ConcreteType {
+    ) -> Result<ConcreteType, TypeResolutionError> {
         generics.make_concrete(resolution, t.clone())
     }
 
-    pub fn is_value_type(&self, td: TypeDescription) -> bool {
+    pub fn is_value_type(&self, td: TypeDescription) -> Result<bool, TypeResolutionError> {
         if let Some(cached) = self.caches.value_type_cache.get(&td) {
             if let Some(m) = self.metrics() {
                 m.record_value_type_cache_hit();
             }
-            return *cached;
+            return Ok(*cached);
         }
         if let Some(m) = self.metrics() {
             m.record_value_type_cache_miss();
         }
 
-        let enum_type = self.loader.corlib_type("System.Enum");
-        let value_type = self.loader.corlib_type("System.ValueType");
+        let enum_type = self
+            .loader
+            .corlib_type("System.Enum")?;
+        let value_type = self
+            .loader
+            .corlib_type("System.ValueType")?;
 
         for (a, _) in self.loader.ancestors(td) {
             if a == enum_type || a == value_type {
                 self.caches.value_type_cache.insert(td, true);
-                return true;
+                return Ok(true);
             }
         }
         self.caches.value_type_cache.insert(td, false);
-        false
+        Ok(false)
     }
 
-    pub fn has_finalizer(&self, td: TypeDescription) -> bool {
+    pub fn has_finalizer(&self, td: TypeDescription) -> Result<bool, TypeResolutionError> {
         if let Some(cached) = self.caches.has_finalizer_cache.get(&td) {
             if let Some(m) = self.metrics() {
                 m.record_has_finalizer_cache_hit();
             }
-            return *cached;
+            return Ok(*cached);
         }
         if let Some(m) = self.metrics() {
             m.record_has_finalizer_cache_miss();
@@ -511,17 +525,17 @@ impl<'m> ResolverService<'m> {
 
         if check_type(td) {
             self.caches.has_finalizer_cache.insert(td, true);
-            return true;
+            return Ok(true);
         }
 
         for (ancestor, _) in self.loader.ancestors(td) {
             if check_type(ancestor) {
                 self.caches.has_finalizer_cache.insert(td, true);
-                return true;
+                return Ok(true);
             }
         }
         self.caches.has_finalizer_cache.insert(td, false);
-        false
+        Ok(false)
     }
 
     pub fn get_field_type(
@@ -529,7 +543,7 @@ impl<'m> ResolverService<'m> {
         resolution: ResolutionS,
         generics: &GenericLookup,
         field: FieldDescription,
-    ) -> ConcreteType {
+    ) -> Result<ConcreteType, TypeResolutionError> {
         let return_type = &field.field.return_type;
         if field.field.by_ref {
             let by_ref_t: MemberType = BaseType::pointer(return_type.clone()).into();
@@ -544,22 +558,26 @@ impl<'m> ResolverService<'m> {
         resolution: ResolutionS,
         generics: &GenericLookup,
         field: FieldDescription,
-    ) -> TypeDescription {
+    ) -> Result<TypeDescription, TypeResolutionError> {
         self.loader
-            .find_concrete_type(self.get_field_type(resolution, generics, field))
+            .find_concrete_type(self.get_field_type(resolution, generics, field)?)
     }
 
-    pub fn get_heap_description(&self, object: ObjectHandle) -> TypeDescription {
+    pub fn get_heap_description(&self, object: ObjectHandle) -> Result<TypeDescription, TypeResolutionError> {
         use dotnet_value::object::HeapStorage::*;
         match &object.as_ref().borrow().storage {
-            Obj(o) => o.description,
-            Vec(_) => self.loader.corlib_type("System.Array"),
-            Str(_) => self.loader.corlib_type("System.String"),
+            Obj(o) => Ok(o.description),
+            Vec(_) => self
+                .loader
+                .corlib_type("System.Array"),
+            Str(_) => self
+                .loader
+                .corlib_type("System.String"),
             Boxed(v) => self.value_type_description(v),
         }
     }
 
-    pub fn value_type_description<'gc>(&self, vt: &ValueType<'gc>) -> TypeDescription {
+    pub fn value_type_description<'gc>(&self, vt: &ValueType<'gc>) -> Result<TypeDescription, TypeResolutionError> {
         let asms = self.loader();
         match vt {
             ValueType::Bool(_) => asms.corlib_type("System.Boolean"),
@@ -578,11 +596,11 @@ impl<'m> ResolverService<'m> {
             ValueType::Float32(_) => asms.corlib_type("System.Single"),
             ValueType::Float64(_) => asms.corlib_type("System.Double"),
             ValueType::TypedRef => asms.corlib_type("System.TypedReference"),
-            ValueType::Struct(s) => s.description,
+            ValueType::Struct(s) => Ok(s.description),
         }
     }
 
-    pub fn stack_value_type<'gc>(&self, val: &StackValue<'gc>) -> TypeDescription {
+    pub fn stack_value_type<'gc>(&self, val: &StackValue<'gc>) -> Result<TypeDescription, TypeResolutionError> {
         use dotnet_value::object::ObjectRef;
         match val {
             StackValue::Int32(_) => self.loader.corlib_type("System.Int32"),
@@ -593,8 +611,8 @@ impl<'m> ResolverService<'m> {
             StackValue::NativeFloat(_) => self.loader.corlib_type("System.Double"),
             StackValue::ObjectRef(ObjectRef(Some(o))) => self.get_heap_description(*o),
             StackValue::ObjectRef(ObjectRef(None)) => self.loader.corlib_type("System.Object"),
-            StackValue::ManagedPtr(m) => m.inner_type,
-            StackValue::ValueType(o) => o.description,
+            StackValue::ManagedPtr(m) => Ok(m.inner_type),
+            StackValue::ValueType(o) => Ok(o.description),
             #[cfg(feature = "multithreaded-gc")]
             StackValue::CrossArenaObjectRef(_, _) => {
                 todo!("handle CrossArenaObjectRef in contains_type")
@@ -606,33 +624,33 @@ impl<'m> ResolverService<'m> {
         &self,
         td: TypeDescription,
         ctx: &ResolutionContext<'_, 'm>,
-    ) -> Object<'gc> {
-        Object::new(td, self.new_instance_fields(td, ctx))
+    ) -> Result<Object<'gc>, TypeResolutionError> {
+        Ok(Object::new(td, self.new_instance_fields(td, ctx)?))
     }
 
     pub fn new_instance_fields(
         &self,
         td: TypeDescription,
         ctx: &ResolutionContext<'_, 'm>,
-    ) -> FieldStorage {
+    ) -> Result<FieldStorage, TypeResolutionError> {
         let layout =
-            crate::layout::LayoutFactory::instance_field_layout_cached(td, ctx, self.metrics());
+            crate::layout::LayoutFactory::instance_field_layout_cached(td, ctx, self.metrics())?;
         let size = layout.size();
-        FieldStorage::new(layout, vec![0; size])
+        Ok(FieldStorage::new(layout, vec![0; size]))
     }
 
     pub fn new_static_fields(
         &self,
         td: TypeDescription,
         ctx: &ResolutionContext<'_, 'm>,
-    ) -> FieldStorage {
+    ) -> Result<FieldStorage, TypeResolutionError> {
         let layout = Arc::new(crate::layout::LayoutFactory::static_fields_with_metrics(
             td,
             ctx,
             self.metrics(),
-        ));
+        )?);
         let size = layout.size();
-        FieldStorage::new(layout, vec![0; size])
+        Ok(FieldStorage::new(layout, vec![0; size]))
     }
 
     pub fn new_value_type<'gc>(
@@ -640,9 +658,9 @@ impl<'m> ResolverService<'m> {
         t: &ConcreteType,
         data: StackValue<'gc>,
         ctx: &ResolutionContext<'_, 'm>,
-    ) -> ValueType<'gc> {
-        match self.new_cts_value(t, data, ctx) {
-            CTSValue::Value(v) => v,
+    ) -> Result<ValueType<'gc>, TypeResolutionError> {
+        match self.new_cts_value(t, data, ctx)? {
+            CTSValue::Value(v) => Ok(v),
             CTSValue::Ref(r) => {
                 panic!(
                     "tried to instantiate value type, received object reference ({:?})",
@@ -657,47 +675,49 @@ impl<'m> ResolverService<'m> {
         t: &ConcreteType,
         data: StackValue<'gc>,
         ctx: &ResolutionContext<'_, 'm>,
-    ) -> CTSValue<'gc> {
+    ) -> Result<CTSValue<'gc>, TypeResolutionError> {
         use ValueType::*;
-        let t = self.normalize_type(t.clone());
+        let t = self.normalize_type(t.clone())?;
         match t.get() {
-            BaseType::Boolean => CTSValue::Value(Bool(convert_num::<u8>(data) != 0)),
-            BaseType::Char => CTSValue::Value(Char(convert_num(data))),
-            BaseType::Int8 => CTSValue::Value(Int8(convert_num(data))),
-            BaseType::UInt8 => CTSValue::Value(UInt8(convert_num(data))),
-            BaseType::Int16 => CTSValue::Value(Int16(convert_num(data))),
-            BaseType::UInt16 => CTSValue::Value(UInt16(convert_num(data))),
-            BaseType::Int32 => CTSValue::Value(Int32(convert_num(data))),
-            BaseType::UInt32 => CTSValue::Value(UInt32(convert_num(data))),
-            BaseType::Int64 => CTSValue::Value(Int64(convert_i64(data))),
-            BaseType::UInt64 => CTSValue::Value(UInt64(reinterpret_i64_as_u64(data))),
-            BaseType::Float32 => CTSValue::Value(Float32(match data {
+            BaseType::Boolean => Ok(CTSValue::Value(Bool(convert_num::<u8>(data) != 0))),
+            BaseType::Char => Ok(CTSValue::Value(Char(convert_num(data)))),
+            BaseType::Int8 => Ok(CTSValue::Value(Int8(convert_num(data)))),
+            BaseType::UInt8 => Ok(CTSValue::Value(UInt8(convert_num(data)))),
+            BaseType::Int16 => Ok(CTSValue::Value(Int16(convert_num(data)))),
+            BaseType::UInt16 => Ok(CTSValue::Value(UInt16(convert_num(data)))),
+            BaseType::Int32 => Ok(CTSValue::Value(Int32(convert_num(data)))),
+            BaseType::UInt32 => Ok(CTSValue::Value(UInt32(convert_num(data)))),
+            BaseType::Int64 => Ok(CTSValue::Value(Int64(convert_i64(data)))),
+            BaseType::UInt64 => Ok(CTSValue::Value(UInt64(reinterpret_i64_as_u64(data)))),
+            BaseType::Float32 => Ok(CTSValue::Value(Float32(match data {
                 StackValue::NativeFloat(f) => f as f32,
                 other => panic!("invalid stack value {:?} for float conversion", other),
-            })),
-            BaseType::Float64 => CTSValue::Value(Float64(match data {
+            }))),
+            BaseType::Float64 => Ok(CTSValue::Value(Float64(match data {
                 StackValue::NativeFloat(f) => f,
                 other => panic!("invalid stack value {:?} for float conversion", other),
-            })),
-            BaseType::IntPtr => CTSValue::Value(NativeInt(convert_num(data))),
+            }))),
+            BaseType::IntPtr => Ok(CTSValue::Value(NativeInt(convert_num(data)))),
             BaseType::UIntPtr | BaseType::FunctionPointer(_) => {
-                CTSValue::Value(NativeUInt(convert_num(data)))
+                Ok(CTSValue::Value(NativeUInt(convert_num(data))))
             }
             BaseType::ValuePointer(_modifiers, inner) => match data {
-                StackValue::ManagedPtr(p) => CTSValue::Value(Pointer(p)),
+                StackValue::ManagedPtr(p) => Ok(CTSValue::Value(Pointer(p))),
                 _ => {
                     let ptr = convert_num::<usize>(data);
                     let inner_type = if let Some(source) = inner {
-                        self.loader.find_concrete_type(source.clone())
+                        self.loader
+                            .find_concrete_type(source.clone())?
                     } else {
-                        self.loader.corlib_type("System.Void")
+                        self.loader
+                            .corlib_type("System.Void")?
                     };
-                    CTSValue::Value(Pointer(ManagedPtr::new(
+                    Ok(CTSValue::Value(Pointer(ManagedPtr::new(
                         NonNull::new(ptr as *mut u8),
                         inner_type,
                         None,
                         false,
-                    )))
+                    ))))
                 }
             },
             BaseType::Object
@@ -705,7 +725,7 @@ impl<'m> ResolverService<'m> {
             | BaseType::Vector(_, _)
             | BaseType::Array(_, _) => {
                 if let StackValue::ObjectRef(o) = data {
-                    CTSValue::Ref(o)
+                    Ok(CTSValue::Ref(o))
                 } else {
                     panic!("expected ObjectRef, got {:?}", data)
                 }
@@ -715,7 +735,7 @@ impl<'m> ResolverService<'m> {
                 ..
             } => {
                 if let StackValue::ObjectRef(o) = data {
-                    CTSValue::Ref(o)
+                    Ok(CTSValue::Ref(o))
                 } else {
                     panic!("expected ObjectRef, got {:?}", data)
                 }
@@ -727,32 +747,32 @@ impl<'m> ResolverService<'m> {
                 let (ut, type_generics) = decompose_type_source(source);
                 let new_lookup = GenericLookup::new(type_generics);
                 let new_ctx = ctx.with_generics(&new_lookup);
-                let td = new_ctx.locate_type(ut);
+                let td = new_ctx.locate_type(ut)?;
 
-                if !td.is_value_type(&new_ctx) {
-                    return CTSValue::Ref(if let StackValue::ObjectRef(r) = data {
+                if !td.is_value_type(&new_ctx)? {
+                    return Ok(CTSValue::Ref(if let StackValue::ObjectRef(r) = data {
                         r
                     } else {
                         panic!("expected ObjectRef, got {:?}", data)
-                    });
+                    }));
                 }
 
                 if let Some(e) = td.is_enum() {
-                    let enum_type = new_ctx.make_concrete(e);
+                    let enum_type = new_ctx.make_concrete(e)?;
                     return self.new_cts_value(&enum_type, data, &new_ctx);
                 }
 
                 if td.type_name() == "System.TypedReference" {
-                    return CTSValue::Value(TypedRef);
+                    return Ok(CTSValue::Value(TypedRef));
                 }
 
                 if let StackValue::ValueType(mut o) = data {
                     if o.description != td {
                         o.description = td;
                     }
-                    CTSValue::Value(Struct(o))
+                    Ok(CTSValue::Value(Struct(o)))
                 } else {
-                    let mut instance = self.new_object(td, &new_ctx);
+                    let mut instance = self.new_object(td, &new_ctx)?;
                     if let StackValue::ObjectRef(o) = data
                         && let Some(handle) = o.0
                     {
@@ -764,7 +784,7 @@ impl<'m> ResolverService<'m> {
                             _ => panic!("cannot unbox from non-object storage"),
                         }
                     }
-                    CTSValue::Value(Struct(instance))
+                    Ok(CTSValue::Value(Struct(instance)))
                 }
             }
         }
@@ -776,43 +796,45 @@ impl<'m> ResolverService<'m> {
         data: &[u8],
         gc: GCHandle<'gc>,
         ctx: &ResolutionContext<'_, 'm>,
-    ) -> CTSValue<'gc> {
+    ) -> Result<CTSValue<'gc>, TypeResolutionError> {
         use ValueType::*;
-        let t = self.normalize_type(t.clone());
+        let t = self.normalize_type(t.clone())?;
         match t.get() {
-            BaseType::Boolean => CTSValue::Value(Bool(data[0] != 0)),
-            BaseType::Char => CTSValue::Value(Char(u16::from_ne_bytes(data.try_into().unwrap()))),
-            BaseType::Int8 => CTSValue::Value(Int8(data[0] as i8)),
-            BaseType::UInt8 => CTSValue::Value(UInt8(data[0])),
-            BaseType::Int16 => CTSValue::Value(Int16(i16::from_ne_bytes(data.try_into().unwrap()))),
+            BaseType::Boolean => Ok(CTSValue::Value(Bool(data[0] != 0))),
+            BaseType::Char => Ok(CTSValue::Value(Char(u16::from_ne_bytes(data.try_into().unwrap())))),
+            BaseType::Int8 => Ok(CTSValue::Value(Int8(data[0] as i8))),
+            BaseType::UInt8 => Ok(CTSValue::Value(UInt8(data[0]))),
+            BaseType::Int16 => Ok(CTSValue::Value(Int16(i16::from_ne_bytes(data.try_into().unwrap())))),
             BaseType::UInt16 => {
-                CTSValue::Value(UInt16(u16::from_ne_bytes(data.try_into().unwrap())))
+                Ok(CTSValue::Value(UInt16(u16::from_ne_bytes(data.try_into().unwrap()))))
             }
-            BaseType::Int32 => CTSValue::Value(Int32(i32::from_ne_bytes(data.try_into().unwrap()))),
+            BaseType::Int32 => Ok(CTSValue::Value(Int32(i32::from_ne_bytes(data.try_into().unwrap())))),
             BaseType::UInt32 => {
-                CTSValue::Value(UInt32(u32::from_ne_bytes(data.try_into().unwrap())))
+                Ok(CTSValue::Value(UInt32(u32::from_ne_bytes(data.try_into().unwrap()))))
             }
-            BaseType::Int64 => CTSValue::Value(Int64(i64::from_ne_bytes(data.try_into().unwrap()))),
+            BaseType::Int64 => Ok(CTSValue::Value(Int64(i64::from_ne_bytes(data.try_into().unwrap())))),
             BaseType::UInt64 => {
-                CTSValue::Value(UInt64(u64::from_ne_bytes(data.try_into().unwrap())))
+                Ok(CTSValue::Value(UInt64(u64::from_ne_bytes(data.try_into().unwrap()))))
             }
             BaseType::Float32 => {
-                CTSValue::Value(Float32(f32::from_ne_bytes(data.try_into().unwrap())))
+                Ok(CTSValue::Value(Float32(f32::from_ne_bytes(data.try_into().unwrap()))))
             }
             BaseType::Float64 => {
-                CTSValue::Value(Float64(f64::from_ne_bytes(data.try_into().unwrap())))
+                Ok(CTSValue::Value(Float64(f64::from_ne_bytes(data.try_into().unwrap()))))
             }
             BaseType::IntPtr => {
-                CTSValue::Value(NativeInt(isize::from_ne_bytes(data.try_into().unwrap())))
+                Ok(CTSValue::Value(NativeInt(isize::from_ne_bytes(data.try_into().unwrap()))))
             }
             BaseType::UIntPtr | BaseType::FunctionPointer(_) => {
-                CTSValue::Value(NativeUInt(usize::from_ne_bytes(data.try_into().unwrap())))
+                Ok(CTSValue::Value(NativeUInt(usize::from_ne_bytes(data.try_into().unwrap()))))
             }
             BaseType::ValuePointer(_modifiers, inner) => {
                 let inner_type = if let Some(source) = inner {
-                    self.loader.find_concrete_type(source.clone())
+                    self.loader
+                        .find_concrete_type(source.clone())?
                 } else {
-                    self.loader.corlib_type("System.Void")
+                    self.loader
+                        .corlib_type("System.Void")?
                 };
 
                 if data.len() >= 16 {
@@ -821,29 +843,29 @@ impl<'m> ResolverService<'m> {
                     let mut m = ManagedPtr::new(ptr, inner_type, Some(owner), false);
                     m.offset = offset;
                     m.stack_slot_origin = stack_origin;
-                    CTSValue::Value(Pointer(m))
+                    Ok(CTSValue::Value(Pointer(m)))
                 } else {
                     let mut ptr_bytes = [0u8; 8];
                     ptr_bytes.copy_from_slice(&data[0..8]);
                     let ptr = usize::from_ne_bytes(ptr_bytes);
-                    CTSValue::Value(Pointer(ManagedPtr::new(
+                    Ok(CTSValue::Value(Pointer(ManagedPtr::new(
                         NonNull::new(ptr as *mut u8),
                         inner_type,
                         None,
                         false,
-                    )))
+                    ))))
                 }
             }
             BaseType::Object
             | BaseType::String
             | BaseType::Vector(_, _)
             | BaseType::Array(_, _) => {
-                CTSValue::Ref(unsafe { dotnet_value::object::ObjectRef::read_branded(data, gc) })
+                Ok(CTSValue::Ref(unsafe { dotnet_value::object::ObjectRef::read_branded(data, gc) }))
             }
             BaseType::Type {
                 value_kind: Some(ValueKind::Class),
                 ..
-            } => CTSValue::Ref(unsafe { dotnet_value::object::ObjectRef::read_branded(data, gc) }),
+            } => Ok(CTSValue::Ref(unsafe { dotnet_value::object::ObjectRef::read_branded(data, gc) })),
             BaseType::Type {
                 value_kind: None | Some(ValueKind::ValueType),
                 source,
@@ -851,26 +873,26 @@ impl<'m> ResolverService<'m> {
                 let (ut, type_generics) = decompose_type_source(source);
                 let new_lookup = GenericLookup::new(type_generics);
                 let new_ctx = ctx.with_generics(&new_lookup);
-                let td = new_ctx.locate_type(ut);
+                let td = new_ctx.locate_type(ut)?;
 
-                if !td.is_value_type(&new_ctx) {
-                    return CTSValue::Ref(unsafe {
+                if !td.is_value_type(&new_ctx)? {
+                    return Ok(CTSValue::Ref(unsafe {
                         dotnet_value::object::ObjectRef::read_branded(data, gc)
-                    });
+                    }));
                 }
 
                 if let Some(e) = td.is_enum() {
-                    let enum_type = new_ctx.make_concrete(e);
+                    let enum_type = new_ctx.make_concrete(e)?;
                     return self.read_cts_value(&enum_type, data, gc, &new_ctx);
                 }
 
                 if td.type_name() == "System.TypedReference" {
-                    return CTSValue::Value(TypedRef);
+                    return Ok(CTSValue::Value(TypedRef));
                 }
 
-                let instance = self.new_object(td, &new_ctx);
+                let instance = self.new_object(td, &new_ctx)?;
                 instance.instance_storage.get_mut().copy_from_slice(data);
-                CTSValue::Value(Struct(instance))
+                Ok(CTSValue::Value(Struct(instance)))
             }
         }
     }
@@ -880,22 +902,22 @@ impl<'m> ResolverService<'m> {
         element: ConcreteType,
         size: usize,
         ctx: &ResolutionContext<'_, 'm>,
-    ) -> Vector<'gc> {
+    ) -> Result<Vector<'gc>, TypeResolutionError> {
         let layout = crate::layout::LayoutFactory::create_array_layout_with_metrics(
             element.clone(),
             size,
             ctx,
             self.metrics(),
-        );
+        )?;
         let total_size = layout.element_layout.size() * size;
         if total_size > 0x7FFF_FFFF {
-            panic!(
+            return Err(TypeResolutionError::MassiveAllocation(format!(
                 "attempted to allocate massive vector of {} bytes (element: {:?}, length: {})",
                 total_size, element, size
-            );
+            )));
         }
 
-        Vector::new(element, layout, vec![0; total_size], vec![size])
+        Ok(Vector::new(element, layout, vec![0; total_size], vec![size]))
     }
 }
 

@@ -22,6 +22,7 @@ use std::{
 };
 
 pub mod comparer;
+pub mod error;
 pub mod generics;
 #[macro_use]
 mod macros;
@@ -30,8 +31,16 @@ pub mod resolution;
 pub mod runtime;
 
 pub trait TypeResolver {
-    fn corlib_type(&self, name: &str) -> TypeDescription;
-    fn locate_type(&self, resolution: ResolutionS, handle: UserType) -> TypeDescription;
+    fn corlib_type(&self, name: &str) -> Result<TypeDescription, crate::error::TypeResolutionError>;
+    fn locate_type(
+        &self,
+        resolution: ResolutionS,
+        handle: UserType,
+    ) -> Result<TypeDescription, crate::error::TypeResolutionError>;
+    fn find_concrete_type(
+        &self,
+        ty: crate::generics::ConcreteType,
+    ) -> Result<TypeDescription, crate::error::TypeResolutionError>;
 }
 
 #[repr(C)]

@@ -17,6 +17,9 @@ use dotnetdll::prelude::*;
 use gc_arena::{Collect, unsafe_empty_collect};
 use std::rc::Rc;
 
+#[macro_use]
+mod macros;
+
 pub mod context;
 pub mod dispatch;
 pub mod error;
@@ -26,8 +29,6 @@ pub mod gc;
 mod instructions;
 pub(crate) mod intrinsics;
 pub mod layout;
-#[macro_use]
-mod macros;
 pub mod memory;
 pub mod metrics;
 mod pinvoke;
@@ -81,7 +82,7 @@ impl MethodInfo<'static> {
         method: MethodDescription,
         generics: &GenericLookup,
         shared: Arc<SharedGlobalState>,
-    ) -> Self {
+    ) -> Result<Self, dotnet_types::error::TypeResolutionError> {
         let loader = shared.loader;
         let ctx = ResolutionContext::for_method(
             method,
@@ -103,29 +104,29 @@ impl MethodInfo<'static> {
                 }
             }
 
-            Self {
+            Ok(Self {
                 is_cctor: method.method.runtime_special_name
                     && method.method.name == ".cctor"
                     && !method.method.signature.instance
                     && method.method.signature.parameters.is_empty(),
                 signature: &method.method.signature,
                 locals: &body.header.local_variables,
-                exceptions: exceptions::parse(exceptions, &ctx)
+                exceptions: exceptions::parse(exceptions, &ctx)?
                     .into_iter()
                     .map(Rc::new)
                     .collect(),
                 instructions: body.instructions.as_slice(),
                 source: method,
-            }
+            })
         } else {
-            Self {
+            Ok(Self {
                 is_cctor: false,
                 signature: &method.method.signature,
                 locals: &[],
                 exceptions: vec![],
                 instructions: &[],
                 source: method,
-            }
+            })
         }
     }
 }

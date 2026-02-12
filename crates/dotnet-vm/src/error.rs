@@ -1,3 +1,5 @@
+use dotnet_assemblies::error::AssemblyLoadError;
+use dotnet_types::error::TypeResolutionError;
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone, PartialEq)]
@@ -13,24 +15,6 @@ pub enum VmError {
     
     #[error("Memory access violation: {0}")]
     Memory(#[from] MemoryError),
-}
-
-#[derive(Debug, Error, Clone, PartialEq)]
-pub enum AssemblyLoadError {
-    #[error("File not found: {0}")]
-    FileNotFound(String),
-    #[error("Invalid format: {0}")]
-    InvalidFormat(String),
-    #[error("IO error: {0}")]
-    Io(String),
-}
-
-#[derive(Debug, Error, Clone, PartialEq)]
-pub enum TypeResolutionError {
-    #[error("Type not found: {0}")]
-    NotFound(String),
-    #[error("Invalid type handle")]
-    InvalidHandle,
 }
 
 #[derive(Debug, Error, Clone, PartialEq)]

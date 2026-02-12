@@ -11,7 +11,6 @@ use crate::{
         ops::*,
     },
     threading::ThreadManagerOps,
-    vm_trace_instruction,
 };
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
@@ -224,12 +223,7 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
         if ctx.is_intrinsic_cached(method) {
             crate::intrinsics::intrinsic_call(&mut ctx, method, &lookup)
         } else if method.method.pinvoke.is_some() {
-            crate::pinvoke::external_call(&mut ctx, method);
-            if matches!(*ctx.exception_mode, ExceptionState::Throwing(_)) {
-                StepResult::Exception
-            } else {
-                StepResult::Continue
-            }
+            crate::pinvoke::external_call(&mut ctx, method)
         } else {
             if method.method.internal_call {
                 panic!("intrinsic not found: {:?}", method);
@@ -249,10 +243,10 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
                 );
             }
 
-            ctx.call_frame(
-                MethodInfo::new(method, &lookup, ctx.shared.clone()),
+            vm_try!(ctx.call_frame(
+                vm_try!(MethodInfo::new(method, &lookup, ctx.shared.clone())),
                 lookup,
-            );
+            ));
             StepResult::FramePushed
         }
     }

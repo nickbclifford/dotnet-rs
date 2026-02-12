@@ -1,5 +1,5 @@
-use crate::{StepResult, StoreType, context::ResolutionContext, stack::ops::*, vm_error};
-use dotnet_types::generics::ConcreteType;
+use crate::{StepResult, StoreType, context::ResolutionContext, stack::ops::*};
+use dotnet_types::{error::TypeResolutionError, generics::ConcreteType};
 use dotnet_utils::{DebugStr, gc::GCHandle};
 use dotnet_value::{
     StackValue,
@@ -144,7 +144,7 @@ impl Debug for HandlerKind {
 pub fn parse<'a>(
     source: impl IntoIterator<Item = &'a body::Exception>,
     ctx: &ResolutionContext,
-) -> Vec<ProtectedSection> {
+) -> Result<Vec<ProtectedSection>, dotnet_types::error::TypeResolutionError> {
     let mut sections: HashMap<Range<usize>, Vec<Handler>> = HashMap::new();
     for exc in source {
         use body::ExceptionKind::*;
@@ -152,7 +152,7 @@ pub fn parse<'a>(
         let handler_range = exc.handler_offset..exc.handler_offset + exc.handler_length;
 
         let kind = match &exc.kind {
-            TypedException(t) => HandlerKind::Catch(ctx.make_concrete(t)),
+            TypedException(t) => HandlerKind::Catch(ctx.make_concrete(t)?),
             Filter { offset } => HandlerKind::Filter {
                 clause_offset: *offset,
             },
@@ -177,7 +177,7 @@ pub fn parse<'a>(
     // Sort sections such that inner blocks come before outer blocks.
     // This ensures that when searching for a handler, we find the most specific one first.
     v.sort_by_key(|s| (Reverse(s.instructions.start), s.instructions.end));
-    v
+    Ok(v)
 }
 
 pub struct ExceptionHandlingSystem;
@@ -238,7 +238,9 @@ impl ExceptionHandlingSystem {
             ));
         }
 
-        let exception_type = ctx.loader().corlib_type("System.Exception");
+        let exception_type = vm_try!(ctx
+            .loader()
+            .corlib_type("System.Exception"));
         exception.as_object(|obj| {
             if obj
                 .instance_storage
@@ -319,12 +321,11 @@ impl ExceptionHandlingSystem {
                 {
                     match &handler.kind {
                         HandlerKind::Catch(t) => {
-                            let exc_type = ctx
-                                .current_context()
-                                .get_heap_description(exception.0.expect("throwing null"));
+                            let exc_ref = vm_try!(exception.0.ok_or(TypeResolutionError::InvalidHandle));
+                            let exc_type = vm_try!(ctx.current_context().get_heap_description(exc_ref));
                             let catch_type = t.clone();
 
-                            if ctx.current_context().is_a(exc_type.into(), catch_type) {
+                            if vm_try!(ctx.current_context().is_a(exc_type.into(), catch_type)) {
                                 // Match found! Start the unwind phase towards this handler.
                                 *ctx.exception_mode_mut() =
                                     ExceptionState::Unwinding(UnwindState {
@@ -387,12 +388,13 @@ impl ExceptionHandlingSystem {
 
         let mut message = None;
         let mut stack_trace = None;
-        let exc_type = ctx
-            .current_context()
-            .get_heap_description(exception.0.expect("throwing null"));
+        let exc_ref = vm_try!(exception.0.ok_or(TypeResolutionError::InvalidHandle));
+        let exc_type = vm_try!(ctx.current_context().get_heap_description(exc_ref));
         let type_name = exc_type.type_name();
 
-        let exception_type = ctx.loader().corlib_type("System.Exception");
+        let exception_type = vm_try!(ctx
+            .loader()
+            .corlib_type("System.Exception"));
         exception.as_object(|obj| {
             if obj.instance_storage.has_field(exception_type, "_message") {
                 let message_bytes = obj

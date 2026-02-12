@@ -210,6 +210,7 @@ dependencies = [
  "dotnet-utils",
  "dotnetdll",
  "gc-arena",
+ "thiserror 1.0.69",
  "tracing",
 ]
 
@@ -250,6 +251,7 @@ version = "0.1.0"
 dependencies = [
  "dotnetdll",
  "gc-arena",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

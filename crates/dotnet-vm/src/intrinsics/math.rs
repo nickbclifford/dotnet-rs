@@ -29,11 +29,11 @@ pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc>(
 ) -> StepResult {
     let target_type = generics.type_generics[0].clone();
     let comparer_type_name = "System.Collections.Generic.GenericEqualityComparer`1";
-    let comparer_td = ctx.loader().corlib_type(comparer_type_name);
+    let comparer_td = vm_try!(ctx.loader().corlib_type(comparer_type_name));
 
     let new_lookup = GenericLookup::new(vec![target_type]);
     let res_ctx = ctx.with_generics(generics).with_generics(&new_lookup);
-    let instance = ObjectRef::new(ctx.gc(), HeapStorage::Obj(res_ctx.new_object(comparer_td)));
+    let instance = ObjectRef::new(ctx.gc(), HeapStorage::Obj(vm_try!(res_ctx.new_object(comparer_td))));
 
     ctx.push_obj(instance);
     StepResult::Continue

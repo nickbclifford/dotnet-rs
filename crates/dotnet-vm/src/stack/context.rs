@@ -14,6 +14,7 @@ use dotnet_types::{
     members::MethodDescription,
     resolution::ResolutionS,
     runtime::RuntimeType,
+    error::TypeResolutionError,
 };
 use dotnet_utils::{
     gc::GCHandle,
@@ -109,7 +110,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
         method: MethodDescription,
         locals: &'m [LocalVariable],
         generics: &GenericLookup,
-    ) -> (Vec<StackValue<'gc>>, Vec<bool>) {
+    ) -> Result<(Vec<StackValue<'gc>>, Vec<bool>), TypeResolutionError> {
         let mut values = vec![];
         let mut pinned_locals = vec![];
 
@@ -138,18 +139,18 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                         shared: Some(self.shared.clone()),
                     };
 
-                    let v = match ctx.make_concrete(var_type).get() {
+                    let v = match ctx.make_concrete(var_type)?.get() {
                         Type { source, .. } => {
                             let (ut, type_generics) = decompose_type_source::<ConcreteType>(source);
-                            let desc = ctx.locate_type(ut);
+                            let desc = ctx.locate_type(ut)?;
 
-                            if desc.is_value_type(&ctx) {
+                            if desc.is_value_type(&ctx)? {
                                 let new_lookup = GenericLookup {
                                     type_generics: type_generics.into(),
                                     ..generics.clone()
                                 };
                                 let new_ctx = ctx.with_generics(&new_lookup);
-                                let instance = new_ctx.new_object(desc);
+                                let instance = new_ctx.new_object(desc)?;
                                 StackValue::ValueType(instance)
                             } else {
                                 StackValue::null()
@@ -161,7 +162,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                 }
             }
         }
-        (values, pinned_locals)
+        Ok((values, pinned_locals))
     }
 
     pub(crate) fn handle_return(&mut self) -> StepResult {
@@ -185,11 +186,14 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
             } else {
                 let val = self.pop();
                 let return_concrete = return_type.to_concrete(self.loader());
-                let td = self.loader().find_concrete_type(return_concrete.clone());
-                if td.is_value_type(&self.current_context()) {
+                let td = self
+                    .loader()
+                    .find_concrete_type(return_concrete.clone())
+                    .expect("Type must exist for init_locals");
+                if td.is_value_type(&self.current_context()).expect("Failed to check if return type is value type") {
                     let boxed = ObjectRef::new(
                         self.gc,
-                        HeapStorage::Boxed(self.new_value_type(&return_concrete, val)),
+                        HeapStorage::Boxed(self.new_value_type(&return_concrete, val).expect("Failed to create value type for return")),
                     );
                     self.register_new_object(&boxed);
                     self.push_obj(boxed);
@@ -232,15 +236,17 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
 
     pub fn locate_type(&self, handle: UserType) -> TypeDescription {
         let f = self.current_frame();
-        self.resolver().locate_type(f.source_resolution, handle)
+        self.resolver()
+            .locate_type(f.source_resolution, handle)
+            .expect("Type resolution failed")
     }
 
-    pub fn new_instance_fields(&self, td: TypeDescription) -> FieldStorage {
+    pub fn new_instance_fields(&self, td: TypeDescription) -> Result<FieldStorage, TypeResolutionError> {
         self.resolver()
             .new_instance_fields(td, &self.current_context())
     }
 
-    pub fn new_static_fields(&self, td: TypeDescription) -> FieldStorage {
+    pub fn new_static_fields(&self, td: TypeDescription) -> Result<FieldStorage, TypeResolutionError> {
         self.resolver()
             .new_static_fields(td, &self.current_context())
     }
@@ -475,7 +481,11 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
             let finalizer: Option<MethodDescription> = instance.as_heap_storage(|storage| {
                 if let HeapStorage::Obj(o) = storage {
                     let obj_type = o.description;
-                    let object_type = self.shared.loader.corlib_type("System.Object");
+                    let object_type = self
+                        .shared
+                        .loader
+                        .corlib_type("System.Object")
+                        .expect("System.Object must exist in corlib");
                     let base_finalize = object_type
                         .definition()
                         .methods
@@ -498,7 +508,7 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
                         obj_type,
                         &GenericLookup::default(),
                         &ctx,
-                    ))
+                    ).expect("Failed to resolve finalizer"))
                 } else {
                     None
                 }
@@ -510,12 +520,12 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
             };
 
             let method_info =
-                MethodInfo::new(finalizer, &self.shared.empty_generics, self.shared.clone());
+                vm_try!(MethodInfo::new(finalizer, &self.shared.empty_generics, self.shared.clone()));
 
             // Push the object as 'this'
             self.push(StackValue::ObjectRef(instance));
 
-            self.call_frame(method_info, self.shared.empty_generics.clone());
+            vm_try!(self.call_frame(method_info, self.shared.empty_generics.clone()));
             self.current_frame_mut().is_finalizer = true;
             return StepResult::FramePushed;
         }

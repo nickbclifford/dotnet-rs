@@ -102,7 +102,7 @@
 //!   ├─→ external_call() [if P/Invoke]
 //!   └─→ call_frame() [managed CIL]
 //! ```
-use crate::{stack::ops::VesOps, vm_trace_intrinsic};
+use crate::stack::ops::VesOps;
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
@@ -307,8 +307,9 @@ pub fn is_intrinsic_field(
 
     // Check for IntrinsicAttribute
     for a in &field.field.attributes {
-        let ctor = loader.locate_attribute(field.parent.resolution, a);
-        if ctor.parent.type_name() == INTRINSIC_ATTR {
+        if let Ok(ctor) = loader.locate_attribute(field.parent.resolution, a)
+            && ctor.parent.type_name() == INTRINSIC_ATTR
+        {
             return true;
         }
     }
@@ -411,7 +412,10 @@ fn object_get_type<'gc, 'm: 'gc>(
         // For arrays, return System.Array as a conservative fallback.
         // TODO: encode exact element type and rank into RuntimeType (Vector/Array)
         HeapStorage::Vec(_v) => {
-            let arr_td = ctx.loader().corlib_type("System.Array");
+            let arr_td = ctx
+                .loader()
+                .corlib_type("System.Array")
+                .expect("System.Array must exist");
             RuntimeType::Type(arr_td)
         }
         HeapStorage::Boxed(v) => match v {

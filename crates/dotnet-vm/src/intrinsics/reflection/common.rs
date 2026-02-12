@@ -91,8 +91,8 @@ pub(crate) fn get_runtime_type<'gc, 'm: 'gc>(
         index
     };
 
-    let rt = ctx.loader().corlib_type("DotnetRs.RuntimeType");
-    let rt_obj = ctx.new_object(rt);
+    let rt = ctx.loader().corlib_type("DotnetRs.RuntimeType").expect("RuntimeType not found");
+    let rt_obj = ctx.new_object(rt).expect("Failed to create RuntimeType object");
     let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
     ctx.register_new_object(&obj_ref);
 
@@ -197,7 +197,7 @@ pub(crate) fn make_runtime_type(res_ctx: &ResolutionContext, t: &MethodType) -> 
             BaseType::String => RuntimeType::String,
             BaseType::Type { source, .. } => {
                 let (ut, generics) = decompose_type_source::<MethodType>(source);
-                let td = res_ctx.locate_type(ut);
+                let td = res_ctx.locate_type(ut).expect("failed to locate type");
                 if generics.is_empty() {
                     RuntimeType::Type(td)
                 } else {
@@ -323,8 +323,8 @@ pub(crate) fn get_runtime_method_obj<'gc, 'm: 'gc>(
         "DotnetRs.MethodInfo"
     };
 
-    let rt = ctx.loader().corlib_type(class_name);
-    let rt_obj = ctx.new_object(rt);
+    let rt = ctx.loader().corlib_type(class_name).expect("reflection type not found");
+    let rt_obj = ctx.new_object(rt).expect("Failed to create reflection object");
     let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
     ctx.register_new_object(&obj_ref);
 
@@ -358,8 +358,8 @@ pub(crate) fn get_runtime_field_obj<'gc, 'm: 'gc>(
 
     let index = get_runtime_field_index(ctx, field, lookup.clone()) as usize;
 
-    let rt = ctx.loader().corlib_type("DotnetRs.FieldInfo");
-    let rt_obj = ctx.new_object(rt);
+    let rt = ctx.loader().corlib_type("DotnetRs.FieldInfo").expect("FieldInfo not found");
+    let rt_obj = ctx.new_object(rt).expect("Failed to create FieldInfo object");
     let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
     ctx.register_new_object(&obj_ref);
 

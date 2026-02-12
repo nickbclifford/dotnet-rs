@@ -1,5 +1,5 @@
 use clap::Parser;
-use dotnet_assemblies::{find_dotnet_sdk_path, static_res_from_file};
+use dotnet_assemblies::{find_dotnet_sdk_path, try_static_res_from_file};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -57,7 +57,13 @@ fn main() {
 
     loop {
         let assembly_path = resolve_assembly_path(&current_assembly);
-        resolution = static_res_from_file(&assembly_path);
+        resolution = match try_static_res_from_file(&assembly_path) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Error loading assembly '{}': {}", assembly_path.display(), e);
+                std::process::exit(1);
+            }
+        };
 
         eprintln!(
             "Assembly: {}, Types: {}, MethodRefs: {}",

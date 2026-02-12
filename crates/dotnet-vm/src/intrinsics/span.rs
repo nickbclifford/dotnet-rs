@@ -1,6 +1,6 @@
 use crate::{StepResult, layout::type_layout, resolution::ValueResolution, stack::ops::VesOps};
 use dotnet_types::{
-    generics::GenericLookup,
+    generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
 };
 use dotnet_value::{
@@ -120,7 +120,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
 
     let res_ctx = ctx.with_generics(generics);
 
-    let (base_ptr, total_len, h_opt, element_type, element_size) = match obj_val {
+    let (base_ptr, total_len, h_opt, element_type, element_size): (*mut u8, usize, Option<_>, ConcreteType, usize) = match obj_val {
         StackValue::ObjectRef(ObjectRef(Some(h))) => {
             let heap = h.borrow();
             match &heap.storage {
@@ -129,7 +129,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
                         s.as_ptr() as *mut u8,
                         s.len(),
                         Some(h),
-                        res_ctx.make_concrete(&dotnetdll::prelude::BaseType::Char),
+                        vm_try!(res_ctx.make_concrete(&dotnetdll::prelude::BaseType::Char)),
                         2, // char is 2 bytes in .NET
                     )
                 }
@@ -154,7 +154,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
             let element_type = if !generics.method_generics.is_empty() {
                 generics.method_generics[0].clone()
             } else {
-                res_ctx.make_concrete(&dotnetdll::prelude::BaseType::Char)
+                vm_try!(res_ctx.make_concrete(&dotnetdll::prelude::BaseType::Char))
             };
             (std::ptr::null_mut(), 0, None, element_type, 2)
         }
@@ -187,19 +187,19 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
     let len = actual_length;
 
     let span_type_concrete = match &method.method.signature.return_type.1 {
-        Some(ParameterType::Value(t)) => res_ctx.make_concrete(t),
+        Some(ParameterType::Value(t)) => vm_try!(res_ctx.make_concrete(t)),
         Some(_) => panic!("AsSpan called on method with ref/typedref return"),
         None => panic!("AsSpan called on method returning void"),
     };
-    let span_type = ctx.loader().find_concrete_type(span_type_concrete);
+    let span_type = vm_try!(ctx.loader().find_concrete_type(span_type_concrete));
 
     let new_lookup = GenericLookup::new(vec![element_type.clone()]);
     let res_ctx_generic = res_ctx.with_generics(&new_lookup);
 
-    let span = res_ctx_generic.new_object(span_type);
+    let span = vm_try!(res_ctx_generic.new_object(span_type));
 
     if let Some(h) = h_opt {
-        let element_type_desc = ctx.loader().find_concrete_type(element_type);
+        let element_type_desc = vm_try!(ctx.loader().find_concrete_type(element_type));
 
         let managed = ManagedPtr::new(
             Some(NonNull::new(ptr).expect("Object pointer should not be null")),
@@ -233,7 +233,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
     let gc = ctx.gc();
     let element_type = &generics.method_generics[0];
     let res_ctx = ctx.with_generics(generics);
-    let element_size = type_layout(element_type.clone(), &res_ctx).size();
+    let element_size = vm_try!(type_layout(element_type.clone(), &res_ctx)).size();
 
     let field_handle = ctx.pop_value_type();
 
@@ -247,8 +247,8 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
         let obj_ref = unsafe { ObjectRef::read_branded(&ptr_buf, gc) };
         ctx.resolve_runtime_field(obj_ref)
     };
-    let field_type = ctx.with_generics(&lookup).make_concrete(&field.return_type);
-    let field_desc = ctx.loader().find_concrete_type(field_type.clone());
+    let field_type = vm_try!(ctx.with_generics(&lookup).make_concrete(&field.return_type));
+    let field_desc = vm_try!(ctx.loader().find_concrete_type(field_type.clone()));
 
     let Some(initial_data) = &field.initial_value else {
         return ctx.throw_by_name("System.ArgumentException");
@@ -265,12 +265,12 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
         let array_size = size_str[..size_end].parse::<usize>().unwrap();
         let data_slice = &initial_data[..array_size];
 
-        let span_type = ctx.loader().corlib_type("System.ReadOnlySpan`1");
+        let span_type = vm_try!(ctx.loader().corlib_type("System.ReadOnlySpan`1"));
         let span_lookup = GenericLookup::new(vec![element_type.clone()]);
         let span_res_ctx = res_ctx.with_generics(&span_lookup);
-        let span_instance = span_res_ctx.new_object(span_type);
+        let span_instance = vm_try!(span_res_ctx.new_object(span_type));
 
-        let element_desc = ctx.loader().find_concrete_type(element_type.clone());
+        let element_desc = vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
         let managed = ManagedPtr::new(
             Some(
                 NonNull::new(data_slice.as_ptr() as *mut u8)
@@ -340,7 +340,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
         element_type_runtime.to_concrete(ctx.loader());
 
     let res_ctx = ctx.with_generics(generics);
-    let element_size = type_layout(element_type, &res_ctx).size();
+    let element_size = vm_try!(type_layout(element_type, &res_ctx)).size();
 
     let Some(initial_data) = &field.initial_value else {
         ctx.push_isize(0);
@@ -388,7 +388,7 @@ pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc>(
         panic!("GetArrayData expected generic argument");
     };
 
-    let element_type_desc = ctx.loader().find_concrete_type(element_type);
+    let element_type_desc = vm_try!(ctx.loader().find_concrete_type(element_type));
 
     if let Some(handle) = array_ref.0 {
         let inner = handle.borrow();

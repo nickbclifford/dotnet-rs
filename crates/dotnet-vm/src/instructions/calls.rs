@@ -1,5 +1,5 @@
 use crate::{
-    StepResult, layout::type_layout, resolution::TypeResolutionExt, stack::ops::VesOps, vm_trace,
+    StepResult, layout::type_layout, resolution::TypeResolutionExt, stack::ops::VesOps,
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::{
@@ -28,9 +28,9 @@ pub fn callvirt<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     // Note: We still need to pop args to extract this_type before dispatch
 
     // Determine number of arguments to extract this_type
-    let (base_method, _) = ctx
+    let (base_method, _) = vm_try!(ctx
         .resolver()
-        .find_generic_method(param0, &ctx.current_context());
+        .find_generic_method(param0, &ctx.current_context()));
     let num_args = 1 + base_method.method.signature.parameters.len();
     let args = ctx.pop_multiple(num_args);
 
@@ -40,7 +40,9 @@ pub fn callvirt<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         StackValue::ObjectRef(ObjectRef(None)) => {
             return ctx.throw_by_name("System.NullReferenceException");
         }
-        StackValue::ObjectRef(ObjectRef(Some(o))) => ctx.current_context().get_heap_description(o),
+        StackValue::ObjectRef(ObjectRef(Some(o))) => {
+            vm_try!(ctx.current_context().get_heap_description(o))
+        }
         StackValue::ManagedPtr(m) => m.inner_type,
         rest => {
             return StepResult::Error(crate::error::VmError::Execution(
@@ -71,24 +73,25 @@ pub fn call_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     // because the constrained prefix should only be on callvirt
     // however, this appears to be used for static interface dispatch?
 
-    let constraint_type = ctx.current_context().make_concrete(constraint);
-    let (method, lookup) = ctx
+    let constraint_type = vm_try!(ctx.current_context().make_concrete(constraint));
+    let (method, lookup) = vm_try!(ctx
         .resolver()
-        .find_generic_method(source, &ctx.current_context());
+        .find_generic_method(source, &ctx.current_context()));
 
-    let td = ctx.loader().find_concrete_type(constraint_type.clone());
+    let td = vm_try!(ctx
+        .loader()
+        .find_concrete_type(constraint_type.clone()));
 
     for o in td.definition().overrides.iter() {
-        let target = ctx
+        let target = vm_try!(ctx
             .current_context()
-            .locate_method(o.implementation, &lookup, None);
-        let declaration = ctx
+            .locate_method(o.implementation, &lookup, None));
+        let declaration = vm_try!(ctx
             .current_context()
-            .locate_method(o.declaration, &lookup, None);
+            .locate_method(o.declaration, &lookup, None));
         if method == declaration {
             vm_trace!(ctx, "-- dispatching to {:?} --", target);
             // Note: Uses dispatch_method directly since method is already resolved
-            // via explicit override lookup (static interface dispatch pattern)
             return ctx.dispatch_method(target, lookup);
         }
     }
@@ -107,21 +110,21 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     constraint: &MethodType,
     source: &MethodSource,
 ) -> StepResult {
-    let (base_method, lookup) = ctx
+    let (base_method, lookup) = vm_try!(ctx
         .resolver()
-        .find_generic_method(source, &ctx.current_context());
+        .find_generic_method(source, &ctx.current_context()));
 
     // Pop all arguments (this + parameters)
     let num_args = 1 + base_method.method.signature.parameters.len();
     let mut args = ctx.pop_multiple(num_args);
 
-    let constraint_type_source = ctx.make_concrete(constraint);
-    let constraint_type = ctx
+    let constraint_type_source = vm_try!(ctx.make_concrete(constraint));
+    let constraint_type = vm_try!(ctx
         .loader()
-        .find_concrete_type(constraint_type_source.clone());
+        .find_concrete_type(constraint_type_source.clone()));
 
     // Determine dispatch strategy based on constraint type
-    let method = if constraint_type.is_value_type(&ctx.current_context()) {
+    let method = if vm_try!(constraint_type.is_value_type(&ctx.current_context())) {
         // Value type: check for direct override first
         if let Some(overriding_method) = ctx.loader().find_method_in_type_with_substitution(
             constraint_type,
@@ -131,7 +134,7 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             &lookup,
         ) {
             // Value type has its own implementation
-            overriding_method
+            Ok(overriding_method)
         } else {
             // No override: box the value and use base implementation
             let m = args[0].as_managed_ptr();
@@ -144,25 +147,25 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             }
 
             let value_size =
-                type_layout(constraint_type_source.clone(), &ctx.current_context()).size();
+                vm_try!(type_layout(vm_try!(ctx.make_concrete(constraint)), &ctx.current_context())).size();
 
             let mut value_vec = vec![0u8; value_size];
             // SAFETY: Memory is allocated with sufficient size (value_size) and ptr is valid
             // for the current thread's evaluation stack.
             unsafe { ptr::copy_nonoverlapping(ptr, value_vec.as_mut_ptr(), value_size) };
             let value_data = &value_vec;
-            let value = ctx.read_cts_value(&constraint_type_source, value_data);
+            let value = vm_try!(ctx.read_cts_value(&constraint_type_source, value_data));
 
             let boxed = ObjectRef::new(
                 ctx.gc(),
-                HeapStorage::Boxed(
-                    ctx.new_value_type(&constraint_type_source, value.into_stack(ctx.gc())),
-                ),
+                HeapStorage::Boxed(vm_try!(
+                    ctx.new_value_type(&constraint_type_source, value.into_stack(ctx.gc()))
+                )),
             );
             ctx.register_new_object(&boxed);
 
             args[0] = StackValue::ObjectRef(boxed);
-            let this_type = ctx.get_heap_description(boxed.0.unwrap());
+            let this_type = vm_try!(ctx.get_heap_description(boxed.0.unwrap()));
             ctx.resolver().resolve_virtual_method(
                 base_method,
                 this_type,
@@ -206,10 +209,10 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             base_method.resolution(),
             &lookup,
         ) {
-            impl_method
+            Ok(impl_method)
         } else {
             // Fall back to normal virtual dispatch
-            let this_type = ctx.get_heap_description(obj_ref.0.unwrap());
+            let this_type = vm_try!(ctx.get_heap_description(obj_ref.0.unwrap()));
             ctx.resolver().resolve_virtual_method(
                 base_method,
                 this_type,
@@ -218,6 +221,8 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             )
         }
     };
+
+    let method = vm_try!(method);
 
     for arg in args {
         ctx.push(arg);

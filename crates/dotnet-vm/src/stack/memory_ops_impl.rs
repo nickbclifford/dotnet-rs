@@ -1,6 +1,6 @@
 use super::context::VesContext;
 use crate::memory::ops::MemoryOps;
-use dotnet_types::{TypeDescription, generics::ConcreteType};
+use dotnet_types::{TypeDescription, error::TypeResolutionError, generics::ConcreteType};
 use dotnet_utils::gc::{GCHandle, ThreadSafeLock};
 use super::ops::{LoaderOps, ResolutionOps};
 use dotnet_value::{
@@ -17,30 +17,30 @@ impl<'a, 'gc, 'm: 'gc> MemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn new_vector(&self, element: ConcreteType, size: usize) -> Vector<'gc> {
+    fn new_vector(&self, element: ConcreteType, size: usize) -> Result<Vector<'gc>, TypeResolutionError> {
         self.resolver()
             .new_vector(element, size, &self.current_context())
     }
 
     #[inline]
-    fn new_object(&self, td: TypeDescription) -> ObjectInstance<'gc> {
+    fn new_object(&self, td: TypeDescription) -> Result<ObjectInstance<'gc>, TypeResolutionError> {
         self.resolver().new_object(td, &self.current_context())
     }
 
     #[inline]
-    fn new_value_type(&self, t: &ConcreteType, data: StackValue<'gc>) -> ValueType<'gc> {
+    fn new_value_type(&self, t: &ConcreteType, data: StackValue<'gc>) -> Result<ValueType<'gc>, TypeResolutionError> {
         self.resolver()
             .new_value_type(t, data, &self.current_context())
     }
 
     #[inline]
-    fn new_cts_value(&self, t: &ConcreteType, data: StackValue<'gc>) -> CTSValue<'gc> {
+    fn new_cts_value(&self, t: &ConcreteType, data: StackValue<'gc>) -> Result<CTSValue<'gc>, TypeResolutionError> {
         self.resolver()
             .new_cts_value(t, data, &self.current_context())
     }
 
     #[inline]
-    fn read_cts_value(&self, t: &ConcreteType, data: &[u8]) -> CTSValue<'gc> {
+    fn read_cts_value(&self, t: &ConcreteType, data: &[u8]) -> Result<CTSValue<'gc>, TypeResolutionError> {
         let gc = self.gc;
         self.resolver()
             .read_cts_value(t, data, gc, &self.current_context())

@@ -1,7 +1,7 @@
-use crate::stack::ops::{ArgumentOps, EvalStackOps, LocalOps, TypedStackOps, CallOps, ResolutionOps, LoaderOps};
+use crate::stack::ops::{EvalStackOps, CallOps, ResolutionOps, LoaderOps};
 use super::context::{BasePointer, VesContext, StackFrame};
-use crate::{StepResult, MethodInfo, ResolutionContext, resolution::TypeResolutionExt, stack::ExceptionState};
-use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
+use crate::{StepResult, MethodInfo, ResolutionContext, resolution::TypeResolutionExt};
+use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription, error::TypeResolutionError};
 use dotnet_value::{object::{HeapStorage, Object as ObjectInstance, ObjectRef}, StackValue};
 use dotnetdll::prelude::MethodSource;
 
@@ -12,11 +12,11 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         instance: ObjectInstance<'gc>,
         method: crate::MethodInfo<'m>,
         generic_inst: GenericLookup,
-    ) {
+    ) -> Result<(), TypeResolutionError> {
         let gc = self.gc;
         let desc = instance.description;
 
-        let value = if desc.is_value_type(&self.current_context()) {
+        let value = if desc.is_value_type(&self.current_context())? {
             StackValue::ValueType(instance)
         } else {
             let in_heap = ObjectRef::new(gc, HeapStorage::Obj(instance));
@@ -27,7 +27,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         let num_params = method.signature.parameters.len();
         let args = self.pop_multiple(num_params);
 
-        if desc.is_value_type(&self.current_context()) {
+        if desc.is_value_type(&self.current_context())? {
             self.push(value);
             let index = self.evaluation_stack.top_of_stack() - 1;
             let ptr = self.evaluation_stack.get_slot_address(index).as_ptr() as *mut _;
@@ -42,7 +42,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         for arg in args {
             self.push(arg);
         }
-        self.call_frame(method, generic_inst);
+        self.call_frame(method, generic_inst)
     }
 
     #[inline]
@@ -50,7 +50,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         &mut self,
         method: crate::MethodInfo<'m>,
         generic_inst: GenericLookup,
-    ) {
+    ) -> Result<(), TypeResolutionError> {
         let _gc = self.gc;
         if self.tracer_enabled() {
             let method_desc = format!("{:?}", method.source);
@@ -69,7 +69,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
 
         let locals_base = self.evaluation_stack.top_of_stack();
         let (local_values, pinned_locals) =
-            self.init_locals(method.source, method.locals, &generic_inst);
+            self.init_locals(method.source, method.locals, &generic_inst)?;
 
         for (i, v) in local_values.into_iter().enumerate() {
             self.evaluation_stack.set_slot_at(locals_base + i, v);
@@ -97,6 +97,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
             generic_inst,
             pinned_locals,
         ));
+        Ok(())
     }
 
     #[inline]
@@ -105,7 +106,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         method: crate::MethodInfo<'m>,
         generic_inst: GenericLookup,
         args: Vec<StackValue<'gc>>,
-    ) {
+    ) -> Result<(), TypeResolutionError> {
         let _gc = self.gc;
         let argument_base = self.evaluation_stack.top_of_stack();
         for a in args {
@@ -113,7 +114,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         }
         let locals_base = self.evaluation_stack.top_of_stack();
         let (local_values, pinned_locals) =
-            self.init_locals(method.source, method.locals, &generic_inst);
+            self.init_locals(method.source, method.locals, &generic_inst)?;
         for v in local_values {
             self.push(v);
         }
@@ -129,6 +130,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
             generic_inst,
             pinned_locals,
         ));
+        Ok(())
     }
 
     #[inline]
@@ -141,12 +143,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         if let Some(intrinsic) = self.shared.caches.intrinsic_registry.get(&method) {
             intrinsic(self, method, &lookup)
         } else if method.method.pinvoke.is_some() {
-            crate::pinvoke::external_call(self, method);
-            if matches!(*self.exception_mode, ExceptionState::Throwing(_)) {
-                StepResult::Exception
-            } else {
-                StepResult::Continue
-            }
+            crate::pinvoke::external_call(self, method)
         } else {
             if method.method.body.is_none() {
                 if let Some(result) =
@@ -162,8 +159,11 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
                 );
             }
 
-            let info = MethodInfo::new(method, &lookup, self.shared.clone());
-            self.call_frame(info, lookup);
+            let info = match MethodInfo::new(method, &lookup, self.shared.clone()) {
+                Ok(v) => v,
+                Err(e) => return StepResult::Error(e.into()),
+            };
+            vm_try!(self.call_frame(info, lookup));
             StepResult::FramePushed
         }
     }
@@ -176,11 +176,19 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         ctx: Option<&ResolutionContext<'_, 'm>>,
     ) -> StepResult {
         let context = ctx.cloned().unwrap_or_else(|| self.current_context());
-        let (resolved, lookup) = self.resolver().find_generic_method(source, &context);
+        let (resolved, lookup) = match self.resolver().find_generic_method(source, &context) {
+            Ok(v) => v,
+            Err(e) => return StepResult::Error(e.into()),
+        };
 
         let final_method = if let Some(this_type) = this_type {
-            self.resolver()
+            match self
+                .resolver()
                 .resolve_virtual_method(resolved, this_type, &lookup, &context)
+            {
+                Ok(v) => v,
+                Err(e) => return StepResult::Error(e.into()),
+            }
         } else {
             resolved
         };

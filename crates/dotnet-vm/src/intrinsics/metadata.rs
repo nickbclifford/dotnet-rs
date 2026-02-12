@@ -150,8 +150,9 @@ pub fn classify_intrinsic(
 
     // 3. Check for IntrinsicAttribute
     for a in &method.method.attributes {
-        let ctor = loader.locate_attribute(method.resolution(), a);
-        if ctor.parent.type_name() == INTRINSIC_ATTR {
+        if let Ok(ctor) = loader.locate_attribute(method.resolution(), a)
+            && ctor.parent.type_name() == INTRINSIC_ATTR
+        {
             if let Some(registry) = registry
                 && let Some(handler) = registry.get(&method)
             {

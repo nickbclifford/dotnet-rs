@@ -85,8 +85,11 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
         ("GetMethodHandle" | "get_MethodHandle", 0) => {
             let obj = ctx.pop_obj();
 
-            let rmh = ctx.loader().corlib_type("System.RuntimeMethodHandle");
-            let instance = ctx.new_object(rmh);
+            let rmh = ctx
+                .loader()
+                .corlib_type("System.RuntimeMethodHandle")
+                .expect("System.RuntimeMethodHandle must exist");
+            let instance = vm_try!(ctx.new_object(rmh));
             obj.write(&mut instance.instance_storage.get_field_mut_local(rmh, "_value"));
 
             ctx.push(StackValue::ValueType(instance));
@@ -150,10 +153,11 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                         }
                     };
                     let res_ctx = ctx.with_generics(&lookup);
-                    let concrete_param_type = ctx.make_concrete(param_type);
-                    let td = ctx.loader().find_concrete_type(concrete_param_type.clone());
+                    let concrete_param_type = vm_try!(ctx.make_concrete(param_type));
+                    let td = ctx.loader().find_concrete_type(concrete_param_type.clone())
+                        .expect("Parameter type must exist for MethodInfo.Invoke");
 
-                    if td.is_value_type(&res_ctx) {
+                    if vm_try!(td.is_value_type(&res_ctx)) {
                         if arg_obj.0.is_none() {
                             args.push(StackValue::null());
                         } else {
@@ -203,7 +207,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
             let (method, lookup) = ctx.resolve_runtime_method(method_obj);
 
             // For ConstructorInfo.Invoke(parameters), we need to create the instance
-            let instance = ctx.new_object(method.parent);
+            let instance = vm_try!(ctx.new_object(method.parent));
             let this_obj = ObjectRef::new(gc, dotnet_value::object::HeapStorage::Obj(instance));
             ctx.register_new_object(&this_obj);
 
@@ -234,10 +238,11 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                         }
                     };
                     let res_ctx = ctx.with_generics(&lookup);
-                    let concrete_param_type = ctx.make_concrete(param_type);
-                    let td = ctx.loader().find_concrete_type(concrete_param_type.clone());
+                    let concrete_param_type = vm_try!(ctx.make_concrete(param_type));
+                    let td = ctx.loader().find_concrete_type(concrete_param_type.clone())
+                        .expect("Parameter type must exist for ConstructorInfo.Invoke");
 
-                    if td.is_value_type(&res_ctx) {
+                    if vm_try!(td.is_value_type(&res_ctx)) {
                         if arg_obj.0.is_none() {
                             args.push(StackValue::null());
                         } else {

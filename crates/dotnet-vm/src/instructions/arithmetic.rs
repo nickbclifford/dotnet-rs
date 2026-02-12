@@ -1,4 +1,4 @@
-use crate::{StepResult, instructions::macros::*};
+use crate::StepResult;
 use dotnet_macros::dotnet_instruction;
 use dotnetdll::prelude::*;
 

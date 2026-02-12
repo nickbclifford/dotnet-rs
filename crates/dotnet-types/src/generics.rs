@@ -1,4 +1,4 @@
-use crate::{TypeDescription, resolution::ResolutionS};
+use crate::{TypeDescription, resolution::ResolutionS, error::TypeResolutionError};
 use dotnetdll::prelude::{BaseType, MethodType, Resolution, ResolvedDebug, TypeSource, UserType};
 use gc_arena::{Collect, Collection};
 use std::{
@@ -91,31 +91,41 @@ impl GenericLookup {
         }
     }
 
-    pub fn make_concrete(&self, res: ResolutionS, t: impl Into<MethodType>) -> ConcreteType {
+    pub fn make_concrete(&self, res: ResolutionS, t: impl Into<MethodType>) -> Result<ConcreteType, TypeResolutionError> {
         match t.into() {
-            MethodType::Base(b) => ConcreteType::new(res, b.map(|t| self.make_concrete(res, t))),
+            MethodType::Base(b) => {
+                let mut err = None;
+                let concrete_base = b.map(|t| {
+                    match self.make_concrete(res, t) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            err = Some(e);
+                            ConcreteType::new(res, BaseType::Boolean)
+                        }
+                    }
+                });
+                if let Some(e) = err {
+                    Err(e)
+                } else {
+                    Ok(ConcreteType::new(res, concrete_base))
+                }
+            }
             MethodType::TypeGeneric(i) => self
                 .type_generics
                 .get(i)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Type generic index !{} out of bounds (current context only has {})",
-                        i,
-                        self.type_generics.len()
-                    );
-                })
-                .clone(),
+                .cloned()
+                .ok_or(TypeResolutionError::GenericIndexOutOfBounds {
+                    index: i,
+                    length: self.type_generics.len(),
+                }),
             MethodType::MethodGeneric(i) => self
                 .method_generics
                 .get(i)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Method generic index !!{} out of bounds (current context only has {})",
-                        i,
-                        self.method_generics.len()
-                    );
-                })
-                .clone(),
+                .cloned()
+                .ok_or(TypeResolutionError::GenericIndexOutOfBounds {
+                    index: i,
+                    length: self.method_generics.len(),
+                }),
         }
     }
 }

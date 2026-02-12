@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 dotnetdll = { workspace = true }
 gc-arena = { workspace = true }
+thiserror = { workspace = true }

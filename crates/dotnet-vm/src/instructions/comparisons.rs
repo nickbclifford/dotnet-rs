@@ -1,4 +1,4 @@
-use crate::{StepResult, instructions::macros::*, stack::ops::VesOps};
+use crate::{StepResult, stack::ops::VesOps};
 use dotnet_macros::dotnet_instruction;
 use dotnetdll::prelude::*;
 use std::cmp::Ordering as CmpOrdering;
