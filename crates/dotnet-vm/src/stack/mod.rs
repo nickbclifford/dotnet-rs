@@ -80,6 +80,14 @@ pub mod evaluation_stack;
 pub mod frames;
 pub mod ops;
 
+mod call_ops_impl;
+mod exception_ops_impl;
+mod memory_ops_impl;
+mod raw_memory_ops_impl;
+mod reflection_ops_impl;
+mod resolution_ops_impl;
+mod stack_ops_impl;
+
 pub use context::*;
 pub use evaluation_stack::*;
 pub use frames::*;
