@@ -11,7 +11,7 @@ use dotnet_utils::{
     gc::{GCHandle, ThreadSafeLock},
     sync::get_current_thread_id,
 };
-use gc_arena::{Collect, Collection, Gc};
+use gc_arena::{Collect, Collection, Gc, Mutation};
 use std::{
     cmp::Ordering,
     collections::HashSet,
@@ -23,7 +23,7 @@ use std::{
 };
 
 #[cfg(feature = "multithreaded-gc")]
-use dotnet_utils::gc::{get_currently_tracing, record_allocation, record_cross_arena_ref};
+use dotnet_utils::gc::{get_currently_tracing, record_cross_arena_ref};
 
 #[cfg(any(feature = "memory-validation", debug_assertions))]
 const OBJECT_MAGIC: u64 = 0x5AFE_0B1E_C700_0000;
@@ -147,11 +147,11 @@ impl<'gc> ObjectRef<'gc> {
         #[cfg(feature = "multithreaded-gc")]
         {
             let size = size_of::<ObjectInner>() + value.size_bytes();
-            record_allocation(size);
+            gc.record_allocation(size);
         }
 
         Self(Some(Gc::new(
-            gc,
+            &gc,
             ThreadSafeLock::new(ObjectInner {
                 #[cfg(any(feature = "memory-validation", debug_assertions))]
                 magic: OBJECT_MAGIC,
@@ -211,7 +211,7 @@ impl<'gc> ObjectRef<'gc> {
     /// # Safety
     /// - `source` must contain a valid `Gc` pointer.
     /// - The pointer must belong to the arena associated with `gc`.
-    pub unsafe fn read_branded(source: &[u8], _gc: GCHandle<'gc>) -> Self {
+    pub unsafe fn read_branded(source: &[u8], _gc: &Mutation<'gc>) -> Self {
         unsafe { Self::read_unchecked(source) }
     }
 
@@ -260,7 +260,7 @@ impl<'gc> ObjectRef<'gc> {
                 "NullReferenceException: called ObjectRef::as_object_mut on NULL object reference"
             )
         };
-        let mut inner = o.borrow_mut(gc);
+        let mut inner = o.borrow_mut(&gc);
         let HeapStorage::Obj(instance) = &mut inner.storage else {
             let variant = match &inner.storage {
                 HeapStorage::Vec(_) => "Vec",
@@ -295,7 +295,7 @@ impl<'gc> ObjectRef<'gc> {
                 "NullReferenceException: called ObjectRef::as_vector_mut on NULL object reference"
             )
         };
-        let mut inner = o.borrow_mut(gc);
+        let mut inner = o.borrow_mut(&gc);
         let HeapStorage::Vec(instance) = &mut inner.storage else {
             panic!("called ObjectRef::as_vector_mut on non-vector heap reference")
         };

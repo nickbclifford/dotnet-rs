@@ -104,7 +104,7 @@ pub fn ldelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             LoadType::Float64 => StackValue::NativeFloat(from_bytes!(f64)),
             LoadType::IntPtr => StackValue::NativeInt(from_bytes!(isize)),
             LoadType::Object => {
-                StackValue::ObjectRef(unsafe { ObjectRef::read_branded(target, ctx.gc()) })
+                StackValue::ObjectRef(unsafe { ObjectRef::read_branded(target, &ctx.gc()) })
             }
         })
     });

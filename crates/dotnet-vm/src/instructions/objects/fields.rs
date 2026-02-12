@@ -150,7 +150,7 @@ pub fn stfld<'gc, 'm: 'gc>(
     };
 
     let parent_data = if let StackValue::ObjectRef(ObjectRef(Some(h))) = &parent {
-        Some(h.borrow_mut(ctx.gc()))
+        Some(h.borrow_mut(&ctx.gc()))
     } else {
         None
     };

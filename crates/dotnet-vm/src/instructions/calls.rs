@@ -198,7 +198,7 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         let value_bytes = &value_vec;
 
         // SAFETY: value_bytes contains a valid ObjectRef from the stack and gc is the current arena.
-        let obj_ref = unsafe { ObjectRef::read_branded(value_bytes, ctx.gc()) };
+        let obj_ref = unsafe { ObjectRef::read_branded(value_bytes, &ctx.gc()) };
 
         if obj_ref.0.is_none() {
             return ctx.throw_by_name("System.NullReferenceException");

@@ -22,7 +22,61 @@ use gc_arena::lock::RefLock as RwLock;
 use std::cell::{Ref as MappedRwLockReadGuard, RefMut as MappedRwLockWriteGuard};
 
 /// A handle to the GC mutation context.
-pub type GCHandle<'gc> = &'gc Mutation<'gc>;
+#[derive(Copy, Clone)]
+pub struct GCHandle<'gc> {
+    pub(crate) mutation: &'gc Mutation<'gc>,
+    #[cfg(feature = "multithreaded-gc")]
+    pub(crate) arena: &'gc ArenaHandleInner,
+    #[cfg(feature = "memory-validation")]
+    pub(crate) thread_id: u64,
+}
+
+impl<'gc> GCHandle<'gc> {
+    pub fn new(
+        mutation: &'gc Mutation<'gc>,
+        #[cfg(feature = "multithreaded-gc")] arena: &'gc ArenaHandleInner,
+        #[cfg(feature = "memory-validation")] thread_id: u64,
+    ) -> Self {
+        Self {
+            mutation,
+            #[cfg(feature = "multithreaded-gc")]
+            arena,
+            #[cfg(feature = "memory-validation")]
+            thread_id,
+        }
+    }
+
+    /// Get the underlying mutation context.
+    pub fn mutation(&self) -> &'gc Mutation<'gc> {
+        self.mutation
+    }
+
+    /// Record an allocation of the given size in the arena.
+    pub fn record_allocation(&self, _size: usize) {
+        #[cfg(feature = "memory-validation")]
+        {
+            let current_thread = crate::sync::get_current_thread_id();
+            assert_eq!(
+                self.thread_id, current_thread,
+                "GCHandle used on wrong thread (expected {}, got {})",
+                self.thread_id, current_thread
+            );
+        }
+
+        #[cfg(feature = "multithreaded-gc")]
+        {
+            self.arena.record_allocation(_size);
+        }
+    }
+}
+
+impl<'gc> Deref for GCHandle<'gc> {
+    type Target = Mutation<'gc>;
+
+    fn deref(&self) -> &Self::Target {
+        self.mutation
+    }
+}
 
 /// Type of GC handle, determines how the garbage collector treats the reference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Collect)]
@@ -289,15 +343,6 @@ pub fn clear_tracing_state() {
     FOUND_CROSS_ARENA_REFS.with(|refs| {
         refs.borrow_mut().clear();
     });
-    CURRENT_ARENA_HANDLE.with(|h| {
-        *h.borrow_mut() = None;
-    });
-}
-
-#[cfg(feature = "multithreaded-gc")]
-thread_local! {
-    /// The ArenaHandle for the current thread.
-    static CURRENT_ARENA_HANDLE: RefCell<Option<ArenaHandle>> = const { RefCell::new(None) };
 }
 
 #[cfg(feature = "multithreaded-gc")]
@@ -319,34 +364,27 @@ pub enum GCCommand {
 /// Metadata about each thread's arena and its communication channel.
 #[derive(Debug, Clone)]
 pub struct ArenaHandle {
-    pub thread_id: u64,
-    pub allocation_counter: Arc<AtomicUsize>,
-    pub gc_allocated_bytes: Arc<AtomicUsize>,
-    pub external_allocated_bytes: Arc<AtomicUsize>,
-    pub needs_collection: Arc<AtomicBool>,
-    /// Command currently being processed by this thread.
-    pub current_command: Arc<Mutex<Option<GCCommand>>>,
-    /// Signal to wake up the thread when a command is available.
-    pub command_signal: Arc<Condvar>,
-    /// Signal to the coordinator that the command is finished.
-    pub finish_signal: Arc<Condvar>,
+    inner: Arc<ArenaHandleInner>,
 }
 
 #[cfg(feature = "multithreaded-gc")]
-impl ArenaHandle {
-    pub fn new(thread_id: u64) -> Self {
-        Self {
-            thread_id,
-            allocation_counter: Arc::new(AtomicUsize::new(0)),
-            gc_allocated_bytes: Arc::new(AtomicUsize::new(0)),
-            external_allocated_bytes: Arc::new(AtomicUsize::new(0)),
-            needs_collection: Arc::new(AtomicBool::new(false)),
-            current_command: Arc::new(Mutex::new(None)),
-            command_signal: Arc::new(Condvar::new()),
-            finish_signal: Arc::new(Condvar::new()),
-        }
-    }
+#[derive(Debug)]
+pub struct ArenaHandleInner {
+    pub thread_id: u64,
+    pub allocation_counter: AtomicUsize,
+    pub gc_allocated_bytes: AtomicUsize,
+    pub external_allocated_bytes: AtomicUsize,
+    pub needs_collection: AtomicBool,
+    /// Command currently being processed by this thread.
+    pub current_command: Mutex<Option<GCCommand>>,
+    /// Signal to wake up the thread when a command is available.
+    pub command_signal: Condvar,
+    /// Signal to the coordinator that the command is finished.
+    pub finish_signal: Condvar,
+}
 
+#[cfg(feature = "multithreaded-gc")]
+impl ArenaHandleInner {
     /// Record an allocation and check if we've exceeded the threshold.
     pub fn record_allocation(&self, size: usize) {
         let current = self.allocation_counter.fetch_add(size, Ordering::Relaxed);
@@ -357,62 +395,67 @@ impl ArenaHandle {
 }
 
 #[cfg(feature = "multithreaded-gc")]
+impl ArenaHandle {
+    pub fn new(thread_id: u64) -> Self {
+        Self {
+            inner: Arc::new(ArenaHandleInner {
+                thread_id,
+                allocation_counter: AtomicUsize::new(0),
+                gc_allocated_bytes: AtomicUsize::new(0),
+                external_allocated_bytes: AtomicUsize::new(0),
+                needs_collection: AtomicBool::new(false),
+                current_command: Mutex::new(None),
+                command_signal: Condvar::new(),
+                finish_signal: Condvar::new(),
+            }),
+        }
+    }
+
+    pub fn as_inner(&self) -> &ArenaHandleInner {
+        &self.inner
+    }
+
+    pub fn thread_id(&self) -> u64 {
+        self.inner.thread_id
+    }
+
+    pub fn allocation_counter(&self) -> &AtomicUsize {
+        &self.inner.allocation_counter
+    }
+
+    pub fn gc_allocated_bytes(&self) -> &AtomicUsize {
+        &self.inner.gc_allocated_bytes
+    }
+
+    pub fn external_allocated_bytes(&self) -> &AtomicUsize {
+        &self.inner.external_allocated_bytes
+    }
+
+    pub fn needs_collection(&self) -> &AtomicBool {
+        &self.inner.needs_collection
+    }
+
+    pub fn current_command(&self) -> &Mutex<Option<GCCommand>> {
+        &self.inner.current_command
+    }
+
+    pub fn command_signal(&self) -> &Condvar {
+        &self.inner.command_signal
+    }
+
+    pub fn finish_signal(&self) -> &Condvar {
+        &self.inner.finish_signal
+    }
+
+    /// Record an allocation and check if we've exceeded the threshold.
+    pub fn record_allocation(&self, size: usize) {
+        self.inner.record_allocation(size);
+    }
+}
+
+#[cfg(feature = "multithreaded-gc")]
 /// Allocation threshold in bytes that triggers a GC request for a thread-local arena.
 pub const ALLOCATION_THRESHOLD: usize = 1024 * 1024; // 1MB per-thread trigger
-
-#[cfg(feature = "multithreaded-gc")]
-/// Set the ArenaHandle for the current thread.
-pub fn set_current_arena_handle(handle: ArenaHandle) {
-    CURRENT_ARENA_HANDLE.with(|h| {
-        *h.borrow_mut() = Some(handle);
-    });
-}
-
-#[cfg(feature = "multithreaded-gc")]
-/// Record an allocation of the given size in the current thread's arena.
-pub fn record_allocation(size: usize) {
-    CURRENT_ARENA_HANDLE.with(|h| {
-        if let Some(handle) = h.borrow().as_ref() {
-            handle.record_allocation(size);
-        }
-    });
-}
-
-#[cfg(feature = "multithreaded-gc")]
-/// Check if the current thread's arena has requested a collection.
-pub fn is_current_arena_collection_requested() -> bool {
-    CURRENT_ARENA_HANDLE.with(|h| {
-        if let Some(handle) = h.borrow().as_ref() {
-            handle.needs_collection.load(Ordering::Acquire)
-        } else {
-            false
-        }
-    })
-}
-
-#[cfg(feature = "multithreaded-gc")]
-/// Reset the collection request flag for the current thread's arena.
-pub fn reset_current_arena_collection_requested() {
-    CURRENT_ARENA_HANDLE.with(|h| {
-        if let Some(handle) = h.borrow().as_ref() {
-            handle.needs_collection.store(false, Ordering::Release);
-            handle.allocation_counter.store(0, Ordering::Release);
-        }
-    });
-}
-
-#[cfg(feature = "multithreaded-gc")]
-/// Update the metrics for the current thread's arena.
-pub fn update_current_arena_metrics(gc_bytes: usize, external_bytes: usize) {
-    CURRENT_ARENA_HANDLE.with(|h| {
-        if let Some(handle) = h.borrow().as_ref() {
-            handle.gc_allocated_bytes.store(gc_bytes, Ordering::Relaxed);
-            handle
-                .external_allocated_bytes
-                .store(external_bytes, Ordering::Relaxed);
-        }
-    });
-}
 
 #[cfg(test)]
 mod tests {

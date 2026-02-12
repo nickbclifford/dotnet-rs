@@ -641,7 +641,6 @@ fn test_cross_arena_reference_tracking() {
     let ptr1 = unsafe { dotnet_value::object::ObjectPtr::from_raw(0x1000 as *const _).unwrap() };
     let ptr2 = unsafe { dotnet_value::object::ObjectPtr::from_raw(0x2000 as *const _).unwrap() };
 
-    vm::gc::coordinator::set_current_arena_handle(handle.clone());
     dotnet_utils::gc::record_cross_arena_ref(2, ptr1.as_ptr() as usize);
     dotnet_utils::gc::record_cross_arena_ref(2, ptr2.as_ptr() as usize);
 
@@ -661,11 +660,10 @@ fn test_allocation_pressure_triggers_collection() {
     let handle = vm::gc::coordinator::ArenaHandle::new(1);
 
     shared.gc_coordinator.register_arena(handle.clone());
-    vm::gc::coordinator::set_current_arena_handle(handle.clone());
 
-    // Simulate allocations using the thread-local function
+    // Simulate allocations using the handle directly
     for _ in 0..100 {
-        vm::gc::coordinator::record_allocation(1024);
+        handle.record_allocation(1024);
     }
 
     // Check if collection should be triggered

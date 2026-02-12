@@ -143,7 +143,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                     element_bytes.copy_from_slice(
                         &vector.get()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE],
                     );
-                    let arg_obj = unsafe { ObjectRef::read_branded(&element_bytes, gc) };
+                    let arg_obj = unsafe { ObjectRef::read_branded(&element_bytes, &gc) };
 
                     let param_type = match &method.method.signature.parameters[i].1 {
                         dotnetdll::prelude::ParameterType::Value(t)
@@ -230,7 +230,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                     element_bytes.copy_from_slice(
                         &vector.get()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE],
                     );
-                    let arg_obj = unsafe { ObjectRef::read_branded(&element_bytes, gc) };
+                    let arg_obj = unsafe { ObjectRef::read_branded(&element_bytes, &gc) };
 
                     let param_type = match &method.method.signature.parameters[i].1 {
                         dotnetdll::prelude::ParameterType::Value(t)
@@ -300,7 +300,7 @@ pub fn intrinsic_method_handle_get_function_pointer<'gc, 'm: 'gc>(
             &handle
                 .instance_storage
                 .get_field_local(handle.description, "_value"),
-            gc,
+            &gc,
         )
     };
     let (method, lookup) = ctx.resolve_runtime_method(method_obj);

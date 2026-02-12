@@ -152,7 +152,7 @@ pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
             return ctx.throw_by_name("System.IndexOutOfRangeException");
         }
     }
-    let mut heap = handle.borrow_mut(ctx.gc());
+    let mut heap = handle.borrow_mut(&ctx.gc());
     let HeapStorage::Vec(v) = &mut heap.storage else {
         panic!("Not an array");
     };

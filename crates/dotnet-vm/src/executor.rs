@@ -12,7 +12,10 @@ use crate::{
     tracer::Tracer,
 };
 use dotnet_types::members::MethodDescription;
-use dotnet_utils::sync::{Arc, Ordering};
+use dotnet_utils::{
+    gc::GCHandle,
+    sync::{Arc, Ordering},
+};
 use dotnet_value::StackValue;
 
 #[cfg(feature = "multithreaded-gc")]
@@ -94,13 +97,27 @@ impl Executor {
         {
             let handle = ArenaHandle::new(thread_id);
             shared.gc_coordinator.register_arena(handle.clone());
-            set_current_arena_handle(handle);
         }
 
         // Set thread id in arena and pre-initialize reflection
         arena.mutate_root(|gc, c| {
             c.stack.thread_id.set(thread_id);
-            let mut ctx = c.stack.ves_context(gc);
+            #[cfg(feature = "multithreaded-gc")]
+            {
+                c.stack.arena = ArenaHandle::new(thread_id);
+            }
+
+            let gc_handle = GCHandle::new(
+                gc,
+                #[cfg(feature = "multithreaded-gc")]
+                unsafe {
+                    c.stack.arena_inner_gc()
+                },
+                #[cfg(feature = "memory-validation")]
+                thread_id,
+            );
+
+            let mut ctx = c.stack.ves_context(gc_handle);
             ctx.pre_initialize_reflection();
         });
 
@@ -119,12 +136,24 @@ impl Executor {
 
     pub fn entrypoint(&mut self, method: MethodDescription) {
         // TODO: initialize argv (entry point args are either string[] or nothing, II.15.4.1.2)
+        #[cfg(feature = "memory-validation")]
+        let thread_id = self.thread_id;
         self.with_arena(|arena| {
             arena.mutate_root(|gc, c| {
+                let gc_handle = GCHandle::new(
+                    gc,
+                    #[cfg(feature = "multithreaded-gc")]
+                    unsafe {
+                        c.stack.arena_inner_gc()
+                    },
+                    #[cfg(feature = "memory-validation")]
+                    thread_id,
+                );
+
                 let shared = c.stack.shared.clone();
                 let info = MethodInfo::new(method, &Default::default(), shared)
                     .expect("Failed to resolve entrypoint");
-                c.ves_context(gc)
+                c.ves_context(gc_handle)
                     .entrypoint_frame(info, Default::default(), vec![])
                     .expect("Failed to set up entrypoint frame")
             });
@@ -148,26 +177,49 @@ impl Executor {
                 }
             });
 
-            let full_collect = self.with_arena(|arena| {
+            #[cfg(feature = "multithreaded-gc")]
+            let (_full_collect, collection_requested) = self.with_arena(|arena| {
                 arena.mutate(|_, c| {
-                    if c.stack.local.heap.needs_full_collect.get() {
+                    let full_collect = if c.stack.local.heap.needs_full_collect.get() {
                         c.stack.local.heap.needs_full_collect.set(false);
                         true
                     } else {
                         false
-                    }
+                    };
+                    let collection_requested =
+                        full_collect || c.stack.arena.needs_collection().load(Ordering::Acquire);
+                    (full_collect, collection_requested)
                 })
             });
 
-            #[cfg(feature = "multithreaded-gc")]
-            let collection_requested = full_collect || is_current_arena_collection_requested();
             #[cfg(not(feature = "multithreaded-gc"))]
-            let collection_requested = full_collect;
+            let (_full_collect, collection_requested) = self.with_arena(|arena| {
+                arena.mutate(|_, c| {
+                    let full_collect = if c.stack.local.heap.needs_full_collect.get() {
+                        c.stack.local.heap.needs_full_collect.set(false);
+                        true
+                    } else {
+                        false
+                    };
+                    (full_collect, full_collect)
+                })
+            });
 
             if collection_requested {
                 self.perform_full_gc();
                 #[cfg(feature = "multithreaded-gc")]
-                reset_current_arena_collection_requested();
+                self.with_arena(|arena| {
+                    arena.mutate(|_, c| {
+                        c.stack
+                            .arena
+                            .needs_collection()
+                            .store(false, Ordering::Release);
+                        c.stack
+                            .arena
+                            .allocation_counter()
+                            .store(0, Ordering::Release);
+                    })
+                });
             }
 
             // Reach a safe point between instructions if requested
@@ -194,11 +246,39 @@ impl Executor {
                     .safe_point(self.thread_id, coordinator);
             }
 
+            #[cfg(feature = "memory-validation")]
+            let thread_id = self.thread_id;
             self.with_arena(|arena| {
-                let _ = arena.mutate_root(|gc, c| c.ves_context(gc).process_pending_finalizers());
+                let _ = arena.mutate_root(|gc, c| {
+                    let gc_handle = GCHandle::new(
+                        gc,
+                        #[cfg(feature = "multithreaded-gc")]
+                        unsafe {
+                            c.stack.arena_inner_gc()
+                        },
+                        #[cfg(feature = "memory-validation")]
+                        thread_id,
+                    );
+                    c.ves_context(gc_handle).process_pending_finalizers()
+                });
             });
 
-            let step_result = self.with_arena(|arena| arena.mutate_root(|gc, c| c.run(gc)));
+            #[cfg(feature = "memory-validation")]
+            let thread_id = self.thread_id;
+            let step_result = self.with_arena(|arena| {
+                arena.mutate_root(|gc, c| {
+                    let gc_handle = GCHandle::new(
+                        gc,
+                        #[cfg(feature = "multithreaded-gc")]
+                        unsafe {
+                            c.stack.arena_inner_gc()
+                        },
+                        #[cfg(feature = "memory-validation")]
+                        thread_id,
+                    );
+                    c.run(gc_handle)
+                })
+            });
 
             match step_result {
                 StepResult::Return => {
@@ -233,7 +313,19 @@ impl Executor {
 
                 #[cfg(feature = "multithreaded-gc")]
                 {
-                    update_current_arena_metrics(gc_bytes, external_bytes);
+                    // Update the arena's metrics directly
+                    self.with_arena(|arena| {
+                        arena.mutate(|_, c| {
+                            c.stack
+                                .arena
+                                .gc_allocated_bytes()
+                                .store(gc_bytes, Ordering::Relaxed);
+                            c.stack
+                                .arena
+                                .external_allocated_bytes()
+                                .store(external_bytes, Ordering::Relaxed);
+                        })
+                    });
 
                     // Update global metrics from aggregated values
                     let total_gc = self.shared.gc_coordinator.total_gc_allocation();

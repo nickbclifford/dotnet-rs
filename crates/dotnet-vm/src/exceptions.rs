@@ -399,7 +399,7 @@ impl ExceptionHandlingSystem {
                     .instance_storage
                     .get_field_local(exception_type, "_message");
                 // SAFETY: message_bytes contains a valid ObjectRef from the object's storage.
-                let message_ref = unsafe { ObjectRef::read_branded(&message_bytes, gc) };
+                let message_ref = unsafe { ObjectRef::read_branded(&message_bytes, &gc) };
                 if let Some(msg_inner) = message_ref.0 {
                     let storage = &msg_inner.borrow().storage;
                     if let HeapStorage::Str(clr_str) = storage {
@@ -415,7 +415,7 @@ impl ExceptionHandlingSystem {
                     .instance_storage
                     .get_field_local(exception_type, "_stackTraceString");
                 // SAFETY: st_bytes contains a valid ObjectRef from the object's storage.
-                let st_ref = unsafe { ObjectRef::read_branded(&st_bytes, gc) };
+                let st_ref = unsafe { ObjectRef::read_branded(&st_bytes, &gc) };
                 if let Some(st_inner) = st_ref.0 {
                     let storage = &st_inner.borrow().storage;
                     if let HeapStorage::Str(clr_str) = storage {

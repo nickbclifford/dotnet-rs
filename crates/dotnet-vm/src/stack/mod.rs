@@ -97,11 +97,13 @@ pub struct CallStack<'gc, 'm> {
     pub shared: Arc<SharedGlobalState<'m>>,
     pub local: ArenaLocalState<'gc>,
     pub thread_id: Cell<u64>,
+    #[cfg(feature = "multithreaded-gc")]
+    pub arena: dotnet_utils::gc::ArenaHandle,
 }
 
 // SAFETY: `CallStack` correctly traces all GC-managed fields (`execution`, `local`, and
-// `shared.statics`) in its `trace` implementation. The `thread_id` field is not GC-managed
-// and does not need tracing. This implementation is safe because it delegates to the
+// `shared.statics`) in its `trace` implementation. The `thread_id` and `arena` fields are not GC-managed
+// and do not need tracing. This implementation is safe because it delegates to the
 // `Collect` implementations of its components, which are themselves safe.
 unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
     fn trace(&self, cc: &gc_arena::Collection) {
@@ -129,7 +131,20 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             shared,
             local,
             thread_id: Cell::new(0),
+            #[cfg(feature = "multithreaded-gc")]
+            arena: dotnet_utils::gc::ArenaHandle::new(0),
         }
+    }
+
+    #[cfg(feature = "multithreaded-gc")]
+    /// Returns the arena inner handle with the GC lifetime.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the arena handle lives as long as the GC arena.
+    /// In our case, `CallStack` is stored in the arena root, so it's safe.
+    pub unsafe fn arena_inner_gc(&self) -> &'gc dotnet_utils::gc::ArenaHandleInner {
+        unsafe { &*(self.arena.as_inner() as *const _) }
     }
 
     pub fn ves_context(&mut self, gc: GCHandle<'gc>) -> VesContext<'_, 'gc, 'm> {

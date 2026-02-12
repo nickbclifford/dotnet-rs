@@ -311,7 +311,7 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
                 )
             } as usize;
 
-            let prev = unsafe { ObjectRef::read_branded(&prev_raw.to_ne_bytes(), gc) };
+            let prev = unsafe { ObjectRef::read_branded(&prev_raw.to_ne_bytes(), &gc) };
             ctx.push_obj(prev);
         }
     }

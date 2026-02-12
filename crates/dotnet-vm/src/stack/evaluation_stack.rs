@@ -20,8 +20,6 @@ impl<'gc> EvaluationStack<'gc> {
     }
 
     pub fn push(&mut self, value: StackValue<'gc>) {
-        #[cfg(feature = "multithreaded-gc")]
-        crate::gc::coordinator::record_allocation(value.size_bytes());
         let old_capacity = self.stack.capacity();
         self.stack.push(value);
         if self.stack.capacity() > old_capacity {
@@ -213,10 +211,6 @@ impl<'gc> EvaluationStack<'gc> {
     }
 
     pub fn set_slot(&mut self, index: usize, value: StackValue<'gc>) {
-        #[cfg(feature = "multithreaded-gc")]
-        if matches!(value, StackValue::ValueType(_)) {
-            crate::gc::coordinator::record_allocation(value.size_bytes());
-        }
         self.stack[index] = value;
     }
 

@@ -58,7 +58,7 @@ pub fn intrinsic_gc_suppress_finalize<'gc, 'm: 'gc>(
 ) -> StepResult {
     let obj = ctx.pop_obj();
     if let Some(handle) = obj.0
-        && let Some(o) = handle.borrow_mut(ctx.gc()).storage.as_obj_mut()
+        && let Some(o) = handle.borrow_mut(&ctx.gc()).storage.as_obj_mut()
     {
         o.finalizer_suppressed = true;
     }
@@ -77,7 +77,7 @@ pub fn intrinsic_gc_reregister_for_finalize<'gc, 'm: 'gc>(
         let is_obj = handle.borrow().storage.as_obj().is_some();
         if is_obj {
             handle
-                .borrow_mut(ctx.gc())
+                .borrow_mut(&ctx.gc())
                 .storage
                 .as_obj_mut()
                 .unwrap()

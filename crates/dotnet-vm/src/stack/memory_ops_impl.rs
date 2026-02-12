@@ -79,7 +79,7 @@ impl<'a, 'gc, 'm: 'gc> MemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
             storage: cloned_storage,
         };
 
-        let new_h = gc_arena::Gc::new(gc, ThreadSafeLock::new(new_inner));
+        let new_h = gc_arena::Gc::new(&gc, ThreadSafeLock::new(new_inner));
         let new_ref = ObjectRef(Some(new_h));
         self.register_new_object(&new_ref);
         new_ref

@@ -1,7 +1,6 @@
 use crate::object::ObjectRef;
 use dotnet_types::TypeDescription;
-use dotnet_utils::gc::GCHandle;
-use gc_arena::{Collect, Collection, unsafe_empty_collect};
+use gc_arena::{Collect, Collection, Mutation, unsafe_empty_collect};
 use std::{
     cmp::Ordering,
     collections::HashSet,
@@ -161,7 +160,7 @@ impl<'gc> ManagedPtr<'gc> {
     ///
     /// The `source` slice must be at least `ManagedPtr::MEMORY_SIZE` bytes long.
     /// It must contain valid bytes representing a `ManagedPtr`.
-    pub unsafe fn read_branded(source: &[u8], _gc: GCHandle<'gc>) -> ManagedPtrInfo<'gc> {
+    pub unsafe fn read_branded(source: &[u8], _gc: &Mutation<'gc>) -> ManagedPtrInfo<'gc> {
         unsafe { Self::read_unchecked(source) }
     }
 

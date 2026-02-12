@@ -10,9 +10,7 @@ use std::collections::{HashMap, HashSet};
 #[cfg(feature = "multithreaded-gc")]
 pub use dotnet_utils::gc::{
     ALLOCATION_THRESHOLD, ArenaHandle, GCCommand, clear_tracing_state, get_currently_tracing,
-    is_current_arena_collection_requested, record_allocation,
-    reset_current_arena_collection_requested, set_current_arena_handle, set_currently_tracing,
-    take_found_cross_arena_refs, update_current_arena_metrics,
+    set_currently_tracing, take_found_cross_arena_refs,
 };
 
 #[cfg(feature = "multithreaded-gc")]
@@ -42,7 +40,7 @@ impl GCCoordinator {
     /// Register a thread-local arena with the coordinator.
     pub fn register_arena(&self, handle: ArenaHandle) {
         let mut arenas = self.arenas.lock();
-        arenas.insert(handle.thread_id, handle);
+        arenas.insert(handle.thread_id(), handle);
     }
 
     /// Unregister a thread-local arena.
@@ -55,7 +53,7 @@ impl GCCoordinator {
     pub fn should_collect(&self) -> bool {
         let arenas = self.arenas.lock();
         for handle in arenas.values() {
-            if handle.needs_collection.load(Ordering::Acquire) {
+            if handle.needs_collection().load(Ordering::Acquire) {
                 return true;
             }
         }
@@ -76,7 +74,7 @@ impl GCCoordinator {
         // Reset all collection flags
         let arenas = self.arenas.lock();
         for handle in arenas.values() {
-            handle.needs_collection.store(false, Ordering::Release);
+            handle.needs_collection().store(false, Ordering::Release);
             // We don't reset allocation_counter here as it might be useful for stats,
             // or we might want to reset it. For now, let's just clear the flag.
         }
@@ -87,7 +85,7 @@ impl GCCoordinator {
         let arenas = self.arenas.lock();
         arenas
             .values()
-            .map(|h| h.allocation_counter.load(Ordering::Acquire))
+            .map(|h| h.allocation_counter().load(Ordering::Acquire))
             .sum()
     }
 
@@ -96,7 +94,7 @@ impl GCCoordinator {
         let arenas = self.arenas.lock();
         arenas
             .values()
-            .map(|h| h.gc_allocated_bytes.load(Ordering::Acquire))
+            .map(|h| h.gc_allocated_bytes().load(Ordering::Acquire))
             .sum()
     }
 
@@ -105,7 +103,7 @@ impl GCCoordinator {
         let arenas = self.arenas.lock();
         arenas
             .values()
-            .map(|h| h.external_allocated_bytes.load(Ordering::Acquire))
+            .map(|h| h.external_allocated_bytes().load(Ordering::Acquire))
             .sum()
     }
 
@@ -120,10 +118,10 @@ impl GCCoordinator {
 
     fn wait_on_other_arenas(&self, initiating_thread_id: u64) {
         for handle in self.get_all_arenas() {
-            if handle.thread_id != initiating_thread_id {
-                let mut cmd = handle.current_command.lock();
+            if handle.thread_id() != initiating_thread_id {
+                let mut cmd = handle.current_command().lock();
                 while cmd.is_some() {
-                    handle.finish_signal.wait(&mut cmd);
+                    handle.finish_signal().wait(&mut cmd);
                 }
             }
         }
@@ -131,10 +129,10 @@ impl GCCoordinator {
 
     fn send_command_to_other_arenas(&self, initiating_thread_id: u64, command: GCCommand) {
         for handle in self.get_all_arenas() {
-            if handle.thread_id != initiating_thread_id {
-                let mut cmd = handle.current_command.lock();
+            if handle.thread_id() != initiating_thread_id {
+                let mut cmd = handle.current_command().lock();
                 *cmd = Some(command.clone());
-                handle.command_signal.notify_all();
+                handle.command_signal().notify_all();
             }
         }
     }
@@ -186,9 +184,9 @@ impl GCCoordinator {
                     // Save for direct execution by initiating thread
                     initiator_mark_objs = Some(ptrs_usize);
                 } else if let Some(handle) = self.get_arena(target_thread_id) {
-                    let mut cmd = handle.current_command.lock();
+                    let mut cmd = handle.current_command().lock();
                     *cmd = Some(GCCommand::MarkObjects(ptrs_usize));
-                    handle.command_signal.notify_all();
+                    handle.command_signal().notify_all();
                 }
             }
 
@@ -222,7 +220,7 @@ impl GCCoordinator {
     /// Check if a thread has a pending GC command.
     pub fn has_command(&self, thread_id: u64) -> bool {
         if let Some(handle) = self.get_arena(thread_id) {
-            handle.current_command.lock().is_some()
+            handle.current_command().lock().is_some()
         } else {
             false
         }
@@ -231,7 +229,7 @@ impl GCCoordinator {
     /// Get the pending command for a thread.
     pub fn get_command(&self, thread_id: u64) -> Option<GCCommand> {
         if let Some(handle) = self.get_arena(thread_id) {
-            handle.current_command.lock().clone()
+            handle.current_command().lock().clone()
         } else {
             None
         }
@@ -240,9 +238,9 @@ impl GCCoordinator {
     /// Mark a command as finished for a thread.
     pub fn command_finished(&self, thread_id: u64) {
         if let Some(handle) = self.get_arena(thread_id) {
-            let mut cmd = handle.current_command.lock();
+            let mut cmd = handle.current_command().lock();
             *cmd = None;
-            handle.finish_signal.notify_all();
+            handle.finish_signal().notify_all();
         }
     }
 
@@ -312,13 +310,6 @@ pub mod stubs {
         }
     }
 
-    pub fn set_current_arena_handle(_handle: ArenaHandle) {}
-    pub fn record_allocation(_size: usize) {}
-    pub fn is_current_arena_collection_requested() -> bool {
-        false
-    }
-    pub fn reset_current_arena_collection_requested() {}
-    pub fn update_current_arena_metrics(_gc_bytes: usize, _external_bytes: usize) {}
     pub fn set_currently_tracing(_thread_id: Option<u64>) {}
     pub fn get_currently_tracing() -> Option<u64> {
         None
@@ -341,31 +332,26 @@ pub use stubs::*;
 #[cfg(all(test, feature = "multithreaded-gc"))]
 mod tests {
     use super::*;
-    use crate::sync::{Arc, AtomicBool, AtomicUsize, Ordering};
+    use crate::sync::{Arc, AtomicBool, Ordering};
 
     #[test]
     fn test_coordinator_registration() {
         let coordinator = GCCoordinator::new();
-        let counter = Arc::new(AtomicUsize::new(100));
-        let flag = Arc::new(AtomicBool::new(false));
+        let handle = ArenaHandle::new(1);
 
-        let handle = ArenaHandle {
-            allocation_counter: counter.clone(),
-            needs_collection: flag.clone(),
-            ..ArenaHandle::new(1)
-        };
+        handle.allocation_counter().store(100, Ordering::Release);
 
-        coordinator.register_arena(handle);
+        coordinator.register_arena(handle.clone());
         assert_eq!(coordinator.total_allocated(), 100);
 
-        flag.store(true, Ordering::Release);
+        handle.needs_collection().store(true, Ordering::Release);
         assert!(coordinator.should_collect());
 
         let _guard = coordinator.start_collection().unwrap();
         coordinator.finish_collection();
 
         assert!(!coordinator.should_collect());
-        assert!(!flag.load(Ordering::Acquire));
+        assert!(!handle.needs_collection().load(Ordering::Acquire));
 
         coordinator.unregister_arena(1);
         assert_eq!(coordinator.total_allocated(), 0);
@@ -377,19 +363,18 @@ mod tests {
         let handle = ArenaHandle::new(1);
 
         coordinator.register_arena(handle.clone());
-        set_current_arena_handle(handle.clone());
 
-        // Allocate just below threshold
-        record_allocation(ALLOCATION_THRESHOLD - 100);
-        assert!(!is_current_arena_collection_requested());
+        // Allocate just below threshold using the handle directly
+        handle.record_allocation(ALLOCATION_THRESHOLD - 100);
+        assert!(!handle.needs_collection().load(Ordering::Acquire));
 
         // Allocate to cross threshold
-        record_allocation(200);
-        assert!(is_current_arena_collection_requested());
+        handle.record_allocation(200);
+        assert!(handle.needs_collection().load(Ordering::Acquire));
 
-        reset_current_arena_collection_requested();
-        assert!(!is_current_arena_collection_requested());
-        assert_eq!(handle.allocation_counter.load(Ordering::Acquire), 0);
+        // Reset via coordinator
+        coordinator.finish_collection();
+        assert!(!handle.needs_collection().load(Ordering::Acquire));
     }
 
     #[test]
@@ -413,7 +398,7 @@ mod tests {
             // Wait until we actually have a command
             while !done_clone.load(Ordering::Relaxed) {
                 let has_cmd = {
-                    let cmd = handle2.current_command.lock();
+                    let cmd = handle2.current_command().lock();
                     cmd.is_some()
                 };
 

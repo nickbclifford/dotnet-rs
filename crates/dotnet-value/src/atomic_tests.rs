@@ -107,9 +107,18 @@ mod tests {
         use gc_arena::{Arena, Rootable};
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
+        #[cfg(feature = "multithreaded-gc")]
+        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(0)));
         arena.mutate(|gc, _root| {
             let storage = HeapStorage::Boxed(ValueType::Int32(42));
-            let obj = ObjectRef::new(gc, storage);
+            let gc_handle = dotnet_utils::gc::GCHandle::new(
+                gc,
+                #[cfg(feature = "multithreaded-gc")]
+                arena_handle.as_inner(),
+                #[cfg(feature = "memory-validation")]
+                0,
+            );
+            let obj = ObjectRef::new(gc_handle, storage);
             let mut buffer = [0u8; 8];
             let ptr = buffer.as_mut_ptr();
             unsafe {

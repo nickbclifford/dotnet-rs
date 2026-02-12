@@ -846,7 +846,7 @@ impl<'m> ResolverService<'m> {
                 };
 
                 if data.len() >= 16 {
-                    let info = unsafe { ManagedPtr::read_branded(data, gc) };
+                    let info = unsafe { ManagedPtr::read_branded(data, &gc) };
                     let mut m = ManagedPtr::new(info.address, inner_type, Some(info.owner), false);
                     m.offset = info.offset;
                     m.stack_slot_origin = info.stack_origin;
@@ -867,13 +867,13 @@ impl<'m> ResolverService<'m> {
             | BaseType::String
             | BaseType::Vector(_, _)
             | BaseType::Array(_, _) => Ok(CTSValue::Ref(unsafe {
-                dotnet_value::object::ObjectRef::read_branded(data, gc)
+                dotnet_value::object::ObjectRef::read_branded(data, &gc)
             })),
             BaseType::Type {
                 value_kind: Some(ValueKind::Class),
                 ..
             } => Ok(CTSValue::Ref(unsafe {
-                dotnet_value::object::ObjectRef::read_branded(data, gc)
+                dotnet_value::object::ObjectRef::read_branded(data, &gc)
             })),
             BaseType::Type {
                 value_kind: None | Some(ValueKind::ValueType),
@@ -886,7 +886,7 @@ impl<'m> ResolverService<'m> {
 
                 if !td.is_value_type(&new_ctx)? {
                     return Ok(CTSValue::Ref(unsafe {
-                        dotnet_value::object::ObjectRef::read_branded(data, gc)
+                        dotnet_value::object::ObjectRef::read_branded(data, &gc)
                     }));
                 }
 

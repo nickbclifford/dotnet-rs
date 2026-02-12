@@ -317,12 +317,12 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     Scalar::ObjectRef => {
                         let mut buf = [0u8; 8];
                         ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), 8);
-                        StackValue::ObjectRef(ObjectRef::read_branded(&buf, gc))
+                        StackValue::ObjectRef(ObjectRef::read_branded(&buf, &gc))
                     }
                     Scalar::ManagedPtr => {
                         let info = ManagedPtr::read_branded(
                             std::slice::from_raw_parts(ptr, ManagedPtr::MEMORY_SIZE),
-                            gc,
+                            &gc,
                         );
 
                         let void_desc = TypeDescription::from_raw(

@@ -11,3 +11,4 @@ parking_lot = { workspace = true, optional = true }
 default = ["multithreaded-gc"]
 multithreading = ["dep:parking_lot"]
 multithreaded-gc = ["multithreading"]
+memory-validation = []

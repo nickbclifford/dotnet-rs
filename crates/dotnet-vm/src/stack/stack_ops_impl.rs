@@ -10,6 +10,8 @@ use dotnet_value::{
 impl<'a, 'gc, 'm: 'gc> EvalStackOps<'gc> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn push(&mut self, value: StackValue<'gc>) {
+        #[cfg(feature = "multithreaded-gc")]
+        self.gc.record_allocation(value.size_bytes());
         self.trace_push(&value);
         self.evaluation_stack.push(value);
         self.on_push();
@@ -93,6 +95,10 @@ impl<'a, 'gc, 'm: 'gc> LocalOps<'gc> for VesContext<'a, 'gc, 'm> {
 
     #[inline]
     fn set_local(&mut self, index: usize, value: StackValue<'gc>) {
+        #[cfg(feature = "multithreaded-gc")]
+        if matches!(value, StackValue::ValueType(_)) {
+            self.gc.record_allocation(value.size_bytes());
+        }
         let bp = self.frame_stack.current_frame().base;
         self.evaluation_stack.set_slot(bp.locals + index, value);
     }
@@ -124,6 +130,10 @@ impl<'a, 'gc, 'm: 'gc> ArgumentOps<'gc> for VesContext<'a, 'gc, 'm> {
 
     #[inline]
     fn set_argument(&mut self, index: usize, value: StackValue<'gc>) {
+        #[cfg(feature = "multithreaded-gc")]
+        if matches!(value, StackValue::ValueType(_)) {
+            self.gc.record_allocation(value.size_bytes());
+        }
         let bp = self.frame_stack.current_frame().base;
         self.evaluation_stack.set_slot(bp.arguments + index, value);
     }
@@ -159,6 +169,10 @@ impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
 
     #[inline]
     fn set_slot(&mut self, index: usize, value: StackValue<'gc>) {
+        #[cfg(feature = "multithreaded-gc")]
+        if matches!(value, StackValue::ValueType(_)) {
+            self.gc.record_allocation(value.size_bytes());
+        }
         self.evaluation_stack.set_slot(index, value)
     }
 

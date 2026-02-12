@@ -218,7 +218,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
                         &rth_handle
                             .instance_storage
                             .get_field_local(rth_handle.description, "_value"),
-                        gc,
+                        &gc,
                     )
                 },
                 StackValue::ObjectRef(rt_obj) => rt_obj,
@@ -402,7 +402,7 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc>(
             &handle
                 .instance_storage
                 .get_field_local(handle.description, "_value"),
-            gc,
+            &gc,
         )
     };
     let target_type = ctx.resolve_runtime_type(target_obj);
@@ -493,7 +493,7 @@ pub fn intrinsic_get_from_handle<'gc, 'm: 'gc>(
             &handle
                 .instance_storage
                 .get_field_local(handle.description, "_value"),
-            gc,
+            &gc,
         )
     };
     ctx.push_obj(target);
@@ -1089,7 +1089,7 @@ fn handle_make_generic_type<'gc, 'm>(
         let param_objs = parameters.as_vector(|v: &dotnet_value::object::Vector<'gc>| {
             v.get()
                 .chunks_exact(ObjectRef::SIZE)
-                .map(|chunk| unsafe { ObjectRef::read_branded(chunk, gc) })
+                .map(|chunk| unsafe { ObjectRef::read_branded(chunk, &gc) })
                 .collect::<Vec<_>>()
         });
         let new_generics: Vec<_> = param_objs

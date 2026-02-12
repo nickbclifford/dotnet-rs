@@ -133,7 +133,7 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
             let targets_bytes = instance
                 .instance_storage
                 .get_field_local(multicast_type, "targets");
-            let targets_ref = unsafe { ObjectRef::read_branded(&targets_bytes, ctx.gc()) };
+            let targets_ref = unsafe { ObjectRef::read_branded(&targets_bytes, &ctx.gc()) };
             if let Some(targets_handle) = targets_ref.0 {
                 let targets_len = targets_ref.as_vector(|v| v.layout.length);
                 if targets_len > 1 {
@@ -142,7 +142,7 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
                 // If len == 1, check if it's not 'this'
                 let first_target = targets_ref.as_vector(|v| {
                     let offset = 0;
-                    unsafe { ObjectRef::read_branded(&v.get()[offset..], ctx.gc()) }
+                    unsafe { ObjectRef::read_branded(&v.get()[offset..], &ctx.gc()) }
                 });
                 if first_target != *delegate_ref {
                     return Some(targets_handle);
@@ -187,7 +187,7 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
         let target_bytes = instance
             .instance_storage
             .get_field_local(delegate_type, "_target");
-        let target = unsafe { ObjectRef::read_branded(&target_bytes, ctx.gc()) };
+        let target = unsafe { ObjectRef::read_branded(&target_bytes, &ctx.gc()) };
 
         // Read _method field
         let method_handle_bytes = instance
@@ -238,7 +238,7 @@ pub fn delegate_get_target<'gc, 'm: 'gc>(
         let target_bytes = instance
             .instance_storage
             .get_field_local(delegate_type, "_target");
-        unsafe { ObjectRef::read_branded(&target_bytes, ctx.gc()) }
+        unsafe { ObjectRef::read_branded(&target_bytes, &ctx.gc()) }
     });
 
     ctx.push_obj(target);
@@ -343,10 +343,10 @@ pub fn delegate_equals<'gc, 'm: 'gc>(
                 let mut equal = true;
                 for i in 0..this_len {
                     let t1 = this_ref.as_vector(|v| unsafe {
-                        ObjectRef::read_branded(&v.get()[i * ObjectRef::SIZE..], ctx.gc())
+                        ObjectRef::read_branded(&v.get()[i * ObjectRef::SIZE..], &ctx.gc())
                     });
                     let t2 = other_ref.as_vector(|v| unsafe {
-                        ObjectRef::read_branded(&v.get()[i * ObjectRef::SIZE..], ctx.gc())
+                        ObjectRef::read_branded(&v.get()[i * ObjectRef::SIZE..], &ctx.gc())
                     });
                     // We should probably call Equals recursively or compare info
                     // For now, let's just compare info of elements
@@ -408,7 +408,7 @@ fn get_delegate_info<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
         let target_bytes = instance
             .instance_storage
             .get_field_local(delegate_type, "_target");
-        let target = unsafe { ObjectRef::read_branded(&target_bytes, ctx.gc()) };
+        let target = unsafe { ObjectRef::read_branded(&target_bytes, &ctx.gc()) };
         let method_handle_bytes = instance
             .instance_storage
             .get_field_local(delegate_type, "_method");
@@ -457,7 +457,7 @@ fn get_multicast_targets_ref<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
         let targets_bytes = instance
             .instance_storage
             .get_field_local(multicast_type, "targets");
-        let targets_ref = unsafe { ObjectRef::read_branded(&targets_bytes, ctx.gc()) };
+        let targets_ref = unsafe { ObjectRef::read_branded(&targets_bytes, &ctx.gc()) };
         if targets_ref.0.is_some() {
             Some(targets_ref)
         } else {
@@ -505,7 +505,7 @@ fn get_invocation_list<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
             let mut result = Vec::with_capacity(len);
             for i in 0..len {
                 let entry =
-                    unsafe { ObjectRef::read_branded(&v.get()[i * ObjectRef::SIZE..], ctx.gc()) };
+                    unsafe { ObjectRef::read_branded(&v.get()[i * ObjectRef::SIZE..], &ctx.gc()) };
                 result.push(entry);
             }
             result
