@@ -14,9 +14,7 @@ pub fn leave<'gc, 'm: 'gc, T: ExceptionOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(EndFinally)]
-pub fn endfinally<'gc, 'm: 'gc, T: ExceptionOps<'gc> + ?Sized>(
-    ctx: &mut T,
-) -> StepResult {
+pub fn endfinally<'gc, 'm: 'gc, T: ExceptionOps<'gc> + ?Sized>(ctx: &mut T) -> StepResult {
     ctx.endfinally()
 }
 
@@ -40,8 +38,6 @@ pub fn throw<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(Rethrow)]
-pub fn rethrow<'gc, 'm: 'gc, T: ExceptionOps<'gc> + ?Sized>(
-    ctx: &mut T,
-) -> StepResult {
+pub fn rethrow<'gc, 'm: 'gc, T: ExceptionOps<'gc> + ?Sized>(ctx: &mut T) -> StepResult {
     ctx.rethrow()
 }

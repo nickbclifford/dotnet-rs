@@ -33,7 +33,10 @@ pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc>(
 
     let new_lookup = GenericLookup::new(vec![target_type]);
     let res_ctx = ctx.with_generics(generics).with_generics(&new_lookup);
-    let instance = ObjectRef::new(ctx.gc(), HeapStorage::Obj(vm_try!(res_ctx.new_object(comparer_td))));
+    let instance = ObjectRef::new(
+        ctx.gc(),
+        HeapStorage::Obj(vm_try!(res_ctx.new_object(comparer_td))),
+    );
 
     ctx.push_obj(instance);
     StepResult::Continue

@@ -2,7 +2,6 @@
 //!
 //! Procedural macros for the dotnet-rs VM.
 //! Includes `#[dotnet_intrinsic]` for BCL methods and `#[dotnet_instruction]` for CIL instructions.
-
 extern crate proc_macro;
 
 use dotnet_macros_core::{ParsedFieldSignature, ParsedSignature};

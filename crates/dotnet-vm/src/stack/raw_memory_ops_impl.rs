@@ -1,5 +1,10 @@
-use super::{context::VesContext, ops::{PoolOps, RawMemoryOps, VesOps}};
-use crate::threading::ThreadManagerOps;
+use crate::{
+    stack::{
+        context::VesContext,
+        ops::{PoolOps, RawMemoryOps, VesOps},
+    },
+    threading::ThreadManagerOps,
+};
 use dotnet_types::TypeDescription;
 use dotnet_value::{StackValue, object::ObjectRef};
 

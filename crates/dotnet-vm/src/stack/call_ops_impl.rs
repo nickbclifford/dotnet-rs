@@ -1,8 +1,19 @@
-use crate::stack::ops::{EvalStackOps, CallOps, ResolutionOps, LoaderOps};
-use super::context::{BasePointer, VesContext, StackFrame};
-use crate::{StepResult, MethodInfo, ResolutionContext, resolution::TypeResolutionExt};
-use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription, error::TypeResolutionError};
-use dotnet_value::{object::{HeapStorage, Object as ObjectInstance, ObjectRef}, StackValue};
+use crate::{
+    MethodInfo, ResolutionContext, StepResult,
+    resolution::TypeResolutionExt,
+    stack::{
+        context::{BasePointer, StackFrame, VesContext},
+        ops::{CallOps, EvalStackOps, LoaderOps, ResolutionOps},
+    },
+};
+use dotnet_types::{
+    TypeDescription, error::TypeResolutionError, generics::GenericLookup,
+    members::MethodDescription,
+};
+use dotnet_value::{
+    StackValue,
+    object::{HeapStorage, Object as ObjectInstance, ObjectRef},
+};
 use dotnetdll::prelude::MethodSource;
 
 impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
@@ -31,9 +42,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
             self.push(value);
             let index = self.evaluation_stack.top_of_stack() - 1;
             let ptr = self.evaluation_stack.get_slot_address(index).as_ptr() as *mut _;
-            self.push(
-                StackValue::managed_stack_ptr(index, 0, ptr, desc, false),
-            );
+            self.push(StackValue::managed_stack_ptr(index, 0, ptr, desc, false));
         } else {
             self.push(value.clone());
             self.push(value);
@@ -134,11 +143,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn dispatch_method(
-        &mut self,
-        method: MethodDescription,
-        lookup: GenericLookup,
-    ) -> StepResult {
+    fn dispatch_method(&mut self, method: MethodDescription, lookup: GenericLookup) -> StepResult {
         let _gc = self.gc;
         if let Some(intrinsic) = self.shared.caches.intrinsic_registry.get(&method) {
             intrinsic(self, method, &lookup)

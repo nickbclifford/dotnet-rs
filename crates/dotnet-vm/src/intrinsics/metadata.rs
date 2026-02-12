@@ -19,10 +19,9 @@
 //! Methods that MUST bypass any BCL implementation for correctness or performance.
 //! The VM intercepts these calls even when a BCL implementation exists.
 //! Examples: String.Length (internal representation differs), Math functions (performance)
+use crate::intrinsics::{INTRINSIC_ATTR, IntrinsicHandler, IntrinsicRegistry};
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::members::MethodDescription;
-
-use super::{INTRINSIC_ATTR, IntrinsicHandler, IntrinsicRegistry};
 
 /// Classification of intrinsic methods based on their dispatch behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

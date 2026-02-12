@@ -9,7 +9,6 @@
 //! - **[`MethodDescription`]**: Represents a resolved .NET method.
 //! - **[`FieldDescription`]**: Represents a resolved .NET field.
 //! - **[`TypeComparer`](comparer::TypeComparer)**: Handles type equality and assignability.
-
 use crate::{members::MethodDescription, resolution::ResolutionS};
 use dotnetdll::prelude::{
     MemberType, ResolvedDebug, TypeDefinition, TypeIndex, TypeSource, UserType,
@@ -21,17 +20,19 @@ use std::{
     ptr::NonNull,
 };
 
+#[macro_use]
+mod macros;
+
 pub mod comparer;
 pub mod error;
 pub mod generics;
-#[macro_use]
-mod macros;
 pub mod members;
 pub mod resolution;
 pub mod runtime;
 
 pub trait TypeResolver {
-    fn corlib_type(&self, name: &str) -> Result<TypeDescription, crate::error::TypeResolutionError>;
+    fn corlib_type(&self, name: &str)
+    -> Result<TypeDescription, crate::error::TypeResolutionError>;
     fn locate_type(
         &self,
         resolution: ResolutionS,

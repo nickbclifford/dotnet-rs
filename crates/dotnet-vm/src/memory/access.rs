@@ -1,3 +1,4 @@
+use crate::memory::heap::HeapManager;
 use dotnet_types::TypeDescription;
 use dotnet_value::{
     StackValue,
@@ -7,8 +8,6 @@ use dotnet_value::{
     storage::FieldStorage,
 };
 use std::{ptr, sync::Arc};
-
-use super::heap::HeapManager;
 
 /// Manages unsafe memory access, enforcing bounds checks, GC write barriers, and type integrity.
 pub struct RawMemoryAccess<'a, 'gc> {

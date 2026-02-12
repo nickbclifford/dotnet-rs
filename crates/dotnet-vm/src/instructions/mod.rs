@@ -83,6 +83,7 @@
 //! ```
 #[macro_use]
 pub mod macros;
+
 pub mod arithmetic;
 pub mod calls;
 pub mod comparisons;

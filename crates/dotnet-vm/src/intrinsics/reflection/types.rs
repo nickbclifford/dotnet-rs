@@ -175,9 +175,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
         ("GetConstructors", 1) => handle_get_constructors(ctx, generics),
         ("GetName" | "get_Name", 0) => handle_get_name(ctx, generics),
         ("GetBaseType" | "get_BaseType", 0) => handle_get_base_type(ctx, generics),
-        ("GetIsGenericType" | "get_IsGenericType", 0) => {
-            handle_get_is_generic_type(ctx, generics)
-        }
+        ("GetIsGenericType" | "get_IsGenericType", 0) => handle_get_is_generic_type(ctx, generics),
         ("GetGenericTypeDefinition" | "get_GenericTypeDefinition", 0) => {
             handle_get_generic_type_definition(ctx, generics)
         }
@@ -409,7 +407,9 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc>(
     };
     let target_type = ctx.resolve_runtime_type(target_obj);
     let target_ct = target_type.to_concrete(ctx.loader());
-    let target_desc = ctx.loader().find_concrete_type(target_ct)
+    let target_desc = ctx
+        .loader()
+        .find_concrete_type(target_ct)
         .expect("Type must exist for RunClassConstructor");
 
     let res = ctx.initialize_static_storage(target_desc, generics.clone());
@@ -429,7 +429,9 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let target_ct = generics.method_generics[0].clone();
-    let target_td = ctx.loader().find_concrete_type(target_ct.clone())
+    let target_td = ctx
+        .loader()
+        .find_concrete_type(target_ct.clone())
         .expect("Type must exist for Activator.CreateInstance");
     let res_ctx = ResolutionContext::for_method(
         method,
@@ -529,7 +531,9 @@ pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc>(
     let o = ctx.pop_obj();
     let target = ctx.resolve_runtime_type(o);
     let target_ct = target.to_concrete(ctx.loader());
-    let target_desc = ctx.loader().find_concrete_type(target_ct)
+    let target_desc = ctx
+        .loader()
+        .find_concrete_type(target_ct)
         .expect("Type must exist for get_IsValueType");
     let value = vm_try!(target_desc.is_value_type(&ctx.current_context()));
     ctx.push_i32(value as i32);
@@ -647,7 +651,10 @@ fn handle_get_assembly<'gc, 'm>(
         return StepResult::Continue;
     }
 
-    let support_res = ctx.loader().get_assembly(SUPPORT_ASSEMBLY).expect("support library must be loadable");
+    let support_res = ctx
+        .loader()
+        .get_assembly(SUPPORT_ASSEMBLY)
+        .expect("support library must be loadable");
     let (index, definition) = support_res
         .definition()
         .type_definitions
@@ -663,7 +670,8 @@ fn handle_get_assembly<'gc, 'm>(
         ctx.shared().caches.clone(),
         Some(ctx.shared().clone()),
     );
-    let asm_handle = vm_try!(res_ctx.new_object(TypeDescription::new(support_res, definition, type_index)));
+    let asm_handle =
+        vm_try!(res_ctx.new_object(TypeDescription::new(support_res, definition, type_index)));
     let data = (resolution.as_raw() as usize).to_ne_bytes();
     asm_handle
         .instance_storage
@@ -746,7 +754,8 @@ fn handle_get_methods<'gc, 'm>(
     }
 
     let method_info_type = vm_try!(ctx.loader().corlib_type("System.Reflection.MethodInfo"));
-    let mut vector = vm_try!(ctx.new_vector(ConcreteType::from(method_info_type), methods_objs.len()));
+    let mut vector =
+        vm_try!(ctx.new_vector(ConcreteType::from(method_info_type), methods_objs.len()));
     for (i, m) in methods_objs.into_iter().enumerate() {
         m.write(&mut vector.get_mut()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
     }
@@ -878,8 +887,14 @@ fn handle_get_constructors<'gc, 'm>(
         }
     }
 
-    let constructor_info_type = vm_try!(ctx.loader().corlib_type("System.Reflection.ConstructorInfo"));
-    let mut vector = vm_try!(ctx.new_vector(ConcreteType::from(constructor_info_type), methods_objs.len()));
+    let constructor_info_type = vm_try!(
+        ctx.loader()
+            .corlib_type("System.Reflection.ConstructorInfo")
+    );
+    let mut vector = vm_try!(ctx.new_vector(
+        ConcreteType::from(constructor_info_type),
+        methods_objs.len()
+    ));
     for (i, m) in methods_objs.into_iter().enumerate() {
         m.write(&mut vector.get_mut()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
     }
@@ -904,7 +919,9 @@ fn handle_get_base_type<'gc, 'm>(
     let obj = ctx.pop_obj();
     let target_type = ctx.resolve_runtime_type(obj);
     match target_type {
-        RuntimeType::Type(td) | RuntimeType::Generic(td, _) if td.definition().extends.is_some() => {
+        RuntimeType::Type(td) | RuntimeType::Generic(td, _)
+            if td.definition().extends.is_some() =>
+        {
             // Get the first ancestor (the direct parent)
             let mut ancestors = ctx.loader().ancestors(td);
             ancestors.next(); // skip self
@@ -924,7 +941,10 @@ fn handle_get_base_type<'gc, 'm>(
                                 BaseType::Type { source, .. } => {
                                     let (ut, sub_generics) =
                                         decompose_type_source::<MemberType>(source);
-                                    let sub_td = ctx.loader().locate_type(td.resolution, ut).expect("base type must exist");
+                                    let sub_td = ctx
+                                        .loader()
+                                        .locate_type(td.resolution, ut)
+                                        .expect("base type must exist");
                                     if sub_generics.is_empty() {
                                         RuntimeType::Type(sub_td)
                                     } else {

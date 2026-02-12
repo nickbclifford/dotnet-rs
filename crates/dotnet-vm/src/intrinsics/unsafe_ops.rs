@@ -145,7 +145,9 @@ pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
     let layout = vm_try!(type_layout(concrete_type.clone(), &ctx.current_context()));
 
     if let LayoutManager::Field(flm) = &*layout {
-        let td = ctx.loader().find_concrete_type(concrete_type.clone())
+        let td = ctx
+            .loader()
+            .find_concrete_type(concrete_type.clone())
             .expect("Type must exist for Marshal.OffsetOf");
         if let Some(field) = flm.get_field(td, &field_name) {
             ctx.push_isize(field.position as isize);
@@ -207,9 +209,12 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     };
     let m = m_val.as_ptr();
     let result_ptr = unsafe { m.offset(offset * layout.size() as isize) };
-    ctx.push(
-        StackValue::managed_ptr_with_owner(result_ptr, target_type, owner, pinned),
-    );
+    ctx.push(StackValue::managed_ptr_with_owner(
+        result_ptr,
+        target_type,
+        owner,
+        pinned,
+    ));
     StepResult::Continue
 }
 
@@ -222,7 +227,9 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let target = &generics.method_generics[0];
-    let target_type = ctx.loader().find_concrete_type(target.clone())
+    let target_type = ctx
+        .loader()
+        .find_concrete_type(target.clone())
         .expect("Type must exist for Unsafe.AddByteOffset");
 
     let offset_val = ctx.pop();
@@ -242,9 +249,12 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
         (false, None)
     };
     let m = m_val.as_ptr();
-    ctx.push(
-        StackValue::managed_ptr_with_owner(unsafe { m.offset(offset) }, target_type, owner, pinned),
-    );
+    ctx.push(StackValue::managed_ptr_with_owner(
+        unsafe { m.offset(offset) },
+        target_type,
+        owner,
+        pinned,
+    ));
     StepResult::Continue
 }
 
@@ -443,7 +453,9 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
             // If we read a ManagedPtr, we need to supply the target type,
             // because memory.read_unaligned returns ManagedPtr with void/unknown type.
             if let StackValue::ManagedPtr(m) = v {
-                let target_type = ctx.loader().find_concrete_type(target.clone())
+                let target_type = ctx
+                    .loader()
+                    .find_concrete_type(target.clone())
                     .expect("Type must exist for Unsafe.ReadUnaligned ManagedPtr");
                 let new_m = ManagedPtr::new(m.pointer(), target_type, m.owner, m.pinned);
                 ctx.push(StackValue::ManagedPtr(new_m));

@@ -60,7 +60,11 @@ fn main() {
         resolution = match try_static_res_from_file(&assembly_path) {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("Error loading assembly '{}': {}", assembly_path.display(), e);
+                eprintln!(
+                    "Error loading assembly '{}': {}",
+                    assembly_path.display(),
+                    e
+                );
                 std::process::exit(1);
             }
         };

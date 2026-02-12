@@ -238,9 +238,7 @@ impl ExceptionHandlingSystem {
             ));
         }
 
-        let exception_type = vm_try!(ctx
-            .loader()
-            .corlib_type("System.Exception"));
+        let exception_type = vm_try!(ctx.loader().corlib_type("System.Exception"));
         exception.as_object(|obj| {
             if obj
                 .instance_storage
@@ -321,8 +319,10 @@ impl ExceptionHandlingSystem {
                 {
                     match &handler.kind {
                         HandlerKind::Catch(t) => {
-                            let exc_ref = vm_try!(exception.0.ok_or(TypeResolutionError::InvalidHandle));
-                            let exc_type = vm_try!(ctx.current_context().get_heap_description(exc_ref));
+                            let exc_ref =
+                                vm_try!(exception.0.ok_or(TypeResolutionError::InvalidHandle));
+                            let exc_type =
+                                vm_try!(ctx.current_context().get_heap_description(exc_ref));
                             let catch_type = t.clone();
 
                             if vm_try!(ctx.current_context().is_a(exc_type.into(), catch_type)) {
@@ -392,9 +392,7 @@ impl ExceptionHandlingSystem {
         let exc_type = vm_try!(ctx.current_context().get_heap_description(exc_ref));
         let type_name = exc_type.type_name();
 
-        let exception_type = vm_try!(ctx
-            .loader()
-            .corlib_type("System.Exception"));
+        let exception_type = vm_try!(ctx.loader().corlib_type("System.Exception"));
         exception.as_object(|obj| {
             if obj.instance_storage.has_field(exception_type, "_message") {
                 let message_bytes = obj

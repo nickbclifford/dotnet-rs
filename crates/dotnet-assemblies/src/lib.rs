@@ -2,7 +2,6 @@
 //!
 //! Assembly loading and metadata resolution for the dotnet-rs VM.
 //! This crate handles finding, loading, and caching .NET assemblies from the file system.
-
 use dashmap::DashMap;
 use dotnet_types::{
     TypeDescription, TypeResolver,
@@ -25,6 +24,7 @@ use std::{
 };
 
 pub mod error;
+
 use error::AssemblyLoadError;
 
 pub struct AssemblyLoader {
@@ -55,10 +55,7 @@ impl TypeResolver for AssemblyLoader {
         self.locate_type(resolution, handle)
     }
 
-    fn find_concrete_type(
-        &self,
-        ty: ConcreteType,
-    ) -> Result<TypeDescription, TypeResolutionError> {
+    fn find_concrete_type(&self, ty: ConcreteType) -> Result<TypeDescription, TypeResolutionError> {
         self.find_concrete_type(ty)
     }
 }
@@ -69,14 +66,16 @@ pub const SUPPORT_ASSEMBLY: &str = "__dotnetrs_support";
 impl AssemblyLoader {
     pub fn new(assembly_root: String) -> Result<Self, AssemblyLoadError> {
         let mut resolutions: HashMap<_, _> = fs::read_dir(&assembly_root)
-            .map_err(|e| AssemblyLoadError::Io(format!("could not read assembly root {}: {}", assembly_root, e)))?
+            .map_err(|e| {
+                AssemblyLoadError::Io(format!(
+                    "could not read assembly root {}: {}",
+                    assembly_root, e
+                ))
+            })?
             .filter_map(|e| {
                 let path = e.ok()?.path();
                 if path.extension()? == "dll" {
-                    Some((
-                        path.file_stem()?.to_string_lossy().into_owned(),
-                        None,
-                    ))
+                    Some((path.file_stem()?.to_string_lossy().into_owned(), None))
                 } else {
                     None
                 }
@@ -104,8 +103,10 @@ impl AssemblyLoader {
             // with exactly 'len' bytes from SUPPORT_LIBRARY.
             unsafe { std::slice::from_raw_parts(aligned_slice.as_ptr() as *const u8, len) };
 
-        let support_res_raw = Resolution::parse(byte_slice, ReadOptions::default())
-            .map_err(|e| AssemblyLoadError::InvalidFormat(format!("failed to parse support library: {}", e)))?;
+        let support_res_raw =
+            Resolution::parse(byte_slice, ReadOptions::default()).map_err(|e| {
+                AssemblyLoadError::InvalidFormat(format!("failed to parse support library: {}", e))
+            })?;
         let support_res = Box::leak(Box::new(support_res_raw));
         resolutions.insert(
             SUPPORT_ASSEMBLY.to_string(),
@@ -135,15 +136,23 @@ impl AssemblyLoader {
                     }
                 };
                 if parent.type_name() == "DotnetRs.StubAttribute" {
-                    let data = a.instantiation_data(&this, &*support_res)
-                        .map_err(|e| AssemblyLoadError::InvalidFormat(format!("failed to parse stub attribute data: {}", e)))?;
+                    let data = a.instantiation_data(&this, &*support_res).map_err(|e| {
+                        AssemblyLoadError::InvalidFormat(format!(
+                            "failed to parse stub attribute data: {}",
+                            e
+                        ))
+                    })?;
                     for n in data.named_args {
                         match n {
                             NamedArg::Field(name, FixedArg::String(Some(target)))
                                 if name == "InPlaceOf" =>
                             {
-                                let type_index = support_res.type_definition_index(index)
-                                    .ok_or_else(|| AssemblyLoadError::InvalidFormat("failed to find type definition index".to_string()))?;
+                                let type_index =
+                                    support_res.type_definition_index(index).ok_or_else(|| {
+                                        AssemblyLoadError::InvalidFormat(
+                                            "failed to find type definition index".to_string(),
+                                        )
+                                    })?;
                                 this.stubs.insert(
                                     target.to_string(),
                                     TypeDescription::new(
@@ -184,7 +193,7 @@ impl AssemblyLoader {
                     None => {
                         return Err(AssemblyLoadError::InvalidFormat(
                             "no assembly present in external module".to_string(),
-                        ))
+                        ));
                     }
                     Some(a) => {
                         self.external
@@ -202,7 +211,7 @@ impl AssemblyLoader {
                     None => {
                         return Err(AssemblyLoadError::InvalidFormat(
                             "no assembly present in external module".to_string(),
-                        ))
+                        ));
                     }
                     Some(a) => {
                         self.external
@@ -259,7 +268,8 @@ impl AssemblyLoader {
             return Ok(*t);
         }
 
-        let res = self.get_assembly(assembly.name.as_ref())
+        let res = self
+            .get_assembly(assembly.name.as_ref())
             .map_err(|e| TypeResolutionError::AssemblyLoad(e.to_string()))?;
 
         let (namespace, name) = if let Some(idx) = full_name.rfind('.') {
@@ -297,11 +307,14 @@ impl AssemblyLoader {
                                 .to_string(),
                         )
                     })?;
-                let type_index = res.definition().type_definition_index(index).ok_or_else(|| {
-                    TypeResolutionError::TypeNotFound(
-                        "Internal error: invalid type definition index".to_string(),
-                    )
-                })?;
+                let type_index =
+                    res.definition()
+                        .type_definition_index(index)
+                        .ok_or_else(|| {
+                            TypeResolutionError::TypeNotFound(
+                                "Internal error: invalid type definition index".to_string(),
+                            )
+                        })?;
                 Ok(TypeDescription::new(res, t, type_index))
             }
         }
@@ -324,7 +337,8 @@ impl AssemblyLoader {
 
         let mut tried_mscorlib = false;
         if self.external.read().contains_key("mscorlib") {
-            let res = self.get_assembly("mscorlib")
+            let res = self
+                .get_assembly("mscorlib")
                 .map_err(|e| TypeResolutionError::AssemblyLoad(e.to_string()))?;
             if let Some(t) = self.try_find_in_assembly(res, name) {
                 return Ok(t);
@@ -333,7 +347,8 @@ impl AssemblyLoader {
         }
 
         if self.external.read().contains_key("System.Private.CoreLib") {
-            let res = self.get_assembly("System.Private.CoreLib")
+            let res = self
+                .get_assembly("System.Private.CoreLib")
                 .map_err(|e| TypeResolutionError::AssemblyLoad(e.to_string()))?;
             if let Some(t) = self.try_find_in_assembly(res, name) {
                 return Ok(t);
@@ -341,7 +356,8 @@ impl AssemblyLoader {
         }
 
         if self.external.read().contains_key(SUPPORT_ASSEMBLY) {
-            let res = self.get_assembly(SUPPORT_ASSEMBLY)
+            let res = self
+                .get_assembly(SUPPORT_ASSEMBLY)
                 .map_err(|e| TypeResolutionError::AssemblyLoad(e.to_string()))?;
             if let Some(t) = self.try_find_in_assembly(res, name) {
                 return Ok(t);
@@ -457,9 +473,12 @@ impl AssemblyLoader {
                             .ok_or_else(|| {
                                 TypeResolutionError::TypeNotFound("Internal error".to_string())
                             })?;
-                        let type_index = res.definition().type_definition_index(index).ok_or_else(
-                            || TypeResolutionError::TypeNotFound("Internal error".to_string()),
-                        )?;
+                        let type_index =
+                            res.definition()
+                                .type_definition_index(index)
+                                .ok_or_else(|| {
+                                    TypeResolutionError::TypeNotFound("Internal error".to_string())
+                                })?;
                         return Ok(TypeDescription::new(res, t, type_index));
                     }
                 }
@@ -473,7 +492,10 @@ impl AssemblyLoader {
         }
     }
 
-    pub fn find_concrete_type(&self, ty: ConcreteType) -> Result<TypeDescription, TypeResolutionError> {
+    pub fn find_concrete_type(
+        &self,
+        ty: ConcreteType,
+    ) -> Result<TypeDescription, TypeResolutionError> {
         match ty.get() {
             BaseType::Type { source, .. } => {
                 let parent = match source {
@@ -571,8 +593,7 @@ impl AssemblyLoader {
         self.method_cache_misses.fetch_add(1, Ordering::Relaxed);
         let result = match handle {
             UserMethod::Definition(d) => Ok(MethodDescription {
-                parent: self
-                    .locate_type(resolution, d.parent_type().into())?,
+                parent: self.locate_type(resolution, d.parent_type().into())?,
                 method_resolution: resolution,
                 method: &resolution.definition()[d],
             }),
@@ -659,8 +680,7 @@ impl AssemblyLoader {
         match field {
             FieldSource::Definition(d) => Ok((
                 FieldDescription {
-                    parent: self
-                        .locate_type(resolution, d.parent_type().into())?,
+                    parent: self.locate_type(resolution, d.parent_type().into())?,
                     field_resolution: resolution,
                     field: &resolution.definition()[d],
                 },
@@ -732,13 +752,11 @@ impl<'a> Iterator for AncestorsImpl<'a> {
 
         self.child = match &child.definition().extends {
             None => None,
-            Some(TypeSource::User(parent) | TypeSource::Generic { base: parent, .. }) => {
-                Some(
-                    self.assemblies
-                        .locate_type(child.resolution, *parent)
-                        .expect("Failed to locate parent type in ancestors"),
-                )
-            }
+            Some(TypeSource::User(parent) | TypeSource::Generic { base: parent, .. }) => Some(
+                self.assemblies
+                    .locate_type(child.resolution, *parent)
+                    .expect("Failed to locate parent type in ancestors"),
+            ),
         };
 
         let generics = match &child.definition().extends {
@@ -781,9 +799,7 @@ pub fn static_res_from_file(path: impl AsRef<Path>) -> ResolutionS {
     }
 }
 
-pub fn try_static_res_from_file(
-    path: impl AsRef<Path>,
-) -> Result<ResolutionS, AssemblyLoadError> {
+pub fn try_static_res_from_file(path: impl AsRef<Path>) -> Result<ResolutionS, AssemblyLoadError> {
     let path_ref = path.as_ref();
     let mut file = fs::File::open(path_ref).map_err(|e| {
         AssemblyLoadError::Io(format!(
@@ -816,9 +832,7 @@ pub fn try_static_res_from_file(
 
     let resolution = Resolution::parse(byte_slice, ReadOptions::default())
         .map_err(|e| AssemblyLoadError::InvalidFormat(format!("failed to parse file: {}", e)))?;
-    Ok(ResolutionS::new(
-        Box::leak(Box::new(resolution)) as *const _
-    ))
+    Ok(ResolutionS::new(Box::leak(Box::new(resolution)) as *const _))
 }
 
 pub fn find_dotnet_sdk_path() -> Option<PathBuf> {

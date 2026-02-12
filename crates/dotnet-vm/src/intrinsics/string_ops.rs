@@ -281,17 +281,12 @@ pub fn intrinsic_string_index_of<'gc, 'm: 'gc>(
     };
 
     let val = ctx.pop();
-    let index = with_string!(ctx, val, |s| s
-        .iter()
-        .skip(start_at)
-        .position(|x| *x == c));
+    let index = with_string!(ctx, val, |s| s.iter().skip(start_at).position(|x| *x == c));
 
-    ctx.push_i32(
-        match index {
-            None => -1,
-            Some(i) => (i + start_at) as i32,
-        },
-    );
+    ctx.push_i32(match index {
+        None => -1,
+        Some(i) => (i + start_at) as i32,
+    });
     StepResult::Continue
 }
 

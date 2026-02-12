@@ -1,6 +1,17 @@
 #[cfg(feature = "multithreaded-gc")]
+use crate::gc::GCCoordinator;
+#[cfg(feature = "multithreaded-gc")]
 use dotnet_utils::sync::AtomicUsize;
 
+use crate::{
+    intrinsics::IntrinsicRegistry,
+    memory::HeapManager,
+    metrics::{CacheSizes, CacheStats, RuntimeMetrics},
+    pinvoke::NativeLibraries,
+    sync::SyncBlockManager,
+    threading::ThreadManager,
+    tracer::Tracer,
+};
 use dashmap::DashMap;
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{
@@ -21,20 +32,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
 };
 
-pub use super::statics::StaticStorageManager;
-
-use super::{
-    intrinsics::IntrinsicRegistry,
-    memory::HeapManager,
-    metrics::{CacheSizes, CacheStats, RuntimeMetrics},
-    pinvoke::NativeLibraries,
-    sync::SyncBlockManager,
-    threading::ThreadManager,
-    tracer::Tracer,
-};
-
-#[cfg(feature = "multithreaded-gc")]
-use super::gc::GCCoordinator;
+pub use crate::statics::StaticStorageManager;
 
 /// Grouped caches for type resolution and layout computation.
 /// This struct reduces the API surface area of ResolutionContext.

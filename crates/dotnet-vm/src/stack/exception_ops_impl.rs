@@ -1,10 +1,13 @@
-use super::{context::VesContext, ops::{ExceptionOps, StackOps}};
 use crate::{
     StepResult,
     exceptions::{
-        ExceptionState, HandlerAddress, SearchState, UnwindState, UnwindTarget, HandlerKind,
+        ExceptionState, HandlerAddress, HandlerKind, SearchState, UnwindState, UnwindTarget,
     },
     memory::ops::MemoryOps,
+    stack::{
+        context::VesContext,
+        ops::{ExceptionOps, StackOps},
+    },
 };
 use dotnet_value::object::{HeapStorage, ObjectRef};
 

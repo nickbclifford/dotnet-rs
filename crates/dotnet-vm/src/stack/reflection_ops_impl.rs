@@ -1,7 +1,13 @@
-use super::{context::VesContext, ops::{LoaderOps, ReflectionOps, StaticsOps, ThreadOps, RawMemoryOps, StackOps, CallOps, ExceptionOps, ResolutionOps}};
 use crate::{
-    StepResult, MethodInfo, MethodType, ResolutionContext,
+    MethodInfo, MethodType, ResolutionContext, StepResult,
     resolver::ResolverService,
+    stack::{
+        context::VesContext,
+        ops::{
+            CallOps, ExceptionOps, LoaderOps, RawMemoryOps, ReflectionOps, ResolutionOps, StackOps,
+            StaticsOps, ThreadOps,
+        },
+    },
     state::{SharedGlobalState, StaticStorageManager},
     sync::Arc,
 };
@@ -12,7 +18,7 @@ use dotnet_types::{
     members::{FieldDescription, MethodDescription},
     runtime::RuntimeType,
 };
-use dotnet_value::object::{ObjectRef, ObjectHandle};
+use dotnet_value::object::{ObjectHandle, ObjectRef};
 use dotnetdll::prelude::FieldSource;
 
 impl<'a, 'gc, 'm: 'gc> LoaderOps<'m> for VesContext<'a, 'gc, 'm> {
@@ -151,7 +157,10 @@ impl<'a, 'gc, 'm: 'gc> ReflectionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn get_heap_description(&self, object: ObjectHandle<'gc>) -> Result<TypeDescription, dotnet_types::error::TypeResolutionError> {
+    fn get_heap_description(
+        &self,
+        object: ObjectHandle<'gc>,
+    ) -> Result<TypeDescription, dotnet_types::error::TypeResolutionError> {
         self.resolver().get_heap_description(object)
     }
 
@@ -209,4 +218,3 @@ impl<'a, 'gc, 'm: 'gc> ReflectionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         crate::state::ReflectionRegistry::new(self.local)
     }
 }
-

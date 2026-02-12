@@ -89,12 +89,10 @@ impl<'gc> EvaluationStack<'gc> {
         self.stack.pop().expect("Evaluation stack underflow")
     }
 
-    pub fn pop_safe(
-        &mut self,
-    ) -> Result<StackValue<'gc>, crate::error::VmError> {
-        self.stack
-            .pop()
-            .ok_or(crate::error::VmError::Execution(crate::error::ExecutionError::StackUnderflow))
+    pub fn pop_safe(&mut self) -> Result<StackValue<'gc>, crate::error::VmError> {
+        self.stack.pop().ok_or(crate::error::VmError::Execution(
+            crate::error::ExecutionError::StackUnderflow,
+        ))
     }
 
     pub fn pop_i32(&mut self) -> i32 {
@@ -157,12 +155,7 @@ impl<'gc> EvaluationStack<'gc> {
         self.push(StackValue::ManagedPtr(value));
     }
 
-    pub fn push_ptr(
-        &mut self,
-        ptr: *mut u8,
-        t: TypeDescription,
-        is_pinned: bool,
-    ) {
+    pub fn push_ptr(&mut self, ptr: *mut u8, t: TypeDescription, is_pinned: bool) {
         self.push(StackValue::managed_ptr(ptr, t, is_pinned));
     }
 

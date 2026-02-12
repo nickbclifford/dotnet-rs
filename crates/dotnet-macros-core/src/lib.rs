@@ -2,7 +2,6 @@
 //!
 //! Core logic for macro expansion used by `dotnet-macros`.
 //! This crate contains the parsing and transformation logic for .NET signatures.
-
 use syn::{
     Ident, Result, Token,
     parse::{Parse, ParseStream},

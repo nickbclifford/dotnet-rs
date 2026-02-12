@@ -1,4 +1,4 @@
-use crate::{TypeDescription, resolution::ResolutionS, error::TypeResolutionError};
+use crate::{TypeDescription, error::TypeResolutionError, resolution::ResolutionS};
 use dotnetdll::prelude::{BaseType, MethodType, Resolution, ResolvedDebug, TypeSource, UserType};
 use gc_arena::{Collect, Collection};
 use std::{
@@ -91,17 +91,19 @@ impl GenericLookup {
         }
     }
 
-    pub fn make_concrete(&self, res: ResolutionS, t: impl Into<MethodType>) -> Result<ConcreteType, TypeResolutionError> {
+    pub fn make_concrete(
+        &self,
+        res: ResolutionS,
+        t: impl Into<MethodType>,
+    ) -> Result<ConcreteType, TypeResolutionError> {
         match t.into() {
             MethodType::Base(b) => {
                 let mut err = None;
-                let concrete_base = b.map(|t| {
-                    match self.make_concrete(res, t) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            err = Some(e);
-                            ConcreteType::new(res, BaseType::Boolean)
-                        }
+                let concrete_base = b.map(|t| match self.make_concrete(res, t) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        err = Some(e);
+                        ConcreteType::new(res, BaseType::Boolean)
                     }
                 });
                 if let Some(e) = err {
@@ -110,22 +112,18 @@ impl GenericLookup {
                     Ok(ConcreteType::new(res, concrete_base))
                 }
             }
-            MethodType::TypeGeneric(i) => self
-                .type_generics
-                .get(i)
-                .cloned()
-                .ok_or(TypeResolutionError::GenericIndexOutOfBounds {
+            MethodType::TypeGeneric(i) => self.type_generics.get(i).cloned().ok_or(
+                TypeResolutionError::GenericIndexOutOfBounds {
                     index: i,
                     length: self.type_generics.len(),
-                }),
-            MethodType::MethodGeneric(i) => self
-                .method_generics
-                .get(i)
-                .cloned()
-                .ok_or(TypeResolutionError::GenericIndexOutOfBounds {
+                },
+            ),
+            MethodType::MethodGeneric(i) => self.method_generics.get(i).cloned().ok_or(
+                TypeResolutionError::GenericIndexOutOfBounds {
                     index: i,
                     length: self.method_generics.len(),
-                }),
+                },
+            ),
         }
     }
 }

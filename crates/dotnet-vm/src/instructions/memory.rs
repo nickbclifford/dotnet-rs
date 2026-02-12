@@ -76,17 +76,14 @@ pub fn localloc<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + PoolOps + ExceptionOps<'gc>
         return ctx.throw_by_name("System.OutOfMemoryException");
     }
 
-    ctx.push(
-        StackValue::UnmanagedPtr(UnmanagedPtr(ptr::NonNull::new(ptr).unwrap())),
-    );
+    ctx.push(StackValue::UnmanagedPtr(UnmanagedPtr(
+        ptr::NonNull::new(ptr).unwrap(),
+    )));
     StepResult::Continue
 }
 
 #[dotnet_instruction(StoreIndirect { param0 })]
-pub fn stind<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
-    param0: StoreType,
-) -> StepResult {
+pub fn stind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: StoreType) -> StepResult {
     let val = ctx.pop();
     let addr_val = ctx.pop();
 
@@ -137,10 +134,7 @@ pub fn stind<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(LoadIndirect { param0 })]
-pub fn ldind<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
-    param0: LoadType,
-) -> StepResult {
+pub fn ldind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: LoadType) -> StepResult {
     let addr_val = ctx.pop();
 
     if let StackValue::ManagedPtr(m) = &addr_val

@@ -120,7 +120,13 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
 
     let res_ctx = ctx.with_generics(generics);
 
-    let (base_ptr, total_len, h_opt, element_type, element_size): (*mut u8, usize, Option<_>, ConcreteType, usize) = match obj_val {
+    let (base_ptr, total_len, h_opt, element_type, element_size): (
+        *mut u8,
+        usize,
+        Option<_>,
+        ConcreteType,
+        usize,
+    ) = match obj_val {
         StackValue::ObjectRef(ObjectRef(Some(h))) => {
             let heap = h.borrow();
             match &heap.storage {

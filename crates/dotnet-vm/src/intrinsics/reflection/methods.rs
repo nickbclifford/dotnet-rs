@@ -154,7 +154,9 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                     };
                     let res_ctx = ctx.with_generics(&lookup);
                     let concrete_param_type = vm_try!(ctx.make_concrete(param_type));
-                    let td = ctx.loader().find_concrete_type(concrete_param_type.clone())
+                    let td = ctx
+                        .loader()
+                        .find_concrete_type(concrete_param_type.clone())
                         .expect("Parameter type must exist for MethodInfo.Invoke");
 
                     if vm_try!(td.is_value_type(&res_ctx)) {
@@ -239,7 +241,9 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                     };
                     let res_ctx = ctx.with_generics(&lookup);
                     let concrete_param_type = vm_try!(ctx.make_concrete(param_type));
-                    let td = ctx.loader().find_concrete_type(concrete_param_type.clone())
+                    let td = ctx
+                        .loader()
+                        .find_concrete_type(concrete_param_type.clone())
                         .expect("Parameter type must exist for ConstructorInfo.Invoke");
 
                     if vm_try!(td.is_value_type(&res_ctx)) {

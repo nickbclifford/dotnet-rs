@@ -159,9 +159,7 @@ pub fn conv_ovf<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>
 }
 
 #[dotnet_instruction(ConvertFloat32)]
-pub fn conv_r4<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
-    ctx: &mut T,
-) -> StepResult {
+pub fn conv_r4<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
     let v = match ctx.pop() {
         StackValue::Int32(i) => i as f32,
         StackValue::Int64(i) => i as f32,
@@ -177,9 +175,7 @@ pub fn conv_r4<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(ConvertFloat64)]
-pub fn conv_r8<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
-    ctx: &mut T,
-) -> StepResult {
+pub fn conv_r8<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
     let v = match ctx.pop() {
         StackValue::Int32(i) => i as f64,
         StackValue::Int64(i) => i as f64,
@@ -195,9 +191,7 @@ pub fn conv_r8<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(ConvertUnsignedToFloat)]
-pub fn conv_r_un<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
-    ctx: &mut T,
-) -> StepResult {
+pub fn conv_r_un<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
     let value = ctx.pop();
     let f = match value {
         StackValue::Int32(i) => (i as u32) as f64,

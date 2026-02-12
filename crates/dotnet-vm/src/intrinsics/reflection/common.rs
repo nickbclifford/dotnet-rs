@@ -91,8 +91,13 @@ pub(crate) fn get_runtime_type<'gc, 'm: 'gc>(
         index
     };
 
-    let rt = ctx.loader().corlib_type("DotnetRs.RuntimeType").expect("RuntimeType not found");
-    let rt_obj = ctx.new_object(rt).expect("Failed to create RuntimeType object");
+    let rt = ctx
+        .loader()
+        .corlib_type("DotnetRs.RuntimeType")
+        .expect("RuntimeType not found");
+    let rt_obj = ctx
+        .new_object(rt)
+        .expect("Failed to create RuntimeType object");
     let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
     ctx.register_new_object(&obj_ref);
 
@@ -323,8 +328,13 @@ pub(crate) fn get_runtime_method_obj<'gc, 'm: 'gc>(
         "DotnetRs.MethodInfo"
     };
 
-    let rt = ctx.loader().corlib_type(class_name).expect("reflection type not found");
-    let rt_obj = ctx.new_object(rt).expect("Failed to create reflection object");
+    let rt = ctx
+        .loader()
+        .corlib_type(class_name)
+        .expect("reflection type not found");
+    let rt_obj = ctx
+        .new_object(rt)
+        .expect("Failed to create reflection object");
     let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
     ctx.register_new_object(&obj_ref);
 
@@ -358,8 +368,13 @@ pub(crate) fn get_runtime_field_obj<'gc, 'm: 'gc>(
 
     let index = get_runtime_field_index(ctx, field, lookup.clone()) as usize;
 
-    let rt = ctx.loader().corlib_type("DotnetRs.FieldInfo").expect("FieldInfo not found");
-    let rt_obj = ctx.new_object(rt).expect("Failed to create FieldInfo object");
+    let rt = ctx
+        .loader()
+        .corlib_type("DotnetRs.FieldInfo")
+        .expect("FieldInfo not found");
+    let rt_obj = ctx
+        .new_object(rt)
+        .expect("Failed to create FieldInfo object");
     let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
     ctx.register_new_object(&obj_ref);
 

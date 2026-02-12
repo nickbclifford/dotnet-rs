@@ -1,9 +1,9 @@
 use crate::{context::ResolutionContext, metrics::RuntimeMetrics, sync::Arc};
 use dotnet_types::{
     TypeDescription,
+    error::TypeResolutionError,
     generics::{ConcreteType, GenericLookup},
     members::FieldDescription,
-    error::TypeResolutionError,
 };
 use dotnet_value::layout::{
     ArrayLayoutManager, FieldKey, FieldLayout, FieldLayoutManager, GcDesc, HasLayout,
@@ -141,9 +141,12 @@ impl LayoutFactory {
                 for (owner, name, o, layout) in fields {
                     max_alignment = max_alignment.max(layout.alignment());
                     match o {
-                        None => return Err(TypeResolutionError::InvalidLayout(
-                            "explicit field layout requires all fields to have defined offsets".to_string()
-                        )),
+                        None => {
+                            return Err(TypeResolutionError::InvalidLayout(
+                                "explicit field layout requires all fields to have defined offsets"
+                                    .to_string(),
+                            ));
+                        }
                         Some(o) => {
                             // Add base size to the explicit offset
                             let actual_offset = base_size + o;
@@ -170,11 +173,7 @@ impl LayoutFactory {
                                     } else {
                                         return Err(TypeResolutionError::InvalidLayout(format!(
                                             "explicit field layout overlaps reference type fields in type '{}'. Field '{}' (offset {}) overlaps with previous field (range {}-{}).",
-                                            type_name,
-                                            name,
-                                            actual_offset,
-                                            prev_start,
-                                            prev_end
+                                            type_name, name, actual_offset, prev_start, prev_end
                                         )));
                                     }
                                 }
@@ -205,7 +204,10 @@ impl LayoutFactory {
         }
 
         if total_size > 0x1000_0000 {
-            return Err(TypeResolutionError::MassiveAllocation(format!("massive field layout detected: {} bytes", total_size)));
+            return Err(TypeResolutionError::MassiveAllocation(format!(
+                "massive field layout detected: {} bytes",
+                total_size
+            )));
         }
 
         Ok(FieldLayoutManager {

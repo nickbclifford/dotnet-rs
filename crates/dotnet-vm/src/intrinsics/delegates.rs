@@ -35,7 +35,10 @@ pub fn is_delegate_type<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
 
         if let Some(extends) = &definition.extends {
             let (ut, _) = decompose_type_source::<MemberType>(extends);
-            let base_td = ctx.resolver().locate_type(td.resolution, ut).expect("Failed to locate base type");
+            let base_td = ctx
+                .resolver()
+                .locate_type(td.resolution, ut)
+                .expect("Failed to locate base type");
             if base_td == td {
                 break;
             }
@@ -95,7 +98,10 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
 
     // Check for multicast targets
     let multicast_targets = delegate_ref.as_object(|instance| {
-        let multicast_type = ctx.loader().corlib_type("DotnetRs.MulticastDelegate").expect("DotnetRs.MulticastDelegate must exist");
+        let multicast_type = ctx
+            .loader()
+            .corlib_type("DotnetRs.MulticastDelegate")
+            .expect("DotnetRs.MulticastDelegate must exist");
 
         // We can't use is_assignable_to easily here because it needs a TypeComparer or similar
         // Let's use is_delegate_type's logic or just check if it's a MulticastDelegate
@@ -110,7 +116,10 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
             }
             if let Some(parent) = curr.definition().extends.as_ref() {
                 let (ut, _) = decompose_type_source::<MemberType>(parent);
-                let next = ctx.resolver().locate_type(curr.resolution, ut).expect("Failed to locate base type");
+                let next = ctx
+                    .resolver()
+                    .locate_type(curr.resolution, ut)
+                    .expect("Failed to locate base type");
                 if next == curr {
                     break;
                 }
@@ -145,7 +154,11 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
 
     if let Some(targets_handle) = multicast_targets {
         // Push a dummy frame for the current Invoke method
-        let method_info = vm_try!(MethodInfo::new(invoke_method, _lookup, ctx.shared().clone()));
+        let method_info = vm_try!(MethodInfo::new(
+            invoke_method,
+            _lookup,
+            ctx.shared().clone()
+        ));
 
         // Push arguments back onto stack so call_frame can consume them
         for arg in &args {
@@ -165,7 +178,10 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
     }
 
     let (target, method_index) = delegate_ref.as_object(|instance| {
-        let delegate_type = ctx.loader().corlib_type("DotnetRs.Delegate").expect("DotnetRs.Delegate must exist");
+        let delegate_type = ctx
+            .loader()
+            .corlib_type("DotnetRs.Delegate")
+            .expect("DotnetRs.Delegate must exist");
 
         // Read Target field
         let target_bytes = instance
@@ -215,7 +231,10 @@ pub fn delegate_get_target<'gc, 'm: 'gc>(
     }
 
     let target = this.as_object(|instance| {
-        let delegate_type = ctx.loader().corlib_type("DotnetRs.Delegate").expect("DotnetRs.Delegate must exist");
+        let delegate_type = ctx
+            .loader()
+            .corlib_type("DotnetRs.Delegate")
+            .expect("DotnetRs.Delegate must exist");
         let target_bytes = instance
             .instance_storage
             .get_field_local(delegate_type, "_target");
@@ -239,7 +258,10 @@ pub fn delegate_get_method<'gc, 'm: 'gc>(
     }
 
     let method_index = this.as_object(|instance| {
-        let delegate_type = ctx.loader().corlib_type("DotnetRs.Delegate").expect("DotnetRs.Delegate must exist");
+        let delegate_type = ctx
+            .loader()
+            .corlib_type("DotnetRs.Delegate")
+            .expect("DotnetRs.Delegate must exist");
         let method_handle_bytes = instance
             .instance_storage
             .get_field_local(delegate_type, "_method");
@@ -379,7 +401,10 @@ fn get_delegate_info<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
     obj: ObjectRef<'gc>,
 ) -> (ObjectRef<'gc>, usize) {
     obj.as_object(|instance| {
-        let delegate_type = ctx.loader().corlib_type("DotnetRs.Delegate").expect("DotnetRs.Delegate must exist");
+        let delegate_type = ctx
+            .loader()
+            .corlib_type("DotnetRs.Delegate")
+            .expect("DotnetRs.Delegate must exist");
         let target_bytes = instance
             .instance_storage
             .get_field_local(delegate_type, "_target");
@@ -397,7 +422,10 @@ fn get_multicast_targets_ref<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
     obj: ObjectRef<'gc>,
 ) -> Option<ObjectRef<'gc>> {
     obj.as_object(|instance| {
-        let multicast_type = ctx.loader().corlib_type("DotnetRs.MulticastDelegate").expect("DotnetRs.MulticastDelegate must exist");
+        let multicast_type = ctx
+            .loader()
+            .corlib_type("DotnetRs.MulticastDelegate")
+            .expect("DotnetRs.MulticastDelegate must exist");
 
         let mut curr = instance.description;
         let mut is_multicast = false;
@@ -410,7 +438,10 @@ fn get_multicast_targets_ref<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
             }
             if let Some(parent) = curr.definition().extends.as_ref() {
                 let (ut, _) = decompose_type_source::<MemberType>(parent);
-                let next = ctx.resolver().locate_type(curr.resolution, ut).expect("Failed to locate base type");
+                let next = ctx
+                    .resolver()
+                    .locate_type(curr.resolution, ut)
+                    .expect("Failed to locate base type");
                 if next == curr {
                     break;
                 }
@@ -607,7 +638,8 @@ pub fn delegate_remove<'gc, 'm: 'gc>(
             let delegate_type = vm_try!(ctx.loader().corlib_type("System.Delegate"));
             let delegate_concrete = ConcreteType::from(delegate_type);
             let array_v = vm_try!(ctx.new_vector(delegate_concrete, new_list.len()));
-            let array_obj = ObjectRef::new(ctx.gc(), dotnet_value::object::HeapStorage::Vec(array_v));
+            let array_obj =
+                ObjectRef::new(ctx.gc(), dotnet_value::object::HeapStorage::Vec(array_v));
             ctx.register_new_object(&array_obj);
 
             array_obj.as_vector_mut(ctx.gc(), |v| {

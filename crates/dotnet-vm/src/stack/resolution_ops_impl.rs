@@ -1,11 +1,23 @@
-use super::{context::VesContext, ops::{ResolutionOps, LoaderOps, StackOps}};
-use crate::{MethodType, ResolutionContext};
-use dotnet_types::{TypeDescription, error::TypeResolutionError, generics::{ConcreteType, GenericLookup}};
+use crate::{
+    MethodType, ResolutionContext,
+    stack::{
+        context::VesContext,
+        ops::{LoaderOps, ResolutionOps, StackOps},
+    },
+};
+use dotnet_types::{
+    TypeDescription,
+    error::TypeResolutionError,
+    generics::{ConcreteType, GenericLookup},
+};
 use dotnet_value::StackValue;
 
 impl<'a, 'gc, 'm: 'gc> ResolutionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     #[inline]
-    fn stack_value_type(&self, val: &StackValue<'gc>) -> Result<TypeDescription, TypeResolutionError> {
+    fn stack_value_type(
+        &self,
+        val: &StackValue<'gc>,
+    ) -> Result<TypeDescription, TypeResolutionError> {
         self.resolver().stack_value_type(val)
     }
 
@@ -33,7 +45,12 @@ impl<'a, 'gc, 'm: 'gc> ResolutionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
             ResolutionContext {
                 generics: &self.shared.empty_generics,
                 loader: self.shared.loader,
-                resolution: self.shared.loader.corlib_type("System.Object").expect("System.Object must exist in corlib").resolution,
+                resolution: self
+                    .shared
+                    .loader
+                    .corlib_type("System.Object")
+                    .expect("System.Object must exist in corlib")
+                    .resolution,
                 type_owner: None,
                 method_owner: None,
                 caches: self.shared.caches.clone(),

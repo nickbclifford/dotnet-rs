@@ -3,6 +3,7 @@ use crate::{
     exceptions::ExceptionState,
     memory::ops::MemoryOps,
     resolution::{TypeResolutionExt, ValueResolution},
+    stack::{evaluation_stack::EvaluationStack, frames::FrameStack, ops::*},
     state::{ArenaLocalState, SharedGlobalState},
     sync::{Arc, MutexGuard},
     tracer::Tracer,
@@ -10,32 +11,21 @@ use crate::{
 use dotnet_types::{
     TypeDescription,
     comparer::decompose_type_source,
+    error::TypeResolutionError,
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
     resolution::ResolutionS,
     runtime::RuntimeType,
-    error::TypeResolutionError,
 };
-use dotnet_utils::{
-    gc::GCHandle,
-    sync::Ordering,
-};
+use dotnet_utils::{gc::GCHandle, sync::Ordering};
 use dotnet_value::{
     StackValue,
-    object::{
-        HeapStorage, ObjectRef, ObjectHandle,
-    },
+    object::{HeapStorage, ObjectHandle, ObjectRef},
     storage::FieldStorage,
 };
 use dotnetdll::prelude::*;
 use gc_arena::Collect;
 use std::ptr::NonNull;
-
-use crate::stack::ops::*;
-use super::{
-    evaluation_stack::EvaluationStack,
-    frames::FrameStack,
-};
 
 pub struct VesContext<'a, 'gc, 'm> {
     pub(crate) gc: GCHandle<'gc>,
@@ -190,10 +180,16 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                     .loader()
                     .find_concrete_type(return_concrete.clone())
                     .expect("Type must exist for init_locals");
-                if td.is_value_type(&self.current_context()).expect("Failed to check if return type is value type") {
+                if td
+                    .is_value_type(&self.current_context())
+                    .expect("Failed to check if return type is value type")
+                {
                     let boxed = ObjectRef::new(
                         self.gc,
-                        HeapStorage::Boxed(self.new_value_type(&return_concrete, val).expect("Failed to create value type for return")),
+                        HeapStorage::Boxed(
+                            self.new_value_type(&return_concrete, val)
+                                .expect("Failed to create value type for return"),
+                        ),
                     );
                     self.register_new_object(&boxed);
                     self.push_obj(boxed);
@@ -241,12 +237,18 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
             .expect("Type resolution failed")
     }
 
-    pub fn new_instance_fields(&self, td: TypeDescription) -> Result<FieldStorage, TypeResolutionError> {
+    pub fn new_instance_fields(
+        &self,
+        td: TypeDescription,
+    ) -> Result<FieldStorage, TypeResolutionError> {
         self.resolver()
             .new_instance_fields(td, &self.current_context())
     }
 
-    pub fn new_static_fields(&self, td: TypeDescription) -> Result<FieldStorage, TypeResolutionError> {
+    pub fn new_static_fields(
+        &self,
+        td: TypeDescription,
+    ) -> Result<FieldStorage, TypeResolutionError> {
         self.resolver()
             .new_static_fields(td, &self.current_context())
     }
@@ -503,12 +505,16 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
                         method_resolution: object_type.resolution,
                     };
 
-                    Some(self.resolver().resolve_virtual_method(
-                        method_desc,
-                        obj_type,
-                        &GenericLookup::default(),
-                        &ctx,
-                    ).expect("Failed to resolve finalizer"))
+                    Some(
+                        self.resolver()
+                            .resolve_virtual_method(
+                                method_desc,
+                                obj_type,
+                                &GenericLookup::default(),
+                                &ctx,
+                            )
+                            .expect("Failed to resolve finalizer"),
+                    )
                 } else {
                     None
                 }
@@ -519,8 +525,11 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
                 return StepResult::Continue;
             };
 
-            let method_info =
-                vm_try!(MethodInfo::new(finalizer, &self.shared.empty_generics, self.shared.clone()));
+            let method_info = vm_try!(MethodInfo::new(
+                finalizer,
+                &self.shared.empty_generics,
+                self.shared.clone()
+            ));
 
             // Push the object as 'this'
             self.push(StackValue::ObjectRef(instance));

@@ -280,8 +280,14 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
             (BaseType::Type { source: ts1, .. }, BaseType::Type { source: ts2, .. }) => {
                 let (ut1, generics1) = decompose_type_source(ts1);
                 let (ut2, generics2_list) = decompose_type_source(ts2);
-                let td1 = self.loader.locate_type(res1, ut1).expect("Type resolution failed during comparison");
-                let td2 = self.loader.locate_type(res2, ut2).expect("Type resolution failed during comparison");
+                let td1 = self
+                    .loader
+                    .locate_type(res1, ut1)
+                    .expect("Type resolution failed during comparison");
+                let td2 = self
+                    .loader
+                    .locate_type(res2, ut2)
+                    .expect("Type resolution failed during comparison");
 
                 if td1 != td2 {
                     let d1 = td1.definition();

@@ -1,21 +1,17 @@
 use crate::{
     StepResult,
-    stack::ops::{ResolutionOps, StackOps, LoaderOps},
+    stack::ops::{LoaderOps, ResolutionOps, StackOps},
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::StackValue;
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(NoOperation)]
-pub fn nop<'gc, 'm: 'gc>(
-    _ctx: &mut dyn crate::stack::ops::VesOps<'gc, 'm>,
-) -> StepResult {
+pub fn nop<'gc, 'm: 'gc>(_ctx: &mut dyn crate::stack::ops::VesOps<'gc, 'm>) -> StepResult {
     StepResult::Continue
 }
 #[dotnet_instruction(Pop)]
-pub fn pop<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
-    ctx: &mut T,
-) -> StepResult {
+pub fn pop<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
     match ctx.pop_safe() {
         Ok(_) => StepResult::Continue,
         Err(e) => StepResult::Error(e),
@@ -23,9 +19,7 @@ pub fn pop<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(Duplicate)]
-pub fn duplicate<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
-    ctx: &mut T,
-) -> StepResult {
+pub fn duplicate<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
     match ctx.pop_safe() {
         Ok(val) => {
             ctx.push(val.clone());
@@ -61,9 +55,7 @@ load_const!(
     StackValue::NativeFloat
 );
 #[dotnet_instruction(LoadNull)]
-pub fn ldnull<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
-    ctx: &mut T,
-) -> StepResult {
+pub fn ldnull<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
     ctx.push(StackValue::null());
     StepResult::Continue
 }
@@ -75,7 +67,11 @@ load_var!(
 );
 
 #[dotnet_instruction(LoadArgumentAddress(index))]
-pub fn ldarga<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + ?Sized>(
+pub fn ldarga<
+    'gc,
+    'm: 'gc,
+    T: StackOps<'gc, 'm> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + ?Sized,
+>(
     ctx: &mut T,
     index: u16,
 ) -> StepResult {
@@ -83,15 +79,13 @@ pub fn ldarga<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ResolutionOps<'gc, 'm> + Load
     let abs_idx = frame.base.arguments + index as usize;
     let arg = ctx.get_argument(index as usize);
     let live_type = vm_try!(ctx.stack_value_type(&arg));
-    ctx.push(
-        StackValue::managed_stack_ptr(
-            abs_idx,
-            0,
-            ctx.get_argument_address(index as usize).as_ptr() as *mut _,
-            live_type,
-            true,
-        ),
-    );
+    ctx.push(StackValue::managed_stack_ptr(
+        abs_idx,
+        0,
+        ctx.get_argument_address(index as usize).as_ptr() as *mut _,
+        live_type,
+        true,
+    ));
     StepResult::Continue
 }
 
@@ -107,7 +101,11 @@ load_var!(
 );
 
 #[dotnet_instruction(LoadLocalAddress(index))]
-pub fn ldloca<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + ?Sized>(
+pub fn ldloca<
+    'gc,
+    'm: 'gc,
+    T: StackOps<'gc, 'm> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + ?Sized,
+>(
     ctx: &mut T,
     index: u16,
 ) -> StepResult {
@@ -118,9 +116,13 @@ pub fn ldloca<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ResolutionOps<'gc, 'm> + Load
 
     let (ptr, pinned) = ctx.get_local_info_for_managed_ptr(index as usize);
 
-    ctx.push(
-        StackValue::managed_stack_ptr(abs_idx, 0, ptr.as_ptr() as *mut _, live_type, pinned),
-    );
+    ctx.push(StackValue::managed_stack_ptr(
+        abs_idx,
+        0,
+        ptr.as_ptr() as *mut _,
+        live_type,
+        pinned,
+    ));
     StepResult::Continue
 }
 

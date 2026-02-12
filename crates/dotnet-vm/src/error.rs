@@ -6,13 +6,13 @@ use thiserror::Error;
 pub enum VmError {
     #[error("Assembly loading failed: {0}")]
     AssemblyLoad(#[from] AssemblyLoadError),
-    
+
     #[error("Type resolution failed: {0}")]
     TypeResolution(#[from] TypeResolutionError),
-    
+
     #[error("Method execution failed: {0}")]
     Execution(#[from] ExecutionError),
-    
+
     #[error("Memory access violation: {0}")]
     Memory(#[from] MemoryError),
 }
@@ -21,13 +21,13 @@ pub enum VmError {
 pub enum ExecutionError {
     #[error("Stack underflow")]
     StackUnderflow,
-    
+
     #[error("Invalid instruction pointer: {0}")]
     InvalidIP(usize),
-    
+
     #[error("Type mismatch: expected {expected}, got {actual}")]
     TypeMismatch { expected: String, actual: String },
-    
+
     #[error("Null reference")]
     NullReference,
 

@@ -75,15 +75,13 @@ use dotnet_value::StackValue;
 use gc_arena::{Arena, Collect, Rootable};
 use std::cell::Cell;
 
+mod call_ops_impl;
 pub mod context;
 pub mod evaluation_stack;
-pub mod frames;
-pub mod ops;
-pub use ops::*;
-
-mod call_ops_impl;
 mod exception_ops_impl;
+pub mod frames;
 mod memory_ops_impl;
+pub mod ops;
 mod raw_memory_ops_impl;
 mod reflection_ops_impl;
 mod resolution_ops_impl;
@@ -92,6 +90,7 @@ mod stack_ops_impl;
 pub use context::*;
 pub use evaluation_stack::*;
 pub use frames::*;
+pub use ops::*;
 
 pub struct CallStack<'gc, 'm> {
     pub execution: ThreadContext<'gc, 'm>,

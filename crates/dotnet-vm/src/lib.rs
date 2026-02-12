@@ -11,7 +11,6 @@
 //! - **Memory Management** (`memory/`, `gc/`): Heap management and garbage collection.
 //! - **Dispatch** (`dispatch/`): Method resolution and execution engine.
 //! - **Threading** (`threading/`): Support for multi-threaded execution.
-
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, unsafe_empty_collect};
@@ -134,12 +133,12 @@ impl MethodInfo<'static> {
 #[must_use]
 #[derive(Clone, Debug, PartialEq)]
 pub enum StepResult {
-    Continue,    // Advance IP
-    Jump(usize), // Set IP to X
-    FramePushed, // Do not advance IP (new frame active)
-    Return,      // Pop frame
-    MethodThrew, // Exception unhandled in frame
-    Exception,   // Exception thrown, need to call handle_exception
-    Yield,       // GC/Thread yield
+    Continue,              // Advance IP
+    Jump(usize),           // Set IP to X
+    FramePushed,           // Do not advance IP (new frame active)
+    Return,                // Pop frame
+    MethodThrew,           // Exception unhandled in frame
+    Exception,             // Exception thrown, need to call handle_exception
+    Yield,                 // GC/Thread yield
     Error(error::VmError), // Internal VM error
 }

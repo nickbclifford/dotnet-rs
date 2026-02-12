@@ -172,14 +172,12 @@ fn ldelema_internal<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         .loader()
         .find_concrete_type(concrete_t)
         .expect("Array element type must exist for ldelema");
-    ctx.push(
-        StackValue::ManagedPtr(ManagedPtr::new(
-            NonNull::new(ptr),
-            target_type,
-            Some(obj),
-            readonly,
-        )),
-    );
+    ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
+        NonNull::new(ptr),
+        target_type,
+        Some(obj),
+        readonly,
+    )));
 
     StepResult::Continue
 }
@@ -370,9 +368,7 @@ pub fn newarr<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(LoadLength)]
-pub fn ldlen<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
-    ctx: &mut T,
-) -> StepResult {
+pub fn ldlen<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
     let array = ctx.pop();
     let StackValue::ObjectRef(obj) = array else {
         panic!("ldlen: expected object on stack, got {:?}", array);

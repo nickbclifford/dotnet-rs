@@ -1,5 +1,5 @@
 use crate::{
-    StepResult, layout::LayoutFactory, memory::Atomic,
+    StepResult, instructions::objects::get_ptr_context, layout::LayoutFactory, memory::Atomic,
     resolution::ValueResolution, stack::ops::VesOps, sync::Ordering as AtomicOrdering,
 };
 use dotnet_macros::dotnet_instruction;
@@ -11,8 +11,6 @@ use dotnet_value::{
 };
 use dotnetdll::prelude::*;
 use std::ptr::{self, NonNull};
-
-use super::get_ptr_context;
 
 #[dotnet_instruction(LoadField { param0, volatile })]
 pub fn ldfld<'gc, 'm: 'gc>(
@@ -215,7 +213,8 @@ pub fn ldsfld<'gc, 'm: 'gc>(
     param0: &FieldSource,
     volatile: bool,
 ) -> StepResult {
-    let (field, lookup): (_, dotnet_types::generics::GenericLookup) = vm_try!(ctx.locate_field(*param0));
+    let (field, lookup): (_, dotnet_types::generics::GenericLookup) =
+        vm_try!(ctx.locate_field(*param0));
 
     // Special fields check (intrinsic fields)
     if ctx.is_intrinsic_field_cached(field) {
@@ -257,7 +256,8 @@ pub fn stsfld<'gc, 'm: 'gc>(
     param0: &FieldSource,
     volatile: bool,
 ) -> StepResult {
-    let (field, lookup): (_, dotnet_types::generics::GenericLookup) = vm_try!(ctx.locate_field(*param0));
+    let (field, lookup): (_, dotnet_types::generics::GenericLookup) =
+        vm_try!(ctx.locate_field(*param0));
     let name = &field.field.name;
 
     let res = ctx.initialize_static_storage(field.parent, lookup.clone());
@@ -292,10 +292,7 @@ pub fn stsfld<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(LoadFieldAddress(param0))]
-pub fn ldflda<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
-    param0: &FieldSource,
-) -> StepResult {
+pub fn ldflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource) -> StepResult {
     let (field, lookup) = vm_try!(ctx.locate_field(*param0));
 
     // Special fields check (intrinsic fields)
@@ -324,14 +321,12 @@ pub fn ldflda<'gc, 'm: 'gc>(
             if !ptr.is_null() {
                 let target_type = vm_try!(ctx.current_context().get_field_desc(field));
                 drop(data);
-                ctx.push(
-                    StackValue::ManagedPtr(ManagedPtr::new(
-                        NonNull::new(ptr),
-                        target_type,
-                        Some(ObjectRef(Some(*h))),
-                        false,
-                    )),
-                );
+                ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
+                    NonNull::new(ptr),
+                    target_type,
+                    Some(ObjectRef(Some(*h))),
+                    false,
+                )));
                 return StepResult::Continue;
             }
         }
@@ -350,14 +345,12 @@ pub fn ldflda<'gc, 'm: 'gc>(
                 if !ptr.is_null() {
                     let target_type = vm_try!(ctx.current_context().get_field_desc(field));
                     drop(data);
-                    ctx.push(
-                        StackValue::ManagedPtr(ManagedPtr::new(
-                            NonNull::new(ptr),
-                            target_type,
-                            Some(ObjectRef(Some(*h))),
-                            false,
-                        )),
-                    );
+                    ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
+                        NonNull::new(ptr),
+                        target_type,
+                        Some(ObjectRef(Some(*h))),
+                        false,
+                    )));
                     return StepResult::Continue;
                 }
             }
@@ -389,35 +382,33 @@ pub fn ldflda<'gc, 'm: 'gc>(
 
     let field_ptr = unsafe { ptr.add(field_layout.position) };
     let t = vm_try!(res_ctx.get_field_type(field));
-    let target_type = vm_try!(ctx
-        .loader()
-        .find_concrete_type(t));
+    let target_type = vm_try!(ctx.loader().find_concrete_type(t));
 
     if let Some((idx, _)) = stack_slot_origin {
         let new_offset = base_offset + field_layout.position;
-        ctx.push(
-            StackValue::managed_stack_ptr(idx, new_offset, field_ptr, target_type, false),
-        );
+        ctx.push(StackValue::managed_stack_ptr(
+            idx,
+            new_offset,
+            field_ptr,
+            target_type,
+            false,
+        ));
     } else {
-        ctx.push(
-            StackValue::ManagedPtr(ManagedPtr::new(
-                NonNull::new(field_ptr),
-                target_type,
-                owner,
-                false,
-            )),
-        );
+        ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
+            NonNull::new(field_ptr),
+            target_type,
+            owner,
+            false,
+        )));
     }
 
     StepResult::Continue
 }
 
 #[dotnet_instruction(LoadStaticFieldAddress(param0))]
-pub fn ldsflda<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
-    param0: &FieldSource,
-) -> StepResult {
-    let (field, lookup): (_, dotnet_types::generics::GenericLookup) = vm_try!(ctx.locate_field(*param0));
+pub fn ldsflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource) -> StepResult {
+    let (field, lookup): (_, dotnet_types::generics::GenericLookup) =
+        vm_try!(ctx.locate_field(*param0));
 
     let res = ctx.initialize_static_storage(field.parent, lookup.clone());
     if res != StepResult::Continue {
@@ -437,18 +428,14 @@ pub fn ldsflda<'gc, 'm: 'gc>(
     let field_ptr = unsafe { ptr.add(field_layout.position) };
 
     let t = vm_try!(res_ctx.get_field_type(field));
-    let target_type = vm_try!(ctx
-        .loader()
-        .find_concrete_type(t));
+    let target_type = vm_try!(ctx.loader().find_concrete_type(t));
 
-    ctx.push(
-        StackValue::ManagedPtr(ManagedPtr::new(
-            NonNull::new(field_ptr),
-            target_type,
-            None,
-            false,
-        )),
-    );
+    ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
+        NonNull::new(field_ptr),
+        target_type,
+        None,
+        false,
+    )));
 
     StepResult::Continue
 }

@@ -1,10 +1,8 @@
 use crate::StepResult;
 use dotnetdll::prelude::Instruction;
 
-pub type InstructionHandler = for<'gc, 'm> fn(
-    &mut dyn crate::stack::ops::VesOps<'gc, 'm>,
-    &Instruction,
-) -> StepResult;
+pub type InstructionHandler =
+    for<'gc, 'm> fn(&mut dyn crate::stack::ops::VesOps<'gc, 'm>, &Instruction) -> StepResult;
 
 pub type InstructionTable = [Option<InstructionHandler>; Instruction::VARIANT_COUNT];
 

@@ -21,7 +21,6 @@
 //! Handlers should typically take a generic parameter `T: VesOps<'gc, 'm> + ?Sized`.
 //! This allows them to work with both `VesContext` and potentially other implementations
 //! for testing or specialized execution.
-pub use crate::memory::ops::MemoryOps;
 use crate::{
     state::SharedGlobalState,
     sync::{Arc, MutexGuard},
@@ -40,6 +39,8 @@ use dotnet_value::{
     pointer::ManagedPtr,
 };
 use dotnetdll::prelude::{FieldSource, MethodType};
+
+pub use crate::memory::ops::MemoryOps;
 
 pub trait EvalStackOps<'gc> {
     fn push(&mut self, value: StackValue<'gc>);
@@ -151,7 +152,10 @@ pub trait ExceptionOps<'gc> {
 }
 
 pub trait ResolutionOps<'gc, 'm> {
-    fn stack_value_type(&self, val: &StackValue<'gc>) -> Result<TypeDescription, TypeResolutionError>;
+    fn stack_value_type(
+        &self,
+        val: &StackValue<'gc>,
+    ) -> Result<TypeDescription, TypeResolutionError>;
     fn make_concrete(&self, t: &MethodType) -> Result<ConcreteType, TypeResolutionError>;
     fn current_context(&self) -> crate::ResolutionContext<'_, 'm>;
     fn with_generics<'b>(&self, lookup: &'b GenericLookup) -> crate::ResolutionContext<'b, 'm>;
@@ -218,7 +222,10 @@ pub trait ReflectionOps<'gc, 'm>: crate::memory::ops::MemoryOps<'gc> {
         ctx: &crate::ResolutionContext<'_, 'm>,
         source: &MethodType,
     ) -> RuntimeType;
-    fn get_heap_description(&self, object: ObjectHandle<'gc>) -> Result<TypeDescription, TypeResolutionError>;
+    fn get_heap_description(
+        &self,
+        object: ObjectHandle<'gc>,
+    ) -> Result<TypeDescription, TypeResolutionError>;
     fn locate_field(
         &self,
         handle: FieldSource,

@@ -1,12 +1,12 @@
 use crate::{
-    MethodState, StepResult, memory::heap::HeapManager, stack::context::StackFrame,
+    MethodState, StepResult,
+    memory::heap::HeapManager,
+    stack::{context::StackFrame, evaluation_stack::EvaluationStack},
     state::SharedGlobalState,
 };
 use dotnet_value::StackValue;
 use dotnetdll::prelude::ReturnType;
 use gc_arena::Collect;
-
-use super::evaluation_stack::EvaluationStack;
 
 #[derive(Collect, Default)]
 #[collect(no_drop)]

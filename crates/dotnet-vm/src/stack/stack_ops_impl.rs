@@ -1,4 +1,4 @@
-use super::{
+use crate::stack::{
     context::VesContext,
     ops::{ArgumentOps, EvalStackOps, LocalOps, StackOps, TypedStackOps},
 };
@@ -125,8 +125,7 @@ impl<'a, 'gc, 'm: 'gc> ArgumentOps<'gc> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn set_argument(&mut self, index: usize, value: StackValue<'gc>) {
         let bp = self.frame_stack.current_frame().base;
-        self.evaluation_stack
-            .set_slot(bp.arguments + index, value);
+        self.evaluation_stack.set_slot(bp.arguments + index, value);
     }
 
     #[inline]

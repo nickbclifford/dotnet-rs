@@ -10,7 +10,6 @@
 //! - **[`ManagedPtr`]**: Pointer to a location within a managed object or the stack.
 //! - **[`Object`]**: Internal representation of an object's instance data and layout.
 //! - **[`CLRString`]**: Specialized representation for .NET strings.
-
 #[cfg(feature = "multithreaded-gc")]
 use dotnet_utils::gc::record_cross_arena_ref;
 

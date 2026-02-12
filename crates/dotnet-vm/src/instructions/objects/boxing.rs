@@ -1,8 +1,4 @@
-use crate::{
-    StepResult,
-    resolution::TypeResolutionExt,
-    stack::ops::VesOps,
-};
+use crate::{StepResult, resolution::TypeResolutionExt, stack::ops::VesOps};
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::{
     StackValue,
@@ -25,7 +21,10 @@ pub fn box_value<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         // boxing is a noop for all reference types
         ctx.push(value);
     } else {
-        let obj = ObjectRef::new(ctx.gc(), HeapStorage::Boxed(vm_try!(ctx.new_value_type(&t, value))));
+        let obj = ObjectRef::new(
+            ctx.gc(),
+            HeapStorage::Boxed(vm_try!(ctx.new_value_type(&t, value))),
+        );
         ctx.register_new_object(&obj);
         ctx.push(StackValue::ObjectRef(obj));
     }
@@ -43,9 +42,7 @@ pub fn unbox_any<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 
     let is_vt = match target_ct.get() {
         BaseType::Type { .. } => {
-            let td = vm_try!(ctx
-                .loader()
-                .find_concrete_type(target_ct.clone()));
+            let td = vm_try!(ctx.loader().find_concrete_type(target_ct.clone()));
             vm_try!(td.is_value_type(&res_ctx))
         }
         BaseType::Vector(_, _) | BaseType::Array(_, _) | BaseType::Object | BaseType::String => {
@@ -120,17 +117,13 @@ pub fn unbox<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         _ => panic!("unbox on non-boxed struct"),
     };
 
-    let target_type = vm_try!(ctx
-        .loader()
-        .find_concrete_type(target_ct));
-    ctx.push(
-        StackValue::ManagedPtr(ManagedPtr::new(
-            NonNull::new(ptr),
-            target_type,
-            Some(obj),
-            false,
-        )),
-    );
+    let target_type = vm_try!(ctx.loader().find_concrete_type(target_ct));
+    ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
+        NonNull::new(ptr),
+        target_type,
+        Some(obj),
+        false,
+    )));
 
     StepResult::Continue
 }

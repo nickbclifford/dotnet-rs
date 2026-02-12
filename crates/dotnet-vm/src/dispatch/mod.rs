@@ -6,10 +6,7 @@
 use crate::{
     MethodInfo, ResolutionContext, StepResult,
     exceptions::ExceptionState,
-    stack::{
-        CallStack,
-        ops::*,
-    },
+    stack::{CallStack, ops::*},
     threading::ThreadManagerOps,
 };
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
@@ -230,9 +227,9 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
             }
 
             if method.method.body.is_none() {
-                if let Some(result) = crate::intrinsics::delegates::try_delegate_dispatch(
-                    &mut ctx, method, &lookup,
-                ) {
+                if let Some(result) =
+                    crate::intrinsics::delegates::try_delegate_dispatch(&mut ctx, method, &lookup)
+                {
                     return result;
                 }
 

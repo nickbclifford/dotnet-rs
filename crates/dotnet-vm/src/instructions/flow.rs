@@ -7,20 +7,12 @@ use dotnet_value::StackValue;
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(Branch(target))]
-pub fn br<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
-    _ctx: &mut T,
-
-    target: usize,
-) -> StepResult {
+pub fn br<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(_ctx: &mut T, target: usize) -> StepResult {
     StepResult::Jump(target)
 }
 
 #[dotnet_instruction(BranchEqual(target))]
-pub fn beq<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
-    ctx: &mut T,
-
-    target: usize,
-) -> StepResult {
+pub fn beq<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T, target: usize) -> StepResult {
     let v2 = ctx.pop();
     let v1 = ctx.pop();
     if v1 == v2 {
@@ -105,11 +97,7 @@ pub fn blt<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(BranchNotEqual(target))]
-pub fn bne<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
-    ctx: &mut T,
-
-    target: usize,
-) -> StepResult {
+pub fn bne<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T, target: usize) -> StepResult {
     let v2 = ctx.pop();
     let v1 = ctx.pop();
     if v1 != v2 {
@@ -167,10 +155,7 @@ pub fn switch<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(Return)]
-pub fn ret<'gc, 'm: 'gc, T: ExceptionOps<'gc> + ?Sized>(
-    ctx: &mut T,
-
-) -> StepResult {
+pub fn ret<'gc, 'm: 'gc, T: ExceptionOps<'gc> + ?Sized>(ctx: &mut T) -> StepResult {
     ctx.ret()
 }
 

@@ -26,7 +26,8 @@ impl TestHarness {
 
     fn new() -> Self {
         let assemblies_path = Self::find_dotnet_app_path().to_str().unwrap().to_string();
-        let loader = assemblies::AssemblyLoader::new(assemblies_path).expect("Failed to create AssemblyLoader");
+        let loader = assemblies::AssemblyLoader::new(assemblies_path)
+            .expect("Failed to create AssemblyLoader");
         let loader = Box::leak(Box::new(loader));
         Self { loader }
     }
@@ -424,7 +425,8 @@ fn test_multiple_arenas_simple() {
     let dll_path = harness.build(fixture_path).unwrap();
 
     let shared = Arc::new(state::SharedGlobalState::new(harness.loader));
-    let resolution = try_static_res_from_file(dll_path.to_str().unwrap()).expect("Failed to load assembly");
+    let resolution =
+        try_static_res_from_file(dll_path.to_str().unwrap()).expect("Failed to load assembly");
     shared.loader.register_assembly(resolution);
 
     let (tx, rx) = std::sync::mpsc::channel();
@@ -519,7 +521,8 @@ fn test_reflection_race_condition() {
     let dll_path = harness.build(fixture_path).unwrap();
 
     let shared = Arc::new(state::SharedGlobalState::new(harness.loader));
-    let resolution = try_static_res_from_file(dll_path.to_str().unwrap()).expect("Failed to load assembly");
+    let resolution =
+        try_static_res_from_file(dll_path.to_str().unwrap()).expect("Failed to load assembly");
     shared.loader.register_assembly(resolution);
 
     let num_threads = 20;
@@ -607,7 +610,8 @@ fn test_volatile_sharing() {
             let harness_ptr = harness as *const TestHarness as usize;
             thread::spawn(move || {
                 let harness = unsafe { &*(harness_ptr as *const TestHarness) };
-                let resolution = try_static_res_from_file(dll_path.to_str().unwrap()).expect("Failed to load assembly");
+                let resolution = try_static_res_from_file(dll_path.to_str().unwrap())
+                    .expect("Failed to load assembly");
                 let exit_code = harness.run_with_shared(resolution, shared);
                 assert_eq!(exit_code, 42);
             })

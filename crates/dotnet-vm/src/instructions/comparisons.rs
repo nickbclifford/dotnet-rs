@@ -4,9 +4,7 @@ use dotnetdll::prelude::*;
 use std::cmp::Ordering as CmpOrdering;
 
 #[dotnet_instruction(CompareEqual)]
-pub fn ceq<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
-    ctx: &mut T,
-) -> StepResult {
+pub fn ceq<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
     let v2 = vm_pop!(ctx);
     let v1 = vm_pop!(ctx);
     let val = (v1 == v2) as i32;
@@ -26,9 +24,7 @@ comparison_op!(
 );
 
 #[dotnet_instruction(CheckFinite)]
-pub fn ckfinite<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
-    ctx: &mut T,
-) -> StepResult {
+pub fn ckfinite<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
     let f = ctx.pop_f64();
     if f.is_infinite() || f.is_nan() {
         return ctx.throw_by_name("System.ArithmeticException");

@@ -1,6 +1,4 @@
-use crate::{
-    StepResult, layout::type_layout, resolution::TypeResolutionExt, stack::ops::VesOps,
-};
+use crate::{StepResult, layout::type_layout, resolution::TypeResolutionExt, stack::ops::VesOps};
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::{
     StackValue,
@@ -28,9 +26,10 @@ pub fn callvirt<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     // Note: We still need to pop args to extract this_type before dispatch
 
     // Determine number of arguments to extract this_type
-    let (base_method, _) = vm_try!(ctx
-        .resolver()
-        .find_generic_method(param0, &ctx.current_context()));
+    let (base_method, _) = vm_try!(
+        ctx.resolver()
+            .find_generic_method(param0, &ctx.current_context())
+    );
     let num_args = 1 + base_method.method.signature.parameters.len();
     let args = ctx.pop_multiple(num_args);
 
@@ -74,21 +73,23 @@ pub fn call_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     // however, this appears to be used for static interface dispatch?
 
     let constraint_type = vm_try!(ctx.current_context().make_concrete(constraint));
-    let (method, lookup) = vm_try!(ctx
-        .resolver()
-        .find_generic_method(source, &ctx.current_context()));
+    let (method, lookup) = vm_try!(
+        ctx.resolver()
+            .find_generic_method(source, &ctx.current_context())
+    );
 
-    let td = vm_try!(ctx
-        .loader()
-        .find_concrete_type(constraint_type.clone()));
+    let td = vm_try!(ctx.loader().find_concrete_type(constraint_type.clone()));
 
     for o in td.definition().overrides.iter() {
-        let target = vm_try!(ctx
-            .current_context()
-            .locate_method(o.implementation, &lookup, None));
-        let declaration = vm_try!(ctx
-            .current_context()
-            .locate_method(o.declaration, &lookup, None));
+        let target = vm_try!(
+            ctx.current_context()
+                .locate_method(o.implementation, &lookup, None)
+        );
+        let declaration = vm_try!(ctx.current_context().locate_method(
+            o.declaration,
+            &lookup,
+            None
+        ));
         if method == declaration {
             vm_trace!(ctx, "-- dispatching to {:?} --", target);
             // Note: Uses dispatch_method directly since method is already resolved
@@ -110,18 +111,20 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     constraint: &MethodType,
     source: &MethodSource,
 ) -> StepResult {
-    let (base_method, lookup) = vm_try!(ctx
-        .resolver()
-        .find_generic_method(source, &ctx.current_context()));
+    let (base_method, lookup) = vm_try!(
+        ctx.resolver()
+            .find_generic_method(source, &ctx.current_context())
+    );
 
     // Pop all arguments (this + parameters)
     let num_args = 1 + base_method.method.signature.parameters.len();
     let mut args = ctx.pop_multiple(num_args);
 
     let constraint_type_source = vm_try!(ctx.make_concrete(constraint));
-    let constraint_type = vm_try!(ctx
-        .loader()
-        .find_concrete_type(constraint_type_source.clone()));
+    let constraint_type = vm_try!(
+        ctx.loader()
+            .find_concrete_type(constraint_type_source.clone())
+    );
 
     // Determine dispatch strategy based on constraint type
     let method = if vm_try!(constraint_type.is_value_type(&ctx.current_context())) {
@@ -146,8 +149,11 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
                 return ctx.throw_by_name("System.NullReferenceException");
             }
 
-            let value_size =
-                vm_try!(type_layout(vm_try!(ctx.make_concrete(constraint)), &ctx.current_context())).size();
+            let value_size = vm_try!(type_layout(
+                vm_try!(ctx.make_concrete(constraint)),
+                &ctx.current_context()
+            ))
+            .size();
 
             let mut value_vec = vec![0u8; value_size];
             // SAFETY: Memory is allocated with sufficient size (value_size) and ptr is valid

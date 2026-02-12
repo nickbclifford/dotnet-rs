@@ -96,14 +96,11 @@ pub(crate) fn get_ptr_context<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(NewObject(ctor))]
-pub fn new_object<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
-
-    ctor: &UserMethod,
-) -> StepResult {
-    let (mut method, lookup) = vm_try!(ctx
-        .resolver()
-        .find_generic_method(&MethodSource::User(*ctor), &ctx.current_context()));
+pub fn new_object<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, ctor: &UserMethod) -> StepResult {
+    let (mut method, lookup) = vm_try!(
+        ctx.resolver()
+            .find_generic_method(&MethodSource::User(*ctor), &ctx.current_context())
+    );
 
     if method.method.name == "CtorArraySentinel"
         && let UserMethod::Reference(r) = *ctor
@@ -137,8 +134,11 @@ pub fn new_object<'gc, 'm: 'gc>(
                 let res_ctx = ctx.current_context();
                 let elem_type = vm_try!(res_ctx.normalize_type(element.clone()));
 
-                let layout =
-                    vm_try!(LayoutFactory::create_array_layout(elem_type.clone(), total_len, &res_ctx));
+                let layout = vm_try!(LayoutFactory::create_array_layout(
+                    elem_type.clone(),
+                    total_len,
+                    &res_ctx
+                ));
                 let total_size_bytes = layout.element_layout.size() * total_len;
 
                 let vec_obj = dotnet_value::object::Vector::new(
@@ -213,7 +213,11 @@ pub fn new_object<'gc, 'm: 'gc>(
 
         vm_try!(ctx.constructor_frame(
             instance,
-            vm_try!(crate::MethodInfo::new(method, &lookup, ctx.shared().clone())),
+            vm_try!(crate::MethodInfo::new(
+                method,
+                &lookup,
+                ctx.shared().clone()
+            )),
             lookup,
         ));
         StepResult::FramePushed
@@ -221,11 +225,7 @@ pub fn new_object<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(LoadObject { param0 })]
-pub fn ldobj<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
-
-    param0: &MethodType,
-) -> StepResult {
+pub fn ldobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType) -> StepResult {
     let addr = ctx.pop();
     let (source_ptr, _owner, _origin, _offset) = get_ptr_context(ctx, &addr);
 
@@ -239,20 +239,15 @@ pub fn ldobj<'gc, 'm: 'gc>(
 
     let mut source_vec = vec![0u8; layout.size()];
     unsafe { ptr::copy_nonoverlapping(source_ptr, source_vec.as_mut_ptr(), layout.size()) };
-    let value = vm_try!(res_ctx
-        .read_cts_value(&load_type, &source_vec, ctx.gc()))
-        .into_stack(ctx.gc());
+    let value =
+        vm_try!(res_ctx.read_cts_value(&load_type, &source_vec, ctx.gc())).into_stack(ctx.gc());
 
     ctx.push(value);
     StepResult::Continue
 }
 
 #[dotnet_instruction(StoreObject { param0 })]
-pub fn stobj<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
-
-    param0: &MethodType,
-) -> StepResult {
+pub fn stobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType) -> StepResult {
     let value = ctx.pop();
     let addr = ctx.pop();
 
@@ -275,11 +270,7 @@ pub fn stobj<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(InitializeForObject(param0))]
-pub fn initobj<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
-
-    param0: &MethodType,
-) -> StepResult {
+pub fn initobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType) -> StepResult {
     let addr = ctx.pop();
     let (target, _owner, _origin, _offset) = get_ptr_context(ctx, &addr);
     if target.is_null() {
@@ -295,11 +286,7 @@ pub fn initobj<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(Sizeof(param0))]
-pub fn sizeof<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
-
-    param0: &MethodType,
-) -> StepResult {
+pub fn sizeof<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType) -> StepResult {
     let target = vm_try!(ctx.make_concrete(param0));
     let res_ctx = ctx.current_context();
     let layout = vm_try!(type_layout(target, &res_ctx));

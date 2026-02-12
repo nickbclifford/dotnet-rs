@@ -1,6 +1,6 @@
 use crate::{
-    context::ResolutionContext, layout::LayoutFactory, resolution::ValueResolution,
-    stack::ops::VesOps, tracer::Tracer, StepResult,
+    StepResult, context::ResolutionContext, layout::LayoutFactory, resolution::ValueResolution,
+    stack::ops::VesOps, tracer::Tracer,
 };
 use dashmap::DashMap;
 use dotnet_types::{
@@ -188,7 +188,9 @@ fn type_to_layout(t: &TypeSource<ConcreteType>, ctx: &ResolutionContext) -> Fiel
     let (ut, type_generics) = decompose_type_source::<ConcreteType>(t);
     let new_lookup = GenericLookup::new(type_generics);
     let new_ctx = ctx.with_generics(&new_lookup);
-    let td = new_ctx.locate_type(ut).expect("failed to locate type in pinvoke");
+    let td = new_ctx
+        .locate_type(ut)
+        .expect("failed to locate type in pinvoke");
 
     if td.is_null() {
         panic!(
@@ -258,7 +260,10 @@ fn type_to_ffi(t: &ConcreteType, ctx: &ResolutionContext) -> Type {
     }
 }
 
-fn param_to_type(p: &ParameterType<MethodType>, ctx: &ResolutionContext) -> Result<Type, dotnet_types::error::TypeResolutionError> {
+fn param_to_type(
+    p: &ParameterType<MethodType>,
+    ctx: &ResolutionContext,
+) -> Result<Type, dotnet_types::error::TypeResolutionError> {
     match p {
         ParameterType::Value(t) => Ok(type_to_ffi(&ctx.make_concrete(t)?, ctx)),
         ParameterType::Ref(_) => Ok(Type::pointer()),
@@ -399,7 +404,8 @@ pub fn external_call<'gc, 'm: 'gc>(
             };
             let exception = ObjectRef::new(ctx.gc(), HeapStorage::Obj(exception_instance));
 
-            let message_ref = StackValue::string(ctx.gc(), CLRString::from(msg.as_str())).as_object_ref();
+            let message_ref =
+                StackValue::string(ctx.gc(), CLRString::from(msg.as_str())).as_object_ref();
             exception.as_object_mut(ctx.gc(), |obj| {
                 if obj.instance_storage.has_field(exception_type, "_message") {
                     let mut field = obj
@@ -619,7 +625,9 @@ pub fn external_call<'gc, 'm: 'gc>(
                     let (ut, type_generics) = decompose_type_source::<ConcreteType>(source);
                     let new_lookup = GenericLookup::new(type_generics);
                     let new_ctx = res_ctx.with_generics(&new_lookup);
-                    let td = new_ctx.locate_type(ut).expect("Failed to locate type in pinvoke interop");
+                    let td = new_ctx
+                        .locate_type(ut)
+                        .expect("Failed to locate type in pinvoke interop");
 
                     let instance = match new_ctx.new_object(td) {
                         Ok(inst) => inst,
