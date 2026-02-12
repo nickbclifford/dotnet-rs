@@ -846,11 +846,10 @@ impl<'m> ResolverService<'m> {
                 };
 
                 if data.len() >= 16 {
-                    let (ptr, owner, offset, stack_origin) =
-                        unsafe { ManagedPtr::read_from_bytes(data) };
-                    let mut m = ManagedPtr::new(ptr, inner_type, Some(owner), false);
-                    m.offset = offset;
-                    m.stack_slot_origin = stack_origin;
+                    let info = unsafe { ManagedPtr::read_branded(data, gc) };
+                    let mut m = ManagedPtr::new(info.address, inner_type, Some(info.owner), false);
+                    m.offset = info.offset;
+                    m.stack_slot_origin = info.stack_origin;
                     Ok(CTSValue::Value(Pointer(m)))
                 } else {
                     let mut ptr_bytes = [0u8; 8];

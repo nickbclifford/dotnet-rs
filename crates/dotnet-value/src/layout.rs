@@ -116,7 +116,7 @@ impl LayoutManager {
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
                 // ManagedPtr in memory is 16 bytes: (Owner ObjectRef, Offset).
                 // We need to trace the owner at offset 0.
-                let ptr_size = size_of::<usize>();
+                let ptr_size = ObjectRef::SIZE;
                 unsafe { ObjectRef::read_unchecked(&storage[0..ptr_size]) }.trace(cc);
             }
             LayoutManager::Field(f) => {
@@ -135,18 +135,19 @@ impl LayoutManager {
     pub fn resurrect<'gc>(
         &self,
         storage: &[u8],
-        fc: &gc_arena::Finalization<'gc>,
+        fc: &'gc gc_arena::Finalization<'gc>,
         visited: &mut HashSet<usize>,
     ) {
         match self {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
-                unsafe { ObjectRef::read_unchecked(storage) }.resurrect(fc, visited);
+                unsafe { ObjectRef::read_branded(storage, fc) }.resurrect(fc, visited);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
                 // ManagedPtr in memory is 16 bytes: (Owner ObjectRef, Offset).
                 // We need to resurrect the owner at offset 0.
                 let ptr_size = size_of::<usize>();
-                unsafe { ObjectRef::read_unchecked(&storage[0..ptr_size]) }.resurrect(fc, visited);
+                unsafe { ObjectRef::read_branded(&storage[0..ptr_size], fc) }
+                    .resurrect(fc, visited);
             }
             LayoutManager::Field(f) => {
                 for field in f.fields.values() {
@@ -266,7 +267,7 @@ impl FieldLayoutManager {
     pub fn resurrect<'gc>(
         &self,
         storage: &[u8],
-        fc: &gc_arena::Finalization<'gc>,
+        fc: &'gc gc_arena::Finalization<'gc>,
         visited: &mut HashSet<usize>,
     ) {
         for field in self.fields.values() {
@@ -310,7 +311,7 @@ impl ArrayLayoutManager {
     pub fn resurrect<'gc>(
         &self,
         storage: &[u8],
-        fc: &gc_arena::Finalization<'gc>,
+        fc: &'gc gc_arena::Finalization<'gc>,
         visited: &mut HashSet<usize>,
     ) {
         let elem_size = self.element_layout.size();

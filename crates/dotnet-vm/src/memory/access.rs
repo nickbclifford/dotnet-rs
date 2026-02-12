@@ -1,5 +1,6 @@
 use crate::memory::heap::HeapManager;
 use dotnet_types::TypeDescription;
+use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
     StackValue,
     layout::{HasLayout, LayoutManager, Scalar},
@@ -55,6 +56,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     /// The caller must ensure that `ptr` is valid for reads if `owner` is None.
     pub unsafe fn read_unaligned(
         &self,
+        gc: GCHandle<'gc>,
         ptr: *const u8,
         owner: Option<ObjectRef<'gc>>,
         layout: &LayoutManager,
@@ -91,7 +93,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         // SAFETY: Bounds and safety checks were performed above.
         // `ptr` is guaranteed to be within the bounds of `owner` (if present)
         // or its validity is ensured by the caller.
-        unsafe { self.perform_read(ptr, owner, layout, type_desc) }
+        unsafe { self.perform_read(gc, ptr, owner, layout, type_desc) }
     }
 
     pub fn get_storage_base(&self, owner: ObjectRef<'gc>) -> (*const u8, usize) {
@@ -278,6 +280,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
     unsafe fn perform_read(
         &self,
+        gc: GCHandle<'gc>,
         ptr: *const u8,
         _owner: Option<ObjectRef<'gc>>,
         layout: &LayoutManager,
@@ -314,14 +317,13 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     Scalar::ObjectRef => {
                         let mut buf = [0u8; 8];
                         ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), 8);
-                        StackValue::ObjectRef(ObjectRef::read_unchecked(&buf))
+                        StackValue::ObjectRef(ObjectRef::read_branded(&buf, gc))
                     }
                     Scalar::ManagedPtr => {
-                        let (ptr_val, owner_ref, offset, stack_origin) =
-                            ManagedPtr::read_from_bytes(std::slice::from_raw_parts(
-                                ptr,
-                                ManagedPtr::MEMORY_SIZE,
-                            ));
+                        let info = ManagedPtr::read_branded(
+                            std::slice::from_raw_parts(ptr, ManagedPtr::MEMORY_SIZE),
+                            gc,
+                        );
 
                         let void_desc = TypeDescription::from_raw(
                             dotnet_types::resolution::ResolutionS::new(ptr::null()),
@@ -329,9 +331,10 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             std::mem::zeroed(),
                         );
 
-                        let mut m = ManagedPtr::new(ptr_val, void_desc, Some(owner_ref), false);
-                        m.offset = offset;
-                        m.stack_slot_origin = stack_origin;
+                        let mut m =
+                            ManagedPtr::new(info.address, void_desc, Some(info.owner), false);
+                        m.offset = info.offset;
+                        m.stack_slot_origin = info.stack_origin;
                         StackValue::ManagedPtr(m)
                     }
                 },

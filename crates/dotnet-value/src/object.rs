@@ -132,7 +132,7 @@ impl Hash for ObjectRef<'_> {
 impl<'gc> ObjectRef<'gc> {
     pub const SIZE: usize = size_of::<ObjectRef>();
 
-    pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+    pub fn resurrect(&self, fc: &'gc gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
         if let Some(handle) = self.0 {
             let ptr = Gc::as_ptr(handle) as usize;
             if visited.insert(ptr) {
@@ -363,7 +363,7 @@ impl<'gc> HeapStorage<'gc> {
         }
     }
 
-    pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+    pub fn resurrect(&self, fc: &'gc gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
         match self {
             HeapStorage::Vec(v) => v.resurrect(fc, visited),
             HeapStorage::Obj(o) => o.resurrect(fc, visited),
@@ -436,7 +436,7 @@ impl<'gc> ValueType<'gc> {
         }
     }
 
-    pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+    pub fn resurrect(&self, fc: &'gc gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
         match self {
             ValueType::Pointer(p) => p.resurrect(fc, visited),
             ValueType::Struct(o) => o.resurrect(fc, visited),
@@ -579,7 +579,7 @@ impl<'gc> Vector<'gc> {
         size_of::<Vector>() + self.storage.len() + (self.dims.len() * size_of::<usize>())
     }
 
-    pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+    pub fn resurrect(&self, fc: &'gc gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
         self.layout.resurrect(&self.storage, fc, visited);
     }
 
@@ -674,7 +674,7 @@ impl<'gc> Object<'gc> {
         size_of::<Object>() + self.instance_storage.get().len()
     }
 
-    pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+    pub fn resurrect(&self, fc: &'gc gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
         self.instance_storage.resurrect(fc, visited);
     }
 

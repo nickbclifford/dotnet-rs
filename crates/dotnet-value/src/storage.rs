@@ -149,7 +149,11 @@ impl FieldStorage {
         unsafe { &*self.data.data_ptr() }
     }
 
-    pub fn resurrect<'gc>(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+    pub fn resurrect<'gc>(
+        &self,
+        fc: &'gc gc_arena::Finalization<'gc>,
+        visited: &mut HashSet<usize>,
+    ) {
         // SAFETY: Resurrection happens during a stop-the-world pause, so no other
         // threads are running. We can safely access the inner value without
         // acquiring the lock. This avoids deadlock (or panic) if a thread was

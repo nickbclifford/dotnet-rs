@@ -60,7 +60,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         let memory = crate::memory::RawMemoryAccess::new(heap);
         // SAFETY: The caller of RawMemoryOps::read_unaligned must ensure ptr is valid.
         // We delegate to RawMemoryAccess which performs owner-based validation.
-        unsafe { memory.read_unaligned(ptr, owner, layout, type_desc) }
+        unsafe { memory.read_unaligned(self.gc, ptr, owner, layout, type_desc) }
     }
 
     #[inline]

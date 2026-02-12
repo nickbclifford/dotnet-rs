@@ -1,5 +1,6 @@
 use crate::object::ObjectRef;
 use dotnet_types::TypeDescription;
+use dotnet_utils::gc::GCHandle;
 use gc_arena::{Collect, Collection, unsafe_empty_collect};
 use std::{
     cmp::Ordering,
@@ -12,6 +13,32 @@ use std::{
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 pub struct UnmanagedPtr(pub NonNull<u8>);
 unsafe_empty_collect!(UnmanagedPtr);
+
+/// Stack-related metadata for a [`ManagedPtr`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ManagedPtrStackInfo {
+    /// The actual memory address being pointed to.
+    /// NOTE: For heap pointers, this is `None` because the absolute address
+    /// cannot be computed without the owner's base pointer.
+    pub address: Option<NonNull<u8>>,
+    /// The offset from the base of the owner (either an object on the heap or a stack slot).
+    pub offset: usize,
+    /// If this is a stack pointer, this contains the stack slot index and the offset within that slot.
+    pub stack_origin: Option<(usize, usize)>,
+}
+
+/// Detailed information about a [`ManagedPtr`] read from memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ManagedPtrInfo<'gc> {
+    /// The actual memory address being pointed to.
+    pub address: Option<NonNull<u8>>,
+    /// The object that owns the memory, if any.
+    pub owner: ObjectRef<'gc>,
+    /// The offset from the base of the owner (either an object on the heap or a stack slot).
+    pub offset: usize,
+    /// If this is a stack pointer, this contains the stack slot index and the offset within that slot.
+    pub stack_origin: Option<(usize, usize)>,
+}
 
 #[derive(Copy, Clone)]
 #[repr(C)]
@@ -93,70 +120,110 @@ impl<'gc> ManagedPtr<'gc> {
         }
     }
 
-    /// Read pointer and owner from memory.
-    /// Returns (pointer, owner). Type info must be supplied by caller.
+    /// Read only the stack-related metadata from memory. This does not require a GCHandle
+    /// because it does not return an ObjectRef.
+    ///
+    /// # Safety
+    ///
+    /// The `source` slice must be at least `ManagedPtr::MEMORY_SIZE` bytes long.
+    pub unsafe fn read_stack_info(source: &[u8]) -> ManagedPtrStackInfo {
+        let ptr_size = size_of::<usize>();
+        if source.len() < ptr_size * 2 {
+            panic!("ManagedPtr::read: buffer too small");
+        }
+
+        let word0 = unsafe { (source.as_ptr() as *const usize).read_unaligned() };
+        let word1 = unsafe { (source.as_ptr().add(ptr_size) as *const usize).read_unaligned() };
+
+        if word0 & 1 == 1 {
+            // Stack pointer
+            let idx = (word0 >> 1) & 0xFFFFFFFF;
+            let off = word0 >> 33;
+            ManagedPtrStackInfo {
+                address: NonNull::new(word1 as *mut u8),
+                offset: off,
+                stack_origin: Some((idx, off)),
+            }
+        } else {
+            // Heap pointer
+            ManagedPtrStackInfo {
+                address: None,
+                offset: word1,
+                stack_origin: None,
+            }
+        }
+    }
+
+    /// Read pointer and owner from memory, branded with a GCHandle.
+    /// Returns detailed metadata about the pointer. Type info must be supplied by caller.
     ///
     /// # Safety
     ///
     /// The `source` slice must be at least `ManagedPtr::MEMORY_SIZE` bytes long.
     /// It must contain valid bytes representing a `ManagedPtr`.
-    #[allow(clippy::type_complexity)]
-    pub unsafe fn read_from_bytes(
-        source: &[u8],
-    ) -> (
-        Option<NonNull<u8>>,
-        ObjectRef<'gc>,
-        usize,
-        Option<(usize, usize)>,
-    ) {
-        unsafe {
-            let ptr_size = size_of::<usize>();
+    pub unsafe fn read_branded(source: &[u8], _gc: GCHandle<'gc>) -> ManagedPtrInfo<'gc> {
+        unsafe { Self::read_unchecked(source) }
+    }
 
-            let mut word0_bytes = [0u8; size_of::<usize>()];
-            word0_bytes.copy_from_slice(&source[0..ptr_size]);
-            let word0 = usize::from_ne_bytes(word0_bytes);
+    /// Read pointer and owner from memory.
+    /// Returns detailed metadata about the pointer. Type info must be supplied by caller.
+    ///
+    /// # Safety
+    ///
+    /// The `source` slice must be at least `ManagedPtr::MEMORY_SIZE` bytes long.
+    /// It must contain valid bytes representing a `ManagedPtr`.
+    pub unsafe fn read_unchecked(source: &[u8]) -> ManagedPtrInfo<'gc> {
+        let ptr_size = size_of::<usize>();
 
-            let mut word1_bytes = [0u8; size_of::<usize>()];
-            word1_bytes.copy_from_slice(&source[ptr_size..ptr_size * 2]);
-            let word1 = usize::from_ne_bytes(word1_bytes);
+        let mut word0_bytes = [0u8; size_of::<usize>()];
+        word0_bytes.copy_from_slice(&source[0..ptr_size]);
+        let word0 = usize::from_ne_bytes(word0_bytes);
 
-            if word0 & 1 != 0 {
-                // Stack pointer
-                let slot_idx = (word0 >> 1) & 0xFFFFFFFF;
-                let slot_offset = word0 >> 33;
-                let raw_ptr = NonNull::new(word1 as *mut u8);
-                (
-                    raw_ptr,
-                    ObjectRef(None),
-                    slot_offset,
-                    Some((slot_idx, slot_offset)),
-                )
-            } else {
-                // Memory layout: (Owner ObjectRef at offset 0, Offset at offset 8)
-                // Read Owner (Offset 0)
-                let owner = ObjectRef::read_unchecked(&source[0..ptr_size]);
+        let mut word1_bytes = [0u8; size_of::<usize>()];
+        word1_bytes.copy_from_slice(&source[ptr_size..ptr_size * 2]);
+        let word1 = usize::from_ne_bytes(word1_bytes);
 
-                // Read Offset (Offset 8)
-                let offset = word1;
+        if word0 & 1 != 0 {
+            // Stack pointer
+            let slot_idx = (word0 >> 1) & 0xFFFFFFFF;
+            let slot_offset = word0 >> 33;
+            let raw_ptr = NonNull::new(word1 as *mut u8);
+            ManagedPtrInfo {
+                address: raw_ptr,
+                owner: ObjectRef(None),
+                offset: slot_offset,
+                stack_origin: Some((slot_idx, slot_offset)),
+            }
+        } else {
+            // Memory layout: (Owner ObjectRef at offset 0, Offset at offset 8)
+            // Read Owner (Offset 0)
+            let owner = unsafe { ObjectRef::read_unchecked(&source[0..ptr_size]) };
 
-                // Compute pointer from owner's data + offset
-                let ptr = if let Some(handle) = owner.0 {
-                    let base_ptr = handle.borrow().storage.as_ptr();
-                    if base_ptr.is_null() {
-                        None
-                    } else {
-                        NonNull::new(base_ptr.wrapping_add(offset) as *mut u8)
-                    }
-                } else if offset == 0 {
-                    // Null owner with zero offset means null pointer
+            // Read Offset (Offset 8)
+            let offset = word1;
+
+            // Compute pointer from owner's data + offset
+            let ptr = if let Some(handle) = owner.0 {
+                let base_ptr = handle.borrow().storage.as_ptr();
+                if base_ptr.is_null() {
                     None
                 } else {
-                    // Null owner but non-zero offset - this is a static data pointer
-                    // Store raw pointer directly in offset field for static data
-                    NonNull::new(offset as *mut u8)
-                };
+                    NonNull::new(base_ptr.wrapping_add(offset) as *mut u8)
+                }
+            } else if offset == 0 {
+                // Null owner with zero offset means null pointer
+                None
+            } else {
+                // Null owner but non-zero offset - this is a static data pointer
+                // Store raw pointer directly in offset field for static data
+                NonNull::new(offset as *mut u8)
+            };
 
-                (ptr, owner, offset, None)
+            ManagedPtrInfo {
+                address: ptr,
+                owner,
+                offset,
+                stack_origin: None,
             }
         }
     }
@@ -274,7 +341,7 @@ unsafe impl<'gc> Collect for ManagedPtr<'gc> {
 }
 
 impl<'gc> ManagedPtr<'gc> {
-    pub fn resurrect(&self, fc: &gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+    pub fn resurrect(&self, fc: &'gc gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
         if let Some(owner) = &self.owner {
             owner.resurrect(fc, visited);
         }

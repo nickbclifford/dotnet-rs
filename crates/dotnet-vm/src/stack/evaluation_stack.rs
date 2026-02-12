@@ -56,16 +56,17 @@ impl<'gc> EvaluationStack<'gc> {
                 layout.visit_managed_ptrs(0, &mut |offset| {
                     if offset + 16 <= data.len() {
                         let slice = &mut data[offset..offset + 16];
-                        let (_, _, off, origin) = unsafe { ManagedPtr::read_from_bytes(slice) };
-                        if let Some((idx, _)) = origin {
+                        let info = unsafe { ManagedPtr::read_stack_info(slice) };
+                        if let Some((idx, _)) = info.stack_origin {
                             let slot_ptr = if idx < slot_locations.len() {
                                 slot_locations[idx]
                             } else {
                                 suspended_locations[idx - slot_locations.len()]
                             };
-                            let new_ptr =
-                                unsafe { NonNull::new_unchecked(slot_ptr.as_ptr().add(off)) };
-                            let word0 = 1 | ((idx & 0xFFFFFFFF) << 1) | (off << 33);
+                            let new_ptr = unsafe {
+                                NonNull::new_unchecked(slot_ptr.as_ptr().add(info.offset))
+                            };
+                            let word0 = 1 | ((idx & 0xFFFFFFFF) << 1) | (info.offset << 33);
                             let word1 = new_ptr.as_ptr() as usize;
                             slice[0..8].copy_from_slice(&word0.to_ne_bytes());
                             slice[8..16].copy_from_slice(&word1.to_ne_bytes());

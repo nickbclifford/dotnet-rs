@@ -47,7 +47,7 @@ impl<'gc> HeapManager<'gc> {
 
     pub fn finalize_check(
         &self,
-        fc: &gc_arena::Finalization<'gc>,
+        fc: &'gc gc_arena::Finalization<'gc>,
         shared: &SharedGlobalState<'_>,
         indent: usize,
     ) {

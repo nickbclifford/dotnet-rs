@@ -209,10 +209,9 @@ macro_rules! wrapping_arithmetic_op {
 
 impl<'gc> StackValue<'gc> {
     pub fn unmanaged_ptr(ptr: *mut u8) -> Self {
-        if ptr.is_null() {
-            Self::NativeInt(0)
-        } else {
-            Self::UnmanagedPtr(UnmanagedPtr(NonNull::new(ptr).unwrap()))
+        match NonNull::new(ptr) {
+            Some(p) => Self::UnmanagedPtr(UnmanagedPtr(p)),
+            None => Self::NativeInt(0),
         }
     }
     pub fn managed_ptr(ptr: *mut u8, target_type: TypeDescription, pinned: bool) -> Self {
@@ -288,10 +287,10 @@ impl<'gc> StackValue<'gc> {
         match self {
             Self::NativeInt(i) => *i as *mut u8,
             Self::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-            Self::ManagedPtr(m) => m
-                .pointer()
-                .map(|p| p.as_ptr())
-                .unwrap_or(std::ptr::null_mut()),
+            Self::ManagedPtr(m) => match m.pointer() {
+                Some(p) => p.as_ptr(),
+                None => std::ptr::null_mut(),
+            },
             v => panic!("expected pointer on stack, received {:?}", v),
         }
     }
@@ -413,45 +412,44 @@ impl<'gc> StackValue<'gc> {
     /// Note: This uses `AtomicT::from_ptr` which is supported in recent Rust versions.
     /// Also, it does not ensure that the appropriate locks are held for the memory being accessed.
     pub unsafe fn load_atomic(ptr: *const u8, t: LoadType, ordering: AtomicOrdering) -> Self {
-        unsafe {
-            debug_assert!(!ptr.is_null(), "Attempted to load from a null pointer");
-            let alignment = load_type_alignment(t);
-            debug_assert!(
-                (ptr as usize).is_multiple_of(alignment),
-                "Attempted to load from an unaligned pointer {:?} for type {:?}",
-                ptr,
-                t
-            );
+        debug_assert!(!ptr.is_null(), "Attempted to load from a null pointer");
+        let alignment = load_type_alignment(t);
+        debug_assert!(
+            (ptr as usize).is_multiple_of(alignment),
+            "Attempted to load from an unaligned pointer {:?} for type {:?}",
+            ptr,
+            t
+        );
 
-            let size = match t {
-                LoadType::Int8 | LoadType::UInt8 => 1,
-                LoadType::Int16 | LoadType::UInt16 => 2,
-                LoadType::Int32 | LoadType::UInt32 | LoadType::Float32 => 4,
-                LoadType::Int64 | LoadType::Float64 => 8,
-                LoadType::IntPtr => size_of::<isize>(),
-                LoadType::Object => size_of::<usize>(),
-            };
+        let size = match t {
+            LoadType::Int8 | LoadType::UInt8 => 1,
+            LoadType::Int16 | LoadType::UInt16 => 2,
+            LoadType::Int32 | LoadType::UInt32 | LoadType::Float32 => 4,
+            LoadType::Int64 | LoadType::Float64 => 8,
+            LoadType::IntPtr => size_of::<isize>(),
+            LoadType::Object => size_of::<usize>(),
+        };
 
-            let val = StandardAtomicAccess::load_atomic(ptr, size, ordering);
+        let val = unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) };
 
-            match t {
-                LoadType::Int8 => Self::Int32(val as i8 as i32),
-                LoadType::UInt8 => Self::Int32(val as u8 as i32),
-                LoadType::Int16 => Self::Int32(val as i16 as i32),
-                LoadType::UInt16 => Self::Int32(val as u16 as i32),
-                LoadType::Int32 | LoadType::UInt32 => Self::Int32(val as i32),
-                LoadType::Int64 => Self::Int64(val as i64),
-                LoadType::Float32 => Self::NativeFloat(f32::from_bits(val as u32) as f64),
-                LoadType::Float64 => Self::NativeFloat(f64::from_bits(val)),
-                LoadType::IntPtr => Self::NativeInt(val as isize),
-                LoadType::Object => {
-                    let ptr = val as usize as *const ThreadSafeLock<object::ObjectInner<'gc>>;
-                    if ptr.is_null() {
-                        Self::ObjectRef(ObjectRef(None))
-                    } else {
-                        Self::ObjectRef(ObjectRef(Some(Gc::from_ptr(ptr))))
-                    }
-                }
+        match t {
+            LoadType::Int8 => Self::Int32(val as i8 as i32),
+            LoadType::UInt8 => Self::Int32(val as u8 as i32),
+            LoadType::Int16 => Self::Int32(val as i16 as i32),
+            LoadType::UInt16 => Self::Int32(val as u16 as i32),
+            LoadType::Int32 | LoadType::UInt32 => Self::Int32(val as i32),
+            LoadType::Int64 => Self::Int64(val as i64),
+            LoadType::Float32 => Self::NativeFloat(f32::from_bits(val as u32) as f64),
+            LoadType::Float64 => Self::NativeFloat(f64::from_bits(val)),
+            LoadType::IntPtr => Self::NativeInt(val as isize),
+            LoadType::Object => {
+                let ptr = val as usize as *const ThreadSafeLock<object::ObjectInner<'gc>>;
+                let obj = if ptr.is_null() {
+                    None
+                } else {
+                    Some(unsafe { Gc::from_ptr(ptr) })
+                };
+                Self::ObjectRef(ObjectRef(obj))
             }
         }
     }
@@ -470,34 +468,34 @@ impl<'gc> StackValue<'gc> {
     /// Note: This uses `AtomicT::from_ptr` which is supported in recent Rust versions.
     /// Also, it does not ensure that the appropriate locks are held for the memory being accessed.
     pub unsafe fn store_atomic(self, ptr: *mut u8, t: StoreType, ordering: AtomicOrdering) {
+        debug_assert!(!ptr.is_null(), "Attempted to store to a null pointer");
+        let alignment = store_type_alignment(t);
+        debug_assert!(
+            (ptr as usize).is_multiple_of(alignment),
+            "Attempted to store to an unaligned pointer {:?} for type {:?}",
+            ptr,
+            t
+        );
+
+        let (val, size) = match t {
+            StoreType::Int8 => (self.as_i32() as u64, 1),
+            StoreType::Int16 => (self.as_i32() as u64, 2),
+            StoreType::Int32 => (self.as_i32() as u64, 4),
+            StoreType::Int64 => (self.as_i64() as u64, 8),
+            StoreType::Float32 => ((self.as_f64() as f32).to_bits() as u64, 4),
+            StoreType::Float64 => (self.as_f64().to_bits(), 8),
+            StoreType::IntPtr => (self.as_isize() as u64, size_of::<isize>()),
+            StoreType::Object => {
+                let obj = self.as_object_ref();
+                let val = match obj.0 {
+                    Some(h) => Gc::as_ptr(h) as usize,
+                    None => 0,
+                };
+                (val as u64, size_of::<usize>())
+            }
+        };
+
         unsafe {
-            debug_assert!(!ptr.is_null(), "Attempted to store to a null pointer");
-            let alignment = store_type_alignment(t);
-            debug_assert!(
-                (ptr as usize).is_multiple_of(alignment),
-                "Attempted to store to an unaligned pointer {:?} for type {:?}",
-                ptr,
-                t
-            );
-
-            let (val, size) = match t {
-                StoreType::Int8 => (self.as_i32() as u64, 1),
-                StoreType::Int16 => (self.as_i32() as u64, 2),
-                StoreType::Int32 => (self.as_i32() as u64, 4),
-                StoreType::Int64 => (self.as_i64() as u64, 8),
-                StoreType::Float32 => ((self.as_f64() as f32).to_bits() as u64, 4),
-                StoreType::Float64 => (self.as_f64().to_bits(), 8),
-                StoreType::IntPtr => (self.as_isize() as u64, size_of::<isize>()),
-                StoreType::Object => {
-                    let obj = self.as_object_ref();
-                    let val = match obj.0 {
-                        Some(h) => Gc::as_ptr(h) as usize,
-                        None => 0,
-                    };
-                    (val as u64, size_of::<usize>())
-                }
-            };
-
             StandardAtomicAccess::store_atomic(ptr, size, val, ordering);
         }
     }

@@ -276,7 +276,7 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
             if index < targets_len {
                 let target = ObjectRef(Some(state.targets)).as_vector(|v| {
                     let offset = index * v.layout.element_layout.as_ref().size();
-                    unsafe { ObjectRef::read_unchecked(&v.get()[offset..]) }
+                    unsafe { ObjectRef::read_branded(&v.get()[offset..], gc) }
                 });
                 state.next_index += 1;
                 (Some(target), state.args.clone(), index)

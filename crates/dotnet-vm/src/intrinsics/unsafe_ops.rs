@@ -448,7 +448,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
     let target_type = vm_try!(ctx.loader().find_concrete_type(target.clone()));
 
     let memory = RawMemoryAccess::new(ctx.heap());
-    match unsafe { memory.read_unaligned(ptr, owner, &layout, Some(target_type)) } {
+    match unsafe { memory.read_unaligned(ctx.gc(), ptr, owner, &layout, Some(target_type)) } {
         Ok(v) => {
             // If we read a ManagedPtr, we need to supply the target type,
             // because memory.read_unaligned returns ManagedPtr with void/unknown type.
