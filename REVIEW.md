@@ -1123,6 +1123,21 @@ Notes for next agent:
 
 5. **Test each handler individually** after extraction
 
+Checkpoint (2026-02-09):
+- Extracted handlers and refactored `runtime_type_intrinsic_call` into function calls. Handlers added:
+  - `handle_create_instance_check_this`, `handle_get_assembly`, `handle_get_namespace`, `handle_get_methods`, `handle_get_method_impl`, `handle_get_constructors`, `handle_get_name`, `handle_get_base_type`, `handle_get_is_generic_type`, `handle_get_generic_type_definition`, `handle_get_generic_arguments`, `handle_get_type_handle`, `handle_make_generic_type`, `handle_create_instance_default_ctor`.
+- Kept a simple match-based dispatch for clarity. A `phf` dispatch table was considered but deferred to minimize churn; can be added later with no behavior change.
+- Verified build and tests across all feature combinations (timeouts ≤ 20s):
+  - `timeout 20s cargo test --no-default-features` → PASS
+  - `timeout 20s cargo test --no-default-features --features multithreading` → PASS
+  - `timeout 20s cargo test --no-default-features --features multithreaded-gc` → PASS
+- Notes for next agent:
+  - The extraction is behavior-preserving. Further micro-extractions (e.g., sharing BindingFlags decoding) can be done later but are not required.
+  - If adding dispatch table, prefer `phf` with a small wrapper that also checks `param_count` to avoid accidental collisions between overloads.
+  - Reflection methods not implemented in the match (e.g., `GetFields`, `GetField`, `GetProperties`, `GetPropertyImpl`) still route to the panic as before; implement them in future phases as needed.
+- Commits:
+  - AI-generated: Phase 2.3 – extract handlers from runtime_type_intrinsic_call and refactor match arms
+
 ---
 
 #### 2.4 Create VM Error Type Hierarchy

@@ -169,483 +169,29 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
     let method_name = &*method.method.name;
     let param_count = method.method.signature.parameters.len();
 
-    let result = match (method_name, param_count) {
-        ("CreateInstanceCheckThis", 0) => {
-            let _obj = ctx.pop_obj(gc);
-            // For now, we don't perform any actual checks.
-            // In a real VM, this would check if the type is abstract, has a ctor, etc.
-            Some(StepResult::Continue)
-        }
-        ("GetAssembly" | "get_Assembly", 0) => {
-            let obj = ctx.pop_obj(gc);
-
-            let target_type = ctx.resolve_runtime_type(obj);
-            let resolution = target_type.resolution(ctx.loader());
-
-            let cached_asm = ctx.reflection().asms_read().get(&resolution).copied();
-            if let Some(o) = cached_asm {
-                ctx.push_obj(gc, o);
-                return StepResult::Continue;
-            }
-
-            let support_res = ctx.loader().get_assembly(SUPPORT_ASSEMBLY);
-            let (index, definition) = support_res
-                .definition()
-                .type_definitions
-                .iter()
-                .enumerate()
-                .find(|(_, a)| a.type_name() == "DotnetRs.Assembly")
-                .expect("could find DotnetRs.Assembly in support library");
-            let type_index = support_res.type_definition_index(index).unwrap();
-            let res_ctx = ResolutionContext::new(
-                generics,
-                ctx.loader(),
-                support_res,
-                ctx.shared().caches.clone(),
-                Some(ctx.shared().clone()),
-            );
-            let asm_handle =
-                res_ctx.new_object(TypeDescription::new(support_res, definition, type_index));
-            let data = (resolution.as_raw() as usize).to_ne_bytes();
-            asm_handle
-                .instance_storage
-                .get_field_mut_local(asm_handle.description, "resolution")
-                .copy_from_slice(&data);
-            let v = ObjectRef::new(gc, HeapStorage::Obj(asm_handle));
-            ctx.register_new_object(&v);
-
-            ctx.reflection().asms_write().insert(resolution, v);
-            ctx.push_obj(gc, v);
-            Some(StepResult::Continue)
-        }
-        ("GetNamespace" | "get_Namespace", 0) => {
-            let obj = ctx.pop_obj(gc);
-            let target_type = ctx.resolve_runtime_type(obj);
-            match target_type {
-                RuntimeType::Type(td) | RuntimeType::Generic(td, _) => {
-                    match td.definition().namespace.as_ref() {
-                        None => ctx.push(gc, StackValue::null()),
-                        Some(n) => ctx.push_string(gc, n.clone().into()),
-                    }
-                }
-                _ => ctx.push_string(gc, "System".into()),
-            }
-            Some(StepResult::Continue)
-        }
-        ("GetMethods", 1) => {
-            let flags = ctx.pop_i32(gc);
-            let obj = ctx.pop_obj(gc);
-            let target_type = ctx.resolve_runtime_type(obj);
-
-            const BINDING_FLAGS_INSTANCE: i32 = 4;
-            const BINDING_FLAGS_STATIC: i32 = 8;
-            const BINDING_FLAGS_PUBLIC: i32 = 16;
-            const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
-
-            let mut methods_objs = Vec::new();
-            if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
-                for m in td.definition().methods.iter() {
-                    let is_public =
-                        m.accessibility == MemberAccessibility::Access(Accessibility::Public);
-                    let is_static = !m.signature.instance;
-
-                    let match_public = if is_public {
-                        (flags & BINDING_FLAGS_PUBLIC) != 0
-                    } else {
-                        (flags & BINDING_FLAGS_NON_PUBLIC) != 0
-                    };
-                    let match_static = if is_static {
-                        (flags & BINDING_FLAGS_STATIC) != 0
-                    } else {
-                        (flags & BINDING_FLAGS_INSTANCE) != 0
-                    };
-
-                    if match_public && match_static && m.name != ".ctor" && m.name != ".cctor" {
-                        let desc = MethodDescription {
-                            parent: td,
-                            method: m,
-                            method_resolution: td.resolution,
-                        };
-                        let mut lookup = GenericLookup::default();
-                        if let RuntimeType::Generic(_, args) = &target_type {
-                            lookup.type_generics = args
-                                .iter()
-                                .map(|a| a.to_concrete(ctx.loader()))
-                                .collect::<Vec<_>>()
-                                .into();
-                        }
-                        methods_objs.push(ctx.get_runtime_method_obj(gc, desc, lookup));
-                    }
-                }
-            }
-
-            let method_info_type = ctx.loader().corlib_type("System.Reflection.MethodInfo");
-            let mut vector =
-                ctx.new_vector(ConcreteType::from(method_info_type), methods_objs.len());
-            for (i, m) in methods_objs.into_iter().enumerate() {
-                m.write(&mut vector.get_mut()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
-            }
-            ctx.push_obj(gc, ObjectRef::new(gc, HeapStorage::Vec(vector)));
-            Some(StepResult::Continue)
-        }
-        ("GetMethodImpl", 6) => {
-            let _modifiers = ctx.pop(gc);
-            let _types = ctx.pop(gc); // TODO: match by parameter types
-            let _call_convention = ctx.pop(gc);
-            let _binder = ctx.pop(gc);
-            let flags = ctx.pop_i32(gc);
-            let name_obj = ctx.pop_obj(gc);
-            let obj = ctx.pop_obj(gc);
-
-            let name = name_obj.as_heap_storage(|s| {
-                if let HeapStorage::Str(s) = s {
-                    s.as_string()
-                } else {
-                    panic!("name is not a string")
-                }
-            });
-            let target_type = ctx.resolve_runtime_type(obj);
-
-            const BINDING_FLAGS_INSTANCE: i32 = 4;
-            const BINDING_FLAGS_STATIC: i32 = 8;
-            const BINDING_FLAGS_PUBLIC: i32 = 16;
-            const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
-
-            let mut found_method = None;
-            if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
-                for m in td.definition().methods.iter() {
-                    if m.name != name {
-                        continue;
-                    }
-                    let is_public =
-                        m.accessibility == MemberAccessibility::Access(Accessibility::Public);
-                    let is_static = !m.signature.instance;
-
-                    let match_public = if is_public {
-                        (flags & BINDING_FLAGS_PUBLIC) != 0
-                    } else {
-                        (flags & BINDING_FLAGS_NON_PUBLIC) != 0
-                    };
-                    let match_static = if is_static {
-                        (flags & BINDING_FLAGS_STATIC) != 0
-                    } else {
-                        (flags & BINDING_FLAGS_INSTANCE) != 0
-                    };
-
-                    if match_public && match_static {
-                        let desc = MethodDescription {
-                            parent: td,
-                            method: m,
-                            method_resolution: td.resolution,
-                        };
-                        let mut lookup = GenericLookup::default();
-                        if let RuntimeType::Generic(_, args) = &target_type {
-                            lookup.type_generics = args
-                                .iter()
-                                .map(|a| a.to_concrete(ctx.loader()))
-                                .collect::<Vec<_>>()
-                                .into();
-                        }
-                        found_method = Some(ctx.get_runtime_method_obj(gc, desc, lookup));
-                        break;
-                    }
-                }
-            }
-
-            if let Some(m) = found_method {
-                ctx.push_obj(gc, m);
-            } else {
-                ctx.push(gc, StackValue::null());
-            }
-            Some(StepResult::Continue)
-        }
-        ("GetConstructors", 1) => {
-            let flags = ctx.pop_i32(gc);
-            let obj = ctx.pop_obj(gc);
-            let target_type = ctx.resolve_runtime_type(obj);
-
-            const BINDING_FLAGS_INSTANCE: i32 = 4;
-            const BINDING_FLAGS_STATIC: i32 = 8;
-            const BINDING_FLAGS_PUBLIC: i32 = 16;
-            const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
-
-            let mut methods_objs = Vec::new();
-            if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
-                for m in td.definition().methods.iter() {
-                    let is_public =
-                        m.accessibility == MemberAccessibility::Access(Accessibility::Public);
-                    let is_static = !m.signature.instance;
-
-                    let match_public = if is_public {
-                        (flags & BINDING_FLAGS_PUBLIC) != 0
-                    } else {
-                        (flags & BINDING_FLAGS_NON_PUBLIC) != 0
-                    };
-                    let match_static = if is_static {
-                        (flags & BINDING_FLAGS_STATIC) != 0
-                    } else {
-                        (flags & BINDING_FLAGS_INSTANCE) != 0
-                    };
-
-                    if match_public && match_static && m.name == ".ctor" {
-                        let desc = MethodDescription {
-                            parent: td,
-                            method: m,
-                            method_resolution: td.resolution,
-                        };
-                        let mut lookup = GenericLookup::default();
-                        if let RuntimeType::Generic(_, args) = &target_type {
-                            lookup.type_generics = args
-                                .iter()
-                                .map(|a| a.to_concrete(ctx.loader()))
-                                .collect::<Vec<_>>()
-                                .into();
-                        }
-                        methods_objs.push(ctx.get_runtime_method_obj(gc, desc, lookup));
-                    }
-                }
-            }
-
-            let constructor_info_type = ctx
-                .loader()
-                .corlib_type("System.Reflection.ConstructorInfo");
-            let mut vector = ctx.new_vector(
-                ConcreteType::from(constructor_info_type),
-                methods_objs.len(),
-            );
-            for (i, m) in methods_objs.into_iter().enumerate() {
-                m.write(&mut vector.get_mut()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
-            }
-            ctx.push_obj(gc, ObjectRef::new(gc, HeapStorage::Vec(vector)));
-            Some(StepResult::Continue)
-        }
-        ("GetName" | "get_Name", 0) => {
-            let obj = ctx.pop_obj(gc);
-            let target_type = ctx.resolve_runtime_type(obj);
-            ctx.push_string(gc, target_type.get_name().into());
-            Some(StepResult::Continue)
-        }
-        ("GetBaseType" | "get_BaseType", 0) => {
-            let obj = ctx.pop_obj(gc);
-            let target_type = ctx.resolve_runtime_type(obj);
-            match target_type {
-                RuntimeType::Type(td) | RuntimeType::Generic(td, _)
-                    if td.definition().extends.is_some() =>
-                {
-                    // Get the first ancestor (the direct parent)
-                    let mut ancestors = ctx.loader().ancestors(td);
-                    ancestors.next(); // skip self
-                    if let Some((base_td, base_generics)) = ancestors.next() {
-                        let base_rt: RuntimeType = if base_td.definition().extends.is_none()
-                            && base_td.type_name() == "System.Object"
-                        {
-                            RuntimeType::Object
-                        } else if base_generics.is_empty() {
-                            RuntimeType::Type(base_td)
-                        } else {
-                            // Convert member type generic parameters to runtime types
-                            let runtime_generics: Vec<RuntimeType> = base_generics
-                                .iter()
-                                .map(|mt| match mt {
-                                    MemberType::Base(b) => {
-                                        match b.as_ref() {
-                                            BaseType::Type { source, .. } => {
-                                                let (ut, sub_generics) =
-                                                    decompose_type_source::<MemberType>(source);
-                                                let sub_td =
-                                                    ctx.loader().locate_type(td.resolution, ut);
-                                                if sub_generics.is_empty() {
-                                                    RuntimeType::Type(sub_td)
-                                                } else {
-                                                    // TODO: properly handle generic types
-                                                    RuntimeType::Type(sub_td)
-                                                }
-                                            }
-                                            BaseType::Object => RuntimeType::Object,
-                                            BaseType::String => RuntimeType::String,
-                                            BaseType::Boolean => RuntimeType::Boolean,
-                                            BaseType::Char => RuntimeType::Char,
-                                            BaseType::Int8 => RuntimeType::Int8,
-                                            BaseType::UInt8 => RuntimeType::UInt8,
-                                            BaseType::Int16 => RuntimeType::Int16,
-                                            BaseType::UInt16 => RuntimeType::UInt16,
-                                            BaseType::Int32 => RuntimeType::Int32,
-                                            BaseType::UInt32 => RuntimeType::UInt32,
-                                            BaseType::Int64 => RuntimeType::Int64,
-                                            BaseType::UInt64 => RuntimeType::UInt64,
-                                            BaseType::Float32 => RuntimeType::Float32,
-                                            BaseType::Float64 => RuntimeType::Float64,
-                                            BaseType::IntPtr => RuntimeType::IntPtr,
-                                            BaseType::UIntPtr => RuntimeType::UIntPtr,
-                                            _ => RuntimeType::Object, // Fallback
-                                        }
-                                    }
-                                    MemberType::TypeGeneric(i) => RuntimeType::TypeParameter {
-                                        owner: td,
-                                        index: *i as u16,
-                                    },
-                                })
-                                .collect();
-                            RuntimeType::Generic(base_td, runtime_generics)
-                        };
-                        let rt_obj = ctx.get_runtime_type(gc, base_rt);
-                        ctx.push_obj(gc, rt_obj);
-                    } else {
-                        ctx.push(gc, StackValue::null());
-                    }
-                }
-                _ => ctx.push(gc, StackValue::null()),
-            }
-            Some(StepResult::Continue)
-        }
+    match (method_name, param_count) {
+        ("CreateInstanceCheckThis", 0) => handle_create_instance_check_this(ctx, gc, generics),
+        ("GetAssembly" | "get_Assembly", 0) => handle_get_assembly(ctx, gc, generics),
+        ("GetNamespace" | "get_Namespace", 0) => handle_get_namespace(ctx, gc, generics),
+        ("GetMethods", 1) => handle_get_methods(ctx, gc, generics),
+        ("GetMethodImpl", 6) => handle_get_method_impl(ctx, gc, generics),
+        ("GetConstructors", 1) => handle_get_constructors(ctx, gc, generics),
+        ("GetName" | "get_Name", 0) => handle_get_name(ctx, gc, generics),
+        ("GetBaseType" | "get_BaseType", 0) => handle_get_base_type(ctx, gc, generics),
         ("GetIsGenericType" | "get_IsGenericType", 0) => {
-            let obj = ctx.pop_obj(gc);
-            let target_type = ctx.resolve_runtime_type(obj);
-            let is_generic = matches!(target_type, RuntimeType::Generic(_, _));
-            ctx.push_i32(gc, if is_generic { 1 } else { 0 });
-            Some(StepResult::Continue)
+            handle_get_is_generic_type(ctx, gc, generics)
         }
         ("GetGenericTypeDefinition" | "get_GenericTypeDefinition", 0) => {
-            let obj = ctx.pop_obj(gc);
-            let target_type = ctx.resolve_runtime_type(obj);
-            match target_type {
-                RuntimeType::Generic(td, _) => {
-                    let n_params = td.definition().generic_parameters.len();
-                    let params = (0..n_params as u16)
-                        .map(|index| RuntimeType::TypeParameter { owner: td, index })
-                        .collect();
-                    let def_rt = RuntimeType::Generic(td, params);
-                    let rt_obj = ctx.get_runtime_type(gc, def_rt);
-                    ctx.push_obj(gc, rt_obj);
-                }
-                _ => return ctx.throw_by_name(gc, "System.InvalidOperationException"),
-            }
-            Some(StepResult::Continue)
+            handle_get_generic_type_definition(ctx, gc, generics)
         }
         ("GetGenericArguments" | "get_GenericArguments", 0) => {
-            let obj = ctx.pop_obj(gc);
-            let target_type = ctx.resolve_runtime_type(obj);
-            let args = match target_type {
-                RuntimeType::Generic(_, args) => args.clone(),
-                _ => vec![],
-            };
-
-            // Check GC safe point before allocating type array
-            ctx.check_gc_safe_point();
-
-            let type_type_td = ctx.loader().corlib_type("System.Type");
-            let type_type = ConcreteType::from(type_type_td);
-            let mut vector = ctx.current_context().new_vector(type_type, args.len());
-            for (i, (arg, chunk)) in args
-                .into_iter()
-                .zip(vector.get_mut().chunks_exact_mut(ObjectRef::SIZE))
-                .enumerate()
-            {
-                // Check GC safe point periodically during loops with allocations
-                // Check every 16 iterations
-                if i % 16 == 0 {
-                    ctx.check_gc_safe_point();
-                }
-                let arg_obj = ctx.get_runtime_type(gc, arg);
-                arg_obj.write(chunk);
-            }
-            let obj = ObjectRef::new(gc, HeapStorage::Vec(vector));
-            ctx.register_new_object(&obj);
-            ctx.push_obj(gc, obj);
-            Some(StepResult::Continue)
+            handle_get_generic_arguments(ctx, gc, generics)
         }
-        ("GetTypeHandle" | "get_TypeHandle", 0) => {
-            let obj = ctx.pop_obj(gc);
-
-            let rth = ctx.loader().corlib_type("System.RuntimeTypeHandle");
-            let instance = ctx.current_context().new_object(rth);
-            obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
-
-            ctx.push(gc, StackValue::ValueType(instance));
-            Some(StepResult::Continue)
-        }
-        ("MakeGenericType", 1) => {
-            let parameters = ctx.pop_obj(gc);
-            let target = ctx.pop_obj(gc);
-
-            // Check GC safe point before potentially allocating generic type objects
-            ctx.check_gc_safe_point();
-
-            let target_rt = ctx.resolve_runtime_type(target);
-
-            if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_rt {
-                let param_objs = parameters.as_vector(|v: &dotnet_value::object::Vector<'gc>| {
-                    v.get()
-                        .chunks_exact(ObjectRef::SIZE)
-                        .map(|chunk| unsafe { ObjectRef::read_branded(chunk, gc) })
-                        .collect::<Vec<_>>()
-                });
-                let new_generics: Vec<_> = param_objs
-                    .into_iter()
-                    .map(|p_obj| ctx.resolve_runtime_type(p_obj).clone())
-                    .collect();
-                let new_rt = RuntimeType::Generic(td, new_generics);
-
-                let rt_obj = ctx.get_runtime_type(gc, new_rt);
-                ctx.push_obj(gc, rt_obj);
-            } else {
-                return ctx.throw_by_name(gc, "System.InvalidOperationException");
-            }
-            Some(StepResult::Continue)
-        }
-        ("CreateInstanceDefaultCtor", 2) => {
-            let _ = ctx.pop(gc); // skipCheck
-            let _ = ctx.pop(gc); // publicOnly
-            let target_obj = ctx.pop_obj(gc);
-
-            // Check GC safe point before object instantiation
-            ctx.check_gc_safe_point();
-
-            let target_rt = ctx.resolve_runtime_type(target_obj);
-
-            let (td, type_generics) = match target_rt {
-                RuntimeType::Type(td) => (td, vec![]),
-                RuntimeType::Generic(td, args) => (td, args.clone()),
-                _ => panic!("cannot create instance of {:?}", target_rt),
-            };
-
-            let type_generics_concrete: Vec<ConcreteType> = type_generics
-                .iter()
-                .map(|a| a.to_concrete(ctx.loader()))
-                .collect();
-            let new_lookup = GenericLookup::new(type_generics_concrete);
-            let new_ctx = ctx.current_context().with_generics(&new_lookup);
-
-            let instance = new_ctx.new_object(td);
-
-            for m in &td.definition().methods {
-                if m.runtime_special_name
-                    && m.name == ".ctor"
-                    && m.signature.instance
-                    && m.signature.parameters.is_empty()
-                {
-                    let desc = MethodDescription {
-                        parent: td,
-                        method_resolution: td.resolution,
-                        method: m,
-                    };
-
-                    ctx.constructor_frame(
-                        gc,
-                        instance,
-                        MethodInfo::new(desc, &new_lookup, ctx.shared().clone()),
-                        new_lookup,
-                    );
-                    return StepResult::FramePushed;
-                }
-            }
-
-            panic!("could not find a parameterless constructor in {:?}", td)
-        }
-        _ => None,
-    };
-
-    result.unwrap_or_else(|| panic!("unimplemented runtime type intrinsic: {:?}", method))
+        ("GetTypeHandle" | "get_TypeHandle", 0) => handle_get_type_handle(ctx, gc, generics),
+        ("MakeGenericType", 1) => handle_make_generic_type(ctx, gc, generics),
+        ("CreateInstanceDefaultCtor", 2) => handle_create_instance_default_ctor(ctx, gc, generics),
+        _ => panic!("unimplemented runtime type intrinsic: {:?}", method),
+    }
 }
 
 #[dotnet_intrinsic(
@@ -1085,4 +631,531 @@ pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc>(
 
     ctx.push_value_type(gc, instance);
     StepResult::Continue
+}
+
+fn handle_create_instance_check_this<'gc, 'm>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let _obj = ctx.pop_obj(gc);
+    // For now, we don't perform any actual checks.
+    // In a real VM, this would check if the type is abstract, has a ctor, etc.
+    StepResult::Continue
+}
+
+fn handle_get_assembly<'gc, 'm>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    gc: GCHandle<'gc>,
+    generics: &GenericLookup,
+) -> StepResult {
+    let obj = ctx.pop_obj(gc);
+
+    let target_type = ctx.resolve_runtime_type(obj);
+    let resolution = target_type.resolution(ctx.loader());
+
+    let cached_asm = ctx.reflection().asms_read().get(&resolution).copied();
+    if let Some(o) = cached_asm {
+        ctx.push_obj(gc, o);
+        return StepResult::Continue;
+    }
+
+    let support_res = ctx.loader().get_assembly(SUPPORT_ASSEMBLY);
+    let (index, definition) = support_res
+        .definition()
+        .type_definitions
+        .iter()
+        .enumerate()
+        .find(|(_, a)| a.type_name() == "DotnetRs.Assembly")
+        .expect("could find DotnetRs.Assembly in support library");
+    let type_index = support_res.type_definition_index(index).unwrap();
+    let res_ctx = ResolutionContext::new(
+        generics,
+        ctx.loader(),
+        support_res,
+        ctx.shared().caches.clone(),
+        Some(ctx.shared().clone()),
+    );
+    let asm_handle = res_ctx.new_object(TypeDescription::new(support_res, definition, type_index));
+    let data = (resolution.as_raw() as usize).to_ne_bytes();
+    asm_handle
+        .instance_storage
+        .get_field_mut_local(asm_handle.description, "resolution")
+        .copy_from_slice(&data);
+    let v = ObjectRef::new(gc, HeapStorage::Obj(asm_handle));
+    ctx.register_new_object(&v);
+
+    ctx.reflection().asms_write().insert(resolution, v);
+    ctx.push_obj(gc, v);
+    StepResult::Continue
+}
+
+fn handle_get_namespace<'gc, 'm>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let obj = ctx.pop_obj(gc);
+    let target_type = ctx.resolve_runtime_type(obj);
+    match target_type {
+        RuntimeType::Type(td) | RuntimeType::Generic(td, _) => {
+            match td.definition().namespace.as_ref() {
+                None => ctx.push(gc, StackValue::null()),
+                Some(n) => ctx.push_string(gc, n.clone().into()),
+            }
+        }
+        _ => ctx.push_string(gc, "System".into()),
+    }
+    StepResult::Continue
+}
+
+fn handle_get_methods<'gc, 'm>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let flags = ctx.pop_i32(gc);
+    let obj = ctx.pop_obj(gc);
+    let target_type = ctx.resolve_runtime_type(obj);
+
+    const BINDING_FLAGS_INSTANCE: i32 = 4;
+    const BINDING_FLAGS_STATIC: i32 = 8;
+    const BINDING_FLAGS_PUBLIC: i32 = 16;
+    const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
+
+    let mut methods_objs = Vec::new();
+    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
+        for m in td.definition().methods.iter() {
+            let is_public = m.accessibility == MemberAccessibility::Access(Accessibility::Public);
+            let is_static = !m.signature.instance;
+
+            let match_public = if is_public {
+                (flags & BINDING_FLAGS_PUBLIC) != 0
+            } else {
+                (flags & BINDING_FLAGS_NON_PUBLIC) != 0
+            };
+            let match_static = if is_static {
+                (flags & BINDING_FLAGS_STATIC) != 0
+            } else {
+                (flags & BINDING_FLAGS_INSTANCE) != 0
+            };
+
+            if match_public && match_static && m.name != ".ctor" && m.name != ".cctor" {
+                let desc = MethodDescription {
+                    parent: td,
+                    method: m,
+                    method_resolution: td.resolution,
+                };
+                let mut lookup = GenericLookup::default();
+                if let RuntimeType::Generic(_, args) = &target_type {
+                    lookup.type_generics = args
+                        .iter()
+                        .map(|a| a.to_concrete(ctx.loader()))
+                        .collect::<Vec<_>>()
+                        .into();
+                }
+                methods_objs.push(ctx.get_runtime_method_obj(gc, desc, lookup));
+            }
+        }
+    }
+
+    let method_info_type = ctx.loader().corlib_type("System.Reflection.MethodInfo");
+    let mut vector = ctx.new_vector(ConcreteType::from(method_info_type), methods_objs.len());
+    for (i, m) in methods_objs.into_iter().enumerate() {
+        m.write(&mut vector.get_mut()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
+    }
+    ctx.push_obj(gc, ObjectRef::new(gc, HeapStorage::Vec(vector)));
+    StepResult::Continue
+}
+
+fn handle_get_method_impl<'gc, 'm>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let _modifiers = ctx.pop(gc);
+    let _types = ctx.pop(gc); // TODO: match by parameter types
+    let _call_convention = ctx.pop(gc);
+    let _binder = ctx.pop(gc);
+    let flags = ctx.pop_i32(gc);
+    let name_obj = ctx.pop_obj(gc);
+    let obj = ctx.pop_obj(gc);
+
+    let name = name_obj.as_heap_storage(|s| {
+        if let HeapStorage::Str(s) = s {
+            s.as_string()
+        } else {
+            panic!("name is not a string")
+        }
+    });
+    let target_type = ctx.resolve_runtime_type(obj);
+
+    const BINDING_FLAGS_INSTANCE: i32 = 4;
+    const BINDING_FLAGS_STATIC: i32 = 8;
+    const BINDING_FLAGS_PUBLIC: i32 = 16;
+    const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
+
+    let mut found_method = None;
+    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
+        for m in td.definition().methods.iter() {
+            if m.name != name {
+                continue;
+            }
+            let is_public = m.accessibility == MemberAccessibility::Access(Accessibility::Public);
+            let is_static = !m.signature.instance;
+
+            let match_public = if is_public {
+                (flags & BINDING_FLAGS_PUBLIC) != 0
+            } else {
+                (flags & BINDING_FLAGS_NON_PUBLIC) != 0
+            };
+            let match_static = if is_static {
+                (flags & BINDING_FLAGS_STATIC) != 0
+            } else {
+                (flags & BINDING_FLAGS_INSTANCE) != 0
+            };
+
+            if match_public && match_static {
+                let desc = MethodDescription {
+                    parent: td,
+                    method: m,
+                    method_resolution: td.resolution,
+                };
+                let mut lookup = GenericLookup::default();
+                if let RuntimeType::Generic(_, args) = &target_type {
+                    lookup.type_generics = args
+                        .iter()
+                        .map(|a| a.to_concrete(ctx.loader()))
+                        .collect::<Vec<_>>()
+                        .into();
+                }
+                found_method = Some(ctx.get_runtime_method_obj(gc, desc, lookup));
+                break;
+            }
+        }
+    }
+
+    if let Some(m) = found_method {
+        ctx.push_obj(gc, m);
+    } else {
+        ctx.push(gc, StackValue::null());
+    }
+    StepResult::Continue
+}
+
+fn handle_get_constructors<'gc, 'm>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let flags = ctx.pop_i32(gc);
+    let obj = ctx.pop_obj(gc);
+    let target_type = ctx.resolve_runtime_type(obj);
+
+    const BINDING_FLAGS_INSTANCE: i32 = 4;
+    const BINDING_FLAGS_STATIC: i32 = 8;
+    const BINDING_FLAGS_PUBLIC: i32 = 16;
+    const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
+
+    let mut methods_objs = Vec::new();
+    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
+        for m in td.definition().methods.iter() {
+            let is_public = m.accessibility == MemberAccessibility::Access(Accessibility::Public);
+            let is_static = !m.signature.instance;
+
+            let match_public = if is_public {
+                (flags & BINDING_FLAGS_PUBLIC) != 0
+            } else {
+                (flags & BINDING_FLAGS_NON_PUBLIC) != 0
+            };
+            let match_static = if is_static {
+                (flags & BINDING_FLAGS_STATIC) != 0
+            } else {
+                (flags & BINDING_FLAGS_INSTANCE) != 0
+            };
+
+            if match_public && match_static && m.name == ".ctor" {
+                let desc = MethodDescription {
+                    parent: td,
+                    method: m,
+                    method_resolution: td.resolution,
+                };
+                let mut lookup = GenericLookup::default();
+                if let RuntimeType::Generic(_, args) = &target_type {
+                    lookup.type_generics = args
+                        .iter()
+                        .map(|a| a.to_concrete(ctx.loader()))
+                        .collect::<Vec<_>>()
+                        .into();
+                }
+                methods_objs.push(ctx.get_runtime_method_obj(gc, desc, lookup));
+            }
+        }
+    }
+
+    let constructor_info_type = ctx.loader().corlib_type("System.Reflection.ConstructorInfo");
+    let mut vector = ctx.new_vector(ConcreteType::from(constructor_info_type), methods_objs.len());
+    for (i, m) in methods_objs.into_iter().enumerate() {
+        m.write(&mut vector.get_mut()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
+    }
+    ctx.push_obj(gc, ObjectRef::new(gc, HeapStorage::Vec(vector)));
+    StepResult::Continue
+}
+
+fn handle_get_name<'gc, 'm>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let obj = ctx.pop_obj(gc);
+    let target_type = ctx.resolve_runtime_type(obj);
+    ctx.push_string(gc, target_type.get_name().into());
+    StepResult::Continue
+}
+
+fn handle_get_base_type<'gc, 'm>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let obj = ctx.pop_obj(gc);
+    let target_type = ctx.resolve_runtime_type(obj);
+    match target_type {
+        RuntimeType::Type(td) | RuntimeType::Generic(td, _) if td.definition().extends.is_some() => {
+            // Get the first ancestor (the direct parent)
+            let mut ancestors = ctx.loader().ancestors(td);
+            ancestors.next(); // skip self
+            if let Some((base_td, base_generics)) = ancestors.next() {
+                let base_rt: RuntimeType = if base_td.definition().extends.is_none()
+                    && base_td.type_name() == "System.Object"
+                {
+                    RuntimeType::Object
+                } else if base_generics.is_empty() {
+                    RuntimeType::Type(base_td)
+                } else {
+                    // Convert member type generic parameters to runtime types
+                    let runtime_generics: Vec<RuntimeType> = base_generics
+                        .iter()
+                        .map(|mt| match mt {
+                            MemberType::Base(b) => match b.as_ref() {
+                                BaseType::Type { source, .. } => {
+                                    let (ut, sub_generics) =
+                                        decompose_type_source::<MemberType>(source);
+                                    let sub_td = ctx.loader().locate_type(td.resolution, ut);
+                                    if sub_generics.is_empty() {
+                                        RuntimeType::Type(sub_td)
+                                    } else {
+                                        // TODO: properly handle generic types
+                                        RuntimeType::Type(sub_td)
+                                    }
+                                }
+                                BaseType::Object => RuntimeType::Object,
+                                BaseType::String => RuntimeType::String,
+                                BaseType::Boolean => RuntimeType::Boolean,
+                                BaseType::Char => RuntimeType::Char,
+                                BaseType::Int8 => RuntimeType::Int8,
+                                BaseType::UInt8 => RuntimeType::UInt8,
+                                BaseType::Int16 => RuntimeType::Int16,
+                                BaseType::UInt16 => RuntimeType::UInt16,
+                                BaseType::Int32 => RuntimeType::Int32,
+                                BaseType::UInt32 => RuntimeType::UInt32,
+                                BaseType::Int64 => RuntimeType::Int64,
+                                BaseType::UInt64 => RuntimeType::UInt64,
+                                BaseType::Float32 => RuntimeType::Float32,
+                                BaseType::Float64 => RuntimeType::Float64,
+                                BaseType::IntPtr => RuntimeType::IntPtr,
+                                BaseType::UIntPtr => RuntimeType::UIntPtr,
+                                _ => RuntimeType::Object, // Fallback
+                            },
+                            MemberType::TypeGeneric(i) => RuntimeType::TypeParameter {
+                                owner: td,
+                                index: *i as u16,
+                            },
+                        })
+                        .collect();
+                    RuntimeType::Generic(base_td, runtime_generics)
+                };
+                let rt_obj = ctx.get_runtime_type(gc, base_rt);
+                ctx.push_obj(gc, rt_obj);
+            } else {
+                ctx.push(gc, StackValue::null());
+            }
+        }
+        _ => ctx.push(gc, StackValue::null()),
+    }
+    StepResult::Continue
+}
+
+fn handle_get_is_generic_type<'gc, 'm>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let obj = ctx.pop_obj(gc);
+    let target_type = ctx.resolve_runtime_type(obj);
+    let is_generic = matches!(target_type, RuntimeType::Generic(_, _));
+    ctx.push_i32(gc, if is_generic { 1 } else { 0 });
+    StepResult::Continue
+}
+
+fn handle_get_generic_type_definition<'gc, 'm>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let obj = ctx.pop_obj(gc);
+    let target_type = ctx.resolve_runtime_type(obj);
+    match target_type {
+        RuntimeType::Generic(td, _) => {
+            let n_params = td.definition().generic_parameters.len();
+            let params = (0..n_params as u16)
+                .map(|index| RuntimeType::TypeParameter { owner: td, index })
+                .collect();
+            let def_rt = RuntimeType::Generic(td, params);
+            let rt_obj = ctx.get_runtime_type(gc, def_rt);
+            ctx.push_obj(gc, rt_obj);
+            StepResult::Continue
+        }
+        _ => ctx.throw_by_name(gc, "System.InvalidOperationException"),
+    }
+}
+
+fn handle_get_generic_arguments<'gc, 'm>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let obj = ctx.pop_obj(gc);
+    let target_type = ctx.resolve_runtime_type(obj);
+    let args = match target_type {
+        RuntimeType::Generic(_, args) => args.clone(),
+        _ => vec![],
+    };
+
+    // Check GC safe point before allocating type array
+    ctx.check_gc_safe_point();
+
+    let type_type_td = ctx.loader().corlib_type("System.Type");
+    let type_type = ConcreteType::from(type_type_td);
+    let mut vector = ctx.current_context().new_vector(type_type, args.len());
+    for (i, (arg, chunk)) in args
+        .into_iter()
+        .zip(vector.get_mut().chunks_exact_mut(ObjectRef::SIZE))
+        .enumerate()
+    {
+        // Check GC safe point periodically during loops with allocations
+        // Check every 16 iterations
+        if i % 16 == 0 {
+            ctx.check_gc_safe_point();
+        }
+        let arg_obj = ctx.get_runtime_type(gc, arg);
+        arg_obj.write(chunk);
+    }
+    let obj = ObjectRef::new(gc, HeapStorage::Vec(vector));
+    ctx.register_new_object(&obj);
+    ctx.push_obj(gc, obj);
+    StepResult::Continue
+}
+
+fn handle_get_type_handle<'gc, 'm>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let obj = ctx.pop_obj(gc);
+
+    let rth = ctx.loader().corlib_type("System.RuntimeTypeHandle");
+    let instance = ctx.current_context().new_object(rth);
+    obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
+
+    ctx.push(gc, StackValue::ValueType(instance));
+    StepResult::Continue
+}
+
+fn handle_make_generic_type<'gc, 'm>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let parameters = ctx.pop_obj(gc);
+    let target = ctx.pop_obj(gc);
+
+    // Check GC safe point before potentially allocating generic type objects
+    ctx.check_gc_safe_point();
+
+    let target_rt = ctx.resolve_runtime_type(target);
+
+    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_rt {
+        let param_objs = parameters.as_vector(|v: &dotnet_value::object::Vector<'gc>| {
+            v.get()
+                .chunks_exact(ObjectRef::SIZE)
+                .map(|chunk| unsafe { ObjectRef::read_branded(chunk, gc) })
+                .collect::<Vec<_>>()
+        });
+        let new_generics: Vec<_> = param_objs
+            .into_iter()
+            .map(|p_obj| ctx.resolve_runtime_type(p_obj).clone())
+            .collect();
+        let new_rt = RuntimeType::Generic(td, new_generics);
+
+        let rt_obj = ctx.get_runtime_type(gc, new_rt);
+        ctx.push_obj(gc, rt_obj);
+        StepResult::Continue
+    } else {
+        ctx.throw_by_name(gc, "System.InvalidOperationException")
+    }
+}
+
+fn handle_create_instance_default_ctor<'gc, 'm>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    gc: GCHandle<'gc>,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let _ = ctx.pop(gc); // skipCheck
+    let _ = ctx.pop(gc); // publicOnly
+    let target_obj = ctx.pop_obj(gc);
+
+    // Check GC safe point before object instantiation
+    ctx.check_gc_safe_point();
+
+    let target_rt = ctx.resolve_runtime_type(target_obj);
+
+    let (td, type_generics) = match target_rt {
+        RuntimeType::Type(td) => (td, vec![]),
+        RuntimeType::Generic(td, args) => (td, args.clone()),
+        _ => panic!("cannot create instance of {:?}", target_rt),
+    };
+
+    let type_generics_concrete: Vec<ConcreteType> = type_generics
+        .iter()
+        .map(|a| a.to_concrete(ctx.loader()))
+        .collect();
+    let new_lookup = GenericLookup::new(type_generics_concrete);
+    let new_ctx = ctx.current_context().with_generics(&new_lookup);
+
+    let instance = new_ctx.new_object(td);
+
+    for m in &td.definition().methods {
+        if m.runtime_special_name
+            && m.name == ".ctor"
+            && m.signature.instance
+            && m.signature.parameters.is_empty()
+        {
+            let desc = MethodDescription {
+                parent: td,
+                method_resolution: td.resolution,
+                method: m,
+            };
+
+            ctx.constructor_frame(
+                gc,
+                instance,
+                MethodInfo::new(desc, &new_lookup, ctx.shared().clone()),
+                new_lookup,
+            );
+            return StepResult::FramePushed;
+        }
+    }
+
+    panic!("could not find a parameterless constructor in {:?}", td)
 }
