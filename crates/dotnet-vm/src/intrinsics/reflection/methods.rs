@@ -105,7 +105,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                     ctx.make_runtime_type(&res_ctx, t)
                 }
                 Some(dotnetdll::prelude::ParameterType::TypedReference) => {
-                    todo!("TypedReference in GetReturnType")
+                    RuntimeType::TypedReference
                 }
                 None => RuntimeType::Void,
             };
@@ -149,7 +149,21 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                         dotnetdll::prelude::ParameterType::Value(t)
                         | dotnetdll::prelude::ParameterType::Ref(t) => t,
                         dotnetdll::prelude::ParameterType::TypedReference => {
-                            todo!("TypedReference in Invoke parameter")
+                            if arg_obj.0.is_none() {
+                                panic!("TypedReference parameter cannot be null");
+                            }
+                            let val = arg_obj.as_heap_storage(|s| {
+                                if let dotnet_value::object::HeapStorage::Boxed(
+                                    dotnet_value::object::ValueType::TypedRef(m, td),
+                                ) = s
+                                {
+                                    (m.clone(), td.clone())
+                                } else {
+                                    panic!("Expected boxed TypedReference for parameter {}", i)
+                                }
+                            });
+                            args.push(StackValue::TypedRef(val.0, val.1));
+                            continue;
                         }
                     };
                     let res_ctx = ctx.with_generics(&lookup);
@@ -185,7 +199,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                     ctx.make_runtime_type(&res_ctx, t)
                 }
                 Some(dotnetdll::prelude::ParameterType::TypedReference) => {
-                    todo!("TypedReference in Invoke return")
+                    RuntimeType::TypedReference
                 }
                 None => RuntimeType::Void,
             };
@@ -236,7 +250,21 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                         dotnetdll::prelude::ParameterType::Value(t)
                         | dotnetdll::prelude::ParameterType::Ref(t) => t,
                         dotnetdll::prelude::ParameterType::TypedReference => {
-                            todo!("TypedReference in Invoke parameter")
+                            if arg_obj.0.is_none() {
+                                panic!("TypedReference parameter cannot be null");
+                            }
+                            let val = arg_obj.as_heap_storage(|s| {
+                                if let dotnet_value::object::HeapStorage::Boxed(
+                                    dotnet_value::object::ValueType::TypedRef(m, td),
+                                ) = s
+                                {
+                                    (m.clone(), td.clone())
+                                } else {
+                                    panic!("Expected boxed TypedReference for parameter {}", i)
+                                }
+                            });
+                            args.push(StackValue::TypedRef(val.0, val.1));
+                            continue;
                         }
                     };
                     let res_ctx = ctx.with_generics(&lookup);

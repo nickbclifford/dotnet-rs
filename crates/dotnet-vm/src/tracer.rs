@@ -72,12 +72,9 @@ impl Tracer {
     }
 
     pub fn trace_instruction(&mut self, indent: usize, ip: usize, instruction: &str) {
-        let indent = indent.min(100);
         trace!(
             target: "instruction",
-            indent = indent,
-            ip = ip,
-            instruction = instruction,
+            frame = indent,
             "[IP:{:04}] {:indent$}{}",
             ip,
             "",
@@ -87,12 +84,9 @@ impl Tracer {
     }
 
     pub fn trace_method_entry(&mut self, indent: usize, name: &str, signature: &str) {
-        let indent = indent.min(100);
         debug!(
             target: "method",
-            indent = indent,
-            name = name,
-            signature = signature,
+            frame = indent,
             "{:indent$}→ CALL {} ({})",
             "",
             name,
@@ -102,11 +96,9 @@ impl Tracer {
     }
 
     pub fn trace_method_exit(&mut self, indent: usize, name: &str) {
-        let indent = indent.min(100);
         debug!(
             target: "method",
-            indent = indent,
-            name = name,
+            frame = indent,
             "{:indent$}← RET  {}",
             "",
             name,
@@ -117,9 +109,7 @@ impl Tracer {
     pub fn trace_exception(&mut self, indent: usize, exception: &str, location: &str) {
         error!(
             target: "exception",
-            indent = indent,
-            exception = exception,
-            location = location,
+            frame = indent,
             "{:indent$}⚠ EXC  {} at {}",
             "",
             exception,
@@ -131,9 +121,7 @@ impl Tracer {
     pub fn trace_gc_event(&mut self, indent: usize, event: &str, details: &str) {
         info!(
             target: "gc",
-            indent = indent,
-            event = event,
-            details = details,
+            frame = indent,
             "{:indent$}♻ GC   {} ({})",
             "",
             event,
@@ -145,9 +133,7 @@ impl Tracer {
     pub fn trace_stack_op(&mut self, indent: usize, op: &str, value: &str) {
         trace!(
             target: "stack",
-            indent = indent,
-            op = op,
-            value = value,
+            frame = indent,
             "{:indent$}  STACK {} {}",
             "",
             op,
@@ -159,10 +145,7 @@ impl Tracer {
     pub fn trace_field_access(&mut self, indent: usize, op: &str, field: &str, value: &str) {
         trace!(
             target: "field",
-            indent = indent,
-            op = op,
-            field = field,
-            value = value,
+            frame = indent,
             "{:indent$}  FIELD {} {} = {}",
             "",
             op,
@@ -175,10 +158,7 @@ impl Tracer {
     pub fn trace_branch(&mut self, indent: usize, branch_type: &str, target: usize, taken: bool) {
         trace!(
             target: "branch",
-            indent = indent,
-            branch_type = branch_type,
-            target = target,
-            taken = taken,
+            frame = indent,
             "{:indent$}↷ {} to {:04} ({})",
             "",
             branch_type,
@@ -191,9 +171,7 @@ impl Tracer {
     pub fn trace_type_info(&mut self, indent: usize, operation: &str, type_name: &str) {
         debug!(
             target: "type",
-            indent = indent,
-            operation = operation,
-            type_name = type_name,
+            frame = indent,
             "{:indent$}  TYPE {} {}",
             "",
             operation,
@@ -205,9 +183,7 @@ impl Tracer {
     pub fn trace_intrinsic(&mut self, indent: usize, operation: &str, details: &str) {
         debug!(
             target: "intrinsic",
-            indent = indent,
-            operation = operation,
-            details = details,
+            frame = indent,
             "{:indent$}⚡ INTRINSIC {} {}",
             "",
             operation,
@@ -219,9 +195,7 @@ impl Tracer {
     pub fn trace_interop(&mut self, indent: usize, operation: &str, details: &str) {
         debug!(
             target: "interop",
-            indent = indent,
-            operation = operation,
-            details = details,
+            frame = indent,
             "{:indent$}🔗 INTEROP {} {}",
             "",
             operation,
@@ -234,9 +208,7 @@ impl Tracer {
     pub fn trace_gc_collection_start(&mut self, indent: usize, generation: usize, reason: &str) {
         info!(
             target: "gc",
-            indent = indent,
-            generation = generation,
-            reason = reason,
+            frame = indent,
             "{:indent$}♻ GC   COLLECTION START [Gen {}] ({})",
             "",
             generation,
@@ -254,10 +226,7 @@ impl Tracer {
     ) {
         info!(
             target: "gc",
-            indent = indent,
-            generation = generation,
-            collected = collected,
-            duration_us = duration_us,
+            frame = indent,
             "{:indent$}♻ GC   COLLECTION END [Gen {}] ({} objects collected, {} μs)",
             "",
             generation,
@@ -270,9 +239,7 @@ impl Tracer {
     pub fn trace_gc_allocation(&mut self, indent: usize, type_name: &str, size_bytes: usize) {
         debug!(
             target: "gc",
-            indent = indent,
-            type_name = type_name,
-            size_bytes = size_bytes,
+            frame = indent,
             "{:indent$}♻ GC   ALLOC {} ({} bytes)",
             "",
             type_name,
@@ -284,9 +251,7 @@ impl Tracer {
     pub fn trace_gc_finalization(&mut self, indent: usize, obj_type: &str, obj_addr: usize) {
         debug!(
             target: "gc",
-            indent = indent,
-            obj_type = obj_type,
-            obj_addr = obj_addr,
+            frame = indent,
             "{:indent$}♻ GC   FINALIZE {} @ {:#x}",
             "",
             obj_type,
@@ -304,10 +269,7 @@ impl Tracer {
     ) {
         debug!(
             target: "gc",
-            indent = indent,
-            operation = operation,
-            handle_type = handle_type,
-            addr = addr,
+            frame = indent,
             "{:indent$}♻ GC   HANDLE {} [{}] @ {:#x}",
             "",
             operation,
@@ -320,9 +282,7 @@ impl Tracer {
     pub fn trace_gc_pin(&mut self, indent: usize, operation: &str, obj_addr: usize) {
         debug!(
             target: "gc",
-            indent = indent,
-            operation = operation,
-            obj_addr = obj_addr,
+            frame = indent,
             "{:indent$}♻ GC   PIN {} @ {:#x}",
             "",
             operation,
@@ -334,9 +294,7 @@ impl Tracer {
     pub fn trace_gc_weak_ref(&mut self, indent: usize, operation: &str, handle_id: usize) {
         debug!(
             target: "gc",
-            indent = indent,
-            operation = operation,
-            handle_id = handle_id,
+            frame = indent,
             "{:indent$}♻ GC   WEAK {} (handle {})",
             "",
             operation,
@@ -348,9 +306,7 @@ impl Tracer {
     pub fn trace_gc_resurrection(&mut self, indent: usize, obj_type: &str, obj_addr: usize) {
         debug!(
             target: "gc",
-            indent = indent,
-            obj_type = obj_type,
-            obj_addr = obj_addr,
+            frame = indent,
             "{:indent$}♻ GC   RESURRECT {} @ {:#x}",
             "",
             obj_type,
@@ -367,17 +323,17 @@ impl Tracer {
         thread_id: dotnet_utils::ArenaId,
         name: &str,
     ) {
-        info!(target: "thread", indent = indent, thread_id = thread_id.as_u64(), name = name, "{:indent$}⚙ THREAD CREATE [ID:{}] \"{}\"", "", thread_id, name, indent = indent * 2);
+        info!(target: "thread", frame = indent, "{:indent$}⚙ THREAD CREATE [ID:{}] \"{}\"", "", thread_id, name, indent = indent * 2);
     }
 
     #[cfg(feature = "multithreading")]
     pub fn trace_thread_start(&mut self, indent: usize, thread_id: dotnet_utils::ArenaId) {
-        info!(target: "thread", indent = indent, thread_id = thread_id.as_u64(), "{:indent$}⚙ THREAD START [ID:{}]", "", thread_id, indent = indent * 2);
+        info!(target: "thread", frame = indent, "{:indent$}⚙ THREAD START [ID:{}]", "", thread_id, indent = indent * 2);
     }
 
     #[cfg(feature = "multithreading")]
     pub fn trace_thread_exit(&mut self, indent: usize, thread_id: dotnet_utils::ArenaId) {
-        info!(target: "thread", indent = indent, thread_id = thread_id.as_u64(), "{:indent$}⚙ THREAD EXIT [ID:{}]", "", thread_id, indent = indent * 2);
+        info!(target: "thread", frame = indent, "{:indent$}⚙ THREAD EXIT [ID:{}]", "", thread_id, indent = indent * 2);
     }
 
     #[cfg(feature = "multithreading")]
@@ -387,7 +343,7 @@ impl Tracer {
         thread_id: dotnet_utils::ArenaId,
         location: &str,
     ) {
-        debug!(target: "thread", indent = indent, thread_id = thread_id.as_u64(), location = location, "{:indent$}⚙ THREAD SAFEPOINT [ID:{}] at {}", "", thread_id, location, indent = indent * 2);
+        debug!(target: "thread", frame = indent, "{:indent$}⚙ THREAD SAFEPOINT [ID:{}] at {}", "", thread_id, location, indent = indent * 2);
     }
 
     #[cfg(feature = "multithreading")]
@@ -397,22 +353,22 @@ impl Tracer {
         thread_id: dotnet_utils::ArenaId,
         reason: &str,
     ) {
-        debug!(target: "thread", indent = indent, thread_id = thread_id.as_u64(), reason = reason, "{:indent$}⚙ THREAD SUSPEND [ID:{}] ({})", "", thread_id, reason, indent = indent * 2);
+        debug!(target: "thread", frame = indent, "{:indent$}⚙ THREAD SUSPEND [ID:{}] ({})", "", thread_id, reason, indent = indent * 2);
     }
 
     #[cfg(feature = "multithreading")]
     pub fn trace_thread_resume(&mut self, indent: usize, thread_id: dotnet_utils::ArenaId) {
-        debug!(target: "thread", indent = indent, thread_id = thread_id.as_u64(), "{:indent$}⚙ THREAD RESUME [ID:{}]", "", thread_id, indent = indent * 2);
+        debug!(target: "thread", frame = indent, "{:indent$}⚙ THREAD RESUME [ID:{}]", "", thread_id, indent = indent * 2);
     }
 
     #[cfg(feature = "multithreaded-gc")]
     pub fn trace_stw_start(&mut self, indent: usize, active_threads: usize) {
-        info!(target: "thread", indent = indent, active_threads = active_threads, "{:indent$}⚙ STOP-THE-WORLD START ({} active threads)", "", active_threads, indent = indent * 2);
+        info!(target: "thread", frame = indent, "{:indent$}⚙ STOP-THE-WORLD START ({} active threads)", "", active_threads, indent = indent * 2);
     }
 
     #[cfg(feature = "multithreaded-gc")]
     pub fn trace_stw_end(&mut self, indent: usize, duration_us: u64) {
-        info!(target: "thread", indent = indent, duration_us = duration_us, "{:indent$}⚙ STOP-THE-WORLD END ({} μs)", "", duration_us, indent = indent * 2);
+        info!(target: "thread", frame = indent, "{:indent$}⚙ STOP-THE-WORLD END ({} μs)", "", duration_us, indent = indent * 2);
     }
 
     #[cfg(feature = "multithreading")]
@@ -423,7 +379,7 @@ impl Tracer {
         old_state: &str,
         new_state: &str,
     ) {
-        debug!(target: "thread", indent = indent, thread_id = thread_id.as_u64(), old_state = old_state, new_state = new_state, "{:indent$}⚙ THREAD STATE [ID:{}] {} → {}", "", thread_id, old_state, new_state, indent = indent * 2);
+        debug!(target: "thread", frame = indent, "{:indent$}⚙ THREAD STATE [ID:{}] {} → {}", "", thread_id, old_state, new_state, indent = indent * 2);
     }
 
     #[cfg(feature = "multithreading")]
@@ -434,7 +390,7 @@ impl Tracer {
         operation: &str,
         obj_addr: usize,
     ) {
-        debug!(target: "thread", indent = indent, thread_id = thread_id.as_u64(), operation = operation, obj_addr = obj_addr, "{:indent$}⚙ THREAD SYNC [ID:{}] {} @ {:#x}", "", thread_id, operation, obj_addr, indent = indent * 2);
+        debug!(target: "thread", frame = indent, "{:indent$}⚙ THREAD SYNC [ID:{}] {} @ {:#x}", "", thread_id, operation, obj_addr, indent = indent * 2);
     }
 
     // Snapshots

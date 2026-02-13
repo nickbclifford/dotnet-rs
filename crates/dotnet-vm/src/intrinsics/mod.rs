@@ -435,7 +435,7 @@ fn object_get_type<'gc, 'm: 'gc>(
             ValueType::Pointer(_) => RuntimeType::IntPtr,
             ValueType::Float32(_) => RuntimeType::Float32,
             ValueType::Float64(_) => RuntimeType::Float64,
-            ValueType::TypedRef => RuntimeType::Object,
+            ValueType::TypedRef(_, _) => RuntimeType::Object,
         },
     });
 

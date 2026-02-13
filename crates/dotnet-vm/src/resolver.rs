@@ -566,8 +566,16 @@ impl<'m> ResolverService<'m> {
         &self,
         object: ObjectHandle,
     ) -> Result<TypeDescription, TypeResolutionError> {
+        let inner = object.as_ref().borrow();
+        self.get_heap_description_inner(&inner)
+    }
+
+    fn get_heap_description_inner(
+        &self,
+        inner: &dotnet_value::object::ObjectInner<'_>,
+    ) -> Result<TypeDescription, TypeResolutionError> {
         use dotnet_value::object::HeapStorage::*;
-        match &object.as_ref().borrow().storage {
+        match &inner.storage {
             Obj(o) => Ok(o.description),
             Vec(_) => self.loader.corlib_type("System.Array"),
             Str(_) => self.loader.corlib_type("System.String"),
@@ -596,7 +604,7 @@ impl<'m> ResolverService<'m> {
             ValueType::Pointer(_) => asms.corlib_type("System.IntPtr"),
             ValueType::Float32(_) => asms.corlib_type("System.Single"),
             ValueType::Float64(_) => asms.corlib_type("System.Double"),
-            ValueType::TypedRef => asms.corlib_type("System.TypedReference"),
+            ValueType::TypedRef(_, _) => asms.corlib_type("System.TypedReference"),
             ValueType::Struct(s) => Ok(s.description),
         }
     }
@@ -617,9 +625,12 @@ impl<'m> ResolverService<'m> {
             StackValue::ObjectRef(ObjectRef(None)) => self.loader.corlib_type("System.Object"),
             StackValue::ManagedPtr(m) => Ok(m.inner_type),
             StackValue::ValueType(o) => Ok(o.description),
+            StackValue::TypedRef(_, _) => self.loader.corlib_type("System.TypedReference"),
             #[cfg(feature = "multithreaded-gc")]
-            StackValue::CrossArenaObjectRef(_, _) => {
-                todo!("handle CrossArenaObjectRef in contains_type")
+            StackValue::CrossArenaObjectRef(ptr, _) => {
+                let lock = unsafe { ptr.0.as_ref() };
+                let guard = lock.borrow();
+                self.get_heap_description_inner(&guard)
             }
         }
     }
@@ -719,6 +730,7 @@ impl<'m> ResolverService<'m> {
                         inner_type,
                         None,
                         false,
+                        Some(dotnet_value::ByteOffset(ptr)),
                     ))))
                 }
             },
@@ -765,7 +777,10 @@ impl<'m> ResolverService<'m> {
                 }
 
                 if td.type_name() == "System.TypedReference" {
-                    return Ok(CTSValue::Value(TypedRef));
+                    let StackValue::TypedRef(p, t) = data else {
+                        panic!("expected TypedRef, got {:?}", data);
+                    };
+                    return Ok(CTSValue::Value(ValueType::TypedRef(p, t)));
                 }
 
                 if let StackValue::ValueType(mut o) = data {
@@ -847,9 +862,7 @@ impl<'m> ResolverService<'m> {
 
                 if data.len() >= 16 {
                     let info = unsafe { ManagedPtr::read_branded(data, &gc) };
-                    let mut m = ManagedPtr::new(info.address, inner_type, Some(info.owner), false);
-                    m.offset = info.offset;
-                    m.stack_slot_origin = info.stack_origin;
+                    let m = ManagedPtr::from_info(info, inner_type);
                     Ok(CTSValue::Value(Pointer(m)))
                 } else {
                     let mut ptr_bytes = [0u8; 8];
@@ -860,6 +873,7 @@ impl<'m> ResolverService<'m> {
                         inner_type,
                         None,
                         false,
+                        Some(dotnet_value::ByteOffset(ptr)),
                     ))))
                 }
             }
@@ -896,7 +910,31 @@ impl<'m> ResolverService<'m> {
                 }
 
                 if td.type_name() == "System.TypedReference" {
-                    return Ok(CTSValue::Value(TypedRef));
+                    let addr_bytes = data[0..8].try_into().unwrap();
+                    let type_bytes = data[8..16].try_into().unwrap();
+                    let addr = usize::from_ne_bytes(addr_bytes);
+                    let type_ptr = usize::from_ne_bytes(type_bytes) as *const TypeDescription;
+
+                    if type_ptr.is_null() {
+                        return Err(TypeResolutionError::InvalidHandle);
+                    }
+
+                    // SAFETY: Reconstructing Arc from raw pointer stored in memory.
+                    let type_desc = unsafe {
+                        let arc = Arc::from_raw(type_ptr);
+                        let clone = arc.clone();
+                        let _ = Arc::into_raw(arc);
+                        clone
+                    };
+
+                    let m = ManagedPtr::new(
+                        NonNull::new(addr as *mut u8),
+                        *type_desc.clone(),
+                        None,
+                        false,
+                        Some(dotnet_utils::ByteOffset(0)),
+                    );
+                    return Ok(CTSValue::Value(ValueType::TypedRef(m, type_desc)));
                 }
 
                 let instance = self.new_object(td, &new_ctx)?;
@@ -946,11 +984,12 @@ fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(data: StackVal
         StackValue::UnmanagedPtr(p) => (p.0.as_ptr() as usize)
             .try_into()
             .unwrap_or_else(|_| panic!("failed to convert from pointer")),
-        StackValue::ManagedPtr(p) => p
-            .pointer()
-            .map_or(0, |x| x.as_ptr() as usize)
-            .try_into()
-            .unwrap_or_else(|_| panic!("failed to convert from pointer")),
+        StackValue::ManagedPtr(p) => {
+            let ptr = p.pointer().map(|p| p.as_ptr()).unwrap_or(std::ptr::null_mut());
+            (ptr as usize)
+                .try_into()
+                .unwrap_or_else(|_| panic!("failed to convert from pointer"))
+        }
         other => panic!(
             "invalid stack value {:?} for conversion into {}",
             other,

@@ -123,6 +123,7 @@ pub fn unbox<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         target_type,
         Some(obj),
         false,
+        Some(dotnet_value::ByteOffset(0)),
     )));
 
     StepResult::Continue

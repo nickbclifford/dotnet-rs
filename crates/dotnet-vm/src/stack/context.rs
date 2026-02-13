@@ -552,6 +552,16 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
                 .saturating_sub_idx(frame.base.stack);
         }
     }
+
+    #[inline]
+    fn pin_object(&mut self, object: ObjectRef<'gc>) {
+        self.local.heap.pinned_objects.borrow_mut().insert(object);
+    }
+
+    #[inline]
+    fn unpin_object(&mut self, object: ObjectRef<'gc>) {
+        self.local.heap.pinned_objects.borrow_mut().remove(&object);
+    }
 }
 
 #[derive(Collect)]

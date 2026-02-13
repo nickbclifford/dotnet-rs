@@ -2,7 +2,7 @@ use dotnet_types::TypeDescription;
 use dotnet_value::{
     StackValue,
     object::{Object as ObjectInstance, ObjectRef},
-    pointer::ManagedPtr,
+    pointer::{ManagedPtr, PointerOrigin},
 };
 use gc_arena::Collect;
 use std::ptr::NonNull;
@@ -38,7 +38,7 @@ impl<'gc> EvaluationStack<'gc> {
 
         let update_val = |val: &mut StackValue<'gc>| match val {
             StackValue::ManagedPtr(m) => {
-                if let Some((idx, off)) = m.stack_slot_origin {
+                if let PointerOrigin::Stack(idx, off) = m.origin {
                     let slot_ptr = if idx.as_usize() < slot_locations.len() {
                         slot_locations[idx.as_usize()]
                     } else {
@@ -57,7 +57,7 @@ impl<'gc> EvaluationStack<'gc> {
                         let offset_val = offset.as_usize();
                         let slice = &mut data[offset_val..offset_val + 16];
                         let info = unsafe { ManagedPtr::read_stack_info(slice) };
-                        if let Some((idx, _)) = info.stack_origin {
+                        if let PointerOrigin::Stack(idx, _) = info.origin {
                             let slot_ptr = if idx.as_usize() < slot_locations.len() {
                                 slot_locations[idx.as_usize()]
                             } else {
@@ -68,7 +68,7 @@ impl<'gc> EvaluationStack<'gc> {
                                     slot_ptr.as_ptr().add(info.offset.as_usize()),
                                 )
                             };
-                            let word0 = 1
+                            let word0: usize = 1
                                 | ((idx.as_usize() & 0xFFFFFFFF) << 1)
                                 | (info.offset.as_usize() << 33);
                             let word1 = new_ptr.as_ptr() as usize;
@@ -160,8 +160,17 @@ impl<'gc> EvaluationStack<'gc> {
         self.push(StackValue::ManagedPtr(value));
     }
 
-    pub fn push_ptr(&mut self, ptr: *mut u8, t: TypeDescription, is_pinned: bool) {
-        self.push(StackValue::managed_ptr(ptr, t, is_pinned));
+    pub fn push_ptr(
+        &mut self,
+        ptr: *mut u8,
+        t: TypeDescription,
+        is_pinned: bool,
+        owner: Option<ObjectRef<'gc>>,
+        offset: Option<crate::ByteOffset>,
+    ) {
+        self.push(StackValue::managed_ptr_with_owner(
+            ptr, t, owner, is_pinned, offset,
+        ));
     }
 
     pub fn pop_multiple(&mut self, count: usize) -> Vec<StackValue<'gc>> {

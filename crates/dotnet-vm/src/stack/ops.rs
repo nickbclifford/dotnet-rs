@@ -33,10 +33,12 @@ use dotnet_types::{
     members::{FieldDescription, MethodDescription},
     runtime::RuntimeType,
 };
+use dotnet_utils::ByteOffset;
 use dotnet_value::{
     CLRString, StackValue,
+    layout::LayoutManager,
     object::{Object as ObjectInstance, ObjectHandle, ObjectRef},
-    pointer::ManagedPtr,
+    pointer::{ManagedPtr, PointerOrigin},
 };
 use dotnetdll::prelude::{FieldSource, MethodType};
 
@@ -68,8 +70,17 @@ pub trait TypedStackOps<'gc>: EvalStackOps<'gc> {
     fn push_obj(&mut self, value: ObjectRef<'gc>) {
         self.push(StackValue::ObjectRef(value));
     }
-    fn push_ptr(&mut self, ptr: *mut u8, t: TypeDescription, is_pinned: bool) {
-        self.push(StackValue::managed_ptr(ptr, t, is_pinned));
+    fn push_ptr(
+        &mut self,
+        ptr: *mut u8,
+        t: TypeDescription,
+        is_pinned: bool,
+        owner: Option<ObjectRef<'gc>>,
+        offset: Option<dotnet_value::ByteOffset>,
+    ) {
+        self.push(StackValue::managed_ptr_with_owner(
+            ptr, t, owner, is_pinned, offset,
+        ));
     }
     fn push_isize(&mut self, value: isize) {
         self.push(StackValue::NativeInt(value));
@@ -175,34 +186,114 @@ pub trait PoolOps {
 pub trait RawMemoryOps<'gc> {
     /// # Safety
     ///
-    /// The caller must ensure that `ptr` is valid for writes and properly represents the memory location.
-    /// If `owner` is provided, it must be the object that contains `ptr` to ensure GC safety.
+    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
     /// The `layout` must match the expected type of `value`.
     unsafe fn write_unaligned(
         &mut self,
-        ptr: *mut u8,
-        owner: Option<ObjectRef<'gc>>,
+        origin: PointerOrigin<'gc>,
+        offset: ByteOffset,
         value: StackValue<'gc>,
         layout: &dotnet_value::layout::LayoutManager,
     ) -> Result<(), String>;
 
     /// # Safety
     ///
-    /// The caller must ensure that `ptr` is valid for reads and points to a memory location.
-    /// If `owner` is provided, it must be the object that contains `ptr` to ensure GC safety.
-    /// The `layout` must match the expected type stored at `ptr`.
+    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
+    /// The `layout` must match the expected type stored at the location.
     unsafe fn read_unaligned(
         &self,
-        ptr: *const u8,
-        owner: Option<ObjectRef<'gc>>,
+        origin: PointerOrigin<'gc>,
+        offset: ByteOffset,
         layout: &dotnet_value::layout::LayoutManager,
         type_desc: Option<TypeDescription>,
     ) -> Result<StackValue<'gc>, String>;
 
+    /// Safely writes raw bytes to a memory location.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
+    unsafe fn write_bytes(
+        &mut self,
+        origin: PointerOrigin<'gc>,
+        offset: ByteOffset,
+        data: &[u8],
+    ) -> Result<(), String>;
+
+    /// Safely reads raw bytes from a memory location.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
+    unsafe fn read_bytes(
+        &self,
+        origin: PointerOrigin<'gc>,
+        offset: ByteOffset,
+        dest: &mut [u8],
+    ) -> Result<(), String>;
+
+    /// Atomically compares and exchanges a value in memory.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn compare_exchange_atomic(
+        &mut self,
+        origin: PointerOrigin<'gc>,
+        offset: ByteOffset,
+        expected: u64,
+        new: u64,
+        size: usize,
+        success: dotnet_utils::sync::Ordering,
+        failure: dotnet_utils::sync::Ordering,
+    ) -> Result<u64, u64>;
+
+    /// Atomically exchanges a value in memory.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
+    unsafe fn exchange_atomic(
+        &mut self,
+        origin: PointerOrigin<'gc>,
+        offset: ByteOffset,
+        value: u64,
+        size: usize,
+        ordering: dotnet_utils::sync::Ordering,
+    ) -> Result<u64, String>;
+
+    /// Atomically loads a value from memory.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
+    unsafe fn load_atomic(
+        &self,
+        origin: PointerOrigin<'gc>,
+        offset: ByteOffset,
+        size: usize,
+        ordering: dotnet_utils::sync::Ordering,
+    ) -> Result<u64, String>;
+
+    /// Atomically stores a value to memory.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
+    unsafe fn store_atomic(
+        &mut self,
+        origin: PointerOrigin<'gc>,
+        offset: ByteOffset,
+        value: u64,
+        size: usize,
+        ordering: dotnet_utils::sync::Ordering,
+    ) -> Result<(), String>;
+
     fn check_gc_safe_point(&self);
 }
 
-pub trait ReflectionOps<'gc, 'm>: crate::memory::ops::MemoryOps<'gc> {
+pub trait ReflectionOps<'gc, 'm>: MemoryOps<'gc> {
     fn pre_initialize_reflection(&mut self);
     fn get_runtime_method_index(
         &mut self,
@@ -340,4 +431,7 @@ pub trait VesOps<'gc, 'm>:
     fn original_stack_height_mut(&mut self) -> &mut crate::StackSlotIndex;
 
     fn unwind_frame(&mut self);
+
+    fn pin_object(&mut self, object: ObjectRef<'gc>);
+    fn unpin_object(&mut self, object: ObjectRef<'gc>);
 }

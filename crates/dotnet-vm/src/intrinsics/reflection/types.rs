@@ -236,28 +236,29 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
             };
 
             // pfnAllocator = IntPtr.Zero
-            ctx.push(StackValue::NativeInt(0));
+            let val = StackValue::NativeInt(0);
+            let layout = LayoutManager::Scalar(Scalar::NativeInt);
             unsafe {
-                ctx.pop().store(
-                    pfn_allocator
-                        .pointer()
-                        .expect("pfn_allocator null")
-                        .as_ptr(),
-                    dotnetdll::prelude::StoreType::IntPtr,
+                ctx.write_unaligned(
+                    pfn_allocator.origin.clone(),
+                    pfn_allocator.offset,
+                    val,
+                    &layout,
                 )
-            };
+                .expect("pfn_allocator write failed");
+            }
 
             // allocatorFirstArg = IntPtr.Zero
-            ctx.push(StackValue::NativeInt(0));
+            let val = StackValue::NativeInt(0);
             unsafe {
-                ctx.pop().store(
-                    allocator_first_arg
-                        .pointer()
-                        .expect("allocator_first_arg null")
-                        .as_ptr(),
-                    dotnetdll::prelude::StoreType::IntPtr,
+                ctx.write_unaligned(
+                    allocator_first_arg.origin.clone(),
+                    allocator_first_arg.offset,
+                    val,
+                    &layout,
                 )
-            };
+                .expect("allocator_first_arg write failed");
+            }
 
             // Find default ctor
             let mut found_ctor = false;
@@ -281,24 +282,29 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
                         },
                     );
 
-                    ctx.push(StackValue::NativeInt(method_idx as isize));
+                    let method_val = StackValue::NativeInt(method_idx as isize);
+                    let layout = LayoutManager::Scalar(Scalar::NativeInt);
                     unsafe {
-                        ctx.pop().store(
-                            pfn_ctor.pointer().expect("pfn_ctor null").as_ptr(),
-                            dotnetdll::prelude::StoreType::IntPtr,
+                        ctx.write_unaligned(
+                            pfn_ctor.origin.clone(),
+                            pfn_ctor.offset,
+                            method_val,
+                            &layout,
                         )
-                    };
+                        .expect("pfn_ctor write failed");
+                    }
 
-                    ctx.push(StackValue::Int32(1));
+                    let public_val = StackValue::Int32(1);
+                    let byte_layout = LayoutManager::Scalar(Scalar::Int8);
                     unsafe {
-                        ctx.pop().store(
-                            ctor_is_public
-                                .pointer()
-                                .expect("ctor_is_public null")
-                                .as_ptr(),
-                            dotnetdll::prelude::StoreType::Int8,
+                        ctx.write_unaligned(
+                            ctor_is_public.origin.clone(),
+                            ctor_is_public.offset,
+                            public_val,
+                            &byte_layout,
                         )
-                    };
+                        .expect("ctor_is_public write failed");
+                    }
                     found_ctor = true;
                     break;
                 }

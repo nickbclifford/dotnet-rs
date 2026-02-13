@@ -5,10 +5,7 @@ use crate::{
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
-use dotnet_utils::{
-    atomic::{AtomicAccess, StandardAtomicAccess},
-    gc::GCHandle,
-};
+use dotnet_utils::gc::GCHandle;
 use dotnet_value::{ManagedPtr, StackValue, object::ObjectRef};
 use dotnetdll::prelude::{BaseType, Parameter, ParameterType};
 use gc_arena::Gc;
@@ -93,17 +90,13 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
             let value = ctx.pop_i32();
             let target_ptr = ctx.pop_managed_ptr();
 
-            let target = target_ptr
-                .pointer()
-                .expect("Target pointer should not be null")
-                .as_ptr();
-
             let prev = match unsafe {
-                StandardAtomicAccess::compare_exchange_atomic(
-                    target,
-                    4,
+                ctx.compare_exchange_atomic(
+                    target_ptr.origin.clone(),
+                    target_ptr.offset,
                     comparand as u64,
                     value as u64,
+                    4,
                     Ordering::SeqCst,
                     Ordering::SeqCst,
                 )
@@ -118,17 +111,13 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
             let value = ctx.pop_i64();
             let target_ptr = ctx.pop_managed_ptr();
 
-            let target = target_ptr
-                .pointer()
-                .expect("Target pointer should not be null")
-                .as_ptr();
-
             let prev = match unsafe {
-                StandardAtomicAccess::compare_exchange_atomic(
-                    target,
-                    8,
+                ctx.compare_exchange_atomic(
+                    target_ptr.origin.clone(),
+                    target_ptr.offset,
                     comparand as u64,
                     value as u64,
+                    8,
                     Ordering::SeqCst,
                     Ordering::SeqCst,
                 )
@@ -143,18 +132,14 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
             let value = ctx.pop_isize();
             let target_ptr = ctx.pop_managed_ptr();
 
-            let target = target_ptr
-                .pointer()
-                .expect("Target pointer should not be null")
-                .as_ptr();
-
             let size = ObjectRef::SIZE;
             let prev = match unsafe {
-                StandardAtomicAccess::compare_exchange_atomic(
-                    target,
-                    size,
+                ctx.compare_exchange_atomic(
+                    target_ptr.origin.clone(),
+                    target_ptr.offset,
                     comparand as u64,
                     value as u64,
+                    size,
                     Ordering::SeqCst,
                     Ordering::SeqCst,
                 )
@@ -170,11 +155,6 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
             let value = ctx.pop_obj();
             let target_ptr = ctx.pop_managed_ptr();
 
-            let target = target_ptr
-                .pointer()
-                .expect("Target pointer should not be null")
-                .as_ptr();
-
             let val_raw = match value.0 {
                 Some(ptr) => Gc::as_ptr(ptr) as usize,
                 None => 0,
@@ -186,11 +166,12 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
 
             let size = ObjectRef::SIZE;
             let prev_raw = match unsafe {
-                StandardAtomicAccess::compare_exchange_atomic(
-                    target,
-                    size,
+                ctx.compare_exchange_atomic(
+                    target_ptr.origin.clone(),
+                    target_ptr.offset,
                     comp_raw as u64,
                     val_raw as u64,
+                    size,
                     Ordering::SeqCst,
                     Ordering::SeqCst,
                 )
@@ -242,13 +223,15 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
             let value = ctx.pop_i32();
             let target_ptr = ctx.pop_managed_ptr();
 
-            let target = target_ptr
-                .pointer()
-                .expect("Target pointer should not be null")
-                .as_ptr();
-
             let prev = unsafe {
-                StandardAtomicAccess::exchange_atomic(target, 4, value as u64, Ordering::SeqCst)
+                ctx.exchange_atomic(
+                    target_ptr.origin.clone(),
+                    target_ptr.offset,
+                    value as u64,
+                    4,
+                    Ordering::SeqCst,
+                )
+                .expect("Interlocked.Exchange failed")
             } as i32;
 
             ctx.push_i32(prev);
@@ -257,13 +240,15 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
             let value = ctx.pop_i64();
             let target_ptr = ctx.pop_managed_ptr();
 
-            let target = target_ptr
-                .pointer()
-                .expect("Target pointer should not be null")
-                .as_ptr();
-
             let prev = unsafe {
-                StandardAtomicAccess::exchange_atomic(target, 8, value as u64, Ordering::SeqCst)
+                ctx.exchange_atomic(
+                    target_ptr.origin.clone(),
+                    target_ptr.offset,
+                    value as u64,
+                    8,
+                    Ordering::SeqCst,
+                )
+                .expect("Interlocked.Exchange failed")
             } as i64;
 
             ctx.push_i64(prev);
@@ -272,14 +257,16 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
             let value = ctx.pop_isize();
             let target_ptr = ctx.pop_managed_ptr();
 
-            let target = target_ptr
-                .pointer()
-                .expect("Target pointer should not be null")
-                .as_ptr();
-
             let size = ObjectRef::SIZE;
             let prev = unsafe {
-                StandardAtomicAccess::exchange_atomic(target, size, value as u64, Ordering::SeqCst)
+                ctx.exchange_atomic(
+                    target_ptr.origin.clone(),
+                    target_ptr.offset,
+                    value as u64,
+                    size,
+                    Ordering::SeqCst,
+                )
+                .expect("Interlocked.Exchange failed")
             } as isize;
 
             ctx.push_isize(prev);
@@ -289,11 +276,6 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
             // We use manual popping to handle both ObjectRef and NativeInt (which might be used for null or pointers).
             let value = ctx.pop();
             let target_ptr = ctx.pop_managed_ptr();
-
-            let target = target_ptr
-                .pointer()
-                .expect("Target pointer should not be null")
-                .as_ptr();
 
             let val_raw = match value {
                 StackValue::ObjectRef(ObjectRef(Some(ptr))) => Gc::as_ptr(ptr) as usize,
@@ -307,12 +289,14 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
 
             let size = ObjectRef::SIZE;
             let prev_raw = unsafe {
-                StandardAtomicAccess::exchange_atomic(
-                    target,
-                    size,
+                ctx.exchange_atomic(
+                    target_ptr.origin.clone(),
+                    target_ptr.offset,
                     val_raw as u64,
+                    size,
                     Ordering::SeqCst,
                 )
+                .expect("Interlocked.Exchange failed")
             } as usize;
 
             let prev = unsafe { ObjectRef::read_branded(&prev_raw.to_ne_bytes(), &gc) };
@@ -339,18 +323,11 @@ fn get_or_create_sync_block<'gc, T: SyncManagerOps>(
     result
 }
 
-fn find_success_flag_index(ctx: &dyn VesOps, success_ptr: ManagedPtr) -> Option<usize> {
-    let mut success_flag_index = None;
-    if let (None, Some(p)) = (success_ptr.owner, success_ptr.pointer()) {
-        let raw_ptr = p.as_ptr();
-        for i in 0..ctx.top_of_stack().as_usize() {
-            if ctx.get_slot_address(crate::StackSlotIndex(i)).as_ptr() == raw_ptr {
-                success_flag_index = Some(i);
-                break;
-            }
-        }
+fn find_success_flag_index(_ctx: &dyn VesOps, success_ptr: &ManagedPtr) -> Option<usize> {
+    if let dotnet_value::pointer::PointerOrigin::Stack(idx, _) = &success_ptr.origin {
+        return Some(idx.0);
     }
-    success_flag_index
+    None
 }
 
 /// System.Threading.Monitor::Enter(object)
@@ -400,7 +377,7 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
     let success_ptr = ctx.peek_stack_at(0).as_managed_ptr();
     let obj_ref = ctx.peek_stack_at(1).as_object_ref();
 
-    let success_flag_index = find_success_flag_index(ctx, success_ptr);
+    let success_flag_index = find_success_flag_index(ctx, &success_ptr);
 
     if obj_ref.0.is_some() {
         let thread_id = ctx.thread_id();
@@ -421,14 +398,14 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
             thread::yield_now();
         }
 
-        let ptr = if let Some(index) = success_flag_index {
-            ctx.get_slot_address(crate::StackSlotIndex(index))
+        if let Some(index) = success_flag_index {
+            ctx.set_slot(crate::StackSlotIndex(index), StackValue::Int32(1));
         } else {
-            success_ptr.pointer().expect("null success flag")
+            unsafe {
+                ctx.write_bytes(success_ptr.origin.clone(), success_ptr.offset, &[1u8])
+                    .expect("Failed to write success flag");
+            }
         };
-        unsafe {
-            *ptr.as_ptr() = 1u8;
-        }
 
         // Pop arguments now that we're done with things that might trigger GC or reallocation
         let _ = ctx.pop(); // success_ptr
@@ -482,7 +459,7 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
     let timeout_ms = ctx.peek_stack_at(1).as_i32();
     let obj_ref = ctx.peek_stack_at(2).as_object_ref();
 
-    let success_flag_index = find_success_flag_index(ctx, success_ptr);
+    let success_flag_index = find_success_flag_index(ctx, &success_ptr);
 
     if obj_ref.0.is_some() {
         let thread_id = ctx.thread_id();
@@ -506,14 +483,21 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
         let success =
             sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &ctx.shared().metrics);
 
-        let ptr = if let Some(index) = success_flag_index {
-            ctx.get_slot_address(crate::StackSlotIndex(index))
+        if let Some(index) = success_flag_index {
+            ctx.set_slot(
+                crate::StackSlotIndex(index),
+                StackValue::Int32(if success { 1 } else { 0 }),
+            );
         } else {
-            success_ptr.pointer().expect("null success flag")
+            unsafe {
+                ctx.write_bytes(
+                    success_ptr.origin.clone(),
+                    success_ptr.offset,
+                    &[if success { 1u8 } else { 0u8 }],
+                )
+                .expect("Failed to write success flag");
+            }
         };
-        unsafe {
-            *ptr.as_ptr() = if success { 1u8 } else { 0u8 };
-        }
 
         // Pop arguments now that we're done
         let _ = ctx.pop(); // success_ptr
@@ -606,32 +590,26 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
     match target_type.get() {
         BaseType::Boolean | BaseType::Int8 | BaseType::UInt8 => {
             let target_ptr = ctx.pop_managed_ptr();
-            let target = target_ptr
-                .pointer()
-                .expect("Target pointer should not be null")
-                .as_ptr();
-
-            let val = unsafe { StandardAtomicAccess::load_atomic(target, 1, Ordering::Acquire) };
+            let val = unsafe {
+                ctx.load_atomic(target_ptr.origin.clone(), target_ptr.offset, 1, Ordering::Acquire)
+                    .unwrap()
+            };
             ctx.push_i32(val as i32);
         }
         BaseType::Int16 | BaseType::UInt16 => {
             let target_ptr = ctx.pop_managed_ptr();
-            let target = target_ptr
-                .pointer()
-                .expect("Target pointer should not be null")
-                .as_ptr();
-
-            let val = unsafe { StandardAtomicAccess::load_atomic(target, 2, Ordering::Acquire) };
+            let val = unsafe {
+                ctx.load_atomic(target_ptr.origin.clone(), target_ptr.offset, 2, Ordering::Acquire)
+                    .unwrap()
+            };
             ctx.push_i32(val as i32);
         }
         BaseType::Int32 | BaseType::UInt32 | BaseType::Float32 => {
             let target_ptr = ctx.pop_managed_ptr();
-            let target = target_ptr
-                .pointer()
-                .expect("Target pointer should not be null")
-                .as_ptr();
-
-            let val = unsafe { StandardAtomicAccess::load_atomic(target, 4, Ordering::Acquire) };
+            let val = unsafe {
+                ctx.load_atomic(target_ptr.origin.clone(), target_ptr.offset, 4, Ordering::Acquire)
+                    .unwrap()
+            };
             if matches!(target_type.get(), BaseType::Float32) {
                 ctx.push_f64(f32::from_bits(val as u32) as f64);
             } else {
@@ -640,12 +618,10 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
         }
         BaseType::Int64 | BaseType::UInt64 | BaseType::Float64 => {
             let target_ptr = ctx.pop_managed_ptr();
-            let target = target_ptr
-                .pointer()
-                .expect("Target pointer should not be null")
-                .as_ptr();
-
-            let val = unsafe { StandardAtomicAccess::load_atomic(target, 8, Ordering::Acquire) };
+            let val = unsafe {
+                ctx.load_atomic(target_ptr.origin.clone(), target_ptr.offset, 8, Ordering::Acquire)
+                    .unwrap()
+            };
             if matches!(target_type.get(), BaseType::Float64) {
                 ctx.push_f64(f64::from_bits(val));
             } else {
@@ -654,25 +630,24 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
         }
         BaseType::IntPtr | BaseType::UIntPtr => {
             let target_ptr = ctx.pop_managed_ptr();
-            let target = target_ptr
-                .pointer()
-                .expect("Target pointer should not be null")
-                .as_ptr();
-
             let size = ObjectRef::SIZE;
-            let val = unsafe { StandardAtomicAccess::load_atomic(target, size, Ordering::Acquire) };
+            let val = unsafe {
+                ctx.load_atomic(target_ptr.origin.clone(), target_ptr.offset, size, Ordering::Acquire)
+                    .unwrap()
+            };
             ctx.push_isize(val as isize);
         }
         _ => {
             // Assume ObjectRef
             let target_ptr = ctx.pop_managed_ptr();
-            let target = target_ptr
-                .pointer()
-                .expect("Target pointer should not be null")
-                .as_ptr();
-
             let val = unsafe {
-                StandardAtomicAccess::load_atomic(target, ObjectRef::SIZE, Ordering::Acquire)
+                ctx.load_atomic(
+                    target_ptr.origin.clone(),
+                    target_ptr.offset,
+                    ObjectRef::SIZE,
+                    Ordering::Acquire,
+                )
+                .unwrap()
             };
             let obj = if val == 0 {
                 ObjectRef(None)
@@ -709,10 +684,6 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
     let _gc = ctx.gc();
     let value = ctx.pop();
     let target_ptr = ctx.pop_managed_ptr();
-    let target = target_ptr
-        .pointer()
-        .expect("Target pointer should not be null")
-        .as_ptr();
 
     let params = &method.method.signature.parameters;
     let Parameter(_, target_ref_type) = &params[0];
@@ -732,14 +703,32 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
                 StackValue::Int32(i) => i as u64,
                 _ => panic!("Expected Int32 for byte-sized Volatile.Write"),
             };
-            unsafe { StandardAtomicAccess::store_atomic(target, 1, val, Ordering::Release) };
+            unsafe {
+                ctx.store_atomic(
+                    target_ptr.origin.clone(),
+                    target_ptr.offset,
+                    val,
+                    1,
+                    Ordering::Release,
+                )
+                .unwrap();
+            }
         }
         BaseType::Int16 | BaseType::UInt16 => {
             let val = match value {
                 StackValue::Int32(i) => i as u64,
                 _ => panic!("Expected Int32 for 16-bit Volatile.Write"),
             };
-            unsafe { StandardAtomicAccess::store_atomic(target, 2, val, Ordering::Release) };
+            unsafe {
+                ctx.store_atomic(
+                    target_ptr.origin.clone(),
+                    target_ptr.offset,
+                    val,
+                    2,
+                    Ordering::Release,
+                )
+                .unwrap();
+            }
         }
         BaseType::Int32 | BaseType::UInt32 | BaseType::Float32 => {
             let val = match value {
@@ -747,7 +736,16 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
                 StackValue::NativeFloat(f) => (f as f32).to_bits() as u64,
                 _ => panic!("Expected Int32 or Float for 32-bit Volatile.Write"),
             };
-            unsafe { StandardAtomicAccess::store_atomic(target, 4, val, Ordering::Release) };
+            unsafe {
+                ctx.store_atomic(
+                    target_ptr.origin.clone(),
+                    target_ptr.offset,
+                    val,
+                    4,
+                    Ordering::Release,
+                )
+                .unwrap();
+            }
         }
         BaseType::Int64 | BaseType::UInt64 | BaseType::Float64 => {
             let val = match value {
@@ -755,7 +753,16 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
                 StackValue::NativeFloat(f) => f.to_bits(),
                 _ => panic!("Expected Int64 or Float for 64-bit Volatile.Write"),
             };
-            unsafe { StandardAtomicAccess::store_atomic(target, 8, val, Ordering::Release) };
+            unsafe {
+                ctx.store_atomic(
+                    target_ptr.origin.clone(),
+                    target_ptr.offset,
+                    val,
+                    8,
+                    Ordering::Release,
+                )
+                .unwrap();
+            }
         }
         BaseType::IntPtr | BaseType::UIntPtr => {
             let val = match value {
@@ -763,7 +770,16 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
                 _ => panic!("Expected NativeInt for Volatile.Write"),
             };
             let size = ObjectRef::SIZE;
-            unsafe { StandardAtomicAccess::store_atomic(target, size, val, Ordering::Release) };
+            unsafe {
+                ctx.store_atomic(
+                    target_ptr.origin.clone(),
+                    target_ptr.offset,
+                    val,
+                    size,
+                    Ordering::Release,
+                )
+                .unwrap();
+            }
         }
         _ => {
             // Assume ObjectRef
@@ -774,7 +790,16 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
                 _ => panic!("Expected ObjectRef or NativeInt for Volatile.Write"),
             };
             let size = ObjectRef::SIZE;
-            unsafe { StandardAtomicAccess::store_atomic(target, size, val_raw, Ordering::Release) };
+            unsafe {
+                ctx.store_atomic(
+                    target_ptr.origin.clone(),
+                    target_ptr.offset,
+                    val_raw,
+                    size,
+                    Ordering::Release,
+                )
+                .unwrap();
+            }
         }
     }
 

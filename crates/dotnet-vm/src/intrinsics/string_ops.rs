@@ -256,10 +256,30 @@ pub fn intrinsic_string_get_raw_data<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let val = ctx.pop();
-    let ptr = with_string!(ctx, val, |s| s.as_ptr() as *mut u8);
     let char_type = vm_try!(ctx.loader().corlib_type("System.Char"));
-    ctx.push_ptr(ptr, char_type, false);
-    StepResult::Continue
+
+    let obj = val.as_object_ref();
+    if let Some(handle) = obj.0 {
+        let heap = handle.borrow();
+        if let HeapStorage::Str(_) = &heap.storage {
+            let ptr = unsafe { heap.storage.raw_data_ptr() };
+            ctx.push_ptr(
+                ptr,
+                char_type,
+                false,
+                Some(obj),
+                Some(dotnet_value::ByteOffset(0)),
+            );
+            StepResult::Continue
+        } else {
+            panic!(
+                "invalid type on stack, expected string, received {:?}",
+                heap.storage
+            )
+        }
+    } else {
+        ctx.throw_by_name("System.NullReferenceException")
+    }
 }
 
 /// System.String::IndexOf(char)

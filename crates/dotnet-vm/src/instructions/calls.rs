@@ -141,11 +141,7 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         } else {
             // No override: box the value and use base implementation
             let m = args[0].as_managed_ptr();
-            let ptr = m
-                .pointer()
-                .map(|p: ptr::NonNull<u8>| p.as_ptr())
-                .unwrap_or(ptr::null_mut());
-            if ptr.is_null() {
+            if m.is_null() {
                 return ctx.throw_by_name("System.NullReferenceException");
             }
 
@@ -155,12 +151,10 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             ))
             .size();
 
-            let mut value_vec = vec![0u8; value_size.as_usize()];
-            // SAFETY: Memory is allocated with sufficient size (value_size) and ptr is valid
-            // for the current thread's evaluation stack.
-            unsafe { ptr::copy_nonoverlapping(ptr, value_vec.as_mut_ptr(), value_size.as_usize()) };
-            let value_data = &value_vec;
-            let value = vm_try!(ctx.read_cts_value(&constraint_type_source, value_data));
+            let value_vec = unsafe {
+                m.with_data(value_size.as_usize(), |data| data.to_vec())
+            };
+            let value = vm_try!(ctx.read_cts_value(&constraint_type_source, &value_vec));
 
             let boxed = ObjectRef::new(
                 ctx.gc(),
@@ -182,19 +176,13 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     } else {
         // Reference type: dereference the managed pointer
         let m = args[0].as_managed_ptr();
-        let Some(p) = m.pointer() else {
+        if m.is_null() {
             return ctx.throw_by_name("System.NullReferenceException");
         };
-        let ptr = p.as_ptr();
-        debug_assert!(
-            (ptr as usize).is_multiple_of(align_of::<ObjectRef>()),
-            "ManagedPtr value is not aligned for ObjectRef"
-        );
-        // Create a slice from the pointer. We know ObjectRef is pointer-sized.
 
-        let mut value_vec = vec![0u8; ObjectRef::SIZE];
-        // SAFETY: ObjectRef size is fixed and ptr is valid for the current thread's evaluation stack.
-        unsafe { ptr::copy_nonoverlapping(ptr, value_vec.as_mut_ptr(), ObjectRef::SIZE) };
+        let value_vec = unsafe {
+            m.with_data(ObjectRef::SIZE, |data| data.to_vec())
+        };
         let value_bytes = &value_vec;
 
         // SAFETY: value_bytes contains a valid ObjectRef from the stack and gc is the current arena.
