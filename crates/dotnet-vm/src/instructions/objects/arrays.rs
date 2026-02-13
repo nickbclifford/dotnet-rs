@@ -2,9 +2,9 @@ use crate::{StepResult, layout::type_layout, stack::ops::VesOps};
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::{
     StackValue,
-    layout::HasLayout,
+    layout::{HasLayout, LayoutManager, Scalar},
     object::{HeapStorage, ObjectRef},
-    pointer::ManagedPtr,
+    pointer::{ManagedPtr, PointerOrigin},
 };
 use dotnetdll::prelude::*;
 use std::ptr::NonNull;
@@ -30,21 +30,16 @@ pub fn ldelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 
     let res_ctx = ctx.current_context();
     let load_type = vm_try!(res_ctx.make_concrete(param0));
-    let value = obj.as_vector(|array| {
-        if index >= array.layout.length {
-            return Err(());
-        }
-        let elem_size = array.layout.element_layout.size();
-        let target =
-            &array.get()[(elem_size.as_usize() * index)..(elem_size.as_usize() * (index + 1))];
-        ctx.read_cts_value(&load_type, target)
-            .map(|v| v.into_stack(ctx.gc()))
-            .map_err(|_| ())
-    });
-    match value {
-        Ok(v) => ctx.push(v),
+    let layout = vm_try!(type_layout(load_type.clone(), &res_ctx));
+    let target_type = vm_try!(ctx.loader().find_concrete_type(load_type));
+    let offset = dotnet_utils::ByteOffset(layout.size().as_usize() * index);
+
+    // SAFETY: read_unaligned handles GC-safe reading from the heap with bounds checking.
+    let value = match unsafe { ctx.read_unaligned(PointerOrigin::Heap(obj), offset, &layout, Some(target_type)) } {
+        Ok(v) => v,
         Err(_) => return ctx.throw_by_name("System.IndexOutOfRangeException"),
-    }
+    };
+    ctx.push(value);
     StepResult::Continue
 }
 
@@ -71,48 +66,27 @@ pub fn ldelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         return ctx.throw_by_name("System.NullReferenceException");
     }
 
-    let elem_size: usize = match param0 {
-        LoadType::Int8 | LoadType::UInt8 => 1,
-        LoadType::Int16 | LoadType::UInt16 => 2,
-        LoadType::Int32 | LoadType::UInt32 => 4,
-        LoadType::Int64 => 8,
-        LoadType::Float32 => 4,
-        LoadType::Float64 => 8,
-        LoadType::IntPtr | LoadType::Object => ObjectRef::SIZE,
+    let layout = match param0 {
+        LoadType::Int8 => Scalar::Int8,
+        LoadType::UInt8 => Scalar::UInt8,
+        LoadType::Int16 => Scalar::Int16,
+        LoadType::UInt16 => Scalar::UInt16,
+        LoadType::Int32 | LoadType::UInt32 => Scalar::Int32,
+        LoadType::Int64 => Scalar::Int64,
+        LoadType::Float32 => Scalar::Float32,
+        LoadType::Float64 => Scalar::Float64,
+        LoadType::IntPtr => Scalar::NativeInt,
+        LoadType::Object => Scalar::ObjectRef,
     };
+    let layout = LayoutManager::Scalar(layout);
+    let offset = dotnet_utils::ByteOffset(layout.size().as_usize() * index);
 
-    let value = obj.as_vector(|array| {
-        if index >= array.layout.length {
-            return Err(());
-        }
-        let target = &array.get()[(elem_size * index)..(elem_size * (index + 1))];
-
-        macro_rules! from_bytes {
-            ($t:ty) => {
-                <$t>::from_ne_bytes(target.try_into().expect("source data was too small"))
-            };
-        }
-
-        Ok(match param0 {
-            LoadType::Int8 => StackValue::Int32(from_bytes!(i8) as i32),
-            LoadType::UInt8 => StackValue::Int32(from_bytes!(u8) as i32),
-            LoadType::Int16 => StackValue::Int32(from_bytes!(i16) as i32),
-            LoadType::UInt16 => StackValue::Int32(from_bytes!(u16) as i32),
-            LoadType::Int32 => StackValue::Int32(from_bytes!(i32)),
-            LoadType::UInt32 => StackValue::Int32(from_bytes!(u32) as i32),
-            LoadType::Int64 => StackValue::Int64(from_bytes!(i64)),
-            LoadType::Float32 => StackValue::NativeFloat(from_bytes!(f32) as f64),
-            LoadType::Float64 => StackValue::NativeFloat(from_bytes!(f64)),
-            LoadType::IntPtr => StackValue::NativeInt(from_bytes!(isize)),
-            LoadType::Object => {
-                StackValue::ObjectRef(unsafe { ObjectRef::read_branded(target, &ctx.gc()) })
-            }
-        })
-    });
-    match value {
-        Ok(v) => ctx.push(v),
+    // SAFETY: read_unaligned handles GC-safe reading from the heap with bounds checking.
+    let value = match unsafe { ctx.read_unaligned(PointerOrigin::Heap(obj), offset, &layout, None) } {
+        Ok(v) => v,
         Err(_) => return ctx.throw_by_name("System.IndexOutOfRangeException"),
-    }
+    };
+    ctx.push(value);
     StepResult::Continue
 }
 
@@ -156,19 +130,16 @@ fn ldelema_internal<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let concrete_t = vm_try!(res_ctx.make_concrete(param0));
     let element_layout = vm_try!(type_layout(concrete_t.clone(), &res_ctx));
 
-    let value = obj.as_vector(|v| {
+    let element_offset = (element_layout.size() * index).as_usize();
+    let result = obj.as_vector(|v| {
         if index >= v.layout.length {
             return Err(());
         }
-        let ptr = unsafe {
-            v.get()
-                .as_ptr()
-                .add((element_layout.size() * index).as_usize()) as *mut u8
-        };
+        let ptr = unsafe { v.raw_data_ptr().add(element_offset) };
         Ok(ptr)
     });
 
-    let ptr = match value {
+    let ptr = match result {
         Ok(p) => p,
         Err(_) => return ctx.throw_by_name("System.IndexOutOfRangeException"),
     };
@@ -182,6 +153,7 @@ fn ldelema_internal<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         target_type,
         Some(obj),
         readonly,
+        Some(dotnet_value::ByteOffset(element_offset)),
     )));
 
     StepResult::Continue
@@ -209,18 +181,11 @@ pub fn stelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 
     let res_ctx = ctx.current_context();
     let store_type = vm_try!(res_ctx.make_concrete(param0));
-    let result = obj.as_vector_mut(ctx.gc(), |array| {
-        if index >= array.layout.length {
-            return Err(());
-        }
-        let elem_size = array.layout.element_layout.size();
-        let target = &mut array.get_mut()
-            [(elem_size.as_usize() * index)..(elem_size.as_usize() * (index + 1))];
-        ctx.new_cts_value(&store_type, value)
-            .map(|v| v.write(target))
-            .map_err(|_| ())
-    });
-    match result {
+    let layout = vm_try!(type_layout(store_type, &res_ctx));
+    let offset = dotnet_utils::ByteOffset(layout.size().as_usize() * index);
+
+    // SAFETY: write_unaligned handles GC-safe writing to the heap with bounds checking and write barriers.
+    match unsafe { ctx.write_unaligned(PointerOrigin::Heap(obj), offset, value, &layout) } {
         Ok(_) => StepResult::Continue,
         Err(_) => ctx.throw_by_name("System.IndexOutOfRangeException"),
     }
@@ -246,89 +211,21 @@ pub fn stelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         return ctx.throw_by_name("System.NullReferenceException");
     }
 
-    let elem_size: usize = match param0 {
-        StoreType::Int8 => 1,
-        StoreType::Int16 => 2,
-        StoreType::Int32 => 4,
-        StoreType::Int64 => 8,
-        StoreType::Float32 => 4,
-        StoreType::Float64 => 8,
-        StoreType::IntPtr | StoreType::Object => ObjectRef::SIZE,
+    let layout = match param0 {
+        StoreType::Int8 => Scalar::Int8,
+        StoreType::Int16 => Scalar::Int16,
+        StoreType::Int32 => Scalar::Int32,
+        StoreType::Int64 => Scalar::Int64,
+        StoreType::Float32 => Scalar::Float32,
+        StoreType::Float64 => Scalar::Float64,
+        StoreType::IntPtr => Scalar::NativeInt,
+        StoreType::Object => Scalar::ObjectRef,
     };
+    let layout = LayoutManager::Scalar(layout);
+    let offset = dotnet_utils::ByteOffset(layout.size().as_usize() * index);
 
-    let result = obj.as_vector_mut(ctx.gc(), |array| {
-        if index >= array.layout.length {
-            return Err(());
-        }
-        let target = &mut array.get_mut()[(elem_size * index)..(elem_size * (index + 1))];
-
-        macro_rules! to_bytes {
-            ($t:ty, $v:expr) => {{
-                let val = $v as $t;
-                target.copy_from_slice(&val.to_ne_bytes());
-            }};
-        }
-
-        match param0 {
-            StoreType::Int8 => to_bytes!(
-                i8,
-                match value {
-                    StackValue::Int32(i) => i,
-                    _ => panic!("Invalid value for i8 store"),
-                }
-            ),
-            StoreType::Int16 => to_bytes!(
-                i16,
-                match value {
-                    StackValue::Int32(i) => i,
-                    _ => panic!("Invalid value for i16 store"),
-                }
-            ),
-            StoreType::Int32 => to_bytes!(
-                i32,
-                match value {
-                    StackValue::Int32(i) => i,
-                    _ => panic!("Invalid value for i32 store"),
-                }
-            ),
-            StoreType::Int64 => to_bytes!(
-                i64,
-                match value {
-                    StackValue::Int64(i) => i,
-                    _ => panic!("Invalid value for i64 store"),
-                }
-            ),
-            StoreType::Float32 => to_bytes!(
-                f32,
-                match value {
-                    StackValue::NativeFloat(f) => f,
-                    _ => panic!("Invalid value for f32 store"),
-                }
-            ),
-            StoreType::Float64 => to_bytes!(
-                f64,
-                match value {
-                    StackValue::NativeFloat(f) => f,
-                    _ => panic!("Invalid value for f64 store"),
-                }
-            ),
-            StoreType::IntPtr => to_bytes!(
-                usize,
-                match value {
-                    StackValue::NativeInt(i) => i as usize,
-                    _ => panic!("Invalid value for IntPtr store"),
-                }
-            ),
-            StoreType::Object => {
-                let StackValue::ObjectRef(r) = value else {
-                    panic!("Invalid value for object store")
-                };
-                r.write(target);
-            }
-        }
-        Ok(())
-    });
-    match result {
+    // SAFETY: write_unaligned handles GC-safe writing to the heap with bounds checking and write barriers.
+    match unsafe { ctx.write_unaligned(PointerOrigin::Heap(obj), offset, value, &layout) } {
         Ok(_) => StepResult::Continue,
         Err(_) => ctx.throw_by_name("System.IndexOutOfRangeException"),
     }

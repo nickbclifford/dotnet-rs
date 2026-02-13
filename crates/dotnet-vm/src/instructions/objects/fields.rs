@@ -1,5 +1,5 @@
 use crate::{
-    StepResult, instructions::objects::get_ptr_context, layout::LayoutFactory, memory::Atomic,
+    StepResult, instructions::objects::get_ptr_context, layout::LayoutFactory,
     resolution::ValueResolution, stack::ops::VesOps, sync::Ordering as AtomicOrdering,
 };
 use dotnet_macros::dotnet_instruction;
@@ -7,7 +7,7 @@ use dotnet_value::{
     StackValue,
     layout::HasLayout,
     object::{HeapStorage, ObjectRef},
-    pointer::{ManagedPtr, UnmanagedPtr},
+    pointer::{ManagedPtr, PointerOrigin},
 };
 use dotnetdll::prelude::*;
 use std::ptr::{self, NonNull};
@@ -34,7 +34,7 @@ pub fn ldfld<'gc, 'm: 'gc>(
     let name = &field.field.name;
     let t = vm_try!(res_ctx.get_field_type(field));
 
-    let ordering = if volatile {
+    let _ordering = if volatile {
         AtomicOrdering::SeqCst
     } else {
         AtomicOrdering::Acquire
@@ -69,46 +69,11 @@ pub fn ldfld<'gc, 'm: 'gc>(
         }
     }
 
-    let parent_data = if let StackValue::ObjectRef(ObjectRef(Some(h))) = &parent {
-        Some(h.borrow())
-    } else {
-        None
-    };
+    if let StackValue::ObjectRef(ObjectRef(None)) = &parent {
+        return ctx.throw_by_name("System.NullReferenceException");
+    }
+    let (origin, base_offset) = crate::instructions::objects::get_ptr_info(ctx, &parent);
 
-    let ptr = match &parent {
-        StackValue::ObjectRef(ObjectRef(Some(_))) => {
-            let inner = parent_data.as_ref().unwrap();
-            match &inner.storage {
-                HeapStorage::Obj(o) => o.instance_storage.get().as_ptr() as *mut u8,
-                HeapStorage::Vec(v) => v.get().as_ptr() as *mut u8,
-                HeapStorage::Str(s) => s.as_ptr() as *mut u8,
-                HeapStorage::Boxed(v) => match v {
-                    dotnet_value::object::ValueType::Struct(s) => {
-                        s.instance_storage.get().as_ptr() as *mut u8
-                    }
-                    _ => ptr::null_mut(),
-                },
-            }
-        }
-        StackValue::ValueType(v) => v.instance_storage.get().as_ptr() as *mut u8,
-        StackValue::ManagedPtr(_) => {
-            let (ptr, _, _, _) = get_ptr_context(ctx, &parent);
-            ptr
-        }
-        StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-        StackValue::NativeInt(i) => {
-            if *i == 0 {
-                return ctx.throw_by_name("System.NullReferenceException");
-            }
-            *i as *mut u8
-        }
-        StackValue::ObjectRef(ObjectRef(None)) => {
-            return ctx.throw_by_name("System.NullReferenceException");
-        }
-        v => panic!("Invalid parent for ldfld: {:?}", v),
-    };
-
-    debug_assert!(!ptr.is_null(), "Attempted to read field from null pointer");
     let layout = vm_try!(LayoutFactory::instance_field_layout_cached(
         field.parent,
         &res_ctx,
@@ -116,13 +81,24 @@ pub fn ldfld<'gc, 'm: 'gc>(
     ));
     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
 
-    let size = field_layout.layout.size();
-    let field_ptr = unsafe { ptr.add(field_layout.position.as_usize()) };
+    let offset = base_offset + field_layout.position;
+    let target_type = vm_try!(ctx.loader().find_concrete_type(t));
 
-    let val_bytes = unsafe { Atomic::load_field(field_ptr, size.as_usize(), ordering) };
-    let value = vm_try!(res_ctx.read_cts_value(&t, &val_bytes, ctx.gc()));
+    // SAFETY: read_unaligned handles GC-safe reading from the heap if an owner is provided.
+    // It also performs bounds checking.
+    let value = match unsafe {
+        ctx.read_unaligned(origin, offset, &field_layout.layout, Some(target_type))
+    } {
+            Ok(v) => v,
+            Err(e) => {
+                if offset.0 == 0 {
+                    return ctx.throw_by_name("System.NullReferenceException");
+                }
+                panic!("ldfld failed: {}", e);
+            }
+        };
 
-    ctx.push(value.into_stack(ctx.gc()));
+    ctx.push(value);
     StepResult::Continue
 }
 
@@ -141,54 +117,19 @@ pub fn stfld<'gc, 'm: 'gc>(
         .current_context()
         .for_type_with_generics(field.parent, &lookup);
     let name = &field.field.name;
-    let t = vm_try!(res_ctx.get_field_type(field));
+    let _t = vm_try!(res_ctx.get_field_type(field));
 
-    let ordering = if volatile {
+    let _ordering = if volatile {
         AtomicOrdering::SeqCst
     } else {
         AtomicOrdering::Release
     };
 
-    let parent_data = if let StackValue::ObjectRef(ObjectRef(Some(h))) = &parent {
-        Some(h.borrow_mut(&ctx.gc()))
-    } else {
-        None
-    };
+    if let StackValue::ObjectRef(ObjectRef(None)) = &parent {
+        return ctx.throw_by_name("System.NullReferenceException");
+    }
+    let (origin, base_offset) = crate::instructions::objects::get_ptr_info(ctx, &parent);
 
-    let ptr = match &parent {
-        StackValue::ObjectRef(ObjectRef(Some(_))) => {
-            let inner = parent_data.as_ref().unwrap();
-            match &inner.storage {
-                HeapStorage::Obj(o) => o.instance_storage.get().as_ptr() as *mut u8,
-                HeapStorage::Vec(v) => v.get().as_ptr() as *mut u8,
-                HeapStorage::Str(s) => s.as_ptr() as *mut u8,
-                HeapStorage::Boxed(v) => match v {
-                    dotnet_value::object::ValueType::Struct(s) => {
-                        s.instance_storage.get().as_ptr() as *mut u8
-                    }
-                    _ => ptr::null_mut(),
-                },
-            }
-        }
-        StackValue::ValueType(v) => v.instance_storage.get().as_ptr() as *mut u8,
-        StackValue::ManagedPtr(_) => {
-            let (ptr, _, _, _) = get_ptr_context(ctx, &parent);
-            ptr
-        }
-        StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-        StackValue::NativeInt(i) => {
-            if *i == 0 {
-                return ctx.throw_by_name("System.NullReferenceException");
-            }
-            *i as *mut u8
-        }
-        StackValue::ObjectRef(ObjectRef(None)) => {
-            return ctx.throw_by_name("System.NullReferenceException");
-        }
-        v => panic!("Invalid parent for stfld: {:?}", v),
-    };
-
-    debug_assert!(!ptr.is_null(), "Attempted to write field to null pointer");
     let layout = vm_try!(LayoutFactory::instance_field_layout_cached(
         field.parent,
         &res_ctx,
@@ -196,13 +137,18 @@ pub fn stfld<'gc, 'm: 'gc>(
     ));
     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
 
-    let size = field_layout.layout.size();
-    let field_ptr = unsafe { ptr.add(field_layout.position.as_usize()) };
-
-    let mut val_bytes = vec![0u8; size.as_usize()];
-    vm_try!(ctx.new_cts_value(&t, value)).write(&mut val_bytes);
-
-    unsafe { Atomic::store_field(field_ptr, &val_bytes, ordering) };
+    let offset = base_offset + field_layout.position;
+    // SAFETY: write_unaligned handles GC-safe writing to the heap if an owner is provided.
+    // It also performs bounds checking and write barriers.
+    match unsafe { ctx.write_unaligned(origin, offset, value, &field_layout.layout) } {
+        Ok(_) => {}
+        Err(e) => {
+            if offset.0 == 0 {
+                return ctx.throw_by_name("System.NullReferenceException");
+            }
+            panic!("stfld failed: {}", e);
+        }
+    }
 
     StepResult::Continue
 }
@@ -307,12 +253,12 @@ pub fn ldflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource)
         if field.parent.type_name() == "System.Runtime.CompilerServices.RawData" {
             let data = h.borrow();
             let ptr = match &data.storage {
-                HeapStorage::Obj(o) => o.instance_storage.get().as_ptr() as *mut u8,
-                HeapStorage::Vec(v) => v.get().as_ptr() as *mut u8,
+                HeapStorage::Obj(o) => unsafe { o.instance_storage.raw_data_ptr() },
+                HeapStorage::Vec(v) => unsafe { v.raw_data_ptr() },
                 HeapStorage::Boxed(b) => match b {
-                    dotnet_value::object::ValueType::Struct(s) => {
-                        s.instance_storage.get().as_ptr() as *mut u8
-                    }
+                    dotnet_value::object::ValueType::Struct(s) => unsafe {
+                        s.instance_storage.raw_data_ptr()
+                    },
                     _ => ptr::null_mut(),
                 },
                 HeapStorage::Str(_) => ptr::null_mut(),
@@ -326,6 +272,7 @@ pub fn ldflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource)
                     target_type,
                     Some(ObjectRef(Some(*h))),
                     false,
+                    Some(dotnet_value::ByteOffset(0)),
                 )));
                 return StepResult::Continue;
             }
@@ -335,7 +282,7 @@ pub fn ldflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource)
             let data = h.borrow();
             if let HeapStorage::Vec(ref vector) = data.storage {
                 let ptr = if field.field.name == "Data" {
-                    vector.get().as_ptr() as *mut u8
+                    unsafe { vector.raw_data_ptr() }
                 } else if field.field.name == "Length" {
                     (&vector.layout.length as *const usize) as *mut u8
                 } else {
@@ -344,12 +291,25 @@ pub fn ldflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource)
 
                 if !ptr.is_null() {
                     let target_type = vm_try!(ctx.current_context().get_field_desc(field));
+                    let offset = if field.field.name == "Data" {
+                        dotnet_value::ByteOffset(0)
+                    } else {
+                        // Length is at the beginning of the ObjectInner? No, Vector struct.
+                        // Actually, Length field in RawArrayData is special.
+                        // If it's not the data, we should probably still calculate offset correctly if we want it to be stable.
+                        // But RawArrayData is a hack anyway.
+                        dotnet_value::ByteOffset(
+                            (ptr as usize)
+                                .wrapping_sub(unsafe { data.storage.raw_data_ptr() } as usize),
+                        )
+                    };
                     drop(data);
                     ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
                         NonNull::new(ptr),
                         target_type,
                         Some(ObjectRef(Some(*h))),
                         false,
+                        Some(offset),
                     )));
                     return StepResult::Continue;
                 }
@@ -360,7 +320,7 @@ pub fn ldflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource)
     if let StackValue::ObjectRef(ObjectRef(None)) = &parent {
         return ctx.throw_by_name("System.NullReferenceException");
     }
-    let (ptr, owner, stack_slot_origin, base_offset) = get_ptr_context(ctx, &parent);
+    let (origin, base_offset) = get_ptr_context(ctx, &parent);
 
     let res_ctx = ctx
         .current_context()
@@ -374,32 +334,91 @@ pub fn ldflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource)
     ));
     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
 
-    let ptr = if field.parent.type_name() == "System.String" && name == "_firstChar" {
-        unsafe { ptr.sub(field_layout.position.as_usize()) }
+    let base_offset = if field.parent.type_name() == "System.String" && name == "_firstChar" {
+        base_offset - field_layout.position
     } else {
-        ptr
+        base_offset
     };
 
-    let field_ptr = unsafe { ptr.add(field_layout.position.as_usize()) };
+    let field_offset = base_offset + field_layout.position;
     let t = vm_try!(res_ctx.get_field_type(field));
     let target_type = vm_try!(ctx.loader().find_concrete_type(t));
 
-    if let Some((idx, _)) = stack_slot_origin {
-        let new_offset = base_offset + field_layout.position;
-        ctx.push(StackValue::managed_stack_ptr(
-            idx,
-            new_offset,
-            field_ptr,
-            target_type,
-            false,
-        ));
-    } else {
-        ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
-            NonNull::new(field_ptr),
-            target_type,
-            owner,
-            false,
-        )));
+    match origin {
+        PointerOrigin::Stack(idx, _) => {
+            let slot = ctx.get_slot_ref(idx);
+            let field_ptr = if let StackValue::ValueType(v) = slot {
+                let base_ptr = v.instance_storage.get().as_ptr();
+                unsafe { base_ptr.add(field_offset.as_usize()) as *mut u8 }
+            } else {
+                panic!("Expected ValueType in slot for ldflda");
+            };
+            ctx.push(StackValue::managed_stack_ptr(
+                idx,
+                field_offset,
+                field_ptr,
+                target_type,
+                false,
+            ));
+        }
+        PointerOrigin::Heap(obj) => {
+            let base_ptr = obj.with_data(|d| d.as_ptr());
+            let field_ptr = unsafe { base_ptr.add(field_offset.as_usize()) as *mut u8 };
+            ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
+                NonNull::new(field_ptr),
+                target_type,
+                Some(obj),
+                false,
+                Some(field_offset),
+            )));
+        }
+        PointerOrigin::Static(type_desc, lookup) => {
+            let storage = ctx.statics().get(type_desc, &lookup);
+            let base_ptr = unsafe { storage.storage.raw_data_ptr() };
+            let field_ptr = unsafe { base_ptr.add(field_offset.as_usize()) };
+            ctx.push(StackValue::ManagedPtr(ManagedPtr::new_static(
+                NonNull::new(field_ptr),
+                target_type,
+                type_desc,
+                lookup,
+                false,
+                field_offset,
+            )));
+        }
+        PointerOrigin::ValueType(v) => {
+            let base_ptr = v.instance_storage.get().as_ptr();
+            let field_ptr = unsafe { base_ptr.add(field_offset.as_usize()) as *mut u8 };
+            ctx.push(StackValue::ManagedPtr(ManagedPtr::new_value_type(
+                NonNull::new(field_ptr),
+                target_type,
+                v,
+                field_offset,
+            )));
+        }
+        PointerOrigin::Unmanaged => {
+            let field_ptr = field_offset.as_usize() as *mut u8;
+            ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
+                NonNull::new(field_ptr),
+                target_type,
+                None,
+                false,
+                Some(field_offset),
+            )));
+        }
+        #[cfg(feature = "multithreaded-gc")]
+        PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+            let lock = unsafe { ptr.0.as_ref() };
+            let guard = lock.borrow();
+            let base_ptr = unsafe { guard.storage.raw_data_ptr() };
+            let field_ptr = unsafe { base_ptr.add(field_offset.as_usize()) };
+            ctx.push(StackValue::ManagedPtr(ManagedPtr::new_cross_arena(
+                NonNull::new(field_ptr),
+                target_type,
+                ptr,
+                tid,
+                field_offset,
+            )));
+        }
     }
 
     StepResult::Continue
@@ -421,20 +440,22 @@ pub fn ldsflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource
     let name = &field.field.name;
 
     let storage = ctx.statics().get(field.parent, &lookup);
-    let ptr = storage.storage.get().as_ptr() as *mut u8;
+    let base_ptr = unsafe { storage.storage.raw_data_ptr() };
 
     let layout = storage.layout();
     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
-    let field_ptr = unsafe { ptr.add(field_layout.position.as_usize()) };
+    let field_ptr = unsafe { base_ptr.add(field_layout.position.as_usize()) };
 
     let t = vm_try!(res_ctx.get_field_type(field));
     let target_type = vm_try!(ctx.loader().find_concrete_type(t));
 
-    ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
+    ctx.push(StackValue::ManagedPtr(ManagedPtr::new_static(
         NonNull::new(field_ptr),
         target_type,
-        None,
+        field.parent,
+        lookup,
         false,
+        field_layout.position,
     )));
 
     StepResult::Continue

@@ -131,20 +131,18 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
         StackValue::ObjectRef(ObjectRef(Some(h))) => {
             let heap = h.borrow();
             match &heap.storage {
-                HeapStorage::Str(s) => {
-                    (
-                        s.as_ptr() as *mut u8,
-                        s.len(),
-                        Some(h),
-                        vm_try!(res_ctx.make_concrete(&dotnetdll::prelude::BaseType::Char)),
-                        2, // char is 2 bytes in .NET
-                    )
-                }
+                HeapStorage::Str(s) => (
+                    unsafe { heap.storage.raw_data_ptr() },
+                    s.len(),
+                    Some(h),
+                    vm_try!(res_ctx.make_concrete(&dotnetdll::prelude::BaseType::Char)),
+                    2, // char is 2 bytes in .NET
+                ),
                 HeapStorage::Vec(a) => {
                     let elem_type = a.element.clone();
                     let elem_size = a.layout.element_layout.size();
                     (
-                        a.get().as_ptr() as *mut u8,
+                        unsafe { a.raw_data_ptr() },
                         a.layout.length,
                         Some(h),
                         elem_type,
@@ -186,6 +184,11 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
     } else {
         total_len - start
     };
+    let offset = if base_ptr.is_null() {
+        0
+    } else {
+        start * element_size
+    };
     let ptr = if base_ptr.is_null() {
         base_ptr
     } else {
@@ -213,6 +216,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
             element_type_desc,
             Some(ObjectRef(Some(h))),
             false,
+            Some(dotnet_value::ByteOffset(offset)),
         );
         managed.write(
             &mut span
@@ -286,6 +290,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
             element_desc,
             None,
             false,
+            None,
         );
         managed.write(
             &mut span_instance
@@ -362,14 +367,12 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
 
         let element_count = (array_size / element_size.as_usize()) as i32;
         unsafe {
-            std::ptr::copy_nonoverlapping(
-                element_count.to_ne_bytes().as_ptr(),
-                length_ref
-                    .pointer()
-                    .expect("System.NullReferenceException")
-                    .as_ptr(),
-                size_of::<i32>(),
-            );
+            ctx.write_bytes(
+                length_ref.origin.clone(),
+                length_ref.offset,
+                &element_count.to_ne_bytes(),
+            )
+            .expect("System.NullReferenceException");
         }
 
         let ptr = initial_data.as_ptr() as usize;
@@ -400,19 +403,20 @@ pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc>(
     if let Some(handle) = array_ref.0 {
         let inner = handle.borrow();
         if let HeapStorage::Vec(v) = &inner.storage {
-            let ptr = v.get().as_ptr();
+            let ptr = unsafe { v.raw_data_ptr() };
             let managed = ManagedPtr::new(
-                NonNull::new(ptr as *mut u8),
+                NonNull::new(ptr),
                 element_type_desc,
                 Some(array_ref),
                 false,
+                Some(dotnet_value::ByteOffset(0)),
             );
             ctx.push_managed_ptr(managed);
         } else {
             panic!("GetArrayData called on non-vector object");
         }
     } else {
-        let managed = ManagedPtr::new(None, element_type_desc, None, false);
+        let managed = ManagedPtr::new(None, element_type_desc, None, false, None);
         ctx.push_managed_ptr(managed);
     }
     StepResult::Continue

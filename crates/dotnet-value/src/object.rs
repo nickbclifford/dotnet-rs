@@ -19,7 +19,9 @@ use std::{
     hash::{Hash, Hasher},
     iter,
     marker::PhantomData,
+    mem::size_of,
     ptr::{self, NonNull},
+    sync::Arc,
 };
 
 #[cfg(feature = "multithreaded-gc")]
@@ -188,7 +190,8 @@ impl<'gc> ObjectRef<'gc> {
     pub fn pointer(&self) -> Option<NonNull<u8>> {
         self.0.map(|h| {
             let inner = h.borrow();
-            NonNull::new(inner.storage.as_ptr() as *mut u8).expect("Object storage pointer is null")
+            NonNull::new(unsafe { inner.storage.raw_data_ptr() })
+                .expect("Object storage pointer is null")
         })
     }
 
@@ -391,6 +394,80 @@ impl<'gc> ObjectRef<'gc> {
         inner.validate_magic();
         op(&inner.storage)
     }
+
+    /// Safely accesses the object's data as a byte slice.
+    ///
+    /// This method ensures that the object is locked for the duration of the access
+    /// and provides a stable view of the underlying data.
+    pub fn with_data<T>(&self, f: impl FnOnce(&[u8]) -> T) -> T {
+        let ObjectRef(Some(o)) = &self else {
+            panic!("NullReferenceException: called ObjectRef::with_data on NULL object reference")
+        };
+        let inner = o.borrow();
+        inner.validate_magic();
+        match &inner.storage {
+            HeapStorage::Vec(v) => f(&v.storage),
+            HeapStorage::Obj(o) => f(&o.instance_storage.get()),
+            HeapStorage::Str(s) => unsafe {
+                let bytes = std::slice::from_raw_parts(s.as_ptr() as *const u8, s.len() * 2);
+                f(bytes)
+            },
+            HeapStorage::Boxed(v) => match v {
+                ValueType::Struct(o) => f(&o.instance_storage.get()),
+                _ => {
+                    let mut buf = [0u8; 16];
+                    let size = v.size_bytes();
+                    CTSValue::Value(v.clone()).write(&mut buf[..size]);
+                    f(&buf[..size])
+                }
+            },
+        }
+    }
+
+    /// Safely accesses the object's data as a mutable byte slice.
+    ///
+    /// This method ensures that the object is locked for the duration of the access
+    /// and provides a stable, mutable view of the underlying data.
+    pub fn with_data_mut<T>(&self, gc: GCHandle<'gc>, f: impl FnOnce(&mut [u8]) -> T) -> T {
+        let ObjectRef(Some(o)) = &self else {
+            panic!(
+                "NullReferenceException: called ObjectRef::with_data_mut on NULL object reference"
+            )
+        };
+        let mut inner = o.borrow_mut(&gc);
+        inner.validate_magic();
+        match &mut inner.storage {
+            HeapStorage::Vec(v) => f(&mut v.storage),
+            HeapStorage::Obj(o) => f(&mut o.instance_storage.get_mut()),
+            HeapStorage::Boxed(v) => match v {
+                ValueType::Struct(o) => f(&mut o.instance_storage.get_mut()),
+                _ => {
+                    // For boxed primitives, we need to write back the value after the closure returns.
+                    // This is more complex than with_data.
+                    let mut buf = [0u8; 16];
+                    let size = v.size_bytes();
+                    let cts = CTSValue::Value(v.clone());
+                    cts.write(&mut buf[..size]);
+                    let result = f(&mut buf[..size]);
+
+                    // TODO: Marshaling back to ValueType
+                    // This currently only supports structs in boxes for mutation.
+                    // primitives in boxes are generally immutable in .NET anyway (you'd re-box).
+                    // But if it's a ref to a boxed int, it might be mutable.
+                    if size > 0 {
+                        panic!(
+                            "Mutation of boxed primitives via with_data_mut is not yet implemented"
+                        );
+                    }
+
+                    result
+                }
+            },
+            HeapStorage::Str(_) => {
+                panic!("Strings are immutable and cannot be accessed via with_data_mut")
+            }
+        }
+    }
 }
 
 impl Debug for ObjectRef<'_> {
@@ -478,13 +555,20 @@ impl<'gc> HeapStorage<'gc> {
         }
     }
 
-    pub fn as_ptr(&self) -> *const u8 {
+    /// Returns a pointer to the raw data without acquiring a lock.
+    ///
+    /// # Safety
+    /// The caller must ensure that the lock is held elsewhere (e.g. during STW GC)
+    /// or that the data is otherwise stable and no writers are active.
+    pub unsafe fn raw_data_ptr(&self) -> *mut u8 {
         match self {
-            HeapStorage::Vec(v) => v.get().as_ptr(),
-            HeapStorage::Str(s) => s.as_ptr() as *const u8,
-            HeapStorage::Obj(o) => o.instance_storage.get().as_ptr(),
-            HeapStorage::Boxed(ValueType::Struct(o)) => o.instance_storage.get().as_ptr(),
-            HeapStorage::Boxed(v) => v as *const _ as *const u8,
+            HeapStorage::Vec(v) => unsafe { v.raw_data_ptr() },
+            HeapStorage::Str(s) => s.as_ptr() as *mut u8,
+            HeapStorage::Obj(o) => unsafe { o.instance_storage.raw_data_ptr() },
+            HeapStorage::Boxed(ValueType::Struct(o)) => unsafe {
+                o.instance_storage.raw_data_ptr()
+            },
+            HeapStorage::Boxed(v) => v as *const _ as *mut u8,
         }
     }
 }
@@ -506,7 +590,7 @@ pub enum ValueType<'gc> {
     Pointer(ManagedPtr<'gc>),
     Float32(f32),
     Float64(f64),
-    TypedRef, // TODO
+    TypedRef(ManagedPtr<'gc>, Arc<TypeDescription>),
     Struct(Object<'gc>),
 }
 
@@ -516,6 +600,7 @@ unsafe impl<'gc> Collect for ValueType<'gc> {
     fn trace(&self, cc: &Collection) {
         match self {
             Self::Pointer(p) => p.trace(cc),
+            Self::TypedRef(p, _) => p.trace(cc),
             Self::Struct(o) => o.trace(cc),
             _ => {}
         }
@@ -526,6 +611,7 @@ impl<'gc> ValueType<'gc> {
     pub fn size_bytes(&self) -> usize {
         match self {
             ValueType::Struct(o) => o.size_bytes(),
+            ValueType::TypedRef(_, _) => 16, // (Pointer + Type)
             _ => size_of::<ValueType>(),
         }
     }
@@ -533,6 +619,7 @@ impl<'gc> ValueType<'gc> {
     pub fn validate_resurrection_invariants(&self) {
         match self {
             ValueType::Pointer(p) => p.validate_magic(),
+            ValueType::TypedRef(p, _) => p.validate_magic(),
             ValueType::Struct(o) => o.validate_resurrection_invariants(),
             _ => {}
         }
@@ -546,6 +633,7 @@ impl<'gc> ValueType<'gc> {
     ) {
         match self {
             ValueType::Pointer(p) => p.resurrect(fc, visited, depth),
+            ValueType::TypedRef(p, _) => p.resurrect(fc, visited, depth),
             ValueType::Struct(o) => o.resurrect(fc, visited, depth),
             _ => {}
         }
@@ -578,7 +666,7 @@ impl<'gc> CTSValue<'gc> {
             Value(Pointer(p)) => StackValue::ManagedPtr(p),
             Value(Float32(f)) => StackValue::NativeFloat(f as f64),
             Value(Float64(f)) => StackValue::NativeFloat(f),
-            Value(TypedRef) => todo!(),
+            Value(TypedRef(p, t)) => StackValue::TypedRef(p, t),
             Value(Struct(s)) => StackValue::ValueType(s),
             Ref(o) => StackValue::ObjectRef(o),
         }
@@ -606,7 +694,13 @@ impl<'gc> CTSValue<'gc> {
                 }
                 Float32(f) => dest.copy_from_slice(&f.to_ne_bytes()),
                 Float64(f) => dest.copy_from_slice(&f.to_ne_bytes()),
-                TypedRef => todo!("typedref implementation"),
+                TypedRef(p, t) => {
+                    #[allow(deprecated)]
+                    let addr = p.pointer().map_or(0, |ptr| ptr.as_ptr() as usize);
+                    let type_ptr = Arc::as_ptr(&t) as usize;
+                    dest[0..8].copy_from_slice(&addr.to_ne_bytes());
+                    dest[8..16].copy_from_slice(&type_ptr.to_ne_bytes());
+                }
                 Struct(o) => dest.copy_from_slice(&o.instance_storage.get()),
             },
             CTSValue::Ref(o) => o.write(dest),
@@ -746,6 +840,15 @@ impl<'gc> Vector<'gc> {
         self.validate_magic();
         &mut self.storage
     }
+
+    /// Returns a pointer to the raw data without acquiring a lock.
+    ///
+    /// # Safety
+    /// The caller must ensure that the lock is held elsewhere (e.g. during STW GC)
+    /// or that the data is otherwise stable and no writers are active.
+    pub unsafe fn raw_data_ptr(&self) -> *mut u8 {
+        self.storage.as_ptr() as *mut u8
+    }
 }
 
 impl Debug for Vector<'_> {
@@ -818,6 +921,8 @@ impl<'gc> PartialEq for Object<'gc> {
     }
 }
 
+impl<'gc> Eq for Object<'gc> {}
+
 // SAFETY: Object contains field storage that may hold GC pointers.
 // We use the layout manager associated with the type description to trace fields.
 unsafe impl<'gc> Collect for Object<'gc> {
@@ -830,6 +935,12 @@ unsafe impl<'gc> Collect for Object<'gc> {
 impl<'gc> Object<'gc> {
     pub fn size_bytes(&self) -> usize {
         size_of::<Object>() + unsafe { self.instance_storage.raw_data_unsynchronized().len() }
+    }
+
+    /// Safely accesses the object's data as a byte slice.
+    pub fn with_data<T>(&self, f: impl FnOnce(&[u8]) -> T) -> T {
+        let data = self.instance_storage.get();
+        f(&data)
     }
 
     pub fn validate_resurrection_invariants(&self) {

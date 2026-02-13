@@ -196,6 +196,15 @@ impl FieldStorage {
         unsafe { &*self.data.data_ptr() }
     }
 
+    /// Returns a pointer to the raw data without acquiring a lock.
+    ///
+    /// # Safety
+    /// The caller must ensure that the lock is held elsewhere (e.g. during STW GC)
+    /// or that the data is otherwise stable and no writers are active.
+    pub unsafe fn raw_data_ptr(&self) -> *mut u8 {
+        unsafe { (*self.data.data_ptr()).as_mut_ptr() }
+    }
+
     pub fn resurrect<'gc>(
         &self,
         fc: &'gc gc_arena::Finalization<'gc>,
