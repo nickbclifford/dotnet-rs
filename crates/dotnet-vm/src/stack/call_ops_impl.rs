@@ -42,7 +42,13 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
             self.push(value);
             let index = self.evaluation_stack.top_of_stack() - 1;
             let ptr = self.evaluation_stack.get_slot_address(index).as_ptr() as *mut _;
-            self.push(StackValue::managed_stack_ptr(index, crate::ByteOffset(0), ptr, desc, false));
+            self.push(StackValue::managed_stack_ptr(
+                index,
+                crate::ByteOffset(0),
+                ptr,
+                desc,
+                false,
+            ));
         } else {
             self.push(value.clone());
             self.push(value);
@@ -70,7 +76,8 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         }
 
         let num_args = method.signature.instance as usize + method.signature.parameters.len();
-        let argument_base = self.evaluation_stack
+        let argument_base = self
+            .evaluation_stack
             .top_of_stack()
             .checked_sub(num_args)
             .expect("not enough values on stack for call");

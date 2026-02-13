@@ -19,7 +19,10 @@ fn test_single_threaded_stub_thread_manager() {
     let _shared = Arc::new(state::SharedGlobalState::new(loader));
 
     // Thread manager should provide a consistent thread ID (always 1)
-    assert_eq!(dotnet_utils::sync::get_current_thread_id(), dotnet_utils::ArenaId(1));
+    assert_eq!(
+        dotnet_utils::sync::get_current_thread_id(),
+        dotnet_utils::ArenaId(1)
+    );
 }
 
 #[test]
@@ -115,7 +118,9 @@ fn test_multithreaded_gc_arena_handle() {
 
     // Register and unregister the arena
     shared.gc_coordinator.register_arena(handle.clone());
-    shared.gc_coordinator.unregister_arena(dotnet_utils::ArenaId(1));
+    shared
+        .gc_coordinator
+        .unregister_arena(dotnet_utils::ArenaId(1));
 }
 
 #[test]

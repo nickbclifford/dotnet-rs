@@ -120,7 +120,10 @@ pub trait LocalOps<'gc> {
     fn get_local(&self, index: crate::LocalIndex) -> StackValue<'gc>;
     fn set_local(&mut self, index: crate::LocalIndex, value: StackValue<'gc>);
     fn get_local_address(&self, index: crate::LocalIndex) -> std::ptr::NonNull<u8>;
-    fn get_local_info_for_managed_ptr(&self, index: crate::LocalIndex) -> (std::ptr::NonNull<u8>, bool);
+    fn get_local_info_for_managed_ptr(
+        &self,
+        index: crate::LocalIndex,
+    ) -> (std::ptr::NonNull<u8>, bool);
 }
 
 pub trait ArgumentOps<'gc> {

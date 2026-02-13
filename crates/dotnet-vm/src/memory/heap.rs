@@ -79,7 +79,10 @@ impl<'gc> HeapManager<'gc> {
                     let ptr = obj.0.expect("object in finalization queue is null");
                     let addr = Gc::as_ptr(ptr) as usize;
                     if !seen.insert(addr) {
-                        panic!("Duplicate object in finalization queue at address {:#x}", addr);
+                        panic!(
+                            "Duplicate object in finalization queue at address {:#x}",
+                            addr
+                        );
                     }
 
                     let inner = ptr.borrow();

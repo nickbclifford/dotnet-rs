@@ -40,7 +40,9 @@ pub mod sync;
 pub mod threading;
 pub mod tracer;
 
-pub use dotnet_utils::{ArenaId, ArgumentIndex, ByteOffset, FieldIndex, LocalIndex, StackSlotIndex};
+pub use dotnet_utils::{
+    ArenaId, ArgumentIndex, ByteOffset, FieldIndex, LocalIndex, StackSlotIndex,
+};
 pub use executor::*;
 pub use stack::*;
 pub use state::ReflectionRegistry;

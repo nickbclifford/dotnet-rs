@@ -111,12 +111,19 @@ impl<'a, 'gc, 'm: 'gc> LocalOps<'gc> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn get_local_info_for_managed_ptr(&self, index: crate::LocalIndex) -> (std::ptr::NonNull<u8>, bool) {
+    fn get_local_info_for_managed_ptr(
+        &self,
+        index: crate::LocalIndex,
+    ) -> (std::ptr::NonNull<u8>, bool) {
         let frame = self.frame_stack.current_frame();
         let addr = self
             .evaluation_stack
             .get_slot_address(frame.base.locals + index);
-        let is_pinned = frame.pinned_locals.get(index.as_usize()).copied().unwrap_or(false);
+        let is_pinned = frame
+            .pinned_locals
+            .get(index.as_usize())
+            .copied()
+            .unwrap_or(false);
         (addr, is_pinned)
     }
 }

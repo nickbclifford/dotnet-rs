@@ -35,16 +35,18 @@ pub mod layout;
 pub mod object;
 #[cfg(test)]
 mod object_tests;
-#[cfg(test)]
-mod validation_tests;
 pub mod pointer;
 pub mod storage;
 pub mod string;
+#[cfg(test)]
+mod validation_tests;
 
+pub use dotnet_utils::{
+    ArenaId, ArgumentIndex, ByteOffset, FieldIndex, LocalIndex, StackSlotIndex,
+};
 pub use object::{HeapStorage, Object, ObjectRef};
 pub use pointer::{ManagedPtr, UnmanagedPtr};
 pub use string::CLRString;
-pub use dotnet_utils::{ArenaId, ByteOffset, FieldIndex, LocalIndex, ArgumentIndex, StackSlotIndex};
 
 #[cfg(feature = "multithreaded-gc")]
 use object::ObjectPtr;

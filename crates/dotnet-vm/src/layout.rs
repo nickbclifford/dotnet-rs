@@ -382,7 +382,9 @@ impl LayoutFactory {
     ) -> Result<ArrayLayoutManager, TypeResolutionError> {
         let element_layout = type_layout_with_metrics(element, context, metrics)?;
         // Defensive check for massive allocations (e.g. from corrupted metadata/stack)
-        if length > 0x4000_0000 || (length > 0 && element_layout.size().as_usize() > usize::MAX / length) {
+        if length > 0x4000_0000
+            || (length > 0 && element_layout.size().as_usize() > usize::MAX / length)
+        {
             return Err(TypeResolutionError::MassiveAllocation(format!(
                 "massive array allocation attempt: length={}, element_size={}",
                 length,

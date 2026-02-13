@@ -212,7 +212,10 @@ impl<'gc> ManagedPtr<'gc> {
                 address: raw_ptr,
                 owner: ObjectRef(None),
                 offset: crate::ByteOffset(slot_offset),
-                stack_origin: Some((crate::StackSlotIndex(slot_idx), crate::ByteOffset(slot_offset))),
+                stack_origin: Some((
+                    crate::StackSlotIndex(slot_idx),
+                    crate::ByteOffset(slot_offset),
+                )),
             }
         } else {
             // Memory layout: (Owner ObjectRef at offset 0, Offset at offset 8)
@@ -255,7 +258,8 @@ impl<'gc> ManagedPtr<'gc> {
         let ptr_size = size_of::<usize>();
 
         if let Some((slot_idx, slot_offset)) = self.stack_slot_origin {
-            let word0 = 1 | ((slot_idx.as_usize() & 0xFFFFFFFF) << 1) | (slot_offset.as_usize() << 33);
+            let word0 =
+                1 | ((slot_idx.as_usize() & 0xFFFFFFFF) << 1) | (slot_offset.as_usize() << 33);
             let word1 = self._value.map_or(0, |p| p.as_ptr() as usize);
             dest[0..ptr_size].copy_from_slice(&word0.to_ne_bytes());
             dest[ptr_size..ptr_size * 2].copy_from_slice(&word1.to_ne_bytes());
@@ -326,7 +330,10 @@ impl<'gc> ManagedPtr<'gc> {
             } else {
                 0
             };
-            m.stack_slot_origin = Some((idx, crate::ByteOffset((offset.as_usize() as isize + diff) as usize)));
+            m.stack_slot_origin = Some((
+                idx,
+                crate::ByteOffset((offset.as_usize() as isize + diff) as usize),
+            ));
             m.offset = crate::ByteOffset((self.offset.as_usize() as isize + diff) as usize);
         }
         m
@@ -370,7 +377,11 @@ impl<'gc> ManagedPtr<'gc> {
         })
     }
 
-    pub fn with_stack_origin(mut self, slot_index: crate::StackSlotIndex, offset: crate::ByteOffset) -> Self {
+    pub fn with_stack_origin(
+        mut self,
+        slot_index: crate::StackSlotIndex,
+        offset: crate::ByteOffset,
+    ) -> Self {
         self.validate_magic();
         self.stack_slot_origin = Some((slot_index, offset));
         self
@@ -420,7 +431,9 @@ mod tests {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
         #[cfg(feature = "multithreaded-gc")]
-        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(dotnet_utils::ArenaId(0))));
+        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(
+            dotnet_utils::ArenaId(0),
+        )));
 
         arena.mutate(|gc, _root| {
             let gc_handle = dotnet_utils::gc::GCHandle::new(
@@ -435,7 +448,12 @@ mod tests {
             let storage = HeapStorage::Boxed(ValueType::Int32(42));
             let obj = ObjectRef::new(gc_handle, storage);
 
-            let ptr = ManagedPtr::new(obj.pointer(), dotnet_types::TypeDescription::NULL, Some(obj), false);
+            let ptr = ManagedPtr::new(
+                obj.pointer(),
+                dotnet_types::TypeDescription::NULL,
+                Some(obj),
+                false,
+            );
 
             // Offset by much more than size of ValueType should panic
             unsafe {
@@ -449,7 +467,9 @@ mod tests {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
         #[cfg(feature = "multithreaded-gc")]
-        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(dotnet_utils::ArenaId(0))));
+        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(
+            dotnet_utils::ArenaId(0),
+        )));
 
         arena.mutate(|gc, _root| {
             let gc_handle = dotnet_utils::gc::GCHandle::new(
@@ -463,7 +483,12 @@ mod tests {
             let storage = HeapStorage::Boxed(ValueType::Int32(42));
             let obj = ObjectRef::new(gc_handle, storage);
 
-            let ptr = ManagedPtr::new(obj.pointer(), dotnet_types::TypeDescription::NULL, Some(obj), false);
+            let ptr = ManagedPtr::new(
+                obj.pointer(),
+                dotnet_types::TypeDescription::NULL,
+                Some(obj),
+                false,
+            );
 
             // Offset by 4 bytes (end of object) should be valid
             unsafe {

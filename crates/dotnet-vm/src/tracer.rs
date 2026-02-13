@@ -361,7 +361,12 @@ impl Tracer {
 
     // Threading Helpers
     #[cfg(feature = "multithreading")]
-    pub fn trace_thread_create(&mut self, indent: usize, thread_id: dotnet_utils::ArenaId, name: &str) {
+    pub fn trace_thread_create(
+        &mut self,
+        indent: usize,
+        thread_id: dotnet_utils::ArenaId,
+        name: &str,
+    ) {
         info!(target: "thread", indent = indent, thread_id = thread_id.as_u64(), name = name, "{:indent$}⚙ THREAD CREATE [ID:{}] \"{}\"", "", thread_id, name, indent = indent * 2);
     }
 
@@ -376,12 +381,22 @@ impl Tracer {
     }
 
     #[cfg(feature = "multithreading")]
-    pub fn trace_thread_safepoint(&mut self, indent: usize, thread_id: dotnet_utils::ArenaId, location: &str) {
+    pub fn trace_thread_safepoint(
+        &mut self,
+        indent: usize,
+        thread_id: dotnet_utils::ArenaId,
+        location: &str,
+    ) {
         debug!(target: "thread", indent = indent, thread_id = thread_id.as_u64(), location = location, "{:indent$}⚙ THREAD SAFEPOINT [ID:{}] at {}", "", thread_id, location, indent = indent * 2);
     }
 
     #[cfg(feature = "multithreading")]
-    pub fn trace_thread_suspend(&mut self, indent: usize, thread_id: dotnet_utils::ArenaId, reason: &str) {
+    pub fn trace_thread_suspend(
+        &mut self,
+        indent: usize,
+        thread_id: dotnet_utils::ArenaId,
+        reason: &str,
+    ) {
         debug!(target: "thread", indent = indent, thread_id = thread_id.as_u64(), reason = reason, "{:indent$}⚙ THREAD SUSPEND [ID:{}] ({})", "", thread_id, reason, indent = indent * 2);
     }
 
@@ -622,9 +637,15 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             let base = &frame.base;
             markers.push((base.stack.as_usize(), format!("Stack base of frame #{}", i)));
             if base.locals != base.stack {
-                markers.push((base.locals.as_usize(), format!("Locals base of frame #{}", i)));
+                markers.push((
+                    base.locals.as_usize(),
+                    format!("Locals base of frame #{}", i),
+                ));
             }
-            markers.push((base.arguments.as_usize(), format!("Arguments base of frame #{}", i)));
+            markers.push((
+                base.arguments.as_usize(),
+                format!("Arguments base of frame #{}", i),
+            ));
         }
 
         self.tracer().dump_stack_state(&contents, &markers);

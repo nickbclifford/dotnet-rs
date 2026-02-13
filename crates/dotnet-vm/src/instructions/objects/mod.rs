@@ -55,8 +55,18 @@ pub(crate) fn get_ptr<'gc>(
             m.stack_slot_origin,
             m.offset,
         ),
-        StackValue::UnmanagedPtr(UnmanagedPtr(p)) => (p.as_ptr(), None, None, dotnet_utils::ByteOffset(p.as_ptr() as usize)),
-        StackValue::NativeInt(p) => (*p as *mut u8, None, None, dotnet_utils::ByteOffset(*p as usize)),
+        StackValue::UnmanagedPtr(UnmanagedPtr(p)) => (
+            p.as_ptr(),
+            None,
+            None,
+            dotnet_utils::ByteOffset(p.as_ptr() as usize),
+        ),
+        StackValue::NativeInt(p) => (
+            *p as *mut u8,
+            None,
+            None,
+            dotnet_utils::ByteOffset(*p as usize),
+        ),
         _ => panic!("Invalid parent for field/element access: {:?}", val),
     }
 }
@@ -238,7 +248,13 @@ pub fn ldobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType) -
     let layout = vm_try!(type_layout(load_type.clone(), &res_ctx));
 
     let mut source_vec = vec![0u8; layout.size().as_usize()];
-    unsafe { ptr::copy_nonoverlapping(source_ptr, source_vec.as_mut_ptr(), layout.size().as_usize()) };
+    unsafe {
+        ptr::copy_nonoverlapping(
+            source_ptr,
+            source_vec.as_mut_ptr(),
+            layout.size().as_usize(),
+        )
+    };
     let value =
         vm_try!(res_ctx.read_cts_value(&load_type, &source_vec, ctx.gc())).into_stack(ctx.gc());
 

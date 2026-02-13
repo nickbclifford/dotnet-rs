@@ -3,8 +3,10 @@ use crate::{
     threading::{STWGuardOps, ThreadManagerOps, ThreadState},
     tracer::Tracer,
 };
-use dotnet_utils::ArenaId;
-use dotnet_utils::sync::{Arc, AtomicU64, MANAGED_THREAD_ID, Mutex, Ordering};
+use dotnet_utils::{
+    ArenaId,
+    sync::{Arc, AtomicU64, MANAGED_THREAD_ID, Mutex, Ordering},
+};
 use std::{
     cell::Cell,
     collections::HashMap,
@@ -13,12 +15,10 @@ use std::{
 };
 
 #[cfg(feature = "multithreaded-gc")]
-use dotnet_utils::gc::{
-    register_arena, unregister_arena,
-    set_currently_tracing, take_found_cross_arena_refs
+use dotnet_utils::{
+    gc::{register_arena, set_currently_tracing, take_found_cross_arena_refs, unregister_arena},
+    sync::{AtomicBool, AtomicUsize, Condvar, MutexGuard, get_current_thread_id},
 };
-#[cfg(feature = "multithreaded-gc")]
-use dotnet_utils::sync::{AtomicBool, AtomicUsize, Condvar, MutexGuard, get_current_thread_id};
 #[cfg(feature = "multithreaded-gc")]
 use dotnet_value::object::ObjectPtr;
 #[cfg(feature = "multithreaded-gc")]

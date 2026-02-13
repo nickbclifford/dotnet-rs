@@ -166,7 +166,13 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 let dest_layout = self.get_layout_from_owner(owner);
 
                 if let Some(dl) = dest_layout {
-                    validate_ref_integrity(&dl, 0, offset, offset + src_layout.size().as_usize(), src_layout);
+                    validate_ref_integrity(
+                        &dl,
+                        0,
+                        offset,
+                        offset + src_layout.size().as_usize(),
+                        src_layout,
+                    );
                 }
             }
         }
@@ -426,7 +432,9 @@ pub fn has_ref_at(layout: &LayoutManager, offset: usize) -> bool {
         },
         LayoutManager::Field(fm) => {
             for f in fm.fields.values() {
-                if offset >= f.position.as_usize() && offset < (f.position + f.layout.size()).as_usize() {
+                if offset >= f.position.as_usize()
+                    && offset < (f.position + f.layout.size()).as_usize()
+                {
                     return has_ref_at(&f.layout, offset - f.position.as_usize());
                 }
             }

@@ -1,6 +1,6 @@
 use crate::{
-    ops::{ExceptionOps, PoolOps, RawMemoryOps, StackOps, VesOps},
     StepResult,
+    ops::{ExceptionOps, PoolOps, RawMemoryOps, StackOps, VesOps},
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::atomic::validate_atomic_access;

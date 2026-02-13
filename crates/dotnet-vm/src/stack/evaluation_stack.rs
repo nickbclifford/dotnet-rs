@@ -44,7 +44,8 @@ impl<'gc> EvaluationStack<'gc> {
                     } else {
                         suspended_locations[idx.as_usize() - slot_locations.len()]
                     };
-                    let new_ptr = unsafe { NonNull::new_unchecked(slot_ptr.as_ptr().add(off.as_usize())) };
+                    let new_ptr =
+                        unsafe { NonNull::new_unchecked(slot_ptr.as_ptr().add(off.as_usize())) };
                     m.update_cached_ptr(new_ptr);
                 }
             }
@@ -63,9 +64,13 @@ impl<'gc> EvaluationStack<'gc> {
                                 suspended_locations[idx.as_usize() - slot_locations.len()]
                             };
                             let new_ptr = unsafe {
-                                NonNull::new_unchecked(slot_ptr.as_ptr().add(info.offset.as_usize()))
+                                NonNull::new_unchecked(
+                                    slot_ptr.as_ptr().add(info.offset.as_usize()),
+                                )
                             };
-                            let word0 = 1 | ((idx.as_usize() & 0xFFFFFFFF) << 1) | (info.offset.as_usize() << 33);
+                            let word0 = 1
+                                | ((idx.as_usize() & 0xFFFFFFFF) << 1)
+                                | (info.offset.as_usize() << 33);
                             let word1 = new_ptr.as_ptr() as usize;
                             slice[0..8].copy_from_slice(&word0.to_ne_bytes());
                             slice[8..16].copy_from_slice(&word1.to_ne_bytes());

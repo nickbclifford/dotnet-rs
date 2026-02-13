@@ -7,7 +7,9 @@ mod tests {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
         #[cfg(feature = "multithreaded-gc")]
-        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(dotnet_utils::ArenaId(0))));
+        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(
+            dotnet_utils::ArenaId(0),
+        )));
         arena.mutate(|gc, _root| {
             let null_bytes = 0usize.to_ne_bytes();
             let gc_handle = dotnet_utils::gc::GCHandle::new(
@@ -28,7 +30,9 @@ mod tests {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
         #[cfg(feature = "multithreaded-gc")]
-        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(dotnet_utils::ArenaId(0))));
+        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(
+            dotnet_utils::ArenaId(0),
+        )));
         arena.mutate(|gc, _root| {
             let storage = HeapStorage::Boxed(ValueType::Int32(42));
             let gc_handle = dotnet_utils::gc::GCHandle::new(

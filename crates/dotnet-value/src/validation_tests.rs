@@ -6,38 +6,23 @@ mod tests {
     use dotnet_utils::ArenaId;
     #[cfg(feature = "memory-validation")]
     use gc_arena::{Arena, Rootable};
-
     #[test]
     #[cfg(feature = "memory-validation")]
     fn test_arena_mismatch_panics() {
         #[cfg(feature = "multithreaded-gc")]
         {
-            // Just satisfy the compiler if multithreaded-gc is on, 
-            // but the actual test is for single-threaded mode.
             return;
         }
-
         #[cfg(not(feature = "multithreaded-gc"))]
         {
             type TestRoot = Rootable![()];
             let arena = Arena::<TestRoot>::new(|_mc| ());
             arena.mutate(|gc, _root| {
-                // Set current thread ID to 1
                 dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(ArenaId(1))));
-
-                let gc_handle = dotnet_utils::gc::GCHandle::new(
-                    gc,
-                    ArenaId(1),
-                );
+                let gc_handle = dotnet_utils::gc::GCHandle::new(gc, ArenaId(1));
                 let obj = ObjectRef::new(gc_handle, HeapStorage::Boxed(ValueType::Int32(42)));
-                
-                // Accessing it should be fine
                 let _ = obj.as_heap_storage(|_| ());
-
-                // Change current thread ID to 2
                 dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(ArenaId(2))));
-
-                // Accessing it now should panic
                 let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                     obj.as_heap_storage(|_| ());
                 }));
@@ -45,99 +30,56 @@ mod tests {
             });
         }
     }
-
     #[test]
     #[cfg(all(feature = "memory-validation", feature = "multithreaded-gc"))]
     fn test_dangling_arena_panics() {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
-        
         let arena_id = ArenaId(100);
         let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(arena_id)));
-        
-        // Register the arena
         dotnet_utils::gc::register_arena(arena_id);
-
         arena.mutate(|gc, _root| {
             dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(arena_id)));
-
-            let gc_handle = dotnet_utils::gc::GCHandle::new(
-                gc,
-                arena_handle.as_inner(),
-                arena_id,
-            );
+            let gc_handle = dotnet_utils::gc::GCHandle::new(gc, arena_handle.as_inner(), arena_id);
             let obj = ObjectRef::new(gc_handle, HeapStorage::Boxed(ValueType::Int32(42)));
-            
-            // Accessing it should be fine
             let _ = obj.as_heap_storage(|_| ());
-
-            // Unregister the arena (simulate thread exit)
             dotnet_utils::gc::unregister_arena(arena_id);
-
-            // Switch current thread to something else so it's a cross-arena access
             let other_id = ArenaId(200);
             dotnet_utils::gc::register_arena(other_id);
             dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(other_id)));
-
-            // Accessing it now should panic
             let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                 obj.as_heap_storage(|_| ());
             }));
             assert!(res.is_err(), "Access to dangling arena should panic");
-            
             dotnet_utils::gc::unregister_arena(other_id);
         });
     }
-
     #[test]
     #[cfg(all(feature = "memory-validation", feature = "multithreaded-gc"))]
     fn test_uncoordinated_stw_access_panics() {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
-        
         let owner_id = ArenaId(101);
         let current_id = ArenaId(102);
         let owner_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(owner_id)));
-        
         dotnet_utils::gc::register_arena(owner_id);
         dotnet_utils::gc::register_arena(current_id);
-
         arena.mutate(|gc, _root| {
             dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(owner_id)));
-
-            let gc_handle = dotnet_utils::gc::GCHandle::new(
-                gc,
-                owner_handle.as_inner(),
-                owner_id,
-            );
+            let gc_handle = dotnet_utils::gc::GCHandle::new(gc, owner_handle.as_inner(), owner_id);
             let obj = ObjectRef::new(gc_handle, HeapStorage::Boxed(ValueType::Int32(42)));
-            
-            // Switch to current thread
             dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(current_id)));
-
-            // Normal cross-arena access is fine (coordinated by RwLock)
             let _ = obj.as_heap_storage(|_| ());
-
-            // Start STW
             dotnet_utils::gc::set_stw_in_progress(true);
-
-            // Accessing it now without being the tracing thread should panic
             let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                 obj.as_heap_storage(|_| ());
             }));
             assert!(res.is_err(), "Uncoordinated access during STW should panic");
-
-            // Mark ourselves as tracing
             dotnet_utils::gc::set_currently_tracing(Some(current_id));
-            
-            // Now it should be fine (simulating GC tracing)
             let _ = obj.as_heap_storage(|_| ());
-
-            // Clean up
             dotnet_utils::gc::set_currently_tracing(None);
             dotnet_utils::gc::set_stw_in_progress(false);
         });
-        
         dotnet_utils::gc::unregister_arena(owner_id);
         dotnet_utils::gc::unregister_arena(current_id);
     }

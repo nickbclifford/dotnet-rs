@@ -27,7 +27,11 @@ pub fn intrinsic_monitor_exit<'gc, 'm: 'gc>(
     if obj_ref.0.is_some() {
         // Get the current thread ID from the call stack
         let thread_id = ctx.thread_id();
-        assert_ne!(thread_id, dotnet_utils::ArenaId::INVALID, "Monitor.Exit called from unregistered thread");
+        assert_ne!(
+            thread_id,
+            dotnet_utils::ArenaId::INVALID,
+            "Monitor.Exit called from unregistered thread"
+        );
 
         // Get the sync block if it exists
         if let Some(index) = obj_ref.as_object(|o| o.sync_block_index) {
@@ -362,7 +366,8 @@ pub fn intrinsic_monitor_enter_obj<'gc, 'm: 'gc>(
     if obj_ref.0.is_some() {
         let thread_id = ctx.thread_id();
         assert_ne!(
-            thread_id, dotnet_utils::ArenaId::INVALID,
+            thread_id,
+            dotnet_utils::ArenaId::INVALID,
             "Monitor.Enter called from unregistered thread"
         );
 
@@ -400,7 +405,8 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
     if obj_ref.0.is_some() {
         let thread_id = ctx.thread_id();
         assert_ne!(
-            thread_id, dotnet_utils::ArenaId::INVALID,
+            thread_id,
+            dotnet_utils::ArenaId::INVALID,
             "Monitor.ReliableEnter called from unregistered thread"
         );
 
@@ -449,7 +455,8 @@ pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc>(
     if obj_ref.0.is_some() {
         let thread_id = ctx.thread_id();
         assert_ne!(
-            thread_id, dotnet_utils::ArenaId::INVALID,
+            thread_id,
+            dotnet_utils::ArenaId::INVALID,
             "Monitor.TryEnter_FastPath called from unregistered thread"
         );
 
@@ -480,7 +487,8 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
     if obj_ref.0.is_some() {
         let thread_id = ctx.thread_id();
         assert_ne!(
-            thread_id, dotnet_utils::ArenaId::INVALID,
+            thread_id,
+            dotnet_utils::ArenaId::INVALID,
             "Monitor.TryEnter called from unregistered thread"
         );
 
@@ -535,7 +543,8 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
     if obj_ref.0.is_some() {
         let thread_id = ctx.thread_id();
         assert_ne!(
-            thread_id, dotnet_utils::ArenaId::INVALID,
+            thread_id,
+            dotnet_utils::ArenaId::INVALID,
             "Monitor.TryEnter called from unregistered thread"
         );
 

@@ -547,7 +547,9 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         self.frame_stack.current_frame_mut().state.ip = *self.original_ip;
         self.evaluation_stack.truncate(*self.original_stack_height);
         if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
-            frame.stack_height = self.original_stack_height.saturating_sub_idx(frame.base.stack);
+            frame.stack_height = self
+                .original_stack_height
+                .saturating_sub_idx(frame.base.stack);
         }
     }
 }

@@ -44,7 +44,11 @@ impl From<Scalar> for LayoutManager {
 }
 
 impl LayoutManager {
-    pub fn visit_managed_ptrs(&self, offset: crate::ByteOffset, visitor: &mut dyn FnMut(crate::ByteOffset)) {
+    pub fn visit_managed_ptrs(
+        &self,
+        offset: crate::ByteOffset,
+        visitor: &mut dyn FnMut(crate::ByteOffset),
+    ) {
         match self {
             Self::Scalar(Scalar::ManagedPtr) => visitor(offset),
             Self::Field(flm) => {
@@ -57,8 +61,12 @@ impl LayoutManager {
             Self::Array(alm) => {
                 let elem_size = alm.element_layout.size();
                 for i in 0..alm.length {
-                    alm.element_layout
-                        .visit_managed_ptrs(offset.checked_add(elem_size.checked_mul(i).unwrap()).unwrap(), visitor);
+                    alm.element_layout.visit_managed_ptrs(
+                        offset
+                            .checked_add(elem_size.checked_mul(i).unwrap())
+                            .unwrap(),
+                        visitor,
+                    );
                 }
             }
             _ => {}
@@ -125,7 +133,8 @@ impl LayoutManager {
             LayoutManager::Array(a) => {
                 let elem_size = a.element_layout.size();
                 for i in 0..a.length {
-                    a.element_layout.trace(&storage[elem_size.as_usize() * i..], cc);
+                    a.element_layout
+                        .trace(&storage[elem_size.as_usize() * i..], cc);
                 }
             }
             _ => {}
@@ -152,16 +161,23 @@ impl LayoutManager {
             }
             LayoutManager::Field(f) => {
                 for field in f.fields.values() {
-                    field
-                        .layout
-                        .resurrect(&storage[field.position.as_usize()..], fc, visited, depth);
+                    field.layout.resurrect(
+                        &storage[field.position.as_usize()..],
+                        fc,
+                        visited,
+                        depth,
+                    );
                 }
             }
             LayoutManager::Array(a) => {
                 let elem_size = a.element_layout.size();
                 for i in 0..a.length {
-                    a.element_layout
-                        .resurrect(&storage[elem_size.as_usize() * i..], fc, visited, depth);
+                    a.element_layout.resurrect(
+                        &storage[elem_size.as_usize() * i..],
+                        fc,
+                        visited,
+                        depth,
+                    );
                 }
             }
             _ => {}
@@ -253,7 +269,11 @@ impl HasLayout for FieldLayoutManager {
 }
 
 impl FieldLayoutManager {
-    pub fn visit_managed_ptrs(&self, offset: crate::ByteOffset, visitor: &mut dyn FnMut(crate::ByteOffset)) {
+    pub fn visit_managed_ptrs(
+        &self,
+        offset: crate::ByteOffset,
+        visitor: &mut dyn FnMut(crate::ByteOffset),
+    ) {
         for field in self.fields.values() {
             field
                 .layout
@@ -319,8 +339,12 @@ impl ArrayLayoutManager {
     ) {
         let elem_size = self.element_layout.size();
         for i in 0..self.length {
-            self.element_layout
-                .resurrect(&storage[(elem_size * i).as_usize()..], fc, visited, depth);
+            self.element_layout.resurrect(
+                &storage[(elem_size * i).as_usize()..],
+                fc,
+                visited,
+                depth,
+            );
         }
     }
 }

@@ -201,7 +201,6 @@ impl TypeDescription {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

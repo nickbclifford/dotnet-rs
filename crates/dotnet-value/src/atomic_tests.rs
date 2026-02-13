@@ -108,7 +108,9 @@ mod tests {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
         #[cfg(feature = "multithreaded-gc")]
-        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(dotnet_utils::ArenaId(0))));
+        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(
+            dotnet_utils::ArenaId(0),
+        )));
         arena.mutate(|gc, _root| {
             let storage = HeapStorage::Boxed(ValueType::Int32(42));
             let gc_handle = dotnet_utils::gc::GCHandle::new(
@@ -148,7 +150,10 @@ mod tests {
         });
     }
     #[test]
-    #[cfg_attr(feature = "memory-validation", should_panic(expected = "Alignment violation"))]
+    #[cfg_attr(
+        feature = "memory-validation",
+        should_panic(expected = "Alignment violation")
+    )]
     fn test_misaligned_load() {
         let data = [0u8; 16];
         let ptr = unsafe { data.as_ptr().add(1) };
@@ -156,7 +161,6 @@ mod tests {
             StackValue::load_atomic(ptr, LoadType::Int32, AtomicOrdering::Relaxed);
         }
     }
-
     struct ThreadSafeBox([u8; 8]);
     unsafe impl Sync for ThreadSafeBox {}
     unsafe impl Send for ThreadSafeBox {}

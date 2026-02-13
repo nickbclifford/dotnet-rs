@@ -12,7 +12,7 @@ pub mod gc;
 pub mod newtypes;
 pub mod sync;
 
-pub use newtypes::{ArenaId, ByteOffset, FieldIndex, LocalIndex, ArgumentIndex, StackSlotIndex};
+pub use newtypes::{ArenaId, ArgumentIndex, ByteOffset, FieldIndex, LocalIndex, StackSlotIndex};
 
 pub struct DebugStr(pub String);
 
@@ -35,7 +35,10 @@ pub fn is_ptr_aligned_to_field(ptr: *const u8, field_size: usize) -> bool {
 #[cfg(feature = "memory-validation")]
 pub fn validate_alignment(ptr: *const u8, align: usize) {
     if !(ptr as usize).is_multiple_of(align) {
-        panic!("Alignment violation: pointer {:p} is not aligned to {}", ptr, align);
+        panic!(
+            "Alignment violation: pointer {:p} is not aligned to {}",
+            ptr, align
+        );
     }
 }
 

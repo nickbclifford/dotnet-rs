@@ -1,13 +1,11 @@
-use crate::sync::Ordering;
-#[cfg(feature = "multithreading")]
-use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8};
-
-use crate::is_ptr_aligned_to_field;
-#[cfg(feature = "memory-validation")]
-use std::cell::RefCell;
-#[cfg(feature = "memory-validation")]
-use std::collections::HashSet;
+use crate::{is_ptr_aligned_to_field, sync::Ordering};
 use std::ptr;
+
+#[cfg(feature = "multithreading")]
+use std::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, AtomicU64};
+
+#[cfg(feature = "memory-validation")]
+use std::{cell::RefCell, collections::HashSet};
 
 #[cfg(feature = "memory-validation")]
 thread_local! {
@@ -51,7 +49,9 @@ fn validate_ordering(ordering: Ordering, is_load: bool) {
     }
 
     if ordering == Ordering::Relaxed {
-        tracing::warn!("Relaxed ordering used for atomic access. Ensure this is intentional (e.g., not for a .NET volatile field).");
+        tracing::warn!(
+            "Relaxed ordering used for atomic access. Ensure this is intentional (e.g., not for a .NET volatile field)."
+        );
     }
 }
 

@@ -584,8 +584,12 @@ fn test_gc_coordinator_multi_arena_tracking() {
     assert!(!shared.gc_coordinator.has_command(dotnet_utils::ArenaId(2)));
 
     // Unregister
-    shared.gc_coordinator.unregister_arena(dotnet_utils::ArenaId(1));
-    shared.gc_coordinator.unregister_arena(dotnet_utils::ArenaId(2));
+    shared
+        .gc_coordinator
+        .unregister_arena(dotnet_utils::ArenaId(1));
+    shared
+        .gc_coordinator
+        .unregister_arena(dotnet_utils::ArenaId(2));
 
     // After unregister, commands should not be available
     assert!(!shared.gc_coordinator.has_command(dotnet_utils::ArenaId(1)));
@@ -649,8 +653,12 @@ fn test_cross_arena_reference_tracking() {
     dotnet_utils::gc::record_cross_arena_ref(dotnet_utils::ArenaId(2), ptr2.as_ptr() as usize);
 
     // The fact that we can record cross-arena refs without panicking demonstrates the system works
-    shared.gc_coordinator.unregister_arena(dotnet_utils::ArenaId(1));
-    shared.gc_coordinator.unregister_arena(dotnet_utils::ArenaId(2));
+    shared
+        .gc_coordinator
+        .unregister_arena(dotnet_utils::ArenaId(1));
+    shared
+        .gc_coordinator
+        .unregister_arena(dotnet_utils::ArenaId(2));
     dotnet_utils::gc::unregister_arena(dotnet_utils::ArenaId(1));
     dotnet_utils::gc::unregister_arena(dotnet_utils::ArenaId(2));
 }
@@ -679,5 +687,7 @@ fn test_allocation_pressure_triggers_collection() {
     // The coordinator tracks allocation pressure
     println!("Should collect after 100 allocations: {}", should_collect);
 
-    shared.gc_coordinator.unregister_arena(dotnet_utils::ArenaId(1));
+    shared
+        .gc_coordinator
+        .unregister_arena(dotnet_utils::ArenaId(1));
 }

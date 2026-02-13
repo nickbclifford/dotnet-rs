@@ -1,6 +1,8 @@
-use std::ops::{Add, Sub, AddAssign, SubAssign, Mul};
-use std::fmt::{self, Display, Formatter};
 use gc_arena::Collect;
+use std::{
+    fmt::{self, Display, Formatter},
+    ops::{Add, AddAssign, Mul, Sub, SubAssign},
+};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Collect)]
 #[collect(require_static)]

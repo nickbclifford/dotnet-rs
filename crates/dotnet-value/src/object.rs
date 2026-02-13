@@ -1,10 +1,9 @@
 use crate::{
-    StackValue,
+    ArenaId, StackValue,
     layout::{ArrayLayoutManager, HasLayout, LayoutManager, Scalar},
     pointer::ManagedPtr,
     storage::FieldStorage,
     string::CLRString,
-    ArenaId,
 };
 use dotnet_types::{TypeDescription, generics::ConcreteType};
 use dotnet_utils::{
@@ -200,7 +199,9 @@ impl<'gc> ObjectRef<'gc> {
         depth: usize,
     ) {
         if depth > 1000 {
-            panic!("Resurrection depth exceeded (possible infinite recursion in custom finalizers or corrupt graph)");
+            panic!(
+                "Resurrection depth exceeded (possible infinite recursion in custom finalizers or corrupt graph)"
+            );
         }
         if let Some(handle) = self.0 {
             let ptr = Gc::as_ptr(handle) as usize;
@@ -663,13 +664,19 @@ unsafe impl Collect for Vector<'_> {
         match element.as_ref() {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
                 for i in 0..self.layout.length {
-                    unsafe { ObjectRef::read_unchecked(&self.storage[(element.size() * i).as_usize()..]) }
-                        .trace(cc);
+                    unsafe {
+                        ObjectRef::read_unchecked(&self.storage[(element.size() * i).as_usize()..])
+                    }
+                    .trace(cc);
                 }
             }
             _ => {
                 for i in 0..self.layout.length {
-                    LayoutManager::trace(element, &self.storage[(element.size() * i).as_usize()..], cc);
+                    LayoutManager::trace(
+                        element,
+                        &self.storage[(element.size() * i).as_usize()..],
+                        cc,
+                    );
                 }
             }
         }
@@ -749,29 +756,31 @@ impl Debug for Vector<'_> {
                     "vector of {:?} (length {})",
                     self.element, self.layout.length
                 ))
-                .chain(self.storage.chunks(self.layout.element_layout.size().as_usize()).map(
-                    match self.layout.element_layout.as_ref() {
-                        LayoutManager::Scalar(Scalar::ObjectRef) => |chunk: &[u8]| {
-                            format!("{:?}", unsafe { ObjectRef::read_unchecked(chunk) })
-                        },
-                        LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                            |chunk: &[u8]| {
-                                // ManagedPtr is now printed via its Debug impl if we could read it.
-                                // But read_unchecked returns ObjectRef.
-                                // We need ManagedPtr::read_from_bytes.
-                                // For now just print bytes to avoid issues.
+                .chain(
+                    self.storage
+                        .chunks(self.layout.element_layout.size().as_usize())
+                        .map(match self.layout.element_layout.as_ref() {
+                            LayoutManager::Scalar(Scalar::ObjectRef) => |chunk: &[u8]| {
+                                format!("{:?}", unsafe { ObjectRef::read_unchecked(chunk) })
+                            },
+                            LayoutManager::Scalar(Scalar::ManagedPtr) => {
+                                |chunk: &[u8]| {
+                                    // ManagedPtr is now printed via its Debug impl if we could read it.
+                                    // But read_unchecked returns ObjectRef.
+                                    // We need ManagedPtr::read_from_bytes.
+                                    // For now just print bytes to avoid issues.
+                                    let bytes: Vec<_> =
+                                        chunk.iter().map(|b| format!("{:02x}", b)).collect();
+                                    format!("ptr({})", bytes.join(" "))
+                                }
+                            }
+                            _ => |chunk: &[u8]| {
                                 let bytes: Vec<_> =
                                     chunk.iter().map(|b| format!("{:02x}", b)).collect();
-                                format!("ptr({})", bytes.join(" "))
-                            }
-                        }
-                        _ => |chunk: &[u8]| {
-                            let bytes: Vec<_> =
-                                chunk.iter().map(|b| format!("{:02x}", b)).collect();
-                            bytes.join(" ")
-                        },
-                    },
-                ))
+                                bytes.join(" ")
+                            },
+                        }),
+                )
                 .map(DebugStr),
             )
             .finish()

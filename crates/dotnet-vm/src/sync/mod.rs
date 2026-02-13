@@ -14,8 +14,12 @@ pub use threaded::*;
 pub trait SyncBlockOps {
     fn try_enter(&self, thread_id: dotnet_utils::ArenaId) -> bool;
     fn enter(&self, thread_id: dotnet_utils::ArenaId, metrics: &RuntimeMetrics);
-    fn enter_with_timeout(&self, thread_id: dotnet_utils::ArenaId, timeout_ms: u64, metrics: &RuntimeMetrics)
-    -> bool;
+    fn enter_with_timeout(
+        &self,
+        thread_id: dotnet_utils::ArenaId,
+        timeout_ms: u64,
+        metrics: &RuntimeMetrics,
+    ) -> bool;
     fn enter_safe(
         &self,
         thread_id: dotnet_utils::ArenaId,
@@ -32,7 +36,11 @@ pub trait SyncBlockOps {
         gc_coordinator: &GCCoordinator,
     ) -> bool;
     fn exit(&self, thread_id: dotnet_utils::ArenaId) -> bool;
-    fn wait(&self, thread_id: dotnet_utils::ArenaId, timeout_ms: Option<u64>) -> Result<(), &'static str>;
+    fn wait(
+        &self,
+        thread_id: dotnet_utils::ArenaId,
+        timeout_ms: Option<u64>,
+    ) -> Result<(), &'static str>;
     fn pulse(&self, thread_id: dotnet_utils::ArenaId) -> Result<(), &'static str>;
     fn pulse_all(&self, thread_id: dotnet_utils::ArenaId) -> Result<(), &'static str>;
 }

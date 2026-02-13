@@ -83,7 +83,8 @@ pub fn ldarga<
     ctx.push(StackValue::managed_stack_ptr(
         abs_idx,
         crate::ByteOffset(0),
-        ctx.get_argument_address(crate::ArgumentIndex(index as usize)).as_ptr() as *mut _,
+        ctx.get_argument_address(crate::ArgumentIndex(index as usize))
+            .as_ptr() as *mut _,
         live_type,
         true,
     ));

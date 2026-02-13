@@ -129,7 +129,11 @@ impl GCCoordinator {
         }
     }
 
-    fn send_command_to_other_arenas(&self, initiating_thread_id: dotnet_utils::ArenaId, command: GCCommand) {
+    fn send_command_to_other_arenas(
+        &self,
+        initiating_thread_id: dotnet_utils::ArenaId,
+        command: GCCommand,
+    ) {
         for handle in self.get_all_arenas() {
             if handle.thread_id() != initiating_thread_id {
                 let mut cmd = handle.current_command().lock();
@@ -139,7 +143,11 @@ impl GCCoordinator {
         }
     }
 
-    fn send_command_to_all_and_wait(&self, initiating_thread_id: dotnet_utils::ArenaId, command: GCCommand) {
+    fn send_command_to_all_and_wait(
+        &self,
+        initiating_thread_id: dotnet_utils::ArenaId,
+        command: GCCommand,
+    ) {
         self.send_command_to_other_arenas(initiating_thread_id, command.clone());
         execute_gc_command_for_current_thread(command, self);
         self.wait_on_other_arenas(initiating_thread_id);
@@ -300,7 +308,12 @@ pub mod stubs {
             false
         }
         pub fn finish_collection(&self) {}
-        pub fn record_cross_arena_ref(&self, _target_thread_id: dotnet_utils::ArenaId, _ptr: ObjectPtr) {}
+        pub fn record_cross_arena_ref(
+            &self,
+            _target_thread_id: dotnet_utils::ArenaId,
+            _ptr: ObjectPtr,
+        ) {
+        }
         pub fn start_collection(&self) -> Option<MutexGuard<'_, ()>> {
             None
         }
