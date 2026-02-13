@@ -153,9 +153,9 @@ impl LayoutManager {
                 unsafe { ObjectRef::read_branded(storage, fc) }.resurrect(fc, visited, depth);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                // ManagedPtr in memory is 16 bytes: (Owner ObjectRef, Offset).
+                // ManagedPtr in memory is ManagedPtr::SIZE bytes: (Owner ObjectRef, Offset).
                 // We need to resurrect the owner at offset 0.
-                let ptr_size = size_of::<usize>();
+                let ptr_size = ObjectRef::SIZE;
                 unsafe { ObjectRef::read_branded(&storage[0..ptr_size], fc) }
                     .resurrect(fc, visited, depth);
             }
@@ -239,7 +239,7 @@ impl GcDesc {
     }
 
     pub fn trace(&self, storage: &[u8], cc: &Collection) {
-        let ptr_size = size_of::<usize>();
+        let ptr_size = ObjectRef::SIZE;
         for word_index in self.bitmap.iter_ones() {
             let offset = word_index * ptr_size;
 

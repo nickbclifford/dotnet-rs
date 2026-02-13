@@ -16,7 +16,7 @@ pub struct LayoutFactory;
 
 impl LayoutFactory {
     fn populate_gc_desc(layout: &LayoutManager, base_offset: usize, desc: &mut GcDesc) {
-        let ptr_size = size_of::<usize>();
+        let ptr_size = dotnet_value::object::ObjectRef::SIZE;
         match layout {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
                 desc.set(base_offset / ptr_size);

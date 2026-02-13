@@ -428,7 +428,7 @@ impl<'gc> StackValue<'gc> {
             LoadType::Int32 | LoadType::UInt32 | LoadType::Float32 => 4,
             LoadType::Int64 | LoadType::Float64 => 8,
             LoadType::IntPtr => size_of::<isize>(),
-            LoadType::Object => size_of::<usize>(),
+            LoadType::Object => ObjectRef::SIZE,
         };
 
         let val = unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) };
@@ -487,7 +487,7 @@ impl<'gc> StackValue<'gc> {
                     Some(h) => Gc::as_ptr(h) as usize,
                     None => 0,
                 };
-                (val as u64, size_of::<usize>())
+                (val as u64, ObjectRef::SIZE)
             }
         };
 

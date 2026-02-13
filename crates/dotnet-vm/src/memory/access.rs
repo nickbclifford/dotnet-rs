@@ -258,7 +258,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             if ptr.is_null() {
                                 panic!("perform_write: ptr is null!");
                             }
-                            m.write(std::slice::from_raw_parts_mut(ptr, ManagedPtr::MEMORY_SIZE));
+                            m.write(std::slice::from_raw_parts_mut(ptr, ManagedPtr::SIZE));
                         } else {
                             return Err("Expected ManagedPtr".into());
                         }
@@ -329,7 +329,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     }
                     Scalar::ManagedPtr => {
                         let info = ManagedPtr::read_branded(
-                            std::slice::from_raw_parts(ptr, ManagedPtr::MEMORY_SIZE),
+                            std::slice::from_raw_parts(ptr, ManagedPtr::SIZE),
                             &gc,
                         );
 

@@ -5,7 +5,6 @@ use std::{
     cmp::Ordering,
     collections::HashSet,
     fmt::{self, Debug, Formatter},
-    mem::size_of,
     ptr::NonNull,
 };
 
@@ -92,7 +91,7 @@ impl PartialOrd for ManagedPtr<'_> {
 
 impl<'gc> ManagedPtr<'gc> {
     /// One word for the pointer, one word for the owner.
-    pub const MEMORY_SIZE: usize = size_of::<usize>() * 2;
+    pub const SIZE: usize = ObjectRef::SIZE * 2;
 
     pub fn new(
         value: Option<NonNull<u8>>,
@@ -145,9 +144,9 @@ impl<'gc> ManagedPtr<'gc> {
     ///
     /// # Safety
     ///
-    /// The `source` slice must be at least `ManagedPtr::MEMORY_SIZE` bytes long.
+    /// The `source` slice must be at least `ManagedPtr::SIZE` bytes long.
     pub unsafe fn read_stack_info(source: &[u8]) -> ManagedPtrStackInfo {
-        let ptr_size = size_of::<usize>();
+        let ptr_size = ObjectRef::SIZE;
         if source.len() < ptr_size * 2 {
             panic!("ManagedPtr::read: buffer too small");
         }
@@ -179,7 +178,7 @@ impl<'gc> ManagedPtr<'gc> {
     ///
     /// # Safety
     ///
-    /// The `source` slice must be at least `ManagedPtr::MEMORY_SIZE` bytes long.
+    /// The `source` slice must be at least `ManagedPtr::SIZE` bytes long.
     /// It must contain valid bytes representing a `ManagedPtr`.
     pub unsafe fn read_branded(source: &[u8], _gc: &Mutation<'gc>) -> ManagedPtrInfo<'gc> {
         unsafe { Self::read_unchecked(source) }
@@ -190,16 +189,16 @@ impl<'gc> ManagedPtr<'gc> {
     ///
     /// # Safety
     ///
-    /// The `source` slice must be at least `ManagedPtr::MEMORY_SIZE` bytes long.
+    /// The `source` slice must be at least `ManagedPtr::SIZE` bytes long.
     /// It must contain valid bytes representing a `ManagedPtr`.
     pub unsafe fn read_unchecked(source: &[u8]) -> ManagedPtrInfo<'gc> {
-        let ptr_size = size_of::<usize>();
+        let ptr_size = ObjectRef::SIZE;
 
-        let mut word0_bytes = [0u8; size_of::<usize>()];
+        let mut word0_bytes = [0u8; ObjectRef::SIZE];
         word0_bytes.copy_from_slice(&source[0..ptr_size]);
         let word0 = usize::from_ne_bytes(word0_bytes);
 
-        let mut word1_bytes = [0u8; size_of::<usize>()];
+        let mut word1_bytes = [0u8; ObjectRef::SIZE];
         word1_bytes.copy_from_slice(&source[ptr_size..ptr_size * 2]);
         let word1 = usize::from_ne_bytes(word1_bytes);
 
@@ -255,7 +254,7 @@ impl<'gc> ManagedPtr<'gc> {
     /// Memory layout: (Owner ObjectRef at offset 0, Offset at offset 8)
     pub fn write(&self, dest: &mut [u8]) {
         self.validate_magic();
-        let ptr_size = size_of::<usize>();
+        let ptr_size = ObjectRef::SIZE;
 
         if let Some((slot_idx, slot_offset)) = self.stack_slot_origin {
             let word0 =

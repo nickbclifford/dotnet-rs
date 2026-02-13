@@ -148,7 +148,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
                 .expect("Target pointer should not be null")
                 .as_ptr();
 
-            let size = size_of::<usize>();
+            let size = ObjectRef::SIZE;
             let prev = match unsafe {
                 StandardAtomicAccess::compare_exchange_atomic(
                     target,
@@ -184,7 +184,7 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
                 None => 0,
             };
 
-            let size = size_of::<usize>();
+            let size = ObjectRef::SIZE;
             let prev_raw = match unsafe {
                 StandardAtomicAccess::compare_exchange_atomic(
                     target,
@@ -277,7 +277,7 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
                 .expect("Target pointer should not be null")
                 .as_ptr();
 
-            let size = size_of::<usize>();
+            let size = ObjectRef::SIZE;
             let prev = unsafe {
                 StandardAtomicAccess::exchange_atomic(target, size, value as u64, Ordering::SeqCst)
             } as isize;
@@ -305,7 +305,7 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
                 ),
             };
 
-            let size = size_of::<usize>();
+            let size = ObjectRef::SIZE;
             let prev_raw = unsafe {
                 StandardAtomicAccess::exchange_atomic(
                     target,
@@ -659,7 +659,7 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
                 .expect("Target pointer should not be null")
                 .as_ptr();
 
-            let size = size_of::<usize>();
+            let size = ObjectRef::SIZE;
             let val = unsafe { StandardAtomicAccess::load_atomic(target, size, Ordering::Acquire) };
             ctx.push_isize(val as isize);
         }
@@ -762,7 +762,7 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
                 StackValue::NativeInt(i) => i as u64,
                 _ => panic!("Expected NativeInt for Volatile.Write"),
             };
-            let size = size_of::<usize>();
+            let size = ObjectRef::SIZE;
             unsafe { StandardAtomicAccess::store_atomic(target, size, val, Ordering::Release) };
         }
         _ => {
@@ -773,7 +773,7 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
                 StackValue::NativeInt(i) => i as u64,
                 _ => panic!("Expected ObjectRef or NativeInt for Volatile.Write"),
             };
-            let size = size_of::<usize>();
+            let size = ObjectRef::SIZE;
             unsafe { StandardAtomicAccess::store_atomic(target, size, val_raw, Ordering::Release) };
         }
     }

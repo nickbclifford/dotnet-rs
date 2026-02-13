@@ -43,7 +43,7 @@ mod tests {
                 dotnet_utils::ArenaId(0),
             );
             let obj = ObjectRef::new(gc_handle, storage);
-            let mut buffer = [0u8; size_of::<usize>()];
+            let mut buffer = [0u8; ObjectRef::SIZE];
             obj.write(&mut buffer);
             unsafe {
                 let read_obj = ObjectRef::read_branded(&buffer, &gc_handle);
