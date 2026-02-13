@@ -18,6 +18,7 @@ use dotnet_utils::{
     atomic::{AtomicAccess, StandardAtomicAccess},
     gc::{GCHandle, ThreadSafeLock},
     sync::Ordering as AtomicOrdering,
+    validate_alignment,
 };
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, Collection, Gc};
@@ -34,6 +35,8 @@ pub mod layout;
 pub mod object;
 #[cfg(test)]
 mod object_tests;
+#[cfg(test)]
+mod validation_tests;
 pub mod pointer;
 pub mod storage;
 pub mod string;
@@ -41,6 +44,7 @@ pub mod string;
 pub use object::{HeapStorage, Object, ObjectRef};
 pub use pointer::{ManagedPtr, UnmanagedPtr};
 pub use string::CLRString;
+pub use dotnet_utils::{ArenaId, ByteOffset, FieldIndex, LocalIndex, ArgumentIndex, StackSlotIndex};
 
 #[cfg(feature = "multithreaded-gc")]
 use object::ObjectPtr;
@@ -58,7 +62,7 @@ pub enum StackValue<'gc> {
     /// Reference to an object in another thread's arena.
     /// (ObjectPtr, OwningThreadID)
     #[cfg(feature = "multithreaded-gc")]
-    CrossArenaObjectRef(ObjectPtr, u64),
+    CrossArenaObjectRef(ObjectPtr, ArenaId),
 }
 
 // SAFETY: StackValue contains several variants that hold GC-managed references.
@@ -232,8 +236,8 @@ impl<'gc> StackValue<'gc> {
         ))
     }
     pub fn managed_stack_ptr(
-        index: usize,
-        offset: usize,
+        index: crate::StackSlotIndex,
+        offset: crate::ByteOffset,
         ptr: *mut u8,
         target_type: TypeDescription,
         pinned: bool,
@@ -414,12 +418,7 @@ impl<'gc> StackValue<'gc> {
     pub unsafe fn load_atomic(ptr: *const u8, t: LoadType, ordering: AtomicOrdering) -> Self {
         debug_assert!(!ptr.is_null(), "Attempted to load from a null pointer");
         let alignment = load_type_alignment(t);
-        debug_assert!(
-            (ptr as usize).is_multiple_of(alignment),
-            "Attempted to load from an unaligned pointer {:?} for type {:?}",
-            ptr,
-            t
-        );
+        validate_alignment(ptr, alignment);
 
         let size = match t {
             LoadType::Int8 | LoadType::UInt8 => 1,
@@ -470,12 +469,7 @@ impl<'gc> StackValue<'gc> {
     pub unsafe fn store_atomic(self, ptr: *mut u8, t: StoreType, ordering: AtomicOrdering) {
         debug_assert!(!ptr.is_null(), "Attempted to store to a null pointer");
         let alignment = store_type_alignment(t);
-        debug_assert!(
-            (ptr as usize).is_multiple_of(alignment),
-            "Attempted to store to an unaligned pointer {:?} for type {:?}",
-            ptr,
-            t
-        );
+        validate_alignment(ptr, alignment);
 
         let (val, size) = match t {
             StoreType::Int8 => (self.as_i32() as u64, 1),

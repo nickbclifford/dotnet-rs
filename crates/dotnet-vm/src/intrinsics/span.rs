@@ -148,7 +148,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
                         a.layout.length,
                         Some(h),
                         elem_type,
-                        elem_size,
+                        elem_size.as_usize(),
                     )
                 }
                 _ => panic!(
@@ -293,7 +293,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
                 .get_field_mut_local(span_type, "_reference"),
         );
 
-        let element_count = (array_size / element_size) as i32;
+        let element_count = (array_size / element_size.as_usize()) as i32;
         span_instance
             .instance_storage
             .get_field_mut_local(span_type, "_length")
@@ -360,7 +360,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
         let size_end = size_str.find('_').unwrap_or(size_str.len());
         let array_size = size_str[..size_end].parse::<usize>().unwrap();
 
-        let element_count = (array_size / element_size) as i32;
+        let element_count = (array_size / element_size.as_usize()) as i32;
         unsafe {
             std::ptr::copy_nonoverlapping(
                 element_count.to_ne_bytes().as_ptr(),

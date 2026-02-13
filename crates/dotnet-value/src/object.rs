@@ -4,6 +4,7 @@ use crate::{
     pointer::ManagedPtr,
     storage::FieldStorage,
     string::CLRString,
+    ArenaId,
 };
 use dotnet_types::{TypeDescription, generics::ConcreteType};
 use dotnet_utils::{
@@ -25,6 +26,9 @@ use std::{
 #[cfg(feature = "multithreaded-gc")]
 use dotnet_utils::gc::{get_currently_tracing, record_cross_arena_ref};
 
+#[cfg(all(feature = "multithreaded-gc", feature = "memory-validation"))]
+use dotnet_utils::gc::{is_stw_in_progress, is_valid_cross_arena_ref};
+
 #[cfg(any(feature = "memory-validation", debug_assertions))]
 const OBJECT_MAGIC: u64 = 0x5AFE_0B1E_C700_0000;
 
@@ -33,8 +37,58 @@ const OBJECT_MAGIC: u64 = 0x5AFE_0B1E_C700_0000;
 pub struct ObjectInner<'gc> {
     #[cfg(any(feature = "memory-validation", debug_assertions))]
     pub magic: u64,
-    pub owner_id: u64,
+    pub owner_id: ArenaId,
     pub storage: HeapStorage<'gc>,
+}
+
+impl<'gc> ObjectInner<'gc> {
+    pub fn validate_arena_id(&self) {
+        #[cfg(feature = "memory-validation")]
+        {
+            let current_id = get_current_thread_id();
+            if self.owner_id != current_id && self.owner_id != ArenaId::INVALID {
+                // In multithreaded-gc mode, this might be a valid cross-arena reference.
+                // But it's unsafe to borrow it directly without coordination.
+                #[cfg(not(feature = "multithreaded-gc"))]
+                panic!(
+                    "Arena mismatch: object owned by {:?}, but accessed by {:?}",
+                    self.owner_id, current_id
+                );
+
+                #[cfg(feature = "multithreaded-gc")]
+                {
+                    if !is_valid_cross_arena_ref(self.owner_id) {
+                        panic!(
+                            "Dangling cross-arena reference: arena {:?} is no longer valid (thread exited?)",
+                            self.owner_id
+                        );
+                    }
+
+                    if is_stw_in_progress() && get_currently_tracing().is_none() {
+                        panic!(
+                            "Uncoordinated cross-arena access during STW GC: object owned by {:?}, accessed by {:?}",
+                            self.owner_id, current_id
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn validate_magic(&self) {
+        #[cfg(any(feature = "memory-validation", debug_assertions))]
+        {
+            if self.magic != OBJECT_MAGIC {
+                panic!("Object magic number corrupted: {:#x}", self.magic);
+            }
+        }
+        self.validate_arena_id();
+    }
+
+    pub fn validate_resurrection_invariants(&self) {
+        self.validate_magic();
+        self.storage.validate_resurrection_invariants();
+    }
 }
 
 #[repr(transparent)]
@@ -132,12 +186,31 @@ impl Hash for ObjectRef<'_> {
 impl<'gc> ObjectRef<'gc> {
     pub const SIZE: usize = size_of::<ObjectRef>();
 
-    pub fn resurrect(&self, fc: &'gc gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+    pub fn pointer(&self) -> Option<NonNull<u8>> {
+        self.0.map(|h| {
+            let inner = h.borrow();
+            NonNull::new(inner.storage.as_ptr() as *mut u8).expect("Object storage pointer is null")
+        })
+    }
+
+    pub fn resurrect(
+        &self,
+        fc: &'gc gc_arena::Finalization<'gc>,
+        visited: &mut HashSet<usize>,
+        depth: usize,
+    ) {
+        if depth > 1000 {
+            panic!("Resurrection depth exceeded (possible infinite recursion in custom finalizers or corrupt graph)");
+        }
         if let Some(handle) = self.0 {
             let ptr = Gc::as_ptr(handle) as usize;
             if visited.insert(ptr) {
+                let inner = handle.borrow();
+                inner.validate_resurrection_invariants();
+                drop(inner);
+
                 Gc::resurrect(fc, handle);
-                handle.borrow().storage.resurrect(fc, visited);
+                handle.borrow().storage.resurrect(fc, visited, depth + 1);
             }
         }
     }
@@ -238,6 +311,7 @@ impl<'gc> ObjectRef<'gc> {
             panic!("NullReferenceException: called ObjectRef::as_object on NULL object reference")
         };
         let inner = o.borrow();
+        inner.validate_magic();
         let HeapStorage::Obj(instance) = &inner.storage else {
             let variant = match &inner.storage {
                 HeapStorage::Vec(_) => "Vec",
@@ -261,6 +335,7 @@ impl<'gc> ObjectRef<'gc> {
             )
         };
         let mut inner = o.borrow_mut(&gc);
+        inner.validate_magic();
         let HeapStorage::Obj(instance) = &mut inner.storage else {
             let variant = match &inner.storage {
                 HeapStorage::Vec(_) => "Vec",
@@ -282,6 +357,7 @@ impl<'gc> ObjectRef<'gc> {
             panic!("NullReferenceException: called ObjectRef::as_vector on NULL object reference")
         };
         let inner = o.borrow();
+        inner.validate_magic();
         let HeapStorage::Vec(instance) = &inner.storage else {
             panic!("called ObjectRef::as_vector on non-vector heap reference")
         };
@@ -296,6 +372,7 @@ impl<'gc> ObjectRef<'gc> {
             )
         };
         let mut inner = o.borrow_mut(&gc);
+        inner.validate_magic();
         let HeapStorage::Vec(instance) = &mut inner.storage else {
             panic!("called ObjectRef::as_vector_mut on non-vector heap reference")
         };
@@ -310,6 +387,7 @@ impl<'gc> ObjectRef<'gc> {
             )
         };
         let inner = o.borrow();
+        inner.validate_magic();
         op(&inner.storage)
     }
 }
@@ -320,6 +398,7 @@ impl Debug for ObjectRef<'_> {
             None => f.write_str("NULL"),
             Some(gc) => {
                 let inner = gc.borrow();
+                inner.validate_magic();
                 let desc = match &inner.storage {
                     HeapStorage::Obj(o) => o.description.type_name(),
                     HeapStorage::Vec(v) => format!("{:?}[{}]", v.element, v.layout.length),
@@ -363,11 +442,25 @@ impl<'gc> HeapStorage<'gc> {
         }
     }
 
-    pub fn resurrect(&self, fc: &'gc gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+    pub fn validate_resurrection_invariants(&self) {
         match self {
-            HeapStorage::Vec(v) => v.resurrect(fc, visited),
-            HeapStorage::Obj(o) => o.resurrect(fc, visited),
-            HeapStorage::Boxed(v) => v.resurrect(fc, visited),
+            HeapStorage::Vec(v) => v.validate_resurrection_invariants(),
+            HeapStorage::Obj(o) => o.validate_resurrection_invariants(),
+            HeapStorage::Str(_) => {}
+            HeapStorage::Boxed(b) => b.validate_resurrection_invariants(),
+        }
+    }
+
+    pub fn resurrect(
+        &self,
+        fc: &'gc gc_arena::Finalization<'gc>,
+        visited: &mut HashSet<usize>,
+        depth: usize,
+    ) {
+        match self {
+            HeapStorage::Vec(v) => v.resurrect(fc, visited, depth),
+            HeapStorage::Obj(o) => o.resurrect(fc, visited, depth),
+            HeapStorage::Boxed(v) => v.resurrect(fc, visited, depth),
             HeapStorage::Str(_) => {}
         }
     }
@@ -390,7 +483,7 @@ impl<'gc> HeapStorage<'gc> {
             HeapStorage::Str(s) => s.as_ptr() as *const u8,
             HeapStorage::Obj(o) => o.instance_storage.get().as_ptr(),
             HeapStorage::Boxed(ValueType::Struct(o)) => o.instance_storage.get().as_ptr(),
-            _ => ptr::null(),
+            HeapStorage::Boxed(v) => v as *const _ as *const u8,
         }
     }
 }
@@ -436,10 +529,23 @@ impl<'gc> ValueType<'gc> {
         }
     }
 
-    pub fn resurrect(&self, fc: &'gc gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
+    pub fn validate_resurrection_invariants(&self) {
         match self {
-            ValueType::Pointer(p) => p.resurrect(fc, visited),
-            ValueType::Struct(o) => o.resurrect(fc, visited),
+            ValueType::Pointer(p) => p.validate_magic(),
+            ValueType::Struct(o) => o.validate_resurrection_invariants(),
+            _ => {}
+        }
+    }
+
+    pub fn resurrect(
+        &self,
+        fc: &'gc gc_arena::Finalization<'gc>,
+        visited: &mut HashSet<usize>,
+        depth: usize,
+    ) {
+        match self {
+            ValueType::Pointer(p) => p.resurrect(fc, visited, depth),
+            ValueType::Struct(o) => o.resurrect(fc, visited, depth),
             _ => {}
         }
     }
@@ -507,8 +613,13 @@ impl<'gc> CTSValue<'gc> {
     }
 }
 
+#[cfg(any(feature = "memory-validation", debug_assertions))]
+const VECTOR_MAGIC: u64 = 0x5AFE_7EC7_0B00_0000;
+
 // Manual implementation of Clone and PartialEq to handle ThreadSafeLock
 pub struct Vector<'gc> {
+    #[cfg(any(feature = "memory-validation", debug_assertions))]
+    magic: u64,
     pub element: ConcreteType,
     pub layout: ArrayLayoutManager,
     pub(crate) storage: Vec<u8>,
@@ -518,7 +629,10 @@ pub struct Vector<'gc> {
 
 impl<'gc> Clone for Vector<'gc> {
     fn clone(&self) -> Self {
+        self.validate_magic();
         Self {
+            #[cfg(any(feature = "memory-validation", debug_assertions))]
+            magic: VECTOR_MAGIC,
             element: self.element.clone(),
             layout: self.layout.clone(),
             storage: self.storage.clone(),
@@ -530,6 +644,8 @@ impl<'gc> Clone for Vector<'gc> {
 
 impl<'gc> PartialEq for Vector<'gc> {
     fn eq(&self, other: &Self) -> bool {
+        self.validate_magic();
+        other.validate_magic();
         self.element == other.element
             && self.layout == other.layout
             && self.storage == other.storage
@@ -542,17 +658,18 @@ impl<'gc> PartialEq for Vector<'gc> {
 unsafe impl Collect for Vector<'_> {
     #[inline]
     fn trace(&self, cc: &Collection) {
+        self.validate_magic();
         let element = &self.layout.element_layout;
         match element.as_ref() {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
                 for i in 0..self.layout.length {
-                    unsafe { ObjectRef::read_unchecked(&self.storage[(i * element.size())..]) }
+                    unsafe { ObjectRef::read_unchecked(&self.storage[(element.size() * i).as_usize()..]) }
                         .trace(cc);
                 }
             }
             _ => {
                 for i in 0..self.layout.length {
-                    LayoutManager::trace(element, &self.storage[(i * element.size())..], cc);
+                    LayoutManager::trace(element, &self.storage[(element.size() * i).as_usize()..], cc);
                 }
             }
         }
@@ -567,6 +684,8 @@ impl<'gc> Vector<'gc> {
         dims: Vec<usize>,
     ) -> Self {
         Self {
+            #[cfg(any(feature = "memory-validation", debug_assertions))]
+            magic: VECTOR_MAGIC,
             element,
             layout,
             storage,
@@ -575,19 +694,49 @@ impl<'gc> Vector<'gc> {
         }
     }
 
+    fn validate_magic(&self) {
+        #[cfg(any(feature = "memory-validation", debug_assertions))]
+        {
+            if self.magic != VECTOR_MAGIC {
+                panic!("Vector magic number corrupted: {:#x}", self.magic);
+            }
+        }
+    }
+
     pub fn size_bytes(&self) -> usize {
+        self.validate_magic();
         size_of::<Vector>() + self.storage.len() + (self.dims.len() * size_of::<usize>())
     }
 
-    pub fn resurrect(&self, fc: &'gc gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
-        self.layout.resurrect(&self.storage, fc, visited);
+    pub fn validate_resurrection_invariants(&self) {
+        self.validate_magic();
+        let actual_size = self.storage.len();
+        let expected_size = self.layout.size();
+        if actual_size != expected_size.as_usize() {
+            panic!(
+                "Vector storage size mismatch during resurrection: actual {}, expected {}",
+                actual_size, expected_size
+            );
+        }
+    }
+
+    pub fn resurrect(
+        &self,
+        fc: &'gc gc_arena::Finalization<'gc>,
+        visited: &mut HashSet<usize>,
+        depth: usize,
+    ) {
+        self.validate_magic();
+        self.layout.resurrect(&self.storage, fc, visited, depth);
     }
 
     pub fn get(&self) -> &[u8] {
+        self.validate_magic();
         &self.storage
     }
 
     pub fn get_mut(&mut self) -> &mut [u8] {
+        self.validate_magic();
         &mut self.storage
     }
 }
@@ -600,7 +749,7 @@ impl Debug for Vector<'_> {
                     "vector of {:?} (length {})",
                     self.element, self.layout.length
                 ))
-                .chain(self.storage.chunks(self.layout.element_layout.size()).map(
+                .chain(self.storage.chunks(self.layout.element_layout.size().as_usize()).map(
                     match self.layout.element_layout.as_ref() {
                         LayoutManager::Scalar(Scalar::ObjectRef) => |chunk: &[u8]| {
                             format!("{:?}", unsafe { ObjectRef::read_unchecked(chunk) })
@@ -671,11 +820,27 @@ unsafe impl<'gc> Collect for Object<'gc> {
 
 impl<'gc> Object<'gc> {
     pub fn size_bytes(&self) -> usize {
-        size_of::<Object>() + self.instance_storage.get().len()
+        size_of::<Object>() + unsafe { self.instance_storage.raw_data_unsynchronized().len() }
     }
 
-    pub fn resurrect(&self, fc: &'gc gc_arena::Finalization<'gc>, visited: &mut HashSet<usize>) {
-        self.instance_storage.resurrect(fc, visited);
+    pub fn validate_resurrection_invariants(&self) {
+        let actual_size = unsafe { self.instance_storage.raw_data_unsynchronized().len() };
+        let expected_size = self.instance_storage.layout().total_size;
+        if actual_size != expected_size {
+            panic!(
+                "Object storage size mismatch during resurrection: actual {}, expected {}",
+                actual_size, expected_size
+            );
+        }
+    }
+
+    pub fn resurrect(
+        &self,
+        fc: &'gc gc_arena::Finalization<'gc>,
+        visited: &mut HashSet<usize>,
+        depth: usize,
+    ) {
+        self.instance_storage.resurrect(fc, visited, depth);
     }
 
     pub fn new(description: TypeDescription, instance_storage: FieldStorage) -> Self {

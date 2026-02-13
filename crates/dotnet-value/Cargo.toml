@@ -14,4 +14,4 @@ gc-arena = { workspace = true }
 default = ["multithreaded-gc"]
 multithreading = ["dotnet-utils/multithreading"]
 multithreaded-gc = ["multithreading", "dotnet-utils/multithreaded-gc"]
-memory-validation = []
+memory-validation = ["dotnet-utils/memory-validation"]

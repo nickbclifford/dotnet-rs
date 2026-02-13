@@ -63,7 +63,8 @@ pub fn ldnull<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepR
 load_var!(
     #[dotnet_instruction(LoadArgument(index))]
     ldarg,
-    get_argument
+    get_argument,
+    ArgumentIndex
 );
 
 #[dotnet_instruction(LoadArgumentAddress(index))]
@@ -77,12 +78,12 @@ pub fn ldarga<
 ) -> StepResult {
     let frame = ctx.current_frame();
     let abs_idx = frame.base.arguments + index as usize;
-    let arg = ctx.get_argument(index as usize);
+    let arg = ctx.get_argument(crate::ArgumentIndex(index as usize));
     let live_type = vm_try!(ctx.stack_value_type(&arg));
     ctx.push(StackValue::managed_stack_ptr(
         abs_idx,
-        0,
-        ctx.get_argument_address(index as usize).as_ptr() as *mut _,
+        crate::ByteOffset(0),
+        ctx.get_argument_address(crate::ArgumentIndex(index as usize)).as_ptr() as *mut _,
         live_type,
         true,
     ));
@@ -92,12 +93,14 @@ pub fn ldarga<
 store_var!(
     #[dotnet_instruction(StoreArgument(index))]
     starg,
-    set_argument
+    set_argument,
+    ArgumentIndex
 );
 load_var!(
     #[dotnet_instruction(LoadLocal(index))]
     ldloc,
-    get_local
+    get_local,
+    LocalIndex
 );
 
 #[dotnet_instruction(LoadLocalAddress(index))]
@@ -111,14 +114,14 @@ pub fn ldloca<
 ) -> StepResult {
     let frame = ctx.current_frame();
     let abs_idx = frame.base.locals + index as usize;
-    let local = ctx.get_local(index as usize);
+    let local = ctx.get_local(crate::LocalIndex(index as usize));
     let live_type = vm_try!(ctx.stack_value_type(&local));
 
-    let (ptr, pinned) = ctx.get_local_info_for_managed_ptr(index as usize);
+    let (ptr, pinned) = ctx.get_local_info_for_managed_ptr(crate::LocalIndex(index as usize));
 
     ctx.push(StackValue::managed_stack_ptr(
         abs_idx,
-        0,
+        crate::ByteOffset(0),
         ptr.as_ptr() as *mut _,
         live_type,
         pinned,
@@ -129,5 +132,6 @@ pub fn ldloca<
 store_var!(
     #[dotnet_instruction(StoreLocal(index))]
     stloc,
-    set_local
+    set_local,
+    LocalIndex
 );

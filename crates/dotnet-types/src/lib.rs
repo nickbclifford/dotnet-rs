@@ -62,6 +62,16 @@ unsafe impl Send for TypeDescription {}
 unsafe impl Sync for TypeDescription {}
 
 impl TypeDescription {
+    pub const NULL: Self = Self {
+        resolution: ResolutionS::NULL,
+        definition_ptr: None,
+        index: unsafe {
+            std::mem::transmute::<[u8; std::mem::size_of::<TypeIndex>()], TypeIndex>(
+                [0u8; std::mem::size_of::<TypeIndex>()],
+            )
+        },
+    };
+
     pub const fn new(
         resolution: ResolutionS,
         definition: &'static TypeDefinition<'static>,
@@ -188,5 +198,16 @@ impl TypeDescription {
             }
             _ => None,
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_null_exists() {
+        let _ = TypeDescription::NULL;
+        let _ = ResolutionS::NULL;
     }
 }

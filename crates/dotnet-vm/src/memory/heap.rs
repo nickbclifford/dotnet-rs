@@ -72,6 +72,39 @@ impl<'gc> HeapManager<'gc> {
         };
 
         if !queue.is_empty() {
+            #[cfg(feature = "memory-validation")]
+            {
+                let mut seen = HashSet::new();
+                for obj in queue.iter() {
+                    let ptr = obj.0.expect("object in finalization queue is null");
+                    let addr = Gc::as_ptr(ptr) as usize;
+                    if !seen.insert(addr) {
+                        panic!("Duplicate object in finalization queue at address {:#x}", addr);
+                    }
+
+                    let inner = ptr.borrow();
+                    match &inner.storage {
+                        HeapStorage::Obj(o) => {
+                            let has_finalizer = o.description.static_initializer().is_some()
+                                || o.description
+                                    .definition()
+                                    .methods
+                                    .iter()
+                                    .any(|m| m.name == "Finalize");
+                            if !has_finalizer {
+                                panic!(
+                                    "Object without finalizer in finalization queue: {:?}",
+                                    o.description
+                                );
+                            }
+                        }
+                        _ => {
+                            panic!("Non-object in finalization queue");
+                        }
+                    }
+                }
+            }
+
             let mut to_finalize = Vec::new();
             let mut i = 0;
             while i < queue.len() {
@@ -119,7 +152,7 @@ impl<'gc> HeapManager<'gc> {
                             );
                         }
                         Gc::resurrect(fc, ptr);
-                        ptr.borrow().storage.resurrect(fc, &mut resurrected);
+                        ptr.borrow().storage.resurrect(fc, &mut resurrected, 0);
                     }
                 }
             }

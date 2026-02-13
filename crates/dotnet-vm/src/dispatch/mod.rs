@@ -35,7 +35,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let thread_manager = &self.shared.thread_manager;
         if thread_manager.is_gc_stop_requested() {
             let managed_id = self.thread_id.get();
-            if managed_id != 0 {
+            if managed_id != dotnet_utils::ArenaId::INVALID {
                 #[cfg(feature = "multithreaded-gc")]
                 thread_manager.safe_point(managed_id, &self.shared.gc_coordinator);
                 #[cfg(not(feature = "multithreaded-gc"))]
@@ -258,7 +258,7 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
         let mut ctx = self.stack.ves_context(gc);
 
         // 1. Handle return from previous target
-        if ctx.frame_stack.current_frame().stack_height > 0 {
+        if ctx.frame_stack.current_frame().stack_height > crate::StackSlotIndex(0) {
             let frame = ctx.frame_stack.current_frame();
             let invoke_method = frame.state.info_handle.source;
             let has_return_value = invoke_method.method.signature.return_type.1.is_some();
@@ -275,7 +275,7 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
             let index = state.next_index;
             if index < targets_len {
                 let target = ObjectRef(Some(state.targets)).as_vector(|v| {
-                    let offset = index * v.layout.element_layout.as_ref().size();
+                    let offset = (v.layout.element_layout.as_ref().size() * index).as_usize();
                     unsafe { ObjectRef::read_branded(&v.get()[offset..], &gc) }
                 });
                 state.next_index += 1;

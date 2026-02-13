@@ -110,8 +110,8 @@ impl<'gc, 'm> FrameStack<'gc, 'm> {
         if frame.is_finalizer {
             heap.processing_finalizer.set(false);
         }
-        for i in frame.base.arguments..evaluation_stack.top_of_stack() {
-            evaluation_stack.set_slot(i, StackValue::null());
+        for i in frame.base.arguments.as_usize()..evaluation_stack.top_of_stack().as_usize() {
+            evaluation_stack.set_slot(crate::StackSlotIndex(i), StackValue::null());
         }
         evaluation_stack.truncate(frame.base.arguments);
     }
@@ -146,14 +146,14 @@ impl<'gc, 'm> FrameStack<'gc, 'm> {
 
         let signature = frame.state.info_handle.signature;
         let return_value = if let ReturnType(_, Some(_)) = &signature.return_type {
-            let return_slot_index = frame.base.stack + frame.stack_height - 1;
+            let return_slot_index = frame.base.stack + frame.stack_height - 1usize;
             Some(evaluation_stack.get_slot(return_slot_index))
         } else {
             None
         };
 
-        for i in frame.base.arguments..evaluation_stack.top_of_stack() {
-            evaluation_stack.set_slot(i, StackValue::null());
+        for i in frame.base.arguments.as_usize()..evaluation_stack.top_of_stack().as_usize() {
+            evaluation_stack.set_slot(crate::StackSlotIndex(i), StackValue::null());
         }
         evaluation_stack.truncate(frame.base.arguments);
 
@@ -163,7 +163,7 @@ impl<'gc, 'm> FrameStack<'gc, 'm> {
                 // wait, how to push back to evaluation stack?
                 // we need to call push on evaluation_stack
                 evaluation_stack.push(return_value);
-                self.current_frame_mut().stack_height += 1;
+                self.current_frame_mut().stack_height += 1usize;
             } else {
                 evaluation_stack.push(return_value);
             }

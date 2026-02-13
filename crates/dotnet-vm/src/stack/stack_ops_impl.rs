@@ -71,7 +71,7 @@ impl<'a, 'gc, 'm: 'gc> EvalStackOps<'gc> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn top_of_stack(&self) -> usize {
+    fn top_of_stack(&self) -> crate::StackSlotIndex {
         self.evaluation_stack.top_of_stack()
     }
 }
@@ -88,13 +88,13 @@ impl<'a, 'gc, 'm: 'gc> TypedStackOps<'gc> for VesContext<'a, 'gc, 'm> {
 
 impl<'a, 'gc, 'm: 'gc> LocalOps<'gc> for VesContext<'a, 'gc, 'm> {
     #[inline]
-    fn get_local(&self, index: usize) -> StackValue<'gc> {
+    fn get_local(&self, index: crate::LocalIndex) -> StackValue<'gc> {
         let frame = self.frame_stack.current_frame();
         self.evaluation_stack.get_slot(frame.base.locals + index)
     }
 
     #[inline]
-    fn set_local(&mut self, index: usize, value: StackValue<'gc>) {
+    fn set_local(&mut self, index: crate::LocalIndex, value: StackValue<'gc>) {
         #[cfg(feature = "multithreaded-gc")]
         if matches!(value, StackValue::ValueType(_)) {
             self.gc.record_allocation(value.size_bytes());
@@ -104,32 +104,32 @@ impl<'a, 'gc, 'm: 'gc> LocalOps<'gc> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn get_local_address(&self, index: usize) -> std::ptr::NonNull<u8> {
+    fn get_local_address(&self, index: crate::LocalIndex) -> std::ptr::NonNull<u8> {
         let frame = self.frame_stack.current_frame();
         self.evaluation_stack
             .get_slot_address(frame.base.locals + index)
     }
 
     #[inline]
-    fn get_local_info_for_managed_ptr(&self, index: usize) -> (std::ptr::NonNull<u8>, bool) {
+    fn get_local_info_for_managed_ptr(&self, index: crate::LocalIndex) -> (std::ptr::NonNull<u8>, bool) {
         let frame = self.frame_stack.current_frame();
         let addr = self
             .evaluation_stack
             .get_slot_address(frame.base.locals + index);
-        let is_pinned = frame.pinned_locals.get(index).copied().unwrap_or(false);
+        let is_pinned = frame.pinned_locals.get(index.as_usize()).copied().unwrap_or(false);
         (addr, is_pinned)
     }
 }
 
 impl<'a, 'gc, 'm: 'gc> ArgumentOps<'gc> for VesContext<'a, 'gc, 'm> {
     #[inline]
-    fn get_argument(&self, index: usize) -> StackValue<'gc> {
+    fn get_argument(&self, index: crate::ArgumentIndex) -> StackValue<'gc> {
         let frame = self.frame_stack.current_frame();
         self.evaluation_stack.get_slot(frame.base.arguments + index)
     }
 
     #[inline]
-    fn set_argument(&mut self, index: usize, value: StackValue<'gc>) {
+    fn set_argument(&mut self, index: crate::ArgumentIndex, value: StackValue<'gc>) {
         #[cfg(feature = "multithreaded-gc")]
         if matches!(value, StackValue::ValueType(_)) {
             self.gc.record_allocation(value.size_bytes());
@@ -139,7 +139,7 @@ impl<'a, 'gc, 'm: 'gc> ArgumentOps<'gc> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn get_argument_address(&self, index: usize) -> std::ptr::NonNull<u8> {
+    fn get_argument_address(&self, index: crate::ArgumentIndex) -> std::ptr::NonNull<u8> {
         let frame = self.frame_stack.current_frame();
         self.evaluation_stack
             .get_slot_address(frame.base.arguments + index)
@@ -158,17 +158,17 @@ impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn get_slot(&self, index: usize) -> StackValue<'gc> {
+    fn get_slot(&self, index: crate::StackSlotIndex) -> StackValue<'gc> {
         self.evaluation_stack.get_slot(index)
     }
 
     #[inline]
-    fn get_slot_ref(&self, index: usize) -> &StackValue<'gc> {
+    fn get_slot_ref(&self, index: crate::StackSlotIndex) -> &StackValue<'gc> {
         self.evaluation_stack.get_slot_ref(index)
     }
 
     #[inline]
-    fn set_slot(&mut self, index: usize, value: StackValue<'gc>) {
+    fn set_slot(&mut self, index: crate::StackSlotIndex, value: StackValue<'gc>) {
         #[cfg(feature = "multithreaded-gc")]
         if matches!(value, StackValue::ValueType(_)) {
             self.gc.record_allocation(value.size_bytes());
@@ -177,7 +177,7 @@ impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn get_slot_address(&self, index: usize) -> std::ptr::NonNull<u8> {
+    fn get_slot_address(&self, index: crate::StackSlotIndex) -> std::ptr::NonNull<u8> {
         self.evaluation_stack.get_slot_address(index)
     }
 }

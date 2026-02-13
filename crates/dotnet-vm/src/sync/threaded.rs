@@ -4,13 +4,14 @@ use crate::{
     sync::{SyncBlockOps, SyncManagerOps},
     threading::ThreadManagerOps,
 };
+use dotnet_utils::ArenaId;
 use parking_lot::{Condvar, Mutex};
 use std::{collections::HashMap, sync::Arc};
 
 #[derive(Debug)]
 struct SyncBlockState {
-    /// Thread ID of the current lock owner (0 means unlocked)
-    owner_thread_id: u64,
+    /// Thread ID of the current lock owner (ArenaId::INVALID means unlocked)
+    owner_thread_id: ArenaId,
     /// Lock recursion count (for nested locks by the same thread)
     recursion_count: usize,
 }
@@ -26,7 +27,7 @@ impl SyncBlock {
     pub(super) fn new() -> Self {
         Self {
             state: Mutex::new(SyncBlockState {
-                owner_thread_id: 0,
+                owner_thread_id: ArenaId::INVALID,
                 recursion_count: 0,
             }),
             condvar: Condvar::new(),
@@ -35,9 +36,9 @@ impl SyncBlock {
 }
 
 impl SyncBlockOps for SyncBlock {
-    fn try_enter(&self, thread_id: u64) -> bool {
+    fn try_enter(&self, thread_id: ArenaId) -> bool {
         let mut state = self.state.lock();
-        if state.owner_thread_id == 0 {
+        if state.owner_thread_id == ArenaId::INVALID {
             state.owner_thread_id = thread_id;
             state.recursion_count = 1;
             true
@@ -49,7 +50,7 @@ impl SyncBlockOps for SyncBlock {
         }
     }
 
-    fn enter(&self, thread_id: u64, metrics: &RuntimeMetrics) {
+    fn enter(&self, thread_id: ArenaId, metrics: &RuntimeMetrics) {
         use std::time::Instant;
         let mut state = self.state.lock();
 
@@ -58,9 +59,9 @@ impl SyncBlockOps for SyncBlock {
             return;
         }
 
-        if state.owner_thread_id != 0 {
+        if state.owner_thread_id != ArenaId::INVALID {
             let start_wait = Instant::now();
-            while state.owner_thread_id != 0 {
+            while state.owner_thread_id != ArenaId::INVALID {
                 self.condvar.wait(&mut state);
             }
             metrics.record_lock_contention(start_wait.elapsed());
@@ -72,7 +73,7 @@ impl SyncBlockOps for SyncBlock {
 
     fn enter_with_timeout(
         &self,
-        thread_id: u64,
+        thread_id: ArenaId,
         timeout_ms: u64,
         metrics: &RuntimeMetrics,
     ) -> bool {
@@ -91,9 +92,9 @@ impl SyncBlockOps for SyncBlock {
 
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
 
-        if state.owner_thread_id != 0 {
+        if state.owner_thread_id != ArenaId::INVALID {
             let start_wait = Instant::now();
-            while state.owner_thread_id != 0 {
+            while state.owner_thread_id != ArenaId::INVALID {
                 let now = Instant::now();
                 if now >= deadline {
                     return false;
@@ -102,7 +103,7 @@ impl SyncBlockOps for SyncBlock {
                 let remaining = deadline - now;
                 let timed_out = self.condvar.wait_for(&mut state, remaining).timed_out();
 
-                if timed_out && state.owner_thread_id != 0 {
+                if timed_out && state.owner_thread_id != ArenaId::INVALID {
                     return false;
                 }
             }
@@ -116,7 +117,7 @@ impl SyncBlockOps for SyncBlock {
 
     fn enter_safe(
         &self,
-        thread_id: u64,
+        thread_id: ArenaId,
         metrics: &RuntimeMetrics,
         thread_manager: &impl ThreadManagerOps,
         gc_coordinator: &GCCoordinator,
@@ -131,7 +132,7 @@ impl SyncBlockOps for SyncBlock {
                 return;
             }
 
-            if state.owner_thread_id == 0 {
+            if state.owner_thread_id == ArenaId::INVALID {
                 state.owner_thread_id = thread_id;
                 state.recursion_count = 1;
                 return;
@@ -144,7 +145,7 @@ impl SyncBlockOps for SyncBlock {
             let timeout = Duration::from_millis(10);
             let _ = self.condvar.wait_for(&mut state, timeout);
 
-            if state.owner_thread_id == 0 {
+            if state.owner_thread_id == ArenaId::INVALID {
                 state.owner_thread_id = thread_id;
                 state.recursion_count = 1;
                 metrics.record_lock_contention(start_wait.elapsed());
@@ -163,7 +164,7 @@ impl SyncBlockOps for SyncBlock {
 
     fn enter_with_timeout_safe(
         &self,
-        thread_id: u64,
+        thread_id: ArenaId,
         timeout_ms: u64,
         metrics: &RuntimeMetrics,
         thread_manager: &impl ThreadManagerOps,
@@ -190,7 +191,7 @@ impl SyncBlockOps for SyncBlock {
                 return true;
             }
 
-            if state.owner_thread_id == 0 {
+            if state.owner_thread_id == ArenaId::INVALID {
                 state.owner_thread_id = thread_id;
                 state.recursion_count = 1;
                 return true;
@@ -203,7 +204,7 @@ impl SyncBlockOps for SyncBlock {
             let start_wait = Instant::now();
             let _ = self.condvar.wait_for(&mut state, wait_duration);
 
-            if state.owner_thread_id == 0 {
+            if state.owner_thread_id == ArenaId::INVALID {
                 state.owner_thread_id = thread_id;
                 state.recursion_count = 1;
                 metrics.record_lock_contention(start_wait.elapsed());
@@ -220,10 +221,10 @@ impl SyncBlockOps for SyncBlock {
         }
     }
 
-    fn exit(&self, thread_id: u64) -> bool {
+    fn exit(&self, thread_id: ArenaId) -> bool {
         let mut state = self.state.lock();
 
-        if state.owner_thread_id != thread_id || thread_id == 0 {
+        if state.owner_thread_id != thread_id || thread_id == ArenaId::INVALID {
             return false;
         }
 
@@ -234,22 +235,22 @@ impl SyncBlockOps for SyncBlock {
         state.recursion_count -= 1;
 
         if state.recursion_count == 0 {
-            state.owner_thread_id = 0;
+            state.owner_thread_id = ArenaId::INVALID;
             self.condvar.notify_one();
         }
 
         true
     }
 
-    fn wait(&self, _thread_id: u64, _timeout_ms: Option<u64>) -> Result<(), &'static str> {
+    fn wait(&self, _thread_id: ArenaId, _timeout_ms: Option<u64>) -> Result<(), &'static str> {
         Err("Monitor.Wait() is not yet implemented")
     }
 
-    fn pulse(&self, _thread_id: u64) -> Result<(), &'static str> {
+    fn pulse(&self, _thread_id: ArenaId) -> Result<(), &'static str> {
         Err("Monitor.Pulse() is not yet implemented")
     }
 
-    fn pulse_all(&self, _thread_id: u64) -> Result<(), &'static str> {
+    fn pulse_all(&self, _thread_id: ArenaId) -> Result<(), &'static str> {
         Err("Monitor.PulseAll() is not yet implemented")
     }
 }
@@ -305,7 +306,7 @@ impl SyncManagerOps for SyncBlockManager {
     fn try_enter_block(
         &self,
         block: Arc<SyncBlock>,
-        thread_id: u64,
+        thread_id: ArenaId,
         _metrics: &RuntimeMetrics,
     ) -> bool {
         block.try_enter(thread_id)

@@ -155,10 +155,10 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             ))
             .size();
 
-            let mut value_vec = vec![0u8; value_size];
+            let mut value_vec = vec![0u8; value_size.as_usize()];
             // SAFETY: Memory is allocated with sufficient size (value_size) and ptr is valid
             // for the current thread's evaluation stack.
-            unsafe { ptr::copy_nonoverlapping(ptr, value_vec.as_mut_ptr(), value_size) };
+            unsafe { ptr::copy_nonoverlapping(ptr, value_vec.as_mut_ptr(), value_size.as_usize()) };
             let value_data = &value_vec;
             let value = vm_try!(ctx.read_cts_value(&constraint_type_source, value_data));
 

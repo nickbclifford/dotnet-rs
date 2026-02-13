@@ -1,6 +1,6 @@
 use crate::memory::heap::HeapManager;
 use dotnet_types::TypeDescription;
-use dotnet_utils::gc::GCHandle;
+use dotnet_utils::{atomic::validate_atomic_access, gc::GCHandle};
 use dotnet_value::{
     StackValue,
     layout::{HasLayout, LayoutManager, Scalar},
@@ -31,10 +31,11 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         value: StackValue<'gc>,
         layout: &LayoutManager,
     ) -> Result<(), String> {
+        validate_atomic_access(ptr as *const u8, false);
         let owner = owner.or_else(|| self.heap.find_object(ptr as usize));
 
         // 1. Bounds Check
-        self.check_bounds(ptr, owner, layout.size())?;
+        self.check_bounds(ptr, owner, layout.size().as_usize())?;
 
         // 2. Integrity Check
         self.check_integrity(ptr, owner, layout)?;
@@ -62,10 +63,11 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         layout: &LayoutManager,
         type_desc: Option<TypeDescription>,
     ) -> Result<StackValue<'gc>, String> {
+        validate_atomic_access(ptr, false);
         let owner = owner.or_else(|| self.heap.find_object(ptr as usize));
 
         // 1. Bounds Check
-        self.check_bounds(ptr as *mut u8, owner, layout.size())?;
+        self.check_bounds(ptr as *mut u8, owner, layout.size().as_usize())?;
 
         // 2. Read Safety Check
         let src_layout = if let Some(owner) = owner {
@@ -164,7 +166,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 let dest_layout = self.get_layout_from_owner(owner);
 
                 if let Some(dl) = dest_layout {
-                    validate_ref_integrity(&dl, 0, offset, offset + src_layout.size(), src_layout);
+                    validate_ref_integrity(&dl, 0, offset, offset + src_layout.size().as_usize(), src_layout);
                 }
             }
         }
@@ -267,7 +269,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 LayoutManager::Field(flm) => {
                     if let StackValue::ValueType(src_obj) = value {
                         let src_ptr = src_obj.instance_storage.get().as_ptr();
-                        ptr::copy_nonoverlapping(src_ptr, ptr, flm.size());
+                        ptr::copy_nonoverlapping(src_ptr, ptr, flm.size().as_usize());
                     } else {
                         return Err("Expected ValueType for Struct write".into());
                     }
@@ -341,8 +343,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 LayoutManager::Field(flm) => {
                     if let Some(desc) = type_desc {
                         let size = flm.size();
-                        let mut data = vec![0u8; size];
-                        ptr::copy_nonoverlapping(ptr, data.as_mut_ptr(), size);
+                        let mut data = vec![0u8; size.as_usize()];
+                        ptr::copy_nonoverlapping(ptr, data.as_mut_ptr(), size.as_usize());
 
                         let storage = FieldStorage::new(Arc::new(flm.clone()), data);
                         let obj = ObjectInstance::new(desc, storage);
@@ -424,22 +426,22 @@ pub fn has_ref_at(layout: &LayoutManager, offset: usize) -> bool {
         },
         LayoutManager::Field(fm) => {
             for f in fm.fields.values() {
-                if offset >= f.position && offset < f.position + f.layout.size() {
-                    return has_ref_at(&f.layout, offset - f.position);
+                if offset >= f.position.as_usize() && offset < (f.position + f.layout.size()).as_usize() {
+                    return has_ref_at(&f.layout, offset - f.position.as_usize());
                 }
             }
             false
         }
         LayoutManager::Array(am) => {
             let elem_size = am.element_layout.size();
-            if elem_size == 0 {
+            if elem_size.as_usize() == 0 {
                 return false;
             }
-            let idx = offset / elem_size;
+            let idx = offset / elem_size.as_usize();
             if idx >= am.length {
                 return false;
             }
-            let rel = offset % elem_size;
+            let rel = offset % elem_size.as_usize();
             has_ref_at(&am.element_layout, rel)
         }
     }
@@ -456,14 +458,14 @@ where
         },
         LayoutManager::Field(fm) => {
             for f in fm.fields.values() {
-                check_refs_in_layout(&f.layout, base + f.position, callback);
+                check_refs_in_layout(&f.layout, base + f.position.as_usize(), callback);
             }
         }
         LayoutManager::Array(am) => {
             if am.element_layout.is_or_contains_refs() {
                 let sz = am.element_layout.size();
                 for i in 0..am.length {
-                    check_refs_in_layout(&am.element_layout, base + i * sz, callback);
+                    check_refs_in_layout(&am.element_layout, base + (sz * i).as_usize(), callback);
                 }
             }
         }
@@ -518,8 +520,8 @@ fn validate_ref_integrity(
         },
         LayoutManager::Field(fm) => {
             for f in fm.fields.values() {
-                let f_start = base_offset + f.position;
-                let f_end = f_start + f.layout.size();
+                let f_start = base_offset + f.position.as_usize();
+                let f_end = f_start + f.layout.size().as_usize();
                 if f_start < range_end && f_end > range_start {
                     validate_ref_integrity(&f.layout, f_start, range_start, range_end, src_layout);
                 }
@@ -528,21 +530,21 @@ fn validate_ref_integrity(
         LayoutManager::Array(am) => {
             if am.element_layout.is_or_contains_refs() {
                 let elem_size = am.element_layout.size();
-                if elem_size == 0 {
+                if elem_size.as_usize() == 0 {
                     return;
                 }
 
                 let rel_start = range_start.saturating_sub(base_offset);
                 let rel_end = range_end.saturating_sub(base_offset);
 
-                let start_idx = rel_start / elem_size;
-                let end_idx = rel_end.div_ceil(elem_size);
+                let start_idx = rel_start / elem_size.as_usize();
+                let end_idx = rel_end.div_ceil(elem_size.as_usize());
                 let end_idx = end_idx.min(am.length);
 
                 for i in start_idx..end_idx {
                     validate_ref_integrity(
                         &am.element_layout,
-                        base_offset + i * elem_size,
+                        base_offset + (elem_size * i).as_usize(),
                         range_start,
                         range_end,
                         src_layout,

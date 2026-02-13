@@ -214,7 +214,7 @@ impl StaticStorageManager {
         &self,
         description: TypeDescription,
         context: &ResolutionContext,
-        thread_id: u64,
+        thread_id: dotnet_utils::ArenaId,
         metrics: Option<&RuntimeMetrics>,
     ) -> Result<StaticInitResult, dotnet_types::error::TypeResolutionError> {
         let key = (description, context.generics.clone());
@@ -231,7 +231,7 @@ impl StaticStorageManager {
                     Arc::new(StaticStorage {
                         init_state: AtomicU8::new(INIT_STATE_UNINITIALIZED),
                         initializing_thread: AtomicU64::new(0),
-                        storage: FieldStorage::new(layout, vec![0; size]),
+                        storage: FieldStorage::new(layout, vec![0; size.as_usize()]),
                         init_cond: Arc::new(Condvar::new()),
                         init_mutex: Arc::new(Mutex::new(())),
                     }),
@@ -252,7 +252,7 @@ impl StaticStorageManager {
         }
 
         if state == INIT_STATE_INITIALIZING
-            && storage.initializing_thread.load(Ordering::Acquire) == thread_id
+            && storage.initializing_thread.load(Ordering::Acquire) == thread_id.as_u64()
         {
             return Ok(StaticInitResult::Recursive);
         }
@@ -283,10 +283,9 @@ impl StaticStorageManager {
             Ordering::Acquire,
         ) {
             Ok(_) => {
-                // We won the race - this thread should execute the .cctor
                 storage
                     .initializing_thread
-                    .store(thread_id, Ordering::Release);
+                    .store(thread_id.as_u64(), Ordering::Release);
                 Ok(StaticInitResult::Execute(cctor))
             }
             Err(INIT_STATE_INITIALIZED) => {
@@ -322,7 +321,7 @@ impl StaticStorageManager {
         description: TypeDescription,
         generics: &GenericLookup,
         thread_manager: &impl ThreadManagerOps,
-        thread_id: u64,
+        thread_id: dotnet_utils::ArenaId,
         gc_coordinator: &GCCoordinator,
     ) {
         let storage = self.get(description, generics);

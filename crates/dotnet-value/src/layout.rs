@@ -9,7 +9,7 @@ use std::{
 };
 
 pub trait HasLayout {
-    fn size(&self) -> usize;
+    fn size(&self) -> crate::ByteOffset;
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -19,7 +19,7 @@ pub enum LayoutManager {
     Scalar(Scalar),
 }
 impl HasLayout for LayoutManager {
-    fn size(&self) -> usize {
+    fn size(&self) -> crate::ByteOffset {
         match self {
             LayoutManager::Field(f) => f.size(),
             LayoutManager::Array(a) => a.size(),
@@ -44,21 +44,21 @@ impl From<Scalar> for LayoutManager {
 }
 
 impl LayoutManager {
-    pub fn visit_managed_ptrs(&self, offset: usize, visitor: &mut dyn FnMut(usize)) {
+    pub fn visit_managed_ptrs(&self, offset: crate::ByteOffset, visitor: &mut dyn FnMut(crate::ByteOffset)) {
         match self {
             Self::Scalar(Scalar::ManagedPtr) => visitor(offset),
             Self::Field(flm) => {
                 for field in flm.fields.values() {
                     field
                         .layout
-                        .visit_managed_ptrs(offset + field.position, visitor);
+                        .visit_managed_ptrs(offset.checked_add(field.position).unwrap(), visitor);
                 }
             }
             Self::Array(alm) => {
                 let elem_size = alm.element_layout.size();
                 for i in 0..alm.length {
                     alm.element_layout
-                        .visit_managed_ptrs(offset + i * elem_size, visitor);
+                        .visit_managed_ptrs(offset.checked_add(elem_size.checked_mul(i).unwrap()).unwrap(), visitor);
                 }
             }
             _ => {}
@@ -125,7 +125,7 @@ impl LayoutManager {
             LayoutManager::Array(a) => {
                 let elem_size = a.element_layout.size();
                 for i in 0..a.length {
-                    a.element_layout.trace(&storage[i * elem_size..], cc);
+                    a.element_layout.trace(&storage[elem_size.as_usize() * i..], cc);
                 }
             }
             _ => {}
@@ -137,30 +137,31 @@ impl LayoutManager {
         storage: &[u8],
         fc: &'gc gc_arena::Finalization<'gc>,
         visited: &mut HashSet<usize>,
+        depth: usize,
     ) {
         match self {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
-                unsafe { ObjectRef::read_branded(storage, fc) }.resurrect(fc, visited);
+                unsafe { ObjectRef::read_branded(storage, fc) }.resurrect(fc, visited, depth);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
                 // ManagedPtr in memory is 16 bytes: (Owner ObjectRef, Offset).
                 // We need to resurrect the owner at offset 0.
                 let ptr_size = size_of::<usize>();
                 unsafe { ObjectRef::read_branded(&storage[0..ptr_size], fc) }
-                    .resurrect(fc, visited);
+                    .resurrect(fc, visited, depth);
             }
             LayoutManager::Field(f) => {
                 for field in f.fields.values() {
                     field
                         .layout
-                        .resurrect(&storage[field.position..], fc, visited);
+                        .resurrect(&storage[field.position.as_usize()..], fc, visited, depth);
                 }
             }
             LayoutManager::Array(a) => {
                 let elem_size = a.element_layout.size();
                 for i in 0..a.length {
                     a.element_layout
-                        .resurrect(&storage[i * elem_size..], fc, visited);
+                        .resurrect(&storage[elem_size.as_usize() * i..], fc, visited, depth);
                 }
             }
             _ => {}
@@ -179,13 +180,13 @@ pub const fn align_up(value: usize, align: usize) -> usize {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldLayout {
-    pub position: usize,
+    pub position: crate::ByteOffset,
     pub layout: Arc<LayoutManager>,
 }
 
 impl FieldLayout {
     pub fn as_range(&self) -> Range<usize> {
-        self.position..self.position + self.layout.size()
+        self.position.as_usize()..self.position.as_usize() + self.layout.size().as_usize()
     }
 }
 
@@ -246,13 +247,13 @@ pub struct FieldLayoutManager {
 }
 
 impl HasLayout for FieldLayoutManager {
-    fn size(&self) -> usize {
-        self.total_size
+    fn size(&self) -> crate::ByteOffset {
+        crate::ByteOffset(self.total_size)
     }
 }
 
 impl FieldLayoutManager {
-    pub fn visit_managed_ptrs(&self, offset: usize, visitor: &mut dyn FnMut(usize)) {
+    pub fn visit_managed_ptrs(&self, offset: crate::ByteOffset, visitor: &mut dyn FnMut(crate::ByteOffset)) {
         for field in self.fields.values() {
             field
                 .layout
@@ -269,11 +270,12 @@ impl FieldLayoutManager {
         storage: &[u8],
         fc: &'gc gc_arena::Finalization<'gc>,
         visited: &mut HashSet<usize>,
+        depth: usize,
     ) {
         for field in self.fields.values() {
             field
                 .layout
-                .resurrect(&storage[field.position..], fc, visited);
+                .resurrect(&storage[field.position.as_usize()..], fc, visited, depth);
         }
     }
 
@@ -302,7 +304,7 @@ pub struct ArrayLayoutManager {
 }
 
 impl HasLayout for ArrayLayoutManager {
-    fn size(&self) -> usize {
+    fn size(&self) -> crate::ByteOffset {
         self.element_layout.size() * self.length
     }
 }
@@ -313,11 +315,12 @@ impl ArrayLayoutManager {
         storage: &[u8],
         fc: &'gc gc_arena::Finalization<'gc>,
         visited: &mut HashSet<usize>,
+        depth: usize,
     ) {
         let elem_size = self.element_layout.size();
         for i in 0..self.length {
             self.element_layout
-                .resurrect(&storage[i * elem_size..], fc, visited);
+                .resurrect(&storage[(elem_size * i).as_usize()..], fc, visited, depth);
         }
     }
 }
@@ -338,8 +341,8 @@ pub enum Scalar {
 }
 
 impl HasLayout for Scalar {
-    fn size(&self) -> usize {
-        self.size_const()
+    fn size(&self) -> crate::ByteOffset {
+        crate::ByteOffset(self.size_const())
     }
 }
 

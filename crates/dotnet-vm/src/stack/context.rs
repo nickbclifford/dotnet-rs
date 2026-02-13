@@ -34,16 +34,16 @@ pub struct VesContext<'a, 'gc, 'm> {
     pub(crate) shared: &'a Arc<SharedGlobalState<'m>>,
     pub(crate) local: &'a mut ArenaLocalState<'gc>,
     pub(crate) exception_mode: &'a mut ExceptionState<'gc>,
-    pub(crate) thread_id: &'a std::cell::Cell<u64>,
+    pub(crate) thread_id: &'a std::cell::Cell<dotnet_utils::ArenaId>,
     pub(crate) original_ip: &'a mut usize,
-    pub(crate) original_stack_height: &'a mut usize,
+    pub(crate) original_stack_height: &'a mut crate::StackSlotIndex,
 }
 
 impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
     #[inline]
     pub(crate) fn on_push(&mut self) {
         if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
-            frame.stack_height += 1;
+            frame.stack_height += 1usize;
         }
     }
 
@@ -67,32 +67,32 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
     #[inline]
     pub(crate) fn on_pop(&mut self) {
         if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
-            if frame.stack_height == 0 {
+            if frame.stack_height == crate::StackSlotIndex(0) {
                 panic!(
                     "Stack height underflow in frame {:?}",
                     frame.state.info_handle.source
                 );
             }
-            frame.stack_height -= 1;
+            frame.stack_height -= 1usize;
         }
     }
 
     #[inline]
     pub(crate) fn on_pop_safe(&mut self) -> Result<(), crate::error::VmError> {
         if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
-            if frame.stack_height == 0 {
+            if frame.stack_height == crate::StackSlotIndex(0) {
                 return Err(crate::error::VmError::Execution(
                     crate::error::ExecutionError::StackUnderflow,
                 ));
             }
-            frame.stack_height -= 1;
+            frame.stack_height -= 1usize;
         }
         Ok(())
     }
 
     pub fn top_of_stack_address(&self) -> NonNull<u8> {
         self.evaluation_stack
-            .get_slot_address(self.evaluation_stack.top_of_stack().saturating_sub(1))
+            .get_slot_address(self.evaluation_stack.top_of_stack().saturating_sub(1usize))
     }
 
     pub(crate) fn init_locals(
@@ -423,12 +423,12 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn original_stack_height(&self) -> usize {
+    fn original_stack_height(&self) -> crate::StackSlotIndex {
         *self.original_stack_height
     }
 
     #[inline]
-    fn original_stack_height_mut(&mut self) -> &mut usize {
+    fn original_stack_height_mut(&mut self) -> &mut crate::StackSlotIndex {
         self.original_stack_height
     }
 
@@ -547,7 +547,7 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         self.frame_stack.current_frame_mut().state.ip = *self.original_ip;
         self.evaluation_stack.truncate(*self.original_stack_height);
         if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
-            frame.stack_height = (*self.original_stack_height).saturating_sub(frame.base.stack);
+            frame.stack_height = self.original_stack_height.saturating_sub_idx(frame.base.stack);
         }
     }
 }
@@ -559,7 +559,7 @@ pub struct ThreadContext<'gc, 'm> {
     pub frame_stack: FrameStack<'gc, 'm>,
     pub exception_mode: ExceptionState<'gc>,
     pub original_ip: usize,
-    pub original_stack_height: usize,
+    pub original_stack_height: crate::StackSlotIndex,
 }
 
 #[derive(Collect)]
@@ -571,7 +571,7 @@ pub struct MulticastState<'gc> {
 }
 
 pub struct StackFrame<'gc, 'm> {
-    pub stack_height: usize,
+    pub stack_height: crate::StackSlotIndex,
     pub base: BasePointer,
     pub state: MethodState<'m>,
     pub generic_inst: GenericLookup,
@@ -606,7 +606,7 @@ impl<'gc, 'm> StackFrame<'gc, 'm> {
         pinned_locals: Vec<bool>,
     ) -> Self {
         Self {
-            stack_height: 0,
+            stack_height: crate::StackSlotIndex(0),
             base: base_pointer,
             source_resolution: method.source.resolution(),
             state: MethodState::new(method),
@@ -622,7 +622,7 @@ impl<'gc, 'm> StackFrame<'gc, 'm> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct BasePointer {
-    pub arguments: usize,
-    pub locals: usize,
-    pub stack: usize,
+    pub arguments: crate::StackSlotIndex,
+    pub locals: crate::StackSlotIndex,
+    pub stack: crate::StackSlotIndex,
 }

@@ -39,7 +39,7 @@ impl LayoutFactory {
                     for i in 0..arr.length {
                         Self::populate_gc_desc(
                             &arr.element_layout,
-                            base_offset + i * elem_size,
+                            base_offset + (elem_size * i).as_usize(),
                             desc,
                         );
                     }
@@ -87,11 +87,11 @@ impl LayoutFactory {
                             name: name.to_string(),
                         },
                         FieldLayout {
-                            position: aligned_offset,
+                            position: dotnet_utils::ByteOffset(aligned_offset),
                             layout: layout.clone(),
                         },
                     );
-                    offset = aligned_offset + layout.size();
+                    offset = aligned_offset + layout.size().as_usize();
                 }
 
                 total_size = align_up(offset, max_alignment);
@@ -122,11 +122,11 @@ impl LayoutFactory {
                             name: name.to_string(),
                         },
                         FieldLayout {
-                            position: aligned_offset,
+                            position: dotnet_utils::ByteOffset(aligned_offset),
                             layout: layout.clone(),
                         },
                     );
-                    offset = aligned_offset + layout.size();
+                    offset = aligned_offset + layout.size().as_usize();
                 }
 
                 total_size = align_up(offset, max_alignment).max(class_size);
@@ -151,7 +151,7 @@ impl LayoutFactory {
                             // Add base size to the explicit offset
                             let actual_offset = base_size + o;
                             let size = layout.size();
-                            let actual_end = actual_offset + size;
+                            let actual_end = actual_offset + size.as_usize();
 
                             // Validation: Check for overlaps with existing fields if refs are involved
                             for (prev_start, prev_end, prev_layout) in &placed_fields {
@@ -188,7 +188,7 @@ impl LayoutFactory {
                                     name: name.to_string(),
                                 },
                                 FieldLayout {
-                                    position: actual_offset,
+                                    position: dotnet_utils::ByteOffset(actual_offset),
                                     layout: layout.clone(),
                                 },
                             );
@@ -269,7 +269,7 @@ impl LayoutFactory {
         // Now lay out this type's fields on top of the base
         let mut current_type_fields = vec![];
 
-        for f in &td.definition().fields {
+        for (i, f) in td.definition().fields.iter().enumerate() {
             if !predicate(f) {
                 continue;
             }
@@ -281,6 +281,7 @@ impl LayoutFactory {
                     parent: td,
                     field_resolution: td.resolution,
                     field: f,
+                    index: i,
                 })?;
                 type_layout_with_metrics(t, context, metrics)?
             };
@@ -381,7 +382,7 @@ impl LayoutFactory {
     ) -> Result<ArrayLayoutManager, TypeResolutionError> {
         let element_layout = type_layout_with_metrics(element, context, metrics)?;
         // Defensive check for massive allocations (e.g. from corrupted metadata/stack)
-        if length > 0x4000_0000 || (length > 0 && element_layout.size() > usize::MAX / length) {
+        if length > 0x4000_0000 || (length > 0 && element_layout.size().as_usize() > usize::MAX / length) {
             return Err(TypeResolutionError::MassiveAllocation(format!(
                 "massive array allocation attempt: length={}, element_size={}",
                 length,

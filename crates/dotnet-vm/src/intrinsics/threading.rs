@@ -26,8 +26,8 @@ pub fn intrinsic_monitor_exit<'gc, 'm: 'gc>(
 
     if obj_ref.0.is_some() {
         // Get the current thread ID from the call stack
-        let thread_id = ctx.thread_id() as u64;
-        assert_ne!(thread_id, 0, "Monitor.Exit called from unregistered thread");
+        let thread_id = ctx.thread_id();
+        assert_ne!(thread_id, dotnet_utils::ArenaId::INVALID, "Monitor.Exit called from unregistered thread");
 
         // Get the sync block if it exists
         if let Some(index) = obj_ref.as_object(|o| o.sync_block_index) {
@@ -339,8 +339,8 @@ fn find_success_flag_index(ctx: &dyn VesOps, success_ptr: ManagedPtr) -> Option<
     let mut success_flag_index = None;
     if let (None, Some(p)) = (success_ptr.owner, success_ptr.pointer()) {
         let raw_ptr = p.as_ptr();
-        for i in 0..ctx.top_of_stack() {
-            if ctx.get_slot_address(i).as_ptr() == raw_ptr {
+        for i in 0..ctx.top_of_stack().as_usize() {
+            if ctx.get_slot_address(crate::StackSlotIndex(i)).as_ptr() == raw_ptr {
                 success_flag_index = Some(i);
                 break;
             }
@@ -360,9 +360,9 @@ pub fn intrinsic_monitor_enter_obj<'gc, 'm: 'gc>(
     let obj_ref = ctx.pop_obj();
 
     if obj_ref.0.is_some() {
-        let thread_id = ctx.thread_id() as u64;
+        let thread_id = ctx.thread_id();
         assert_ne!(
-            thread_id, 0,
+            thread_id, dotnet_utils::ArenaId::INVALID,
             "Monitor.Enter called from unregistered thread"
         );
 
@@ -398,9 +398,9 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
     let success_flag_index = find_success_flag_index(ctx, success_ptr);
 
     if obj_ref.0.is_some() {
-        let thread_id = ctx.thread_id() as u64;
+        let thread_id = ctx.thread_id();
         assert_ne!(
-            thread_id, 0,
+            thread_id, dotnet_utils::ArenaId::INVALID,
             "Monitor.ReliableEnter called from unregistered thread"
         );
 
@@ -416,7 +416,7 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
         }
 
         let ptr = if let Some(index) = success_flag_index {
-            ctx.get_slot_address(index)
+            ctx.get_slot_address(crate::StackSlotIndex(index))
         } else {
             success_ptr.pointer().expect("null success flag")
         };
@@ -447,9 +447,9 @@ pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc>(
     let obj_ref = ctx.pop_obj();
 
     if obj_ref.0.is_some() {
-        let thread_id = ctx.thread_id() as u64;
+        let thread_id = ctx.thread_id();
         assert_ne!(
-            thread_id, 0,
+            thread_id, dotnet_utils::ArenaId::INVALID,
             "Monitor.TryEnter_FastPath called from unregistered thread"
         );
 
@@ -478,9 +478,9 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
     let success_flag_index = find_success_flag_index(ctx, success_ptr);
 
     if obj_ref.0.is_some() {
-        let thread_id = ctx.thread_id() as u64;
+        let thread_id = ctx.thread_id();
         assert_ne!(
-            thread_id, 0,
+            thread_id, dotnet_utils::ArenaId::INVALID,
             "Monitor.TryEnter called from unregistered thread"
         );
 
@@ -499,7 +499,7 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
             sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &ctx.shared().metrics);
 
         let ptr = if let Some(index) = success_flag_index {
-            ctx.get_slot_address(index)
+            ctx.get_slot_address(crate::StackSlotIndex(index))
         } else {
             success_ptr.pointer().expect("null success flag")
         };
@@ -533,9 +533,9 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
     let obj_ref = ctx.pop_obj();
 
     if obj_ref.0.is_some() {
-        let thread_id = ctx.thread_id() as u64;
+        let thread_id = ctx.thread_id();
         assert_ne!(
-            thread_id, 0,
+            thread_id, dotnet_utils::ArenaId::INVALID,
             "Monitor.TryEnter called from unregistered thread"
         );
 

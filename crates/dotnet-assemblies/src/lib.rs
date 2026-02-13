@@ -678,14 +678,25 @@ impl AssemblyLoader {
         generic_inst: &GenericLookup,
     ) -> Result<(FieldDescription, GenericLookup), TypeResolutionError> {
         match field {
-            FieldSource::Definition(d) => Ok((
-                FieldDescription {
-                    parent: self.locate_type(resolution, d.parent_type().into())?,
-                    field_resolution: resolution,
-                    field: &resolution.definition()[d],
-                },
-                generic_inst.clone(),
-            )),
+            FieldSource::Definition(d) => {
+                let parent = self.locate_type(resolution, d.parent_type().into())?;
+                let field = &resolution.definition()[d];
+                let index = parent
+                    .definition()
+                    .fields
+                    .iter()
+                    .position(|f| std::ptr::eq(f, field))
+                    .ok_or_else(|| TypeResolutionError::FieldNotFound(field.name.to_string()))?;
+                Ok((
+                    FieldDescription {
+                        parent,
+                        field_resolution: resolution,
+                        field,
+                        index,
+                    },
+                    generic_inst.clone(),
+                ))
+            }
             FieldSource::Reference(r) => {
                 let field_ref = &resolution.definition()[r];
 
@@ -695,7 +706,7 @@ impl AssemblyLoader {
                         let t = generic_inst.make_concrete(resolution, t.clone())?;
                         let parent_type: TypeDescription = self.find_concrete_type(t.clone())?;
 
-                        for field in &parent_type.definition().fields {
+                        for (i, field) in parent_type.definition().fields.iter().enumerate() {
                             if field.name == field_ref.name {
                                 let type_generics = if let BaseType::Type {
                                     source: TypeSource::Generic { parameters, .. },
@@ -712,6 +723,7 @@ impl AssemblyLoader {
                                         parent: parent_type,
                                         field_resolution: parent_type.resolution,
                                         field,
+                                        index: i,
                                     },
                                     GenericLookup::new(type_generics),
                                 ));

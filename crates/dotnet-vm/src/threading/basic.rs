@@ -3,6 +3,7 @@ use crate::{
     threading::{STWGuardOps, ThreadManagerOps, ThreadState},
     tracer::Tracer,
 };
+use dotnet_utils::ArenaId;
 use dotnet_utils::sync::{Arc, AtomicU64, MANAGED_THREAD_ID, Mutex, Ordering};
 use std::{
     cell::Cell,
@@ -12,7 +13,10 @@ use std::{
 };
 
 #[cfg(feature = "multithreaded-gc")]
-use crate::gc::{set_currently_tracing, take_found_cross_arena_refs};
+use dotnet_utils::gc::{
+    register_arena, unregister_arena,
+    set_currently_tracing, take_found_cross_arena_refs
+};
 #[cfg(feature = "multithreaded-gc")]
 use dotnet_utils::sync::{AtomicBool, AtomicUsize, Condvar, MutexGuard, get_current_thread_id};
 #[cfg(feature = "multithreaded-gc")]
@@ -35,14 +39,14 @@ thread_local! {
 pub(super) struct ManagedThread {
     /// Native OS thread ID
     pub(super) native_id: ThreadId,
-    /// .NET managed thread ID (stable u64 representation)
-    pub(super) managed_id: u64,
+    /// .NET managed thread ID (stable representation)
+    pub(super) managed_id: ArenaId,
     /// Current state of the thread
     pub(super) state: AtomicU64, // Encoded ThreadState
 }
 
 impl ManagedThread {
-    pub(super) fn new(native_id: ThreadId, managed_id: u64) -> Self {
+    pub(super) fn new(native_id: ThreadId, managed_id: ArenaId) -> Self {
         Self {
             native_id,
             managed_id,
@@ -68,7 +72,7 @@ impl ManagedThread {
 
 pub struct ThreadManager {
     /// Map from managed thread ID to thread info
-    pub(super) threads: Mutex<HashMap<u64, Arc<ManagedThread>>>,
+    pub(super) threads: Mutex<HashMap<ArenaId, Arc<ManagedThread>>>,
     /// Counter for allocating managed thread IDs
     pub(super) next_thread_id: AtomicU64,
     /// Weak reference to self for creating guards
@@ -120,9 +124,10 @@ impl ThreadManagerOps for ThreadManager {
 
     /// Register a new thread with the thread manager.
     /// Returns the managed thread ID assigned to this thread.
-    fn register_thread(&self) -> u64 {
+    fn register_thread(&self) -> ArenaId {
         let native_id = thread::current().id();
-        let managed_id = self.next_thread_id.fetch_add(1, Ordering::Relaxed);
+        let managed_id_u64 = self.next_thread_id.fetch_add(1, Ordering::Relaxed);
+        let managed_id = ArenaId::new(managed_id_u64);
 
         let thread_info = Arc::new(ManagedThread::new(native_id, managed_id));
 
@@ -134,18 +139,21 @@ impl ThreadManagerOps for ThreadManager {
         // Cache the managed ID in thread-local storage
         MANAGED_THREAD_ID.set(Some(managed_id));
 
+        #[cfg(feature = "multithreaded-gc")]
+        register_arena(managed_id);
+
         managed_id
     }
 
     /// Register a new thread with tracing support
-    fn register_thread_traced(&self, tracer: &mut Tracer, name: &str) -> u64 {
+    fn register_thread_traced(&self, tracer: &mut Tracer, name: &str) -> ArenaId {
         let managed_id = self.register_thread();
         tracer.trace_thread_create(0, managed_id, name);
         managed_id
     }
 
     /// Unregister a thread (called when thread exits).
-    fn unregister_thread(&self, managed_id: u64) {
+    fn unregister_thread(&self, managed_id: ArenaId) {
         let mut threads = self.threads.lock();
         if let Some(thread) = threads.get(&managed_id) {
             thread.set_state(ThreadState::Exited);
@@ -154,6 +162,9 @@ impl ThreadManagerOps for ThreadManager {
 
         // Clear thread-local cache
         MANAGED_THREAD_ID.set(None);
+
+        #[cfg(feature = "multithreaded-gc")]
+        unregister_arena(managed_id);
 
         #[cfg(feature = "multithreaded-gc")]
         {
@@ -167,18 +178,18 @@ impl ThreadManagerOps for ThreadManager {
     }
 
     /// Unregister a thread with tracing support
-    fn unregister_thread_traced(&self, managed_id: u64, tracer: &mut Tracer) {
+    fn unregister_thread_traced(&self, managed_id: ArenaId, tracer: &mut Tracer) {
         tracer.trace_thread_exit(0, managed_id);
         self.unregister_thread(managed_id);
     }
 
     /// Get the current thread's managed ID.
     /// Returns None if the thread is not registered.
-    fn current_thread_id(&self) -> Option<u64> {
+    fn current_thread_id(&self) -> Option<ArenaId> {
         // Try thread-local cache first
         let cached_id = MANAGED_THREAD_ID.get();
-        if cached_id.is_some() {
-            return cached_id;
+        if let Some(id) = cached_id {
+            return Some(id);
         }
 
         // Fallback to linear search
@@ -213,7 +224,7 @@ impl ThreadManagerOps for ThreadManager {
         }
     }
 
-    fn safe_point(&self, managed_id: u64, coordinator: &GCCoordinator) {
+    fn safe_point(&self, managed_id: ArenaId, coordinator: &GCCoordinator) {
         #[cfg(feature = "multithreaded-gc")]
         {
             if !self.is_gc_stop_requested() {
@@ -270,7 +281,7 @@ impl ThreadManagerOps for ThreadManager {
 
     fn safe_point_traced(
         &self,
-        managed_id: u64,
+        managed_id: ArenaId,
         coordinator: &GCCoordinator,
         tracer: &mut Tracer,
         location: &str,

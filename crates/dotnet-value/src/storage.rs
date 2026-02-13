@@ -1,11 +1,12 @@
 use crate::layout::{FieldLayoutManager, HasLayout};
 use dotnet_types::TypeDescription;
 use dotnet_utils::{
-    atomic::Atomic,
+    atomic::{self, Atomic},
     sync::{
         Arc, MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLock, RwLockReadGuard,
         RwLockWriteGuard,
     },
+    validate_alignment,
 };
 use gc_arena::{Collect, Collection};
 use std::{
@@ -13,15 +14,23 @@ use std::{
     fmt::{self, Debug, Formatter},
 };
 
+#[cfg(any(feature = "memory-validation", debug_assertions))]
+const FIELD_STORAGE_MAGIC: u64 = 0x5AFE_F1E1_D500_0000;
+
 pub struct FieldStorage {
+    #[cfg(any(feature = "memory-validation", debug_assertions))]
+    magic: u64,
     layout: Arc<FieldLayoutManager>,
     data: RwLock<Vec<u8>>,
 }
 
 impl Clone for FieldStorage {
     fn clone(&self) -> Self {
+        self.validate_magic();
         let data = self.data.read();
         Self {
+            #[cfg(any(feature = "memory-validation", debug_assertions))]
+            magic: FIELD_STORAGE_MAGIC,
             layout: self.layout.clone(),
             data: RwLock::new(data.clone()),
         }
@@ -30,6 +39,8 @@ impl Clone for FieldStorage {
 
 impl PartialEq for FieldStorage {
     fn eq(&self, other: &Self) -> bool {
+        self.validate_magic();
+        other.validate_magic();
         if !Arc::ptr_eq(&self.layout, &other.layout) {
             return false;
         }
@@ -40,16 +51,29 @@ impl PartialEq for FieldStorage {
 impl FieldStorage {
     pub fn new(layout: Arc<FieldLayoutManager>, data: Vec<u8>) -> Self {
         Self {
+            #[cfg(any(feature = "memory-validation", debug_assertions))]
+            magic: FIELD_STORAGE_MAGIC,
             layout,
             data: RwLock::new(data),
         }
     }
 
+    fn validate_magic(&self) {
+        #[cfg(any(feature = "memory-validation", debug_assertions))]
+        {
+            if self.magic != FIELD_STORAGE_MAGIC {
+                panic!("FieldStorage magic number corrupted: {:#x}", self.magic);
+            }
+        }
+    }
+
     pub fn get(&self) -> MappedRwLockReadGuard<'_, [u8]> {
+        self.validate_magic();
         RwLockReadGuard::map(self.data.read(), |v| v.as_slice())
     }
 
     pub fn get_mut(&self) -> MappedRwLockWriteGuard<'_, [u8]> {
+        self.validate_magic();
         RwLockWriteGuard::map(self.data.write(), |v| v.as_mut_slice())
     }
 
@@ -66,10 +90,14 @@ impl FieldStorage {
         owner: TypeDescription,
         name: &str,
     ) -> MappedRwLockReadGuard<'_, [u8]> {
+        self.validate_magic();
         let field = self.layout.get_field(owner, name).expect("Field not found");
+        let alignment = field.layout.alignment();
         let range = field.as_range();
 
-        RwLockReadGuard::map(self.data.read(), |v| &v[range])
+        let guard = RwLockReadGuard::map(self.data.read(), |v| &v[range]);
+        validate_alignment(guard.as_ptr(), alignment);
+        guard
     }
 
     pub fn get_field_mut_local(
@@ -77,10 +105,14 @@ impl FieldStorage {
         owner: TypeDescription,
         name: &str,
     ) -> MappedRwLockWriteGuard<'_, [u8]> {
+        self.validate_magic();
         let field = self.layout.get_field(owner, name).expect("Field not found");
+        let alignment = field.layout.alignment();
         let range = field.as_range();
 
-        RwLockWriteGuard::map(self.data.write(), |v| &mut v[range])
+        let guard = RwLockWriteGuard::map(self.data.write(), |v| &mut v[range]);
+        validate_alignment(guard.as_ptr(), alignment);
+        guard
     }
 
     /// Returns a copy of the field's data, synchronized via RwLock to prevent tearing.
@@ -92,8 +124,9 @@ impl FieldStorage {
         name: &str,
         _ord: std::sync::atomic::Ordering,
     ) -> Vec<u8> {
-        // With RwLock, simple read_unchecked is atomic enough regarding tearing vs other writers
-        self.get_field_local(owner, name).to_vec()
+        let guard = self.get_field_local(owner, name);
+        atomic::validate_atomic_access(guard.as_ptr(), false);
+        guard.to_vec()
     }
 
     /// Sets the field's data, synchronized via RwLock to prevent tearing.
@@ -105,6 +138,7 @@ impl FieldStorage {
         _ord: std::sync::atomic::Ordering,
     ) {
         let mut dest = self.get_field_mut_local(owner, name);
+        atomic::validate_atomic_access(dest.as_ptr(), false);
         dest.copy_from_slice(value);
     }
 
@@ -112,6 +146,10 @@ impl FieldStorage {
     /// This method respects the provided `Ordering` and is suitable for volatile access.
     /// It still acquires a read lock to ensure memory safety and prevent tearing
     /// against synchronized writers for large field sizes.
+    ///
+    /// # Memory Ordering
+    /// For .NET volatile loads, `Ordering::Acquire` or `Ordering::SeqCst` should be used.
+    /// Using `Ordering::Relaxed` will trigger a validation warning.
     pub fn get_field_atomic(
         &self,
         owner: TypeDescription,
@@ -119,17 +157,23 @@ impl FieldStorage {
         ord: std::sync::atomic::Ordering,
     ) -> Vec<u8> {
         let field = self.layout.get_field(owner, name).expect("Field not found");
+        let alignment = field.layout.alignment();
         let size = field.layout.size();
         let data = self.get();
         let ptr = data.as_ptr();
-        let field_ptr = unsafe { ptr.add(field.position) };
-        unsafe { Atomic::load_field(field_ptr, size, ord) }
+        let field_ptr = unsafe { ptr.add(field.position.as_usize()) };
+        validate_alignment(field_ptr, alignment);
+        unsafe { Atomic::load_field(field_ptr, size.as_usize(), ord) }
     }
 
     /// Sets the field's data using atomic operations for supported sizes.
     /// This method respects the provided `Ordering` and is suitable for volatile access.
     /// It acquires a write lock to ensure memory safety and prevent tearing
     /// against other synchronized readers/writers for large field sizes.
+    ///
+    /// # Memory Ordering
+    /// For .NET volatile stores, `Ordering::Release` or `Ordering::SeqCst` should be used.
+    /// Using `Ordering::Relaxed` will trigger a validation warning.
     pub fn set_field_atomic(
         &self,
         owner: TypeDescription,
@@ -138,14 +182,17 @@ impl FieldStorage {
         ord: std::sync::atomic::Ordering,
     ) {
         let field = self.layout.get_field(owner, name).expect("Field not found");
+        let alignment = field.layout.alignment();
         // Let's just use get_mut() to be safe and consistent with synchronized.
         let data = self.get_mut();
         let ptr = data.as_ptr() as *mut u8;
-        let field_ptr = unsafe { ptr.add(field.position) };
+        let field_ptr = unsafe { ptr.add(field.position.as_usize()) };
+        validate_alignment(field_ptr, alignment);
         unsafe { Atomic::store_field(field_ptr, value, ord) }
     }
 
     pub(crate) unsafe fn raw_data_unsynchronized(&self) -> &[u8] {
+        self.validate_magic();
         unsafe { &*self.data.data_ptr() }
     }
 
@@ -153,6 +200,7 @@ impl FieldStorage {
         &self,
         fc: &'gc gc_arena::Finalization<'gc>,
         visited: &mut HashSet<usize>,
+        depth: usize,
     ) {
         // SAFETY: Resurrection happens during a stop-the-world pause, so no other
         // threads are running. We can safely access the inner value without
@@ -160,7 +208,7 @@ impl FieldStorage {
         // already holding the write lock when it reached a safe point.
         let data = unsafe { self.raw_data_unsynchronized() };
 
-        self.layout.resurrect(data, fc, visited);
+        self.layout.resurrect(data, fc, visited, depth);
     }
 }
 

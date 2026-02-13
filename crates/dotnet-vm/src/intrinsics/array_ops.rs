@@ -97,8 +97,8 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
     }
 
     let elem_size = v.layout.element_layout.size();
-    let start = index * elem_size;
-    let end = start + elem_size;
+    let start = (elem_size * index).as_usize();
+    let end = (elem_size * (index + 1)).as_usize();
     let val = vm_try!(ctx.read_cts_value(&v.element, &v.get()[start..end])).into_stack(ctx.gc());
 
     ctx.push(val);
@@ -158,8 +158,8 @@ pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
     };
 
     let elem_size = v.layout.element_layout.size();
-    let start = index * elem_size;
-    let end = start + elem_size;
+    let start = (elem_size * index).as_usize();
+    let end = (elem_size * (index + 1)).as_usize();
     let res_ctx = ctx.current_context();
     vm_try!(res_ctx.new_cts_value(&v.element, value)).write(&mut v.get_mut()[start..end]);
 

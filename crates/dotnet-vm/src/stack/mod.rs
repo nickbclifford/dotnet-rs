@@ -96,7 +96,7 @@ pub struct CallStack<'gc, 'm> {
     pub execution: ThreadContext<'gc, 'm>,
     pub shared: Arc<SharedGlobalState<'m>>,
     pub local: ArenaLocalState<'gc>,
-    pub thread_id: Cell<u64>,
+    pub thread_id: Cell<dotnet_utils::ArenaId>,
     #[cfg(feature = "multithreaded-gc")]
     pub arena: dotnet_utils::gc::ArenaHandle,
 }
@@ -126,13 +126,13 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 frame_stack: FrameStack::new(),
                 exception_mode: ExceptionState::None,
                 original_ip: 0,
-                original_stack_height: 0,
+                original_stack_height: dotnet_utils::StackSlotIndex(0),
             },
             shared,
             local,
-            thread_id: Cell::new(0),
+            thread_id: Cell::new(dotnet_utils::ArenaId::INVALID),
             #[cfg(feature = "multithreaded-gc")]
-            arena: dotnet_utils::gc::ArenaHandle::new(0),
+            arena: dotnet_utils::gc::ArenaHandle::new(dotnet_utils::ArenaId::INVALID),
         }
     }
 

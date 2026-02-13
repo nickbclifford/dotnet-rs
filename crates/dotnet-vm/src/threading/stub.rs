@@ -3,6 +3,7 @@ use crate::{
     threading::{STWGuardOps, ThreadManagerOps},
     tracer::Tracer,
 };
+use dotnet_utils::ArenaId;
 use std::sync::Arc;
 
 pub struct ThreadManager;
@@ -16,20 +17,20 @@ impl ThreadManager {
 impl ThreadManagerOps for ThreadManager {
     type Guard = StopTheWorldGuard;
 
-    fn register_thread(&self) -> u64 {
-        1
+    fn register_thread(&self) -> ArenaId {
+        ArenaId::new(1)
     }
 
-    fn register_thread_traced(&self, _tracer: &mut Tracer, _name: &str) -> u64 {
-        1
+    fn register_thread_traced(&self, _tracer: &mut Tracer, _name: &str) -> ArenaId {
+        ArenaId::new(1)
     }
 
-    fn unregister_thread(&self, _managed_id: u64) {}
+    fn unregister_thread(&self, _managed_id: ArenaId) {}
 
-    fn unregister_thread_traced(&self, _managed_id: u64, _tracer: &mut Tracer) {}
+    fn unregister_thread_traced(&self, _managed_id: ArenaId, _tracer: &mut Tracer) {}
 
-    fn current_thread_id(&self) -> Option<u64> {
-        Some(1)
+    fn current_thread_id(&self) -> Option<ArenaId> {
+        Some(ArenaId::new(1))
     }
 
     fn thread_count(&self) -> usize {
@@ -40,13 +41,13 @@ impl ThreadManagerOps for ThreadManager {
         false
     }
 
-    fn safe_point(&self, _managed_id: u64, _coordinator: &GCCoordinator) {}
+    fn safe_point(&self, _managed_id: ArenaId, _coordinator: &GCCoordinator) {}
 
     fn execute_gc_command(&self, _command: GCCommand, _coordinator: &GCCoordinator) {}
 
     fn safe_point_traced(
         &self,
-        _managed_id: u64,
+        _managed_id: ArenaId,
         _coordinator: &GCCoordinator,
         _tracer: &mut Tracer,
         _location: &str,

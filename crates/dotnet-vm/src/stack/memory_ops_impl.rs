@@ -104,6 +104,16 @@ impl<'a, 'gc, 'm: 'gc> MemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                         .iter()
                         .any(|m| m.name == "Finalize"))
             {
+                #[cfg(feature = "memory-validation")]
+                {
+                    if o.finalizer_suppressed {
+                        panic!("Object added to finalization queue while finalizer_suppressed is true");
+                    }
+                    if self.local.heap.finalization_queue.borrow().contains(instance) {
+                        panic!("Duplicate object added to finalization queue");
+                    }
+                }
+
                 self.local
                     .heap
                     .finalization_queue

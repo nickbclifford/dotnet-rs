@@ -39,32 +39,33 @@ impl<'gc> EvaluationStack<'gc> {
         let update_val = |val: &mut StackValue<'gc>| match val {
             StackValue::ManagedPtr(m) => {
                 if let Some((idx, off)) = m.stack_slot_origin {
-                    let slot_ptr = if idx < slot_locations.len() {
-                        slot_locations[idx]
+                    let slot_ptr = if idx.as_usize() < slot_locations.len() {
+                        slot_locations[idx.as_usize()]
                     } else {
-                        suspended_locations[idx - slot_locations.len()]
+                        suspended_locations[idx.as_usize() - slot_locations.len()]
                     };
-                    let new_ptr = unsafe { NonNull::new_unchecked(slot_ptr.as_ptr().add(off)) };
+                    let new_ptr = unsafe { NonNull::new_unchecked(slot_ptr.as_ptr().add(off.as_usize())) };
                     m.update_cached_ptr(new_ptr);
                 }
             }
             StackValue::ValueType(obj) => {
                 let layout = obj.instance_storage.layout().clone();
                 let mut data = obj.instance_storage.get_mut();
-                layout.visit_managed_ptrs(0, &mut |offset| {
-                    if offset + 16 <= data.len() {
-                        let slice = &mut data[offset..offset + 16];
+                layout.visit_managed_ptrs(dotnet_utils::ByteOffset(0), &mut |offset| {
+                    if offset.as_usize() + 16 <= data.len() {
+                        let offset_val = offset.as_usize();
+                        let slice = &mut data[offset_val..offset_val + 16];
                         let info = unsafe { ManagedPtr::read_stack_info(slice) };
                         if let Some((idx, _)) = info.stack_origin {
-                            let slot_ptr = if idx < slot_locations.len() {
-                                slot_locations[idx]
+                            let slot_ptr = if idx.as_usize() < slot_locations.len() {
+                                slot_locations[idx.as_usize()]
                             } else {
-                                suspended_locations[idx - slot_locations.len()]
+                                suspended_locations[idx.as_usize() - slot_locations.len()]
                             };
                             let new_ptr = unsafe {
-                                NonNull::new_unchecked(slot_ptr.as_ptr().add(info.offset))
+                                NonNull::new_unchecked(slot_ptr.as_ptr().add(info.offset.as_usize()))
                             };
-                            let word0 = 1 | ((idx & 0xFFFFFFFF) << 1) | (info.offset << 33);
+                            let word0 = 1 | ((idx.as_usize() & 0xFFFFFFFF) << 1) | (info.offset.as_usize() << 33);
                             let word1 = new_ptr.as_ptr() as usize;
                             slice[0..8].copy_from_slice(&word0.to_ne_bytes());
                             slice[8..16].copy_from_slice(&word1.to_ne_bytes());
@@ -194,52 +195,62 @@ impl<'gc> EvaluationStack<'gc> {
             .data_location()
     }
 
-    pub fn top_of_stack(&self) -> usize {
-        self.stack.len()
+    pub fn top_of_stack(&self) -> crate::StackSlotIndex {
+        crate::StackSlotIndex(self.stack.len())
     }
 
-    pub fn get_slot(&self, index: usize) -> StackValue<'gc> {
-        self.stack[index].clone()
+    #[inline]
+    pub fn get_slot(&self, index: crate::StackSlotIndex) -> StackValue<'gc> {
+        self.stack[index.as_usize()].clone()
     }
 
-    pub fn get_slot_ref(&self, index: usize) -> &StackValue<'gc> {
-        &self.stack[index]
+    #[inline]
+    pub fn get_slot_ref(&self, index: crate::StackSlotIndex) -> &StackValue<'gc> {
+        &self.stack[index.as_usize()]
     }
 
-    pub fn get_slot_address(&self, index: usize) -> NonNull<u8> {
-        self.stack[index].data_location()
+    #[inline]
+    pub fn get_slot_address(&self, index: crate::StackSlotIndex) -> NonNull<u8> {
+        self.stack[index.as_usize()].data_location()
     }
 
-    pub fn set_slot(&mut self, index: usize, value: StackValue<'gc>) {
-        self.stack[index] = value;
+    #[inline]
+    pub fn set_slot(&mut self, index: crate::StackSlotIndex, value: StackValue<'gc>) {
+        self.stack[index.as_usize()] = value;
     }
 
-    pub fn truncate(&mut self, len: usize) {
-        self.stack.truncate(len);
+    #[inline]
+    pub fn truncate(&mut self, len: crate::StackSlotIndex) {
+        self.stack.truncate(len.as_usize());
     }
 
-    pub fn set_slot_at(&mut self, index: usize, value: StackValue<'gc>) {
-        if index < self.stack.len() {
+    #[inline]
+    pub fn set_slot_at(&mut self, index: crate::StackSlotIndex, value: StackValue<'gc>) {
+        let idx = index.as_usize();
+        if idx < self.stack.len() {
             self.set_slot(index, value);
         } else {
-            for _ in self.stack.len()..index {
+            for _ in self.stack.len()..idx {
                 self.push(StackValue::null());
             }
             self.push(value);
         }
     }
 
+    #[inline]
     pub fn clear(&mut self) {
         self.stack.clear();
         self.suspended_stack.clear();
     }
 
+    #[inline]
     pub fn clear_suspended(&mut self) {
         self.suspended_stack.clear();
     }
 
-    pub fn suspend_above(&mut self, index: usize) {
-        self.suspended_stack = self.stack.split_off(index);
+    #[inline]
+    pub fn suspend_above(&mut self, index: crate::StackSlotIndex) {
+        self.suspended_stack = self.stack.split_off(index.as_usize());
         self.update_stack_pointers();
     }
 

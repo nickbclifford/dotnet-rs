@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 gc-arena = { workspace = true }
 parking_lot = { workspace = true, optional = true }
+tracing = { workspace = true }
 
 [features]
 default = ["multithreaded-gc"]

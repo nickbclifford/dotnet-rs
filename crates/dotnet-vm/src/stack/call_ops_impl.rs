@@ -42,7 +42,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
             self.push(value);
             let index = self.evaluation_stack.top_of_stack() - 1;
             let ptr = self.evaluation_stack.get_slot_address(index).as_ptr() as *mut _;
-            self.push(StackValue::managed_stack_ptr(index, 0, ptr, desc, false));
+            self.push(StackValue::managed_stack_ptr(index, crate::ByteOffset(0), ptr, desc, false));
         } else {
             self.push(value.clone());
             self.push(value);
@@ -70,8 +70,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         }
 
         let num_args = method.signature.instance as usize + method.signature.parameters.len();
-        let argument_base = self
-            .evaluation_stack
+        let argument_base = self.evaluation_stack
             .top_of_stack()
             .checked_sub(num_args)
             .expect("not enough values on stack for call");
@@ -87,7 +86,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         let stack_base = locals_base + pinned_locals.len();
 
         if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
-            if frame.stack_height < num_args {
+            if frame.stack_height < crate::StackSlotIndex(num_args) {
                 panic!(
                     "Not enough values on stack for call: height={}, args={} in {:?}",
                     frame.stack_height, num_args, frame.state.info_handle.source

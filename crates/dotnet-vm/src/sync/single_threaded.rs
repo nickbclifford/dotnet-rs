@@ -4,6 +4,7 @@ use crate::{
     sync::{Mutex, SyncBlockOps, SyncManagerOps},
     threading::ThreadManagerOps,
 };
+use dotnet_utils::ArenaId;
 use std::{
     collections::HashMap,
     sync::{
@@ -26,18 +27,18 @@ impl SyncBlock {
 }
 
 impl SyncBlockOps for SyncBlock {
-    fn try_enter(&self, _thread_id: u64) -> bool {
+    fn try_enter(&self, _thread_id: ArenaId) -> bool {
         self.recursion_count.fetch_add(1, Ordering::Relaxed);
         true
     }
 
-    fn enter(&self, thread_id: u64, _metrics: &RuntimeMetrics) {
+    fn enter(&self, thread_id: ArenaId, _metrics: &RuntimeMetrics) {
         self.try_enter(thread_id);
     }
 
     fn enter_with_timeout(
         &self,
-        thread_id: u64,
+        thread_id: ArenaId,
         _timeout_ms: u64,
         _metrics: &RuntimeMetrics,
     ) -> bool {
@@ -47,7 +48,7 @@ impl SyncBlockOps for SyncBlock {
 
     fn enter_safe(
         &self,
-        thread_id: u64,
+        thread_id: ArenaId,
         metrics: &RuntimeMetrics,
         _thread_manager: &impl ThreadManagerOps,
         _gc_coordinator: &GCCoordinator,
@@ -57,7 +58,7 @@ impl SyncBlockOps for SyncBlock {
 
     fn enter_with_timeout_safe(
         &self,
-        thread_id: u64,
+        thread_id: ArenaId,
         timeout_ms: u64,
         metrics: &RuntimeMetrics,
         _thread_manager: &impl ThreadManagerOps,
@@ -66,7 +67,7 @@ impl SyncBlockOps for SyncBlock {
         self.enter_with_timeout(thread_id, timeout_ms, metrics)
     }
 
-    fn exit(&self, _thread_id: u64) -> bool {
+    fn exit(&self, _thread_id: ArenaId) -> bool {
         let count = self.recursion_count.load(Ordering::Relaxed);
         if count > 0 {
             self.recursion_count.fetch_sub(1, Ordering::Relaxed);
@@ -76,15 +77,15 @@ impl SyncBlockOps for SyncBlock {
         }
     }
 
-    fn wait(&self, _thread_id: u64, _timeout_ms: Option<u64>) -> Result<(), &'static str> {
+    fn wait(&self, _thread_id: ArenaId, _timeout_ms: Option<u64>) -> Result<(), &'static str> {
         Err("Monitor.Wait() is not supported in single-threaded mode")
     }
 
-    fn pulse(&self, _thread_id: u64) -> Result<(), &'static str> {
+    fn pulse(&self, _thread_id: ArenaId) -> Result<(), &'static str> {
         Err("Monitor.Pulse() is not supported in single-threaded mode")
     }
 
-    fn pulse_all(&self, _thread_id: u64) -> Result<(), &'static str> {
+    fn pulse_all(&self, _thread_id: ArenaId) -> Result<(), &'static str> {
         Err("Monitor.PulseAll() is not supported in single-threaded mode")
     }
 }
@@ -136,7 +137,7 @@ impl SyncManagerOps for SyncBlockManager {
     fn try_enter_block(
         &self,
         block: Arc<SyncBlock>,
-        thread_id: u64,
+        thread_id: ArenaId,
         _metrics: &RuntimeMetrics,
     ) -> bool {
         block.try_enter(thread_id)

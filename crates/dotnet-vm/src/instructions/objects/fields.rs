@@ -117,9 +117,9 @@ pub fn ldfld<'gc, 'm: 'gc>(
     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
 
     let size = field_layout.layout.size();
-    let field_ptr = unsafe { ptr.add(field_layout.position) };
+    let field_ptr = unsafe { ptr.add(field_layout.position.as_usize()) };
 
-    let val_bytes = unsafe { Atomic::load_field(field_ptr, size, ordering) };
+    let val_bytes = unsafe { Atomic::load_field(field_ptr, size.as_usize(), ordering) };
     let value = vm_try!(res_ctx.read_cts_value(&t, &val_bytes, ctx.gc()));
 
     ctx.push(value.into_stack(ctx.gc()));
@@ -197,9 +197,9 @@ pub fn stfld<'gc, 'm: 'gc>(
     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
 
     let size = field_layout.layout.size();
-    let field_ptr = unsafe { ptr.add(field_layout.position) };
+    let field_ptr = unsafe { ptr.add(field_layout.position.as_usize()) };
 
-    let mut val_bytes = vec![0u8; size];
+    let mut val_bytes = vec![0u8; size.as_usize()];
     vm_try!(ctx.new_cts_value(&t, value)).write(&mut val_bytes);
 
     unsafe { Atomic::store_field(field_ptr, &val_bytes, ordering) };
@@ -282,7 +282,7 @@ pub fn stsfld<'gc, 'm: 'gc>(
 
     let layout = storage.layout();
     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
-    let mut val_bytes = vec![0u8; field_layout.layout.size()];
+    let mut val_bytes = vec![0u8; field_layout.layout.size().as_usize()];
     vm_try!(ctx.new_cts_value(&t, value)).write(&mut val_bytes);
     storage
         .storage
@@ -375,12 +375,12 @@ pub fn ldflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource)
     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
 
     let ptr = if field.parent.type_name() == "System.String" && name == "_firstChar" {
-        unsafe { ptr.sub(field_layout.position) }
+        unsafe { ptr.sub(field_layout.position.as_usize()) }
     } else {
         ptr
     };
 
-    let field_ptr = unsafe { ptr.add(field_layout.position) };
+    let field_ptr = unsafe { ptr.add(field_layout.position.as_usize()) };
     let t = vm_try!(res_ctx.get_field_type(field));
     let target_type = vm_try!(ctx.loader().find_concrete_type(t));
 
@@ -425,7 +425,7 @@ pub fn ldsflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource
 
     let layout = storage.layout();
     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
-    let field_ptr = unsafe { ptr.add(field_layout.position) };
+    let field_ptr = unsafe { ptr.add(field_layout.position.as_usize()) };
 
     let t = vm_try!(res_ctx.get_field_type(field));
     let target_type = vm_try!(ctx.loader().find_concrete_type(t));

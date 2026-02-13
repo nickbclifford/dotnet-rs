@@ -24,7 +24,7 @@ use crate::gc::{arena::THREAD_ARENA, coordinator::*};
 pub struct Executor {
     shared: Arc<SharedGlobalState<'static>>,
     /// Thread ID for this executor
-    thread_id: u64,
+    thread_id: dotnet_utils::ArenaId,
     #[cfg(not(feature = "multithreaded-gc"))]
     arena: Box<GCArena>,
 }
@@ -104,7 +104,7 @@ impl Executor {
             c.stack.thread_id.set(thread_id);
             #[cfg(feature = "multithreaded-gc")]
             {
-                c.stack.arena = ArenaHandle::new(thread_id);
+                c.stack.arena = dotnet_utils::gc::ArenaHandle::new(thread_id);
             }
 
             let gc_handle = GCHandle::new(

@@ -62,7 +62,7 @@ pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
     } else {
         let target = &generics.method_generics[0];
         let layout = vm_try!(type_layout(target.clone(), &res_ctx));
-        len as usize * layout.size()
+        (layout.size() * (len as usize)).as_usize()
     };
 
     // Check GC safe point before large bulk memory operations
@@ -120,7 +120,7 @@ pub fn intrinsic_marshal_size_of<'gc, 'm: 'gc>(
         ctx.resolve_runtime_type(type_obj).to_concrete(ctx.loader())
     };
     let layout = vm_try!(type_layout(concrete_type, &ctx.current_context()));
-    ctx.push_i32(layout.size() as i32);
+    ctx.push_i32(layout.size().as_usize() as i32);
     StepResult::Continue
 }
 
@@ -150,7 +150,7 @@ pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
             .find_concrete_type(concrete_type.clone())
             .expect("Type must exist for Marshal.OffsetOf");
         if let Some(field) = flm.get_field(td, &field_name) {
-            ctx.push_isize(field.position as isize);
+            ctx.push_isize(field.position.as_usize() as isize);
         } else {
             panic!("Field {} not found in type {:?}", field_name, concrete_type);
         }
@@ -208,7 +208,7 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
         (false, None)
     };
     let m = m_val.as_ptr();
-    let result_ptr = unsafe { m.offset(offset * layout.size() as isize) };
+    let result_ptr = unsafe { m.offset(offset * layout.size().as_usize() as isize) };
     ctx.push(StackValue::managed_ptr_with_owner(
         result_ptr,
         target_type,
@@ -400,7 +400,7 @@ pub fn intrinsic_unsafe_size_of<'gc, 'm: 'gc>(
     let res_ctx = ctx.with_generics(generics);
     let target = &generics.method_generics[0];
     let layout = vm_try!(type_layout(target.clone(), &res_ctx));
-    ctx.push_i32(layout.size() as i32);
+    ctx.push_i32(layout.size().as_usize() as i32);
     StepResult::Continue
 }
 

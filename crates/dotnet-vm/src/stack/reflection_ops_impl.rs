@@ -102,9 +102,8 @@ impl<'a, 'gc, 'm: 'gc> StaticsOps<'gc> for VesContext<'a, 'gc, 'm> {
 }
 
 impl<'a, 'gc, 'm: 'gc> ThreadOps for VesContext<'a, 'gc, 'm> {
-    #[inline]
-    fn thread_id(&self) -> usize {
-        self.thread_id.get() as usize
+    fn thread_id(&self) -> dotnet_utils::ArenaId {
+        self.thread_id.get()
     }
 }
 

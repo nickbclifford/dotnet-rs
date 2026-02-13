@@ -1,8 +1,69 @@
+use crate::sync::Ordering;
 #[cfg(feature = "multithreading")]
-use std::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8};
 
 use crate::is_ptr_aligned_to_field;
-use std::{ptr, sync::atomic::Ordering};
+#[cfg(feature = "memory-validation")]
+use std::cell::RefCell;
+#[cfg(feature = "memory-validation")]
+use std::collections::HashSet;
+use std::ptr;
+
+#[cfg(feature = "memory-validation")]
+thread_local! {
+    static ATOMIC_LOCATIONS: RefCell<HashSet<*const u8>> = RefCell::new(HashSet::new());
+    static NON_ATOMIC_LOCATIONS: RefCell<HashSet<*const u8>> = RefCell::new(HashSet::new());
+}
+
+#[cfg(feature = "memory-validation")]
+pub fn validate_atomic_access(ptr: *const u8, is_atomic: bool) {
+    if is_atomic {
+        NON_ATOMIC_LOCATIONS.with(|locations| {
+            if locations.borrow().contains(&ptr) {
+                tracing::warn!("Mixed atomic and non-atomic access to the same location detected: {:p}. This may indicate a data race or incorrect synchronization.", ptr);
+            }
+        });
+        ATOMIC_LOCATIONS.with(|locations| {
+            locations.borrow_mut().insert(ptr);
+        });
+    } else {
+        ATOMIC_LOCATIONS.with(|locations| {
+            if locations.borrow().contains(&ptr) {
+                tracing::warn!("Mixed atomic and non-atomic access to the same location detected: {:p}. This may indicate a data race or incorrect synchronization.", ptr);
+            }
+        });
+        NON_ATOMIC_LOCATIONS.with(|locations| {
+            locations.borrow_mut().insert(ptr);
+        });
+    }
+}
+
+#[cfg(feature = "memory-validation")]
+fn validate_ordering(ordering: Ordering, is_load: bool) {
+    match (is_load, ordering) {
+        (true, Ordering::Release) | (true, Ordering::AcqRel) => {
+            panic!("Invalid load ordering: {:?}", ordering);
+        }
+        (false, Ordering::Acquire) | (false, Ordering::AcqRel) => {
+            panic!("Invalid store ordering: {:?}", ordering);
+        }
+        _ => {}
+    }
+
+    if ordering == Ordering::Relaxed {
+        tracing::warn!("Relaxed ordering used for atomic access. Ensure this is intentional (e.g., not for a .NET volatile field).");
+    }
+}
+
+#[cfg(not(feature = "memory-validation"))]
+#[inline(always)]
+#[allow(dead_code)]
+pub fn validate_atomic_access(_ptr: *const u8, _is_atomic: bool) {}
+
+#[cfg(not(feature = "memory-validation"))]
+#[inline(always)]
+#[allow(dead_code)]
+fn validate_ordering(_ordering: Ordering, _is_load: bool) {}
 
 /// Unified atomic memory access operations.
 ///
@@ -51,6 +112,8 @@ pub struct StandardAtomicAccess;
 #[cfg(feature = "multithreading")]
 impl AtomicAccess for StandardAtomicAccess {
     unsafe fn load_atomic(ptr: *const u8, size: usize, ordering: Ordering) -> u64 {
+        validate_atomic_access(ptr, true);
+        validate_ordering(ordering, true);
         match size {
             1 => unsafe { AtomicU8::from_ptr(ptr as *mut u8) }.load(ordering) as u64,
             2 => unsafe { AtomicU16::from_ptr(ptr as *mut u16) }.load(ordering) as u64,
@@ -61,6 +124,8 @@ impl AtomicAccess for StandardAtomicAccess {
     }
 
     unsafe fn store_atomic(ptr: *mut u8, size: usize, value: u64, ordering: Ordering) {
+        validate_atomic_access(ptr as *const u8, true);
+        validate_ordering(ordering, false);
         match size {
             1 => unsafe { AtomicU8::from_ptr(ptr) }.store(value as u8, ordering),
             2 => unsafe { AtomicU16::from_ptr(ptr as *mut u16) }.store(value as u16, ordering),
@@ -111,6 +176,7 @@ impl AtomicAccess for StandardAtomicAccess {
 #[cfg(not(feature = "multithreading"))]
 impl AtomicAccess for StandardAtomicAccess {
     unsafe fn load_atomic(ptr: *const u8, size: usize, _ordering: Ordering) -> u64 {
+        validate_atomic_access(ptr, true);
         // In single-threaded mode, we can use simple reads.
         // Since the trait requires alignment, we can use ptr::read for all supported sizes.
         match size {
@@ -123,6 +189,7 @@ impl AtomicAccess for StandardAtomicAccess {
     }
 
     unsafe fn store_atomic(ptr: *mut u8, size: usize, value: u64, _ordering: Ordering) {
+        validate_atomic_access(ptr as *const u8, true);
         // In single-threaded mode, we can use simple writes.
         // Since the trait requires alignment, we can use ptr::write for all supported sizes.
         match size {
@@ -175,6 +242,7 @@ impl Atomic {
                 _ => unreachable!(),
             }
         } else {
+            validate_atomic_access(ptr, false);
             let mut buf = vec![0u8; size];
             unsafe { ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), size) };
             buf
@@ -196,6 +264,7 @@ impl Atomic {
             };
             unsafe { StandardAtomicAccess::store_atomic(ptr, size, val, ordering) };
         } else {
+            validate_atomic_access(ptr as *const u8, false);
             unsafe { ptr::copy_nonoverlapping(value.as_ptr(), ptr, size) };
         }
     }
@@ -259,6 +328,41 @@ mod tests {
             for ord in [Ordering::Relaxed, Ordering::Release, Ordering::SeqCst] {
                 StandardAtomicAccess::store_atomic(ptr, 8, 42, ord);
             }
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "memory-validation")]
+    #[should_panic(expected = "Invalid load ordering")]
+    fn test_invalid_load_ordering() {
+        let val = 0u64;
+        let ptr = &val as *const u64 as *const u8;
+        unsafe {
+            StandardAtomicAccess::load_atomic(ptr, 8, Ordering::Release);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "memory-validation")]
+    #[should_panic(expected = "Invalid store ordering")]
+    fn test_invalid_store_ordering() {
+        let mut val = 0u64;
+        let ptr = &mut val as *mut u64 as *mut u8;
+        unsafe {
+            StandardAtomicAccess::store_atomic(ptr, 8, 42, Ordering::Acquire);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "memory-validation")]
+    fn test_mixed_access_validation() {
+        let mut val = 0u64;
+        let ptr = &mut val as *mut u64 as *mut u8;
+        unsafe {
+            // This should not panic, but it will populate ATOMIC_LOCATIONS
+            StandardAtomicAccess::store_atomic(ptr, 8, 42, Ordering::SeqCst);
+            // This should trigger a warning (not a panic)
+            validate_atomic_access(ptr, false);
         }
     }
 }

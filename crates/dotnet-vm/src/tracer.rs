@@ -361,33 +361,33 @@ impl Tracer {
 
     // Threading Helpers
     #[cfg(feature = "multithreading")]
-    pub fn trace_thread_create(&mut self, indent: usize, thread_id: u64, name: &str) {
-        info!(target: "thread", indent = indent, thread_id = thread_id, name = name, "{:indent$}⚙ THREAD CREATE [ID:{}] \"{}\"", "", thread_id, name, indent = indent * 2);
+    pub fn trace_thread_create(&mut self, indent: usize, thread_id: dotnet_utils::ArenaId, name: &str) {
+        info!(target: "thread", indent = indent, thread_id = thread_id.as_u64(), name = name, "{:indent$}⚙ THREAD CREATE [ID:{}] \"{}\"", "", thread_id, name, indent = indent * 2);
     }
 
     #[cfg(feature = "multithreading")]
-    pub fn trace_thread_start(&mut self, indent: usize, thread_id: u64) {
-        info!(target: "thread", indent = indent, thread_id = thread_id, "{:indent$}⚙ THREAD START [ID:{}]", "", thread_id, indent = indent * 2);
+    pub fn trace_thread_start(&mut self, indent: usize, thread_id: dotnet_utils::ArenaId) {
+        info!(target: "thread", indent = indent, thread_id = thread_id.as_u64(), "{:indent$}⚙ THREAD START [ID:{}]", "", thread_id, indent = indent * 2);
     }
 
     #[cfg(feature = "multithreading")]
-    pub fn trace_thread_exit(&mut self, indent: usize, thread_id: u64) {
-        info!(target: "thread", indent = indent, thread_id = thread_id, "{:indent$}⚙ THREAD EXIT [ID:{}]", "", thread_id, indent = indent * 2);
+    pub fn trace_thread_exit(&mut self, indent: usize, thread_id: dotnet_utils::ArenaId) {
+        info!(target: "thread", indent = indent, thread_id = thread_id.as_u64(), "{:indent$}⚙ THREAD EXIT [ID:{}]", "", thread_id, indent = indent * 2);
     }
 
     #[cfg(feature = "multithreading")]
-    pub fn trace_thread_safepoint(&mut self, indent: usize, thread_id: u64, location: &str) {
-        debug!(target: "thread", indent = indent, thread_id = thread_id, location = location, "{:indent$}⚙ THREAD SAFEPOINT [ID:{}] at {}", "", thread_id, location, indent = indent * 2);
+    pub fn trace_thread_safepoint(&mut self, indent: usize, thread_id: dotnet_utils::ArenaId, location: &str) {
+        debug!(target: "thread", indent = indent, thread_id = thread_id.as_u64(), location = location, "{:indent$}⚙ THREAD SAFEPOINT [ID:{}] at {}", "", thread_id, location, indent = indent * 2);
     }
 
     #[cfg(feature = "multithreading")]
-    pub fn trace_thread_suspend(&mut self, indent: usize, thread_id: u64, reason: &str) {
-        debug!(target: "thread", indent = indent, thread_id = thread_id, reason = reason, "{:indent$}⚙ THREAD SUSPEND [ID:{}] ({})", "", thread_id, reason, indent = indent * 2);
+    pub fn trace_thread_suspend(&mut self, indent: usize, thread_id: dotnet_utils::ArenaId, reason: &str) {
+        debug!(target: "thread", indent = indent, thread_id = thread_id.as_u64(), reason = reason, "{:indent$}⚙ THREAD SUSPEND [ID:{}] ({})", "", thread_id, reason, indent = indent * 2);
     }
 
     #[cfg(feature = "multithreading")]
-    pub fn trace_thread_resume(&mut self, indent: usize, thread_id: u64) {
-        debug!(target: "thread", indent = indent, thread_id = thread_id, "{:indent$}⚙ THREAD RESUME [ID:{}]", "", thread_id, indent = indent * 2);
+    pub fn trace_thread_resume(&mut self, indent: usize, thread_id: dotnet_utils::ArenaId) {
+        debug!(target: "thread", indent = indent, thread_id = thread_id.as_u64(), "{:indent$}⚙ THREAD RESUME [ID:{}]", "", thread_id, indent = indent * 2);
     }
 
     #[cfg(feature = "multithreaded-gc")]
@@ -404,22 +404,22 @@ impl Tracer {
     pub fn trace_thread_state(
         &mut self,
         indent: usize,
-        thread_id: u64,
+        thread_id: dotnet_utils::ArenaId,
         old_state: &str,
         new_state: &str,
     ) {
-        debug!(target: "thread", indent = indent, thread_id = thread_id, old_state = old_state, new_state = new_state, "{:indent$}⚙ THREAD STATE [ID:{}] {} → {}", "", thread_id, old_state, new_state, indent = indent * 2);
+        debug!(target: "thread", indent = indent, thread_id = thread_id.as_u64(), old_state = old_state, new_state = new_state, "{:indent$}⚙ THREAD STATE [ID:{}] {} → {}", "", thread_id, old_state, new_state, indent = indent * 2);
     }
 
     #[cfg(feature = "multithreading")]
     pub fn trace_thread_sync(
         &mut self,
         indent: usize,
-        thread_id: u64,
+        thread_id: dotnet_utils::ArenaId,
         operation: &str,
         obj_addr: usize,
     ) {
-        debug!(target: "thread", indent = indent, thread_id = thread_id, operation = operation, obj_addr = obj_addr, "{:indent$}⚙ THREAD SYNC [ID:{}] {} @ {:#x}", "", thread_id, operation, obj_addr, indent = indent * 2);
+        debug!(target: "thread", indent = indent, thread_id = thread_id.as_u64(), operation = operation, obj_addr = obj_addr, "{:indent$}⚙ THREAD SYNC [ID:{}] {} @ {:#x}", "", thread_id, operation, obj_addr, indent = indent * 2);
     }
 
     // Snapshots
@@ -620,11 +620,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         let mut markers = Vec::new();
         for (i, frame) in self.execution.frame_stack.frames.iter().enumerate() {
             let base = &frame.base;
-            markers.push((base.stack, format!("Stack base of frame #{}", i)));
+            markers.push((base.stack.as_usize(), format!("Stack base of frame #{}", i)));
             if base.locals != base.stack {
-                markers.push((base.locals, format!("Locals base of frame #{}", i)));
+                markers.push((base.locals.as_usize(), format!("Locals base of frame #{}", i)));
             }
-            markers.push((base.arguments, format!("Arguments base of frame #{}", i)));
+            markers.push((base.arguments.as_usize(), format!("Arguments base of frame #{}", i)));
         }
 
         self.tracer().dump_stack_state(&contents, &markers);
@@ -642,10 +642,10 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
                 idx,
                 &method_name,
                 frame.state.ip,
-                frame.base.arguments,
-                frame.base.locals,
-                frame.base.stack,
-                frame.stack_height,
+                frame.base.arguments.as_usize(),
+                frame.base.locals.as_usize(),
+                frame.base.stack.as_usize(),
+                frame.stack_height.as_usize(),
             );
         }
     }

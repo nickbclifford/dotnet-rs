@@ -52,7 +52,7 @@ pub trait EvalStackOps<'gc> {
     fn peek(&self) -> Option<StackValue<'gc>>;
     fn peek_stack(&self) -> StackValue<'gc>;
     fn peek_stack_at(&self, offset: usize) -> StackValue<'gc>;
-    fn top_of_stack(&self) -> usize;
+    fn top_of_stack(&self) -> crate::StackSlotIndex;
 }
 
 pub trait TypedStackOps<'gc>: EvalStackOps<'gc> {
@@ -117,16 +117,16 @@ pub trait TypedStackOps<'gc>: EvalStackOps<'gc> {
 }
 
 pub trait LocalOps<'gc> {
-    fn get_local(&self, index: usize) -> StackValue<'gc>;
-    fn set_local(&mut self, index: usize, value: StackValue<'gc>);
-    fn get_local_address(&self, index: usize) -> std::ptr::NonNull<u8>;
-    fn get_local_info_for_managed_ptr(&self, index: usize) -> (std::ptr::NonNull<u8>, bool);
+    fn get_local(&self, index: crate::LocalIndex) -> StackValue<'gc>;
+    fn set_local(&mut self, index: crate::LocalIndex, value: StackValue<'gc>);
+    fn get_local_address(&self, index: crate::LocalIndex) -> std::ptr::NonNull<u8>;
+    fn get_local_info_for_managed_ptr(&self, index: crate::LocalIndex) -> (std::ptr::NonNull<u8>, bool);
 }
 
 pub trait ArgumentOps<'gc> {
-    fn get_argument(&self, index: usize) -> StackValue<'gc>;
-    fn set_argument(&mut self, index: usize, value: StackValue<'gc>);
-    fn get_argument_address(&self, index: usize) -> std::ptr::NonNull<u8>;
+    fn get_argument(&self, index: crate::ArgumentIndex) -> StackValue<'gc>;
+    fn set_argument(&mut self, index: crate::ArgumentIndex, value: StackValue<'gc>);
+    fn get_argument_address(&self, index: crate::ArgumentIndex) -> std::ptr::NonNull<u8>;
 }
 
 pub trait StackOps<'gc, 'm>:
@@ -135,10 +135,10 @@ pub trait StackOps<'gc, 'm>:
     fn current_frame(&self) -> &crate::stack::StackFrame<'gc, 'm>;
     fn current_frame_mut(&mut self) -> &mut crate::stack::StackFrame<'gc, 'm>;
 
-    fn get_slot(&self, index: usize) -> StackValue<'gc>;
-    fn get_slot_ref(&self, index: usize) -> &StackValue<'gc>;
-    fn set_slot(&mut self, index: usize, value: StackValue<'gc>);
-    fn get_slot_address(&self, index: usize) -> std::ptr::NonNull<u8>;
+    fn get_slot(&self, index: crate::StackSlotIndex) -> StackValue<'gc>;
+    fn get_slot_ref(&self, index: crate::StackSlotIndex) -> &StackValue<'gc>;
+    fn set_slot(&mut self, index: crate::StackSlotIndex, value: StackValue<'gc>);
+    fn get_slot_address(&self, index: crate::StackSlotIndex) -> std::ptr::NonNull<u8>;
 }
 
 pub trait ExceptionOps<'gc> {
@@ -255,7 +255,7 @@ pub trait StaticsOps<'gc> {
 }
 
 pub trait ThreadOps {
-    fn thread_id(&self) -> usize;
+    fn thread_id(&self) -> dotnet_utils::ArenaId;
 }
 
 pub trait CallOps<'gc, 'm> {
@@ -333,8 +333,8 @@ pub trait VesOps<'gc, 'm>:
     fn frame_stack_mut(&mut self) -> &mut crate::stack::frames::FrameStack<'gc, 'm>;
     fn original_ip(&self) -> usize;
     fn original_ip_mut(&mut self) -> &mut usize;
-    fn original_stack_height(&self) -> usize;
-    fn original_stack_height_mut(&mut self) -> &mut usize;
+    fn original_stack_height(&self) -> crate::StackSlotIndex;
+    fn original_stack_height_mut(&mut self) -> &mut crate::StackSlotIndex;
 
     fn unwind_frame(&mut self);
 }

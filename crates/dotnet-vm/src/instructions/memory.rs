@@ -1,8 +1,9 @@
 use crate::{
-    StepResult,
     ops::{ExceptionOps, PoolOps, RawMemoryOps, StackOps, VesOps},
+    StepResult,
 };
 use dotnet_macros::dotnet_instruction;
+use dotnet_utils::atomic::validate_atomic_access;
 use dotnet_value::{
     StackValue,
     layout::{LayoutManager, Scalar},
@@ -30,6 +31,8 @@ pub fn cpblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ?Sized>(
     // and are assumed to be valid for the specified size. In .NET, it is the responsibility
     // of the compiler/programmer to ensure these are valid when using cpblk.
     unsafe {
+        validate_atomic_access(src, false);
+        validate_atomic_access(dest, false);
         ptr::copy(src, dest, size);
     }
     StepResult::Continue
@@ -51,6 +54,7 @@ pub fn initblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ?Sized>(
     // SAFETY: The address and size are obtained from the evaluation stack.
     // Validity of the memory range is the responsibility of the caller in CIL.
     unsafe {
+        validate_atomic_access(addr, false);
         ptr::write_bytes(addr, val, size);
     }
     StepResult::Continue
@@ -88,7 +92,8 @@ pub fn stind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: StoreType) -> 
     let addr_val = ctx.pop();
 
     if let StackValue::ManagedPtr(m) = &addr_val
-        && let Some((slot_idx, 0)) = m.stack_slot_origin
+        && let Some((slot_idx, off)) = m.stack_slot_origin
+        && off == dotnet_utils::ByteOffset::ZERO
     {
         // Direct write to slot - use typed write to maintain StackValue discriminant correctness.
         // Exception: if the slot currently contains a ValueType, we must use raw write to
@@ -138,7 +143,8 @@ pub fn ldind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: LoadType) -> S
     let addr_val = ctx.pop();
 
     if let StackValue::ManagedPtr(m) = &addr_val
-        && let Some((slot_idx, 0)) = m.stack_slot_origin
+        && let Some((slot_idx, off)) = m.stack_slot_origin
+        && off == dotnet_utils::ByteOffset::ZERO
         && !matches!(ctx.get_slot_ref(slot_idx), StackValue::ValueType(_))
     {
         let val = convert_from_stack_value(ctx.get_slot(slot_idx), param0);

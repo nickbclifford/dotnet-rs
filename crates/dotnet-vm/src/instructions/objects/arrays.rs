@@ -35,7 +35,7 @@ pub fn ldelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             return Err(());
         }
         let elem_size = array.layout.element_layout.size();
-        let target = &array.get()[(elem_size * index)..(elem_size * (index + 1))];
+        let target = &array.get()[(elem_size.as_usize() * index)..(elem_size.as_usize() * (index + 1))];
         ctx.read_cts_value(&load_type, target)
             .map(|v| v.into_stack(ctx.gc()))
             .map_err(|_| ())
@@ -159,7 +159,7 @@ fn ldelema_internal<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         if index >= v.layout.length {
             return Err(());
         }
-        let ptr = unsafe { v.get().as_ptr().add(index * element_layout.size()) as *mut u8 };
+        let ptr = unsafe { v.get().as_ptr().add((element_layout.size() * index).as_usize()) as *mut u8 };
         Ok(ptr)
     });
 
@@ -209,7 +209,7 @@ pub fn stelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             return Err(());
         }
         let elem_size = array.layout.element_layout.size();
-        let target = &mut array.get_mut()[(elem_size * index)..(elem_size * (index + 1))];
+        let target = &mut array.get_mut()[(elem_size.as_usize() * index)..(elem_size.as_usize() * (index + 1))];
         ctx.new_cts_value(&store_type, value)
             .map(|v| v.write(target))
             .map_err(|_| ())

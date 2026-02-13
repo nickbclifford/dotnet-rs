@@ -18,6 +18,8 @@ unsafe_empty_collect!(ResolutionS);
 unsafe impl Send for ResolutionS {}
 unsafe impl Sync for ResolutionS {}
 impl ResolutionS {
+    pub const NULL: Self = Self(None);
+
     pub const fn new(ptr: *const Resolution<'static>) -> Self {
         Self(NonNull::new(ptr as *mut _))
     }

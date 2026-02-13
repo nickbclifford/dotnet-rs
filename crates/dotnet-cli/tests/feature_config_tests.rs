@@ -19,7 +19,7 @@ fn test_single_threaded_stub_thread_manager() {
     let _shared = Arc::new(state::SharedGlobalState::new(loader));
 
     // Thread manager should provide a consistent thread ID (always 1)
-    assert_eq!(dotnet_utils::sync::get_current_thread_id(), 1);
+    assert_eq!(dotnet_utils::sync::get_current_thread_id(), dotnet_utils::ArenaId(1));
 }
 
 #[test]
@@ -111,11 +111,11 @@ fn test_multithreaded_gc_arena_handle() {
     let shared = Arc::new(state::SharedGlobalState::new(loader));
 
     // Create an arena handle
-    let handle = dotnet_vm::gc::coordinator::ArenaHandle::new(1);
+    let handle = dotnet_vm::gc::coordinator::ArenaHandle::new(dotnet_utils::ArenaId(1));
 
     // Register and unregister the arena
     shared.gc_coordinator.register_arena(handle.clone());
-    shared.gc_coordinator.unregister_arena(1);
+    shared.gc_coordinator.unregister_arena(dotnet_utils::ArenaId(1));
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn test_multithreaded_gc_cross_arena_value() {
     // Test that CrossArenaObjectRef variant exists
     // We create a simple ObjectPtr by transmuting a pointer value
     let ptr = unsafe { std::mem::transmute::<usize, dotnet_value::object::ObjectPtr>(0x1000) };
-    let _value = StackValue::CrossArenaObjectRef(ptr, 1);
+    let _value = StackValue::CrossArenaObjectRef(ptr, dotnet_utils::ArenaId(1));
     // If this compiles, the variant exists and works
 }
 
@@ -143,7 +143,7 @@ fn test_multithreaded_gc_implies_multithreading() {
 
     // Thread manager should support multiple threads
     let id = shared.thread_manager.register_thread();
-    assert!(id > 0);
+    assert!(id > dotnet_utils::ArenaId(0));
     shared.thread_manager.unregister_thread(id);
 }
 

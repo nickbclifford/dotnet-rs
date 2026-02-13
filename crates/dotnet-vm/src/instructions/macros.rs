@@ -98,7 +98,7 @@ macro_rules! comparison_op {
 }
 
 macro_rules! load_var {
-    ($(#[$attr:meta])* $func_name:ident, $get_method:ident) => {
+    ($(#[$attr:meta])* $func_name:ident, $get_method:ident, $index_type:ident) => {
         $(#[$attr])*
         pub fn $func_name<'gc, 'm: 'gc, T: $crate::stack::ops::StackOps<'gc, 'm> + ?Sized>(
             ctx: &mut T,
@@ -106,7 +106,7 @@ macro_rules! load_var {
         ) -> StepResult {
             #[allow(unused_imports)]
             use $crate::stack::ops::{ArgumentOps, EvalStackOps, LocalOps};
-            let val = ctx.$get_method(index as usize);
+            let val = ctx.$get_method($crate::$index_type(index as usize));
             ctx.push(val);
             StepResult::Continue
         }
@@ -114,7 +114,7 @@ macro_rules! load_var {
 }
 
 macro_rules! store_var {
-    ($(#[$attr:meta])* $func_name:ident, $set_method:ident) => {
+    ($(#[$attr:meta])* $func_name:ident, $set_method:ident, $index_type:ident) => {
         $(#[$attr])*
         pub fn $func_name<'gc, 'm: 'gc, T: $crate::stack::ops::StackOps<'gc, 'm> + ?Sized>(
             ctx: &mut T,
@@ -123,7 +123,7 @@ macro_rules! store_var {
             #[allow(unused_imports)]
             use $crate::stack::ops::{ArgumentOps, EvalStackOps, LocalOps};
             let val = vm_pop!(ctx);
-            ctx.$set_method(index as usize, val);
+            ctx.$set_method($crate::$index_type(index as usize), val);
             StepResult::Continue
         }
     };

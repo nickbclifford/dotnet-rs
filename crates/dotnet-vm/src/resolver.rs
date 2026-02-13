@@ -640,7 +640,7 @@ impl<'m> ResolverService<'m> {
         let layout =
             crate::layout::LayoutFactory::instance_field_layout_cached(td, ctx, self.metrics())?;
         let size = layout.size();
-        Ok(FieldStorage::new(layout, vec![0; size]))
+        Ok(FieldStorage::new(layout, vec![0; size.as_usize()]))
     }
 
     pub fn new_static_fields(
@@ -654,7 +654,7 @@ impl<'m> ResolverService<'m> {
             self.metrics(),
         )?);
         let size = layout.size();
-        Ok(FieldStorage::new(layout, vec![0; size]))
+        Ok(FieldStorage::new(layout, vec![0; size.as_usize()]))
     }
 
     pub fn new_value_type<'gc>(
@@ -919,7 +919,7 @@ impl<'m> ResolverService<'m> {
             self.metrics(),
         )?;
         let total_size = layout.element_layout.size() * size;
-        if total_size > 0x7FFF_FFFF {
+        if total_size.as_usize() > 0x7FFF_FFFF {
             return Err(TypeResolutionError::MassiveAllocation(format!(
                 "attempted to allocate massive vector of {} bytes (element: {:?}, length: {})",
                 total_size, element, size
@@ -929,7 +929,7 @@ impl<'m> ResolverService<'m> {
         Ok(Vector::new(
             element,
             layout,
-            vec![0; total_size],
+            vec![0; total_size.as_usize()],
             vec![size],
         ))
     }

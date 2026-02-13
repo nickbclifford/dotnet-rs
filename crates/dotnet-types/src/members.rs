@@ -58,6 +58,7 @@ pub struct FieldDescription {
     pub parent: TypeDescription,
     pub field_resolution: ResolutionS,
     pub field: &'static Field<'static>,
+    pub index: usize,
 }
 
 impl FieldDescription {

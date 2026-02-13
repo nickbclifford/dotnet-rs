@@ -26,8 +26,8 @@ pub(crate) fn get_ptr<'gc>(
 ) -> (
     *mut u8,
     Option<ObjectRef<'gc>>,
-    Option<(usize, usize)>,
-    usize,
+    Option<(dotnet_utils::StackSlotIndex, dotnet_utils::ByteOffset)>,
+    dotnet_utils::ByteOffset,
 ) {
     match val {
         StackValue::ObjectRef(o @ ObjectRef(Some(h))) => {
@@ -43,11 +43,11 @@ pub(crate) fn get_ptr<'gc>(
                     _ => ptr::null_mut(),
                 },
             };
-            (ptr, Some(*o), None, 0)
+            (ptr, Some(*o), None, dotnet_utils::ByteOffset(0))
         }
         StackValue::ValueType(o) => {
             let ptr = o.instance_storage.get().as_ptr() as *mut u8;
-            (ptr, None, None, 0)
+            (ptr, None, None, dotnet_utils::ByteOffset(0))
         }
         StackValue::ManagedPtr(m) => (
             m.pointer().map(|p| p.as_ptr()).unwrap_or(ptr::null_mut()),
@@ -55,8 +55,8 @@ pub(crate) fn get_ptr<'gc>(
             m.stack_slot_origin,
             m.offset,
         ),
-        StackValue::UnmanagedPtr(UnmanagedPtr(p)) => (p.as_ptr(), None, None, p.as_ptr() as usize),
-        StackValue::NativeInt(p) => (*p as *mut u8, None, None, *p as usize),
+        StackValue::UnmanagedPtr(UnmanagedPtr(p)) => (p.as_ptr(), None, None, dotnet_utils::ByteOffset(p.as_ptr() as usize)),
+        StackValue::NativeInt(p) => (*p as *mut u8, None, None, dotnet_utils::ByteOffset(*p as usize)),
         _ => panic!("Invalid parent for field/element access: {:?}", val),
     }
 }
@@ -67,8 +67,8 @@ pub(crate) fn get_ptr_context<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 ) -> (
     *mut u8,
     Option<ObjectRef<'gc>>,
-    Option<(usize, usize)>,
-    usize,
+    Option<(dotnet_utils::StackSlotIndex, dotnet_utils::ByteOffset)>,
+    dotnet_utils::ByteOffset,
 ) {
     match val {
         StackValue::ManagedPtr(m) => {
@@ -77,7 +77,7 @@ pub(crate) fn get_ptr_context<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
                 if let StackValue::ValueType(v) = slot_val {
                     let ptr = v.instance_storage.get().as_ptr() as *mut u8;
                     return (
-                        unsafe { ptr.add(offset) },
+                        unsafe { ptr.add(offset.as_usize()) },
                         None,
                         Some((idx, offset)),
                         offset,
@@ -144,7 +144,7 @@ pub fn new_object<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, ctor: &UserMethod
                 let vec_obj = dotnet_value::object::Vector::new(
                     elem_type,
                     layout,
-                    vec![0; total_size_bytes],
+                    vec![0; total_size_bytes.as_usize()],
                     dims,
                 );
                 let o = ObjectRef::new(ctx.gc(), HeapStorage::Vec(vec_obj));
@@ -237,8 +237,8 @@ pub fn ldobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType) -
     let res_ctx = ctx.current_context();
     let layout = vm_try!(type_layout(load_type.clone(), &res_ctx));
 
-    let mut source_vec = vec![0u8; layout.size()];
-    unsafe { ptr::copy_nonoverlapping(source_ptr, source_vec.as_mut_ptr(), layout.size()) };
+    let mut source_vec = vec![0u8; layout.size().as_usize()];
+    unsafe { ptr::copy_nonoverlapping(source_ptr, source_vec.as_mut_ptr(), layout.size().as_usize()) };
     let value =
         vm_try!(res_ctx.read_cts_value(&load_type, &source_vec, ctx.gc())).into_stack(ctx.gc());
 
@@ -260,7 +260,7 @@ pub fn stobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType) -
 
     let res_ctx = ctx.current_context();
     let layout = vm_try!(type_layout(concrete_t.clone(), &res_ctx));
-    let mut bytes = vec![0u8; layout.size()];
+    let mut bytes = vec![0u8; layout.size().as_usize()];
     vm_try!(res_ctx.new_cts_value(&concrete_t, value)).write(&mut bytes);
 
     unsafe {
@@ -281,7 +281,7 @@ pub fn initobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType)
     let res_ctx = ctx.current_context();
     let layout = vm_try!(type_layout(ct.clone(), &res_ctx));
 
-    unsafe { ptr::write_bytes(target, 0, layout.size()) };
+    unsafe { ptr::write_bytes(target, 0, layout.size().as_usize()) };
     StepResult::Continue
 }
 
@@ -290,7 +290,7 @@ pub fn sizeof<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType) 
     let target = vm_try!(ctx.make_concrete(param0));
     let res_ctx = ctx.current_context();
     let layout = vm_try!(type_layout(target, &res_ctx));
-    ctx.push(StackValue::Int32(layout.size() as i32));
+    ctx.push(StackValue::Int32(layout.size().as_usize() as i32));
     StepResult::Continue
 }
 

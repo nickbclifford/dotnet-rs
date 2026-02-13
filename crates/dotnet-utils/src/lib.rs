@@ -9,7 +9,10 @@ use std::{
 
 pub mod atomic;
 pub mod gc;
+pub mod newtypes;
 pub mod sync;
+
+pub use newtypes::{ArenaId, ByteOffset, FieldIndex, LocalIndex, ArgumentIndex, StackSlotIndex};
 
 pub struct DebugStr(pub String);
 
@@ -25,6 +28,17 @@ pub fn is_ptr_aligned_to_field(ptr: *const u8, field_size: usize) -> bool {
         2 => (ptr as usize).is_multiple_of(align_of::<u16>()),
         4 => (ptr as usize).is_multiple_of(align_of::<u32>()),
         8 => (ptr as usize).is_multiple_of(align_of::<u64>()),
-        _ => false,
+        _ => (ptr as usize).is_multiple_of(field_size),
     }
 }
+
+#[cfg(feature = "memory-validation")]
+pub fn validate_alignment(ptr: *const u8, align: usize) {
+    if !(ptr as usize).is_multiple_of(align) {
+        panic!("Alignment violation: pointer {:p} is not aligned to {}", ptr, align);
+    }
+}
+
+#[cfg(not(feature = "memory-validation"))]
+#[inline(always)]
+pub fn validate_alignment(_ptr: *const u8, _align: usize) {}
