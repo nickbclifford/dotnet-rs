@@ -9,14 +9,15 @@ use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
 };
+use dotnet_utils::ByteOffset;
 use dotnet_value::{
     StackValue,
     layout::{HasLayout, LayoutManager},
     object::{HeapStorage, ObjectRef},
-    pointer::ManagedPtr,
+    pointer::{ManagedPtr, PointerOrigin},
 };
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
-use std::{ptr, sync::Arc};
+use std::{ptr::{self, NonNull}, sync::Arc};
 
 #[dotnet_intrinsic("static int System.Runtime.InteropServices.Marshal::GetLastPInvokeError()")]
 #[allow(unused_variables)]
@@ -100,7 +101,13 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<'gc, 'm: 'gc>(
         .loader()
         .find_concrete_type(generics.method_generics[0].clone())
         .expect("Element type must exist for GetArrayDataReference");
-    ctx.push_ptr(data_ptr, element_type, false);
+    ctx.push_ptr(
+        data_ptr,
+        element_type,
+        false,
+        Some(obj),
+        Some(ByteOffset(0)),
+    );
     StepResult::Continue
 }
 
@@ -163,6 +170,7 @@ pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
 // System.Runtime.CompilerServices.Unsafe::AsPointer<T>(ref T source)
 #[dotnet_intrinsic("static void* System.Runtime.CompilerServices.Unsafe::AsPointer<T>(T&)")]
 #[allow(unused_variables)]
+#[allow(deprecated)]
 pub fn intrinsic_unsafe_as_pointer<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,
@@ -188,7 +196,6 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let target = &generics.method_generics[0];
-    let target_type = vm_try!(ctx.loader().find_concrete_type(target.clone()));
     let layout = vm_try!(type_layout(target.clone(), &ctx.current_context()));
 
     let offset_val = ctx.pop();
@@ -202,19 +209,15 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     };
 
     let m_val = ctx.pop();
-    let (pinned, owner) = if let StackValue::ManagedPtr(m) = &m_val {
-        (m.pinned, m.owner)
+    let byte_offset = offset * layout.size().as_usize() as isize;
+    if let StackValue::ManagedPtr(m) = m_val {
+        let new_m = unsafe { m.offset(byte_offset) };
+        ctx.push(StackValue::ManagedPtr(new_m));
     } else {
-        (false, None)
-    };
-    let m = m_val.as_ptr();
-    let result_ptr = unsafe { m.offset(offset * layout.size().as_usize() as isize) };
-    ctx.push(StackValue::managed_ptr_with_owner(
-        result_ptr,
-        target_type,
-        owner,
-        pinned,
-    ));
+        let ptr = m_val.as_ptr();
+        let result_ptr = unsafe { ptr.offset(byte_offset) };
+        ctx.push(StackValue::NativeInt(result_ptr as isize));
+    }
     StepResult::Continue
 }
 
@@ -226,11 +229,7 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let target = &generics.method_generics[0];
-    let target_type = ctx
-        .loader()
-        .find_concrete_type(target.clone())
-        .expect("Type must exist for Unsafe.AddByteOffset");
+    let _target = &generics.method_generics[0];
 
     let offset_val = ctx.pop();
     let offset = match offset_val {
@@ -243,18 +242,13 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
     };
 
     let m_val = ctx.pop();
-    let (pinned, owner) = if let StackValue::ManagedPtr(m) = &m_val {
-        (m.pinned, m.owner)
+    if let StackValue::ManagedPtr(m) = m_val {
+        let new_m = unsafe { m.offset(offset) };
+        ctx.push(StackValue::ManagedPtr(new_m));
     } else {
-        (false, None)
-    };
-    let m = m_val.as_ptr();
-    ctx.push(StackValue::managed_ptr_with_owner(
-        unsafe { m.offset(offset) },
-        target_type,
-        owner,
-        pinned,
-    ));
+        let m = m_val.as_ptr();
+        ctx.push(StackValue::NativeInt(unsafe { m.offset(offset) } as isize));
+    }
     StepResult::Continue
 }
 
@@ -307,13 +301,30 @@ pub fn intrinsic_unsafe_as_generic<'gc, 'm: 'gc>(
         .find_concrete_type(generics.method_generics[1].clone())
         .expect("Type must exist for Unsafe.As");
     let m_val = ctx.pop();
-    let pinned = match &m_val {
-        StackValue::ManagedPtr(m) => m.pinned,
-        StackValue::ObjectRef(ObjectRef(Some(_))) => false,
-        _ => false,
-    };
-    let m = m_val.as_ptr();
-    ctx.push(StackValue::managed_ptr(m, target_type, pinned));
+    match m_val {
+        StackValue::ManagedPtr(mut m) => {
+            m.inner_type = target_type;
+            ctx.push(StackValue::ManagedPtr(m));
+        }
+        StackValue::ObjectRef(o) => {
+            ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
+                o.pointer(),
+                target_type,
+                o.0.map(|_| o),
+                false,
+                Some(ByteOffset(0)),
+            )));
+        }
+        rest => {
+            let m = rest.as_ptr();
+            ctx.push(StackValue::managed_ptr(
+                m,
+                target_type,
+                false,
+                Some(ByteOffset(m as usize)),
+            ));
+        }
+    }
     StepResult::Continue
 }
 
@@ -339,6 +350,7 @@ pub fn intrinsic_unsafe_as_ref_any<'gc, 'm: 'gc>(
 // System.Runtime.CompilerServices.Unsafe::AsRef<T>(void* ptr)
 // Note: This is a helper, registration is on intrinsic_unsafe_as_ref_any or separate if needed.
 // But as_ref_any handles dispatch.
+#[allow(deprecated)]
 pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,
@@ -350,19 +362,24 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
     let target_type = vm_try!(ctx.loader().find_concrete_type(target_type_gen));
 
     let val = ctx.pop();
-    let (ptr, pinned) = match val {
-        StackValue::NativeInt(p) => (p as *mut u8, false),
+    let (ptr, pinned, origin, offset_base) = match val {
+        StackValue::NativeInt(p) => (p as *mut u8, false, PointerOrigin::Unmanaged, None),
         StackValue::ManagedPtr(m) => (
             m.pointer().expect("Unsafe.AsRef null managed ptr").as_ptr(),
             m.pinned,
+            m.origin.clone(),
+            Some(m.offset),
         ),
-        StackValue::UnmanagedPtr(p) => (p.0.as_ptr(), false),
+        StackValue::UnmanagedPtr(p) => (p.0.as_ptr(), false, PointerOrigin::Unmanaged, None),
         _ => panic!("Unsafe.AsRef expected pointer, got {:?}", val),
     };
 
     // Safety Check: Casting ptr to ref T
     let memory = RawMemoryAccess::new(ctx.heap());
-    let owner = ctx.heap().find_object(ptr as usize);
+    let owner = match &origin {
+        PointerOrigin::Heap(o) => Some(*o),
+        _ => ctx.heap().find_object(ptr as usize),
+    };
 
     let src_layout_obj = if let Some(owner) = owner {
         memory.get_layout_from_owner(owner)
@@ -385,7 +402,15 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
         // panic!("Heap Corruption: Casting unmanaged pointer to Ref type is unsafe");
     }
 
-    ctx.push(StackValue::managed_ptr(ptr, target_type, pinned));
+    let mut m = ManagedPtr::new(
+        NonNull::new(ptr),
+        target_type,
+        None, // We will set the origin manually to preserve non-heap origins
+        pinned,
+        offset_base,
+    );
+    m.origin = origin;
+    ctx.push(StackValue::ManagedPtr(m));
     StepResult::Continue
 }
 
@@ -422,43 +447,39 @@ pub fn intrinsic_unsafe_byte_offset<'gc, 'm: 'gc>(
 // System.Runtime.CompilerServices.Unsafe::ReadUnaligned<T>(ref byte ptr)
 #[dotnet_intrinsic("static T System.Runtime.CompilerServices.Unsafe::ReadUnaligned<T>(void*)")]
 #[dotnet_intrinsic("static T System.Runtime.CompilerServices.Unsafe::ReadUnaligned<T>(byte&)")]
+#[allow(deprecated)]
 pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let source = ctx.pop();
-    let (ptr, owner) = match source {
-        StackValue::NativeInt(p) => {
-            if p == 0 {
-                return ctx.throw_by_name("System.NullReferenceException");
-            }
-            (p as *mut u8, None)
+    if let StackValue::ManagedPtr(m) = &source {
+        if m.is_null() {
+            return ctx.throw_by_name("System.NullReferenceException");
         }
-        StackValue::ManagedPtr(m) => (
-            m.pointer().expect("Unsafe.ReadUnaligned null").as_ptr(),
-            m.owner,
-        ),
-        rest => panic!("invalid source for read_unchecked unaligned: {:?}", rest),
-    };
+    } else if let StackValue::NativeInt(0) = &source {
+        return ctx.throw_by_name("System.NullReferenceException");
+    }
+
+    let (origin, offset) = crate::instructions::objects::get_ptr_info(ctx, &source);
 
     let target = &generics.method_generics[0];
     let layout = vm_try!(type_layout(target.clone(), &ctx.current_context()));
 
     let target_type = vm_try!(ctx.loader().find_concrete_type(target.clone()));
 
-    let memory = RawMemoryAccess::new(ctx.heap());
-    match unsafe { memory.read_unaligned(ctx.gc(), ptr, owner, &layout, Some(target_type)) } {
+    match unsafe { ctx.read_unaligned(origin, offset, &layout, Some(target_type)) } {
         Ok(v) => {
             // If we read a ManagedPtr, we need to supply the target type,
-            // because memory.read_unaligned returns ManagedPtr with void/unknown type.
-            if let StackValue::ManagedPtr(m) = v {
+            // because read_unaligned returns ManagedPtr with void/unknown type.
+            if let StackValue::ManagedPtr(mut m) = v {
                 let target_type = ctx
                     .loader()
                     .find_concrete_type(target.clone())
                     .expect("Type must exist for Unsafe.ReadUnaligned ManagedPtr");
-                let new_m = ManagedPtr::new(m.pointer(), target_type, m.owner, m.pinned);
-                ctx.push(StackValue::ManagedPtr(new_m));
+                m.inner_type = target_type;
+                ctx.push(StackValue::ManagedPtr(m));
             } else {
                 ctx.push(v);
             }
@@ -487,23 +508,17 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
     let value = ctx.pop();
 
     let dest = ctx.pop();
-    let (ptr, owner) = match dest {
-        StackValue::NativeInt(p) => {
-            if p == 0 {
-                return ctx.throw_by_name("System.NullReferenceException");
-            }
-            (p as *mut u8, None)
+    if let StackValue::ManagedPtr(m) = &dest {
+        if m.is_null() {
+            return ctx.throw_by_name("System.NullReferenceException");
         }
-        StackValue::ManagedPtr(m) => (
-            m.pointer().expect("Unsafe.WriteUnaligned null").as_ptr(),
-            m.owner,
-        ),
-        rest => panic!("invalid destination for write unaligned: {:?}", rest),
-    };
+    } else if let StackValue::NativeInt(0) = &dest {
+        return ctx.throw_by_name("System.NullReferenceException");
+    }
 
-    let mut memory = RawMemoryAccess::new(ctx.heap());
+    let (origin, offset) = crate::instructions::objects::get_ptr_info(ctx, &dest);
 
-    match unsafe { memory.write_unaligned(ptr, owner, value, &layout) } {
+    match unsafe { ctx.write_unaligned(origin, offset, value, &layout) } {
         Ok(_) => {}
         Err(e) => panic!("Unsafe.WriteUnaligned failed: {}", e),
     }

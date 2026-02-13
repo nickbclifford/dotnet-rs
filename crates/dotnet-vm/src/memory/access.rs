@@ -1,6 +1,6 @@
 use crate::memory::heap::HeapManager;
 use dotnet_types::TypeDescription;
-use dotnet_utils::{atomic::validate_atomic_access, gc::GCHandle};
+use dotnet_utils::{ByteOffset, atomic::validate_atomic_access, gc::GCHandle};
 use dotnet_value::{
     StackValue,
     layout::{HasLayout, LayoutManager, Scalar},
@@ -12,90 +12,331 @@ use std::{ptr, sync::Arc};
 
 /// Manages unsafe memory access, enforcing bounds checks, GC write barriers, and type integrity.
 pub struct RawMemoryAccess<'a, 'gc> {
-    heap: &'a HeapManager<'gc>,
+    _heap: &'a HeapManager<'gc>,
 }
 
 impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     pub fn new(heap: &'a HeapManager<'gc>) -> Self {
-        Self { heap }
+        Self { _heap: heap }
     }
 
-    /// Writes a value to a memory location (pointer + optional owner), performing necessary checks.
+    /// Writes a value to a memory location (owner + offset), performing necessary checks.
     ///
     /// # Safety
-    /// The caller must ensure that `ptr` is valid for writes if `owner` is None.
+    /// The caller must ensure that `offset` represents a valid memory location if `owner` is None.
     pub unsafe fn write_unaligned(
         &mut self,
-        ptr: *mut u8,
+        gc: GCHandle<'gc>,
         owner: Option<ObjectRef<'gc>>,
+        offset: ByteOffset,
         value: StackValue<'gc>,
         layout: &LayoutManager,
     ) -> Result<(), String> {
-        validate_atomic_access(ptr as *const u8, false);
-        let owner = owner.or_else(|| self.heap.find_object(ptr as usize));
+        if let Some(owner) = owner {
+            owner.as_heap_storage(|_storage| {}); // Ensure object is valid and magic matches
 
-        // 1. Bounds Check
-        self.check_bounds(ptr, owner, layout.size().as_usize())?;
+            // SAFETY: with_data_mut ensures the lock is held for the duration of the closure.
+            // perform_write will copy the data.
+            owner.with_data_mut(gc, |data| {
+                let base = data.as_ptr();
+                let len = data.len();
+                let ptr = (base as usize).wrapping_add(offset.0) as *mut u8;
+                validate_atomic_access(ptr as *const u8, false);
 
-        // 2. Integrity Check
-        self.check_integrity(ptr, owner, layout)?;
+                // 1. Bounds Check
+                self.check_bounds_internal(ptr, base, len, layout.size().as_usize())?;
 
-        // 3. Perform Write & Write Barrier
-        // SAFETY: Bounds and integrity checks were performed above.
-        // `ptr` is guaranteed to be within the bounds of `owner` (if present)
-        // or its validity is ensured by the caller.
-        unsafe {
-            self.perform_write(ptr, owner, value, layout)?;
+                // 2. Integrity Check
+                self.check_integrity_internal(ptr, owner, base, layout)?;
+
+                // 3. Perform Write
+                unsafe { self.perform_write(ptr, Some(owner), value, layout) }
+            })
+        } else {
+            let ptr = offset.0 as *mut u8;
+            if ptr.is_null() {
+                return Err("NullReferenceException: writing to unmanaged null pointer".into());
+            }
+            validate_atomic_access(ptr as *const u8, false);
+            // SAFETY: Caller ensures ptr is valid.
+            unsafe {
+                self.perform_write(ptr, None, value, layout)?;
+            }
+            Ok(())
         }
-
-        Ok(())
     }
 
     /// Reads a value from a memory location.
     ///
     /// # Safety
-    /// The caller must ensure that `ptr` is valid for reads if `owner` is None.
+    /// The caller must ensure that `offset` represents a valid memory location if `owner` is None.
     pub unsafe fn read_unaligned(
         &self,
         gc: GCHandle<'gc>,
-        ptr: *const u8,
         owner: Option<ObjectRef<'gc>>,
+        offset: ByteOffset,
         layout: &LayoutManager,
         type_desc: Option<TypeDescription>,
     ) -> Result<StackValue<'gc>, String> {
-        validate_atomic_access(ptr, false);
-        let owner = owner.or_else(|| self.heap.find_object(ptr as usize));
+        if let Some(owner) = owner {
+            owner.as_heap_storage(|_storage| {}); // Ensure object is valid and magic matches
 
-        // 1. Bounds Check
-        self.check_bounds(ptr as *mut u8, owner, layout.size().as_usize())?;
+            // SAFETY: with_data ensures the lock is held for the duration of the closure.
+            // perform_read will read the data.
+            owner.with_data(|data| {
+                let base = data.as_ptr();
+                let len = data.len();
+                let ptr = (base as usize).wrapping_add(offset.0) as *const u8;
+                validate_atomic_access(ptr, false);
 
-        // 2. Read Safety Check
-        let src_layout = if let Some(owner) = owner {
-            self.get_layout_from_owner(owner)
+                // 1. Bounds Check
+                self.check_bounds_internal(ptr as *mut u8, base, len, layout.size().as_usize())?;
+
+                // 2. Read Safety Check
+                let src_layout = self.get_layout_from_owner(owner);
+                if offset.0 != 0 || src_layout.is_some() {
+                    check_read_safety(layout, src_layout.as_ref(), offset.0);
+                }
+
+                // 3. Perform Read
+                unsafe { self.perform_read(gc, ptr, Some(owner), layout, type_desc) }
+            })
         } else {
-            None
-        };
-
-        let offset = if let Some(owner) = owner {
-            let (base, _) = self.get_storage_base(owner);
-            if !base.is_null() {
-                (ptr as usize).wrapping_sub(base as usize)
-            } else {
-                0
+            let ptr = offset.0 as *const u8;
+            if ptr.is_null() {
+                return Err("NullReferenceException: reading from unmanaged null pointer".into());
             }
-        } else {
-            0
-        };
-
-        if offset != 0 || src_layout.is_some() {
-            check_read_safety(layout, src_layout.as_ref(), offset);
+            validate_atomic_access(ptr, false);
+            // SAFETY: Caller ensures ptr is valid.
+            unsafe { self.perform_read(gc, ptr, None, layout, type_desc) }
         }
+    }
 
-        // 3. Perform Read
-        // SAFETY: Bounds and safety checks were performed above.
-        // `ptr` is guaranteed to be within the bounds of `owner` (if present)
-        // or its validity is ensured by the caller.
-        unsafe { self.perform_read(gc, ptr, owner, layout, type_desc) }
+    /// Safely writes raw bytes to a memory location.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `offset` represents a valid memory location if `owner` is None.
+    /// If `owner` is provided, it must be the object that contains the memory to ensure GC safety.
+    pub unsafe fn write_bytes(
+        &mut self,
+        gc: GCHandle<'gc>,
+        owner: Option<ObjectRef<'gc>>,
+        offset: ByteOffset,
+        data: &[u8],
+    ) -> Result<(), String> {
+        if let Some(owner) = owner {
+            owner.as_heap_storage(|_storage| {});
+            owner.with_data_mut(gc, |obj_data| {
+                let base = obj_data.as_ptr();
+                let len = obj_data.len();
+                let ptr = (base as usize).wrapping_add(offset.0) as *mut u8;
+                validate_atomic_access(ptr as *const u8, false);
+
+                // Bounds Check
+                self.check_bounds_internal(ptr, base, len, data.len())?;
+
+                // Perform Write
+                unsafe {
+                    ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
+                }
+                Ok(())
+            })
+        } else {
+            let ptr = offset.0 as *mut u8;
+            if ptr.is_null() {
+                return Err(
+                    "NullReferenceException: writing bytes to unmanaged null pointer".into(),
+                );
+            }
+            validate_atomic_access(ptr as *const u8, false);
+            unsafe {
+                ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
+            }
+            Ok(())
+        }
+    }
+
+    /// Safely reads raw bytes from a memory location.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `offset` represents a valid memory location if `owner` is None.
+    /// If `owner` is provided, it must be the object that contains the memory to ensure GC safety.
+    pub unsafe fn read_bytes(
+        &self,
+        owner: Option<ObjectRef<'gc>>,
+        offset: ByteOffset,
+        dest: &mut [u8],
+    ) -> Result<(), String> {
+        if let Some(owner) = owner {
+            owner.with_data(|data| {
+                let start = offset.0;
+                let end = start + dest.len();
+                if end > data.len() {
+                    return Err(format!(
+                        "Read out of bounds: range [{}, {}) in object of size {}",
+                        start,
+                        end,
+                        data.len()
+                    ));
+                }
+                dest.copy_from_slice(&data[start..end]);
+                Ok(())
+            })
+        } else {
+            let ptr = offset.0 as *const u8;
+            validate_atomic_access(ptr, false);
+            // SAFETY: Caller ensures ptr is valid.
+            unsafe {
+                ptr::copy_nonoverlapping(ptr, dest.as_mut_ptr(), dest.len());
+            }
+            Ok(())
+        }
+    }
+
+    /// Atomically compares and exchanges a value in memory.
+    ///
+    /// # Safety
+    /// Caller must ensure the offset and size are valid for the owner object.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn compare_exchange_atomic(
+        &mut self,
+        gc: GCHandle<'gc>,
+        owner: Option<ObjectRef<'gc>>,
+        offset: ByteOffset,
+        expected: u64,
+        new: u64,
+        size: usize,
+        success: dotnet_utils::sync::Ordering,
+        failure: dotnet_utils::sync::Ordering,
+    ) -> Result<u64, u64> {
+        use dotnet_utils::atomic::{AtomicAccess, StandardAtomicAccess};
+
+        if let Some(owner) = owner {
+            owner.with_data_mut(gc, |data| {
+                let base = data.as_ptr();
+                let len = data.len();
+                let ptr = unsafe { base.add(offset.as_usize()) };
+
+                if let Err(e) =
+                    self.check_bounds_internal(ptr as *mut u8, base as *mut u8, len, size)
+                {
+                    panic!("Atomic operation bounds check failed: {}", e);
+                }
+
+                unsafe {
+                    StandardAtomicAccess::compare_exchange_atomic(
+                        ptr as *mut u8,
+                        size,
+                        expected,
+                        new,
+                        success,
+                        failure,
+                    )
+                }
+            })
+        } else {
+            let ptr = offset.as_usize() as *mut u8;
+            unsafe {
+                StandardAtomicAccess::compare_exchange_atomic(
+                    ptr, size, expected, new, success, failure,
+                )
+            }
+        }
+    }
+
+    /// Atomically exchanges a value in memory.
+    ///
+    /// # Safety
+    /// Caller must ensure the offset and size are valid for the owner object.
+    pub unsafe fn exchange_atomic(
+        &mut self,
+        gc: GCHandle<'gc>,
+        owner: Option<ObjectRef<'gc>>,
+        offset: ByteOffset,
+        value: u64,
+        size: usize,
+        ordering: dotnet_utils::sync::Ordering,
+    ) -> Result<u64, String> {
+        use dotnet_utils::atomic::{AtomicAccess, StandardAtomicAccess};
+
+        if let Some(owner) = owner {
+            owner.with_data_mut(gc, |data| {
+                let base = data.as_ptr();
+                let len = data.len();
+                let ptr = unsafe { base.add(offset.as_usize()) };
+
+                self.check_bounds_internal(ptr as *mut u8, base as *mut u8, len, size)?;
+
+                Ok(unsafe {
+                    StandardAtomicAccess::exchange_atomic(ptr as *mut u8, size, value, ordering)
+                })
+            })
+        } else {
+            let ptr = offset.as_usize() as *mut u8;
+            Ok(unsafe { StandardAtomicAccess::exchange_atomic(ptr, size, value, ordering) })
+        }
+    }
+
+    /// Atomically loads a value from memory.
+    ///
+    /// # Safety
+    /// Caller must ensure the offset and size are valid for the owner object.
+    pub unsafe fn load_atomic(
+        &self,
+        owner: Option<ObjectRef<'gc>>,
+        offset: ByteOffset,
+        size: usize,
+        ordering: dotnet_utils::sync::Ordering,
+    ) -> Result<u64, String> {
+        use dotnet_utils::atomic::{AtomicAccess, StandardAtomicAccess};
+        if let Some(owner) = owner {
+            owner.with_data(|data| {
+                let base = data.as_ptr();
+                let len = data.len();
+                let ptr = unsafe { base.add(offset.as_usize()) };
+                self.check_bounds_internal(ptr as *mut u8, base as *mut u8, len, size)?;
+                Ok(unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) })
+            })
+        } else {
+            let ptr = offset.as_usize() as *const u8;
+            Ok(unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) })
+        }
+    }
+
+    /// Atomically stores a value to memory.
+    ///
+    /// # Safety
+    /// Caller must ensure the offset and size are valid for the owner object.
+    pub unsafe fn store_atomic(
+        &mut self,
+        gc: GCHandle<'gc>,
+        owner: Option<ObjectRef<'gc>>,
+        offset: ByteOffset,
+        value: u64,
+        size: usize,
+        ordering: dotnet_utils::sync::Ordering,
+    ) -> Result<(), String> {
+        use dotnet_utils::atomic::{AtomicAccess, StandardAtomicAccess};
+        if let Some(owner) = owner {
+            owner.with_data_mut(gc, |data| {
+                let base = data.as_ptr();
+                let len = data.len();
+                let ptr = unsafe { base.add(offset.as_usize()) };
+                self.check_bounds_internal(ptr as *mut u8, base as *mut u8, len, size)?;
+                unsafe {
+                    StandardAtomicAccess::store_atomic(ptr as *mut u8, size, value, ordering);
+                }
+                Ok(())
+            })
+        } else {
+            let ptr = offset.as_usize() as *mut u8;
+            unsafe {
+                StandardAtomicAccess::store_atomic(ptr, size, value, ordering);
+            }
+            Ok(())
+        }
     }
 
     pub fn get_storage_base(&self, owner: ObjectRef<'gc>) -> (*const u8, usize) {
@@ -117,63 +358,57 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         }
     }
 
-    fn check_bounds(
+    fn check_bounds_internal(
         &self,
         ptr: *mut u8,
-        owner: Option<ObjectRef<'gc>>,
+        base: *const u8,
+        len: usize,
         size: usize,
     ) -> Result<(), String> {
-        if let Some(owner) = owner {
-            let (base, len) = self.get_storage_base(owner);
+        if !base.is_null() {
+            let base_addr = base as usize;
+            let ptr_addr = ptr as usize;
 
-            if !base.is_null() {
-                let base_addr = base as usize;
-                let ptr_addr = ptr as usize;
-
-                if ptr_addr < base_addr
-                    || (ptr_addr - base_addr)
-                        .checked_add(size)
-                        .is_none_or(|end| end > len)
-                {
-                    return Err(format!(
-                        "Access out of bounds. ptr={:p}, base={:p}, offset={}, size={}, len={}",
-                        ptr,
-                        base,
-                        ptr_addr.wrapping_sub(base_addr),
-                        size,
-                        len
-                    ));
-                }
+            if ptr_addr < base_addr
+                || (ptr_addr - base_addr)
+                    .checked_add(size)
+                    .is_none_or(|end| end > len)
+            {
+                return Err(format!(
+                    "Access out of bounds. ptr={:p}, base={:p}, offset={}, size={}, len={}",
+                    ptr,
+                    base,
+                    ptr_addr.wrapping_sub(base_addr),
+                    size,
+                    len
+                ));
             }
         }
         Ok(())
     }
 
-    fn check_integrity(
+    fn check_integrity_internal(
         &self,
         ptr: *mut u8,
-        owner: Option<ObjectRef<'gc>>,
+        owner: ObjectRef<'gc>,
+        base: *const u8,
         src_layout: &LayoutManager,
     ) -> Result<(), String> {
-        if let Some(owner) = owner {
-            let (base, _) = self.get_storage_base(owner);
+        if !base.is_null() {
+            let base_addr = base as usize;
+            let ptr_addr = ptr as usize;
+            let offset = ptr_addr.wrapping_sub(base_addr);
 
-            if !base.is_null() {
-                let base_addr = base as usize;
-                let ptr_addr = ptr as usize;
-                let offset = ptr_addr.wrapping_sub(base_addr);
+            let dest_layout = self.get_layout_from_owner(owner);
 
-                let dest_layout = self.get_layout_from_owner(owner);
-
-                if let Some(dl) = dest_layout {
-                    validate_ref_integrity(
-                        &dl,
-                        0,
-                        offset,
-                        offset + src_layout.size().as_usize(),
-                        src_layout,
-                    );
-                }
+            if let Some(dl) = dest_layout {
+                validate_ref_integrity(
+                    &dl,
+                    0,
+                    offset,
+                    offset + src_layout.size().as_usize(),
+                    src_layout,
+                );
             }
         }
         Ok(())
@@ -201,7 +436,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         }
     }
 
-    unsafe fn perform_write(
+    pub(crate) unsafe fn perform_write(
         &mut self,
         ptr: *mut u8,
         _owner: Option<ObjectRef<'gc>>,
@@ -259,6 +494,36 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                                 panic!("perform_write: ptr is null!");
                             }
                             m.write(std::slice::from_raw_parts_mut(ptr, ManagedPtr::SIZE));
+
+                            #[cfg(feature = "multithreaded-gc")]
+                            if let Some(owner) = _owner {
+                                if let Some(owner_handle) = owner.0 {
+                                    let owner_tid = (*owner_handle.as_ptr()).owner_id;
+                                    use dotnet_value::pointer::PointerOrigin;
+                                    match m.origin {
+                                        PointerOrigin::Heap(r) => {
+                                            if let Some(h) = r.0 {
+                                                let target_tid = (*h.as_ptr()).owner_id;
+                                                if target_tid != owner_tid {
+                                                    dotnet_utils::gc::record_cross_arena_ref(
+                                                        target_tid,
+                                                        h.as_ptr() as usize,
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        PointerOrigin::CrossArenaObjectRef(p, target_tid) => {
+                                            if target_tid != owner_tid {
+                                                dotnet_utils::gc::record_cross_arena_ref(
+                                                    target_tid,
+                                                    p.as_ptr() as usize,
+                                                );
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
                         } else {
                             return Err("Expected ManagedPtr".into());
                         }
@@ -267,6 +532,20 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         if let StackValue::ObjectRef(r) = value {
                             let val_ptr = r.0.map(gc_arena::Gc::as_ptr).unwrap_or(ptr::null());
                             ptr::write_unaligned(ptr as *mut *const (), val_ptr as *const ());
+
+                            #[cfg(feature = "multithreaded-gc")]
+                            if let Some(owner) = _owner {
+                                if let (Some(owner_handle), Some(val_handle)) = (owner.0, r.0) {
+                                    let owner_tid = (*owner_handle.as_ptr()).owner_id;
+                                    let target_tid = (*val_handle.as_ptr()).owner_id;
+                                    if target_tid != owner_tid {
+                                        dotnet_utils::gc::record_cross_arena_ref(
+                                            target_tid,
+                                            val_handle.as_ptr() as usize,
+                                        );
+                                    }
+                                }
+                            }
                         } else {
                             return Err("Expected ObjectRef".into());
                         }
@@ -274,7 +553,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 },
                 LayoutManager::Field(flm) => {
                     if let StackValue::ValueType(src_obj) = value {
-                        let src_ptr = src_obj.instance_storage.get().as_ptr();
+                        let src_ptr = src_obj.instance_storage.raw_data_ptr();
                         ptr::copy_nonoverlapping(src_ptr, ptr, flm.size().as_usize());
                     } else {
                         return Err("Expected ValueType for Struct write".into());
@@ -286,7 +565,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         }
     }
 
-    unsafe fn perform_read(
+    pub(crate) unsafe fn perform_read(
         &self,
         gc: GCHandle<'gc>,
         ptr: *const u8,
@@ -339,10 +618,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             std::mem::zeroed(),
                         );
 
-                        let mut m =
-                            ManagedPtr::new(info.address, void_desc, Some(info.owner), false);
-                        m.offset = info.offset;
-                        m.stack_slot_origin = info.stack_origin;
+                        let m = ManagedPtr::from_info(info, void_desc);
                         StackValue::ManagedPtr(m)
                     }
                 },

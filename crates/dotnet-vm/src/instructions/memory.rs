@@ -3,11 +3,11 @@ use crate::{
     ops::{ExceptionOps, PoolOps, RawMemoryOps, StackOps, VesOps},
 };
 use dotnet_macros::dotnet_instruction;
-use dotnet_utils::atomic::validate_atomic_access;
+use dotnet_utils::{ByteOffset, atomic::validate_atomic_access};
 use dotnet_value::{
     StackValue,
     layout::{LayoutManager, Scalar},
-    pointer::UnmanagedPtr,
+    pointer::{PointerOrigin, UnmanagedPtr},
 };
 use dotnetdll::prelude::*;
 use std::ptr;
@@ -92,7 +92,7 @@ pub fn stind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: StoreType) -> 
     let addr_val = ctx.pop();
 
     if let StackValue::ManagedPtr(m) = &addr_val
-        && let Some((slot_idx, off)) = m.stack_slot_origin
+        && let Some((slot_idx, off)) = m.stack_slot_origin()
         && off == dotnet_utils::ByteOffset::ZERO
     {
         // Direct write to slot - use typed write to maintain StackValue discriminant correctness.
@@ -106,10 +106,10 @@ pub fn stind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: StoreType) -> 
         }
     }
 
-    let (ptr, owner) = match addr_val {
-        StackValue::NativeInt(p) => (p as *mut u8, None),
-        StackValue::ManagedPtr(m) => (m.pointer().map_or(ptr::null_mut(), |p| p.as_ptr()), m.owner),
-        StackValue::UnmanagedPtr(u) => (u.0.as_ptr(), None),
+    let (origin, offset) = match addr_val {
+        StackValue::NativeInt(p) => (PointerOrigin::Unmanaged, ByteOffset(p as usize)),
+        StackValue::ManagedPtr(m) => (m.origin, m.offset),
+        StackValue::UnmanagedPtr(u) => (PointerOrigin::Unmanaged, ByteOffset(u.0.as_ptr() as usize)),
         _ => panic!("StoreIndirect: expected pointer, got {:?}", addr_val),
     };
 
@@ -124,12 +124,12 @@ pub fn stind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: StoreType) -> 
         StoreType::Object => LayoutManager::Scalar(Scalar::ObjectRef),
     };
 
-    // SAFETY: The pointer and owner are validated by the instruction handler.
-    // write_unaligned handles GC-specific write barriers if an owner is provided.
-    match unsafe { ctx.write_unaligned(ptr, owner, val, &layout) } {
+    // SAFETY: The pointer and origin are validated by the instruction handler.
+    // write_unaligned handles GC-specific write barriers if a heap origin is provided.
+    match unsafe { ctx.write_unaligned(origin.clone(), offset, val, &layout) } {
         Ok(_) => {}
         Err(e) => {
-            if ptr.is_null() {
+            if matches!(origin, PointerOrigin::Unmanaged) && offset.0 == 0 {
                 return ctx.throw_by_name("System.NullReferenceException");
             }
             panic!("StoreIndirect failed: {}", e);
@@ -143,7 +143,7 @@ pub fn ldind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: LoadType) -> S
     let addr_val = ctx.pop();
 
     if let StackValue::ManagedPtr(m) = &addr_val
-        && let Some((slot_idx, off)) = m.stack_slot_origin
+        && let Some((slot_idx, off)) = m.stack_slot_origin()
         && off == dotnet_utils::ByteOffset::ZERO
         && !matches!(ctx.get_slot_ref(slot_idx), StackValue::ValueType(_))
     {
@@ -152,13 +152,10 @@ pub fn ldind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: LoadType) -> S
         return StepResult::Continue;
     }
 
-    let (ptr, owner) = match addr_val {
-        StackValue::NativeInt(p) => (p as *const u8, None),
-        StackValue::ManagedPtr(m) => (
-            m.pointer().map_or(ptr::null(), |p| p.as_ptr() as *const u8),
-            m.owner,
-        ),
-        StackValue::UnmanagedPtr(u) => (u.0.as_ptr() as *const u8, None),
+    let (origin, offset) = match addr_val {
+        StackValue::NativeInt(p) => (PointerOrigin::Unmanaged, ByteOffset(p as usize)),
+        StackValue::ManagedPtr(m) => (m.origin, m.offset),
+        StackValue::UnmanagedPtr(u) => (PointerOrigin::Unmanaged, ByteOffset(u.0.as_ptr() as usize)),
         _ => panic!("LoadIndirect: expected pointer, got {:?}", addr_val),
     };
 
@@ -176,12 +173,12 @@ pub fn ldind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: LoadType) -> S
         LoadType::Object => LayoutManager::Scalar(Scalar::ObjectRef),
     };
 
-    // SAFETY: The pointer and owner are validated by the instruction handler.
-    // read_unaligned handles GC-safe reading from the heap if an owner is provided.
-    let val = match unsafe { ctx.read_unaligned(ptr, owner, &layout, None) } {
+    // SAFETY: The pointer and origin are validated by the instruction handler.
+    // read_unaligned handles GC-safe reading from the heap if a heap origin is provided.
+    let val = match unsafe { ctx.read_unaligned(origin.clone(), offset, &layout, None) } {
         Ok(v) => v,
         Err(e) => {
-            if ptr.is_null() {
+            if matches!(origin, PointerOrigin::Unmanaged) && offset.0 == 0 {
                 return ctx.throw_by_name("System.NullReferenceException");
             }
             panic!("LoadIndirect failed: {}", e);
