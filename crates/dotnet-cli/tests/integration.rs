@@ -112,6 +112,7 @@ impl TestHarness {
             || dll_path_str.contains("basic_42")
             || dll_path_str.contains("gc_resurrection_0")
             || dll_path_str.contains("hello_world")
+            || dll_path_str.contains("managed_ptr_unsafe_ops_0")
         {
             shared
                 .tracer_enabled

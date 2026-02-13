@@ -122,10 +122,8 @@ impl LayoutManager {
                 unsafe { ObjectRef::read_unchecked(storage) }.trace(cc);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                // ManagedPtr in memory is 16 bytes: (Owner ObjectRef, Offset).
-                // We need to trace the owner at offset 0.
-                let ptr_size = ObjectRef::SIZE;
-                unsafe { ObjectRef::read_unchecked(&storage[0..ptr_size]) }.trace(cc);
+                let info = unsafe { crate::pointer::ManagedPtr::read_unchecked(storage) };
+                info.origin.trace(cc);
             }
             LayoutManager::Field(f) => {
                 f.trace(storage, cc);
@@ -153,11 +151,8 @@ impl LayoutManager {
                 unsafe { ObjectRef::read_branded(storage, fc) }.resurrect(fc, visited, depth);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                // ManagedPtr in memory is ManagedPtr::SIZE bytes: (Owner ObjectRef, Offset).
-                // We need to resurrect the owner at offset 0.
-                let ptr_size = ObjectRef::SIZE;
-                unsafe { ObjectRef::read_branded(&storage[0..ptr_size], fc) }
-                    .resurrect(fc, visited, depth);
+                let info = unsafe { crate::pointer::ManagedPtr::read_branded(storage, fc) };
+                info.origin.resurrect(fc, visited, depth);
             }
             LayoutManager::Field(f) => {
                 for field in f.fields.values() {

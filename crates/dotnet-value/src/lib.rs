@@ -27,6 +27,7 @@ use std::{
     fmt::Debug,
     ops::{Add, BitAnd, BitOr, BitXor, Mul, Neg, Not, Shl, Sub},
     ptr::NonNull,
+    sync::Arc,
 };
 
 #[cfg(test)]
@@ -44,8 +45,8 @@ mod validation_tests;
 pub use dotnet_utils::{
     ArenaId, ArgumentIndex, ByteOffset, FieldIndex, LocalIndex, StackSlotIndex,
 };
-pub use object::{HeapStorage, Object, ObjectRef};
-pub use pointer::{ManagedPtr, UnmanagedPtr};
+pub use crate::object::{HeapStorage, Object, ObjectHandle, ObjectRef};
+pub use crate::pointer::{ManagedPtr, PointerOrigin, UnmanagedPtr};
 pub use string::CLRString;
 
 #[cfg(feature = "multithreaded-gc")]
@@ -61,6 +62,7 @@ pub enum StackValue<'gc> {
     UnmanagedPtr(UnmanagedPtr),
     ManagedPtr(ManagedPtr<'gc>),
     ValueType(Object<'gc>),
+    TypedRef(ManagedPtr<'gc>, Arc<TypeDescription>),
     /// Reference to an object in another thread's arena.
     /// (ObjectPtr, OwningThreadID)
     #[cfg(feature = "multithreaded-gc")]
@@ -75,6 +77,7 @@ unsafe impl<'gc> Collect for StackValue<'gc> {
         match self {
             Self::ObjectRef(o) => o.trace(cc),
             Self::ManagedPtr(m) => m.trace(cc),
+            Self::TypedRef(m, _) => m.trace(cc),
             Self::ValueType(v) => v.trace(cc),
             #[cfg(feature = "multithreaded-gc")]
             Self::CrossArenaObjectRef(ptr, tid) => {
@@ -220,8 +223,13 @@ impl<'gc> StackValue<'gc> {
             None => Self::NativeInt(0),
         }
     }
-    pub fn managed_ptr(ptr: *mut u8, target_type: TypeDescription, pinned: bool) -> Self {
-        Self::managed_ptr_with_owner(ptr, target_type, None, pinned)
+    pub fn managed_ptr(
+        ptr: *mut u8,
+        target_type: TypeDescription,
+        pinned: bool,
+        offset: Option<crate::ByteOffset>,
+    ) -> Self {
+        Self::managed_ptr_with_owner(ptr, target_type, None, pinned, offset)
     }
 
     pub fn managed_ptr_with_owner(
@@ -229,12 +237,14 @@ impl<'gc> StackValue<'gc> {
         target_type: TypeDescription,
         owner: Option<ObjectRef<'gc>>,
         pinned: bool,
+        offset: Option<crate::ByteOffset>,
     ) -> Self {
         Self::ManagedPtr(ManagedPtr::new(
             NonNull::new(ptr),
             target_type,
             owner,
             pinned,
+            offset,
         ))
     }
     pub fn managed_stack_ptr(
@@ -244,9 +254,8 @@ impl<'gc> StackValue<'gc> {
         target_type: TypeDescription,
         pinned: bool,
     ) -> Self {
-        let mut m = ManagedPtr::new(NonNull::new(ptr), target_type, None, pinned);
-        m.stack_slot_origin = Some((index, offset));
-        m.offset = offset;
+        let mut m = ManagedPtr::new(NonNull::new(ptr), target_type, None, pinned, Some(offset));
+        m.origin = PointerOrigin::Stack(index, offset);
         Self::ManagedPtr(m)
     }
     pub fn null() -> Self {
@@ -277,6 +286,7 @@ impl<'gc> StackValue<'gc> {
             Self::ObjectRef(o) => ref_to_ptr(o),
             Self::UnmanagedPtr(u) => ref_to_ptr(u),
             Self::ManagedPtr(m) => ref_to_ptr(m),
+            Self::TypedRef(m, _) => ref_to_ptr(m),
             Self::ValueType(o) => {
                 // SAFETY: Returning a pointer to the internal buffer.
                 // This is used by ldloca/ldarga to get a byref to the value type.
@@ -293,10 +303,14 @@ impl<'gc> StackValue<'gc> {
         match self {
             Self::NativeInt(i) => *i as *mut u8,
             Self::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-            Self::ManagedPtr(m) => match m.pointer() {
-                Some(p) => p.as_ptr(),
-                None => std::ptr::null_mut(),
-            },
+            Self::ManagedPtr(m) | Self::TypedRef(m, _) =>
+            {
+                #[allow(deprecated)]
+                match m.pointer() {
+                    Some(p) => p.as_ptr(),
+                    None => std::ptr::null_mut(),
+                }
+            }
             v => panic!("expected pointer on stack, received {:?}", v),
         }
     }
@@ -338,7 +352,7 @@ impl<'gc> StackValue<'gc> {
 
     pub fn as_managed_ptr(&self) -> ManagedPtr<'gc> {
         match self {
-            Self::ManagedPtr(m) => *m,
+            Self::ManagedPtr(m) => m.clone(),
             v => panic!("expected ManagedPtr, received {:?}", v),
         }
     }
@@ -539,10 +553,30 @@ impl<'gc> PartialEq for StackValue<'gc> {
             (NativeFloat(l), NativeFloat(r)) => l == r,
             (ManagedPtr(l), ManagedPtr(r)) => l == r,
             (ManagedPtr(l), NativeInt(r)) => {
-                (l.pointer().map(|p| p.as_ptr() as isize).unwrap_or(0)) == *r
+                let l_ptr = if let Some(owner) = l.owner() {
+                    unsafe {
+                        owner
+                            .0
+                            .map(|h: ObjectHandle<'gc>| h.borrow().storage.raw_data_ptr().add(l.offset.as_usize()))
+                            .unwrap_or(std::ptr::null_mut())
+                    }
+                } else {
+                    l.offset.as_usize() as *mut u8
+                };
+                (l_ptr as isize) == *r
             }
             (NativeInt(l), ManagedPtr(r)) => {
-                *l == (r.pointer().map(|p| p.as_ptr() as isize).unwrap_or(0))
+                let r_ptr = if let Some(owner) = r.owner() {
+                    unsafe {
+                        owner
+                            .0
+                            .map(|h: ObjectHandle<'gc>| h.borrow().storage.raw_data_ptr().add(r.offset.as_usize()))
+                            .unwrap_or(std::ptr::null_mut())
+                    }
+                } else {
+                    r.offset.as_usize() as *mut u8
+                };
+                *l == (r_ptr as isize)
             }
             (ObjectRef(l), ObjectRef(r)) => l == r,
             (ValueType(l), ValueType(r)) => l == r,
@@ -551,7 +585,7 @@ impl<'gc> PartialEq for StackValue<'gc> {
     }
 }
 
-impl PartialOrd for StackValue<'_> {
+impl<'gc> PartialOrd for StackValue<'gc> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         use StackValue::*;
         match (self, other) {
@@ -562,13 +596,31 @@ impl PartialOrd for StackValue<'_> {
             (NativeInt(l), NativeInt(r)) => l.partial_cmp(r),
             (NativeFloat(l), NativeFloat(r)) => l.partial_cmp(r),
             (ManagedPtr(l), ManagedPtr(r)) => l.partial_cmp(r),
-            (ManagedPtr(l), NativeInt(r)) => l
-                .pointer()
-                .map(|p| p.as_ptr() as isize)
-                .unwrap_or(0)
-                .partial_cmp(r),
+            (ManagedPtr(l), NativeInt(r)) => {
+                let l_ptr = if let Some(owner) = l.owner() {
+                    unsafe {
+                        owner
+                            .0
+                            .map(|h: ObjectHandle<'gc>| h.borrow().storage.raw_data_ptr().add(l.offset.as_usize()))
+                            .unwrap_or(std::ptr::null_mut())
+                    }
+                } else {
+                    l.offset.as_usize() as *mut u8
+                };
+                (l_ptr as isize).partial_cmp(r)
+            }
             (NativeInt(l), ManagedPtr(r)) => {
-                l.partial_cmp(&(r.pointer().map(|p| p.as_ptr() as isize).unwrap_or(0)))
+                let r_ptr = if let Some(owner) = r.owner() {
+                    unsafe {
+                        owner
+                            .0
+                            .map(|h: ObjectHandle<'gc>| h.borrow().storage.raw_data_ptr().add(r.offset.as_usize()))
+                            .unwrap_or(std::ptr::null_mut())
+                    }
+                } else {
+                    r.offset.as_usize() as *mut u8
+                };
+                l.partial_cmp(&(r_ptr as isize))
             }
             (ObjectRef(l), ObjectRef(r)) => l.partial_cmp(r),
             _ => None,
@@ -618,9 +670,27 @@ impl<'gc> Sub for StackValue<'gc> {
                 unsafe { ManagedPtr(m.offset(-(i as isize))) }
             }
             (ManagedPtr(m1), ManagedPtr(m2)) => {
-                let v1 = m1.pointer().map(|p| p.as_ptr() as isize).unwrap_or(0);
-                let v2 = m2.pointer().map(|p| p.as_ptr() as isize).unwrap_or(0);
-                NativeInt(v1 - v2)
+                let v1 = if let Some(owner) = m1.owner() {
+                    unsafe {
+                        owner
+                            .0
+                            .map(|h: ObjectHandle<'gc>| h.borrow().storage.raw_data_ptr().add(m1.offset.as_usize()))
+                            .unwrap_or(std::ptr::null_mut())
+                    }
+                } else {
+                    m1.offset.as_usize() as *mut u8
+                };
+                let v2 = if let Some(owner) = m2.owner() {
+                    unsafe {
+                        owner
+                            .0
+                            .map(|h: ObjectHandle<'gc>| h.borrow().storage.raw_data_ptr().add(m2.offset.as_usize()))
+                            .unwrap_or(std::ptr::null_mut())
+                    }
+                } else {
+                    m2.offset.as_usize() as *mut u8
+                };
+                NativeInt((v1 as isize) - (v2 as isize))
             }
             (l, r) => wrapping_arithmetic_op!(l, r, wrapping_sub, -),
         }

@@ -30,6 +30,7 @@ runtime_type_impls! {
     },
     complex_types: {
         Void,
+        TypedReference,
         Type(TypeDescription),
         Generic(TypeDescription, Vec<RuntimeType>),
         Vector(Box<RuntimeType>),
@@ -48,7 +49,7 @@ runtime_type_impls! {
         },
     },
     resolution: |loader| {
-        Void => loader
+        Void | TypedReference => loader
             .corlib_type("System.Object")
             .expect("System.Object must exist")
             .resolution,
@@ -69,6 +70,7 @@ runtime_type_impls! {
     },
     get_name: {
         Void => "Void".to_string(),
+        TypedReference => "TypedReference".to_string(),
         Type(td) | Generic(td, _) => td.definition().name.to_string(),
         Vector(t) => format!("{}[]", t.get_name()),
         Array(t, rank) => {
@@ -96,6 +98,11 @@ runtime_type_impls! {
             loader
                 .corlib_type("System.Void")
                 .expect("System.Void must exist"),
+        ),
+        TypedReference => ConcreteType::from(
+            loader
+                .corlib_type("System.TypedReference")
+                .expect("System.TypedReference must exist"),
         ),
         Type(td) => ConcreteType::from(*td),
         Generic(td, args) => {
