@@ -226,7 +226,6 @@ unsafe impl<'gc> Collect for ArenaLocalState<'gc> {
     }
 }
 
-
 impl<'gc> ArenaLocalState<'gc> {
     pub fn new(statics: Arc<StaticStorageManager>) -> Self {
         Self {

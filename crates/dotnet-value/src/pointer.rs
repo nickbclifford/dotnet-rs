@@ -1,20 +1,20 @@
 use crate::object::ObjectRef;
-#[cfg(feature = "multithreaded-gc")]
-use crate::object::ObjectPtr;
-#[cfg(feature = "multithreaded-gc")]
-use crate::ArenaId;
-use dotnet_types::TypeDescription;
-use dotnet_types::generics::GenericLookup;
-use gc_arena::{Collect, Collection, Mutation, unsafe_empty_collect};
-use std::sync::{Arc, OnceLock};
 use dashmap::DashMap;
-use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+use dotnet_types::{TypeDescription, generics::GenericLookup};
+use gc_arena::{Collect, Collection, Mutation, unsafe_empty_collect};
 use std::{
     cmp::Ordering as CmpOrdering,
     collections::HashSet,
     fmt::{self, Debug, Formatter},
     ptr::NonNull,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicU32, Ordering as AtomicOrdering},
+    },
 };
+
+#[cfg(feature = "multithreaded-gc")]
+use crate::{ArenaId, object::ObjectPtr};
 
 pub struct StaticMetadata {
     pub type_desc: TypeDescription,
@@ -240,7 +240,6 @@ impl<'gc> ManagedPtr<'gc> {
         }
     }
 
-
     pub fn from_info(info: ManagedPtrInfo<'gc>, inner_type: TypeDescription) -> Self {
         Self {
             #[cfg(any(feature = "memory-validation", debug_assertions))]
@@ -354,7 +353,10 @@ impl<'gc> ManagedPtr<'gc> {
                         let ptr_raw = (word0 & !7) as *const crate::object::ObjectInner<'static>;
                         // SAFETY: During GC or stable execution, cross-arena pointers are valid.
                         // We need the owner_id from the object itself.
-                        let ptr = unsafe { ObjectPtr::from_raw(ptr_raw as *const _).expect("Invalid ObjectPtr in Tag 5") };
+                        let ptr = unsafe {
+                            ObjectPtr::from_raw(ptr_raw as *const _)
+                                .expect("Invalid ObjectPtr in Tag 5")
+                        };
                         let owner_id = ptr.owner_id();
                         ManagedPtrInfo {
                             address: NonNull::new((ptr_raw as usize + word1) as *mut u8),
@@ -379,13 +381,12 @@ impl<'gc> ManagedPtr<'gc> {
                     let slot_offset = word0 >> 35;
                     let raw_ptr = NonNull::new(word1 as *mut u8);
 
-                    if id > 0 && let Some(meta) = static_registry().get(&id) {
+                    if id > 0
+                        && let Some(meta) = static_registry().get(&id)
+                    {
                         ManagedPtrInfo {
                             address: raw_ptr,
-                            origin: PointerOrigin::Static(
-                                meta.type_desc,
-                                meta.generics.clone(),
-                            ),
+                            origin: PointerOrigin::Static(meta.type_desc, meta.generics.clone()),
                             offset: crate::ByteOffset(slot_offset),
                         }
                     } else {
@@ -439,7 +440,9 @@ impl<'gc> ManagedPtr<'gc> {
 
             ManagedPtrInfo {
                 address: ptr,
-                origin: owner.0.map_or(PointerOrigin::Unmanaged, |h| PointerOrigin::Heap(ObjectRef(Some(h)))),
+                origin: owner.0.map_or(PointerOrigin::Unmanaged, |h| {
+                    PointerOrigin::Heap(ObjectRef(Some(h)))
+                }),
                 offset,
             }
         }
@@ -476,9 +479,8 @@ impl<'gc> ManagedPtr<'gc> {
                     }),
                 );
 
-                let word0: usize = 7
-                    | ((id as usize & 0xFFFFFFFF) << 3)
-                    | (self.offset.as_usize() << 35);
+                let word0: usize =
+                    7 | ((id as usize & 0xFFFFFFFF) << 3) | (self.offset.as_usize() << 35);
                 let word1 = self._value.map_or(0, |p| p.as_ptr() as usize);
                 dest[0..ptr_size].copy_from_slice(&word0.to_ne_bytes());
                 dest[ptr_size..ptr_size * 2].copy_from_slice(&word1.to_ne_bytes());
@@ -731,9 +733,7 @@ mod tests {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
         #[cfg(feature = "multithreaded-gc")]
-        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(
-            ArenaId(0),
-        )));
+        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(ArenaId(0))));
 
         arena.mutate(|gc, _root| {
             let gc_handle = dotnet_utils::gc::GCHandle::new(
@@ -768,9 +768,7 @@ mod tests {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
         #[cfg(feature = "multithreaded-gc")]
-        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(
-            ArenaId(0),
-        )));
+        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(ArenaId(0))));
 
         arena.mutate(|gc, _root| {
             let gc_handle = dotnet_utils::gc::GCHandle::new(

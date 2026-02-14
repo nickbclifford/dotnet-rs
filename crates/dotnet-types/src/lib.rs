@@ -31,8 +31,7 @@ pub mod resolution;
 pub mod runtime;
 
 pub trait TypeResolver {
-    fn corlib_type(&self, name: &str)
-    -> Result<TypeDescription, error::TypeResolutionError>;
+    fn corlib_type(&self, name: &str) -> Result<TypeDescription, error::TypeResolutionError>;
     fn locate_type(
         &self,
         resolution: ResolutionS,

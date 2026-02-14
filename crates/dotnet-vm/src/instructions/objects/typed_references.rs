@@ -20,12 +20,13 @@ pub fn mkrefany<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(ReadTypedReferenceType)]
-pub fn refanytype<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
-    ctx: &mut T,
-) -> StepResult {
+pub fn refanytype<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
     let tr = ctx.pop();
     let StackValue::TypedRef(_, td) = tr else {
-        panic!("refanytype: expected typed reference on stack, got {:?}", tr);
+        panic!(
+            "refanytype: expected typed reference on stack, got {:?}",
+            tr
+        );
     };
     // refanytype pushes a RuntimeTypeHandle (which is a pointer to the type)
     ctx.push(StackValue::NativeInt(Arc::as_ptr(&td) as isize));
@@ -43,11 +44,11 @@ pub fn refanyval<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     };
     let target_type = vm_try!(ctx.make_concrete(class));
     let target_td = vm_try!(ctx.loader().find_concrete_type(target_type));
-    
+
     if *td != target_td {
         return ctx.throw_by_name("System.InvalidCastException");
     }
-    
+
     ctx.push(StackValue::ManagedPtr(m));
     StepResult::Continue
 }

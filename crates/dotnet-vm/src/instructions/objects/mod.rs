@@ -203,8 +203,7 @@ pub fn ldobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType) -
         return ctx.throw_by_name("System.AccessViolationException");
     }
 
-    let value =
-        vm_try!(res_ctx.read_cts_value(&load_type, &source_vec, ctx.gc())).into_stack();
+    let value = vm_try!(res_ctx.read_cts_value(&load_type, &source_vec, ctx.gc())).into_stack();
 
     ctx.push(value);
     StepResult::Continue

@@ -985,9 +985,7 @@ fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(data: StackVal
             .try_into()
             .unwrap_or_else(|_| panic!("failed to convert from pointer")),
         StackValue::ManagedPtr(p) => {
-            let ptr = unsafe {
-                p.with_data(0, |data| data.as_ptr() as *mut u8)
-            };
+            let ptr = unsafe { p.with_data(0, |data| data.as_ptr() as *mut u8) };
             (ptr as usize)
                 .try_into()
                 .unwrap_or_else(|_| panic!("failed to convert from pointer"))

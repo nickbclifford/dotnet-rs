@@ -160,12 +160,7 @@ impl FieldStorage {
     /// # Memory Ordering
     /// For .NET volatile loads, `Ordering::Acquire` or `Ordering::SeqCst` should be used.
     /// Using `Ordering::Relaxed` will trigger a validation warning.
-    pub fn get_field_atomic(
-        &self,
-        owner: TypeDescription,
-        name: &str,
-        ord: Ordering,
-    ) -> Vec<u8> {
+    pub fn get_field_atomic(&self, owner: TypeDescription, name: &str, ord: Ordering) -> Vec<u8> {
         let field = self.layout.get_field(owner, name).expect("Field not found");
         let alignment = field.layout.alignment();
         let size = field.layout.size();

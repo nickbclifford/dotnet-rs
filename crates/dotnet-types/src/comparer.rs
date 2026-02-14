@@ -516,7 +516,7 @@ mod tests {
                 None,
                 unsafe { std::mem::transmute::<usize, TypeIndex>(0usize) },
             ))
-        } 
+        }
     }
 
     #[test]

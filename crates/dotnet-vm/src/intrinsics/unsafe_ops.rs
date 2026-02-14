@@ -17,7 +17,10 @@ use dotnet_value::{
     pointer::{ManagedPtr, PointerOrigin},
 };
 use dotnetdll::prelude::{BaseType, MethodType, ParameterType};
-use std::{ptr::{self, NonNull}, sync::Arc};
+use std::{
+    ptr::{self, NonNull},
+    sync::Arc,
+};
 
 #[dotnet_intrinsic("static int System.Runtime.InteropServices.Marshal::GetLastPInvokeError()")]
 #[allow(unused_variables)]

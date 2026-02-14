@@ -109,7 +109,9 @@ pub fn stind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: StoreType) -> 
     let (origin, offset) = match addr_val {
         StackValue::NativeInt(p) => (PointerOrigin::Unmanaged, ByteOffset(p as usize)),
         StackValue::ManagedPtr(m) => (m.origin, m.offset),
-        StackValue::UnmanagedPtr(u) => (PointerOrigin::Unmanaged, ByteOffset(u.0.as_ptr() as usize)),
+        StackValue::UnmanagedPtr(u) => {
+            (PointerOrigin::Unmanaged, ByteOffset(u.0.as_ptr() as usize))
+        }
         _ => panic!("StoreIndirect: expected pointer, got {:?}", addr_val),
     };
 
@@ -155,7 +157,9 @@ pub fn ldind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: LoadType) -> S
     let (origin, offset) = match addr_val {
         StackValue::NativeInt(p) => (PointerOrigin::Unmanaged, ByteOffset(p as usize)),
         StackValue::ManagedPtr(m) => (m.origin, m.offset),
-        StackValue::UnmanagedPtr(u) => (PointerOrigin::Unmanaged, ByteOffset(u.0.as_ptr() as usize)),
+        StackValue::UnmanagedPtr(u) => {
+            (PointerOrigin::Unmanaged, ByteOffset(u.0.as_ptr() as usize))
+        }
         _ => panic!("LoadIndirect: expected pointer, got {:?}", addr_val),
     };
 

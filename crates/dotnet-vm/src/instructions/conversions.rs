@@ -66,11 +66,9 @@ pub fn conv<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
                 StackValue::Int64(i) => i as u64,
                 StackValue::NativeInt(i) => i as usize as u64,
                 StackValue::UnmanagedPtr(UnmanagedPtr(p)) => (p.as_ptr() as usize) as u64,
-                StackValue::ManagedPtr(m) => {
-                    unsafe {
-                        m.with_data(0, |data| data.as_ptr() as usize) as u64
-                    }
-                }
+                StackValue::ManagedPtr(m) => unsafe {
+                    m.with_data(0, |data| data.as_ptr() as usize) as u64
+                },
                 StackValue::NativeFloat(f) => f as u64,
                 v => panic!("invalid type on stack ({:?}) for conversion to u64", v),
             };
@@ -86,11 +84,9 @@ pub fn conv<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
                 StackValue::Int64(i) => i as u64 as usize,
                 StackValue::NativeInt(i) => i as usize,
                 StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr() as usize,
-                StackValue::ManagedPtr(m) => {
-                    unsafe {
-                        m.with_data(0, |data| data.as_ptr() as usize)
-                    }
-                }
+                StackValue::ManagedPtr(m) => unsafe {
+                    m.with_data(0, |data| data.as_ptr() as usize)
+                },
                 StackValue::NativeFloat(f) => f as usize,
                 v => panic!("invalid type on stack ({:?}) for conversion to usize", v),
             };

@@ -115,9 +115,7 @@ impl ObjectPtr {
     }
 
     pub fn owner_id(&self) -> ArenaId {
-        unsafe {
-            (*self.0.as_ref().as_ptr()).owner_id
-        }
+        unsafe { (*self.0.as_ref().as_ptr()).owner_id }
     }
 }
 
@@ -267,7 +265,8 @@ impl<'gc> ObjectRef<'gc> {
                     if tag == 5 {
                         // This is a CrossArenaObjectRef (Tag 5).
                         // Record it for coordinated GC resurrection.
-                        let real_ptr = (ptr_val & !7) as *const ThreadSafeLock<ObjectInner<'static>>;
+                        let real_ptr =
+                            (ptr_val & !7) as *const ThreadSafeLock<ObjectInner<'static>>;
                         let owner_id = (*(*real_ptr).as_ptr()).owner_id;
                         record_cross_arena_ref(owner_id, real_ptr as usize);
                     }
@@ -727,9 +726,7 @@ impl<'gc> CTSValue<'gc> {
                 Float32(f) => dest.copy_from_slice(&f.to_ne_bytes()),
                 Float64(f) => dest.copy_from_slice(&f.to_ne_bytes()),
                 TypedRef(p, t) => {
-                    let addr = unsafe {
-                        p.with_data(0, |data| data.as_ptr() as usize)
-                    };
+                    let addr = unsafe { p.with_data(0, |data| data.as_ptr() as usize) };
                     let type_ptr = Arc::as_ptr(t) as usize;
                     dest[0..8].copy_from_slice(&addr.to_ne_bytes());
                     dest[8..16].copy_from_slice(&type_ptr.to_ne_bytes());

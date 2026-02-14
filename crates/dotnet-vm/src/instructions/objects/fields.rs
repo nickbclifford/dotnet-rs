@@ -89,14 +89,14 @@ pub fn ldfld<'gc, 'm: 'gc>(
     let value = match unsafe {
         ctx.read_unaligned(origin, offset, &field_layout.layout, Some(target_type))
     } {
-            Ok(v) => v,
-            Err(e) => {
-                if offset.0 == 0 {
-                    return ctx.throw_by_name("System.NullReferenceException");
-                }
-                panic!("ldfld failed: {}", e);
+        Ok(v) => v,
+        Err(e) => {
+            if offset.0 == 0 {
+                return ctx.throw_by_name("System.NullReferenceException");
             }
-        };
+            panic!("ldfld failed: {}", e);
+        }
+    };
 
     ctx.push(value);
     StepResult::Continue

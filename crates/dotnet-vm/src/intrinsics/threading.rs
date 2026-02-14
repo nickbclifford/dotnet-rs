@@ -591,24 +591,39 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
         BaseType::Boolean | BaseType::Int8 | BaseType::UInt8 => {
             let target_ptr = ctx.pop_managed_ptr();
             let val = unsafe {
-                ctx.load_atomic(target_ptr.origin.clone(), target_ptr.offset, 1, Ordering::Acquire)
-                    .unwrap()
+                ctx.load_atomic(
+                    target_ptr.origin.clone(),
+                    target_ptr.offset,
+                    1,
+                    Ordering::Acquire,
+                )
+                .unwrap()
             };
             ctx.push_i32(val as i32);
         }
         BaseType::Int16 | BaseType::UInt16 => {
             let target_ptr = ctx.pop_managed_ptr();
             let val = unsafe {
-                ctx.load_atomic(target_ptr.origin.clone(), target_ptr.offset, 2, Ordering::Acquire)
-                    .unwrap()
+                ctx.load_atomic(
+                    target_ptr.origin.clone(),
+                    target_ptr.offset,
+                    2,
+                    Ordering::Acquire,
+                )
+                .unwrap()
             };
             ctx.push_i32(val as i32);
         }
         BaseType::Int32 | BaseType::UInt32 | BaseType::Float32 => {
             let target_ptr = ctx.pop_managed_ptr();
             let val = unsafe {
-                ctx.load_atomic(target_ptr.origin.clone(), target_ptr.offset, 4, Ordering::Acquire)
-                    .unwrap()
+                ctx.load_atomic(
+                    target_ptr.origin.clone(),
+                    target_ptr.offset,
+                    4,
+                    Ordering::Acquire,
+                )
+                .unwrap()
             };
             if matches!(target_type.get(), BaseType::Float32) {
                 ctx.push_f64(f32::from_bits(val as u32) as f64);
@@ -619,8 +634,13 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
         BaseType::Int64 | BaseType::UInt64 | BaseType::Float64 => {
             let target_ptr = ctx.pop_managed_ptr();
             let val = unsafe {
-                ctx.load_atomic(target_ptr.origin.clone(), target_ptr.offset, 8, Ordering::Acquire)
-                    .unwrap()
+                ctx.load_atomic(
+                    target_ptr.origin.clone(),
+                    target_ptr.offset,
+                    8,
+                    Ordering::Acquire,
+                )
+                .unwrap()
             };
             if matches!(target_type.get(), BaseType::Float64) {
                 ctx.push_f64(f64::from_bits(val));
@@ -632,8 +652,13 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
             let target_ptr = ctx.pop_managed_ptr();
             let size = ObjectRef::SIZE;
             let val = unsafe {
-                ctx.load_atomic(target_ptr.origin.clone(), target_ptr.offset, size, Ordering::Acquire)
-                    .unwrap()
+                ctx.load_atomic(
+                    target_ptr.origin.clone(),
+                    target_ptr.offset,
+                    size,
+                    Ordering::Acquire,
+                )
+                .unwrap()
             };
             ctx.push_isize(val as isize);
         }

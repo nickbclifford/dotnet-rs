@@ -41,7 +41,9 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 let base_ptr = slot.data_location().as_ptr();
                 let total_offset = base_offset + offset;
                 let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                unsafe { memory.perform_write(base_ptr.add(total_offset.as_usize()), None, value, layout) }
+                unsafe {
+                    memory.perform_write(base_ptr.add(total_offset.as_usize()), None, value, layout)
+                }
             }
             PointerOrigin::Static(static_type, lookup) => {
                 let storage = self.statics().get(static_type, &lookup);
@@ -110,7 +112,15 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 let base_ptr = slot.data_location().as_ptr();
                 let total_offset = base_offset + offset;
                 let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                unsafe { memory.perform_read(self.gc, base_ptr.add(total_offset.as_usize()), None, layout, type_desc) }
+                unsafe {
+                    memory.perform_read(
+                        self.gc,
+                        base_ptr.add(total_offset.as_usize()),
+                        None,
+                        layout,
+                        type_desc,
+                    )
+                }
             }
             PointerOrigin::Static(static_type, lookup) => {
                 let storage = self.statics().get(static_type, &lookup);
@@ -148,16 +158,14 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe { memory.perform_read(self.gc, ptr, None, layout, type_desc) }
             }
-            PointerOrigin::Transient(obj) => {
-                obj.instance_storage.with_data(|data: &[u8]| {
-                    if offset.as_usize() + layout.size().as_usize() > data.len() {
-                        return Err("Transient object access out of bounds".to_string());
-                    }
-                    let ptr = unsafe { data.as_ptr().add(offset.as_usize()) };
-                    let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                    unsafe { memory.perform_read(self.gc, ptr, None, layout, type_desc) }
-                })
-            }
+            PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data: &[u8]| {
+                if offset.as_usize() + layout.size().as_usize() > data.len() {
+                    return Err("Transient object access out of bounds".to_string());
+                }
+                let ptr = unsafe { data.as_ptr().add(offset.as_usize()) };
+                let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                unsafe { memory.perform_read(self.gc, ptr, None, layout, type_desc) }
+            }),
         }
     }
 
@@ -174,7 +182,14 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 let base_ptr = slot.data_location().as_ptr();
                 let total_offset = base_offset + offset;
                 let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                unsafe { memory.write_bytes(self.gc, None, dotnet_utils::ByteOffset(base_ptr.add(total_offset.as_usize()) as usize), data) }
+                unsafe {
+                    memory.write_bytes(
+                        self.gc,
+                        None,
+                        dotnet_utils::ByteOffset(base_ptr.add(total_offset.as_usize()) as usize),
+                        data,
+                    )
+                }
             }
             PointerOrigin::Static(type_desc, lookup) => {
                 let storage = self.statics().get(type_desc, &lookup);
@@ -206,7 +221,8 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 if offset.as_usize() + data.len() > storage_slice.len() {
                     return Err("Cross-arena access out of bounds".to_string());
                 }
-                storage_slice[offset.as_usize()..offset.as_usize() + data.len()].copy_from_slice(data);
+                storage_slice[offset.as_usize()..offset.as_usize() + data.len()]
+                    .copy_from_slice(data);
                 Ok(())
             }
             PointerOrigin::Transient(obj) => {
@@ -233,7 +249,13 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 let base_ptr = slot.data_location().as_ptr();
                 let total_offset = base_offset + offset;
                 let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                unsafe { memory.read_bytes(None, dotnet_utils::ByteOffset(base_ptr.add(total_offset.as_usize()) as usize), dest) }
+                unsafe {
+                    memory.read_bytes(
+                        None,
+                        dotnet_utils::ByteOffset(base_ptr.add(total_offset.as_usize()) as usize),
+                        dest,
+                    )
+                }
             }
             PointerOrigin::Static(type_desc, lookup) => {
                 let storage = self.statics().get(type_desc, &lookup);
@@ -275,9 +297,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 if offset.as_usize() + dest.len() > obj_data.len() {
                     return Err("Transient object access out of bounds".to_string());
                 }
-                dest.copy_from_slice(
-                    &obj_data[offset.as_usize()..offset.as_usize() + dest.len()],
-                );
+                dest.copy_from_slice(&obj_data[offset.as_usize()..offset.as_usize() + dest.len()]);
                 Ok(())
             }
         }
@@ -300,7 +320,14 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.compare_exchange_atomic(
-                        self.gc, Some(owner), offset, expected, new, size, success, failure,
+                        self.gc,
+                        Some(owner),
+                        offset,
+                        expected,
+                        new,
+                        size,
+                        success,
+                        failure,
                     )
                 }
             }
@@ -340,25 +367,23 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                     )
                 }
             }
-            PointerOrigin::Transient(obj) => {
-                obj.instance_storage.with_data(|data| {
-                    let base_ptr = data.as_ptr();
-                    let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
-                    let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                    unsafe {
-                        memory.compare_exchange_atomic(
-                            self.gc,
-                            None,
-                            dotnet_utils::ByteOffset(abs_ptr as usize),
-                            expected,
-                            new,
-                            size,
-                            success,
-                            failure,
-                        )
-                    }
-                })
-            }
+            PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| {
+                let base_ptr = data.as_ptr();
+                let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
+                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                unsafe {
+                    memory.compare_exchange_atomic(
+                        self.gc,
+                        None,
+                        dotnet_utils::ByteOffset(abs_ptr as usize),
+                        expected,
+                        new,
+                        size,
+                        success,
+                        failure,
+                    )
+                }
+            }),
             PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
@@ -404,7 +429,9 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
-                unsafe { memory.exchange_atomic(self.gc, Some(owner), offset, value, size, ordering) }
+                unsafe {
+                    memory.exchange_atomic(self.gc, Some(owner), offset, value, size, ordering)
+                }
             }
             PointerOrigin::Static(static_type, lookup) => {
                 let storage = self.statics().get(static_type, &lookup);
@@ -438,23 +465,21 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                     )
                 }
             }
-            PointerOrigin::Transient(obj) => {
-                obj.instance_storage.with_data(|data| {
-                    let base_ptr = data.as_ptr();
-                    let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
-                    let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                    unsafe {
-                        memory.exchange_atomic(
-                            self.gc,
-                            None,
-                            dotnet_utils::ByteOffset(abs_ptr as usize),
-                            value,
-                            size,
-                            ordering,
-                        )
-                    }
-                })
-            }
+            PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| {
+                let base_ptr = data.as_ptr();
+                let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
+                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                unsafe {
+                    memory.exchange_atomic(
+                        self.gc,
+                        None,
+                        dotnet_utils::ByteOffset(abs_ptr as usize),
+                        value,
+                        size,
+                        ordering,
+                    )
+                }
+            }),
             PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
@@ -523,21 +548,19 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                     )
                 }
             }
-            PointerOrigin::Transient(obj) => {
-                obj.instance_storage.with_data(|data| {
-                    let base_ptr = data.as_ptr();
-                    let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
-                    let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                    unsafe {
-                        memory.load_atomic(
-                            None,
-                            dotnet_utils::ByteOffset(abs_ptr as usize),
-                            size,
-                            ordering,
-                        )
-                    }
-                })
-            }
+            PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| {
+                let base_ptr = data.as_ptr();
+                let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
+                let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                unsafe {
+                    memory.load_atomic(
+                        None,
+                        dotnet_utils::ByteOffset(abs_ptr as usize),
+                        size,
+                        ordering,
+                    )
+                }
+            }),
             PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
                 let memory = crate::memory::RawMemoryAccess::new(heap);
@@ -609,23 +632,21 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                     )
                 }
             }
-            PointerOrigin::Transient(obj) => {
-                obj.instance_storage.with_data(|data| {
-                    let base_ptr = data.as_ptr();
-                    let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
-                    let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                    unsafe {
-                        memory.store_atomic(
-                            self.gc,
-                            None,
-                            dotnet_utils::ByteOffset(abs_ptr as usize),
-                            value,
-                            size,
-                            ordering,
-                        )
-                    }
-                })
-            }
+            PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| {
+                let base_ptr = data.as_ptr();
+                let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
+                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                unsafe {
+                    memory.store_atomic(
+                        self.gc,
+                        None,
+                        dotnet_utils::ByteOffset(abs_ptr as usize),
+                        value,
+                        size,
+                        ordering,
+                    )
+                }
+            }),
             PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);

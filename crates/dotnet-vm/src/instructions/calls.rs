@@ -150,9 +150,7 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             ))
             .size();
 
-            let value_vec = unsafe {
-                m.with_data(value_size.as_usize(), |data| data.to_vec())
-            };
+            let value_vec = unsafe { m.with_data(value_size.as_usize(), |data| data.to_vec()) };
             let value = vm_try!(ctx.read_cts_value(&constraint_type_source, &value_vec));
 
             let boxed = ObjectRef::new(
@@ -179,9 +177,7 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             return ctx.throw_by_name("System.NullReferenceException");
         };
 
-        let value_vec = unsafe {
-            m.with_data(ObjectRef::SIZE, |data| data.to_vec())
-        };
+        let value_vec = unsafe { m.with_data(ObjectRef::SIZE, |data| data.to_vec()) };
         let value_bytes = &value_vec;
 
         // SAFETY: value_bytes contains a valid ObjectRef from the stack and gc is the current arena.

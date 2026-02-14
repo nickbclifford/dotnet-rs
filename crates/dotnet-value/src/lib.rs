@@ -42,11 +42,13 @@ pub mod string;
 #[cfg(test)]
 mod validation_tests;
 
+pub use crate::{
+    object::{HeapStorage, Object, ObjectHandle, ObjectRef},
+    pointer::{ManagedPtr, PointerOrigin, UnmanagedPtr},
+};
 pub use dotnet_utils::{
     ArenaId, ArgumentIndex, ByteOffset, FieldIndex, LocalIndex, StackSlotIndex,
 };
-pub use crate::object::{HeapStorage, Object, ObjectHandle, ObjectRef};
-pub use crate::pointer::{ManagedPtr, PointerOrigin, UnmanagedPtr};
 pub use string::CLRString;
 
 #[cfg(feature = "multithreaded-gc")]
@@ -558,7 +560,9 @@ impl<'gc> PartialEq for StackValue<'gc> {
                     unsafe {
                         owner
                             .0
-                            .map(|h: ObjectHandle<'gc>| h.borrow().storage.raw_data_ptr().add(l.offset.as_usize()))
+                            .map(|h: ObjectHandle<'gc>| {
+                                h.borrow().storage.raw_data_ptr().add(l.offset.as_usize())
+                            })
                             .unwrap_or(std::ptr::null_mut())
                     }
                 } else {
@@ -571,7 +575,9 @@ impl<'gc> PartialEq for StackValue<'gc> {
                     unsafe {
                         owner
                             .0
-                            .map(|h: ObjectHandle<'gc>| h.borrow().storage.raw_data_ptr().add(r.offset.as_usize()))
+                            .map(|h: ObjectHandle<'gc>| {
+                                h.borrow().storage.raw_data_ptr().add(r.offset.as_usize())
+                            })
                             .unwrap_or(std::ptr::null_mut())
                     }
                 } else {
@@ -602,7 +608,9 @@ impl<'gc> PartialOrd for StackValue<'gc> {
                     unsafe {
                         owner
                             .0
-                            .map(|h: ObjectHandle<'gc>| h.borrow().storage.raw_data_ptr().add(l.offset.as_usize()))
+                            .map(|h: ObjectHandle<'gc>| {
+                                h.borrow().storage.raw_data_ptr().add(l.offset.as_usize())
+                            })
                             .unwrap_or(std::ptr::null_mut())
                     }
                 } else {
@@ -615,7 +623,9 @@ impl<'gc> PartialOrd for StackValue<'gc> {
                     unsafe {
                         owner
                             .0
-                            .map(|h: ObjectHandle<'gc>| h.borrow().storage.raw_data_ptr().add(r.offset.as_usize()))
+                            .map(|h: ObjectHandle<'gc>| {
+                                h.borrow().storage.raw_data_ptr().add(r.offset.as_usize())
+                            })
                             .unwrap_or(std::ptr::null_mut())
                     }
                 } else {
@@ -675,7 +685,9 @@ impl<'gc> Sub for StackValue<'gc> {
                     unsafe {
                         owner
                             .0
-                            .map(|h: ObjectHandle<'gc>| h.borrow().storage.raw_data_ptr().add(m1.offset.as_usize()))
+                            .map(|h: ObjectHandle<'gc>| {
+                                h.borrow().storage.raw_data_ptr().add(m1.offset.as_usize())
+                            })
                             .unwrap_or(std::ptr::null_mut())
                     }
                 } else {
@@ -685,7 +697,9 @@ impl<'gc> Sub for StackValue<'gc> {
                     unsafe {
                         owner
                             .0
-                            .map(|h: ObjectHandle<'gc>| h.borrow().storage.raw_data_ptr().add(m2.offset.as_usize()))
+                            .map(|h: ObjectHandle<'gc>| {
+                                h.borrow().storage.raw_data_ptr().add(m2.offset.as_usize())
+                            })
                             .unwrap_or(std::ptr::null_mut())
                     }
                 } else {

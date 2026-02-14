@@ -1,6 +1,7 @@
 use dotnet_assemblies::error::AssemblyLoadError;
-pub use dotnet_types::error::TypeResolutionError;
 use thiserror::Error;
+
+pub use dotnet_types::error::TypeResolutionError;
 
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum VmError {

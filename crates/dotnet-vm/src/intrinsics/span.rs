@@ -351,8 +351,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
         ctx.resolve_runtime_type(obj_ref)
     };
 
-    let element_type: ConcreteType =
-        element_type_runtime.to_concrete(ctx.loader());
+    let element_type: ConcreteType = element_type_runtime.to_concrete(ctx.loader());
 
     let res_ctx = ctx.with_generics(generics);
     let element_size = vm_try!(type_layout(element_type, &res_ctx)).size();

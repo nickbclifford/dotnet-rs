@@ -35,7 +35,9 @@ pub fn ldelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let offset = dotnet_utils::ByteOffset(layout.size().as_usize() * index);
 
     // SAFETY: read_unaligned handles GC-safe reading from the heap with bounds checking.
-    let value = match unsafe { ctx.read_unaligned(PointerOrigin::Heap(obj), offset, &layout, Some(target_type)) } {
+    let value = match unsafe {
+        ctx.read_unaligned(PointerOrigin::Heap(obj), offset, &layout, Some(target_type))
+    } {
         Ok(v) => v,
         Err(_) => return ctx.throw_by_name("System.IndexOutOfRangeException"),
     };
@@ -82,7 +84,8 @@ pub fn ldelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let offset = dotnet_utils::ByteOffset(layout.size().as_usize() * index);
 
     // SAFETY: read_unaligned handles GC-safe reading from the heap with bounds checking.
-    let value = match unsafe { ctx.read_unaligned(PointerOrigin::Heap(obj), offset, &layout, None) } {
+    let value = match unsafe { ctx.read_unaligned(PointerOrigin::Heap(obj), offset, &layout, None) }
+    {
         Ok(v) => v,
         Err(_) => return ctx.throw_by_name("System.IndexOutOfRangeException"),
     };
