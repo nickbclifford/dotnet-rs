@@ -685,7 +685,7 @@ impl AssemblyLoader {
                     .definition()
                     .fields
                     .iter()
-                    .position(|f| std::ptr::eq(f, field))
+                    .position(|f| ptr::eq(f, field))
                     .ok_or_else(|| TypeResolutionError::FieldNotFound(field.name.to_string()))?;
                 Ok((
                     FieldDescription {

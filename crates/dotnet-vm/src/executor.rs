@@ -104,7 +104,7 @@ impl Executor {
             c.stack.thread_id.set(thread_id);
             #[cfg(feature = "multithreaded-gc")]
             {
-                c.stack.arena = dotnet_utils::gc::ArenaHandle::new(thread_id);
+                c.stack.arena = ArenaHandle::new(thread_id);
             }
 
             let gc_handle = GCHandle::new(

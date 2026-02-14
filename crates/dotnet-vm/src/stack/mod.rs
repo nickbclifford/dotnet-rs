@@ -32,11 +32,11 @@
 //!
 //! The [`ops`] module defines traits that decompose `VesContext` functionality:
 //!
-//! - [`StackOps`](ops::StackOps): Push/pop/dup operations on the evaluation stack
-//! - [`CallOps`](ops::CallOps): Method invocation and frame management
-//! - [`ExceptionOps`](ops::ExceptionOps): Exception throwing and handling
-//! - [`ResolutionOps`](ops::ResolutionOps): Type and method resolution
-//! - [`VesOps`](ops::VesOps): Unified trait combining all operations
+//! - [`StackOps`](StackOps): Push/pop/dup operations on the evaluation stack
+//! - [`CallOps`](CallOps): Method invocation and frame management
+//! - [`ExceptionOps`](ExceptionOps): Exception throwing and handling
+//! - [`ResolutionOps`](ResolutionOps): Type and method resolution
+//! - [`VesOps`](VesOps): Unified trait combining all operations
 //!
 //! These traits enable instruction handlers and intrinsics to depend only on the
 //! operations they need, rather than coupling to the full `VesContext` struct.

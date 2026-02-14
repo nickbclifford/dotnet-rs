@@ -21,7 +21,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     fn constructor_frame(
         &mut self,
         instance: ObjectInstance<'gc>,
-        method: crate::MethodInfo<'m>,
+        method: MethodInfo<'m>,
         generic_inst: GenericLookup,
     ) -> Result<(), TypeResolutionError> {
         let gc = self.gc;
@@ -63,7 +63,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn call_frame(
         &mut self,
-        method: crate::MethodInfo<'m>,
+        method: MethodInfo<'m>,
         generic_inst: GenericLookup,
     ) -> Result<(), TypeResolutionError> {
         let _gc = self.gc;
@@ -118,7 +118,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn entrypoint_frame(
         &mut self,
-        method: crate::MethodInfo<'m>,
+        method: MethodInfo<'m>,
         generic_inst: GenericLookup,
         args: Vec<StackValue<'gc>>,
     ) -> Result<(), TypeResolutionError> {

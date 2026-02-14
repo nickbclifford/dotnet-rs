@@ -38,36 +38,21 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         match origin {
             PointerOrigin::Stack(idx, base_offset) => {
                 let slot = self.evaluation_stack.get_slot_ref(idx);
-                if let StackValue::ValueType(obj) = slot {
-                    let total_offset = base_offset + offset;
-                    let mut data = obj.instance_storage.get_mut();
-                    if total_offset.as_usize() + layout.size().as_usize() > data.len() {
-                        return Err("Stack slot access out of bounds".to_string());
-                    }
-                    let ptr = unsafe { data.as_mut_ptr().add(total_offset.as_usize()) };
-                    let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                    return unsafe { memory.perform_write(ptr, None, value, layout) };
-                }
-                Err("Stack slot is not a value type".to_string())
+                let base_ptr = slot.data_location().as_ptr();
+                let total_offset = base_offset + offset;
+                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                unsafe { memory.perform_write(base_ptr.add(total_offset.as_usize()), None, value, layout) }
             }
             PointerOrigin::Static(static_type, lookup) => {
                 let storage = self.statics().get(static_type, &lookup);
-                let mut data = storage.storage.get_mut();
-                if offset.as_usize() + layout.size().as_usize() > data.len() {
-                    return Err("Static storage access out of bounds".to_string());
-                }
-                let ptr = unsafe { data.as_mut_ptr().add(offset.as_usize()) };
-                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                unsafe { memory.perform_write(ptr, None, value, layout) }
-            }
-            PointerOrigin::ValueType(obj) => {
-                let mut data = obj.instance_storage.get_mut();
-                if offset.as_usize() + layout.size().as_usize() > data.len() {
-                    return Err("Value type access out of bounds".to_string());
-                }
-                let ptr = unsafe { data.as_mut_ptr().add(offset.as_usize()) };
-                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                unsafe { memory.perform_write(ptr, None, value, layout) }
+                storage.storage.with_data_mut(|data| {
+                    if offset.as_usize() + layout.size().as_usize() > data.len() {
+                        return Err("Static storage access out of bounds".to_string());
+                    }
+                    let ptr = unsafe { data.as_mut_ptr().add(offset.as_usize()) };
+                    let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                    unsafe { memory.perform_write(ptr, None, value, layout) }
+                })
             }
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
@@ -94,6 +79,16 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe { memory.perform_write(ptr, None, value, layout) }
             }
+            PointerOrigin::Transient(obj) => {
+                obj.instance_storage.with_data_mut(|data: &mut [u8]| {
+                    if offset.as_usize() + layout.size().as_usize() > data.len() {
+                        return Err("Transient object access out of bounds".to_string());
+                    }
+                    let ptr = unsafe { data.as_mut_ptr().add(offset.as_usize()) };
+                    let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                    unsafe { memory.perform_write(ptr, None, value, layout) }
+                })
+            }
         }
     }
 
@@ -112,36 +107,21 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         match origin {
             PointerOrigin::Stack(idx, base_offset) => {
                 let slot = self.evaluation_stack.get_slot_ref(idx);
-                if let StackValue::ValueType(obj) = slot {
-                    let total_offset = base_offset + offset;
-                    let data = obj.instance_storage.get();
-                    if total_offset.as_usize() + layout.size().as_usize() > data.len() {
-                        return Err("Stack slot access out of bounds".to_string());
-                    }
-                    let ptr = unsafe { data.as_ptr().add(total_offset.as_usize()) };
-                    let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                    return unsafe { memory.perform_read(self.gc, ptr, None, layout, type_desc) };
-                }
-                Err("Stack slot is not a value type".to_string())
+                let base_ptr = slot.data_location().as_ptr();
+                let total_offset = base_offset + offset;
+                let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                unsafe { memory.perform_read(self.gc, base_ptr.add(total_offset.as_usize()), None, layout, type_desc) }
             }
             PointerOrigin::Static(static_type, lookup) => {
                 let storage = self.statics().get(static_type, &lookup);
-                let data = storage.storage.get();
-                if offset.as_usize() + layout.size().as_usize() > data.len() {
-                    return Err("Static storage access out of bounds".to_string());
-                }
-                let ptr = unsafe { data.as_ptr().add(offset.as_usize()) };
-                let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                unsafe { memory.perform_read(self.gc, ptr, None, layout, type_desc) }
-            }
-            PointerOrigin::ValueType(obj) => {
-                let data = obj.instance_storage.get();
-                if offset.as_usize() + layout.size().as_usize() > data.len() {
-                    return Err("Value type access out of bounds".to_string());
-                }
-                let ptr = unsafe { data.as_ptr().add(offset.as_usize()) };
-                let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                unsafe { memory.perform_read(self.gc, ptr, None, layout, type_desc) }
+                storage.storage.with_data(|data| {
+                    if offset.as_usize() + layout.size().as_usize() > data.len() {
+                        return Err("Static storage access out of bounds".to_string());
+                    }
+                    let ptr = unsafe { data.as_ptr().add(offset.as_usize()) };
+                    let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                    unsafe { memory.perform_read(self.gc, ptr, None, layout, type_desc) }
+                })
             }
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
@@ -168,6 +148,16 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe { memory.perform_read(self.gc, ptr, None, layout, type_desc) }
             }
+            PointerOrigin::Transient(obj) => {
+                obj.instance_storage.with_data(|data: &[u8]| {
+                    if offset.as_usize() + layout.size().as_usize() > data.len() {
+                        return Err("Transient object access out of bounds".to_string());
+                    }
+                    let ptr = unsafe { data.as_ptr().add(offset.as_usize()) };
+                    let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                    unsafe { memory.perform_read(self.gc, ptr, None, layout, type_desc) }
+                })
+            }
         }
     }
 
@@ -181,31 +171,16 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         match origin {
             PointerOrigin::Stack(idx, base_offset) => {
                 let slot = self.evaluation_stack.get_slot_ref(idx);
-                if let StackValue::ValueType(obj) = slot {
-                    let total_offset = base_offset + offset;
-                    let mut obj_data = obj.instance_storage.get_mut();
-                    if total_offset.as_usize() + data.len() > obj_data.len() {
-                        return Err("Stack slot access out of bounds".to_string());
-                    }
-                    obj_data[total_offset.as_usize()..total_offset.as_usize() + data.len()]
-                        .copy_from_slice(data);
-                    return Ok(());
-                }
-                Err("Stack slot is not a value type".to_string())
+                let base_ptr = slot.data_location().as_ptr();
+                let total_offset = base_offset + offset;
+                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                unsafe { memory.write_bytes(self.gc, None, dotnet_utils::ByteOffset(base_ptr.add(total_offset.as_usize()) as usize), data) }
             }
             PointerOrigin::Static(type_desc, lookup) => {
                 let storage = self.statics().get(type_desc, &lookup);
                 let mut obj_data = storage.storage.get_mut();
                 if offset.as_usize() + data.len() > obj_data.len() {
                     return Err("Static storage access out of bounds".to_string());
-                }
-                obj_data[offset.as_usize()..offset.as_usize() + data.len()].copy_from_slice(data);
-                Ok(())
-            }
-            PointerOrigin::ValueType(obj) => {
-                let mut obj_data = obj.instance_storage.get_mut();
-                if offset.as_usize() + data.len() > obj_data.len() {
-                    return Err("Value type access out of bounds".to_string());
                 }
                 obj_data[offset.as_usize()..offset.as_usize() + data.len()].copy_from_slice(data);
                 Ok(())
@@ -234,6 +209,14 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 storage_slice[offset.as_usize()..offset.as_usize() + data.len()].copy_from_slice(data);
                 Ok(())
             }
+            PointerOrigin::Transient(obj) => {
+                let mut obj_data = obj.instance_storage.get_mut();
+                if offset.as_usize() + data.len() > obj_data.len() {
+                    return Err("Transient object access out of bounds".to_string());
+                }
+                obj_data[offset.as_usize()..offset.as_usize() + data.len()].copy_from_slice(data);
+                Ok(())
+            }
         }
     }
 
@@ -247,32 +230,16 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         match origin {
             PointerOrigin::Stack(idx, base_offset) => {
                 let slot = self.evaluation_stack.get_slot_ref(idx);
-                if let StackValue::ValueType(obj) = slot {
-                    let total_offset = base_offset + offset;
-                    let obj_data = obj.instance_storage.get();
-                    if total_offset.as_usize() + dest.len() > obj_data.len() {
-                        return Err("Stack slot access out of bounds".to_string());
-                    }
-                    dest.copy_from_slice(
-                        &obj_data[total_offset.as_usize()..total_offset.as_usize() + dest.len()],
-                    );
-                    return Ok(());
-                }
-                Err("Stack slot is not a value type".to_string())
+                let base_ptr = slot.data_location().as_ptr();
+                let total_offset = base_offset + offset;
+                let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                unsafe { memory.read_bytes(None, dotnet_utils::ByteOffset(base_ptr.add(total_offset.as_usize()) as usize), dest) }
             }
             PointerOrigin::Static(type_desc, lookup) => {
                 let storage = self.statics().get(type_desc, &lookup);
                 let obj_data = storage.storage.get();
                 if offset.as_usize() + dest.len() > obj_data.len() {
                     return Err("Static storage access out of bounds".to_string());
-                }
-                dest.copy_from_slice(&obj_data[offset.as_usize()..offset.as_usize() + dest.len()]);
-                Ok(())
-            }
-            PointerOrigin::ValueType(obj) => {
-                let obj_data = obj.instance_storage.get();
-                if offset.as_usize() + dest.len() > obj_data.len() {
-                    return Err("Value type access out of bounds".to_string());
                 }
                 dest.copy_from_slice(&obj_data[offset.as_usize()..offset.as_usize() + dest.len()]);
                 Ok(())
@@ -300,6 +267,16 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 }
                 dest.copy_from_slice(
                     &storage_slice[offset.as_usize()..offset.as_usize() + dest.len()],
+                );
+                Ok(())
+            }
+            PointerOrigin::Transient(obj) => {
+                let obj_data = obj.instance_storage.get();
+                if offset.as_usize() + dest.len() > obj_data.len() {
+                    return Err("Transient object access out of bounds".to_string());
+                }
+                dest.copy_from_slice(
+                    &obj_data[offset.as_usize()..offset.as_usize() + dest.len()],
                 );
                 Ok(())
             }
@@ -345,13 +322,69 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                     )
                 }
             }
-            _ => {
-                // Atomic operations on stack slots or local value types are not supported (they are not shared between threads)
+            PointerOrigin::Stack(idx, base_offset) => {
+                let slot = self.evaluation_stack.get_slot_ref(idx);
+                let base_ptr = slot.data_location().as_ptr();
+                let abs_ptr = unsafe { base_ptr.add((base_offset + offset).as_usize()) };
+                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                unsafe {
+                    memory.compare_exchange_atomic(
+                        self.gc,
+                        None,
+                        dotnet_utils::ByteOffset(abs_ptr as usize),
+                        expected,
+                        new,
+                        size,
+                        success,
+                        failure,
+                    )
+                }
+            }
+            PointerOrigin::Transient(obj) => {
+                obj.instance_storage.with_data(|data| {
+                    let base_ptr = data.as_ptr();
+                    let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
+                    let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                    unsafe {
+                        memory.compare_exchange_atomic(
+                            self.gc,
+                            None,
+                            dotnet_utils::ByteOffset(abs_ptr as usize),
+                            expected,
+                            new,
+                            size,
+                            success,
+                            failure,
+                        )
+                    }
+                })
+            }
+            PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.compare_exchange_atomic(
                         self.gc, None, offset, expected, new, size, success, failure,
+                    )
+                }
+            }
+            #[cfg(feature = "multithreaded-gc")]
+            PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
+                let lock = unsafe { ptr.0.as_ref() };
+                let guard = lock.borrow();
+                let base_ptr = unsafe { guard.storage.raw_data_ptr() };
+                let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
+                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                unsafe {
+                    memory.compare_exchange_atomic(
+                        self.gc,
+                        None,
+                        dotnet_utils::ByteOffset(abs_ptr as usize),
+                        expected,
+                        new,
+                        size,
+                        success,
+                        failure,
                     )
                 }
             }
@@ -389,10 +422,61 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                     )
                 }
             }
-            _ => {
+            PointerOrigin::Stack(idx, base_offset) => {
+                let slot = self.evaluation_stack.get_slot_ref(idx);
+                let base_ptr = slot.data_location().as_ptr();
+                let abs_ptr = unsafe { base_ptr.add((base_offset + offset).as_usize()) };
+                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                unsafe {
+                    memory.exchange_atomic(
+                        self.gc,
+                        None,
+                        dotnet_utils::ByteOffset(abs_ptr as usize),
+                        value,
+                        size,
+                        ordering,
+                    )
+                }
+            }
+            PointerOrigin::Transient(obj) => {
+                obj.instance_storage.with_data(|data| {
+                    let base_ptr = data.as_ptr();
+                    let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
+                    let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                    unsafe {
+                        memory.exchange_atomic(
+                            self.gc,
+                            None,
+                            dotnet_utils::ByteOffset(abs_ptr as usize),
+                            value,
+                            size,
+                            ordering,
+                        )
+                    }
+                })
+            }
+            PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe { memory.exchange_atomic(self.gc, None, offset, value, size, ordering) }
+            }
+            #[cfg(feature = "multithreaded-gc")]
+            PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
+                let lock = unsafe { ptr.0.as_ref() };
+                let guard = lock.borrow();
+                let base_ptr = unsafe { guard.storage.raw_data_ptr() };
+                let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
+                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                unsafe {
+                    memory.exchange_atomic(
+                        self.gc,
+                        None,
+                        dotnet_utils::ByteOffset(abs_ptr as usize),
+                        value,
+                        size,
+                        ordering,
+                    )
+                }
             }
         }
     }
@@ -425,10 +509,55 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                     )
                 }
             }
-            _ => {
+            PointerOrigin::Stack(idx, base_offset) => {
+                let slot = self.evaluation_stack.get_slot_ref(idx);
+                let base_ptr = slot.data_location().as_ptr();
+                let abs_ptr = unsafe { base_ptr.add((base_offset + offset).as_usize()) };
+                let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                unsafe {
+                    memory.load_atomic(
+                        None,
+                        dotnet_utils::ByteOffset(abs_ptr as usize),
+                        size,
+                        ordering,
+                    )
+                }
+            }
+            PointerOrigin::Transient(obj) => {
+                obj.instance_storage.with_data(|data| {
+                    let base_ptr = data.as_ptr();
+                    let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
+                    let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                    unsafe {
+                        memory.load_atomic(
+                            None,
+                            dotnet_utils::ByteOffset(abs_ptr as usize),
+                            size,
+                            ordering,
+                        )
+                    }
+                })
+            }
+            PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
                 let memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe { memory.load_atomic(None, offset, size, ordering) }
+            }
+            #[cfg(feature = "multithreaded-gc")]
+            PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
+                let lock = unsafe { ptr.0.as_ref() };
+                let guard = lock.borrow();
+                let base_ptr = unsafe { guard.storage.raw_data_ptr() };
+                let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
+                let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                unsafe {
+                    memory.load_atomic(
+                        None,
+                        dotnet_utils::ByteOffset(abs_ptr as usize),
+                        size,
+                        ordering,
+                    )
+                }
             }
         }
     }
@@ -464,10 +593,61 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                     )
                 }
             }
-            _ => {
+            PointerOrigin::Stack(idx, base_offset) => {
+                let slot = self.evaluation_stack.get_slot_ref(idx);
+                let base_ptr = slot.data_location().as_ptr();
+                let abs_ptr = unsafe { base_ptr.add((base_offset + offset).as_usize()) };
+                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                unsafe {
+                    memory.store_atomic(
+                        self.gc,
+                        None,
+                        dotnet_utils::ByteOffset(abs_ptr as usize),
+                        value,
+                        size,
+                        ordering,
+                    )
+                }
+            }
+            PointerOrigin::Transient(obj) => {
+                obj.instance_storage.with_data(|data| {
+                    let base_ptr = data.as_ptr();
+                    let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
+                    let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                    unsafe {
+                        memory.store_atomic(
+                            self.gc,
+                            None,
+                            dotnet_utils::ByteOffset(abs_ptr as usize),
+                            value,
+                            size,
+                            ordering,
+                        )
+                    }
+                })
+            }
+            PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe { memory.store_atomic(self.gc, None, offset, value, size, ordering) }
+            }
+            #[cfg(feature = "multithreaded-gc")]
+            PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
+                let lock = unsafe { ptr.0.as_ref() };
+                let guard = lock.borrow();
+                let base_ptr = unsafe { guard.storage.raw_data_ptr() };
+                let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
+                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                unsafe {
+                    memory.store_atomic(
+                        self.gc,
+                        None,
+                        dotnet_utils::ByteOffset(abs_ptr as usize),
+                        value,
+                        size,
+                        ordering,
+                    )
+                }
             }
         }
     }

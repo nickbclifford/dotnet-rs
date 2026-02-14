@@ -6,7 +6,6 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
 };
 use dotnetdll::prelude::*;
-use std::{mem::align_of, ptr};
 
 #[dotnet_instruction(Call { param0 })]
 pub fn call<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
@@ -159,7 +158,7 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             let boxed = ObjectRef::new(
                 ctx.gc(),
                 HeapStorage::Boxed(vm_try!(
-                    ctx.new_value_type(&constraint_type_source, value.into_stack(ctx.gc()))
+                    ctx.new_value_type(&constraint_type_source, value.into_stack())
                 )),
             );
             ctx.register_new_object(&boxed);

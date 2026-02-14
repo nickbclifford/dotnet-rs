@@ -1,13 +1,32 @@
-use crate::object::{ObjectRef, ObjectPtr};
+use crate::object::ObjectRef;
+#[cfg(feature = "multithreaded-gc")]
+use crate::object::ObjectPtr;
+#[cfg(feature = "multithreaded-gc")]
 use crate::ArenaId;
 use dotnet_types::TypeDescription;
+use dotnet_types::generics::GenericLookup;
 use gc_arena::{Collect, Collection, Mutation, unsafe_empty_collect};
+use std::sync::{Arc, OnceLock};
+use dashmap::DashMap;
+use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use std::{
-    cmp::Ordering,
+    cmp::Ordering as CmpOrdering,
     collections::HashSet,
     fmt::{self, Debug, Formatter},
     ptr::NonNull,
 };
+
+pub struct StaticMetadata {
+    pub type_desc: TypeDescription,
+    pub generics: GenericLookup,
+}
+
+fn static_registry() -> &'static DashMap<u32, Arc<StaticMetadata>> {
+    static REGISTRY: OnceLock<DashMap<u32, Arc<StaticMetadata>>> = OnceLock::new();
+    REGISTRY.get_or_init(DashMap::new)
+}
+
+static NEXT_STATIC_ID: AtomicU32 = AtomicU32::new(1);
 
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 pub struct UnmanagedPtr(pub NonNull<u8>);
@@ -17,11 +36,12 @@ unsafe_empty_collect!(UnmanagedPtr);
 pub enum PointerOrigin<'gc> {
     Heap(ObjectRef<'gc>),
     Stack(crate::StackSlotIndex, crate::ByteOffset),
-    Static(dotnet_types::TypeDescription, dotnet_types::generics::GenericLookup),
-    ValueType(crate::Object<'gc>),
+    Static(TypeDescription, GenericLookup),
     Unmanaged,
     #[cfg(feature = "multithreaded-gc")]
     CrossArenaObjectRef(ObjectPtr, ArenaId),
+    /// A value type resident on the evaluation stack (transient).
+    Transient(crate::object::Object<'gc>),
 }
 
 // SAFETY: PointerOrigin contains several variants that hold GC-managed references.
@@ -31,11 +51,11 @@ unsafe impl<'gc> Collect for PointerOrigin<'gc> {
     fn trace(&self, cc: &Collection) {
         match self {
             Self::Heap(r) => r.trace(cc),
-            Self::ValueType(o) => o.trace(cc),
             #[cfg(feature = "multithreaded-gc")]
             Self::CrossArenaObjectRef(ptr, tid) => {
                 dotnet_utils::gc::record_cross_arena_ref(*tid, ptr.as_ptr() as usize);
             }
+            Self::Transient(obj) => obj.trace(cc),
             _ => {}
         }
     }
@@ -50,11 +70,11 @@ impl<'gc> PointerOrigin<'gc> {
     ) {
         match self {
             PointerOrigin::Heap(r) => r.resurrect(fc, visited, depth),
-            PointerOrigin::ValueType(o) => o.resurrect(fc, visited, depth),
             #[cfg(feature = "multithreaded-gc")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 dotnet_utils::gc::record_cross_arena_ref(*tid, ptr.as_ptr() as usize);
             }
+            PointerOrigin::Transient(obj) => obj.resurrect(fc, visited, depth),
             _ => {}
         }
     }
@@ -120,12 +140,12 @@ impl PartialEq for ManagedPtr<'_> {
 }
 
 impl PartialOrd for ManagedPtr<'_> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
         self.validate_magic();
         other.validate_magic();
         // This is a bit arbitrary but consistent
         match format!("{:?}", self.origin).partial_cmp(&format!("{:?}", other.origin)) {
-            Some(Ordering::Equal) => self.offset.partial_cmp(&other.offset),
+            Some(CmpOrdering::Equal) => self.offset.partial_cmp(&other.offset),
             ord => ord,
         }
     }
@@ -154,8 +174,8 @@ impl<'gc> ManagedPtr<'gc> {
     pub fn new_cross_arena(
         value: Option<NonNull<u8>>,
         inner_type: TypeDescription,
-        ptr: crate::object::ObjectPtr,
-        tid: crate::ArenaId,
+        ptr: ObjectPtr,
+        tid: ArenaId,
         offset: crate::ByteOffset,
     ) -> Self {
         Self {
@@ -164,6 +184,24 @@ impl<'gc> ManagedPtr<'gc> {
             _value: value,
             inner_type,
             origin: PointerOrigin::CrossArenaObjectRef(ptr, tid),
+            offset,
+            pinned: false,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    pub fn new_transient(
+        value: Option<NonNull<u8>>,
+        inner_type: TypeDescription,
+        obj: crate::object::Object<'gc>,
+        offset: crate::ByteOffset,
+    ) -> Self {
+        Self {
+            #[cfg(any(feature = "memory-validation", debug_assertions))]
+            magic: MANAGED_PTR_MAGIC,
+            _value: value,
+            inner_type,
+            origin: PointerOrigin::Transient(obj),
             offset,
             pinned: false,
             _marker: std::marker::PhantomData,
@@ -197,23 +235,6 @@ impl<'gc> ManagedPtr<'gc> {
         }
     }
 
-    pub fn new_value_type(
-        value: Option<NonNull<u8>>,
-        inner_type: TypeDescription,
-        object: crate::Object<'gc>,
-        offset: crate::ByteOffset,
-    ) -> Self {
-        Self {
-            #[cfg(any(feature = "memory-validation", debug_assertions))]
-            magic: MANAGED_PTR_MAGIC,
-            _value: value,
-            inner_type,
-            origin: PointerOrigin::ValueType(object),
-            offset,
-            pinned: false,
-            _marker: std::marker::PhantomData,
-        }
-    }
 
     pub fn from_info(info: ManagedPtrInfo<'gc>, inner_type: TypeDescription) -> Self {
         Self {
@@ -331,12 +352,27 @@ impl<'gc> ManagedPtr<'gc> {
                     }
                 }
                 7 => {
-                    // Unmanaged or Static (metadata lost)
+                    // Static with metadata (if ID > 0) or Unmanaged
+                    let id = ((word0 >> 3) & 0xFFFFFFFF) as u32;
+                    let slot_offset = word0 >> 35;
                     let raw_ptr = NonNull::new(word1 as *mut u8);
-                    ManagedPtrInfo {
-                        address: raw_ptr,
-                        origin: PointerOrigin::Unmanaged,
-                        offset: crate::ByteOffset::ZERO,
+
+                    if id > 0 && let Some(meta) = static_registry().get(&id) {
+                        ManagedPtrInfo {
+                            address: raw_ptr,
+                            origin: PointerOrigin::Static(
+                                meta.type_desc,
+                                meta.generics.clone(),
+                            ),
+                            offset: crate::ByteOffset(slot_offset),
+                        }
+                    } else {
+                        // Unmanaged or Static (metadata lost)
+                        ManagedPtrInfo {
+                            address: raw_ptr,
+                            origin: PointerOrigin::Unmanaged,
+                            offset: crate::ByteOffset::ZERO,
+                        }
                     }
                 }
                 _ => {
@@ -401,23 +437,33 @@ impl<'gc> ManagedPtr<'gc> {
                 dest[0..ptr_size].copy_from_slice(&word0.to_ne_bytes());
                 dest[ptr_size..ptr_size * 2].copy_from_slice(&word1.to_ne_bytes());
             }
-            PointerOrigin::ValueType(_) => {
-                // For ValueType, we currently fall back to unmanaged serialization
-                // as we cannot easily fit the full Object struct into word0.
-                let word0: usize = 3; // Tag 3 for ValueType (metadata lost)
-                let word1 = self._value.map_or(0, |p| p.as_ptr() as usize);
-                dest[0..ptr_size].copy_from_slice(&word0.to_ne_bytes());
-                dest[ptr_size..ptr_size * 2].copy_from_slice(&word1.to_ne_bytes());
-            }
             PointerOrigin::Heap(owner) => {
                 owner.write(&mut dest[0..ptr_size]);
                 let offset_bytes = self.offset.as_usize().to_ne_bytes();
                 dest[ptr_size..ptr_size * 2].copy_from_slice(&offset_bytes);
             }
-            PointerOrigin::Static(_, _) | PointerOrigin::Unmanaged => {
-                // For static/unmanaged, we write 0 to word0 and the absolute pointer to word1
-                // This allows read_unchecked to recover it as Unmanaged.
-                let word0: usize = 0;
+            PointerOrigin::Static(type_desc, generics) => {
+                // Register metadata to get an ID
+                // TODO: Optimization to avoid duplicate registrations for the same type/generics
+                let id = NEXT_STATIC_ID.fetch_add(1, AtomicOrdering::SeqCst);
+                static_registry().insert(
+                    id,
+                    Arc::new(StaticMetadata {
+                        type_desc: *type_desc,
+                        generics: generics.clone(),
+                    }),
+                );
+
+                let word0: usize = 7
+                    | ((id as usize & 0xFFFFFFFF) << 3)
+                    | (self.offset.as_usize() << 35);
+                let word1 = self._value.map_or(0, |p| p.as_ptr() as usize);
+                dest[0..ptr_size].copy_from_slice(&word0.to_ne_bytes());
+                dest[ptr_size..ptr_size * 2].copy_from_slice(&word1.to_ne_bytes());
+            }
+            PointerOrigin::Unmanaged => {
+                // For unmanaged, we write 7 to word0 (tag 7, id 0) and the absolute pointer to word1
+                let word0: usize = 7;
                 let word1 = self._value.map_or(0, |p| p.as_ptr() as usize);
                 dest[0..ptr_size].copy_from_slice(&word0.to_ne_bytes());
                 dest[ptr_size..ptr_size * 2].copy_from_slice(&word1.to_ne_bytes());
@@ -427,6 +473,15 @@ impl<'gc> ManagedPtr<'gc> {
                 // For cross-arena, treat as unmanaged for now when serializing to memory.
                 let word0: usize = 0;
                 let word1 = ptr.as_ptr() as usize + self.offset.as_usize();
+                dest[0..ptr_size].copy_from_slice(&word0.to_ne_bytes());
+                dest[ptr_size..ptr_size * 2].copy_from_slice(&word1.to_ne_bytes());
+            }
+            PointerOrigin::Transient(_) => {
+                // Transient objects cannot be easily serialized to memory as they don't have a stable address.
+                // We treat them as unmanaged and hope the caller isn't doing anything too crazy.
+                // In practice, ManagedPtrs to transient stack values should not be stored in heap memory.
+                let word0: usize = 0;
+                let word1 = self._value.map_or(0, |p| p.as_ptr() as usize);
                 dest[0..ptr_size].copy_from_slice(&word0.to_ne_bytes());
                 dest[ptr_size..ptr_size * 2].copy_from_slice(&word1.to_ne_bytes());
             }
@@ -467,6 +522,13 @@ impl<'gc> ManagedPtr<'gc> {
             let available = slice.len().saturating_sub(offset);
             let to_access = std::cmp::min(size, available);
             f(&slice[offset..offset + to_access])
+        } else if let PointerOrigin::Transient(obj) = &self.origin {
+            obj.with_data(|data| {
+                let offset = self.offset.as_usize();
+                let available = data.len().saturating_sub(offset);
+                let to_access = std::cmp::min(size, available);
+                f(&data[offset..offset + to_access])
+            })
         } else {
             // SAFETY: Caller must ensure the pointer is valid.
             // Inline pointer resolution to avoid calling deprecated pointer()
@@ -496,7 +558,7 @@ impl<'gc> ManagedPtr<'gc> {
         value: Option<NonNull<u8>>,
         inner_type: TypeDescription,
         type_desc: TypeDescription,
-        generics: dotnet_types::generics::GenericLookup,
+        generics: GenericLookup,
         pinned: bool,
         offset: crate::ByteOffset,
     ) -> Self {
@@ -517,9 +579,18 @@ impl<'gc> ManagedPtr<'gc> {
         transform: impl FnOnce(Option<NonNull<u8>>) -> Option<NonNull<u8>>,
     ) -> Self {
         self.validate_magic();
-        // Inline pointer resolution to avoid calling deprecated pointer()
-        #[allow(deprecated)]
-        let old_ptr = self.pointer();
+        let old_ptr = if let Some(owner) = self.owner() {
+            owner.0.and_then(|h| {
+                let base_ptr = unsafe { h.borrow().storage.raw_data_ptr() };
+                if base_ptr.is_null() {
+                    None
+                } else {
+                    NonNull::new(base_ptr.wrapping_add(self.offset.as_usize()))
+                }
+            })
+        } else {
+            self._value
+        };
         let new_value = transform(old_ptr);
         let mut m = self.clone();
         m._value = new_value;
@@ -594,7 +665,11 @@ impl<'gc> ManagedPtr<'gc> {
     /// A null pointer has no owner, no stack origin, and zero offset.
     pub fn is_null(&self) -> bool {
         self.validate_magic();
-        matches!(self.origin, PointerOrigin::Unmanaged) && self.offset == crate::ByteOffset::ZERO
+        match &self.origin {
+            PointerOrigin::Unmanaged => self.offset == crate::ByteOffset::ZERO,
+            PointerOrigin::Heap(o) => o.0.is_none(),
+            _ => false,
+        }
     }
 }
 
@@ -633,7 +708,7 @@ mod tests {
         let arena = Arena::<TestRoot>::new(|_mc| ());
         #[cfg(feature = "multithreaded-gc")]
         let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(
-            dotnet_utils::ArenaId(0),
+            ArenaId(0),
         )));
 
         arena.mutate(|gc, _root| {
@@ -642,7 +717,7 @@ mod tests {
                 #[cfg(feature = "multithreaded-gc")]
                 arena_handle.as_inner(),
                 #[cfg(feature = "memory-validation")]
-                dotnet_utils::ArenaId(0),
+                ArenaId(0),
             );
 
             // Create a small object (4 bytes for Int32)
@@ -650,8 +725,8 @@ mod tests {
             let obj = ObjectRef::new(gc_handle, storage);
 
             let ptr = ManagedPtr::new(
-                obj.pointer(),
-                dotnet_types::TypeDescription::NULL,
+                obj.with_data(|d| NonNull::new(d.as_ptr() as *mut u8)),
+                TypeDescription::NULL,
                 Some(obj),
                 false,
                 Some(crate::ByteOffset(0)),
@@ -670,7 +745,7 @@ mod tests {
         let arena = Arena::<TestRoot>::new(|_mc| ());
         #[cfg(feature = "multithreaded-gc")]
         let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(
-            dotnet_utils::ArenaId(0),
+            ArenaId(0),
         )));
 
         arena.mutate(|gc, _root| {
@@ -679,15 +754,15 @@ mod tests {
                 #[cfg(feature = "multithreaded-gc")]
                 arena_handle.as_inner(),
                 #[cfg(feature = "memory-validation")]
-                dotnet_utils::ArenaId(0),
+                ArenaId(0),
             );
 
             let storage = HeapStorage::Boxed(ValueType::Int32(42));
             let obj = ObjectRef::new(gc_handle, storage);
 
             let ptr = ManagedPtr::new(
-                obj.pointer(),
-                dotnet_types::TypeDescription::NULL,
+                obj.with_data(|d| NonNull::new(d.as_ptr() as *mut u8)),
+                TypeDescription::NULL,
                 Some(obj),
                 false,
                 Some(crate::ByteOffset(0)),

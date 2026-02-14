@@ -495,7 +495,7 @@ mod tests {
             Ok(TypeDescription::from_raw(
                 ResolutionS::new(std::ptr::null()),
                 None,
-                unsafe { std::mem::transmute::<usize, dotnetdll::resolution::TypeIndex>(0usize) },
+                unsafe { std::mem::transmute::<usize, TypeIndex>(0usize) },
             ))
         }
         fn locate_type(
@@ -504,19 +504,19 @@ mod tests {
             _handle: UserType,
         ) -> Result<TypeDescription, TypeResolutionError> {
             Ok(TypeDescription::from_raw(res, None, unsafe {
-                std::mem::transmute::<usize, dotnetdll::resolution::TypeIndex>(0usize)
+                std::mem::transmute::<usize, TypeIndex>(0usize)
             }))
         }
         fn find_concrete_type(
             &self,
-            _ty: crate::generics::ConcreteType,
+            _ty: ConcreteType,
         ) -> Result<TypeDescription, TypeResolutionError> {
             Ok(TypeDescription::from_raw(
                 ResolutionS::new(std::ptr::null()),
                 None,
-                unsafe { std::mem::transmute::<usize, dotnetdll::resolution::TypeIndex>(0usize) },
+                unsafe { std::mem::transmute::<usize, TypeIndex>(0usize) },
             ))
-        }
+        } 
     }
 
     #[test]

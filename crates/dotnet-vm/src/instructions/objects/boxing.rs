@@ -64,7 +64,7 @@ pub fn unbox_any<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         let result = obj.as_heap_storage(|storage| {
             match storage {
                 HeapStorage::Boxed(v) => {
-                    dotnet_value::object::CTSValue::Value(v.clone()).into_stack(ctx.gc())
+                    dotnet_value::object::CTSValue::Value(v.clone()).into_stack()
                 }
                 HeapStorage::Obj(o) => {
                     // Boxed struct is just an Object of that struct type.

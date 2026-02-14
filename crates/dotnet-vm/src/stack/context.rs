@@ -373,12 +373,12 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn state(&self) -> &crate::MethodState<'m> {
+    fn state(&self) -> &MethodState<'m> {
         self.frame_stack.state()
     }
 
     #[inline]
-    fn state_mut(&mut self) -> &mut crate::MethodState<'m> {
+    fn state_mut(&mut self) -> &mut MethodState<'m> {
         self.frame_stack.state_mut()
     }
 

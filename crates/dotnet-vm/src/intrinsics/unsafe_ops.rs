@@ -178,7 +178,7 @@ pub fn intrinsic_unsafe_as_pointer<'gc, 'm: 'gc>(
 ) -> StepResult {
     let val = ctx.pop();
     let ptr = match val {
-        StackValue::ManagedPtr(m) => m.pointer().map_or(ptr::null_mut(), |p| p.as_ptr()),
+        StackValue::ManagedPtr(m) => unsafe { m.with_data(0, |data| data.as_ptr() as *mut u8) },
         StackValue::NativeInt(i) => i as *mut u8,
         StackValue::UnmanagedPtr(p) => p.0.as_ptr(),
         StackValue::ObjectRef(ObjectRef(None)) => ptr::null_mut(),
@@ -308,7 +308,7 @@ pub fn intrinsic_unsafe_as_generic<'gc, 'm: 'gc>(
         }
         StackValue::ObjectRef(o) => {
             ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
-                o.pointer(),
+                o.with_data(|d| NonNull::new(d.as_ptr() as *mut u8)),
                 target_type,
                 o.0.map(|_| o),
                 false,
@@ -365,7 +365,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
     let (ptr, pinned, origin, offset_base) = match val {
         StackValue::NativeInt(p) => (p as *mut u8, false, PointerOrigin::Unmanaged, None),
         StackValue::ManagedPtr(m) => (
-            m.pointer().expect("Unsafe.AsRef null managed ptr").as_ptr(),
+            unsafe { m.with_data(0, |data| data.as_ptr() as *mut u8) },
             m.pinned,
             m.origin.clone(),
             Some(m.offset),

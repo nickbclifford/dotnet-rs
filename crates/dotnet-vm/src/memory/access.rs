@@ -35,6 +35,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         if let Some(owner) = owner {
             owner.as_heap_storage(|_storage| {}); // Ensure object is valid and magic matches
 
+            // Get layout before locking to avoid deadlock
+            let dest_layout = self.get_layout_from_owner(owner);
+
             // SAFETY: with_data_mut ensures the lock is held for the duration of the closure.
             // perform_write will copy the data.
             owner.with_data_mut(gc, |data| {
@@ -47,7 +50,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 self.check_bounds_internal(ptr, base, len, layout.size().as_usize())?;
 
                 // 2. Integrity Check
-                self.check_integrity_internal(ptr, owner, base, layout)?;
+                self.check_integrity_internal_with_layout(ptr, dest_layout, base, layout)?;
 
                 // 3. Perform Write
                 unsafe { self.perform_write(ptr, Some(owner), value, layout) }
@@ -81,6 +84,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         if let Some(owner) = owner {
             owner.as_heap_storage(|_storage| {}); // Ensure object is valid and magic matches
 
+            // Get layout before locking to avoid deadlock
+            let src_layout = self.get_layout_from_owner(owner);
+
             // SAFETY: with_data ensures the lock is held for the duration of the closure.
             // perform_read will read the data.
             owner.with_data(|data| {
@@ -93,7 +99,6 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 self.check_bounds_internal(ptr as *mut u8, base, len, layout.size().as_usize())?;
 
                 // 2. Read Safety Check
-                let src_layout = self.get_layout_from_owner(owner);
                 if offset.0 != 0 || src_layout.is_some() {
                     check_read_safety(layout, src_layout.as_ref(), offset.0);
                 }
@@ -387,10 +392,10 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         Ok(())
     }
 
-    fn check_integrity_internal(
+    fn check_integrity_internal_with_layout(
         &self,
         ptr: *mut u8,
-        owner: ObjectRef<'gc>,
+        dest_layout: Option<LayoutManager>,
         base: *const u8,
         src_layout: &LayoutManager,
     ) -> Result<(), String> {
@@ -398,8 +403,6 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             let base_addr = base as usize;
             let ptr_addr = ptr as usize;
             let offset = ptr_addr.wrapping_sub(base_addr);
-
-            let dest_layout = self.get_layout_from_owner(owner);
 
             if let Some(dl) = dest_layout {
                 validate_ref_integrity(
@@ -496,32 +499,30 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             m.write(std::slice::from_raw_parts_mut(ptr, ManagedPtr::SIZE));
 
                             #[cfg(feature = "multithreaded-gc")]
-                            if let Some(owner) = _owner {
-                                if let Some(owner_handle) = owner.0 {
-                                    let owner_tid = (*owner_handle.as_ptr()).owner_id;
-                                    use dotnet_value::pointer::PointerOrigin;
-                                    match m.origin {
-                                        PointerOrigin::Heap(r) => {
-                                            if let Some(h) = r.0 {
-                                                let target_tid = (*h.as_ptr()).owner_id;
-                                                if target_tid != owner_tid {
-                                                    dotnet_utils::gc::record_cross_arena_ref(
-                                                        target_tid,
-                                                        h.as_ptr() as usize,
-                                                    );
-                                                }
-                                            }
-                                        }
-                                        PointerOrigin::CrossArenaObjectRef(p, target_tid) => {
+                            if let Some(owner_handle) = _owner.and_then(|o| o.0) {
+                                let owner_tid = (*owner_handle.as_ptr()).owner_id;
+                                use dotnet_value::pointer::PointerOrigin;
+                                match m.origin {
+                                    PointerOrigin::Heap(r) => {
+                                        if let Some(h) = r.0 {
+                                            let target_tid = (*h.as_ptr()).owner_id;
                                             if target_tid != owner_tid {
                                                 dotnet_utils::gc::record_cross_arena_ref(
                                                     target_tid,
-                                                    p.as_ptr() as usize,
+                                                    h.as_ptr() as usize,
                                                 );
                                             }
                                         }
-                                        _ => {}
                                     }
+                                    PointerOrigin::CrossArenaObjectRef(p, target_tid) => {
+                                        if target_tid != owner_tid {
+                                            dotnet_utils::gc::record_cross_arena_ref(
+                                                target_tid,
+                                                p.as_ptr() as usize,
+                                            );
+                                        }
+                                    }
+                                    _ => {}
                                 }
                             }
                         } else {
@@ -534,16 +535,16 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             ptr::write_unaligned(ptr as *mut *const (), val_ptr as *const ());
 
                             #[cfg(feature = "multithreaded-gc")]
-                            if let Some(owner) = _owner {
-                                if let (Some(owner_handle), Some(val_handle)) = (owner.0, r.0) {
-                                    let owner_tid = (*owner_handle.as_ptr()).owner_id;
-                                    let target_tid = (*val_handle.as_ptr()).owner_id;
-                                    if target_tid != owner_tid {
-                                        dotnet_utils::gc::record_cross_arena_ref(
-                                            target_tid,
-                                            val_handle.as_ptr() as usize,
-                                        );
-                                    }
+                            if let (Some(owner_handle), Some(val_handle)) =
+                                (_owner.and_then(|o| o.0), r.0)
+                            {
+                                let owner_tid = (*owner_handle.as_ptr()).owner_id;
+                                let target_tid = (*val_handle.as_ptr()).owner_id;
+                                if target_tid != owner_tid {
+                                    dotnet_utils::gc::record_cross_arena_ref(
+                                        target_tid,
+                                        val_handle.as_ptr() as usize,
+                                    );
                                 }
                             }
                         } else {

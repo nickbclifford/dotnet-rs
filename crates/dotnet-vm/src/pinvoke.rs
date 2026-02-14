@@ -2,7 +2,7 @@ use crate::{
     StepResult,
     context::ResolutionContext,
     layout::LayoutFactory,
-    resolution::{TypeResolutionExt, ValueResolution},
+    resolution::ValueResolution,
     stack::ops::VesOps,
     tracer::Tracer,
 };
@@ -216,7 +216,10 @@ fn layout_to_ffi(l: &LayoutManager) -> Type {
 
             Type::structure(fields.into_iter().map(|f| layout_to_ffi(&f.layout)))
         }
-        LayoutManager::Array(_) => todo!("marshalling not yet supported for arrays"),
+        LayoutManager::Array(a) => {
+            let elem_type = layout_to_ffi(&a.element_layout);
+            Type::structure(std::iter::repeat_n(elem_type, a.length))
+        }
         LayoutManager::Scalar(s) => match s {
             Scalar::Int8 => Type::i8(),
             Scalar::UInt8 => Type::u8(),
@@ -235,6 +238,8 @@ fn layout_to_ffi(l: &LayoutManager) -> Type {
 
 fn type_to_ffi(t: &ConcreteType, ctx: &ResolutionContext) -> Type {
     match t.get() {
+        BaseType::Boolean => Type::u8(),
+        BaseType::Char => Type::u16(),
         BaseType::Int8 => Type::i8(),
         BaseType::UInt8 => Type::u8(),
         BaseType::Int16 => Type::i16(),
@@ -266,8 +271,7 @@ fn type_to_ffi(t: &ConcreteType, ctx: &ResolutionContext) -> Type {
             value_kind: None | Some(ValueKind::Class),
             ..
         } => Type::pointer(),
-        BaseType::Array { .. } | BaseType::Vector { .. } | BaseType::String => Type::pointer(),
-        rest => todo!("marshalling not yet supported for {:?}", rest),
+        BaseType::Array { .. } | BaseType::Vector { .. } | BaseType::String | BaseType::Object => Type::pointer(),
     }
 }
 
@@ -284,7 +288,8 @@ fn param_to_type(
 
 enum WriteBackSource<'gc> {
     Managed(PointerOrigin<'gc>, ByteOffset),
-    Raw(std::ptr::NonNull<u8>),
+    #[allow(dead_code)]
+    Raw(NonNull<u8>),
 }
 
 enum TempBuffer {
@@ -512,7 +517,7 @@ pub fn external_call<'gc, 'm: 'gc>(
                     temp_buffers[idx].as_ptr() as *const *mut u8 as *mut *mut u8 as *mut c_void;
             }
             StackValue::ValueType(o) => {
-                let mut data = o.with_data(|d| d.to_vec());
+                let mut data = o.with_data(|d: &[u8]| d.to_vec());
                 if data.len() < ffi_size {
                     data.resize(ffi_size, 0);
                 }
@@ -541,10 +546,13 @@ pub fn external_call<'gc, 'm: 'gc>(
                     temp_buffers[idx].as_ptr() as *const *mut u8 as *mut *mut u8 as *mut c_void;
             }
             StackValue::TypedRef(p, t) => {
+                if let Some(owner) = p.owner() {
+                    ctx.pin_object(owner);
+                    pinned_objects.push(owner);
+                }
                 let mut bytes = vec![0u8; 16];
-                let addr = {
-                    #[allow(deprecated)]
-                    p.pointer().map_or(0, |ptr| ptr.as_ptr() as usize)
+                let addr = unsafe {
+                    p.with_data(0, |data| data.as_ptr() as usize)
                 };
                 let type_ptr = Arc::as_ptr(t) as usize;
                 bytes[0..8].copy_from_slice(&addr.to_ne_bytes());
@@ -595,7 +603,9 @@ pub fn external_call<'gc, 'm: 'gc>(
                         pinned_objects.push(owner);
                     }
                     
-                    let ptr = p.pointer().map(|p| p.as_ptr()).unwrap_or(std::ptr::null_mut());
+                    let ptr = unsafe {
+                        p.with_data(0, |data| data.as_ptr() as *mut u8)
+                    };
                     
                     temp_buffers.push(TempBuffer::Ptr(Box::new(ptr)));
                     let idx = temp_buffers.len() - 1;
@@ -689,6 +699,8 @@ pub fn external_call<'gc, 'm: 'gc>(
                     let res_ctx = ctx.current_context();
                     let t = vm_try!(res_ctx.make_concrete(t));
                     let v = match t.get() {
+                        BaseType::Boolean => read_into_i32!(u8),
+                        BaseType::Char => read_into_i32!(u16),
                         BaseType::Int8 => read_into_i32!(i8),
                         BaseType::UInt8 => read_into_i32!(u8),
                         BaseType::Int16 => read_into_i32!(i16),
@@ -704,7 +716,10 @@ pub fn external_call<'gc, 'm: 'gc>(
                         BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
                             StackValue::unmanaged_ptr(read_return!(*mut u8))
                         }
-                        BaseType::Type { source, .. } => {
+                        BaseType::Type {
+                            value_kind: Some(ValueKind::ValueType),
+                            source,
+                        } => {
                             let (ut, type_generics) = decompose_type_source::<ConcreteType>(source);
                             let new_lookup = GenericLookup::new(type_generics);
                             let new_ctx = res_ctx.with_generics(&new_lookup);
@@ -761,7 +776,6 @@ pub fn external_call<'gc, 'm: 'gc>(
                                     );
                                 }
                             }
-                            let is_val = td.is_value_type(&res_ctx).unwrap_or(false);
                             do_write_back(ctx);
                             vm_trace_interop!(
                                 ctx,
@@ -771,16 +785,13 @@ pub fn external_call<'gc, 'm: 'gc>(
                                 function
                             );
 
-                            if is_val {
-                                StackValue::ValueType(instance)
-                            } else {
-                                StackValue::ObjectRef(ObjectRef::new(
-                                    ctx.gc(),
-                                    HeapStorage::Obj(instance),
-                                ))
-                            }
+                            StackValue::ValueType(instance)
                         }
-                        _ => todo!("marshalling return type {:?}", t),
+                        BaseType::Type { .. }
+                        | BaseType::Array { .. }
+                        | BaseType::Vector { .. }
+                        | BaseType::Object
+                        | BaseType::String => StackValue::unmanaged_ptr(read_return!(*mut u8)),
                     };
                     vm_trace!(ctx, "-- returning {v:?} --");
                     let _ = ctx.pop_multiple(arg_count);
@@ -832,9 +843,9 @@ pub fn external_call<'gc, 'm: 'gc>(
                         panic!("null type handle in returned TypedReference");
                     }
                     let type_desc = unsafe {
-                        let arc = std::sync::Arc::from_raw(type_ptr);
+                        let arc = Arc::from_raw(type_ptr);
                         let clone = arc.clone();
-                        let _ = std::sync::Arc::into_raw(arc);
+                        let _ = Arc::into_raw(arc);
                         clone
                     };
                     let m = ManagedPtr::new(

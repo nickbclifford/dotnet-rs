@@ -84,7 +84,7 @@ impl MethodInfo<'static> {
         method: MethodDescription,
         generics: &GenericLookup,
         shared: Arc<SharedGlobalState>,
-    ) -> Result<Self, dotnet_types::error::TypeResolutionError> {
+    ) -> Result<Self, error::TypeResolutionError> {
         let loader = shared.loader;
         let ctx = ResolutionContext::for_method(
             method,

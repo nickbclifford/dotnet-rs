@@ -41,7 +41,10 @@ pub(crate) fn get_ptr_info<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
             PointerOrigin::Unmanaged,
             dotnet_utils::ByteOffset(*p as usize),
         ),
-        StackValue::ValueType(v) => (PointerOrigin::ValueType(v.clone()), dotnet_utils::ByteOffset(0)),
+        StackValue::ValueType(obj) => (
+            PointerOrigin::Transient(obj.clone()),
+            dotnet_utils::ByteOffset(0),
+        ),
         _ => panic!("Invalid parent for field/element access: {:?}", val),
     }
 }
@@ -196,12 +199,12 @@ pub fn ldobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType) -
     let layout = vm_try!(type_layout(load_type.clone(), &res_ctx));
 
     let mut source_vec = vec![0u8; layout.size().as_usize()];
-    if let Err(_e) = unsafe { ctx.read_bytes(origin, offset, &mut source_vec) } {
+    if let Err(_e) = unsafe { ctx.read_bytes(origin.clone(), offset, &mut source_vec) } {
         return ctx.throw_by_name("System.AccessViolationException");
     }
 
     let value =
-        vm_try!(res_ctx.read_cts_value(&load_type, &source_vec, ctx.gc())).into_stack(ctx.gc());
+        vm_try!(res_ctx.read_cts_value(&load_type, &source_vec, ctx.gc())).into_stack();
 
     ctx.push(value);
     StepResult::Continue

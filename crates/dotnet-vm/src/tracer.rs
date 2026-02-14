@@ -48,7 +48,7 @@ impl Tracer {
         let enabled = tracing::enabled!(Level::ERROR);
         if !enabled {
             // Fallback: if DOTNET_RS_TRACE is set, we probably want it enabled
-            if std::env::var("DOTNET_RS_TRACE").is_ok() {
+            if env::var("DOTNET_RS_TRACE").is_ok() {
                 return true;
             }
         }

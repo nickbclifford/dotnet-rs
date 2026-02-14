@@ -1,5 +1,5 @@
 use dotnet_assemblies::error::AssemblyLoadError;
-use dotnet_types::error::TypeResolutionError;
+pub use dotnet_types::error::TypeResolutionError;
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone, PartialEq)]

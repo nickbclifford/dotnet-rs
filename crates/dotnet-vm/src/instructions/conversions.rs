@@ -67,9 +67,8 @@ pub fn conv<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
                 StackValue::NativeInt(i) => i as usize as u64,
                 StackValue::UnmanagedPtr(UnmanagedPtr(p)) => (p.as_ptr() as usize) as u64,
                 StackValue::ManagedPtr(m) => {
-                    #[allow(deprecated)]
-                    {
-                        m.pointer().map_or(0, |ptr| ptr.as_ptr() as usize) as u64
+                    unsafe {
+                        m.with_data(0, |data| data.as_ptr() as usize) as u64
                     }
                 }
                 StackValue::NativeFloat(f) => f as u64,
@@ -88,9 +87,8 @@ pub fn conv<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
                 StackValue::NativeInt(i) => i as usize,
                 StackValue::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr() as usize,
                 StackValue::ManagedPtr(m) => {
-                    #[allow(deprecated)]
-                    {
-                        m.pointer().map_or(0, |ptr| ptr.as_ptr() as usize)
+                    unsafe {
+                        m.with_data(0, |data| data.as_ptr() as usize)
                     }
                 }
                 StackValue::NativeFloat(f) => f as usize,

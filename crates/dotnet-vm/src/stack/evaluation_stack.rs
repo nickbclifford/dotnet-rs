@@ -52,7 +52,7 @@ impl<'gc> EvaluationStack<'gc> {
             StackValue::ValueType(obj) => {
                 let layout = obj.instance_storage.layout().clone();
                 let mut data = obj.instance_storage.get_mut();
-                layout.visit_managed_ptrs(dotnet_utils::ByteOffset(0), &mut |offset| {
+                layout.visit_managed_ptrs(dotnet_utils::ByteOffset(0), &mut |offset: dotnet_utils::ByteOffset| {
                     if offset.as_usize() + 16 <= data.len() {
                         let offset_val = offset.as_usize();
                         let slice = &mut data[offset_val..offset_val + 16];

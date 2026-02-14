@@ -184,7 +184,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                                     panic!("Expected boxed value for parameter {}", i)
                                 }
                             });
-                            args.push(dotnet_value::object::CTSValue::Value(val).into_stack(gc));
+                            args.push(dotnet_value::object::CTSValue::Value(val).into_stack());
                         }
                     } else {
                         args.push(StackValue::ObjectRef(arg_obj));
@@ -285,7 +285,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                                     panic!("Expected boxed value for parameter {}", i)
                                 }
                             });
-                            args.push(dotnet_value::object::CTSValue::Value(val).into_stack(gc));
+                            args.push(dotnet_value::object::CTSValue::Value(val).into_stack());
                         }
                     } else {
                         args.push(StackValue::ObjectRef(arg_obj));

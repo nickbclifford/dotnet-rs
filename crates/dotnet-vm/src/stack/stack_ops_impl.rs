@@ -96,7 +96,7 @@ impl<'a, 'gc, 'm: 'gc> LocalOps<'gc> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn set_local(&mut self, index: crate::LocalIndex, value: StackValue<'gc>) {
         #[cfg(feature = "multithreaded-gc")]
-        if matches!(value, StackValue::ValueType(_)) {
+        if matches!(value, StackValue::ValueType(..)) {
             self.gc.record_allocation(value.size_bytes());
         }
         let bp = self.frame_stack.current_frame().base;
@@ -138,7 +138,7 @@ impl<'a, 'gc, 'm: 'gc> ArgumentOps<'gc> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn set_argument(&mut self, index: crate::ArgumentIndex, value: StackValue<'gc>) {
         #[cfg(feature = "multithreaded-gc")]
-        if matches!(value, StackValue::ValueType(_)) {
+        if matches!(value, StackValue::ValueType(..)) {
             self.gc.record_allocation(value.size_bytes());
         }
         let bp = self.frame_stack.current_frame().base;
@@ -177,7 +177,7 @@ impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn set_slot(&mut self, index: crate::StackSlotIndex, value: StackValue<'gc>) {
         #[cfg(feature = "multithreaded-gc")]
-        if matches!(value, StackValue::ValueType(_)) {
+        if matches!(value, StackValue::ValueType(..)) {
             self.gc.record_allocation(value.size_bytes());
         }
         self.evaluation_stack.set_slot(index, value)

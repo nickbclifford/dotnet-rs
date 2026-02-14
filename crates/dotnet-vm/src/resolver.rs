@@ -780,7 +780,7 @@ impl<'m> ResolverService<'m> {
                     let StackValue::TypedRef(p, t) = data else {
                         panic!("expected TypedRef, got {:?}", data);
                     };
-                    return Ok(CTSValue::Value(ValueType::TypedRef(p, t)));
+                    return Ok(CTSValue::Value(TypedRef(p, t)));
                 }
 
                 if let StackValue::ValueType(mut o) = data {
@@ -934,7 +934,7 @@ impl<'m> ResolverService<'m> {
                         false,
                         Some(dotnet_utils::ByteOffset(0)),
                     );
-                    return Ok(CTSValue::Value(ValueType::TypedRef(m, type_desc)));
+                    return Ok(CTSValue::Value(TypedRef(m, type_desc)));
                 }
 
                 let instance = self.new_object(td, &new_ctx)?;
@@ -985,7 +985,9 @@ fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(data: StackVal
             .try_into()
             .unwrap_or_else(|_| panic!("failed to convert from pointer")),
         StackValue::ManagedPtr(p) => {
-            let ptr = p.pointer().map(|p| p.as_ptr()).unwrap_or(std::ptr::null_mut());
+            let ptr = unsafe {
+                p.with_data(0, |data| data.as_ptr() as *mut u8)
+            };
             (ptr as usize)
                 .try_into()
                 .unwrap_or_else(|_| panic!("failed to convert from pointer"))

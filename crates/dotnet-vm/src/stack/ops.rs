@@ -36,7 +36,6 @@ use dotnet_types::{
 use dotnet_utils::ByteOffset;
 use dotnet_value::{
     CLRString, StackValue,
-    layout::LayoutManager,
     object::{Object as ObjectInstance, ObjectHandle, ObjectRef},
     pointer::{ManagedPtr, PointerOrigin},
 };
@@ -76,7 +75,7 @@ pub trait TypedStackOps<'gc>: EvalStackOps<'gc> {
         t: TypeDescription,
         is_pinned: bool,
         owner: Option<ObjectRef<'gc>>,
-        offset: Option<dotnet_value::ByteOffset>,
+        offset: Option<ByteOffset>,
     ) {
         self.push(StackValue::managed_ptr_with_owner(
             ptr, t, owner, is_pinned, offset,

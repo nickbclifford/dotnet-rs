@@ -32,16 +32,16 @@ pub mod runtime;
 
 pub trait TypeResolver {
     fn corlib_type(&self, name: &str)
-    -> Result<TypeDescription, crate::error::TypeResolutionError>;
+    -> Result<TypeDescription, error::TypeResolutionError>;
     fn locate_type(
         &self,
         resolution: ResolutionS,
         handle: UserType,
-    ) -> Result<TypeDescription, crate::error::TypeResolutionError>;
+    ) -> Result<TypeDescription, error::TypeResolutionError>;
     fn find_concrete_type(
         &self,
-        ty: crate::generics::ConcreteType,
-    ) -> Result<TypeDescription, crate::error::TypeResolutionError>;
+        ty: generics::ConcreteType,
+    ) -> Result<TypeDescription, error::TypeResolutionError>;
 }
 
 #[repr(C)]
@@ -66,8 +66,8 @@ impl TypeDescription {
         resolution: ResolutionS::NULL,
         definition_ptr: None,
         index: unsafe {
-            std::mem::transmute::<[u8; std::mem::size_of::<TypeIndex>()], TypeIndex>(
-                [0u8; std::mem::size_of::<TypeIndex>()],
+            std::mem::transmute::<[u8; size_of::<TypeIndex>()], TypeIndex>(
+                [0u8; size_of::<TypeIndex>()],
             )
         },
     };

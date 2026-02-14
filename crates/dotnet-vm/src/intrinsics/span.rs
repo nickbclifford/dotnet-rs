@@ -208,7 +208,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
 
     let span = vm_try!(res_ctx_generic.new_object(span_type));
 
-    if let Some(h) = h_opt {
+    let _origin = if let Some(h) = h_opt {
         let element_type_desc = vm_try!(ctx.loader().find_concrete_type(element_type));
 
         let managed = ManagedPtr::new(
@@ -216,14 +216,17 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
             element_type_desc,
             Some(ObjectRef(Some(h))),
             false,
-            Some(dotnet_value::ByteOffset(offset)),
+            Some(dotnet_utils::ByteOffset(offset)),
         );
         managed.write(
             &mut span
                 .instance_storage
                 .get_field_mut_local(span_type, "_reference"),
         );
-    }
+        managed.origin
+    } else {
+        dotnet_value::pointer::PointerOrigin::Unmanaged
+    };
 
     span.instance_storage
         .get_field_mut_local(span_type, "_length")
@@ -348,7 +351,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
         ctx.resolve_runtime_type(obj_ref)
     };
 
-    let element_type: dotnet_types::generics::ConcreteType =
+    let element_type: ConcreteType =
         element_type_runtime.to_concrete(ctx.loader());
 
     let res_ctx = ctx.with_generics(generics);

@@ -63,7 +63,7 @@ pub fn ldfld<'gc, 'm: 'gc>(
             };
 
             if let Some(val) = intercepted {
-                ctx.push(val.into_stack(ctx.gc()));
+                ctx.push(val.into_stack());
                 return StepResult::Continue;
             }
         }
@@ -192,7 +192,7 @@ pub fn ldsfld<'gc, 'm: 'gc>(
         .get_field_atomic(field.parent, name, ordering);
     let value = vm_try!(res_ctx.read_cts_value(&t, &val_bytes, ctx.gc()));
 
-    ctx.push(value.into_stack(ctx.gc()));
+    ctx.push(value.into_stack());
     StepResult::Continue
 }
 
@@ -385,16 +385,6 @@ pub fn ldflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource)
                 field_offset,
             )));
         }
-        PointerOrigin::ValueType(v) => {
-            let base_ptr = v.instance_storage.get().as_ptr();
-            let field_ptr = unsafe { base_ptr.add(field_offset.as_usize()) as *mut u8 };
-            ctx.push(StackValue::ManagedPtr(ManagedPtr::new_value_type(
-                NonNull::new(field_ptr),
-                target_type,
-                v,
-                field_offset,
-            )));
-        }
         PointerOrigin::Unmanaged => {
             let field_ptr = field_offset.as_usize() as *mut u8;
             ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
@@ -416,6 +406,16 @@ pub fn ldflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource)
                 target_type,
                 ptr,
                 tid,
+                field_offset,
+            )));
+        }
+        PointerOrigin::Transient(obj) => {
+            let base_ptr = obj.with_data(|d| d.as_ptr());
+            let field_ptr = unsafe { base_ptr.add(field_offset.as_usize()) as *mut u8 };
+            ctx.push(StackValue::ManagedPtr(ManagedPtr::new_transient(
+                NonNull::new(field_ptr),
+                target_type,
+                obj,
                 field_offset,
             )));
         }

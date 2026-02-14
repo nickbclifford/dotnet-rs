@@ -3,7 +3,7 @@ use dotnet_types::TypeDescription;
 use dotnet_utils::{
     atomic::{self, Atomic},
     sync::{
-        Arc, MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLock, RwLockReadGuard,
+        Arc, MappedRwLockReadGuard, MappedRwLockWriteGuard, Ordering, RwLock, RwLockReadGuard,
         RwLockWriteGuard,
     },
     validate_alignment,
@@ -77,6 +77,16 @@ impl FieldStorage {
         RwLockWriteGuard::map(self.data.write(), |v| v.as_mut_slice())
     }
 
+    pub fn with_data<T>(&self, f: impl FnOnce(&[u8]) -> T) -> T {
+        self.validate_magic();
+        f(&self.data.read())
+    }
+
+    pub fn with_data_mut<T>(&self, f: impl FnOnce(&mut [u8]) -> T) -> T {
+        self.validate_magic();
+        f(&mut self.data.write())
+    }
+
     pub fn layout(&self) -> &Arc<FieldLayoutManager> {
         &self.layout
     }
@@ -122,7 +132,7 @@ impl FieldStorage {
         &self,
         owner: TypeDescription,
         name: &str,
-        _ord: std::sync::atomic::Ordering,
+        _ord: Ordering,
     ) -> Vec<u8> {
         let guard = self.get_field_local(owner, name);
         atomic::validate_atomic_access(guard.as_ptr(), false);
@@ -135,7 +145,7 @@ impl FieldStorage {
         owner: TypeDescription,
         name: &str,
         value: &[u8],
-        _ord: std::sync::atomic::Ordering,
+        _ord: Ordering,
     ) {
         let mut dest = self.get_field_mut_local(owner, name);
         atomic::validate_atomic_access(dest.as_ptr(), false);
@@ -154,7 +164,7 @@ impl FieldStorage {
         &self,
         owner: TypeDescription,
         name: &str,
-        ord: std::sync::atomic::Ordering,
+        ord: Ordering,
     ) -> Vec<u8> {
         let field = self.layout.get_field(owner, name).expect("Field not found");
         let alignment = field.layout.alignment();
@@ -179,7 +189,7 @@ impl FieldStorage {
         owner: TypeDescription,
         name: &str,
         value: &[u8],
-        ord: std::sync::atomic::Ordering,
+        ord: Ordering,
     ) {
         let field = self.layout.get_field(owner, name).expect("Field not found");
         let alignment = field.layout.alignment();

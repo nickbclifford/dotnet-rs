@@ -78,7 +78,9 @@ unsafe impl<'gc> Collect for StackValue<'gc> {
             Self::ObjectRef(o) => o.trace(cc),
             Self::ManagedPtr(m) => m.trace(cc),
             Self::TypedRef(m, _) => m.trace(cc),
-            Self::ValueType(v) => v.trace(cc),
+            Self::ValueType(v) => {
+                v.trace(cc);
+            }
             #[cfg(feature = "multithreaded-gc")]
             Self::CrossArenaObjectRef(ptr, tid) => {
                 record_cross_arena_ref(*tid, ptr.as_ptr() as usize);
@@ -227,7 +229,7 @@ impl<'gc> StackValue<'gc> {
         ptr: *mut u8,
         target_type: TypeDescription,
         pinned: bool,
-        offset: Option<crate::ByteOffset>,
+        offset: Option<ByteOffset>,
     ) -> Self {
         Self::managed_ptr_with_owner(ptr, target_type, None, pinned, offset)
     }
@@ -237,7 +239,7 @@ impl<'gc> StackValue<'gc> {
         target_type: TypeDescription,
         owner: Option<ObjectRef<'gc>>,
         pinned: bool,
-        offset: Option<crate::ByteOffset>,
+        offset: Option<ByteOffset>,
     ) -> Self {
         Self::ManagedPtr(ManagedPtr::new(
             NonNull::new(ptr),
@@ -248,8 +250,8 @@ impl<'gc> StackValue<'gc> {
         ))
     }
     pub fn managed_stack_ptr(
-        index: crate::StackSlotIndex,
-        offset: crate::ByteOffset,
+        index: StackSlotIndex,
+        offset: ByteOffset,
         ptr: *mut u8,
         target_type: TypeDescription,
         pinned: bool,
@@ -303,12 +305,11 @@ impl<'gc> StackValue<'gc> {
         match self {
             Self::NativeInt(i) => *i as *mut u8,
             Self::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
-            Self::ManagedPtr(m) | Self::TypedRef(m, _) =>
-            {
-                #[allow(deprecated)]
-                match m.pointer() {
-                    Some(p) => p.as_ptr(),
-                    None => std::ptr::null_mut(),
+            Self::ManagedPtr(m) | Self::TypedRef(m, _) => {
+                if m.is_null() {
+                    std::ptr::null_mut()
+                } else {
+                    unsafe { m.with_data(0, |data| data.as_ptr() as *mut u8) }
                 }
             }
             v => panic!("expected pointer on stack, received {:?}", v),

@@ -93,13 +93,13 @@ pub fn stind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: StoreType) -> 
 
     if let StackValue::ManagedPtr(m) = &addr_val
         && let Some((slot_idx, off)) = m.stack_slot_origin()
-        && off == dotnet_utils::ByteOffset::ZERO
+        && off == ByteOffset::ZERO
     {
         // Direct write to slot - use typed write to maintain StackValue discriminant correctness.
         // Exception: if the slot currently contains a ValueType, we must use raw write to
         // avoid replacing the entire struct with a scalar. Structs on the stack have stable
         // FieldStorage that can be partially overwritten.
-        if !matches!(ctx.get_slot_ref(slot_idx), StackValue::ValueType(_)) {
+        if !matches!(ctx.get_slot_ref(slot_idx), StackValue::ValueType(..)) {
             let typed_val = convert_to_stack_value(val, param0);
             ctx.set_slot(slot_idx, typed_val);
             return StepResult::Continue;
@@ -144,8 +144,8 @@ pub fn ldind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: LoadType) -> S
 
     if let StackValue::ManagedPtr(m) = &addr_val
         && let Some((slot_idx, off)) = m.stack_slot_origin()
-        && off == dotnet_utils::ByteOffset::ZERO
-        && !matches!(ctx.get_slot_ref(slot_idx), StackValue::ValueType(_))
+        && off == ByteOffset::ZERO
+        && !matches!(ctx.get_slot_ref(slot_idx), StackValue::ValueType(..))
     {
         let val = convert_from_stack_value(ctx.get_slot(slot_idx), param0);
         ctx.push(val);

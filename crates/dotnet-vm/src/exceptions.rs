@@ -144,7 +144,7 @@ impl Debug for HandlerKind {
 pub fn parse<'a>(
     source: impl IntoIterator<Item = &'a body::Exception>,
     ctx: &ResolutionContext,
-) -> Result<Vec<ProtectedSection>, dotnet_types::error::TypeResolutionError> {
+) -> Result<Vec<ProtectedSection>, TypeResolutionError> {
     let mut sections: HashMap<Range<usize>, Vec<Handler>> = HashMap::new();
     for exc in source {
         use body::ExceptionKind::*;

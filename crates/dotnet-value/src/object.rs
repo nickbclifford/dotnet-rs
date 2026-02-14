@@ -610,9 +610,18 @@ unsafe impl<'gc> Collect for ValueType<'gc> {
 impl<'gc> ValueType<'gc> {
     pub fn size_bytes(&self) -> usize {
         match self {
+            ValueType::Bool(_) => 1,
+            ValueType::Char(_) => 2,
+            ValueType::Int8(_) | ValueType::UInt8(_) => 1,
+            ValueType::Int16(_) | ValueType::UInt16(_) => 2,
+            ValueType::Int32(_) | ValueType::UInt32(_) => 4,
+            ValueType::Int64(_) | ValueType::UInt64(_) => 8,
+            ValueType::NativeInt(_) | ValueType::NativeUInt(_) => size_of::<usize>(),
+            ValueType::Float32(_) => 4,
+            ValueType::Float64(_) => 8,
+            ValueType::Pointer(_) => 16,
+            ValueType::TypedRef(_, _) => 16,
             ValueType::Struct(o) => o.size_bytes(),
-            ValueType::TypedRef(_, _) => 16, // (Pointer + Type)
-            _ => size_of::<ValueType>(),
         }
     }
 
@@ -647,7 +656,7 @@ pub enum CTSValue<'gc> {
 }
 
 impl<'gc> CTSValue<'gc> {
-    pub fn into_stack(self, _gc: GCHandle<'gc>) -> StackValue<'gc> {
+    pub fn into_stack(self) -> StackValue<'gc> {
         use CTSValue::*;
         use ValueType::*;
         match self {
@@ -695,9 +704,10 @@ impl<'gc> CTSValue<'gc> {
                 Float32(f) => dest.copy_from_slice(&f.to_ne_bytes()),
                 Float64(f) => dest.copy_from_slice(&f.to_ne_bytes()),
                 TypedRef(p, t) => {
-                    #[allow(deprecated)]
-                    let addr = p.pointer().map_or(0, |ptr| ptr.as_ptr() as usize);
-                    let type_ptr = Arc::as_ptr(&t) as usize;
+                    let addr = unsafe {
+                        p.with_data(0, |data| data.as_ptr() as usize)
+                    };
+                    let type_ptr = Arc::as_ptr(t) as usize;
                     dest[0..8].copy_from_slice(&addr.to_ne_bytes());
                     dest[8..16].copy_from_slice(&type_ptr.to_ne_bytes());
                 }
