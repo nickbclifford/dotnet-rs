@@ -26,6 +26,11 @@ fn static_registry() -> &'static DashMap<u32, Arc<StaticMetadata>> {
     REGISTRY.get_or_init(DashMap::new)
 }
 
+pub fn reset_static_registry() {
+    static_registry().clear();
+    NEXT_STATIC_ID.store(1, AtomicOrdering::SeqCst);
+}
+
 static NEXT_STATIC_ID: AtomicU32 = AtomicU32::new(1);
 
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
@@ -327,9 +332,8 @@ impl<'gc> ManagedPtr<'gc> {
             // Tagged pointer or Stack
             let tag = word0 & 7;
             match tag {
-                1 | 5 => {
-                    // Stack (historical tags 1 and 5 used for stack)
-                    // We preserve the 33-bit offset and 30-bit slot index
+                1 => {
+                    // Stack (Tag 1)
                     let slot_idx = (word0 >> 3) & 0x3FFFFFFF;
                     let slot_offset = word0 >> 33;
                     let raw_ptr = NonNull::new(word1 as *mut u8);
@@ -342,13 +346,31 @@ impl<'gc> ManagedPtr<'gc> {
                         offset: crate::ByteOffset(slot_offset),
                     }
                 }
-                3 => {
-                    // ValueType - Metadata lost, recover as unmanaged
-                    let raw_ptr = NonNull::new(word1 as *mut u8);
-                    ManagedPtrInfo {
-                        address: raw_ptr,
-                        origin: PointerOrigin::Unmanaged,
-                        offset: crate::ByteOffset::ZERO,
+                5 => {
+                    // CrossArenaObjectRef (Tag 5)
+                    // Recover ObjectPtr from Word 0 and offset from Word 1
+                    #[cfg(feature = "multithreaded-gc")]
+                    {
+                        let ptr_raw = (word0 & !7) as *const crate::object::ObjectInner<'static>;
+                        // SAFETY: During GC or stable execution, cross-arena pointers are valid.
+                        // We need the owner_id from the object itself.
+                        let ptr = unsafe { ObjectPtr::from_raw(ptr_raw as *const _).expect("Invalid ObjectPtr in Tag 5") };
+                        let owner_id = ptr.owner_id();
+                        ManagedPtrInfo {
+                            address: NonNull::new((ptr_raw as usize + word1) as *mut u8),
+                            origin: PointerOrigin::CrossArenaObjectRef(ptr, owner_id),
+                            offset: crate::ByteOffset(word1),
+                        }
+                    }
+                    #[cfg(not(feature = "multithreaded-gc"))]
+                    {
+                        // Fallback for non-multithreaded-gc mode (should not happen)
+                        let raw_ptr = NonNull::new(word1 as *mut u8);
+                        ManagedPtrInfo {
+                            address: raw_ptr,
+                            origin: PointerOrigin::Unmanaged,
+                            offset: crate::ByteOffset::ZERO,
+                        }
                     }
                 }
                 7 => {
@@ -470,9 +492,11 @@ impl<'gc> ManagedPtr<'gc> {
             }
             #[cfg(feature = "multithreaded-gc")]
             PointerOrigin::CrossArenaObjectRef(ptr, _) => {
-                // For cross-arena, treat as unmanaged for now when serializing to memory.
-                let word0: usize = 0;
-                let word1 = ptr.as_ptr() as usize + self.offset.as_usize();
+                // For cross-arena, use Tag 5 and store the absolute pointer.
+                // Word 0: (ptr | 5)
+                // Word 1: offset
+                let word0: usize = (ptr.as_ptr() as usize) | 5;
+                let word1 = self.offset.as_usize();
                 dest[0..ptr_size].copy_from_slice(&word0.to_ne_bytes());
                 dest[ptr_size..ptr_size * 2].copy_from_slice(&word1.to_ne_bytes());
             }

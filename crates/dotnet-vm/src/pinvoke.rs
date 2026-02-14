@@ -1,10 +1,6 @@
 use crate::{
-    StepResult,
-    context::ResolutionContext,
-    layout::LayoutFactory,
-    resolution::ValueResolution,
-    stack::ops::VesOps,
-    tracer::Tracer,
+    StepResult, context::ResolutionContext, layout::LayoutFactory, resolution::ValueResolution,
+    stack::ops::VesOps, tracer::Tracer,
 };
 use dashmap::DashMap;
 use dotnet_types::{
@@ -12,7 +8,7 @@ use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
 };
-use dotnet_utils::ByteOffset;
+use dotnet_utils::{ByteOffset, gc::ThreadSafeReadGuard};
 use dotnet_value::{
     StackValue,
     layout::{FieldLayoutManager, LayoutManager, Scalar},
@@ -271,7 +267,9 @@ fn type_to_ffi(t: &ConcreteType, ctx: &ResolutionContext) -> Type {
             value_kind: None | Some(ValueKind::Class),
             ..
         } => Type::pointer(),
-        BaseType::Array { .. } | BaseType::Vector { .. } | BaseType::String | BaseType::Object => Type::pointer(),
+        BaseType::Array { .. } | BaseType::Vector { .. } | BaseType::String | BaseType::Object => {
+            Type::pointer()
+        }
     }
 }
 
@@ -282,7 +280,9 @@ fn param_to_type(
     match p {
         ParameterType::Value(t) => Ok(type_to_ffi(&ctx.make_concrete(t)?, ctx)),
         ParameterType::Ref(_) => Ok(Type::pointer()),
-        ParameterType::TypedReference => Ok(Type::structure(vec![Type::pointer(), Type::pointer()])),
+        ParameterType::TypedReference => {
+            Ok(Type::structure(vec![Type::pointer(), Type::pointer()]))
+        }
     }
 }
 
@@ -345,8 +345,28 @@ impl TempBuffer {
     }
 }
 
-pub fn external_call<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+type ObjectReadGuard<'a, 'gc> = ThreadSafeReadGuard<'a, dotnet_value::object::ObjectInner<'gc>>;
+/// Extends the lifetime of an object read guard to the arena lifetime.
+///
+/// # Safety
+///
+/// This is sound because:
+/// 1. The object being guarded is pinned via `VesOps::pin_object` before the guard is created.
+/// 2. The pinned object is guaranteed to stay at a stable location in memory for the duration
+///    of the native call.
+/// 3. The guard itself is stored in `local_guards` (or `cross_arena_guards`), which live for
+///    the entire duration of the `external_call` function.
+/// 4. The native call is synchronous and does not outlive the `external_call` function.
+/// 5. By the time `external_call` returns, the native code has finished accessing the memory,
+///    and the guards are dropped before the objects are unpinned.
+fn extend_guard_lifetime<'ctx, 'gc>(
+    guard: ObjectReadGuard<'ctx, 'gc>,
+) -> ObjectReadGuard<'gc, 'gc> {
+    unsafe { std::mem::transmute(guard) }
+}
+
+pub fn external_call<'ctx, 'gc, 'm: 'gc>(
+    ctx: &'ctx mut dyn VesOps<'gc, 'm>,
     method: MethodDescription,
 ) -> StepResult {
     let Some(p) = &method.method.pinvoke else {
@@ -354,6 +374,7 @@ pub fn external_call<'gc, 'm: 'gc>(
     };
 
     let mut pinned_objects: Vec<ObjectRef<'gc>> = Vec::new();
+    let mut local_guards: Vec<ObjectReadGuard<'gc, 'gc>> = Vec::new();
     #[cfg(feature = "multithreaded-gc")]
     let mut cross_arena_guards = Vec::new();
 
@@ -377,7 +398,6 @@ pub fn external_call<'gc, 'm: 'gc>(
         function,
         type_name
     );
-
     let arg_types: Vec<String> = method
         .method
         .signature
@@ -386,7 +406,6 @@ pub fn external_call<'gc, 'm: 'gc>(
         .map(|p| format!("{:?}", p.1))
         .collect();
     vm_trace_interop!(ctx, "ARGS", "Signature: {:?}", arg_types);
-
     vm_trace_interop!(ctx, "ARGS", "Values:    {:?}", stack_values);
 
     let target_res = if ctx.tracer_enabled() {
@@ -535,7 +554,10 @@ pub fn external_call<'gc, 'm: 'gc>(
                 let ptr = if let Some(h) = obj.0 {
                     ctx.pin_object(*obj);
                     pinned_objects.push(*obj);
-                    unsafe { h.borrow().storage.raw_data_ptr() }
+                    let guard = extend_guard_lifetime(h.borrow());
+                    let ptr = unsafe { guard.storage.raw_data_ptr() };
+                    local_guards.push(guard);
+                    ptr
                 } else {
                     std::ptr::null_mut()
                 };
@@ -552,7 +574,18 @@ pub fn external_call<'gc, 'm: 'gc>(
                 }
                 let mut bytes = vec![0u8; 16];
                 let addr = unsafe {
-                    p.with_data(0, |data| data.as_ptr() as usize)
+                    if let PointerOrigin::Heap(obj) = p.origin {
+                        if let Some(h) = obj.0 {
+                            let guard = extend_guard_lifetime(h.borrow());
+                            let ptr = guard.storage.raw_data_ptr().add(p.offset.as_usize());
+                            local_guards.push(guard);
+                            ptr as usize
+                        } else {
+                            p.offset.as_usize() // Should be null + offset
+                        }
+                    } else {
+                        p.with_data(0, |data| data.as_ptr() as usize)
+                    }
                 };
                 let type_ptr = Arc::as_ptr(t) as usize;
                 bytes[0..8].copy_from_slice(&addr.to_ne_bytes());
@@ -583,18 +616,18 @@ pub fn external_call<'gc, 'm: 'gc>(
                     temp_buffers.push(TempBuffer::Bytes(buf));
                     let buf_idx = temp_buffers.len() - 1;
                     arg_buffer_map[i] = Some(buf_idx);
-                    
+
                     if let Some(owner) = p.owner() {
                         ctx.pin_object(owner);
                         pinned_objects.push(owner);
                     }
-                    
+
                     write_backs.push((
                         WriteBackSource::Managed(p.origin.clone(), p.offset),
                         buf_idx,
                         buf_len,
                     ));
-                    
+
                     arg_ptrs[i] = temp_buffers[buf_idx].as_bytes().as_ptr() as *mut c_void;
                 } else {
                     // For direct pointers (void*, int*), we just pass the address
@@ -602,11 +635,22 @@ pub fn external_call<'gc, 'm: 'gc>(
                         ctx.pin_object(owner);
                         pinned_objects.push(owner);
                     }
-                    
+
                     let ptr = unsafe {
-                        p.with_data(0, |data| data.as_ptr() as *mut u8)
+                        if let PointerOrigin::Heap(obj) = p.origin {
+                            if let Some(h) = obj.0 {
+                                let guard = extend_guard_lifetime(h.borrow());
+                                let ptr = guard.storage.raw_data_ptr().add(p.offset.as_usize());
+                                local_guards.push(guard);
+                                ptr
+                            } else {
+                                p.offset.as_usize() as *mut u8
+                            }
+                        } else {
+                            p.with_data(0, |data| data.as_ptr() as *mut u8)
+                        }
                     };
-                    
+
                     temp_buffers.push(TempBuffer::Ptr(Box::new(ptr)));
                     let idx = temp_buffers.len() - 1;
                     arg_buffer_map[i] = Some(idx);
@@ -656,6 +700,24 @@ pub fn external_call<'gc, 'm: 'gc>(
         arg_ptrs.len()
     );
 
+    macro_rules! read_return {
+        ($t:ty) => {{
+            let mut ret = std::mem::MaybeUninit::<$t>::uninit();
+            vm_trace_interop!(ctx, "PRE-CALL", "(ret) {}::{}", module, function);
+            unsafe {
+                libffi::raw::ffi_call(
+                    cif.as_raw_ptr(),
+                    Some(target_fn),
+                    ret.as_mut_ptr() as *mut c_void,
+                    arg_ptrs.as_mut_ptr(),
+                );
+            }
+            do_write_back(ctx);
+            vm_trace_interop!(ctx, "POST-CALL", "(ret) {}::{}", module, function);
+            unsafe { ret.assume_init() }
+        }};
+    }
+
     match &method.method.signature.return_type.1 {
         None => {
             vm_trace_interop!(ctx, "PRE-CALL", "(void) {}::{}", module, function);
@@ -671,194 +733,148 @@ pub fn external_call<'gc, 'm: 'gc>(
             vm_trace_interop!(ctx, "POST-CALL", "(void) {}::{}", module, function);
             let _ = ctx.pop_multiple(arg_count);
         }
-        Some(p) => {
-            match p {
-                ParameterType::Value(t) => {
-                    macro_rules! read_return {
-                        ($t:ty) => {{
-                            let mut ret: $t = unsafe { std::mem::zeroed() };
-                            vm_trace_interop!(ctx, "PRE-CALL", "(ret) {}::{}", module, function);
-                            unsafe {
-                                libffi::raw::ffi_call(
-                                    cif.as_raw_ptr(),
-                                    Some(target_fn),
-                                    &mut ret as *mut _ as *mut c_void,
-                                    arg_ptrs.as_mut_ptr(),
-                                );
-                            }
-                            do_write_back(ctx);
-                            vm_trace_interop!(ctx, "POST-CALL", "(ret) {}::{}", module, function);
-                            ret
-                        }};
-                    }
+        Some(ParameterType::Value(t)) => {
+            macro_rules! read_into_i32 {
+                ($t:ty) => {{ StackValue::Int32(read_return!($t) as i32) }};
+            }
 
-                    macro_rules! read_into_i32 {
-                        ($t:ty) => {{ StackValue::Int32(read_return!($t) as i32) }};
-                    }
+            let res_ctx = ctx.current_context();
+            let t = vm_try!(res_ctx.make_concrete(t));
+            let v = match t.get() {
+                BaseType::Boolean => read_into_i32!(u8),
+                BaseType::Char => read_into_i32!(u16),
+                BaseType::Int8 => read_into_i32!(i8),
+                BaseType::UInt8 => read_into_i32!(u8),
+                BaseType::Int16 => read_into_i32!(i16),
+                BaseType::UInt16 => read_into_i32!(u16),
+                BaseType::Int32 => read_into_i32!(i32),
+                BaseType::UInt32 => read_into_i32!(u32),
+                BaseType::Int64 => StackValue::Int64(read_return!(i64)),
+                BaseType::UInt64 => StackValue::Int64(read_return!(u64) as i64),
+                BaseType::Float32 => StackValue::NativeFloat(read_return!(f32) as f64),
+                BaseType::Float64 => StackValue::NativeFloat(read_return!(f64)),
+                BaseType::IntPtr => StackValue::NativeInt(read_return!(isize)),
+                BaseType::UIntPtr => StackValue::NativeInt(read_return!(usize) as isize),
+                BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
+                    StackValue::unmanaged_ptr(read_return!(*mut u8))
+                }
+                BaseType::Type {
+                    value_kind: Some(ValueKind::ValueType),
+                    source,
+                } => {
+                    let (ut, type_generics) = decompose_type_source::<ConcreteType>(source);
+                    let new_lookup = GenericLookup::new(type_generics);
+                    let new_ctx = res_ctx.with_generics(&new_lookup);
+                    let td = new_ctx
+                        .locate_type(ut)
+                        .expect("Failed to locate type in pinvoke interop");
 
-                    let res_ctx = ctx.current_context();
-                    let t = vm_try!(res_ctx.make_concrete(t));
-                    let v = match t.get() {
-                        BaseType::Boolean => read_into_i32!(u8),
-                        BaseType::Char => read_into_i32!(u16),
-                        BaseType::Int8 => read_into_i32!(i8),
-                        BaseType::UInt8 => read_into_i32!(u8),
-                        BaseType::Int16 => read_into_i32!(i16),
-                        BaseType::UInt16 => read_into_i32!(u16),
-                        BaseType::Int32 => read_into_i32!(i32),
-                        BaseType::UInt32 => read_into_i32!(u32),
-                        BaseType::Int64 => StackValue::Int64(read_return!(i64)),
-                        BaseType::UInt64 => StackValue::Int64(read_return!(u64) as i64),
-                        BaseType::Float32 => StackValue::NativeFloat(read_return!(f32) as f64),
-                        BaseType::Float64 => StackValue::NativeFloat(read_return!(f64)),
-                        BaseType::IntPtr => StackValue::NativeInt(read_return!(isize)),
-                        BaseType::UIntPtr => StackValue::NativeInt(read_return!(usize) as isize),
-                        BaseType::ValuePointer(_, _) | BaseType::FunctionPointer(_) => {
-                            StackValue::unmanaged_ptr(read_return!(*mut u8))
-                        }
-                        BaseType::Type {
-                            value_kind: Some(ValueKind::ValueType),
-                            source,
-                        } => {
-                            let (ut, type_generics) = decompose_type_source::<ConcreteType>(source);
-                            let new_lookup = GenericLookup::new(type_generics);
-                            let new_ctx = res_ctx.with_generics(&new_lookup);
-                            let td = new_ctx
-                                .locate_type(ut)
-                                .expect("Failed to locate type in pinvoke interop");
-
-                            let instance = match new_ctx.new_object(td) {
-                                Ok(inst) => inst,
-                                Err(e) => return StepResult::Error(e.into()),
-                            };
-
-                            vm_trace_interop!(
-                                ctx,
-                                "CALLING",
-                                "(raw struct return) {}::{} with {} args",
-                                module,
-                                function,
-                                arg_ptrs.len()
-                            );
-                            vm_trace_interop!(ctx, "PRE-CALL", "(struct) {}::{}", module, function);
-                            let allocated_size = instance.instance_storage.get().len();
-                            let ffi_size = unsafe { (*return_type.as_raw_ptr()).size };
-
-                            // Check for buffer overflow risk
-                            if ffi_size > allocated_size {
-                                vm_trace_interop!(
-                                    ctx,
-                                    "WARNING",
-                                    "Buffer overflow detected! FFI expects {} bytes, but object has {} bytes. Using temp buffer.",
-                                    ffi_size,
-                                    allocated_size
-                                );
-                                let mut temp_buffer = vec![0u8; ffi_size];
-                                unsafe {
-                                    libffi::raw::ffi_call(
-                                        cif.as_raw_ptr(),
-                                        Some(target_fn),
-                                        temp_buffer.as_mut_ptr() as *mut c_void,
-                                        arg_ptrs.as_mut_ptr(),
-                                    );
-                                }
-                                // Copy valid data back to the object
-                                let mut guard = instance.instance_storage.get_mut();
-                                guard.copy_from_slice(&temp_buffer[..allocated_size]);
-                            } else {
-                                unsafe {
-                                    libffi::raw::ffi_call(
-                                        cif.as_raw_ptr(),
-                                        Some(target_fn),
-                                        instance.instance_storage.get_mut().as_mut_ptr()
-                                            as *mut c_void,
-                                        arg_ptrs.as_mut_ptr(),
-                                    );
-                                }
-                            }
-                            do_write_back(ctx);
-                            vm_trace_interop!(
-                                ctx,
-                                "POST-CALL",
-                                "(struct) {}::{}",
-                                module,
-                                function
-                            );
-
-                            StackValue::ValueType(instance)
-                        }
-                        BaseType::Type { .. }
-                        | BaseType::Array { .. }
-                        | BaseType::Vector { .. }
-                        | BaseType::Object
-                        | BaseType::String => StackValue::unmanaged_ptr(read_return!(*mut u8)),
+                    let instance = match new_ctx.new_object(td) {
+                        Ok(inst) => inst,
+                        Err(e) => return StepResult::Error(e.into()),
                     };
-                    vm_trace!(ctx, "-- returning {v:?} --");
-                    let _ = ctx.pop_multiple(arg_count);
-                    ctx.push(v);
-                }
-                ParameterType::Ref(t) => {
-                    macro_rules! read_return {
-                        ($t:ty) => {{
-                            let mut ret: $t = unsafe { std::mem::zeroed() };
-                            vm_trace_interop!(ctx, "PRE-CALL", "(ret) {}::{}", module, function);
-                            unsafe {
-                                libffi::raw::ffi_call(
-                                    cif.as_raw_ptr(),
-                                    Some(target_fn),
-                                    &mut ret as *mut _ as *mut c_void,
-                                    arg_ptrs.as_mut_ptr(),
-                                );
-                            }
-                            do_write_back(ctx);
-                            vm_trace_interop!(ctx, "POST-CALL", "(ret) {}::{}", module, function);
-                            ret
-                        }};
-                    }
 
-                    let ptr = read_return!(*mut u8);
-                    let res_ctx = ctx.current_context();
-                    let concrete = vm_try!(res_ctx.make_concrete(t));
-                    let td = ctx
-                        .loader()
-                        .find_concrete_type(concrete)
-                        .expect("failed to resolve return type");
-                    let _ = ctx.pop_multiple(arg_count);
-                    ctx.push_managed_ptr(ManagedPtr::new(NonNull::new(ptr), td, None, false, None));
-                }
-                ParameterType::TypedReference => {
-                    let mut ret: [usize; 2] = [0, 0];
-                    unsafe {
-                        libffi::raw::ffi_call(
-                            cif.as_raw_ptr(),
-                            Some(target_fn),
-                            &mut ret as *mut _ as *mut c_void,
-                            arg_ptrs.as_mut_ptr(),
+                    vm_trace_interop!(
+                        ctx,
+                        "CALLING",
+                        "(raw struct return) {}::{} with {} args",
+                        module,
+                        function,
+                        arg_ptrs.len()
+                    );
+                    let allocated_size = instance.instance_storage.get().len();
+                    let ffi_size = unsafe { (*return_type.as_raw_ptr()).size };
+
+                    // Check for buffer overflow risk
+                    if ffi_size > allocated_size {
+                        vm_trace_interop!(
+                            ctx,
+                            "WARNING",
+                            "Buffer overflow detected! FFI expects {} bytes, but object has {} bytes. Using temp buffer.",
+                            ffi_size,
+                            allocated_size
                         );
+                        let mut temp_buffer = Vec::with_capacity(ffi_size);
+                        unsafe {
+                            libffi::raw::ffi_call(
+                                cif.as_raw_ptr(),
+                                Some(target_fn),
+                                temp_buffer.as_mut_ptr() as *mut c_void,
+                                arg_ptrs.as_mut_ptr(),
+                            );
+                            temp_buffer.set_len(ffi_size);
+                        }
+                        // Copy valid data back to the object
+                        let mut guard = instance.instance_storage.get_mut();
+                        guard.copy_from_slice(&temp_buffer[..allocated_size]);
+                    } else {
+                        unsafe {
+                            libffi::raw::ffi_call(
+                                cif.as_raw_ptr(),
+                                Some(target_fn),
+                                instance.instance_storage.get_mut().as_mut_ptr() as *mut c_void,
+                                arg_ptrs.as_mut_ptr(),
+                            );
+                        }
                     }
                     do_write_back(ctx);
-                    let addr = ret[0];
-                    let type_ptr = ret[1] as *const dotnet_types::TypeDescription;
-                    if type_ptr.is_null() {
-                        panic!("null type handle in returned TypedReference");
-                    }
-                    let type_desc = unsafe {
-                        let arc = Arc::from_raw(type_ptr);
-                        let clone = arc.clone();
-                        let _ = Arc::into_raw(arc);
-                        clone
-                    };
-                    let m = ManagedPtr::new(
-                        NonNull::new(addr as *mut u8),
-                        *type_desc.clone(),
-                        None,
-                        false,
-                        Some(ByteOffset(0)),
-                    );
-                    let _ = ctx.pop_multiple(arg_count);
-                    ctx.push(StackValue::TypedRef(m, type_desc));
+                    vm_trace_interop!(ctx, "POST-CALL", "(struct) {}::{}", module, function);
+
+                    StackValue::ValueType(instance)
                 }
+                BaseType::Type { .. }
+                | BaseType::Array { .. }
+                | BaseType::Vector { .. }
+                | BaseType::Object
+                | BaseType::String => StackValue::unmanaged_ptr(read_return!(*mut u8)),
+            };
+            vm_trace!(ctx, "-- returning {v:?} --");
+            let _ = ctx.pop_multiple(arg_count);
+            ctx.push(v);
+        }
+        Some(ParameterType::Ref(t)) => {
+            let ptr = read_return!(*mut u8);
+            let res_ctx = ctx.current_context();
+            let concrete = vm_try!(res_ctx.make_concrete(t));
+            let td = ctx
+                .loader()
+                .find_concrete_type(concrete)
+                .expect("failed to resolve return type");
+            let _ = ctx.pop_multiple(arg_count);
+            ctx.push_managed_ptr(ManagedPtr::new(NonNull::new(ptr), td, None, false, None));
+        }
+        Some(ParameterType::TypedReference) => {
+            let mut ret = std::mem::MaybeUninit::<[usize; 2]>::uninit();
+            unsafe {
+                libffi::raw::ffi_call(
+                    cif.as_raw_ptr(),
+                    Some(target_fn),
+                    ret.as_mut_ptr() as *mut c_void,
+                    arg_ptrs.as_mut_ptr(),
+                );
             }
+            do_write_back(ctx);
+            let ret = unsafe { ret.assume_init() };
+            let addr = ret[0];
+            let type_ptr = ret[1] as *const dotnet_types::TypeDescription;
+            if type_ptr.is_null() {
+                panic!("null type handle in returned TypedReference");
+            }
+            let type_desc = unsafe {
+                let arc = Arc::from_raw(type_ptr);
+                let clone = arc.clone();
+                let _ = Arc::into_raw(arc);
+                clone
+            };
+            let m = ManagedPtr::new(
+                NonNull::new(addr as *mut u8),
+                *type_desc.clone(),
+                None,
+                false,
+                Some(ByteOffset(0)),
+            );
+            let _ = ctx.pop_multiple(arg_count);
+            ctx.push(StackValue::TypedRef(m, type_desc));
         }
     }
     vm_trace_interop!(ctx, "RETURN", "Returned from {}::{}", module, function);

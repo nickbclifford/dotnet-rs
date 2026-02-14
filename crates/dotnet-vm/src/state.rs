@@ -96,7 +96,7 @@ pub struct SharedGlobalState<'m> {
     pub empty_generics: GenericLookup,
     /// Grouped caches for type resolution and layout computation
     pub caches: Arc<GlobalCaches>,
-    pub statics: StaticStorageManager,
+    pub statics: Arc<StaticStorageManager>,
     #[cfg(feature = "multithreaded-gc")]
     pub gc_coordinator: Arc<GCCoordinator>,
     /// Cache for shared reflection objects: RuntimeType -> index
@@ -129,6 +129,9 @@ impl<'m> SharedGlobalState<'m> {
 
         let tracer_enabled = Arc::new(AtomicBool::new(tracer.is_enabled()));
 
+        // Reset the static registry to ensure a clean state for the new VM.
+        dotnet_value::pointer::reset_static_registry();
+
         Self {
             loader,
             pinvoke: NativeLibraries::new(loader.get_root()),
@@ -139,7 +142,7 @@ impl<'m> SharedGlobalState<'m> {
             tracer_enabled,
             empty_generics: GenericLookup::default(),
             caches,
-            statics: StaticStorageManager::new(),
+            statics: Arc::new(StaticStorageManager::new()),
             #[cfg(feature = "multithreaded-gc")]
             gc_coordinator: Arc::new(GCCoordinator::new()),
             #[cfg(feature = "multithreaded-gc")]
@@ -191,6 +194,7 @@ impl<'m> SharedGlobalState<'m> {
 /// GC-managed state local to a single thread's arena.
 pub struct ArenaLocalState<'gc> {
     pub heap: HeapManager<'gc>,
+    pub statics: Arc<StaticStorageManager>,
     pub runtime_asms: RefCell<HashMap<ResolutionS, ObjectRef<'gc>>>,
     pub runtime_types: RefCell<HashMap<RuntimeType, ObjectRef<'gc>>>,
     pub runtime_types_list: RefCell<Vec<RuntimeType>>,
@@ -201,12 +205,12 @@ pub struct ArenaLocalState<'gc> {
 }
 
 // SAFETY: `ArenaLocalState` correctly traces all GC-managed fields in its `trace` implementation.
-// This includes the `heap` and all `ObjectRef<'gc>` values stored in the various RefCell-wrapped
-// collections. The non-GC fields (e.g., `runtime_types_list`, `runtime_methods`, `runtime_fields`)
-// contain only metadata and do not need tracing.
+// This includes the `heap`, the global `statics`, and all `ObjectRef<'gc>` values stored in the
+// various RefCell-wrapped collections.
 unsafe impl<'gc> Collect for ArenaLocalState<'gc> {
     fn trace(&self, cc: &Collection) {
         self.heap.trace(cc);
+        self.statics.trace(cc);
         for o in self.runtime_asms.borrow().values() {
             o.trace(cc);
         }
@@ -222,14 +226,9 @@ unsafe impl<'gc> Collect for ArenaLocalState<'gc> {
     }
 }
 
-impl<'gc> Default for ArenaLocalState<'gc> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 impl<'gc> ArenaLocalState<'gc> {
-    pub fn new() -> Self {
+    pub fn new(statics: Arc<StaticStorageManager>) -> Self {
         Self {
             heap: HeapManager {
                 _all_objs: RefCell::new(BTreeMap::new()),
@@ -242,6 +241,7 @@ impl<'gc> ArenaLocalState<'gc> {
                 #[cfg(feature = "multithreaded-gc")]
                 cross_arena_roots: RefCell::new(HashSet::new()),
             },
+            statics,
             runtime_asms: RefCell::new(HashMap::new()),
             runtime_types: RefCell::new(HashMap::new()),
             runtime_types_list: RefCell::new(vec![]),

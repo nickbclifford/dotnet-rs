@@ -86,7 +86,7 @@ impl Executor {
     pub fn new(shared: Arc<SharedGlobalState<'static>>) -> Self {
         let shared_clone = Arc::clone(&shared);
         let mut arena = Box::new(GCArena::new(|_| {
-            let local = ArenaLocalState::new();
+            let local = ArenaLocalState::new(shared_clone.statics.clone());
             ExecutionEngine::new(CallStack::new(shared_clone, local))
         }));
 
