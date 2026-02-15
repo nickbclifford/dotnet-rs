@@ -153,16 +153,17 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                                 panic!("TypedReference parameter cannot be null");
                             }
                             let val = arg_obj.as_heap_storage(|s| {
-                                if let dotnet_value::object::HeapStorage::Boxed(
-                                    dotnet_value::object::ValueType::TypedRef(m, td),
-                                ) = s
-                                {
-                                    (m.clone(), td.clone())
+                                if let dotnet_value::object::HeapStorage::Boxed(o) = s {
+                                    let tr_type = ctx
+                                        .loader()
+                                        .corlib_type("System.TypedReference")
+                                        .expect("System.TypedReference must exist");
+                                    ctx.read_cts_value(&tr_type.into(), &o.instance_storage.get())
                                 } else {
                                     panic!("Expected boxed TypedReference for parameter {}", i)
                                 }
                             });
-                            args.push(StackValue::TypedRef(val.0, val.1));
+                            args.push(vm_try!(val).into_stack());
                             continue;
                         }
                     };
@@ -178,13 +179,16 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                             args.push(StackValue::null());
                         } else {
                             let val = arg_obj.as_heap_storage(|s| {
-                                if let dotnet_value::object::HeapStorage::Boxed(b) = s {
-                                    b.clone()
+                                if let dotnet_value::object::HeapStorage::Boxed(o) = s {
+                                    ctx.read_cts_value(
+                                        &concrete_param_type,
+                                        &o.instance_storage.get(),
+                                    )
                                 } else {
                                     panic!("Expected boxed value for parameter {}", i)
                                 }
                             });
-                            args.push(dotnet_value::object::CTSValue::Value(val).into_stack());
+                            args.push(vm_try!(val).into_stack());
                         }
                     } else {
                         args.push(StackValue::ObjectRef(arg_obj));
@@ -254,16 +258,17 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                                 panic!("TypedReference parameter cannot be null");
                             }
                             let val = arg_obj.as_heap_storage(|s| {
-                                if let dotnet_value::object::HeapStorage::Boxed(
-                                    dotnet_value::object::ValueType::TypedRef(m, td),
-                                ) = s
-                                {
-                                    (m.clone(), td.clone())
+                                if let dotnet_value::object::HeapStorage::Boxed(o) = s {
+                                    let tr_type = ctx
+                                        .loader()
+                                        .corlib_type("System.TypedReference")
+                                        .expect("System.TypedReference must exist");
+                                    ctx.read_cts_value(&tr_type.into(), &o.instance_storage.get())
                                 } else {
                                     panic!("Expected boxed TypedReference for parameter {}", i)
                                 }
                             });
-                            args.push(StackValue::TypedRef(val.0, val.1));
+                            args.push(vm_try!(val).into_stack());
                             continue;
                         }
                     };
@@ -279,13 +284,16 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                             args.push(StackValue::null());
                         } else {
                             let val = arg_obj.as_heap_storage(|s| {
-                                if let dotnet_value::object::HeapStorage::Boxed(b) = s {
-                                    b.clone()
+                                if let dotnet_value::object::HeapStorage::Boxed(o) = s {
+                                    ctx.read_cts_value(
+                                        &concrete_param_type,
+                                        &o.instance_storage.get(),
+                                    )
                                 } else {
                                     panic!("Expected boxed value for parameter {}", i)
                                 }
                             });
-                            args.push(dotnet_value::object::CTSValue::Value(val).into_stack());
+                            args.push(vm_try!(val).into_stack());
                         }
                     } else {
                         args.push(StackValue::ObjectRef(arg_obj));

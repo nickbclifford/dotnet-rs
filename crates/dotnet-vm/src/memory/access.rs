@@ -348,7 +348,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         if let Some(h) = owner.0 {
             let obj = h.borrow();
             match &obj.storage {
-                HeapStorage::Obj(o) | HeapStorage::Boxed(ValueType::Struct(o)) => {
+                HeapStorage::Obj(o) | HeapStorage::Boxed(o) => {
                     let guard = o.instance_storage.get();
                     (guard.as_ptr(), guard.len())
                 }
@@ -425,13 +425,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     o.instance_storage.layout().as_ref().clone(),
                 )),
                 HeapStorage::Vec(v) => Some(LayoutManager::Array(v.layout.clone())),
-                HeapStorage::Boxed(v) => match v {
-                    ValueType::Struct(o) => Some(LayoutManager::Field(
-                        o.instance_storage.layout().as_ref().clone(),
-                    )),
-                    ValueType::Pointer(_) => Some(LayoutManager::Scalar(Scalar::ManagedPtr)),
-                    _ => None,
-                },
+                HeapStorage::Boxed(o) => Some(LayoutManager::Field(
+                    o.instance_storage.layout().as_ref().clone(),
+                )),
                 _ => None,
             }
         } else {

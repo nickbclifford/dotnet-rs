@@ -499,3 +499,46 @@ pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc>(
     }
     StepResult::Continue
 }
+
+#[dotnet_intrinsic("T& System.Span<T>::GetPinnableReference()")]
+#[dotnet_intrinsic("T& System.ReadOnlySpan<T>::GetPinnableReference()")]
+pub fn intrinsic_span_get_pinnable_reference<'gc, 'm: 'gc>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    _method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let _gc = ctx.gc();
+    let span = ctx.pop_managed_ptr();
+
+    let element_type = &generics.type_generics[0];
+    let element_desc = vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
+
+    // Read the _reference field (ManagedPtr at offset 0)
+    let mut ptr_bytes = vec![0u8; ManagedPtr::SIZE];
+    unsafe {
+        ctx.read_bytes(span.origin.clone(), span.offset, &mut ptr_bytes)
+            .expect("Failed to read _reference field");
+    }
+    let managed_ref = unsafe { ManagedPtr::read_unchecked(&ptr_bytes) };
+
+    // Read the _length field (i32 after the ManagedPtr)
+    let length_offset = span.offset + dotnet_utils::ByteOffset(ManagedPtr::SIZE);
+    let mut len_bytes = [0u8; size_of::<i32>()];
+    unsafe {
+        ctx.read_bytes(span.origin.clone(), length_offset, &mut len_bytes)
+            .expect("Failed to read _length field");
+    }
+    let length = i32::from_ne_bytes(len_bytes);
+
+    // If the span is empty, return a null reference
+    if length == 0 {
+        let null_ref = ManagedPtr::new(None, element_desc, None, false, None);
+        ctx.push_managed_ptr(null_ref);
+    } else {
+        // Return a managed pointer to the first element
+        let managed = ManagedPtr::from_info(managed_ref, element_desc);
+        ctx.push_managed_ptr(managed);
+    }
+
+    StepResult::Continue
+}

@@ -20,7 +20,7 @@ mod tests {
             arena.mutate(|gc, _root| {
                 dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(ArenaId(1))));
                 let gc_handle = dotnet_utils::gc::GCHandle::new(gc, ArenaId(1));
-                let obj = ObjectRef::new(gc_handle, HeapStorage::Boxed(ValueType::Int32(42)));
+                let obj = ObjectRef::new(gc_handle, HeapStorage::Str(crate::string::CLRString::from("test")));
                 let _ = obj.as_heap_storage(|_| ());
                 dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(ArenaId(2))));
                 let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -41,7 +41,7 @@ mod tests {
         arena.mutate(|gc, _root| {
             dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(arena_id)));
             let gc_handle = dotnet_utils::gc::GCHandle::new(gc, arena_handle.as_inner(), arena_id);
-            let obj = ObjectRef::new(gc_handle, HeapStorage::Boxed(ValueType::Int32(42)));
+            let obj = ObjectRef::new(gc_handle, HeapStorage::Str(crate::string::CLRString::from("test")));
             let _ = obj.as_heap_storage(|_| ());
             dotnet_utils::gc::unregister_arena(arena_id);
             let other_id = ArenaId(200);
@@ -67,7 +67,7 @@ mod tests {
         arena.mutate(|gc, _root| {
             dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(owner_id)));
             let gc_handle = dotnet_utils::gc::GCHandle::new(gc, owner_handle.as_inner(), owner_id);
-            let obj = ObjectRef::new(gc_handle, HeapStorage::Boxed(ValueType::Int32(42)));
+            let obj = ObjectRef::new(gc_handle, HeapStorage::Str(crate::string::CLRString::from("test")));
             dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(current_id)));
             let _ = obj.as_heap_storage(|_| ());
             dotnet_utils::gc::set_stw_in_progress(true);

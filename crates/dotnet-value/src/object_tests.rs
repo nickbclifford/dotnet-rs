@@ -34,7 +34,7 @@ mod tests {
             dotnet_utils::ArenaId(0),
         )));
         arena.mutate(|gc, _root| {
-            let storage = HeapStorage::Boxed(ValueType::Int32(42));
+            let storage = HeapStorage::Str(crate::string::CLRString::from("test"));
             let gc_handle = dotnet_utils::gc::GCHandle::new(
                 gc,
                 #[cfg(feature = "multithreaded-gc")]

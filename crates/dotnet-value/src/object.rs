@@ -437,15 +437,7 @@ impl<'gc> ObjectRef<'gc> {
                 let bytes = std::slice::from_raw_parts(s.as_ptr() as *const u8, s.len() * 2);
                 f(bytes)
             },
-            HeapStorage::Boxed(v) => match v {
-                ValueType::Struct(o) => f(&o.instance_storage.get()),
-                _ => {
-                    let mut buf = [0u8; 16];
-                    let size = v.size_bytes();
-                    CTSValue::Value(v.clone()).write(&mut buf[..size]);
-                    f(&buf[..size])
-                }
-            },
+            HeapStorage::Boxed(o) => f(&o.instance_storage.get()),
         }
     }
 
@@ -464,30 +456,7 @@ impl<'gc> ObjectRef<'gc> {
         match &mut inner.storage {
             HeapStorage::Vec(v) => f(&mut v.storage),
             HeapStorage::Obj(o) => f(&mut o.instance_storage.get_mut()),
-            HeapStorage::Boxed(v) => match v {
-                ValueType::Struct(o) => f(&mut o.instance_storage.get_mut()),
-                _ => {
-                    // For boxed primitives, we need to write back the value after the closure returns.
-                    // This is more complex than with_data.
-                    let mut buf = [0u8; 16];
-                    let size = v.size_bytes();
-                    let cts = CTSValue::Value(v.clone());
-                    cts.write(&mut buf[..size]);
-                    let result = f(&mut buf[..size]);
-
-                    // TODO: Marshaling back to ValueType
-                    // This currently only supports structs in boxes for mutation.
-                    // primitives in boxes are generally immutable in .NET anyway (you'd re-box).
-                    // But if it's a ref to a boxed int, it might be mutable.
-                    if size > 0 {
-                        panic!(
-                            "Mutation of boxed primitives via with_data_mut is not yet implemented"
-                        );
-                    }
-
-                    result
-                }
-            },
+            HeapStorage::Boxed(o) => f(&mut o.instance_storage.get_mut()),
             HeapStorage::Str(_) => {
                 panic!("Strings are immutable and cannot be accessed via with_data_mut")
             }
@@ -506,7 +475,7 @@ impl Debug for ObjectRef<'_> {
                     HeapStorage::Obj(o) => o.description.type_name(),
                     HeapStorage::Vec(v) => format!("{:?}[{}]", v.element, v.layout.length),
                     HeapStorage::Str(s) => format!("{:?}", s),
-                    HeapStorage::Boxed(v) => format!("boxed {:?}", v),
+                    HeapStorage::Boxed(o) => format!("boxed {}", o.description.type_name()),
                 };
                 write!(f, "{} @ {:#?}", desc, Gc::as_ptr(gc))
             }
@@ -519,7 +488,7 @@ pub enum HeapStorage<'gc> {
     Vec(Vector<'gc>),
     Obj(Object<'gc>),
     Str(CLRString),
-    Boxed(ValueType<'gc>),
+    Boxed(Object<'gc>),
 }
 
 // SAFETY: HeapStorage is an enum where each variant either implements Collect or
@@ -541,7 +510,7 @@ impl<'gc> HeapStorage<'gc> {
             HeapStorage::Vec(v) => v.size_bytes(),
             HeapStorage::Obj(o) => o.size_bytes(),
             HeapStorage::Str(s) => s.size_bytes(),
-            HeapStorage::Boxed(v) => v.size_bytes(),
+            HeapStorage::Boxed(o) => o.size_bytes(),
         }
     }
 
@@ -550,7 +519,7 @@ impl<'gc> HeapStorage<'gc> {
             HeapStorage::Vec(v) => v.validate_resurrection_invariants(),
             HeapStorage::Obj(o) => o.validate_resurrection_invariants(),
             HeapStorage::Str(_) => {}
-            HeapStorage::Boxed(b) => b.validate_resurrection_invariants(),
+            HeapStorage::Boxed(o) => o.validate_resurrection_invariants(),
         }
     }
 
@@ -563,7 +532,7 @@ impl<'gc> HeapStorage<'gc> {
         match self {
             HeapStorage::Vec(v) => v.resurrect(fc, visited, depth),
             HeapStorage::Obj(o) => o.resurrect(fc, visited, depth),
-            HeapStorage::Boxed(v) => v.resurrect(fc, visited, depth),
+            HeapStorage::Boxed(o) => o.resurrect(fc, visited, depth),
             HeapStorage::Str(_) => {}
         }
     }
@@ -590,10 +559,7 @@ impl<'gc> HeapStorage<'gc> {
             HeapStorage::Vec(v) => unsafe { v.raw_data_ptr() },
             HeapStorage::Str(s) => s.as_ptr() as *mut u8,
             HeapStorage::Obj(o) => unsafe { o.instance_storage.raw_data_ptr() },
-            HeapStorage::Boxed(ValueType::Struct(o)) => unsafe {
-                o.instance_storage.raw_data_ptr()
-            },
-            HeapStorage::Boxed(v) => v as *const _ as *mut u8,
+            HeapStorage::Boxed(o) => unsafe { o.instance_storage.raw_data_ptr() },
         }
     }
 }

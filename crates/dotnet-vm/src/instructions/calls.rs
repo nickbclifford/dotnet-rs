@@ -151,14 +151,7 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             let value_vec = unsafe { m.with_data(value_size.as_usize(), |data| data.to_vec()) };
             let value = vm_try!(ctx.read_cts_value(&constraint_type_source, &value_vec));
 
-            let boxed = ObjectRef::new(
-                ctx.gc(),
-                HeapStorage::Boxed(vm_try!(
-                    ctx.new_value_type(&constraint_type_source, value.into_stack())
-                )),
-            );
-            ctx.register_new_object(&boxed);
-
+            let boxed = vm_try!(ctx.box_value(&constraint_type_source, value.into_stack()));
             args[0] = StackValue::ObjectRef(boxed);
             let this_type = vm_try!(ctx.get_heap_description(boxed.0.unwrap()));
             ctx.resolver().resolve_virtual_method(

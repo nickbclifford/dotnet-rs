@@ -92,6 +92,33 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
 
         let stack_base = locals_base + pinned_locals.len();
 
+        // Canonicalize 'this' for value type instance methods
+        if method.signature.instance {
+            let this_val = self.evaluation_stack.get_slot(argument_base);
+            if let StackValue::ObjectRef(obj) = this_val {
+                let td = method.source.parent;
+                if td.is_value_type(&self.current_context())? {
+                    // Unbox this to a managed pointer. This is required when a virtual call
+                    // on a boxed value type reaches a value type override.
+                    let ptr = obj.as_heap_storage(|storage| match storage {
+                        HeapStorage::Boxed(o) | HeapStorage::Obj(o) => unsafe {
+                            o.instance_storage.raw_data_ptr()
+                        },
+                        _ => panic!("Expected boxed value type in unbox canonicalization"),
+                    });
+                    let managed_ptr = dotnet_value::pointer::ManagedPtr::new(
+                        std::ptr::NonNull::new(ptr),
+                        td,
+                        Some(obj),
+                        false,
+                        Some(dotnet_value::ByteOffset(0)),
+                    );
+                    self.evaluation_stack
+                        .set_slot_at(argument_base, StackValue::ManagedPtr(managed_ptr));
+                }
+            }
+        }
+
         if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
             if frame.stack_height < crate::StackSlotIndex(num_args) {
                 panic!(

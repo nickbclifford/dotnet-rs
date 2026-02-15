@@ -489,7 +489,16 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-// System.Runtime.CompilerServices.Unsafe::SizeOf<T>()
+#[dotnet_intrinsic("static void System.Runtime.CompilerServices.Unsafe::SkipInit<T>(T&)")]
+pub fn intrinsic_unsafe_skip_init<'gc, 'm: 'gc>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    ctx.pop();
+    StepResult::Continue
+}
+
 #[dotnet_intrinsic("static int System.Runtime.CompilerServices.Unsafe::SizeOf<T>()")]
 #[allow(unused_variables)]
 pub fn intrinsic_unsafe_size_of<'gc, 'm: 'gc>(

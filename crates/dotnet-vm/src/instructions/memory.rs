@@ -106,6 +106,13 @@ pub fn stind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: StoreType) -> 
         }
     }
 
+    // Check for null managed pointer before extracting origin/offset
+    if let StackValue::ManagedPtr(ref m) = addr_val {
+        if m.is_null() {
+            return ctx.throw_by_name("System.NullReferenceException");
+        }
+    }
+
     let (origin, offset) = match addr_val {
         StackValue::NativeInt(p) => (PointerOrigin::Unmanaged, ByteOffset(p as usize)),
         StackValue::ManagedPtr(m) => (m.origin, m.offset),
@@ -152,6 +159,13 @@ pub fn ldind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: LoadType) -> S
         let val = convert_from_stack_value(ctx.get_slot(slot_idx), param0);
         ctx.push(val);
         return StepResult::Continue;
+    }
+
+    // Check for null managed pointer before extracting origin/offset
+    if let StackValue::ManagedPtr(ref m) = addr_val {
+        if m.is_null() {
+            return ctx.throw_by_name("System.NullReferenceException");
+        }
     }
 
     let (origin, offset) = match addr_val {

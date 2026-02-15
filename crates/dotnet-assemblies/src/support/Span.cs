@@ -111,6 +111,9 @@ namespace System
                 return ref Unsafe.Add(ref _reference, index);
             }
         }
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public extern ref T GetPinnableReference();
     }
 
     [Stub(InPlaceOf = "System.ReadOnlySpan`1")]
@@ -209,5 +212,8 @@ namespace System
                 return ref Unsafe.Add(ref _reference, index);
             }
         }
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public extern ref readonly T GetPinnableReference();
     }
 }

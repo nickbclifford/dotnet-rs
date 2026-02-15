@@ -90,6 +90,13 @@ use crate::{
     state::{GlobalCaches, SharedGlobalState},
 };
 use dotnet_assemblies::AssemblyLoader;
+use dotnet_value::{
+    StackValue,
+    layout::{HasLayout, LayoutManager},
+    object::{CTSValue, HeapStorage, Object, ObjectHandle, ObjectRef, ValueType, Vector},
+    pointer::ManagedPtr,
+    storage::FieldStorage,
+};
 use dotnet_types::{
     TypeDescription,
     comparer::decompose_type_source,
@@ -99,13 +106,6 @@ use dotnet_types::{
     resolution::ResolutionS,
 };
 use dotnet_utils::gc::GCHandle;
-use dotnet_value::{
-    StackValue,
-    layout::{HasLayout, LayoutManager},
-    object::{CTSValue, Object, ObjectHandle, ValueType, Vector},
-    pointer::ManagedPtr,
-    storage::FieldStorage,
-};
 use dotnetdll::prelude::*;
 use std::{
     any,
@@ -579,7 +579,7 @@ impl<'m> ResolverService<'m> {
             Obj(o) => Ok(o.description),
             Vec(_) => self.loader.corlib_type("System.Array"),
             Str(_) => self.loader.corlib_type("System.String"),
-            Boxed(v) => self.value_type_description(v),
+            Boxed(o) => Ok(o.description),
         }
     }
 
@@ -645,6 +645,26 @@ impl<'m> ResolverService<'m> {
             ctx.generics.clone(),
             self.new_instance_fields(td, ctx)?,
         ))
+    }
+
+    pub fn box_value<'gc>(
+        &self,
+        t: &ConcreteType,
+        data: StackValue<'gc>,
+        gc: GCHandle<'gc>,
+        ctx: &ResolutionContext<'_, 'm>,
+    ) -> Result<ObjectRef<'gc>, TypeResolutionError> {
+        let t = self.normalize_type(t.clone())?;
+        match self.new_cts_value(&t, data, ctx)? {
+            CTSValue::Value(v) => {
+                let td = self.loader.find_concrete_type(t)?;
+                let mut obj_instance = self.new_object(td, ctx)?;
+                let size = v.size_bytes();
+                CTSValue::Value(v).write(&mut obj_instance.instance_storage.get_mut()[..size]);
+                Ok(ObjectRef::new(gc, HeapStorage::Boxed(obj_instance)))
+            }
+            CTSValue::Ref(r) => Ok(r),
+        }
     }
 
     pub fn new_instance_fields(

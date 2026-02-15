@@ -253,14 +253,10 @@ pub fn ldflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource)
         if field.parent.type_name() == "System.Runtime.CompilerServices.RawData" {
             let data = h.borrow();
             let ptr = match &data.storage {
-                HeapStorage::Obj(o) => unsafe { o.instance_storage.raw_data_ptr() },
-                HeapStorage::Vec(v) => unsafe { v.raw_data_ptr() },
-                HeapStorage::Boxed(b) => match b {
-                    dotnet_value::object::ValueType::Struct(s) => unsafe {
-                        s.instance_storage.raw_data_ptr()
-                    },
-                    _ => ptr::null_mut(),
+                HeapStorage::Obj(o) | HeapStorage::Boxed(o) => unsafe {
+                    o.instance_storage.raw_data_ptr()
                 },
+                HeapStorage::Vec(v) => unsafe { v.raw_data_ptr() },
                 HeapStorage::Str(_) => ptr::null_mut(),
             };
 

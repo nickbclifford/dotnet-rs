@@ -185,14 +185,8 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                     .is_value_type(&self.current_context())
                     .expect("Failed to check if return type is value type")
                 {
-                    let boxed = ObjectRef::new(
-                        self.gc,
-                        HeapStorage::Boxed(
-                            self.new_value_type(&return_concrete, val)
-                                .expect("Failed to create value type for return"),
-                        ),
-                    );
-                    self.register_new_object(&boxed);
+                    let boxed = self.box_value(&return_concrete, val)
+                        .expect("Failed to box return value");
                     self.push_obj(boxed);
                 } else {
                     // already a reference type (or null)

@@ -66,6 +66,16 @@ impl<'a, 'gc, 'm: 'gc> MemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
             .read_cts_value(t, data, gc, &self.current_context())
     }
 
+    #[inline]
+    fn box_value(
+        &self,
+        t: &ConcreteType,
+        data: StackValue<'gc>,
+    ) -> Result<ObjectRef<'gc>, TypeResolutionError> {
+        self.resolver()
+            .box_value(t, data, self.gc, &self.current_context())
+    }
+
     fn clone_object(&self, obj: ObjectRef<'gc>) -> ObjectRef<'gc> {
         let gc = self.gc;
         let h = obj.0.expect("cannot clone null object");

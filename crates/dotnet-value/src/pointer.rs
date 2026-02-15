@@ -740,7 +740,7 @@ mod tests {
             );
 
             // Create a small object (4 bytes for Int32)
-            let storage = HeapStorage::Boxed(ValueType::Int32(42));
+            let storage = HeapStorage::Str(crate::string::CLRString::from("test"));
             let obj = ObjectRef::new(gc_handle, storage);
 
             let ptr = ManagedPtr::new(
@@ -774,7 +774,7 @@ mod tests {
                 ArenaId(0),
             );
 
-            let storage = HeapStorage::Boxed(ValueType::Int32(42));
+            let storage = HeapStorage::Str(crate::string::CLRString::from("test"));
             let obj = ObjectRef::new(gc_handle, storage);
 
             let ptr = ManagedPtr::new(

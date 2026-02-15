@@ -32,6 +32,11 @@ pub trait MemoryOps<'gc> {
         t: &ConcreteType,
         data: &[u8],
     ) -> Result<CTSValue<'gc>, TypeResolutionError>;
+    fn box_value(
+        &self,
+        t: &ConcreteType,
+        data: StackValue<'gc>,
+    ) -> Result<ObjectRef<'gc>, TypeResolutionError>;
     #[must_use]
     fn clone_object(&self, obj: ObjectRef<'gc>) -> ObjectRef<'gc>;
     fn register_new_object(&self, instance: &ObjectRef<'gc>);

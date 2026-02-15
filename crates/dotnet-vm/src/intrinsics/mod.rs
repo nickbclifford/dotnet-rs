@@ -121,6 +121,7 @@ pub mod array_ops;
 pub mod cpu_intrinsics;
 pub mod delegates;
 pub mod diagnostics;
+pub mod exceptions;
 pub mod gc;
 pub mod math;
 pub mod metadata;
@@ -421,25 +422,26 @@ fn object_get_type<'gc, 'm: 'gc>(
                 .expect("System.Array must exist");
             RuntimeType::Type(arr_td)
         }
-        HeapStorage::Boxed(v) => match v {
-            ValueType::Struct(o) => RuntimeType::Type(o.description),
-            ValueType::Bool(_) => RuntimeType::Boolean,
-            ValueType::Char(_) => RuntimeType::Char,
-            ValueType::Int8(_) => RuntimeType::Int8,
-            ValueType::UInt8(_) => RuntimeType::UInt8,
-            ValueType::Int16(_) => RuntimeType::Int16,
-            ValueType::UInt16(_) => RuntimeType::UInt16,
-            ValueType::Int32(_) => RuntimeType::Int32,
-            ValueType::UInt32(_) => RuntimeType::UInt32,
-            ValueType::Int64(_) => RuntimeType::Int64,
-            ValueType::UInt64(_) => RuntimeType::UInt64,
-            ValueType::NativeInt(_) => RuntimeType::IntPtr,
-            ValueType::NativeUInt(_) => RuntimeType::UIntPtr,
-            ValueType::Pointer(_) => RuntimeType::IntPtr,
-            ValueType::Float32(_) => RuntimeType::Float32,
-            ValueType::Float64(_) => RuntimeType::Float64,
-            ValueType::TypedRef(_, _) => RuntimeType::Object,
-        },
+        HeapStorage::Boxed(o) => {
+            let name = o.description.type_name();
+            match name.as_str() {
+                "System.Boolean" => RuntimeType::Boolean,
+                "System.Char" => RuntimeType::Char,
+                "System.SByte" => RuntimeType::Int8,
+                "System.Byte" => RuntimeType::UInt8,
+                "System.Int16" => RuntimeType::Int16,
+                "System.UInt16" => RuntimeType::UInt16,
+                "System.Int32" => RuntimeType::Int32,
+                "System.UInt32" => RuntimeType::UInt32,
+                "System.Int64" => RuntimeType::Int64,
+                "System.UInt64" => RuntimeType::UInt64,
+                "System.Single" => RuntimeType::Float32,
+                "System.Double" => RuntimeType::Float64,
+                "System.IntPtr" => RuntimeType::IntPtr,
+                "System.UIntPtr" => RuntimeType::UIntPtr,
+                _ => RuntimeType::Type(o.description),
+            }
+        }
     });
 
     let typ_obj = ctx.get_runtime_type(rt);
