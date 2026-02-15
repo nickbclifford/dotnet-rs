@@ -19,13 +19,13 @@ impl<'a, 'gc, 'm: 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc, 'm> {
         let instance = vm_try!(self.new_object(exception_type));
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(instance));
         self.register_new_object(&obj_ref);
-        *self.exception_mode = ExceptionState::Throwing(obj_ref);
+        *self.exception_mode = ExceptionState::Throwing(obj_ref, false);
         StepResult::Exception
     }
 
     #[inline]
     fn throw(&mut self, exception: ObjectRef<'gc>) -> StepResult {
-        *self.exception_mode = ExceptionState::Throwing(exception);
+        *self.exception_mode = ExceptionState::Throwing(exception, false);
         self.handle_exception()
     }
 
@@ -37,7 +37,7 @@ impl<'a, 'gc, 'm: 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc, 'm> {
             .last()
             .cloned()
             .expect("rethrow without active exception");
-        *self.exception_mode = ExceptionState::Throwing(exception);
+        *self.exception_mode = ExceptionState::Throwing(exception, true);
         self.handle_exception()
     }
 

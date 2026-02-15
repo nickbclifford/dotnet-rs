@@ -341,7 +341,10 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         ctx.loader(),
         Some(&ctx.shared().caches.intrinsic_registry),
     ) {
-        return (metadata.handler)(ctx, method, generics);
+        ctx.set_current_intrinsic(Some(method));
+        let res = (metadata.handler)(ctx, method, generics);
+        ctx.set_current_intrinsic(None);
+        return res;
     }
 
     panic!("unsupported intrinsic {:?}", method);

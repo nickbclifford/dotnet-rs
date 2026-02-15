@@ -146,8 +146,12 @@ impl TestHarness {
 
         match executor.run() {
             vm::ExecutorResult::Exited(i) => i,
-            vm::ExecutorResult::Threw => {
-                panic!("VM threw an exception while running {:?}", resolution)
+            vm::ExecutorResult::Threw(exc) => {
+                eprintln!(
+                    "VM threw an unhandled exception while running {:?}:\n{}",
+                    resolution, exc
+                );
+                1
             }
             vm::ExecutorResult::Error(e) => {
                 panic!("VM internal error while running {:?}: {}", resolution, e)

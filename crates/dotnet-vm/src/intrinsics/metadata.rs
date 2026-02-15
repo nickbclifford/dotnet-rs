@@ -274,7 +274,13 @@ mod tests {
         use crate::StepResult;
 
         let handler1: IntrinsicHandler = |_, _, _| StepResult::Continue;
-        let handler2: IntrinsicHandler = |_, _, _| StepResult::MethodThrew;
+        let handler2: IntrinsicHandler = |_, _, _| {
+            StepResult::MethodThrew(crate::exceptions::ManagedException {
+                type_name: "TestException".to_string(),
+                message: None,
+                stack_trace: None,
+            })
+        };
 
         let meta1 = IntrinsicMetadata::static_intrinsic(handler1, "test1");
         let meta2 = IntrinsicMetadata::static_intrinsic(handler2, "test2");

@@ -369,6 +369,16 @@ pub fn external_call<'ctx, 'gc, 'm: 'gc>(
     ctx: &'ctx mut dyn VesOps<'gc, 'm>,
     method: MethodDescription,
 ) -> StepResult {
+    ctx.set_current_intrinsic(Some(method));
+    let res = external_call_impl(ctx, method);
+    ctx.set_current_intrinsic(None);
+    res
+}
+
+fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
+    ctx: &'ctx mut dyn VesOps<'gc, 'm>,
+    method: MethodDescription,
+) -> StepResult {
     let Some(p) = &method.method.pinvoke else {
         unreachable!()
     };

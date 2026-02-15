@@ -427,6 +427,10 @@ pub trait VesOps<'gc, 'm>:
 
     fn exception_mode(&self) -> &crate::exceptions::ExceptionState<'gc>;
     fn exception_mode_mut(&mut self) -> &mut crate::exceptions::ExceptionState<'gc>;
+
+    fn current_intrinsic(&self) -> Option<MethodDescription>;
+    fn set_current_intrinsic(&mut self, method: Option<MethodDescription>);
+
     fn evaluation_stack(&self) -> &crate::stack::evaluation_stack::EvaluationStack<'gc>;
     fn evaluation_stack_mut(&mut self)
     -> &mut crate::stack::evaluation_stack::EvaluationStack<'gc>;

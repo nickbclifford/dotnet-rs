@@ -79,6 +79,9 @@ pub struct MethodInfo<'a> {
     pub is_cctor: bool,
 }
 unsafe_empty_collect!(MethodInfo<'_>);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Collect)]
+#[collect(require_static)]
+pub struct CollectableMethodDescription(pub MethodDescription);
 impl MethodInfo<'static> {
     pub fn new(
         method: MethodDescription,
@@ -140,7 +143,7 @@ pub enum StepResult {
     Jump(usize),           // Set IP to X
     FramePushed,           // Do not advance IP (new frame active)
     Return,                // Pop frame
-    MethodThrew,           // Exception unhandled in frame
+    MethodThrew(exceptions::ManagedException), // Exception unhandled in frame
     Exception,             // Exception thrown, need to call handle_exception
     Yield,                 // GC/Thread yield
     Error(error::VmError), // Internal VM error

@@ -34,6 +34,7 @@ pub struct VesContext<'a, 'gc, 'm> {
     pub(crate) shared: &'a Arc<SharedGlobalState<'m>>,
     pub(crate) local: &'a mut ArenaLocalState<'gc>,
     pub(crate) exception_mode: &'a mut ExceptionState<'gc>,
+    pub(crate) current_intrinsic: &'a mut Option<crate::CollectableMethodDescription>,
     pub(crate) thread_id: &'a std::cell::Cell<dotnet_utils::ArenaId>,
     pub(crate) original_ip: &'a mut usize,
     pub(crate) original_stack_height: &'a mut crate::StackSlotIndex,
@@ -392,6 +393,14 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         self.exception_mode
     }
 
+    fn current_intrinsic(&self) -> Option<MethodDescription> {
+        self.current_intrinsic.map(|m| m.0)
+    }
+
+    fn set_current_intrinsic(&mut self, method: Option<MethodDescription>) {
+        *self.current_intrinsic = method.map(crate::CollectableMethodDescription);
+    }
+
     #[inline]
     fn evaluation_stack(&self) -> &EvaluationStack<'gc> {
         self.evaluation_stack
@@ -564,6 +573,7 @@ pub struct ThreadContext<'gc, 'm> {
     pub evaluation_stack: EvaluationStack<'gc>,
     pub frame_stack: FrameStack<'gc, 'm>,
     pub exception_mode: ExceptionState<'gc>,
+    pub current_intrinsic: Option<crate::CollectableMethodDescription>,
     pub original_ip: usize,
     pub original_stack_height: crate::StackSlotIndex,
 }

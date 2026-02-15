@@ -174,9 +174,20 @@ pub fn intrinsic_string_get_chars<'gc, 'm: 'gc>(
 ) -> StepResult {
     let index = ctx.pop_i32();
     let val = ctx.pop();
-    let value = with_string!(ctx, val, |s| s[index as usize]);
-    ctx.push_i32(value as i32);
-    StepResult::Continue
+    if val.as_object_ref().0.is_none() {
+        return ctx.throw_by_name("System.NullReferenceException");
+    }
+    let char_opt = with_string!(ctx, val, |s| if index >= 0 && (index as usize) < s.len() {
+        Some(s[index as usize])
+    } else {
+        None
+    });
+    if let Some(value) = char_opt {
+        ctx.push_i32(value as i32);
+        StepResult::Continue
+    } else {
+        ctx.throw_by_name("System.IndexOutOfRangeException")
+    }
 }
 
 /// System.String::get_Length()

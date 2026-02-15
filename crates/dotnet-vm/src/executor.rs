@@ -32,8 +32,18 @@ pub struct Executor {
 #[derive(Clone, Debug)]
 pub enum ExecutorResult {
     Exited(u8),
-    Threw, // TODO: well-typed exceptions
+    Threw(crate::exceptions::ManagedException),
     Error(crate::error::VmError),
+}
+
+impl std::fmt::Display for ExecutorResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExecutorResult::Exited(code) => write!(f, "Exited with code {}", code),
+            ExecutorResult::Threw(exc) => write!(f, "{}", exc),
+            ExecutorResult::Error(err) => write!(f, "Internal VM Error: {}", err),
+        }
+    }
 }
 
 impl Executor {
@@ -293,8 +303,8 @@ impl Executor {
                     });
                     break ExecutorResult::Exited(exit_code);
                 }
-                StepResult::MethodThrew => {
-                    break ExecutorResult::Threw;
+                StepResult::MethodThrew(exc) => {
+                    break ExecutorResult::Threw(exc);
                 }
                 StepResult::Error(e) => {
                     break ExecutorResult::Error(e);

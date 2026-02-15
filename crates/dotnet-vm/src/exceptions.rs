@@ -61,7 +61,8 @@ pub enum ExceptionState<'gc> {
     /// No exception is currently being processed.
     None,
     /// An exception has just been thrown. The next step is to begin the search phase.
-    Throwing(ObjectRef<'gc>),
+    /// The boolean flag indicates whether the original stack trace should be preserved (for rethrow).
+    Throwing(ObjectRef<'gc>, bool),
     /// Currently searching for a matching handler (catch or filter).
     Searching(SearchState<'gc>),
     /// A filter block is currently executing.
@@ -70,6 +71,91 @@ pub enum ExceptionState<'gc> {
     Unwinding(UnwindState<'gc>),
     /// A `finally`, `fault`, or `catch` handler is currently executing.
     ExecutingHandler(UnwindState<'gc>),
+}
+
+/// A human-readable representation of a managed exception, suitable for display outside the VM.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedException {
+    pub type_name: String,
+    pub message: Option<String>,
+    pub stack_trace: Option<String>,
+}
+
+impl fmt::Display for ManagedException {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Unhandled Exception: {}", self.type_name)?;
+        if let Some(msg) = &self.message {
+            write!(f, ": {}", msg)?;
+        }
+        if let Some(st) = &self.stack_trace {
+            write!(f, "\nStack Trace:\n{}", st)?;
+        }
+        Ok(())
+    }
+}
+
+impl ManagedException {
+    /// Extracts human-readable information from a managed exception object.
+    pub fn extract<'gc>(
+        gc: &GCHandle<'gc>,
+        exception: ObjectRef<'gc>,
+        ctx: &dyn VesOps<'gc, '_>,
+    ) -> Self {
+        let mut message = None;
+        let mut stack_trace = None;
+
+        let exc_ref = exception
+            .0
+            .expect("Extracting information from a null exception reference");
+        let exc_type = ctx
+            .current_context()
+            .get_heap_description(exc_ref)
+            .expect("Failed to get type description for exception object");
+        let type_name = exc_type.type_name();
+
+        let exception_type = ctx
+            .loader()
+            .corlib_type("System.Exception")
+            .expect("Failed to resolve System.Exception type");
+
+        exception.as_object(|obj| {
+            if obj.instance_storage.has_field(exception_type, "_message") {
+                let message_bytes = obj
+                    .instance_storage
+                    .get_field_local(exception_type, "_message");
+                // SAFETY: message_bytes contains a valid ObjectRef from the object's storage.
+                let message_ref = unsafe { ObjectRef::read_branded(&message_bytes, gc) };
+                if let Some(msg_inner) = message_ref.0 {
+                    let storage = &msg_inner.borrow().storage;
+                    if let HeapStorage::Str(clr_str) = storage {
+                        message = Some(clr_str.as_string());
+                    }
+                }
+            }
+            if obj
+                .instance_storage
+                .has_field(exception_type, "_stackTraceString")
+            {
+                let st_bytes = obj
+                    .instance_storage
+                    .get_field_local(exception_type, "_stackTraceString");
+                // SAFETY: st_bytes contains a valid ObjectRef from the object's storage.
+                let st_ref = unsafe { ObjectRef::read_branded(&st_bytes, gc) };
+                if let Some(st_inner) = st_ref.0 {
+                    let storage = &st_inner.borrow().storage;
+                    if let HeapStorage::Str(clr_str) = storage {
+                        stack_trace = Some(clr_str.as_string());
+                    }
+                }
+            }
+        });
+
+        Self {
+            type_name,
+            message,
+            stack_trace,
+        }
+    }
 }
 
 /// The destination of the current unwind operation.
@@ -194,7 +280,7 @@ impl ExceptionHandlingSystem {
             // instructions without re-checking the current frame/exception state,
             // which can lead to corruption after stack or state transitions.
             ExceptionState::None => StepResult::Exception,
-            ExceptionState::Throwing(exception) => self.begin_throwing(ctx, exception, gc),
+            ExceptionState::Throwing(exception, preserve) => self.begin_throwing(ctx, exception, gc, preserve),
             ExceptionState::Searching(state) => {
                 self.search_for_handler(ctx, gc, state.exception, state.cursor)
             }
@@ -212,7 +298,9 @@ impl ExceptionHandlingSystem {
         ctx: &mut dyn VesOps<'gc, 'm>,
         exception: ObjectRef<'gc>,
         gc: GCHandle<'gc>,
+        preserve_stack_trace: bool,
     ) -> StepResult {
+        // println!("DEBUG: current_intrinsic={:?}", ctx.current_intrinsic());
         let frame = ctx.frame_stack().current_frame();
         if ctx.tracer_enabled() {
             ctx.tracer().trace_exception(
@@ -226,46 +314,79 @@ impl ExceptionHandlingSystem {
         }
 
         // Capture and store stack trace
-        let mut trace = String::new();
-        for frame in ctx.frame_stack().frames.iter().rev() {
-            let method = &frame.state.info_handle.source;
-            let type_name = method.parent.type_name();
-            let method_name = method.method.name.to_string();
-            let ip = frame.state.ip;
-            trace.push_str(&format!(
-                "   at {}.{}(...) in IP {}\n",
-                type_name, method_name, ip
-            ));
+        let exception_type = vm_try!(ctx.loader().corlib_type("System.Exception"));
+
+        let mut existing_trace = None;
+        if preserve_stack_trace {
+            exception.as_object(|obj| {
+                if obj
+                    .instance_storage
+                    .has_field(exception_type, "_stackTraceString")
+                {
+                    let st_bytes = obj
+                        .instance_storage
+                        .get_field_local(exception_type, "_stackTraceString");
+                    // SAFETY: st_bytes contains a valid ObjectRef from the object's storage.
+                    let st_ref = unsafe { ObjectRef::read_branded(&st_bytes, &gc) };
+                    if let Some(st_inner) = st_ref.0 {
+                        let storage = &st_inner.borrow().storage;
+                        if let HeapStorage::Str(clr_str) = storage {
+                            existing_trace = Some(clr_str.as_string());
+                        }
+                    }
+                }
+            });
         }
 
-        let exception_type = vm_try!(ctx.loader().corlib_type("System.Exception"));
-        exception.as_object(|obj| {
-            if obj
-                .instance_storage
-                .has_field(exception_type, "_stackTraceString")
-            {
-                let clr_str = CLRString::from(trace);
-                let str_obj = ObjectRef::new(gc, HeapStorage::Str(clr_str));
-                ctx.register_new_object(&str_obj);
+        if !preserve_stack_trace || existing_trace.is_none() {
+            let mut trace = String::new();
 
-                let mut field_data = obj
-                    .instance_storage
-                    .get_field_mut_local(exception_type, "_stackTraceString");
-                let val = StackValue::ObjectRef(str_obj);
-                // SAFETY: field_data is a valid mutable slice of the object's instance storage,
-                // and val is a valid StackValue::ObjectRef. StoreType matches the field type.
-                unsafe {
-                    val.store(field_data.as_mut_ptr(), StoreType::Object);
-                }
+            // If we're in an intrinsic, record it first
+            if let Some(intrinsic) = ctx.current_intrinsic() {
+                let type_name = intrinsic.parent.type_name();
+                let method_name = intrinsic.method.name.to_string();
+                trace.push_str(&format!("   at {}.{}(...) [Intrinsic]\n", type_name, method_name));
             }
-        });
+
+            for frame in ctx.frame_stack().frames.iter().rev() {
+                let method = &frame.state.info_handle.source;
+                let type_name = method.parent.type_name();
+                let method_name = method.method.name.to_string();
+                let ip = frame.state.ip;
+                trace.push_str(&format!(
+                    "   at {}.{}(...) in IP {}\n",
+                    type_name, method_name, ip
+                ));
+            }
+
+            exception.as_object(|obj| {
+                if obj
+                    .instance_storage
+                    .has_field(exception_type, "_stackTraceString")
+                {
+                    let clr_str = CLRString::from(trace);
+                    let str_obj = ObjectRef::new(gc, HeapStorage::Str(clr_str));
+                    ctx.register_new_object(&str_obj);
+
+                    let mut field_data = obj
+                        .instance_storage
+                        .get_field_mut_local(exception_type, "_stackTraceString");
+                    let val = StackValue::ObjectRef(str_obj);
+                    // SAFETY: field_data is a valid mutable slice of the object's instance storage,
+                    // and val is a valid StackValue::ObjectRef. StoreType matches the field type.
+                    unsafe {
+                        val.store(field_data.as_mut_ptr(), StoreType::Object);
+                    }
+                }
+            });
+        }
 
         // Preempt any existing exception handling state (nested exceptions).
         // If we are already in the middle of a search or filter, we MUST NOT clear the suspended state,
         // as it contains the state of the outer exception we need to resume later.
         if matches!(
             *ctx.exception_mode(),
-            ExceptionState::None | ExceptionState::Throwing(_)
+            ExceptionState::None | ExceptionState::Throwing(_, _)
         ) {
             ctx.evaluation_stack_mut().clear_suspended();
             ctx.frame_stack_mut().clear_suspended();
@@ -386,62 +507,25 @@ impl ExceptionHandlingSystem {
         // In a real VM this might trigger a debugger or a default handler.
         // Log the exception and full backtrace before clearing the stack.
 
-        let mut message = None;
-        let mut stack_trace = None;
-        let exc_ref = vm_try!(exception.0.ok_or(TypeResolutionError::InvalidHandle));
-        let exc_type = vm_try!(ctx.current_context().get_heap_description(exc_ref));
-        let type_name = exc_type.type_name();
-
-        let exception_type = vm_try!(ctx.loader().corlib_type("System.Exception"));
-        exception.as_object(|obj| {
-            if obj.instance_storage.has_field(exception_type, "_message") {
-                let message_bytes = obj
-                    .instance_storage
-                    .get_field_local(exception_type, "_message");
-                // SAFETY: message_bytes contains a valid ObjectRef from the object's storage.
-                let message_ref = unsafe { ObjectRef::read_branded(&message_bytes, &gc) };
-                if let Some(msg_inner) = message_ref.0 {
-                    let storage = &msg_inner.borrow().storage;
-                    if let HeapStorage::Str(clr_str) = storage {
-                        message = Some(clr_str.as_string());
-                    }
-                }
-            }
-            if obj
-                .instance_storage
-                .has_field(exception_type, "_stackTraceString")
-            {
-                let st_bytes = obj
-                    .instance_storage
-                    .get_field_local(exception_type, "_stackTraceString");
-                // SAFETY: st_bytes contains a valid ObjectRef from the object's storage.
-                let st_ref = unsafe { ObjectRef::read_branded(&st_bytes, &gc) };
-                if let Some(st_inner) = st_ref.0 {
-                    let storage = &st_inner.borrow().storage;
-                    if let HeapStorage::Str(clr_str) = storage {
-                        stack_trace = Some(clr_str.as_string());
-                    }
-                }
-            }
-        });
+        let managed_exc = ManagedException::extract(&gc, exception, ctx);
 
         // Also log to tracer if enabled
-        if let Some(msg) = &message {
+        if let Some(msg) = &managed_exc.message {
             vm_error!(
                 ctx,
                 "UNHANDLED EXCEPTION: {} (Type: {}) - No matching exception handler found",
                 msg,
-                type_name
+                managed_exc.type_name
             );
         } else {
             vm_error!(
                 ctx,
                 "UNHANDLED EXCEPTION: {} - No matching exception handler found",
-                type_name
+                managed_exc.type_name
             );
         }
 
-        if let Some(st) = stack_trace {
+        if let Some(st) = &managed_exc.stack_trace {
             vm_error!(ctx, "Stack Trace:\n{}", st);
         } else {
             for (frame_idx, frame) in ctx.frame_stack().frames.iter().enumerate() {
@@ -458,7 +542,7 @@ impl ExceptionHandlingSystem {
         *ctx.exception_mode_mut() = ExceptionState::None;
         ctx.frame_stack_mut().clear();
         ctx.evaluation_stack_mut().clear();
-        StepResult::MethodThrew
+        StepResult::MethodThrew(managed_exc)
     }
 
     fn unwind<'gc, 'm: 'gc>(

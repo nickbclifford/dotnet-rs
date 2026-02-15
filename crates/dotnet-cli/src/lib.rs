@@ -73,7 +73,10 @@ pub fn run_cli() -> ExitCode {
     let result = executor.run();
     match result {
         ExecutorResult::Exited(i) => ExitCode::from(i),
-        ExecutorResult::Threw => todo!("pretty output for crashing on unhandled exception"),
+        ExecutorResult::Threw(exc) => {
+            eprintln!("{}", exc);
+            ExitCode::from(1)
+        }
         ExecutorResult::Error(e) => {
             eprintln!("Internal VM error: {}", e);
             ExitCode::from(1)
