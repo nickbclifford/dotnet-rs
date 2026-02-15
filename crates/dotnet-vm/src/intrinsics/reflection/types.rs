@@ -382,7 +382,9 @@ pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<'gc, 'm: 'g
 ) -> StepResult {
     let target = &generics.method_generics[0];
     let layout = vm_try!(type_layout(target.clone(), &ctx.current_context()));
-    ctx.push_i32(layout.is_or_contains_refs() as i32);
+    let res = layout.is_or_contains_refs();
+    
+    ctx.push_i32(res as i32);
     StepResult::Continue
 }
 

@@ -11,7 +11,7 @@ use dotnet_value::{
     CLRString, StackValue,
     layout::HasLayout,
     object::{HeapStorage, ObjectRef},
-    pointer::{PointerOrigin, UnmanagedPtr},
+    pointer::{ManagedPtr, PointerOrigin, UnmanagedPtr},
 };
 use dotnetdll::prelude::*;
 
@@ -159,6 +159,46 @@ pub fn new_object<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, ctor: &UserMethod
         StepResult::Continue
     } else {
         if ctx.is_intrinsic_cached(method) {
+            let is_value_type = vm_try!(ctx.resolver().is_value_type(parent));
+            if is_value_type && method_name == ".ctor" && parent_name != "System.String" {
+                let arg_count = method.method.signature.parameters.len();
+                let args = ctx.pop_multiple(arg_count);
+
+                let res_ctx = ctx.current_context().for_type_with_generics(parent, &lookup);
+                let instance = vm_try!(res_ctx.new_object(parent));
+
+                ctx.push_value_type(instance);
+                let this_slot = ctx.top_of_stack() - 1;
+                let this_ptr_slot = this_slot + 1;
+
+                // Push placeholder ManagedPtr
+                ctx.push_managed_ptr(ManagedPtr::new(None, parent, None, false, None));
+
+                for arg in args {
+                    ctx.push(arg);
+                }
+
+                // Update ManagedPtr with the now-stable address
+                let real_addr = ctx.get_slot_address(this_slot);
+                let this_ptr_val = match ctx.get_slot(this_ptr_slot) {
+                    StackValue::ManagedPtr(p) => p,
+                    _ => unreachable!(),
+                };
+                // IMPORTANT: Set the stack origin BEFORE updating the cached ptr,
+                // otherwise update_cached_ptr will set offset to the absolute address
+                // thinking it's an Unmanaged pointer.
+                let mut this_ptr_val = this_ptr_val.with_stack_origin(this_slot, dotnet_utils::ByteOffset(0));
+                this_ptr_val.update_cached_ptr(real_addr);
+                ctx.set_slot(this_ptr_slot, StackValue::ManagedPtr(this_ptr_val));
+
+                let res = intrinsic_call(ctx, method, &lookup);
+                if res != StepResult::Continue {
+                    return res;
+                }
+
+                return StepResult::Continue;
+            }
+
             return intrinsic_call(ctx, method, &lookup);
         }
 

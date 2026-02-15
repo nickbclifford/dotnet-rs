@@ -348,16 +348,10 @@ impl ExceptionHandlingSystem {
                         params_str.push_str(", ");
                     }
                     params_str.push_str(&param.1.show(method.resolution().definition()));
-                    if let Some(meta) = method
-                        .method
-                        .parameter_metadata
-                        .get(i)
-                        .and_then(|m| m.as_ref())
-                    {
-                        if let Some(name) = &meta.name {
-                            params_str.push(' ');
-                            params_str.push_str(name);
-                        }
+                    let Some(meta) = method.method.parameter_metadata.get(i) else { continue };
+                    if let Some(name) = meta.as_ref().and_then(|m| m.name.as_ref()) {
+                        params_str.push(' ');
+                        params_str.push_str(name);
                     }
                 }
                 params_str

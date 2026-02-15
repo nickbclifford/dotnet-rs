@@ -53,6 +53,75 @@ pub fn span_to_slice<'gc, 'a>(span: Object<'gc>, element_size: usize) -> &'a [u8
 
 use dotnet_macros::dotnet_intrinsic;
 
+#[dotnet_intrinsic("void System.Span<T>::.ctor(void*, int)")]
+#[dotnet_intrinsic("void System.ReadOnlySpan<T>::.ctor(void*, int)")]
+pub fn intrinsic_span_ctor_from_pointer<'gc, 'm: 'gc>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    _method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let length = ctx.pop_i32();
+    let ptr_val = ctx.pop();
+    let this_ptr = ctx.pop_managed_ptr();
+
+    let element_type = &generics.type_generics[0];
+    let element_desc = vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
+
+    // The pointer can be a NativeInt, ManagedPtr, or UnmanagedPtr
+    let managed = match ptr_val {
+        StackValue::NativeInt(ptr) => {
+            // Create a ManagedPtr from the native pointer
+            ManagedPtr::new(
+                NonNull::new(ptr as *mut u8),
+                element_desc,
+                None, // unmanaged pointer
+                false,
+                None,
+            )
+        }
+        StackValue::UnmanagedPtr(dotnet_value::pointer::UnmanagedPtr(ptr)) => {
+            // Create a ManagedPtr from the unmanaged pointer
+            ManagedPtr::new(
+                Some(ptr),
+                element_desc,
+                None, // unmanaged pointer
+                false,
+                None,
+            )
+        }
+        StackValue::ManagedPtr(m) => {
+            // Already a managed pointer, just use it
+            m
+        }
+        _ => panic!("Span constructor expected pointer, got {:?}", ptr_val),
+    };
+
+    // Write the managed pointer to the _reference field at offset 0 (first field)
+    let mut managed_bytes = vec![0u8; ManagedPtr::SIZE];
+    managed.write(&mut managed_bytes);
+    unsafe {
+        ctx.write_bytes(
+            this_ptr.origin.clone(),
+            this_ptr.offset,
+            &managed_bytes,
+        )
+        .expect("Failed to write _reference field");
+    }
+
+    // Write the length to the _length field (after the ManagedPtr, which is 16 bytes)
+    let length_offset = this_ptr.offset + dotnet_utils::ByteOffset(ManagedPtr::SIZE);
+    unsafe {
+        ctx.write_bytes(
+            this_ptr.origin.clone(),
+            length_offset,
+            &length.to_ne_bytes(),
+        )
+        .expect("Failed to write _length field");
+    }
+
+    StepResult::Continue
+}
+
 #[dotnet_intrinsic(
     "static bool System.MemoryExtensions::Equals(System.ReadOnlySpan<char>, System.ReadOnlySpan<char>, System.StringComparison)"
 )]
