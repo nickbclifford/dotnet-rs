@@ -23,7 +23,11 @@ impl<'a, 'gc, 'm: 'gc> PoolOps for VesContext<'a, 'gc, 'm> {
 }
 
 impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
-    fn resolve_address(&self, origin: PointerOrigin<'gc>, offset: dotnet_utils::ByteOffset) -> std::ptr::NonNull<u8> {
+    fn resolve_address(
+        &self,
+        origin: PointerOrigin<'gc>,
+        offset: dotnet_utils::ByteOffset,
+    ) -> std::ptr::NonNull<u8> {
         match origin {
             PointerOrigin::Stack(idx) => {
                 let slot = self.evaluation_stack.get_slot_ref(idx);
@@ -42,21 +46,21 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 let ptr = unsafe { inner.storage.raw_data_ptr() };
                 unsafe { std::ptr::NonNull::new_unchecked(ptr.add(offset.as_usize())) }
             }
-            PointerOrigin::Unmanaged => {
-                unsafe { std::ptr::NonNull::new_unchecked(offset.as_usize() as *mut u8) }
-            }
+            PointerOrigin::Unmanaged => unsafe {
+                std::ptr::NonNull::new_unchecked(offset.as_usize() as *mut u8)
+            },
             #[cfg(feature = "multithreaded-gc")]
             PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
                 let lock = unsafe { ptr.0.as_ref() };
                 let guard = lock.borrow();
                 let storage = &guard.storage;
-                unsafe { std::ptr::NonNull::new_unchecked(storage.raw_data_ptr().add(offset.as_usize())) }
+                unsafe {
+                    std::ptr::NonNull::new_unchecked(storage.raw_data_ptr().add(offset.as_usize()))
+                }
             }
-            PointerOrigin::Transient(obj) => {
-                obj.instance_storage.with_data(|data| {
-                    unsafe { std::ptr::NonNull::new_unchecked(data.as_ptr().add(offset.as_usize()) as *mut u8) }
-                })
-            }
+            PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| unsafe {
+                std::ptr::NonNull::new_unchecked(data.as_ptr().add(offset.as_usize()) as *mut u8)
+            }),
         }
     }
 
@@ -76,9 +80,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
                 let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                unsafe {
-                    memory.perform_write(ptr.as_ptr(), None, value, layout)
-                }
+                unsafe { memory.perform_write(ptr.as_ptr(), None, value, layout) }
             }
             PointerOrigin::Static(static_type, lookup) => {
                 let storage = self.statics().get(static_type, &lookup);
@@ -145,15 +147,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
                 let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                unsafe {
-                    memory.perform_read(
-                        self.gc,
-                        ptr.as_ptr(),
-                        None,
-                        layout,
-                        type_desc,
-                    )
-                }
+                unsafe { memory.perform_read(self.gc, ptr.as_ptr(), None, layout, type_desc) }
             }
             PointerOrigin::Static(static_type, lookup) => {
                 let storage = self.statics().get(static_type, &lookup);
@@ -279,11 +273,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 let ptr = self.resolve_address(origin, offset);
                 let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
-                    memory.read_bytes(
-                        None,
-                        dotnet_utils::ByteOffset(ptr.as_ptr() as usize),
-                        dest,
-                    )
+                    memory.read_bytes(None, dotnet_utils::ByteOffset(ptr.as_ptr() as usize), dest)
                 }
             }
             PointerOrigin::Static(type_desc, lookup) => {

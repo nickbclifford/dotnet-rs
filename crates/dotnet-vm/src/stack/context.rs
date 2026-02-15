@@ -480,8 +480,8 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
                     .trace_gc_finalization(self.indent(), &type_name, addr);
             }
 
-            let finalizer_data: Option<(MethodDescription, GenericLookup)> =
-                instance.as_heap_storage(|storage| {
+            let finalizer_data: Option<(MethodDescription, GenericLookup)> = instance
+                .as_heap_storage(|storage| {
                     if let HeapStorage::Obj(o) = storage {
                         let obj_type = o.description;
                         let generics = o.generics.clone();

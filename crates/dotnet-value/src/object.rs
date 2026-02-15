@@ -5,7 +5,10 @@ use crate::{
     storage::FieldStorage,
     string::CLRString,
 };
-use dotnet_types::{TypeDescription, generics::{ConcreteType, GenericLookup}};
+use dotnet_types::{
+    TypeDescription,
+    generics::{ConcreteType, GenericLookup},
+};
 use dotnet_utils::{
     DebugStr,
     gc::{GCHandle, ThreadSafeLock},

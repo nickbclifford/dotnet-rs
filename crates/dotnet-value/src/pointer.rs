@@ -835,7 +835,8 @@ mod tests {
                 None,
                 false,
                 Some(crate::ByteOffset(456)),
-            ).with_stack_origin(stack_slot, crate::ByteOffset(0));
+            )
+            .with_stack_origin(stack_slot, crate::ByteOffset(0));
 
             ptr_stack.write(&mut buf);
             let info = unsafe { ManagedPtr::read_unchecked(&buf) };
@@ -878,7 +879,10 @@ mod tests {
 
             ptr_static.write(&mut buf);
             let info = unsafe { ManagedPtr::read_unchecked(&buf) };
-            assert_eq!(info.address, NonNull::new((static_addr + static_offset) as *mut u8));
+            assert_eq!(
+                info.address,
+                NonNull::new((static_addr + static_offset) as *mut u8)
+            );
             assert_eq!(info.origin, PointerOrigin::Static(type_desc, generics));
             assert_eq!(info.offset.as_usize(), static_offset);
 
@@ -900,8 +904,13 @@ mod tests {
 
                 ptr_cross.write(&mut buf);
                 let info = unsafe { ManagedPtr::read_unchecked(&buf) };
-                assert_eq!(info.address, NonNull::new((ptr_raw as usize + cross_offset) as *mut u8));
-                if let PointerOrigin::CrossArenaObjectRef(recovered_ptr, recovered_arena) = info.origin {
+                assert_eq!(
+                    info.address,
+                    NonNull::new((ptr_raw as usize + cross_offset) as *mut u8)
+                );
+                if let PointerOrigin::CrossArenaObjectRef(recovered_ptr, recovered_arena) =
+                    info.origin
+                {
                     assert_eq!(recovered_ptr, ptr);
                     assert_eq!(recovered_arena, arena_id);
                 } else {
