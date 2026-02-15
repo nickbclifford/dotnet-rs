@@ -23,6 +23,43 @@ impl<'a, 'gc, 'm: 'gc> PoolOps for VesContext<'a, 'gc, 'm> {
 }
 
 impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
+    fn resolve_address(&self, origin: PointerOrigin<'gc>, offset: dotnet_utils::ByteOffset) -> std::ptr::NonNull<u8> {
+        match origin {
+            PointerOrigin::Stack(idx) => {
+                let slot = self.evaluation_stack.get_slot_ref(idx);
+                let base_ptr = slot.data_location().as_ptr();
+                unsafe { std::ptr::NonNull::new_unchecked(base_ptr.add(offset.as_usize())) }
+            }
+            PointerOrigin::Static(static_type, lookup) => {
+                let storage = self.statics().get(static_type, &lookup);
+                storage.storage.with_data(|data| {
+                    unsafe { std::ptr::NonNull::new_unchecked(data.as_ptr().add(offset.as_usize()) as *mut u8) }
+                })
+            }
+            PointerOrigin::Heap(owner) => {
+                let handle = owner.0.expect("resolve_address: null owner handle");
+                let inner = handle.borrow();
+                let ptr = unsafe { inner.storage.raw_data_ptr() };
+                unsafe { std::ptr::NonNull::new_unchecked(ptr.add(offset.as_usize())) }
+            }
+            PointerOrigin::Unmanaged => {
+                unsafe { std::ptr::NonNull::new_unchecked(offset.as_usize() as *mut u8) }
+            }
+            #[cfg(feature = "multithreaded-gc")]
+            PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
+                let lock = unsafe { ptr.0.as_ref() };
+                let guard = lock.borrow();
+                let storage = &guard.storage;
+                unsafe { std::ptr::NonNull::new_unchecked(storage.raw_data_ptr().add(offset.as_usize())) }
+            }
+            PointerOrigin::Transient(obj) => {
+                obj.instance_storage.with_data(|data| {
+                    unsafe { std::ptr::NonNull::new_unchecked(data.as_ptr().add(offset.as_usize()) as *mut u8) }
+                })
+            }
+        }
+    }
+
     /// # Safety
     ///
     /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
@@ -36,13 +73,11 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         layout: &dotnet_value::layout::LayoutManager,
     ) -> Result<(), String> {
         match origin {
-            PointerOrigin::Stack(idx, base_offset) => {
-                let slot = self.evaluation_stack.get_slot_ref(idx);
-                let base_ptr = slot.data_location().as_ptr();
-                let total_offset = base_offset + offset;
+            PointerOrigin::Stack(_idx) => {
+                let ptr = self.resolve_address(origin, offset);
                 let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
-                    memory.perform_write(base_ptr.add(total_offset.as_usize()), None, value, layout)
+                    memory.perform_write(ptr.as_ptr(), None, value, layout)
                 }
             }
             PointerOrigin::Static(static_type, lookup) => {
@@ -107,15 +142,13 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         type_desc: Option<TypeDescription>,
     ) -> Result<StackValue<'gc>, String> {
         match origin {
-            PointerOrigin::Stack(idx, base_offset) => {
-                let slot = self.evaluation_stack.get_slot_ref(idx);
-                let base_ptr = slot.data_location().as_ptr();
-                let total_offset = base_offset + offset;
+            PointerOrigin::Stack(_idx) => {
+                let ptr = self.resolve_address(origin, offset);
                 let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.perform_read(
                         self.gc,
-                        base_ptr.add(total_offset.as_usize()),
+                        ptr.as_ptr(),
                         None,
                         layout,
                         type_desc,
@@ -177,16 +210,14 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         data: &[u8],
     ) -> Result<(), String> {
         match origin {
-            PointerOrigin::Stack(idx, base_offset) => {
-                let slot = self.evaluation_stack.get_slot_ref(idx);
-                let base_ptr = slot.data_location().as_ptr();
-                let total_offset = base_offset + offset;
+            PointerOrigin::Stack(_idx) => {
+                let ptr = self.resolve_address(origin, offset);
                 let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.write_bytes(
                         self.gc,
                         None,
-                        dotnet_utils::ByteOffset(base_ptr.add(total_offset.as_usize()) as usize),
+                        dotnet_utils::ByteOffset(ptr.as_ptr() as usize),
                         data,
                     )
                 }
@@ -244,15 +275,13 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         dest: &mut [u8],
     ) -> Result<(), String> {
         match origin {
-            PointerOrigin::Stack(idx, base_offset) => {
-                let slot = self.evaluation_stack.get_slot_ref(idx);
-                let base_ptr = slot.data_location().as_ptr();
-                let total_offset = base_offset + offset;
+            PointerOrigin::Stack(_idx) => {
+                let ptr = self.resolve_address(origin, offset);
                 let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.read_bytes(
                         None,
-                        dotnet_utils::ByteOffset(base_ptr.add(total_offset.as_usize()) as usize),
+                        dotnet_utils::ByteOffset(ptr.as_ptr() as usize),
                         dest,
                     )
                 }
@@ -349,16 +378,14 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                     )
                 }
             }
-            PointerOrigin::Stack(idx, base_offset) => {
-                let slot = self.evaluation_stack.get_slot_ref(idx);
-                let base_ptr = slot.data_location().as_ptr();
-                let abs_ptr = unsafe { base_ptr.add((base_offset + offset).as_usize()) };
+            PointerOrigin::Stack(_idx) => {
+                let ptr = self.resolve_address(origin, offset);
                 let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.compare_exchange_atomic(
                         self.gc,
                         None,
-                        dotnet_utils::ByteOffset(abs_ptr as usize),
+                        dotnet_utils::ByteOffset(ptr.as_ptr() as usize),
                         expected,
                         new,
                         size,
@@ -449,16 +476,14 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                     )
                 }
             }
-            PointerOrigin::Stack(idx, base_offset) => {
-                let slot = self.evaluation_stack.get_slot_ref(idx);
-                let base_ptr = slot.data_location().as_ptr();
-                let abs_ptr = unsafe { base_ptr.add((base_offset + offset).as_usize()) };
+            PointerOrigin::Stack(_idx) => {
+                let ptr = self.resolve_address(origin, offset);
                 let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.exchange_atomic(
                         self.gc,
                         None,
-                        dotnet_utils::ByteOffset(abs_ptr as usize),
+                        dotnet_utils::ByteOffset(ptr.as_ptr() as usize),
                         value,
                         size,
                         ordering,
@@ -534,15 +559,13 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                     )
                 }
             }
-            PointerOrigin::Stack(idx, base_offset) => {
-                let slot = self.evaluation_stack.get_slot_ref(idx);
-                let base_ptr = slot.data_location().as_ptr();
-                let abs_ptr = unsafe { base_ptr.add((base_offset + offset).as_usize()) };
+            PointerOrigin::Stack(_idx) => {
+                let ptr = self.resolve_address(origin, offset);
                 let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.load_atomic(
                         None,
-                        dotnet_utils::ByteOffset(abs_ptr as usize),
+                        dotnet_utils::ByteOffset(ptr.as_ptr() as usize),
                         size,
                         ordering,
                     )
@@ -616,16 +639,14 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                     )
                 }
             }
-            PointerOrigin::Stack(idx, base_offset) => {
-                let slot = self.evaluation_stack.get_slot_ref(idx);
-                let base_ptr = slot.data_location().as_ptr();
-                let abs_ptr = unsafe { base_ptr.add((base_offset + offset).as_usize()) };
+            PointerOrigin::Stack(_idx) => {
+                let ptr = self.resolve_address(origin, offset);
                 let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.store_atomic(
                         self.gc,
                         None,
-                        dotnet_utils::ByteOffset(abs_ptr as usize),
+                        dotnet_utils::ByteOffset(ptr.as_ptr() as usize),
                         value,
                         size,
                         ordering,

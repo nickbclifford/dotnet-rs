@@ -640,7 +640,11 @@ impl<'m> ResolverService<'m> {
         td: TypeDescription,
         ctx: &ResolutionContext<'_, 'm>,
     ) -> Result<Object<'gc>, TypeResolutionError> {
-        Ok(Object::new(td, self.new_instance_fields(td, ctx)?))
+        Ok(Object::new(
+            td,
+            ctx.generics.clone(),
+            self.new_instance_fields(td, ctx)?,
+        ))
     }
 
     pub fn new_instance_fields(

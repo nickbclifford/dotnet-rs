@@ -324,7 +324,7 @@ fn get_or_create_sync_block<'gc, T: SyncManagerOps>(
 }
 
 fn find_success_flag_index(_ctx: &dyn VesOps, success_ptr: &ManagedPtr) -> Option<usize> {
-    if let dotnet_value::pointer::PointerOrigin::Stack(idx, _) = &success_ptr.origin {
+    if let dotnet_value::pointer::PointerOrigin::Stack(idx) = &success_ptr.origin {
         return Some(idx.0);
     }
     None

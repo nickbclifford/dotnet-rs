@@ -183,6 +183,10 @@ pub trait PoolOps {
 }
 
 pub trait RawMemoryOps<'gc> {
+    /// Resolves a `PointerOrigin` and `ByteOffset` to a concrete memory address.
+    /// This is the central point for address calculation in the VM.
+    fn resolve_address(&self, origin: PointerOrigin<'gc>, offset: ByteOffset) -> std::ptr::NonNull<u8>;
+
     /// # Safety
     ///
     /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.

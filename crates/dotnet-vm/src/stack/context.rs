@@ -480,61 +480,55 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
                     .trace_gc_finalization(self.indent(), &type_name, addr);
             }
 
-            let finalizer: Option<MethodDescription> = instance.as_heap_storage(|storage| {
-                if let HeapStorage::Obj(o) = storage {
-                    let obj_type = o.description;
-                    let object_type = self
-                        .shared
-                        .loader
-                        .corlib_type("System.Object")
-                        .expect("System.Object must exist in corlib");
-                    let base_finalize = object_type
-                        .definition()
-                        .methods
-                        .iter()
-                        .find(|m| {
-                            m.name == "Finalize"
-                                && m.virtual_member
-                                && m.signature.parameters.is_empty()
-                        })
-                        .expect("System.Object::Finalize not found");
+            let finalizer_data: Option<(MethodDescription, GenericLookup)> =
+                instance.as_heap_storage(|storage| {
+                    if let HeapStorage::Obj(o) = storage {
+                        let obj_type = o.description;
+                        let generics = o.generics.clone();
+                        let object_type = self
+                            .shared
+                            .loader
+                            .corlib_type("System.Object")
+                            .expect("System.Object must exist in corlib");
+                        let base_finalize = object_type
+                            .definition()
+                            .methods
+                            .iter()
+                            .find(|m| {
+                                m.name == "Finalize"
+                                    && m.virtual_member
+                                    && m.signature.parameters.is_empty()
+                            })
+                            .expect("System.Object::Finalize not found");
 
-                    let method_desc = MethodDescription {
-                        parent: object_type,
-                        method: base_finalize,
-                        method_resolution: object_type.resolution,
-                    };
+                        let method_desc = MethodDescription {
+                            parent: object_type,
+                            method: base_finalize,
+                            method_resolution: object_type.resolution,
+                        };
 
-                    Some(
-                        self.resolver()
-                            .resolve_virtual_method(
-                                method_desc,
-                                obj_type,
-                                &GenericLookup::default(),
-                                &ctx,
-                            )
-                            .expect("Failed to resolve finalizer"),
-                    )
-                } else {
-                    None
-                }
-            });
+                        Some((
+                            self.resolver()
+                                .resolve_virtual_method(method_desc, obj_type, &generics, &ctx)
+                                .expect("Failed to resolve finalizer"),
+                            generics,
+                        ))
+                    } else {
+                        None
+                    }
+                });
 
-            let Some(finalizer) = finalizer else {
+            let Some((finalizer, generics)) = finalizer_data else {
                 self.local.heap.processing_finalizer.set(false);
                 return StepResult::Continue;
             };
 
-            let method_info = vm_try!(MethodInfo::new(
-                finalizer,
-                &self.shared.empty_generics,
-                self.shared.clone()
-            ));
+            let method_info = vm_try!(MethodInfo::new(finalizer, &generics, self.shared.clone()));
 
             // Push the object as 'this'
             self.push(StackValue::ObjectRef(instance));
 
-            vm_try!(self.call_frame(method_info, self.shared.empty_generics.clone()));
+            vm_try!(self.call_frame(method_info, generics));
             self.current_frame_mut().is_finalizer = true;
             return StepResult::FramePushed;
         }

@@ -38,7 +38,8 @@ impl<'gc> EvaluationStack<'gc> {
 
         let update_val = |val: &mut StackValue<'gc>| match val {
             StackValue::ManagedPtr(m) => {
-                if let PointerOrigin::Stack(idx, off) = m.origin {
+                if let PointerOrigin::Stack(idx) = m.origin {
+                    let off = m.offset;
                     let slot_ptr = if idx.as_usize() < slot_locations.len() {
                         slot_locations[idx.as_usize()]
                     } else {
@@ -59,7 +60,7 @@ impl<'gc> EvaluationStack<'gc> {
                             let offset_val = offset.as_usize();
                             let slice = &mut data[offset_val..offset_val + 16];
                             let info = unsafe { ManagedPtr::read_stack_info(slice) };
-                            if let PointerOrigin::Stack(idx, _) = info.origin {
+                            if let PointerOrigin::Stack(idx) = info.origin {
                                 let slot_ptr = if idx.as_usize() < slot_locations.len() {
                                     slot_locations[idx.as_usize()]
                                 } else {
@@ -71,7 +72,7 @@ impl<'gc> EvaluationStack<'gc> {
                                     )
                                 };
                                 let word0: usize = 1
-                                    | ((idx.as_usize() & 0xFFFFFFFF) << 1)
+                                    | ((idx.as_usize() & 0x3FFFFFFF) << 3)
                                     | (info.offset.as_usize() << 33);
                                 let word1 = new_ptr.as_ptr() as usize;
                                 slice[0..8].copy_from_slice(&word0.to_ne_bytes());

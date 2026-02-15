@@ -259,7 +259,7 @@ impl<'gc> StackValue<'gc> {
         pinned: bool,
     ) -> Self {
         let mut m = ManagedPtr::new(NonNull::new(ptr), target_type, None, pinned, Some(offset));
-        m.origin = PointerOrigin::Stack(index, offset);
+        m.origin = PointerOrigin::Stack(index);
         Self::ManagedPtr(m)
     }
     pub fn null() -> Self {

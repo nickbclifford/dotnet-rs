@@ -1,5 +1,5 @@
 use crate::memory::heap::HeapManager;
-use dotnet_types::TypeDescription;
+use dotnet_types::{TypeDescription, generics::GenericLookup};
 use dotnet_utils::{ByteOffset, atomic::validate_atomic_access, gc::GCHandle};
 use dotnet_value::{
     StackValue,
@@ -630,7 +630,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         ptr::copy_nonoverlapping(ptr, data.as_mut_ptr(), size.as_usize());
 
                         let storage = FieldStorage::new(Arc::new(flm.clone()), data);
-                        let obj = ObjectInstance::new(desc, storage);
+                        let obj = ObjectInstance::new(desc, GenericLookup::default(), storage);
 
                         StackValue::ValueType(obj)
                     } else {

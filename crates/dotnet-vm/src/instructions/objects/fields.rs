@@ -7,7 +7,7 @@ use dotnet_value::{
     StackValue,
     layout::HasLayout,
     object::{HeapStorage, ObjectRef},
-    pointer::{ManagedPtr, PointerOrigin},
+    pointer::ManagedPtr,
 };
 use dotnetdll::prelude::*;
 use std::ptr::{self, NonNull};
@@ -334,92 +334,24 @@ pub fn ldflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource)
     ));
     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
 
-    let base_offset = if field.parent.type_name() == "System.String" && name == "_firstChar" {
-        base_offset - field_layout.position
-    } else {
+    let field_offset = if field.parent.type_name() == "System.String" && name == "_firstChar" {
         base_offset
+    } else {
+        base_offset + field_layout.position
     };
-
-    let field_offset = base_offset + field_layout.position;
     let t = vm_try!(res_ctx.get_field_type(field));
     let target_type = vm_try!(ctx.loader().find_concrete_type(t));
 
-    match origin {
-        PointerOrigin::Stack(idx, _) => {
-            let slot = ctx.get_slot_ref(idx);
-            let field_ptr = if let StackValue::ValueType(v) = slot {
-                let base_ptr = v.instance_storage.get().as_ptr();
-                unsafe { base_ptr.add(field_offset.as_usize()) as *mut u8 }
-            } else {
-                panic!("Expected ValueType in slot for ldflda");
-            };
-            ctx.push(StackValue::managed_stack_ptr(
-                idx,
-                field_offset,
-                field_ptr,
-                target_type,
-                false,
-            ));
-        }
-        PointerOrigin::Heap(obj) => {
-            let base_ptr = obj.with_data(|d| d.as_ptr());
-            let field_ptr = unsafe { base_ptr.add(field_offset.as_usize()) as *mut u8 };
-            ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
-                NonNull::new(field_ptr),
-                target_type,
-                Some(obj),
-                false,
-                Some(field_offset),
-            )));
-        }
-        PointerOrigin::Static(type_desc, lookup) => {
-            let storage = ctx.statics().get(type_desc, &lookup);
-            let base_ptr = unsafe { storage.storage.raw_data_ptr() };
-            let field_ptr = unsafe { base_ptr.add(field_offset.as_usize()) };
-            ctx.push(StackValue::ManagedPtr(ManagedPtr::new_static(
-                NonNull::new(field_ptr),
-                target_type,
-                type_desc,
-                lookup,
-                false,
-                field_offset,
-            )));
-        }
-        PointerOrigin::Unmanaged => {
-            let field_ptr = field_offset.as_usize() as *mut u8;
-            ctx.push(StackValue::ManagedPtr(ManagedPtr::new(
-                NonNull::new(field_ptr),
-                target_type,
-                None,
-                false,
-                Some(field_offset),
-            )));
-        }
-        #[cfg(feature = "multithreaded-gc")]
-        PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
-            let lock = unsafe { ptr.0.as_ref() };
-            let guard = lock.borrow();
-            let base_ptr = unsafe { guard.storage.raw_data_ptr() };
-            let field_ptr = unsafe { base_ptr.add(field_offset.as_usize()) };
-            ctx.push(StackValue::ManagedPtr(ManagedPtr::new_cross_arena(
-                NonNull::new(field_ptr),
-                target_type,
-                ptr,
-                tid,
-                field_offset,
-            )));
-        }
-        PointerOrigin::Transient(obj) => {
-            let base_ptr = obj.with_data(|d| d.as_ptr());
-            let field_ptr = unsafe { base_ptr.add(field_offset.as_usize()) as *mut u8 };
-            ctx.push(StackValue::ManagedPtr(ManagedPtr::new_transient(
-                NonNull::new(field_ptr),
-                target_type,
-                obj,
-                field_offset,
-            )));
-        }
-    }
+    let field_ptr = ctx.resolve_address(origin.clone(), field_offset);
+    let info = dotnet_value::pointer::ManagedPtrInfo {
+        address: Some(field_ptr),
+        origin,
+        offset: field_offset,
+    };
+    ctx.push(StackValue::ManagedPtr(ManagedPtr::from_info(
+        info,
+        target_type,
+    )));
 
     StepResult::Continue
 }

@@ -1,16 +1,16 @@
 using System;
 
-public class Finalizable {
+public class GenericFinalizable<T> {
     public static int FinalizedCount = 0;
     
-    ~Finalizable() {
+    ~GenericFinalizable() {
         FinalizedCount++;
     }
 }
 
 public class Program {
     public static void CreateAndDrop() {
-        var f = new Finalizable();
+        var f = new GenericFinalizable<int>();
     }
 
     public static int Main() {
@@ -19,7 +19,7 @@ public class Program {
         for (int i = 0; i < 10; i++) {
             GC.Collect();
             GC.WaitForPendingFinalizers();
-            if (Finalizable.FinalizedCount > 0) {
+            if (GenericFinalizable<int>.FinalizedCount > 0) {
                 return 42;
             }
         }

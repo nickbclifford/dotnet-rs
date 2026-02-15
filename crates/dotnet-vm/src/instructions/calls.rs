@@ -52,8 +52,6 @@ pub fn callvirt<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         }
     };
 
-    // TODO: check explicit overrides
-
     // Push arguments back and dispatch
     for a in args {
         ctx.push(a);

@@ -40,7 +40,7 @@ unsafe_empty_collect!(UnmanagedPtr);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PointerOrigin<'gc> {
     Heap(ObjectRef<'gc>),
-    Stack(crate::StackSlotIndex, crate::ByteOffset),
+    Stack(crate::StackSlotIndex),
     Static(TypeDescription, GenericLookup),
     Unmanaged,
     #[cfg(feature = "multithreaded-gc")]
@@ -166,8 +166,8 @@ impl<'gc> ManagedPtr<'gc> {
     }
 
     pub fn stack_slot_origin(&self) -> Option<(crate::StackSlotIndex, crate::ByteOffset)> {
-        if let PointerOrigin::Stack(idx, off) = self.origin {
-            Some((idx, off))
+        if let PointerOrigin::Stack(idx) = self.origin {
+            Some((idx, self.offset))
         } else {
             None
         }
@@ -221,12 +221,18 @@ impl<'gc> ManagedPtr<'gc> {
         offset: Option<crate::ByteOffset>,
     ) -> Self {
         let owner = owner.and_then(|o| if o.0.is_some() { Some(o) } else { None });
-        let offset = offset.unwrap_or(crate::ByteOffset(0));
         let origin = if let Some(o) = owner {
             PointerOrigin::Heap(o)
         } else {
             PointerOrigin::Unmanaged
         };
+        let offset = offset.unwrap_or_else(|| {
+            if let PointerOrigin::Unmanaged = origin {
+                crate::ByteOffset(value.map_or(0, |p| p.as_ptr() as usize))
+            } else {
+                crate::ByteOffset(0)
+            }
+        });
 
         Self {
             #[cfg(any(feature = "memory-validation", debug_assertions))]
@@ -277,14 +283,15 @@ impl<'gc> ManagedPtr<'gc> {
         let word0 = unsafe { (source.as_ptr() as *const usize).read_unaligned() };
         let word1 = unsafe { (source.as_ptr().add(ptr_size) as *const usize).read_unaligned() };
 
-        if word0 & 1 == 1 {
+        let tag = word0 & 7;
+        if tag == 1 {
             // Stack pointer
-            let idx = (word0 >> 1) & 0xFFFFFFFF;
+            let idx = (word0 >> 3) & 0x3FFFFFFF;
             let off = word0 >> 33;
             ManagedPtrStackInfo {
                 address: NonNull::new(word1 as *mut u8),
                 offset: crate::ByteOffset(off),
-                origin: PointerOrigin::Stack(crate::StackSlotIndex(idx), crate::ByteOffset(off)),
+                origin: PointerOrigin::Stack(crate::StackSlotIndex(idx)),
             }
         } else {
             // Heap pointer or Static/Unmanaged
@@ -327,9 +334,9 @@ impl<'gc> ManagedPtr<'gc> {
         word1_bytes.copy_from_slice(&source[ptr_size..ptr_size * 2]);
         let word1 = usize::from_ne_bytes(word1_bytes);
 
-        if word0 & 1 != 0 {
+        let tag = word0 & 7;
+        if tag != 0 {
             // Tagged pointer or Stack
-            let tag = word0 & 7;
             match tag {
                 1 => {
                     // Stack (Tag 1)
@@ -338,10 +345,7 @@ impl<'gc> ManagedPtr<'gc> {
                     let raw_ptr = NonNull::new(word1 as *mut u8);
                     ManagedPtrInfo {
                         address: raw_ptr,
-                        origin: PointerOrigin::Stack(
-                            crate::StackSlotIndex(slot_idx),
-                            crate::ByteOffset(slot_offset),
-                        ),
+                        origin: PointerOrigin::Stack(crate::StackSlotIndex(slot_idx)),
                         offset: crate::ByteOffset(slot_offset),
                     }
                 }
@@ -394,22 +398,17 @@ impl<'gc> ManagedPtr<'gc> {
                         ManagedPtrInfo {
                             address: raw_ptr,
                             origin: PointerOrigin::Unmanaged,
-                            offset: crate::ByteOffset::ZERO,
+                            offset: crate::ByteOffset(word1),
                         }
                     }
                 }
                 _ => {
-                    // Fallback for old stack format (word0 & 1 != 0)
-                    let slot_idx = (word0 >> 1) & 0xFFFFFFFF;
-                    let slot_offset = word0 >> 33;
+                    // Invalid tag or unhandled format
                     let raw_ptr = NonNull::new(word1 as *mut u8);
                     ManagedPtrInfo {
                         address: raw_ptr,
-                        origin: PointerOrigin::Stack(
-                            crate::StackSlotIndex(slot_idx),
-                            crate::ByteOffset(slot_offset),
-                        ),
-                        offset: crate::ByteOffset(slot_offset),
+                        origin: PointerOrigin::Unmanaged,
+                        offset: crate::ByteOffset(word1),
                     }
                 }
             }
@@ -455,9 +454,9 @@ impl<'gc> ManagedPtr<'gc> {
         let ptr_size = ObjectRef::SIZE;
 
         match &self.origin {
-            PointerOrigin::Stack(slot_idx, slot_offset) => {
+            PointerOrigin::Stack(slot_idx) => {
                 let word0: usize =
-                    1 | ((slot_idx.as_usize() & 0x3FFFFFFF) << 3) | (slot_offset.as_usize() << 33);
+                    1 | ((slot_idx.as_usize() & 0x3FFFFFFF) << 3) | (self.offset.as_usize() << 33);
                 let word1 = self._value.map_or(0, |p| p.as_ptr() as usize);
                 dest[0..ptr_size].copy_from_slice(&word0.to_ne_bytes());
                 dest[ptr_size..ptr_size * 2].copy_from_slice(&word1.to_ne_bytes());
@@ -620,13 +619,12 @@ impl<'gc> ManagedPtr<'gc> {
         let new_value = transform(old_ptr);
         let mut m = self.clone();
         m._value = new_value;
-        if let PointerOrigin::Stack(_idx, ref mut offset) = m.origin {
+        if let PointerOrigin::Stack(_idx) = m.origin {
             let diff = if let (Some(new_p), Some(old_p)) = (new_value, old_ptr) {
                 (new_p.as_ptr() as isize).wrapping_sub(old_p.as_ptr() as isize)
             } else {
                 0
             };
-            *offset = crate::ByteOffset((offset.as_usize() as isize + diff) as usize);
             m.offset = crate::ByteOffset((m.offset.as_usize() as isize + diff) as usize);
         }
         m
@@ -666,25 +664,22 @@ impl<'gc> ManagedPtr<'gc> {
         m._value = m
             ._value
             .map(|p| unsafe { NonNull::new_unchecked(p.as_ptr().offset(bytes)) });
-        if let PointerOrigin::Stack(_idx, ref mut off) = m.origin {
-            *off = crate::ByteOffset((off.as_usize() as isize + bytes) as usize);
-        }
         m
     }
 
     pub fn with_stack_origin(
         mut self,
         slot_index: crate::StackSlotIndex,
-        offset: crate::ByteOffset,
+        _offset: crate::ByteOffset,
     ) -> Self {
         self.validate_magic();
-        self.origin = PointerOrigin::Stack(slot_index, offset);
+        self.origin = PointerOrigin::Stack(slot_index);
         self
     }
 
     pub fn is_stack_local(&self) -> bool {
         self.validate_magic();
-        matches!(self.origin, PointerOrigin::Stack(_, _))
+        matches!(self.origin, PointerOrigin::Stack(_))
     }
 
     /// Returns true if this ManagedPtr represents a null pointer.
@@ -793,6 +788,126 @@ mod tests {
             // Offset by 4 bytes (end of object) should be valid
             unsafe {
                 ptr.offset(4);
+            }
+        });
+    }
+
+    #[test]
+    fn test_managed_ptr_serialization_roundtrip() {
+        type TestRoot = Rootable![()];
+        let arena = Arena::<TestRoot>::new(|_mc| ());
+        #[cfg(feature = "multithreaded-gc")]
+        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(ArenaId(0))));
+
+        arena.mutate(|gc, _root| {
+            let gc_handle = dotnet_utils::gc::GCHandle::new(
+                gc,
+                #[cfg(feature = "multithreaded-gc")]
+                arena_handle.as_inner(),
+                #[cfg(feature = "memory-validation")]
+                ArenaId(0),
+            );
+
+            let mut buf = [0u8; 16];
+
+            // 1. Unmanaged
+            let unmanaged_addr = 0xDEADBEEFusize;
+            let ptr_unmanaged = ManagedPtr::new(
+                NonNull::new(unmanaged_addr as *mut u8),
+                TypeDescription::NULL,
+                None,
+                false,
+                None,
+            );
+
+            ptr_unmanaged.write(&mut buf);
+            let info = unsafe { ManagedPtr::read_unchecked(&buf) };
+            assert_eq!(info.address, NonNull::new(unmanaged_addr as *mut u8));
+            assert_eq!(info.origin, PointerOrigin::Unmanaged);
+            assert_eq!(info.offset.as_usize(), unmanaged_addr);
+
+            // 2. Stack
+            let stack_slot = crate::StackSlotIndex(123);
+            let stack_addr = 0x1000usize;
+            let ptr_stack = ManagedPtr::new(
+                NonNull::new(stack_addr as *mut u8),
+                TypeDescription::NULL,
+                None,
+                false,
+                Some(crate::ByteOffset(456)),
+            ).with_stack_origin(stack_slot, crate::ByteOffset(0));
+
+            ptr_stack.write(&mut buf);
+            let info = unsafe { ManagedPtr::read_unchecked(&buf) };
+            assert_eq!(info.address, NonNull::new(stack_addr as *mut u8));
+            assert_eq!(info.origin, PointerOrigin::Stack(stack_slot));
+            assert_eq!(info.offset.as_usize(), 456);
+
+            // 3. Heap
+            let s = crate::string::CLRString::from("test");
+            let obj = ObjectRef::new(gc_handle, HeapStorage::Str(s));
+            let base_addr = obj.with_data(|d| d.as_ptr() as usize);
+            let offset = 2;
+            let ptr_heap = ManagedPtr::new(
+                NonNull::new((base_addr + offset) as *mut u8),
+                TypeDescription::NULL,
+                Some(obj),
+                false,
+                Some(crate::ByteOffset(offset)),
+            );
+
+            ptr_heap.write(&mut buf);
+            let info = unsafe { ManagedPtr::read_unchecked(&buf) };
+            assert_eq!(info.address, NonNull::new((base_addr + offset) as *mut u8));
+            assert_eq!(info.origin, PointerOrigin::Heap(obj));
+            assert_eq!(info.offset.as_usize(), offset);
+
+            // 4. Static
+            let type_desc = TypeDescription::NULL;
+            let generics = GenericLookup::default();
+            let static_addr = 0x2000usize;
+            let static_offset = 8;
+            let ptr_static = ManagedPtr::new_static(
+                NonNull::new((static_addr + static_offset) as *mut u8),
+                TypeDescription::NULL,
+                type_desc,
+                generics.clone(),
+                false,
+                crate::ByteOffset(static_offset),
+            );
+
+            ptr_static.write(&mut buf);
+            let info = unsafe { ManagedPtr::read_unchecked(&buf) };
+            assert_eq!(info.address, NonNull::new((static_addr + static_offset) as *mut u8));
+            assert_eq!(info.origin, PointerOrigin::Static(type_desc, generics));
+            assert_eq!(info.offset.as_usize(), static_offset);
+
+            // 5. CrossArenaObjectRef (if enabled)
+            #[cfg(feature = "multithreaded-gc")]
+            {
+                use crate::object::ObjectPtr;
+                let ptr_raw = gc_arena::Gc::as_ptr(obj.0.unwrap());
+                let ptr = unsafe { ObjectPtr::from_raw(ptr_raw as *const _).unwrap() };
+                let arena_id = ptr.owner_id();
+                let cross_offset = 12;
+                let ptr_cross = ManagedPtr::new_cross_arena(
+                    NonNull::new((ptr_raw as usize + cross_offset) as *mut u8),
+                    TypeDescription::NULL,
+                    ptr,
+                    arena_id,
+                    crate::ByteOffset(cross_offset),
+                );
+
+                ptr_cross.write(&mut buf);
+                let info = unsafe { ManagedPtr::read_unchecked(&buf) };
+                assert_eq!(info.address, NonNull::new((ptr_raw as usize + cross_offset) as *mut u8));
+                if let PointerOrigin::CrossArenaObjectRef(recovered_ptr, recovered_arena) = info.origin {
+                    assert_eq!(recovered_ptr, ptr);
+                    assert_eq!(recovered_arena, arena_id);
+                } else {
+                    panic!("Expected CrossArenaObjectRef, got {:?}", info.origin);
+                }
+                assert_eq!(info.offset.as_usize(), cross_offset);
             }
         });
     }

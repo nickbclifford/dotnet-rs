@@ -5,7 +5,7 @@ use crate::{
     storage::FieldStorage,
     string::CLRString,
 };
-use dotnet_types::{TypeDescription, generics::ConcreteType};
+use dotnet_types::{TypeDescription, generics::{ConcreteType, GenericLookup}};
 use dotnet_utils::{
     DebugStr,
     gc::{GCHandle, ThreadSafeLock},
@@ -922,6 +922,7 @@ impl Debug for Vector<'_> {
 
 pub struct Object<'gc> {
     pub description: TypeDescription,
+    pub generics: GenericLookup,
     pub instance_storage: FieldStorage,
     pub finalizer_suppressed: bool,
     /// Sync block index for System.Threading.Monitor support.
@@ -934,6 +935,7 @@ impl<'gc> Clone for Object<'gc> {
     fn clone(&self) -> Self {
         Self {
             description: self.description,
+            generics: self.generics.clone(),
             instance_storage: self.instance_storage.clone(),
             finalizer_suppressed: self.finalizer_suppressed,
             sync_block_index: self.sync_block_index,
@@ -945,6 +947,7 @@ impl<'gc> Clone for Object<'gc> {
 impl<'gc> PartialEq for Object<'gc> {
     fn eq(&self, other: &Self) -> bool {
         self.description == other.description
+            && self.generics == other.generics
             && self.instance_storage == other.instance_storage
             && self.finalizer_suppressed == other.finalizer_suppressed
             && self.sync_block_index == other.sync_block_index
@@ -993,9 +996,14 @@ impl<'gc> Object<'gc> {
         self.instance_storage.resurrect(fc, visited, depth);
     }
 
-    pub fn new(description: TypeDescription, instance_storage: FieldStorage) -> Self {
+    pub fn new(
+        description: TypeDescription,
+        generics: GenericLookup,
+        instance_storage: FieldStorage,
+    ) -> Self {
         Self {
             description,
+            generics,
             instance_storage,
             finalizer_suppressed: false,
             sync_block_index: None,

@@ -354,7 +354,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
     let element_type: ConcreteType = element_type_runtime.to_concrete(ctx.loader());
 
     let res_ctx = ctx.with_generics(generics);
-    let element_size = vm_try!(type_layout(element_type, &res_ctx)).size();
+    let element_size = vm_try!(type_layout(element_type.clone(), &res_ctx)).size();
 
     let Some(initial_data) = &field.initial_value else {
         ctx.push_isize(0);
@@ -377,10 +377,17 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
             .expect("System.NullReferenceException");
         }
 
-        let ptr = initial_data.as_ptr() as usize;
-        ctx.push_isize(ptr as isize);
+        let element_desc = vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
+        let managed = ManagedPtr::new(
+            NonNull::new(initial_data.as_ptr() as *mut u8),
+            element_desc,
+            None,
+            false,
+            None,
+        );
+        ctx.push_managed_ptr(managed);
     } else {
-        ctx.push_isize(0);
+        return ctx.throw_by_name("System.ArgumentException");
     }
     StepResult::Continue
 }
