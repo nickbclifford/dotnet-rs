@@ -193,6 +193,8 @@ pub fn intrinsic_unsafe_as_pointer<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::Add<T>(T&, int)")]
 #[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::Add<T>(T&, IntPtr)")]
+#[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::Add<T>(T&, UIntPtr)")]
+#[dotnet_intrinsic("static void* System.Runtime.CompilerServices.Unsafe::Add<T>(void*, int)")]
 pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,
@@ -227,6 +229,9 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
 #[dotnet_intrinsic(
     "static T& System.Runtime.CompilerServices.Unsafe::AddByteOffset<T>(T&, IntPtr)"
 )]
+#[dotnet_intrinsic(
+    "static T& System.Runtime.CompilerServices.Unsafe::AddByteOffset<T>(T&, UIntPtr)"
+)]
 pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,
@@ -251,6 +256,73 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
     } else {
         let m = m_val.as_ptr();
         ctx.push(StackValue::NativeInt(unsafe { m.offset(offset) } as isize));
+    }
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::Subtract<T>(T&, int)")]
+#[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::Subtract<T>(T&, IntPtr)")]
+#[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::Subtract<T>(T&, UIntPtr)")]
+#[dotnet_intrinsic("static void* System.Runtime.CompilerServices.Unsafe::Subtract<T>(void*, int)")]
+pub fn intrinsic_unsafe_subtract<'gc, 'm: 'gc>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    _method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let target = &generics.method_generics[0];
+    let layout = vm_try!(type_layout(target.clone(), &ctx.current_context()));
+
+    let offset_val = ctx.pop();
+    let offset = match offset_val {
+        StackValue::Int32(i) => i as isize,
+        StackValue::NativeInt(i) => i,
+        _ => panic!(
+            "Unsafe.Subtract expected Int32 or NativeInt offset, got {:?}",
+            offset_val
+        ),
+    };
+
+    let m_val = ctx.pop();
+    let byte_offset = -(offset * layout.size().as_usize() as isize);
+    if let StackValue::ManagedPtr(m) = m_val {
+        let new_m = unsafe { m.offset(byte_offset) };
+        ctx.push(StackValue::ManagedPtr(new_m));
+    } else {
+        let ptr = m_val.as_ptr();
+        let result_ptr = unsafe { ptr.offset(byte_offset) };
+        ctx.push(StackValue::NativeInt(result_ptr as isize));
+    }
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic(
+    "static T& System.Runtime.CompilerServices.Unsafe::SubtractByteOffset<T>(T&, IntPtr)"
+)]
+#[dotnet_intrinsic(
+    "static T& System.Runtime.CompilerServices.Unsafe::SubtractByteOffset<T>(T&, UIntPtr)"
+)]
+pub fn intrinsic_unsafe_subtract_byte_offset<'gc, 'm: 'gc>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let offset_val = ctx.pop();
+    let offset = match offset_val {
+        StackValue::Int32(i) => i as isize,
+        StackValue::NativeInt(i) => i,
+        _ => panic!(
+            "Unsafe.SubtractByteOffset expected Int32 or NativeInt offset, got {:?}",
+            offset_val
+        ),
+    };
+
+    let m_val = ctx.pop();
+    if let StackValue::ManagedPtr(m) = m_val {
+        let new_m = unsafe { m.offset(-offset) };
+        ctx.push(StackValue::ManagedPtr(new_m));
+    } else {
+        let m = m_val.as_ptr();
+        ctx.push(StackValue::NativeInt(unsafe { m.offset(-offset) } as isize));
     }
     StepResult::Continue
 }

@@ -1,5 +1,5 @@
 use crate::{StepResult, StoreType, context::ResolutionContext, stack::ops::*};
-use dotnet_types::{error::TypeResolutionError, generics::ConcreteType};
+use dotnet_types::{error::TypeResolutionError, generics::ConcreteType, members::MethodDescription};
 use dotnet_utils::{DebugStr, gc::GCHandle};
 use dotnet_value::{
     StackValue,
@@ -341,21 +341,48 @@ impl ExceptionHandlingSystem {
         if !preserve_stack_trace || existing_trace.is_none() {
             let mut trace = String::new();
 
+            let format_params = |method: &MethodDescription| {
+                let mut params_str = String::new();
+                for (i, param) in method.method.signature.parameters.iter().enumerate() {
+                    if i > 0 {
+                        params_str.push_str(", ");
+                    }
+                    params_str.push_str(&param.1.show(method.resolution().definition()));
+                    if let Some(meta) = method
+                        .method
+                        .parameter_metadata
+                        .get(i)
+                        .and_then(|m| m.as_ref())
+                    {
+                        if let Some(name) = &meta.name {
+                            params_str.push(' ');
+                            params_str.push_str(name);
+                        }
+                    }
+                }
+                params_str
+            };
+
             // If we're in an intrinsic, record it first
             if let Some(intrinsic) = ctx.current_intrinsic() {
                 let type_name = intrinsic.parent.type_name();
                 let method_name = intrinsic.method.name.to_string();
-                trace.push_str(&format!("   at {}.{}(...) [Intrinsic]\n", type_name, method_name));
+                let params = format_params(&intrinsic);
+                trace.push_str(&format!(
+                    "   at {}.{}({}) [Intrinsic]\n",
+                    type_name, method_name, params
+                ));
             }
 
             for frame in ctx.frame_stack().frames.iter().rev() {
                 let method = &frame.state.info_handle.source;
                 let type_name = method.parent.type_name();
                 let method_name = method.method.name.to_string();
+                let params = format_params(method);
                 let ip = frame.state.ip;
                 trace.push_str(&format!(
-                    "   at {}.{}(...) in IP {}\n",
-                    type_name, method_name, ip
+                    "   at {}.{}({}) in IP {}\n",
+                    type_name, method_name, params, ip
                 ));
             }
 
