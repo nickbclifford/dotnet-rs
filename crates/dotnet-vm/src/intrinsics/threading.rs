@@ -9,7 +9,6 @@ use dotnet_utils::gc::GCHandle;
 use dotnet_value::{ManagedPtr, StackValue, object::ObjectRef};
 use dotnetdll::prelude::{BaseType, Parameter, ParameterType};
 use gc_arena::Gc;
-use std::thread;
 
 /// System.Threading.Monitor::Exit(object) - Releases the lock on an object.
 #[dotnet_intrinsic("static void System.Threading.Monitor::Exit(object)")]
@@ -350,13 +349,12 @@ pub fn intrinsic_monitor_enter_obj<'gc, 'm: 'gc>(
 
         let sync_block = get_or_create_sync_block(&ctx.shared().sync_blocks, obj_ref, gc);
 
-        while !ctx.shared().sync_blocks.try_enter_block(
-            sync_block.clone(),
-            thread_id,
-            &ctx.shared().metrics,
-        ) {
-            ctx.check_gc_safe_point();
-            thread::yield_now();
+        if !ctx
+            .shared()
+            .sync_blocks
+            .try_enter_block(sync_block, thread_id, &ctx.shared().metrics)
+        {
+            return StepResult::Yield;
         }
     } else {
         return ctx.throw_by_name("System.NullReferenceException");
@@ -389,13 +387,12 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
 
         let sync_block = get_or_create_sync_block(&ctx.shared().sync_blocks, obj_ref, gc);
 
-        while !ctx.shared().sync_blocks.try_enter_block(
-            sync_block.clone(),
-            thread_id,
-            &ctx.shared().metrics,
-        ) {
-            ctx.check_gc_safe_point();
-            thread::yield_now();
+        if !ctx
+            .shared()
+            .sync_blocks
+            .try_enter_block(sync_block, thread_id, &ctx.shared().metrics)
+        {
+            return StepResult::Yield;
         }
 
         if let Some(index) = success_flag_index {

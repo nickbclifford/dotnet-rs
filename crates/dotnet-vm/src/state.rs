@@ -132,6 +132,9 @@ impl<'m> SharedGlobalState<'m> {
         // Reset the static registry to ensure a clean state for the new VM.
         dotnet_value::pointer::reset_static_registry();
 
+        #[cfg(feature = "multithreaded-gc")]
+        dotnet_utils::gc::reset_arena_registry();
+
         Self {
             loader,
             pinvoke: NativeLibraries::new(loader.get_root()),

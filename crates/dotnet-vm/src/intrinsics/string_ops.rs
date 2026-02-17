@@ -1,6 +1,7 @@
-use crate::{StepResult, intrinsics::span::span_to_slice, stack::ops::VesOps};
+use crate::{StepResult, intrinsics::span::with_span_data, stack::ops::VesOps};
 use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{
+    TypeDescription,
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
 };
@@ -17,8 +18,10 @@ use std::{
 
 /// System.String::Equals(string, string)
 /// System.String::Equals(string)
+/// System.String::Equals(object)
 #[dotnet_intrinsic("static bool System.String::Equals(string, string)")]
 #[dotnet_intrinsic("bool System.String::Equals(string)")]
+#[dotnet_intrinsic("bool System.String::Equals(object)")]
 pub fn intrinsic_string_equals<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,
@@ -35,7 +38,10 @@ pub fn intrinsic_string_equals<'gc, 'm: 'gc>(
             StackValue::ObjectRef(ObjectRef(Some(a_handle))),
             StackValue::ObjectRef(ObjectRef(Some(b_handle))),
         ) => {
-            if unsafe { std::ptr::eq(a_handle.as_ptr(), b_handle.as_ptr()) } {
+            // Compare the actual object pointers (for reference equality/interning check)
+            use gc_arena::Gc;
+            let ptr_equal = Gc::as_ptr(a_handle) == Gc::as_ptr(b_handle);
+            if ptr_equal {
                 true
             } else {
                 let a_heap = a_handle.borrow();
@@ -85,7 +91,7 @@ pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc>(
     // Check GC safe point before allocating large strings
     const LARGE_STRING_THRESHOLD: usize = 1024;
     if len > LARGE_STRING_THRESHOLD {
-        ctx.check_gc_safe_point();
+        // ctx.check_gc_safe_point();
     }
 
     let value = CLRString::new(vec![0u16; len]);
@@ -216,21 +222,26 @@ pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
     let span1 = ctx.pop_value_type();
     let span0 = ctx.pop_value_type();
 
-    fn char_span_into_str(span: Object) -> Vec<u16> {
-        span_to_slice(span, 2)
-            .chunks_exact(2)
-            .map(|c| u16::from_ne_bytes([c[0], c[1]]))
-            .collect::<Vec<_>>()
+    fn char_span_into_str(span: Object) -> Result<Vec<u16>, String> {
+        with_span_data(span, TypeDescription::NULL, 2, |slice| {
+            slice
+                .chunks_exact(2)
+                .map(|c| u16::from_ne_bytes([c[0], c[1]]))
+                .collect::<Vec<_>>()
+        })
     }
 
-    let data0 = char_span_into_str(span0);
-    let data1 = char_span_into_str(span1);
-    let data2 = char_span_into_str(span2);
+    let data0 =
+        vm_try!(char_span_into_str(span0).map_err(crate::error::ExecutionError::NotImplemented));
+    let data1 =
+        vm_try!(char_span_into_str(span1).map_err(crate::error::ExecutionError::NotImplemented));
+    let data2 =
+        vm_try!(char_span_into_str(span2).map_err(crate::error::ExecutionError::NotImplemented));
 
     let total_length = data0.len() + data1.len() + data2.len();
     const LARGE_STRING_CONCAT_THRESHOLD: usize = 1024;
     if total_length > LARGE_STRING_CONCAT_THRESHOLD {
-        ctx.check_gc_safe_point();
+        // ctx.check_gc_safe_point();
     }
 
     let value = CLRString::new(data0.into_iter().chain(data1).chain(data2).collect());
@@ -283,9 +294,12 @@ pub fn intrinsic_string_get_raw_data<'gc, 'm: 'gc>(
             );
             StepResult::Continue
         } else {
-            panic!(
-                "invalid type on stack, expected string, received {:?}",
-                heap.storage
+            StepResult::Error(
+                crate::error::ExecutionError::InternalError(format!(
+                    "invalid type on stack, expected string, received {:?}",
+                    heap.storage
+                ))
+                .into(),
             )
         }
     } else {
@@ -340,13 +354,26 @@ pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
     };
 
     let val = ctx.pop();
-    let value = with_string!(ctx, val, |s| {
-        let sub = &s[start_at..];
-        match length {
-            None => sub.to_vec(),
-            Some(l) => sub[..l].to_vec(),
+    let value = match with_string!(ctx, val, |s| {
+        if start_at > s.len() {
+            Err("start_at out of range".to_string())
+        } else {
+            let sub = &s[start_at..];
+            match length {
+                None => Ok(sub.to_vec()),
+                Some(l) => {
+                    if l > sub.len() {
+                        Err("length out of range".to_string())
+                    } else {
+                        Ok(sub[..l].to_vec())
+                    }
+                }
+            }
         }
-    });
+    }) {
+        Ok(v) => v,
+        Err(_) => return ctx.throw_by_name("System.ArgumentOutOfRangeException"),
+    };
 
     ctx.push_string(CLRString::new(value));
     StepResult::Continue
@@ -366,10 +393,24 @@ pub fn intrinsic_string_is_null_or_empty<'gc, 'm: 'gc>(
             let heap = obj.borrow();
             match &heap.storage {
                 HeapStorage::Str(s) => s.is_empty(),
-                _ => panic!("System.String::IsNullOrEmpty called on non-string object"),
+                _ => {
+                    return StepResult::Error(
+                        crate::error::ExecutionError::InternalError(
+                            "System.String::IsNullOrEmpty called on non-string object".to_string(),
+                        )
+                        .into(),
+                    );
+                }
             }
         }
-        _ => panic!("System.String::IsNullOrEmpty called on invalid stack value"),
+        _ => {
+            return StepResult::Error(
+                crate::error::ExecutionError::InternalError(
+                    "System.String::IsNullOrEmpty called on invalid stack value".to_string(),
+                )
+                .into(),
+            );
+        }
     };
     ctx.push_i32(is_null_or_empty as i32);
     StepResult::Continue
@@ -416,7 +457,12 @@ pub fn intrinsic_field_string_length<'gc, 'm: 'gc>(
     is_address: bool,
 ) -> StepResult {
     if is_address {
-        panic!("taking address of _stringLength is not supported");
+        return StepResult::Error(
+            crate::error::ExecutionError::NotImplemented(
+                "taking address of _stringLength is not supported".to_string(),
+            )
+            .into(),
+        );
     }
     let val = ctx.pop();
     let len = with_string!(ctx, val, |s| s.len());
@@ -437,10 +483,18 @@ pub fn intrinsic_string_copy_string_content<'gc, 'm: 'gc>(
     let dest_val = ctx.pop_obj();
 
     let src = with_string!(ctx, StackValue::ObjectRef(src_val), |s| s.to_vec());
-    with_string_mut!(ctx, StackValue::ObjectRef(dest_val), |dest| {
+    let res = with_string_mut!(ctx, StackValue::ObjectRef(dest_val), |dest| {
         let dest_pos = dest_pos as usize;
         let len = src.len();
-        dest.as_mut_slice()[dest_pos..dest_pos + len].copy_from_slice(&src);
+        if dest_pos + len > dest.len() {
+            Err("destination too small".to_string())
+        } else {
+            dest.as_mut_slice()[dest_pos..dest_pos + len].copy_from_slice(&src);
+            Ok(())
+        }
     });
+    if res.is_err() {
+        return ctx.throw_by_name("System.ArgumentOutOfRangeException");
+    }
     StepResult::Continue
 }

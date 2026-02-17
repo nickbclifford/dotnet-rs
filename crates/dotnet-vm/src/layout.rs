@@ -21,11 +21,6 @@ impl LayoutFactory {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
                 desc.set(base_offset / ptr_size);
             }
-            LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                // ManagedPtr is (Owner, Offset). The first word is the ObjectRef.
-                // The pointer is recomputed from owner + offset on each read.
-                desc.set(base_offset / ptr_size);
-            }
             LayoutManager::Field(m) => {
                 let offset_words = base_offset / ptr_size;
                 for word_idx in m.gc_desc.bitmap.iter_ones() {
@@ -57,6 +52,7 @@ impl LayoutFactory {
     ) -> Result<FieldLayoutManager, TypeResolutionError> {
         let mut mapping = std::collections::HashMap::new();
         let mut gc_desc = GcDesc::default();
+        let mut has_ref_fields = false;
         let total_size;
         let mut max_alignment = base_alignment.max(1);
 
@@ -80,6 +76,9 @@ impl LayoutFactory {
                     let aligned_offset = align_up(offset, field_align);
 
                     Self::populate_gc_desc(&layout, aligned_offset, &mut gc_desc);
+                    if layout.has_managed_ptrs() {
+                        has_ref_fields = true;
+                    }
 
                     mapping.insert(
                         FieldKey {
@@ -115,6 +114,9 @@ impl LayoutFactory {
                     let aligned_offset = align_up(offset, field_align);
 
                     Self::populate_gc_desc(&layout, aligned_offset, &mut gc_desc);
+                    if layout.has_managed_ptrs() {
+                        has_ref_fields = true;
+                    }
 
                     mapping.insert(
                         FieldKey {
@@ -140,6 +142,9 @@ impl LayoutFactory {
 
                 for (owner, name, o, layout) in fields {
                     max_alignment = max_alignment.max(layout.alignment());
+                    if layout.has_managed_ptrs() {
+                        has_ref_fields = true;
+                    }
                     match o {
                         None => {
                             return Err(TypeResolutionError::InvalidLayout(
@@ -215,6 +220,7 @@ impl LayoutFactory {
             total_size,
             alignment: max_alignment,
             gc_desc,
+            has_ref_fields,
         })
     }
 
@@ -304,6 +310,7 @@ impl LayoutFactory {
                 result.fields.insert(key, field_layout);
             }
             result.gc_desc.merge(&base_layout.gc_desc);
+            result.has_ref_fields |= base_layout.has_ref_fields;
         }
 
         Ok(result)
@@ -441,10 +448,10 @@ fn type_layout_internal(
         BaseType::Int16 => Scalar::Int16.into(),
         BaseType::Int32 | BaseType::UInt32 => Scalar::Int32.into(),
         BaseType::Int64 | BaseType::UInt64 => Scalar::Int64.into(),
-        BaseType::IntPtr | BaseType::UIntPtr | BaseType::FunctionPointer(_) => {
-            Scalar::NativeInt.into()
-        }
-        BaseType::ValuePointer(_, _) => Scalar::ManagedPtr.into(),
+        BaseType::IntPtr
+        | BaseType::UIntPtr
+        | BaseType::FunctionPointer(_)
+        | BaseType::ValuePointer(_, _) => Scalar::NativeInt.into(),
         BaseType::Float32 => Scalar::Float32.into(),
         BaseType::Float64 => Scalar::Float64.into(),
         BaseType::Type {

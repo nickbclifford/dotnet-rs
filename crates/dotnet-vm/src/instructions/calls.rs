@@ -1,10 +1,6 @@
 use crate::{StepResult, layout::type_layout, resolution::TypeResolutionExt, stack::ops::VesOps};
 use dotnet_macros::dotnet_instruction;
-use dotnet_value::{
-    StackValue,
-    layout::HasLayout,
-    object::{HeapStorage, ObjectRef},
-};
+use dotnet_value::{StackValue, object::ObjectRef};
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(Call { param0 })]
@@ -142,16 +138,20 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
                 return ctx.throw_by_name("System.NullReferenceException");
             }
 
-            let value_size = vm_try!(type_layout(
-                vm_try!(ctx.make_concrete(constraint)),
+            let constraint_concrete = vm_try!(ctx.make_concrete(constraint));
+            let layout = vm_try!(type_layout(
+                constraint_concrete.clone(),
                 &ctx.current_context()
-            ))
-            .size();
+            ));
 
-            let value_vec = unsafe { m.with_data(value_size.as_usize(), |data| data.to_vec()) };
-            let value = vm_try!(ctx.read_cts_value(&constraint_type_source, &value_vec));
+            let value = match unsafe {
+                ctx.read_unaligned(m.origin.clone(), m.offset, &layout, Some(constraint_type))
+            } {
+                Ok(v) => v,
+                Err(_) => return ctx.throw_by_name("System.AccessViolationException"),
+            };
 
-            let boxed = vm_try!(ctx.box_value(&constraint_type_source, value.into_stack()));
+            let boxed = vm_try!(ctx.box_value(&constraint_type_source, value));
             args[0] = StackValue::ObjectRef(boxed);
             let this_type = vm_try!(ctx.get_heap_description(boxed.0.unwrap()));
             ctx.resolver().resolve_virtual_method(
@@ -162,17 +162,50 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             )
         }
     } else {
-        // Reference type: dereference the managed pointer
-        let m = args[0].as_managed_ptr();
-        if m.is_null() {
-            return ctx.throw_by_name("System.NullReferenceException");
+        // Reference type: the 'this' may already be an ObjectRef (common case),
+        // or a ManagedPtr to an ObjectRef in some generic/constrained contexts.
+        let obj_ref = match &args[0] {
+            StackValue::ObjectRef(o) => *o,
+            StackValue::ManagedPtr(m) => {
+                if m.is_null() {
+                    return ctx.throw_by_name("System.NullReferenceException");
+                }
+                // If the managed pointer originates from the evaluation stack (ldarga/ldloca),
+                // and targets a reference type with zero offset, the pointed memory holds a
+                // StackValue::ObjectRef, not a serialized ObjectRef. Read it via the slot.
+                match (&m.origin, m.offset) {
+                    (dotnet_value::pointer::PointerOrigin::Stack(idx), off)
+                        if off.as_usize() == 0 =>
+                    {
+                        match ctx.get_slot_ref(*idx).clone() {
+                            StackValue::ObjectRef(o) => o,
+                            rest => {
+                                return StepResult::Error(crate::error::VmError::Execution(
+                                    crate::error::ExecutionError::TypeMismatch {
+                                        expected: "ObjectRef at argument/local slot".to_string(),
+                                        actual: format!("{:?}", rest),
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                    _ => unsafe {
+                        // Heap/static/transient: the target stores a serialized ObjectRef
+                        m.with_data(ObjectRef::SIZE, |data| {
+                            ObjectRef::read_branded(data, &ctx.gc())
+                        })
+                    },
+                }
+            }
+            rest => {
+                return StepResult::Error(crate::error::VmError::Execution(
+                    crate::error::ExecutionError::TypeMismatch {
+                        expected: "ObjectRef or ManagedPtr".to_string(),
+                        actual: format!("{:?}", rest),
+                    },
+                ));
+            }
         };
-
-        let value_vec = unsafe { m.with_data(ObjectRef::SIZE, |data| data.to_vec()) };
-        let value_bytes = &value_vec;
-
-        // SAFETY: value_bytes contains a valid ObjectRef from the stack and gc is the current arena.
-        let obj_ref = unsafe { ObjectRef::read_branded(value_bytes, &ctx.gc()) };
 
         if obj_ref.0.is_none() {
             return ctx.throw_by_name("System.NullReferenceException");

@@ -2,7 +2,7 @@ use crate::{
     TypeDescription, TypeResolver, generics::ConcreteType, members::MethodDescription,
     resolution::ResolutionS,
 };
-use dotnetdll::prelude::{BaseType, TypeSource};
+use dotnetdll::prelude::{BaseType, TypeSource, UserType, ValueKind};
 use gc_arena::{Collect, unsafe_empty_collect};
 use std::{fmt::Debug, hash::Hash};
 
@@ -132,10 +132,25 @@ runtime_type_impls! {
                 },
             ),
         ),
-        Pointer(t) | ByRef(t) | ValuePointer(t, _) => {
+        Pointer(t) | ValuePointer(t, _) => {
             ConcreteType::new(
                 corlib_res,
                 BaseType::ValuePointer(vec![], Some(t.to_concrete(loader))),
+            )
+        },
+        ByRef(t) => {
+            let by_ref_type = loader
+                .corlib_type("System.ByReference`1")
+                .expect("System.ByReference`1 not found");
+            ConcreteType::new(
+                by_ref_type.resolution,
+                BaseType::Type {
+                    source: TypeSource::Generic {
+                        base: UserType::Definition(by_ref_type.index),
+                        parameters: vec![t.to_concrete(loader)],
+                    },
+                    value_kind: Some(ValueKind::ValueType),
+                },
             )
         },
         TypeParameter { .. } | MethodParameter { .. } => {

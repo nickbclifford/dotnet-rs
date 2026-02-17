@@ -582,7 +582,7 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
                     ctx.pin_object(owner);
                     pinned_objects.push(owner);
                 }
-                let mut bytes = vec![0u8; 16];
+                let mut bytes = ManagedPtr::serialization_buffer();
                 let addr = unsafe {
                     if let PointerOrigin::Heap(obj) = p.origin {
                         if let Some(h) = obj.0 {
@@ -598,10 +598,10 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
                     }
                 };
                 let type_ptr = Arc::as_ptr(t) as usize;
-                bytes[0..8].copy_from_slice(&addr.to_ne_bytes());
-                bytes[8..16].copy_from_slice(&type_ptr.to_ne_bytes());
+                bytes[0..ObjectRef::SIZE].copy_from_slice(&addr.to_ne_bytes());
+                bytes[ObjectRef::SIZE..ManagedPtr::SIZE].copy_from_slice(&type_ptr.to_ne_bytes());
 
-                temp_buffers.push(TempBuffer::Bytes(bytes));
+                temp_buffers.push(TempBuffer::Bytes(bytes.to_vec()));
                 let idx = temp_buffers.len() - 1;
                 arg_buffer_map[i] = Some(idx);
                 arg_ptrs[i] = temp_buffers[idx].as_bytes().as_ptr() as *mut c_void;

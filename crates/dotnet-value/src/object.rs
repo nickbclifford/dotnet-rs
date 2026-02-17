@@ -23,7 +23,7 @@ use std::{
     iter,
     marker::PhantomData,
     mem::size_of,
-    ptr::{self, NonNull},
+    ptr::NonNull,
     sync::Arc,
 };
 
@@ -38,6 +38,7 @@ const OBJECT_MAGIC: u64 = 0x5AFE_0B1E_C700_0000;
 
 #[derive(Collect, Debug)]
 #[collect(no_drop)]
+#[repr(C)]
 pub struct ObjectInner<'gc> {
     #[cfg(any(feature = "memory-validation", debug_assertions))]
     pub magic: u64,
@@ -120,6 +121,28 @@ impl ObjectPtr {
     pub fn owner_id(&self) -> ArenaId {
         unsafe { (*self.0.as_ref().as_ptr()).owner_id }
     }
+
+    pub fn with_data<T>(&self, f: impl FnOnce(&[u8]) -> T) -> T {
+        let inner = unsafe { self.0.as_ref().borrow() };
+        inner.storage.with_data(f)
+    }
+
+    pub fn with_data_mut<T>(
+        &self,
+        _gc: dotnet_utils::gc::GCHandle<'_>,
+        f: impl FnOnce(&mut [u8]) -> T,
+    ) -> T {
+        // SAFETY: We have GCHandle which proves we are in a mutation context.
+        // Even if the object is in another arena, we can still write to its storage
+        // because we hold the ThreadSafeLock.
+        let mut inner = unsafe { self.0.as_ref().borrow_mut(_gc.mutation()) };
+        inner.storage.with_data_mut(f)
+    }
+
+    pub fn as_heap_storage<T>(&self, f: impl FnOnce(&HeapStorage<'static>) -> T) -> T {
+        let inner = unsafe { self.0.as_ref().borrow() };
+        f(&inner.storage)
+    }
 }
 
 pub type ObjectHandle<'gc> = Gc<'gc, ThreadSafeLock<ObjectInner<'gc>>>;
@@ -138,7 +161,8 @@ unsafe impl<'gc> Collect for ObjectRef<'gc> {
                     // SAFETY: During stop-the-world GC, no other threads are running,
                     // so we can safely access the owner_id without acquiring the lock.
                     // This avoids potential deadlock if a thread was stopped while holding a write lock.
-                    let owner_id = unsafe { (*h.as_ptr()).owner_id };
+                    let lock_ptr: *const ThreadSafeLock<ObjectInner> = Gc::as_ptr(h);
+                    let owner_id = unsafe { (*(*lock_ptr).as_ptr()).owner_id };
                     if owner_id != tracing_id {
                         // This is a reference to an object in another arena.
                         // Do not trace it here; instead, record it for coordinated resurrection.
@@ -155,7 +179,7 @@ unsafe impl<'gc> Collect for ObjectRef<'gc> {
 }
 
 //noinspection RsAssertEqual
-// we assume this type is pointer-sized basically everywhere
+// we assume this type is pointer-sized basically everywhere (for serialization/layout purposes)
 // dependency-wise everything guarantees it; this is just a sanity check for the implementation
 const _: () = assert!(ObjectRef::SIZE == size_of::<usize>());
 
@@ -192,13 +216,33 @@ impl Hash for ObjectRef<'_> {
 }
 
 impl<'gc> ObjectRef<'gc> {
-    pub const SIZE: usize = size_of::<ObjectRef>();
+    /// The serialized size when written to memory (always a single pointer/usize).
+    /// This is the size used for layout calculations and array element size.
+    pub const SIZE: usize = size_of::<usize>();
+
+    /// Deprecated: Use SIZE instead. This constant was renamed for clarity.
+    #[deprecated(note = "Use SIZE instead (now correctly represents serialized size)")]
+    pub const SERIALIZED_SIZE: usize = size_of::<usize>();
 
     pub fn pointer(&self) -> Option<NonNull<u8>> {
         self.0.map(|h| {
             let inner = h.borrow();
             NonNull::new(unsafe { inner.storage.raw_data_ptr() })
                 .expect("Object storage pointer is null")
+        })
+    }
+
+    pub fn as_ptr(&self) -> Option<ObjectPtr> {
+        self.0
+            .map(|h| unsafe { ObjectPtr::from_raw(Gc::as_ptr(h) as *const _).unwrap() })
+    }
+
+    #[cfg(feature = "multithreaded-gc")]
+    pub fn as_ptr_info(&self) -> Option<(ObjectPtr, ArenaId)> {
+        self.0.map(|h| {
+            let ptr = unsafe { ObjectPtr::from_raw(Gc::as_ptr(h) as *const _).unwrap() };
+            let tid = ptr.owner_id();
+            (ptr, tid)
         })
     }
 
@@ -259,21 +303,48 @@ impl<'gc> ObjectRef<'gc> {
                 (source.as_ptr() as *const usize).read_unaligned()
             };
 
-            // If bit 0 is set, it's a tagged pointer (Stack, Static, or other metadata).
+            #[cfg(feature = "multithreaded-gc")]
+            {
+                let tag = ptr_val & 7;
+                if tag == 5 {
+                    // This is a CrossArenaObjectRef (Tag 5).
+                    // Remove the tag to get the real pointer, then record it for coordinated GC.
+                    let real_ptr = (ptr_val & !7) as *const ThreadSafeLock<ObjectInner<'static>>;
+                    let owner_id = (*(*real_ptr).as_ptr()).owner_id;
+                    record_cross_arena_ref(owner_id, real_ptr as usize);
+
+                    // Continue with the untagged pointer to construct the ObjectRef
+                    let ptr = real_ptr.cast::<ThreadSafeLock<ObjectInner<'gc>>>();
+
+                    #[cfg(any(feature = "memory-validation", debug_assertions))]
+                    {
+                        use std::mem::align_of;
+                        if !(real_ptr as usize)
+                            .is_multiple_of(align_of::<ThreadSafeLock<ObjectInner<'static>>>())
+                        {
+                            panic!(
+                                "ObjectRef::read: Pointer {:#x} is not aligned",
+                                real_ptr as usize
+                            );
+                        }
+
+                        // Verify magic number
+                        let inner = &*(*ptr).as_ptr();
+                        if inner.magic != OBJECT_MAGIC {
+                            panic!(
+                                "ObjectRef::read: CrossArena pointer {:#x} points to invalid object (bad magic: {:#x})",
+                                real_ptr as usize, inner.magic
+                            );
+                        }
+                    }
+
+                    return ObjectRef(Some(Gc::from_ptr(ptr)));
+                }
+            }
+
+            // If bit 0 is set and it's not Tag 5, it's a tagged pointer (Stack, Static, or other metadata).
             // These should not be traced as ObjectRefs.
             if ptr_val & 1 != 0 {
-                #[cfg(feature = "multithreaded-gc")]
-                {
-                    let tag = ptr_val & 7;
-                    if tag == 5 {
-                        // This is a CrossArenaObjectRef (Tag 5).
-                        // Record it for coordinated GC resurrection.
-                        let real_ptr =
-                            (ptr_val & !7) as *const ThreadSafeLock<ObjectInner<'static>>;
-                        let owner_id = (*(*real_ptr).as_ptr()).owner_id;
-                        record_cross_arena_ref(owner_id, real_ptr as usize);
-                    }
-                }
                 return ObjectRef(None);
             }
 
@@ -284,7 +355,8 @@ impl<'gc> ObjectRef<'gc> {
             } else {
                 #[cfg(any(feature = "memory-validation", debug_assertions))]
                 {
-                    if ptr_val % align_of::<ThreadSafeLock<ObjectInner<'static>>>() != 0 {
+                    use std::mem::align_of;
+                    if !ptr_val.is_multiple_of(align_of::<ThreadSafeLock<ObjectInner<'static>>>()) {
                         panic!("ObjectRef::read: Pointer {:#x} is not aligned", ptr_val);
                     }
 
@@ -318,13 +390,35 @@ impl<'gc> ObjectRef<'gc> {
     }
 
     pub fn write(&self, dest: &mut [u8]) {
-        let ptr: *const ThreadSafeLock<ObjectInner<'_>> = match self.0 {
-            None => ptr::null(),
-            Some(s) => Gc::as_ptr(s),
+        let ptr_val: usize = match self.0 {
+            None => 0,
+            Some(s) => {
+                let ptr = Gc::as_ptr(s) as usize;
+                #[cfg(feature = "multithreaded-gc")]
+                {
+                    // Tag cross-arena references with Tag 5
+                    // SAFETY: We can safely access owner_id during write because:
+                    // 1. The Gc<T> is alive (we hold a reference via self.0)
+                    // 2. We use raw pointer access to avoid deadlocking with the write lock on the owner object.
+                    //    The owner_id is immutable after object creation.
+                    let current_id = get_current_thread_id();
+                    let owner_id = unsafe { (*(*gc_arena::Gc::as_ptr(s)).as_ptr()).owner_id };
+                    if owner_id != current_id && owner_id != ArenaId::INVALID {
+                        // This is a cross-arena reference - tag it with Tag 5
+                        // The pointer must have low bits clear (it's allocated by gc-arena)
+                        debug_assert_eq!(ptr & 7, 0, "Pointer low bits should be clear");
+                        ptr | 5
+                    } else {
+                        ptr
+                    }
+                }
+                #[cfg(not(feature = "multithreaded-gc"))]
+                ptr
+            }
         };
         unsafe {
             // SAFETY: Use write_unaligned to avoid UB. Caller holds lock.
-            (dest.as_mut_ptr() as *mut usize).write_unaligned(ptr as usize);
+            (dest.as_mut_ptr() as *mut usize).write_unaligned(ptr_val);
         }
     }
 
@@ -546,6 +640,27 @@ impl<'gc> HeapStorage<'gc> {
         match self {
             HeapStorage::Obj(o) => Some(o),
             _ => None,
+        }
+    }
+
+    pub fn with_data<T>(&self, f: impl FnOnce(&[u8]) -> T) -> T {
+        match self {
+            HeapStorage::Vec(v) => f(&v.storage),
+            HeapStorage::Str(s) => unsafe {
+                let bytes = std::slice::from_raw_parts(s.as_ptr() as *const u8, s.len() * 2);
+                f(bytes)
+            },
+            HeapStorage::Obj(o) => f(&o.instance_storage.get()),
+            HeapStorage::Boxed(o) => f(&o.instance_storage.get()),
+        }
+    }
+
+    pub fn with_data_mut<T>(&mut self, f: impl FnOnce(&mut [u8]) -> T) -> T {
+        match self {
+            HeapStorage::Vec(v) => f(&mut v.storage),
+            HeapStorage::Str(_) => panic!("Cannot modify CLRString directly"),
+            HeapStorage::Obj(o) => f(&mut o.instance_storage.get_mut()),
+            HeapStorage::Boxed(o) => f(&mut o.instance_storage.get_mut()),
         }
     }
 

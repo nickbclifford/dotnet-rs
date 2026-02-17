@@ -14,6 +14,7 @@ use dotnet_value::{
     pointer::{ManagedPtr, PointerOrigin, UnmanagedPtr},
 };
 use dotnetdll::prelude::*;
+use tracing::error;
 
 pub mod arrays;
 pub mod boxing;
@@ -164,7 +165,9 @@ pub fn new_object<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, ctor: &UserMethod
                 let arg_count = method.method.signature.parameters.len();
                 let args = ctx.pop_multiple(arg_count);
 
-                let res_ctx = ctx.current_context().for_type_with_generics(parent, &lookup);
+                let res_ctx = ctx
+                    .current_context()
+                    .for_type_with_generics(parent, &lookup);
                 let instance = vm_try!(res_ctx.new_object(parent));
 
                 ctx.push_value_type(instance);
@@ -187,7 +190,8 @@ pub fn new_object<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, ctor: &UserMethod
                 // IMPORTANT: Set the stack origin BEFORE updating the cached ptr,
                 // otherwise update_cached_ptr will set offset to the absolute address
                 // thinking it's an Unmanaged pointer.
-                let mut this_ptr_val = this_ptr_val.with_stack_origin(this_slot, dotnet_utils::ByteOffset(0));
+                let mut this_ptr_val =
+                    this_ptr_val.with_stack_origin(this_slot, dotnet_utils::ByteOffset(0));
                 this_ptr_val.update_cached_ptr(real_addr);
                 ctx.set_slot(this_ptr_slot, StackValue::ManagedPtr(this_ptr_val));
 
@@ -228,11 +232,12 @@ pub fn new_object<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, ctor: &UserMethod
 #[dotnet_instruction(LoadObject { param0 })]
 pub fn ldobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType) -> StepResult {
     let addr = ctx.pop();
-    let (origin, offset) = get_ptr_context(ctx, &addr);
 
-    if matches!(origin, PointerOrigin::Unmanaged) && offset.as_usize() == 0 {
+    if addr.is_null() {
         return ctx.throw_by_name("System.NullReferenceException");
     }
+
+    let (origin, offset) = get_ptr_context(ctx, &addr);
 
     let load_type = vm_try!(ctx.make_concrete(param0));
     let res_ctx = ctx.current_context();
@@ -254,20 +259,29 @@ pub fn stobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType) -
     let value = ctx.pop();
     let addr = ctx.pop();
 
-    let concrete_t = vm_try!(ctx.make_concrete(param0));
-
-    let (origin, offset) = get_ptr_context(ctx, &addr);
-    if matches!(origin, PointerOrigin::Unmanaged) && offset.as_usize() == 0 {
+    if addr.is_null() {
         return ctx.throw_by_name("System.NullReferenceException");
     }
 
+    let concrete_t = vm_try!(ctx.make_concrete(param0));
+
+    let (origin, offset) = get_ptr_context(ctx, &addr);
+
     let res_ctx = ctx.current_context();
     let layout = vm_try!(type_layout(concrete_t.clone(), &res_ctx));
-    let mut bytes = vec![0u8; layout.size().as_usize()];
-    vm_try!(res_ctx.new_cts_value(&concrete_t, value)).write(&mut bytes);
 
-    if let Err(_e) = unsafe { ctx.write_bytes(origin, offset, &bytes) } {
-        return ctx.throw_by_name("System.AccessViolationException");
+    if layout.is_or_contains_refs() {
+        if let Err(e) = unsafe { ctx.write_unaligned(origin, offset, value, &layout) } {
+            error!("stobj failed: {}", e);
+            return ctx.throw_by_name("System.AccessViolationException");
+        }
+    } else {
+        let mut bytes = vec![0u8; layout.size().as_usize()];
+        vm_try!(res_ctx.new_cts_value(&concrete_t, value)).write(&mut bytes);
+
+        if let Err(_e) = unsafe { ctx.write_bytes(origin, offset, &bytes) } {
+            return ctx.throw_by_name("System.AccessViolationException");
+        }
     }
     StepResult::Continue
 }
@@ -275,10 +289,12 @@ pub fn stobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType) -
 #[dotnet_instruction(InitializeForObject(param0))]
 pub fn initobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType) -> StepResult {
     let addr = ctx.pop();
-    let (origin, offset) = get_ptr_context(ctx, &addr);
-    if matches!(origin, PointerOrigin::Unmanaged) && offset.as_usize() == 0 {
+
+    if addr.is_null() {
         return ctx.throw_by_name("System.NullReferenceException");
     }
+
+    let (origin, offset) = get_ptr_context(ctx, &addr);
 
     let ct = vm_try!(ctx.make_concrete(param0));
     let res_ctx = ctx.current_context();

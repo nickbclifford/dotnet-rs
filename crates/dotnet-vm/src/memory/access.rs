@@ -1,14 +1,64 @@
 use crate::memory::heap::HeapManager;
 use dotnet_types::{TypeDescription, generics::GenericLookup};
-use dotnet_utils::{ByteOffset, atomic::validate_atomic_access, gc::GCHandle};
+use dotnet_utils::{ArenaId, ByteOffset, atomic::validate_atomic_access, gc::GCHandle};
 use dotnet_value::{
     StackValue,
     layout::{HasLayout, LayoutManager, Scalar},
-    object::{HeapStorage, Object as ObjectInstance, ObjectRef, ValueType},
+    object::{HeapStorage, Object as ObjectInstance, ObjectRef},
     pointer::ManagedPtr,
     storage::FieldStorage,
 };
 use std::{ptr, sync::Arc};
+
+#[cfg(feature = "multithreaded-gc")]
+use dotnet_value::{object::ObjectPtr, pointer::PointerOrigin};
+
+#[derive(Copy, Clone)]
+pub enum MemoryOwner<'gc> {
+    Local(ObjectRef<'gc>),
+    #[cfg(feature = "multithreaded-gc")]
+    CrossArena(ObjectPtr, ArenaId),
+}
+
+impl<'gc> MemoryOwner<'gc> {
+    pub fn owner_id(&self) -> ArenaId {
+        match self {
+            Self::Local(r) => {
+                r.0.map(|h| unsafe { (*h.as_ptr()).owner_id })
+                    .unwrap_or(ArenaId(0))
+            }
+            #[cfg(feature = "multithreaded-gc")]
+            Self::CrossArena(_, tid) => *tid,
+        }
+    }
+
+    pub fn with_data<T>(&self, f: impl FnOnce(&[u8]) -> T) -> T {
+        match self {
+            Self::Local(r) => r.with_data(f),
+            #[cfg(feature = "multithreaded-gc")]
+            Self::CrossArena(p, _) => p.with_data(f),
+        }
+    }
+
+    pub fn with_data_mut<T>(&self, gc: GCHandle<'gc>, f: impl FnOnce(&mut [u8]) -> T) -> T {
+        match self {
+            Self::Local(r) => r.with_data_mut(gc, f),
+            #[cfg(feature = "multithreaded-gc")]
+            Self::CrossArena(p, _) => p.with_data_mut(gc, f),
+        }
+    }
+
+    pub fn as_heap_storage<T>(&self, f: impl FnOnce(&HeapStorage<'gc>) -> T) -> T {
+        match self {
+            Self::Local(r) => r.as_heap_storage(f),
+            #[cfg(feature = "multithreaded-gc")]
+            Self::CrossArena(p, _) => p.as_heap_storage(|s| {
+                // SAFETY: Casting 'static to 'gc for transient access is safe.
+                f(unsafe { std::mem::transmute::<&HeapStorage<'static>, &HeapStorage<'gc>>(s) })
+            }),
+        }
+    }
+}
 
 /// Manages unsafe memory access, enforcing bounds checks, GC write barriers, and type integrity.
 pub struct RawMemoryAccess<'a, 'gc> {
@@ -27,7 +77,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     pub unsafe fn write_unaligned(
         &mut self,
         gc: GCHandle<'gc>,
-        owner: Option<ObjectRef<'gc>>,
+        owner: Option<MemoryOwner<'gc>>,
         offset: ByteOffset,
         value: StackValue<'gc>,
         layout: &LayoutManager,
@@ -53,7 +103,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 self.check_integrity_internal_with_layout(ptr, dest_layout, base, layout)?;
 
                 // 3. Perform Write
-                unsafe { self.perform_write(ptr, Some(owner), value, layout) }
+                unsafe { self.perform_write(gc, ptr, Some(owner), value, layout) }
             })
         } else {
             let ptr = offset.0 as *mut u8;
@@ -63,7 +113,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             validate_atomic_access(ptr as *const u8, false);
             // SAFETY: Caller ensures ptr is valid.
             unsafe {
-                self.perform_write(ptr, None, value, layout)?;
+                self.perform_write(gc, ptr, None, value, layout)?;
             }
             Ok(())
         }
@@ -76,7 +126,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     pub unsafe fn read_unaligned(
         &self,
         gc: GCHandle<'gc>,
-        owner: Option<ObjectRef<'gc>>,
+        owner: Option<MemoryOwner<'gc>>,
         offset: ByteOffset,
         layout: &LayoutManager,
         type_desc: Option<TypeDescription>,
@@ -126,12 +176,19 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     pub unsafe fn write_bytes(
         &mut self,
         gc: GCHandle<'gc>,
-        owner: Option<ObjectRef<'gc>>,
+        owner: Option<MemoryOwner<'gc>>,
         offset: ByteOffset,
         data: &[u8],
     ) -> Result<(), String> {
         if let Some(owner) = owner {
             owner.as_heap_storage(|_storage| {});
+
+            // Get layout before locking to avoid deadlock
+            #[cfg(feature = "multithreaded-gc")]
+            let layout = self.get_layout_from_owner(owner);
+            #[cfg(feature = "multithreaded-gc")]
+            let owner_tid = owner.owner_id();
+
             owner.with_data_mut(gc, |obj_data| {
                 let base = obj_data.as_ptr();
                 let len = obj_data.len();
@@ -144,6 +201,22 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 // Perform Write
                 unsafe {
                     ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
+                }
+
+                #[cfg(feature = "multithreaded-gc")]
+                {
+                    if let Some(layout) = layout {
+                        unsafe {
+                            self.record_refs_in_range(
+                                gc,
+                                base,
+                                &layout,
+                                owner_tid,
+                                offset.as_usize(),
+                                offset.as_usize() + data.len(),
+                            );
+                        }
+                    }
                 }
                 Ok(())
             })
@@ -170,7 +243,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     /// If `owner` is provided, it must be the object that contains the memory to ensure GC safety.
     pub unsafe fn read_bytes(
         &self,
-        owner: Option<ObjectRef<'gc>>,
+        owner: Option<MemoryOwner<'gc>>,
         offset: ByteOffset,
         dest: &mut [u8],
     ) -> Result<(), String> {
@@ -208,7 +281,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     pub unsafe fn compare_exchange_atomic(
         &mut self,
         gc: GCHandle<'gc>,
-        owner: Option<ObjectRef<'gc>>,
+        owner: Option<MemoryOwner<'gc>>,
         offset: ByteOffset,
         expected: u64,
         new: u64,
@@ -258,7 +331,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     pub unsafe fn exchange_atomic(
         &mut self,
         gc: GCHandle<'gc>,
-        owner: Option<ObjectRef<'gc>>,
+        owner: Option<MemoryOwner<'gc>>,
         offset: ByteOffset,
         value: u64,
         size: usize,
@@ -290,7 +363,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     /// Caller must ensure the offset and size are valid for the owner object.
     pub unsafe fn load_atomic(
         &self,
-        owner: Option<ObjectRef<'gc>>,
+        owner: Option<MemoryOwner<'gc>>,
         offset: ByteOffset,
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
@@ -317,7 +390,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     pub unsafe fn store_atomic(
         &mut self,
         gc: GCHandle<'gc>,
-        owner: Option<ObjectRef<'gc>>,
+        owner: Option<MemoryOwner<'gc>>,
         offset: ByteOffset,
         value: u64,
         size: usize,
@@ -417,33 +490,28 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         Ok(())
     }
 
-    pub fn get_layout_from_owner(&self, owner: ObjectRef<'gc>) -> Option<LayoutManager> {
-        if let Some(h) = owner.0 {
-            let obj = h.borrow();
-            match &obj.storage {
-                HeapStorage::Obj(o) => Some(LayoutManager::Field(
-                    o.instance_storage.layout().as_ref().clone(),
-                )),
-                HeapStorage::Vec(v) => Some(LayoutManager::Array(v.layout.clone())),
-                HeapStorage::Boxed(o) => Some(LayoutManager::Field(
-                    o.instance_storage.layout().as_ref().clone(),
-                )),
-                _ => None,
-            }
-        } else {
-            None
-        }
+    pub fn get_layout_from_owner(&self, owner: MemoryOwner<'gc>) -> Option<LayoutManager> {
+        owner.as_heap_storage(|storage| match storage {
+            HeapStorage::Obj(o) => Some(LayoutManager::Field(
+                o.instance_storage.layout().as_ref().clone(),
+            )),
+            HeapStorage::Vec(v) => Some(LayoutManager::Array(v.layout.clone())),
+            HeapStorage::Boxed(o) => Some(LayoutManager::Field(
+                o.instance_storage.layout().as_ref().clone(),
+            )),
+            _ => None,
+        })
     }
 
     pub(crate) unsafe fn perform_write(
         &mut self,
+        _gc: GCHandle<'gc>,
         ptr: *mut u8,
-        _owner: Option<ObjectRef<'gc>>,
+        _owner: Option<MemoryOwner<'gc>>,
         value: StackValue<'gc>,
         layout: &LayoutManager,
     ) -> Result<(), String> {
-        // SAFETY: The caller must ensure `ptr` is valid for writes and within bounds.
-        // This is verified by `write_unaligned` before calling this method.
+        // Safety: `write_unaligned` ensures `ptr` is valid.
         unsafe {
             if ptr.is_null() {
                 return Err("RawMemoryAccess::perform_write called with null pointer!".to_string());
@@ -495,13 +563,16 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             m.write(std::slice::from_raw_parts_mut(ptr, ManagedPtr::SIZE));
 
                             #[cfg(feature = "multithreaded-gc")]
-                            if let Some(owner_handle) = _owner.and_then(|o| o.0) {
-                                let owner_tid = (*owner_handle.as_ptr()).owner_id;
-                                use dotnet_value::pointer::PointerOrigin;
+                            if let Some(owner) = _owner {
+                                let owner_tid = owner.owner_id();
                                 match m.origin {
                                     PointerOrigin::Heap(r) => {
                                         if let Some(h) = r.0 {
-                                            let target_tid = (*h.as_ptr()).owner_id;
+                                            // SAFETY: During write, we hold a lock on the owner.
+                                            // If h is the same as the owner, we must not call borrow() as it would deadlock.
+                                            // owner_id is immutable after object creation, so we can safely read it via as_ptr().
+                                            let target_tid =
+                                                (*(*gc_arena::Gc::as_ptr(h)).as_ptr()).owner_id;
                                             if target_tid != owner_tid {
                                                 dotnet_utils::gc::record_cross_arena_ref(
                                                     target_tid,
@@ -527,19 +598,19 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     }
                     Scalar::ObjectRef => {
                         if let StackValue::ObjectRef(r) = value {
-                            let val_ptr = r.0.map(gc_arena::Gc::as_ptr).unwrap_or(ptr::null());
-                            ptr::write_unaligned(ptr as *mut *const (), val_ptr as *const ());
+                            // Use ObjectRef::write() to properly serialize the pointer.
+                            // This ensures cross-arena references are tagged correctly.
+                            r.write(std::slice::from_raw_parts_mut(ptr, ObjectRef::SIZE));
 
                             #[cfg(feature = "multithreaded-gc")]
-                            if let (Some(owner_handle), Some(val_handle)) =
-                                (_owner.and_then(|o| o.0), r.0)
-                            {
-                                let owner_tid = (*owner_handle.as_ptr()).owner_id;
-                                let target_tid = (*val_handle.as_ptr()).owner_id;
-                                if target_tid != owner_tid {
+                            if let Some(owner) = _owner {
+                                let owner_tid = owner.owner_id();
+                                if let Some((val_ptr, target_tid)) =
+                                    r.as_ptr_info().filter(|&(_, tid)| tid != owner_tid)
+                                {
                                     dotnet_utils::gc::record_cross_arena_ref(
                                         target_tid,
-                                        val_handle.as_ptr() as usize,
+                                        val_ptr.as_ptr() as usize,
                                     );
                                 }
                             }
@@ -552,6 +623,12 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     if let StackValue::ValueType(src_obj) = value {
                         let src_ptr = src_obj.instance_storage.raw_data_ptr();
                         ptr::copy_nonoverlapping(src_ptr, ptr, flm.size().as_usize());
+
+                        #[cfg(feature = "multithreaded-gc")]
+                        if let Some(owner) = _owner {
+                            let owner_tid = owner.owner_id();
+                            self.record_refs_recursive(_gc, ptr, layout, owner_tid);
+                        }
                     } else {
                         return Err("Expected ValueType for Struct write".into());
                     }
@@ -562,11 +639,166 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         }
     }
 
+    #[cfg(feature = "multithreaded-gc")]
+    unsafe fn record_refs_recursive(
+        &self,
+        gc: GCHandle<'gc>,
+        ptr: *const u8,
+        layout: &LayoutManager,
+        owner_tid: dotnet_utils::ArenaId,
+    ) {
+        match layout {
+            LayoutManager::Scalar(Scalar::ObjectRef) => {
+                let mut buf = [0u8; ObjectRef::SIZE];
+                unsafe {
+                    ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), ObjectRef::SIZE);
+                    let r = ObjectRef::read_branded(&buf, &gc);
+                    if let Some(h) = r.0 {
+                        // SAFETY: owner_id is immutable; use raw access to avoid deadlock with write-locked owner.
+                        let target_tid = (*(*gc_arena::Gc::as_ptr(h)).as_ptr()).owner_id;
+                        if target_tid != owner_tid {
+                            dotnet_utils::gc::record_cross_arena_ref(
+                                target_tid,
+                                h.as_ptr() as usize,
+                            );
+                        }
+                    }
+                }
+            }
+            LayoutManager::Scalar(Scalar::ManagedPtr) => {
+                let info = unsafe {
+                    ManagedPtr::read_branded(std::slice::from_raw_parts(ptr, ManagedPtr::SIZE), &gc)
+                };
+                match info.origin {
+                    PointerOrigin::Heap(r) => {
+                        if let Some(h) = r.0 {
+                            // SAFETY: owner_id is immutable; use raw access to avoid deadlock with write-locked owner.
+                            let target_tid =
+                                unsafe { (*(*gc_arena::Gc::as_ptr(h)).as_ptr()).owner_id };
+                            if target_tid != owner_tid {
+                                unsafe {
+                                    dotnet_utils::gc::record_cross_arena_ref(
+                                        target_tid,
+                                        h.as_ptr() as usize,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    PointerOrigin::CrossArenaObjectRef(p, target_tid) => {
+                        if target_tid != owner_tid {
+                            dotnet_utils::gc::record_cross_arena_ref(
+                                target_tid,
+                                p.as_ptr() as usize,
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            LayoutManager::Field(flm) => {
+                for field in flm.fields.values() {
+                    if field.layout.is_or_contains_refs() {
+                        unsafe {
+                            self.record_refs_recursive(
+                                gc,
+                                ptr.add(field.position.as_usize()),
+                                &field.layout,
+                                owner_tid,
+                            );
+                        }
+                    }
+                }
+            }
+            LayoutManager::Array(arr) => {
+                if arr.element_layout.is_or_contains_refs() {
+                    let elem_size = arr.element_layout.size().as_usize();
+                    for i in 0..arr.length {
+                        unsafe {
+                            self.record_refs_recursive(
+                                gc,
+                                ptr.add(i * elem_size),
+                                &arr.element_layout,
+                                owner_tid,
+                            );
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[cfg(feature = "multithreaded-gc")]
+    unsafe fn record_refs_in_range(
+        &self,
+        gc: GCHandle<'gc>,
+        ptr: *const u8, // Base of the layout
+        layout: &LayoutManager,
+        owner_tid: dotnet_utils::ArenaId,
+        range_start: usize,
+        range_end: usize,
+    ) {
+        if !layout.is_or_contains_refs() {
+            return;
+        }
+        match layout {
+            LayoutManager::Scalar(Scalar::ObjectRef)
+            | LayoutManager::Scalar(Scalar::ManagedPtr) => {
+                // If the scalar overlaps at all with the written range, we should re-record it
+                // because it might have been partially or fully overwritten.
+                unsafe { self.record_refs_recursive(gc, ptr, layout, owner_tid) };
+            }
+            LayoutManager::Field(flm) => {
+                for field in flm.fields.values() {
+                    let f_start = field.position.as_usize();
+                    let f_end = f_start + field.layout.size().as_usize();
+                    if f_start < range_end && f_end > range_start {
+                        unsafe {
+                            self.record_refs_in_range(
+                                gc,
+                                ptr.add(f_start),
+                                &field.layout,
+                                owner_tid,
+                                range_start.saturating_sub(f_start),
+                                range_end.saturating_sub(f_start),
+                            );
+                        }
+                    }
+                }
+            }
+            LayoutManager::Array(alm) => {
+                let elem_size = alm.element_layout.size().as_usize();
+                if elem_size > 0 {
+                    let start_idx = range_start / elem_size;
+                    let end_idx = range_end.div_ceil(elem_size);
+                    let start_idx = start_idx.min(alm.length);
+                    let end_idx = end_idx.min(alm.length);
+
+                    for i in start_idx..end_idx {
+                        let f_start = i * elem_size;
+                        unsafe {
+                            self.record_refs_in_range(
+                                gc,
+                                ptr.add(f_start),
+                                &alm.element_layout,
+                                owner_tid,
+                                range_start.saturating_sub(f_start),
+                                range_end.saturating_sub(f_start),
+                            );
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub(crate) unsafe fn perform_read(
         &self,
         gc: GCHandle<'gc>,
         ptr: *const u8,
-        _owner: Option<ObjectRef<'gc>>,
+        _owner: Option<MemoryOwner<'gc>>,
         layout: &LayoutManager,
         type_desc: Option<TypeDescription>,
     ) -> Result<StackValue<'gc>, String> {
@@ -599,8 +831,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         StackValue::NativeFloat(ptr::read_unaligned(ptr as *const f64))
                     }
                     Scalar::ObjectRef => {
-                        let mut buf = [0u8; 8];
-                        ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), 8);
+                        let mut buf = [0u8; ObjectRef::SIZE];
+                        ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), ObjectRef::SIZE);
                         StackValue::ObjectRef(ObjectRef::read_branded(&buf, &gc))
                     }
                     Scalar::ManagedPtr => {
@@ -609,13 +841,13 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             &gc,
                         );
 
-                        let void_desc = TypeDescription::from_raw(
+                        let actual_desc = type_desc.unwrap_or(TypeDescription::from_raw(
                             dotnet_types::resolution::ResolutionS::new(ptr::null()),
                             None,
                             std::mem::zeroed(),
-                        );
+                        ));
 
-                        let m = ManagedPtr::from_info(info, void_desc);
+                        let m = ManagedPtr::from_info_full(info, actual_desc, false);
                         StackValue::ManagedPtr(m)
                     }
                 },

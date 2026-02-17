@@ -121,13 +121,12 @@ fn ldelema_internal<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         rest => panic!("invalid index for ldelema: {:?}", rest),
     };
     let array = ctx.pop();
+    if array.is_null() {
+        return ctx.throw_by_name("System.NullReferenceException");
+    }
     let StackValue::ObjectRef(obj) = array else {
         panic!("ldelema: expected object on stack, got {:?}", array);
     };
-
-    if obj.0.is_none() {
-        return ctx.throw_by_name("System.NullReferenceException");
-    }
 
     let res_ctx = ctx.current_context();
     let concrete_t = vm_try!(res_ctx.make_concrete(param0));
@@ -174,13 +173,12 @@ pub fn stelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         rest => panic!("invalid index for stelem: {:?}", rest),
     };
     let array = ctx.pop();
+    if array.is_null() {
+        return ctx.throw_by_name("System.NullReferenceException");
+    }
     let StackValue::ObjectRef(obj) = array else {
         panic!("stelem: expected object on stack, got {:?}", array);
     };
-
-    if obj.0.is_none() {
-        return ctx.throw_by_name("System.NullReferenceException");
-    }
 
     let res_ctx = ctx.current_context();
     let store_type = vm_try!(res_ctx.make_concrete(param0));
@@ -206,13 +204,12 @@ pub fn stelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         rest => panic!("invalid index for stelem: {:?}", rest),
     };
     let array = ctx.pop();
+    if array.is_null() {
+        return ctx.throw_by_name("System.NullReferenceException");
+    }
     let StackValue::ObjectRef(obj) = array else {
         panic!("stelem: expected object on stack, got {:?}", array);
     };
-
-    if obj.0.is_none() {
-        return ctx.throw_by_name("System.NullReferenceException");
-    }
 
     let layout = match param0 {
         StoreType::Int8 => Scalar::Int8,
@@ -260,7 +257,7 @@ pub fn newarr<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     };
 
     if length > LARGE_ARRAY_THRESHOLD {
-        ctx.check_gc_safe_point();
+        // ctx.check_gc_safe_point();
     }
 
     let res_ctx = ctx.current_context();
@@ -276,13 +273,14 @@ pub fn newarr<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 #[dotnet_instruction(LoadLength)]
 pub fn ldlen<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
     let array = ctx.pop();
+    if array.is_null() {
+        return ctx.throw_by_name("System.NullReferenceException");
+    }
     let StackValue::ObjectRef(obj) = array else {
         panic!("ldlen: expected object on stack, got {:?}", array);
     };
 
-    let Some(h) = obj.0 else {
-        return ctx.throw_by_name("System.NullReferenceException");
-    };
+    let h = obj.0.expect("ObjectRef cannot be null after is_null check");
 
     let inner = h.borrow();
     let len = match &inner.storage {

@@ -19,8 +19,28 @@ pub fn intrinsic_x86base_is_supported<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
+#[dotnet_intrinsic("static bool System.Runtime.Intrinsics.X86.X86Base/X64::get_IsSupported()")]
+pub fn intrinsic_x86base_x64_is_supported<'gc, 'm: 'gc>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    ctx.push_i32(0);
+    StepResult::Continue
+}
+
 #[dotnet_intrinsic("static bool System.Runtime.Intrinsics.X86.Lzcnt::get_IsSupported()")]
 pub fn intrinsic_lzcnt_is_supported<'gc, 'm: 'gc>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    ctx.push_i32(0);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static bool System.Runtime.Intrinsics.X86.Lzcnt/X64::get_IsSupported()")]
+pub fn intrinsic_lzcnt_x64_is_supported<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,
     _generics: &GenericLookup,

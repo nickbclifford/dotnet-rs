@@ -139,12 +139,12 @@ impl MethodInfo<'static> {
 #[must_use]
 #[derive(Clone, Debug, PartialEq)]
 pub enum StepResult {
-    Continue,              // Advance IP
-    Jump(usize),           // Set IP to X
-    FramePushed,           // Do not advance IP (new frame active)
-    Return,                // Pop frame
+    Continue,                                  // Advance IP
+    Jump(usize),                               // Set IP to X
+    FramePushed,                               // Do not advance IP (new frame active)
+    Return,                                    // Pop frame
     MethodThrew(exceptions::ManagedException), // Exception unhandled in frame
-    Exception,             // Exception thrown, need to call handle_exception
-    Yield,                 // GC/Thread yield
-    Error(error::VmError), // Internal VM error
+    Exception,                                 // Exception thrown, need to call handle_exception
+    Yield,                                     // GC/Thread yield
+    Error(error::VmError),                     // Internal VM error
 }

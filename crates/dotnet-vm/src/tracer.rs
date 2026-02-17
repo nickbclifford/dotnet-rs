@@ -72,14 +72,14 @@ impl Tracer {
     }
 
     pub fn trace_instruction(&mut self, indent: usize, ip: usize, instruction: &str) {
+        let padding = " ".repeat(indent * 2);
         trace!(
             target: "instruction",
             frame = indent,
-            "[IP:{:04}] {:indent$}{}",
+            "[IP:{:04}] {}{}",
             ip,
-            "",
-            instruction,
-            indent = indent * 2
+            padding,
+            instruction
         );
     }
 

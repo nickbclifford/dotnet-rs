@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::object::{HeapStorage, ObjectRef, ValueType};
+    use crate::object::{HeapStorage, ObjectRef};
     use gc_arena::{Arena, Rootable};
     #[test]
     fn test_read_branded_null() {

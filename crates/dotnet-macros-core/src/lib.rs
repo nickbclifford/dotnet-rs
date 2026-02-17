@@ -4,6 +4,7 @@
 //! This crate contains the parsing and transformation logic for .NET signatures.
 use syn::{
     Ident, Result, Token,
+    ext::IdentExt,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
 };
@@ -86,11 +87,21 @@ impl Parse for ParsedFieldSignature {
 }
 
 pub fn parse_type(input: ParseStream) -> Result<String> {
+    let mut is_ref = false;
+    if input.peek(Ident::peek_any) {
+        let fork = input.fork();
+        let ident: Ident = fork.call(Ident::parse_any)?;
+        if ident == "ref" || ident == "out" || ident == "in" {
+            input.call(Ident::parse_any)?;
+            is_ref = true;
+        }
+    }
+
     let mut segments = Vec::new();
     let mut separators = Vec::new();
 
     loop {
-        let ident: Ident = input.parse()?;
+        let ident: Ident = input.call(Ident::parse_any)?;
         let mut segment = ident.to_string();
 
         // Check for generics <T, U> -> `2
@@ -194,6 +205,9 @@ pub fn parse_type(input: ParseStream) -> Result<String> {
     };
 
     type_name.push_str(&suffix);
+    if is_ref {
+        type_name.push('&');
+    }
     Ok(type_name)
 }
 
@@ -202,7 +216,7 @@ pub fn parse_class_name(input: ParseStream) -> Result<String> {
     let mut separators = Vec::new();
 
     loop {
-        let ident: Ident = input.parse()?;
+        let ident: Ident = input.call(Ident::parse_any)?;
         let mut segment = ident.to_string();
 
         // Generics
@@ -335,5 +349,13 @@ mod tests {
             parse_str("static int Namespace.Parent/Nested::Field").unwrap();
         assert_eq!(sig.class_name, "Namespace.Parent+Nested");
         assert_eq!(sig.field_name, "Field");
+    }
+
+    #[test]
+    fn test_parse_ref_params() {
+        let sig: ParsedSignature =
+            parse_str("static bool System.SpanHelpers::SequenceEqual(ref byte, byte&, int*)")
+                .unwrap();
+        assert_eq!(sig.parameters, vec!["UInt8&", "UInt8&", "Int32*"]);
     }
 }

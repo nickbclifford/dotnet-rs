@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "memory-validation")]
-    use crate::object::{HeapStorage, ObjectRef, ValueType};
+    use crate::object::{HeapStorage, ObjectRef};
     #[cfg(feature = "memory-validation")]
     use dotnet_utils::ArenaId;
     #[cfg(feature = "memory-validation")]
@@ -10,9 +10,7 @@ mod tests {
     #[cfg(feature = "memory-validation")]
     fn test_arena_mismatch_panics() {
         #[cfg(feature = "multithreaded-gc")]
-        {
-            return;
-        }
+        {}
         #[cfg(not(feature = "multithreaded-gc"))]
         {
             type TestRoot = Rootable![()];
@@ -20,8 +18,11 @@ mod tests {
             arena.mutate(|gc, _root| {
                 dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(ArenaId(1))));
                 let gc_handle = dotnet_utils::gc::GCHandle::new(gc, ArenaId(1));
-                let obj = ObjectRef::new(gc_handle, HeapStorage::Str(crate::string::CLRString::from("test")));
-                let _ = obj.as_heap_storage(|_| ());
+                let obj = ObjectRef::new(
+                    gc_handle,
+                    HeapStorage::Str(crate::string::CLRString::from("test")),
+                );
+                obj.as_heap_storage(|_| ());
                 dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(ArenaId(2))));
                 let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                     obj.as_heap_storage(|_| ());
@@ -41,8 +42,11 @@ mod tests {
         arena.mutate(|gc, _root| {
             dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(arena_id)));
             let gc_handle = dotnet_utils::gc::GCHandle::new(gc, arena_handle.as_inner(), arena_id);
-            let obj = ObjectRef::new(gc_handle, HeapStorage::Str(crate::string::CLRString::from("test")));
-            let _ = obj.as_heap_storage(|_| ());
+            let obj = ObjectRef::new(
+                gc_handle,
+                HeapStorage::Str(crate::string::CLRString::from("test")),
+            );
+            obj.as_heap_storage(|_| ());
             dotnet_utils::gc::unregister_arena(arena_id);
             let other_id = ArenaId(200);
             dotnet_utils::gc::register_arena(other_id);
@@ -67,16 +71,19 @@ mod tests {
         arena.mutate(|gc, _root| {
             dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(owner_id)));
             let gc_handle = dotnet_utils::gc::GCHandle::new(gc, owner_handle.as_inner(), owner_id);
-            let obj = ObjectRef::new(gc_handle, HeapStorage::Str(crate::string::CLRString::from("test")));
+            let obj = ObjectRef::new(
+                gc_handle,
+                HeapStorage::Str(crate::string::CLRString::from("test")),
+            );
             dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(current_id)));
-            let _ = obj.as_heap_storage(|_| ());
+            obj.as_heap_storage(|_| ());
             dotnet_utils::gc::set_stw_in_progress(true);
             let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                 obj.as_heap_storage(|_| ());
             }));
             assert!(res.is_err(), "Uncoordinated access during STW should panic");
             dotnet_utils::gc::set_currently_tracing(Some(current_id));
-            let _ = obj.as_heap_storage(|_| ());
+            obj.as_heap_storage(|_| ());
             dotnet_utils::gc::set_currently_tracing(None);
             dotnet_utils::gc::set_stw_in_progress(false);
         });

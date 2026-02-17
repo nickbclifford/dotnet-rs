@@ -185,7 +185,8 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                     .is_value_type(&self.current_context())
                     .expect("Failed to check if return type is value type")
                 {
-                    let boxed = self.box_value(&return_concrete, val)
+                    let boxed = self
+                        .box_value(&return_concrete, val)
                         .expect("Failed to box return value");
                     self.push_obj(boxed);
                 } else {

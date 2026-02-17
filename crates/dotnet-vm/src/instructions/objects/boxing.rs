@@ -57,34 +57,37 @@ pub fn unbox_any<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             return ctx.throw_by_name("System.NullReferenceException");
         }
 
-        let result = vm_try!(obj.as_heap_storage(|storage| -> Result<StackValue<'gc>, dotnet_types::error::TypeResolutionError> {
-            match storage {
-                HeapStorage::Boxed(o) | HeapStorage::Obj(o) => {
-                    // Boxed value or struct is an Object.
-                    // If the target is a primitive, we need to extract it.
-                    let td = o.description;
-                    if let Some(e) = td.is_enum() {
-                        let enum_type = res_ctx.make_concrete(e)?;
-                        let cts = ctx.read_cts_value(&enum_type, &o.instance_storage.get())?;
-                        Ok(cts.into_stack())
-                    } else if td.definition().namespace.as_deref() == Some("System") {
-                        let name = &td.definition().name;
-                        match name.as_ref() as &str {
-                            "Boolean" | "Char" | "SByte" | "Byte" | "Int16" | "UInt16"
-                            | "Int32" | "UInt32" | "Int64" | "UInt64" | "Single" | "Double"
-                            | "IntPtr" | "UIntPtr" => {
-                                let cts = ctx.read_cts_value(&target_ct, &o.instance_storage.get())?;
-                                Ok(cts.into_stack())
+        let result = vm_try!(obj.as_heap_storage(
+            |storage| -> Result<StackValue<'gc>, dotnet_types::error::TypeResolutionError> {
+                match storage {
+                    HeapStorage::Boxed(o) | HeapStorage::Obj(o) => {
+                        // Boxed value or struct is an Object.
+                        // If the target is a primitive, we need to extract it.
+                        let td = o.description;
+                        if let Some(e) = td.is_enum() {
+                            let enum_type = res_ctx.make_concrete(e)?;
+                            let cts = ctx.read_cts_value(&enum_type, &o.instance_storage.get())?;
+                            Ok(cts.into_stack())
+                        } else if td.definition().namespace.as_deref() == Some("System") {
+                            let name = &td.definition().name;
+                            match name.as_ref() as &str {
+                                "Boolean" | "Char" | "SByte" | "Byte" | "Int16" | "UInt16"
+                                | "Int32" | "UInt32" | "Int64" | "UInt64" | "Single" | "Double"
+                                | "IntPtr" | "UIntPtr" => {
+                                    let cts =
+                                        ctx.read_cts_value(&target_ct, &o.instance_storage.get())?;
+                                    Ok(cts.into_stack())
+                                }
+                                _ => Ok(StackValue::ValueType(o.clone())),
                             }
-                            _ => Ok(StackValue::ValueType(o.clone())),
+                        } else {
+                            Ok(StackValue::ValueType(o.clone()))
                         }
-                    } else {
-                        Ok(StackValue::ValueType(o.clone()))
                     }
+                    _ => panic!("unbox.any: expected boxed value, got {:?}", storage),
                 }
-                _ => panic!("unbox.any: expected boxed value, got {:?}", storage),
             }
-        }));
+        ));
         ctx.push(result);
     } else {
         // Reference type: identical to castclass.
@@ -123,9 +126,7 @@ pub fn unbox<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 
     let inner = h.borrow();
     let ptr = match &inner.storage {
-        HeapStorage::Boxed(o) | HeapStorage::Obj(o) => {
-            o.instance_storage.get().as_ptr() as *mut u8
-        }
+        HeapStorage::Boxed(o) | HeapStorage::Obj(o) => o.instance_storage.get().as_ptr() as *mut u8,
         _ => panic!("unbox on non-boxed struct"),
     };
 

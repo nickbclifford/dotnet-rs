@@ -4,8 +4,8 @@ use crate::{
     stack::{
         context::VesContext,
         ops::{
-            CallOps, ExceptionOps, LoaderOps, RawMemoryOps, ReflectionOps, ResolutionOps, StackOps,
-            StaticsOps, ThreadOps,
+            CallOps, ExceptionOps, LoaderOps, ReflectionOps, ResolutionOps, StackOps, StaticsOps,
+            ThreadOps,
         },
     },
     state::{SharedGlobalState, StaticStorageManager},
@@ -51,7 +51,7 @@ impl<'a, 'gc, 'm: 'gc> StaticsOps<'gc> for VesContext<'a, 'gc, 'm> {
         generics: GenericLookup,
     ) -> StepResult {
         let _gc = self.gc;
-        self.check_gc_safe_point();
+        // self.check_gc_safe_point();
 
         let ctx = ResolutionContext {
             resolution: description.resolution,
@@ -63,40 +63,34 @@ impl<'a, 'gc, 'm: 'gc> StaticsOps<'gc> for VesContext<'a, 'gc, 'm> {
             shared: Some(self.shared.clone()),
         };
 
-        loop {
-            let tid = self.thread_id.get();
-            let init_result = vm_try!(self.shared.statics.init(
-                description,
-                &ctx,
-                tid,
-                Some(&self.shared.metrics)
-            ));
+        let tid = self.thread_id.get();
+        let init_result = vm_try!(self.shared.statics.init(
+            description,
+            &ctx,
+            tid,
+            Some(&self.shared.metrics)
+        ));
 
-            use crate::statics::StaticInitResult::*;
-            match init_result {
-                Execute(m) => {
-                    crate::vm_trace!(
-                        self,
-                        "-- calling static constructor (will return to ip {}) --",
-                        self.current_frame().state.ip
-                    );
-                    vm_try!(self.call_frame(
-                        vm_try!(MethodInfo::new(m, &generics, self.shared.clone())),
-                        generics.clone(),
-                    ));
-                    return StepResult::FramePushed;
-                }
-                Initialized | Recursive => {
-                    return StepResult::Continue;
-                }
-                Waiting => {
-                    self.check_gc_safe_point();
-                    std::thread::yield_now();
-                }
-                Failed => {
-                    return self.throw_by_name("System.TypeInitializationException");
-                }
+        use crate::statics::StaticInitResult::*;
+        match init_result {
+            Execute(m) => {
+                crate::vm_trace!(
+                    self,
+                    "-- calling static constructor (will return to ip {}) --",
+                    self.current_frame().state.ip
+                );
+                vm_try!(self.call_frame(
+                    vm_try!(MethodInfo::new(m, &generics, self.shared.clone())),
+                    generics.clone(),
+                ));
+                StepResult::FramePushed
             }
+            Initialized | Recursive => StepResult::Continue,
+            Waiting => {
+                // self.check_gc_safe_point();
+                StepResult::Yield
+            }
+            Failed => self.throw_by_name("System.TypeInitializationException"),
         }
     }
 }

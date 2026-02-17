@@ -428,7 +428,8 @@ impl AssemblyLoader {
         self.type_cache_misses.fetch_add(1, Ordering::Relaxed);
         let result = match handle {
             UserType::Definition(d) => {
-                let definition = &resolution.definition()[d];
+                let def = resolution.definition();
+                let definition = &def[d];
                 if let Some(t) = self.stubs.get(&definition.type_name()) {
                     *t
                 } else {

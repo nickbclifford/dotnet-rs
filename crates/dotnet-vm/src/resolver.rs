@@ -90,13 +90,6 @@ use crate::{
     state::{GlobalCaches, SharedGlobalState},
 };
 use dotnet_assemblies::AssemblyLoader;
-use dotnet_value::{
-    StackValue,
-    layout::{HasLayout, LayoutManager},
-    object::{CTSValue, HeapStorage, Object, ObjectHandle, ObjectRef, ValueType, Vector},
-    pointer::ManagedPtr,
-    storage::FieldStorage,
-};
 use dotnet_types::{
     TypeDescription,
     comparer::decompose_type_source,
@@ -106,6 +99,13 @@ use dotnet_types::{
     resolution::ResolutionS,
 };
 use dotnet_utils::gc::GCHandle;
+use dotnet_value::{
+    StackValue,
+    layout::{HasLayout, LayoutManager},
+    object::{CTSValue, HeapStorage, Object, ObjectHandle, ObjectRef, ValueType, Vector},
+    pointer::ManagedPtr,
+    storage::FieldStorage,
+};
 use dotnetdll::prelude::*;
 use std::{
     any,
@@ -658,7 +658,7 @@ impl<'m> ResolverService<'m> {
         match self.new_cts_value(&t, data, ctx)? {
             CTSValue::Value(v) => {
                 let td = self.loader.find_concrete_type(t)?;
-                let mut obj_instance = self.new_object(td, ctx)?;
+                let obj_instance = self.new_object(td, ctx)?;
                 let size = v.size_bytes();
                 CTSValue::Value(v).write(&mut obj_instance.instance_storage.get_mut()[..size]);
                 Ok(ObjectRef::new(gc, HeapStorage::Boxed(obj_instance)))
@@ -884,13 +884,13 @@ impl<'m> ResolverService<'m> {
                     self.loader.corlib_type("System.Void")?
                 };
 
-                if data.len() >= 16 {
-                    let info = unsafe { ManagedPtr::read_branded(data, &gc) };
-                    let m = ManagedPtr::from_info(info, inner_type);
+                if data.len() >= ManagedPtr::SIZE {
+                    let info = unsafe { ManagedPtr::read_branded(&data[..ManagedPtr::SIZE], &gc) };
+                    let m = ManagedPtr::from_info_full(info, inner_type, false);
                     Ok(CTSValue::Value(Pointer(m)))
                 } else {
-                    let mut ptr_bytes = [0u8; 8];
-                    ptr_bytes.copy_from_slice(&data[0..8]);
+                    let mut ptr_bytes = [0u8; ObjectRef::SIZE];
+                    ptr_bytes.copy_from_slice(&data[0..ObjectRef::SIZE]);
                     let ptr = usize::from_ne_bytes(ptr_bytes);
                     Ok(CTSValue::Value(Pointer(ManagedPtr::new(
                         NonNull::new(ptr as *mut u8),
@@ -934,8 +934,10 @@ impl<'m> ResolverService<'m> {
                 }
 
                 if td.type_name() == "System.TypedReference" {
-                    let addr_bytes = data[0..8].try_into().unwrap();
-                    let type_bytes = data[8..16].try_into().unwrap();
+                    let mut buf = ManagedPtr::serialization_buffer();
+                    buf.copy_from_slice(&data[..ManagedPtr::SIZE]);
+                    let addr_bytes = buf[0..ObjectRef::SIZE].try_into().unwrap();
+                    let type_bytes = buf[ObjectRef::SIZE..ManagedPtr::SIZE].try_into().unwrap();
                     let addr = usize::from_ne_bytes(addr_bytes);
                     let type_ptr = usize::from_ne_bytes(type_bytes) as *const TypeDescription;
 
@@ -962,7 +964,43 @@ impl<'m> ResolverService<'m> {
                 }
 
                 let instance = self.new_object(td, &new_ctx)?;
-                instance.instance_storage.get_mut().copy_from_slice(data);
+                let layout = instance.instance_storage.layout().clone();
+                let mut storage = instance.instance_storage.get_mut();
+
+                if layout.has_ref_fields {
+                    for (key, field_layout) in &layout.fields {
+                        let pos = field_layout.position.as_usize();
+                        let size = field_layout.layout.size().as_usize();
+                        let field_data = &data[pos..pos + size];
+
+                        if field_layout.layout.has_managed_ptrs() {
+                            let field_info = td
+                                .definition()
+                                .fields
+                                .iter()
+                                .find(|f| f.name == key.name)
+                                .expect("field not found during read_cts_value patching");
+
+                            let field_desc = FieldDescription {
+                                parent: td,
+                                field_resolution: td.resolution,
+                                field: field_info,
+                                index: 0,
+                            };
+                            let field_type =
+                                self.get_field_type(td.resolution, new_ctx.generics, field_desc)?;
+
+                            let val = self.read_cts_value(&field_type, field_data, gc, &new_ctx)?;
+                            val.write(&mut storage[pos..pos + size]);
+                        } else {
+                            storage[pos..pos + size].copy_from_slice(field_data);
+                        }
+                    }
+                } else {
+                    storage.copy_from_slice(data);
+                }
+
+                drop(storage);
                 Ok(CTSValue::Value(Struct(instance)))
             }
         }

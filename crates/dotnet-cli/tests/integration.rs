@@ -154,7 +154,8 @@ impl TestHarness {
                 1
             }
             vm::ExecutorResult::Error(e) => {
-                panic!("VM internal error while running {:?}: {}", resolution, e)
+                eprintln!("VM internal error while running {:?}: {}", resolution, e);
+                101
             }
         }
     }
@@ -321,6 +322,34 @@ fn test_multiple_arenas_static_fields() {
 
     // Test that static fields work correctly across multiple arenas
     let handles: Vec<_> = (0..3)
+        .map(|_| {
+            let dll_path = dll_path.clone();
+            let harness_ptr = harness as *const TestHarness as usize;
+            thread::spawn(move || {
+                let harness = unsafe { &*(harness_ptr as *const TestHarness) };
+                let exit_code = harness.run(&dll_path);
+                assert_eq!(exit_code, 42);
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+}
+
+#[test]
+#[cfg(feature = "multithreaded-gc")]
+fn test_multiple_arenas_static_ref() {
+    use std::thread;
+
+    let harness = TestHarness::get();
+    let fixture_path = Path::new("tests/fixtures/fields/static_ref_42.cs");
+    let dll_path = harness.build(fixture_path).unwrap();
+
+    // Test that static reference fields work correctly across multiple arenas
+    // One thread will initialize the static field, others will use it.
+    let handles: Vec<_> = (0..5)
         .map(|_| {
             let dll_path = dll_path.clone();
             let harness_ptr = harness as *const TestHarness as usize;

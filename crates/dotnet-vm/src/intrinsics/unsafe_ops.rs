@@ -1,7 +1,7 @@
 use crate::{
     StepResult,
     layout::type_layout,
-    memory::{RawMemoryAccess, check_read_safety},
+    memory::{MemoryOwner, RawMemoryAccess, check_read_safety},
     stack::ops::VesOps,
 };
 use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
@@ -72,7 +72,7 @@ pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
     // Check GC safe point before large bulk memory operations
     const LARGE_MEMMOVE_THRESHOLD: usize = 4096;
     if total_count > LARGE_MEMMOVE_THRESHOLD {
-        ctx.check_gc_safe_point();
+        // ctx.check_gc_safe_point();
     }
 
     unsafe {
@@ -97,13 +97,13 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<'gc, 'm: 'gc>(
 
     let data_ptr = match &array_handle.borrow().storage {
         HeapStorage::Vec(v) => v.get().as_ptr() as *mut u8,
-        _ => panic!("GetArrayDataReference called on non-array"),
+        _ => return ctx.throw_by_name("System.ArgumentException"),
     };
 
-    let element_type = ctx
-        .loader()
-        .find_concrete_type(generics.method_generics[0].clone())
-        .expect("Element type must exist for GetArrayDataReference");
+    let element_type = vm_try!(
+        ctx.loader()
+            .find_concrete_type(generics.method_generics[0].clone())
+    );
     ctx.push_ptr(
         data_ptr,
         element_type,
@@ -155,17 +155,14 @@ pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
     let layout = vm_try!(type_layout(concrete_type.clone(), &ctx.current_context()));
 
     if let LayoutManager::Field(flm) = &*layout {
-        let td = ctx
-            .loader()
-            .find_concrete_type(concrete_type.clone())
-            .expect("Type must exist for Marshal.OffsetOf");
+        let td = vm_try!(ctx.loader().find_concrete_type(concrete_type.clone()));
         if let Some(field) = flm.get_field(td, &field_name) {
             ctx.push_isize(field.position.as_usize() as isize);
         } else {
-            panic!("Field {} not found in type {:?}", field_name, concrete_type);
+            return ctx.throw_by_name("System.ArgumentException");
         }
     } else {
-        panic!("Type {:?} does not have field layout", concrete_type);
+        return ctx.throw_by_name("System.ArgumentException");
     }
     StepResult::Continue
 }
@@ -185,7 +182,7 @@ pub fn intrinsic_unsafe_as_pointer<'gc, 'm: 'gc>(
         StackValue::NativeInt(i) => i as *mut u8,
         StackValue::UnmanagedPtr(p) => p.0.as_ptr(),
         StackValue::ObjectRef(ObjectRef(None)) => ptr::null_mut(),
-        _ => panic!("Unsafe.AsPointer expected pointer, got {:?}", val),
+        _ => return ctx.throw_by_name("System.ArgumentException"),
     };
     ctx.push_isize(ptr as isize);
     StepResult::Continue
@@ -207,10 +204,7 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     let offset = match offset_val {
         StackValue::Int32(i) => i as isize,
         StackValue::NativeInt(i) => i,
-        _ => panic!(
-            "Unsafe.Add expected Int32 or NativeInt offset, got {:?}",
-            offset_val
-        ),
+        _ => return ctx.throw_by_name("System.ArgumentException"),
     };
 
     let m_val = ctx.pop();
@@ -243,10 +237,7 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
     let offset = match offset_val {
         StackValue::Int32(i) => i as isize,
         StackValue::NativeInt(i) => i,
-        _ => panic!(
-            "Unsafe.AddByteOffset expected Int32 or NativeInt offset, got {:?}",
-            offset_val
-        ),
+        _ => return ctx.throw_by_name("System.ArgumentException"),
     };
 
     let m_val = ctx.pop();
@@ -276,10 +267,7 @@ pub fn intrinsic_unsafe_subtract<'gc, 'm: 'gc>(
     let offset = match offset_val {
         StackValue::Int32(i) => i as isize,
         StackValue::NativeInt(i) => i,
-        _ => panic!(
-            "Unsafe.Subtract expected Int32 or NativeInt offset, got {:?}",
-            offset_val
-        ),
+        _ => return ctx.throw_by_name("System.ArgumentException"),
     };
 
     let m_val = ctx.pop();
@@ -310,10 +298,7 @@ pub fn intrinsic_unsafe_subtract_byte_offset<'gc, 'm: 'gc>(
     let offset = match offset_val {
         StackValue::Int32(i) => i as isize,
         StackValue::NativeInt(i) => i,
-        _ => panic!(
-            "Unsafe.SubtractByteOffset expected Int32 or NativeInt offset, got {:?}",
-            offset_val
-        ),
+        _ => return ctx.throw_by_name("System.ArgumentException"),
     };
 
     let m_val = ctx.pop();
@@ -371,10 +356,10 @@ pub fn intrinsic_unsafe_as_generic<'gc, 'm: 'gc>(
     // TTo must be compatible with TFrom's memory layout regarding References
     check_read_safety(&dest_layout, Some(&src_layout), 0);
 
-    let target_type = ctx
-        .loader()
-        .find_concrete_type(generics.method_generics[1].clone())
-        .expect("Type must exist for Unsafe.As");
+    let target_type = vm_try!(
+        ctx.loader()
+            .find_concrete_type(generics.method_generics[1].clone())
+    );
     let m_val = ctx.pop();
     match m_val {
         StackValue::ManagedPtr(mut m) => {
@@ -446,7 +431,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
             Some(m.offset),
         ),
         StackValue::UnmanagedPtr(p) => (p.0.as_ptr(), false, PointerOrigin::Unmanaged, None),
-        _ => panic!("Unsafe.AsRef expected pointer, got {:?}", val),
+        _ => return ctx.throw_by_name("System.ArgumentException"),
     };
 
     // Safety Check: Casting ptr to ref T
@@ -457,7 +442,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
     };
 
     let src_layout_obj = if let Some(owner) = owner {
-        memory.get_layout_from_owner(owner)
+        memory.get_layout_from_owner(MemoryOwner::Local(owner))
     } else {
         None
     };
@@ -558,17 +543,22 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
             // If we read a ManagedPtr, we need to supply the target type,
             // because read_unaligned returns ManagedPtr with void/unknown type.
             if let StackValue::ManagedPtr(mut m) = v {
-                let target_type = ctx
-                    .loader()
-                    .find_concrete_type(target.clone())
-                    .expect("Type must exist for Unsafe.ReadUnaligned ManagedPtr");
+                let target_type = vm_try!(ctx.loader().find_concrete_type(target.clone()));
                 m.inner_type = target_type;
                 ctx.push(StackValue::ManagedPtr(m));
             } else {
                 ctx.push(v);
             }
         }
-        Err(e) => panic!("Unsafe.ReadUnaligned failed: {}", e),
+        Err(e) => {
+            return StepResult::Error(
+                crate::error::ExecutionError::NotImplemented(format!(
+                    "Unsafe.ReadUnaligned failed: {}",
+                    e
+                ))
+                .into(),
+            );
+        }
     }
 
     StepResult::Continue
@@ -604,7 +594,15 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
 
     match unsafe { ctx.write_unaligned(origin, offset, value, &layout) } {
         Ok(_) => {}
-        Err(e) => panic!("Unsafe.WriteUnaligned failed: {}", e),
+        Err(e) => {
+            return StepResult::Error(
+                crate::error::ExecutionError::NotImplemented(format!(
+                    "Unsafe.WriteUnaligned failed: {}",
+                    e
+                ))
+                .into(),
+            );
+        }
     }
 
     StepResult::Continue

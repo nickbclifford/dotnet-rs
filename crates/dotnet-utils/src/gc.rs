@@ -355,6 +355,11 @@ pub fn is_valid_cross_arena_ref(target_thread_id: crate::ArenaId) -> bool {
 }
 
 #[cfg(feature = "multithreaded-gc")]
+pub fn reset_arena_registry() {
+    VALID_ARENAS.write().clear();
+}
+
+#[cfg(feature = "multithreaded-gc")]
 pub fn set_stw_in_progress(in_progress: bool) {
     STW_IN_PROGRESS.store(in_progress, Ordering::Release);
 }

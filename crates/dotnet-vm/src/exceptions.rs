@@ -1,5 +1,7 @@
 use crate::{StepResult, StoreType, context::ResolutionContext, stack::ops::*};
-use dotnet_types::{error::TypeResolutionError, generics::ConcreteType, members::MethodDescription};
+use dotnet_types::{
+    error::TypeResolutionError, generics::ConcreteType, members::MethodDescription,
+};
 use dotnet_utils::{DebugStr, gc::GCHandle};
 use dotnet_value::{
     StackValue,
@@ -280,7 +282,9 @@ impl ExceptionHandlingSystem {
             // instructions without re-checking the current frame/exception state,
             // which can lead to corruption after stack or state transitions.
             ExceptionState::None => StepResult::Exception,
-            ExceptionState::Throwing(exception, preserve) => self.begin_throwing(ctx, exception, gc, preserve),
+            ExceptionState::Throwing(exception, preserve) => {
+                self.begin_throwing(ctx, exception, gc, preserve)
+            }
             ExceptionState::Searching(state) => {
                 self.search_for_handler(ctx, gc, state.exception, state.cursor)
             }
@@ -300,7 +304,6 @@ impl ExceptionHandlingSystem {
         gc: GCHandle<'gc>,
         preserve_stack_trace: bool,
     ) -> StepResult {
-        // println!("DEBUG: current_intrinsic={:?}", ctx.current_intrinsic());
         let frame = ctx.frame_stack().current_frame();
         if ctx.tracer_enabled() {
             ctx.tracer().trace_exception(
@@ -348,7 +351,9 @@ impl ExceptionHandlingSystem {
                         params_str.push_str(", ");
                     }
                     params_str.push_str(&param.1.show(method.resolution().definition()));
-                    let Some(meta) = method.method.parameter_metadata.get(i) else { continue };
+                    let Some(meta) = method.method.parameter_metadata.get(i) else {
+                        continue;
+                    };
                     if let Some(name) = meta.as_ref().and_then(|m| m.name.as_ref()) {
                         params_str.push(' ');
                         params_str.push_str(name);

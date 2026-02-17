@@ -112,7 +112,7 @@ use dotnet_types::{
 };
 use dotnet_value::{
     StackValue,
-    object::{HeapStorage, ObjectRef, ValueType},
+    object::{HeapStorage, ObjectRef},
     string::CLRString,
 };
 use std::sync::Arc;
@@ -171,6 +171,29 @@ pub type IntrinsicFieldHandler = for<'gc, 'm> fn(
     type_generics: Arc<[ConcreteType]>,
     is_address: bool,
 ) -> StepResult;
+
+pub fn missing_intrinsic_handler<'gc, 'm: 'gc>(
+    _ctx: &mut dyn VesOps<'gc, 'm>,
+    method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    StepResult::Error(
+        crate::error::ExecutionError::NotImplemented(format!(
+            "Missing intrinsic implementation for method: {:?}",
+            method
+        ))
+        .into(),
+    )
+}
+
+pub fn get_missing_intrinsic_handler() -> IntrinsicHandler {
+    // SAFETY: Transmuting to the higher-ranked trait bound fn pointer.
+    // This is safe because the function signature matches exactly,
+    // only the lifetime bounds are different (generic vs specific).
+    unsafe {
+        std::mem::transmute::<*const (), IntrinsicHandler>(missing_intrinsic_handler as *const ())
+    }
+}
 
 // Note on transmute safety:
 // Throughout this file, we use `unsafe { std::mem::transmute::<_, IntrinsicHandler>(...) }`

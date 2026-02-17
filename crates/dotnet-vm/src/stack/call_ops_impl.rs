@@ -178,8 +178,12 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn dispatch_method(&mut self, method: MethodDescription, lookup: GenericLookup) -> StepResult {
         let _gc = self.gc;
-        if let Some(intrinsic) = self.shared.caches.intrinsic_registry.get(&method) {
-            intrinsic(self, method, &lookup)
+        if let Some(metadata) = crate::intrinsics::classify_intrinsic(
+            method,
+            self.loader(),
+            Some(&self.shared.caches.intrinsic_registry),
+        ) {
+            (metadata.handler)(self, method, &lookup)
         } else if method.method.pinvoke.is_some() {
             crate::pinvoke::external_call(self, method)
         } else {

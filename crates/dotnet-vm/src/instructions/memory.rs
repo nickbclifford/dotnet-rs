@@ -24,7 +24,7 @@ pub fn cpblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ?Sized>(
     // Threshold: copying more than 4KB of data
     const LARGE_COPY_THRESHOLD: usize = 4096;
     if size > LARGE_COPY_THRESHOLD {
-        ctx.check_gc_safe_point();
+        // ctx.check_gc_safe_point();
     }
 
     // SAFETY: The source and destination pointers are obtained from the evaluation stack
@@ -48,7 +48,7 @@ pub fn initblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ?Sized>(
 
     // Check GC safe point before large memory block initialization
     if size > 4096 {
-        ctx.check_gc_safe_point();
+        // ctx.check_gc_safe_point();
     }
 
     // SAFETY: The address and size are obtained from the evaluation stack.
@@ -106,11 +106,9 @@ pub fn stind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: StoreType) -> 
         }
     }
 
-    // Check for null managed pointer before extracting origin/offset
-    if let StackValue::ManagedPtr(ref m) = addr_val {
-        if m.is_null() {
-            return ctx.throw_by_name("System.NullReferenceException");
-        }
+    // Check for null pointer before extracting origin/offset
+    if addr_val.is_null() {
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     let (origin, offset) = match addr_val {
@@ -161,11 +159,9 @@ pub fn ldind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: LoadType) -> S
         return StepResult::Continue;
     }
 
-    // Check for null managed pointer before extracting origin/offset
-    if let StackValue::ManagedPtr(ref m) = addr_val {
-        if m.is_null() {
-            return ctx.throw_by_name("System.NullReferenceException");
-        }
+    // Check for null pointer before extracting origin/offset
+    if addr_val.is_null() {
+        return ctx.throw_by_name("System.NullReferenceException");
     }
 
     let (origin, offset) = match addr_val {

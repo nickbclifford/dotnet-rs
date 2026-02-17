@@ -1,4 +1,5 @@
 use crate::{
+    memory::access::MemoryOwner,
     stack::{
         context::VesContext,
         ops::{PoolOps, RawMemoryOps, StaticsOps, VesOps},
@@ -80,7 +81,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
                 let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                unsafe { memory.perform_write(ptr.as_ptr(), None, value, layout) }
+                unsafe { memory.perform_write(self.gc, ptr.as_ptr(), None, value, layout) }
             }
             PointerOrigin::Static(static_type, lookup) => {
                 let storage = self.statics().get(static_type, &lookup);
@@ -90,13 +91,21 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                     }
                     let ptr = unsafe { data.as_mut_ptr().add(offset.as_usize()) };
                     let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                    unsafe { memory.perform_write(ptr, None, value, layout) }
+                    unsafe { memory.perform_write(self.gc, ptr, None, value, layout) }
                 })
             }
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
-                unsafe { memory.write_unaligned(self.gc, Some(owner), offset, value, layout) }
+                unsafe {
+                    memory.write_unaligned(
+                        self.gc,
+                        Some(MemoryOwner::Local(owner)),
+                        offset,
+                        value,
+                        layout,
+                    )
+                }
             }
             PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
@@ -104,19 +113,18 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 unsafe { memory.write_unaligned(self.gc, None, offset, value, layout) }
             }
             #[cfg(feature = "multithreaded-gc")]
-            PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
-                let lock = unsafe { ptr.0.as_ref() };
-                let mut guard = lock.borrow_mut(&self.gc);
-                let storage = &mut guard.storage;
-                let storage_slice: &mut [u8] = unsafe {
-                    std::slice::from_raw_parts_mut(storage.raw_data_ptr(), storage.size_bytes())
-                };
-                if offset.as_usize() + layout.size().as_usize() > storage_slice.len() {
-                    return Err("Cross-arena access out of bounds".to_string());
+            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+                let heap = &self.local.heap;
+                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                unsafe {
+                    memory.write_unaligned(
+                        self.gc,
+                        Some(MemoryOwner::CrossArena(ptr, tid)),
+                        offset,
+                        value,
+                        layout,
+                    )
                 }
-                let ptr = unsafe { storage_slice.as_mut_ptr().add(offset.as_usize()) };
-                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                unsafe { memory.perform_write(ptr, None, value, layout) }
             }
             PointerOrigin::Transient(obj) => {
                 obj.instance_storage.with_data_mut(|data: &mut [u8]| {
@@ -125,7 +133,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                     }
                     let ptr = unsafe { data.as_mut_ptr().add(offset.as_usize()) };
                     let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                    unsafe { memory.perform_write(ptr, None, value, layout) }
+                    unsafe { memory.perform_write(self.gc, ptr, None, value, layout) }
                 })
             }
         }
@@ -163,7 +171,15 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
                 let memory = crate::memory::RawMemoryAccess::new(heap);
-                unsafe { memory.read_unaligned(self.gc, Some(owner), offset, layout, type_desc) }
+                unsafe {
+                    memory.read_unaligned(
+                        self.gc,
+                        Some(MemoryOwner::Local(owner)),
+                        offset,
+                        layout,
+                        type_desc,
+                    )
+                }
             }
             PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
@@ -171,19 +187,18 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 unsafe { memory.read_unaligned(self.gc, None, offset, layout, type_desc) }
             }
             #[cfg(feature = "multithreaded-gc")]
-            PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
-                let lock = unsafe { ptr.0.as_ref() };
-                let guard = lock.borrow();
-                let storage = &guard.storage;
-                let storage_slice: &[u8] = unsafe {
-                    std::slice::from_raw_parts(storage.raw_data_ptr(), storage.size_bytes())
-                };
-                if offset.as_usize() + layout.size().as_usize() > storage_slice.len() {
-                    return Err("Cross-arena access out of bounds".to_string());
+            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+                let heap = &self.local.heap;
+                let memory = crate::memory::RawMemoryAccess::new(heap);
+                unsafe {
+                    memory.read_unaligned(
+                        self.gc,
+                        Some(MemoryOwner::CrossArena(ptr, tid)),
+                        offset,
+                        layout,
+                        type_desc,
+                    )
                 }
-                let ptr = unsafe { storage_slice.as_ptr().add(offset.as_usize()) };
-                let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                unsafe { memory.perform_read(self.gc, ptr, None, layout, type_desc) }
             }
             PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data: &[u8]| {
                 if offset.as_usize() + layout.size().as_usize() > data.len() {
@@ -228,7 +243,9 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
-                unsafe { memory.write_bytes(self.gc, Some(owner), offset, data) }
+                unsafe {
+                    memory.write_bytes(self.gc, Some(MemoryOwner::Local(owner)), offset, data)
+                }
             }
             PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
@@ -236,19 +253,17 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 unsafe { memory.write_bytes(self.gc, None, offset, data) }
             }
             #[cfg(feature = "multithreaded-gc")]
-            PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
-                let lock = unsafe { ptr.0.as_ref() };
-                let mut guard = lock.borrow_mut(&self.gc);
-                let storage = &mut guard.storage;
-                let storage_slice: &mut [u8] = unsafe {
-                    std::slice::from_raw_parts_mut(storage.raw_data_ptr(), storage.size_bytes())
-                };
-                if offset.as_usize() + data.len() > storage_slice.len() {
-                    return Err("Cross-arena access out of bounds".to_string());
+            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+                let heap = &self.local.heap;
+                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                unsafe {
+                    memory.write_bytes(
+                        self.gc,
+                        Some(MemoryOwner::CrossArena(ptr, tid)),
+                        offset,
+                        data,
+                    )
                 }
-                storage_slice[offset.as_usize()..offset.as_usize() + data.len()]
-                    .copy_from_slice(data);
-                Ok(())
             }
             PointerOrigin::Transient(obj) => {
                 let mut obj_data = obj.instance_storage.get_mut();
@@ -288,7 +303,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
                 let memory = crate::memory::RawMemoryAccess::new(heap);
-                unsafe { memory.read_bytes(Some(owner), offset, dest) }
+                unsafe { memory.read_bytes(Some(MemoryOwner::Local(owner)), offset, dest) }
             }
             PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
@@ -296,20 +311,10 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 unsafe { memory.read_bytes(None, offset, dest) }
             }
             #[cfg(feature = "multithreaded-gc")]
-            PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
-                let lock = unsafe { ptr.0.as_ref() };
-                let guard = lock.borrow();
-                let storage = &guard.storage;
-                let storage_slice: &[u8] = unsafe {
-                    std::slice::from_raw_parts(storage.raw_data_ptr(), storage.size_bytes())
-                };
-                if offset.as_usize() + dest.len() > storage_slice.len() {
-                    return Err("Cross-arena access out of bounds".to_string());
-                }
-                dest.copy_from_slice(
-                    &storage_slice[offset.as_usize()..offset.as_usize() + dest.len()],
-                );
-                Ok(())
+            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+                let heap = &self.local.heap;
+                let memory = crate::memory::RawMemoryAccess::new(heap);
+                unsafe { memory.read_bytes(Some(MemoryOwner::CrossArena(ptr, tid)), offset, dest) }
             }
             PointerOrigin::Transient(obj) => {
                 let obj_data = obj.instance_storage.get();
@@ -340,7 +345,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 unsafe {
                     memory.compare_exchange_atomic(
                         self.gc,
-                        Some(owner),
+                        Some(MemoryOwner::Local(owner)),
                         offset,
                         expected,
                         new,
@@ -411,17 +416,14 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 }
             }
             #[cfg(feature = "multithreaded-gc")]
-            PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
-                let lock = unsafe { ptr.0.as_ref() };
-                let guard = lock.borrow();
-                let base_ptr = unsafe { guard.storage.raw_data_ptr() };
-                let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
-                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+                let heap = &self.local.heap;
+                let mut memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.compare_exchange_atomic(
                         self.gc,
-                        None,
-                        dotnet_utils::ByteOffset(abs_ptr as usize),
+                        Some(MemoryOwner::CrossArena(ptr, tid)),
+                        offset,
                         expected,
                         new,
                         size,
@@ -447,7 +449,14 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 let heap = &self.local.heap;
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe {
-                    memory.exchange_atomic(self.gc, Some(owner), offset, value, size, ordering)
+                    memory.exchange_atomic(
+                        self.gc,
+                        Some(MemoryOwner::Local(owner)),
+                        offset,
+                        value,
+                        size,
+                        ordering,
+                    )
                 }
             }
             PointerOrigin::Static(static_type, lookup) => {
@@ -501,17 +510,14 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 unsafe { memory.exchange_atomic(self.gc, None, offset, value, size, ordering) }
             }
             #[cfg(feature = "multithreaded-gc")]
-            PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
-                let lock = unsafe { ptr.0.as_ref() };
-                let guard = lock.borrow();
-                let base_ptr = unsafe { guard.storage.raw_data_ptr() };
-                let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
-                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+                let heap = &self.local.heap;
+                let mut memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.exchange_atomic(
                         self.gc,
-                        None,
-                        dotnet_utils::ByteOffset(abs_ptr as usize),
+                        Some(MemoryOwner::CrossArena(ptr, tid)),
+                        offset,
                         value,
                         size,
                         ordering,
@@ -533,7 +539,9 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
                 let memory = crate::memory::RawMemoryAccess::new(heap);
-                unsafe { memory.load_atomic(Some(owner), offset, size, ordering) }
+                unsafe {
+                    memory.load_atomic(Some(MemoryOwner::Local(owner)), offset, size, ordering)
+                }
             }
             PointerOrigin::Static(static_type, lookup) => {
                 let storage = self.statics().get(static_type, &lookup);
@@ -580,16 +588,13 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 unsafe { memory.load_atomic(None, offset, size, ordering) }
             }
             #[cfg(feature = "multithreaded-gc")]
-            PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
-                let lock = unsafe { ptr.0.as_ref() };
-                let guard = lock.borrow();
-                let base_ptr = unsafe { guard.storage.raw_data_ptr() };
-                let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
-                let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+                let heap = &self.local.heap;
+                let memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.load_atomic(
-                        None,
-                        dotnet_utils::ByteOffset(abs_ptr as usize),
+                        Some(MemoryOwner::CrossArena(ptr, tid)),
+                        offset,
                         size,
                         ordering,
                     )
@@ -611,7 +616,16 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
-                unsafe { memory.store_atomic(self.gc, Some(owner), offset, value, size, ordering) }
+                unsafe {
+                    memory.store_atomic(
+                        self.gc,
+                        Some(MemoryOwner::Local(owner)),
+                        offset,
+                        value,
+                        size,
+                        ordering,
+                    )
+                }
             }
             PointerOrigin::Static(static_type, lookup) => {
                 let storage = self.statics().get(static_type, &lookup);
@@ -664,17 +678,14 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 unsafe { memory.store_atomic(self.gc, None, offset, value, size, ordering) }
             }
             #[cfg(feature = "multithreaded-gc")]
-            PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
-                let lock = unsafe { ptr.0.as_ref() };
-                let guard = lock.borrow();
-                let base_ptr = unsafe { guard.storage.raw_data_ptr() };
-                let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
-                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+                let heap = &self.local.heap;
+                let mut memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.store_atomic(
                         self.gc,
-                        None,
-                        dotnet_utils::ByteOffset(abs_ptr as usize),
+                        Some(MemoryOwner::CrossArena(ptr, tid)),
+                        offset,
                         value,
                         size,
                         ordering,

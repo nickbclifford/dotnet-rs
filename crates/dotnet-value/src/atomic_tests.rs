@@ -103,7 +103,7 @@ mod tests {
     }
     #[test]
     fn test_atomic_object_load_store() {
-        use crate::object::{HeapStorage, ObjectRef, ValueType};
+        use crate::object::{HeapStorage, ObjectRef};
         use gc_arena::{Arena, Rootable};
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());

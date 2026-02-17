@@ -34,6 +34,9 @@ pub enum ExecutionError {
 
     #[error("Not implemented: {0}")]
     NotImplemented(String),
+
+    #[error("Internal error: {0}")]
+    InternalError(String),
 }
 
 #[derive(Debug, Error, Clone, PartialEq)]

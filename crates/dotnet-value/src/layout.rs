@@ -90,6 +90,15 @@ impl LayoutManager {
         }
     }
 
+    pub fn has_managed_ptrs(&self) -> bool {
+        match self {
+            LayoutManager::Field(f) => f.has_ref_fields,
+            LayoutManager::Array(a) => a.element_layout.has_managed_ptrs(),
+            LayoutManager::Scalar(Scalar::ManagedPtr) => true,
+            _ => false,
+        }
+    }
+
     pub fn type_tag(&self) -> &'static str {
         match &self {
             LayoutManager::Field(_) => "struct",
@@ -255,6 +264,7 @@ pub struct FieldLayoutManager {
     pub total_size: usize,
     pub alignment: usize,
     pub gc_desc: GcDesc,
+    pub has_ref_fields: bool,
 }
 
 impl HasLayout for FieldLayoutManager {
@@ -278,6 +288,18 @@ impl FieldLayoutManager {
 
     pub fn trace(&self, storage: &[u8], cc: &Collection) {
         self.gc_desc.trace(storage, cc);
+
+        if self.has_ref_fields {
+            for (_, offset, size) in self.ref_field_offsets() {
+                if offset + size <= storage.len() {
+                    // SAFETY: layout creation ensures this offset is valid and contains a ManagedPtr.
+                    // ManagedPtr::read_unchecked is tag-aware and safe to use during GC tracing.
+                    let info =
+                        unsafe { crate::pointer::ManagedPtr::read_unchecked(&storage[offset..]) };
+                    info.origin.trace(cc);
+                }
+            }
+        }
     }
 
     pub fn resurrect<'gc>(
@@ -292,6 +314,24 @@ impl FieldLayoutManager {
                 .layout
                 .resurrect(&storage[field.position.as_usize()..], fc, visited, depth);
         }
+    }
+
+    pub fn has_ref_fields(&self) -> bool {
+        self.has_ref_fields
+    }
+
+    pub fn ref_field_offsets(&self) -> Vec<(String, usize, usize)> {
+        let mut result = Vec::new();
+        for (key, field) in &self.fields {
+            if field.layout.has_managed_ptrs() {
+                result.push((
+                    key.name.clone(),
+                    field.position.as_usize(),
+                    field.layout.size().as_usize(),
+                ));
+            }
+        }
+        result
     }
 
     /// Get a field's layout by owner and name

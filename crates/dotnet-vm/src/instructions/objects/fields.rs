@@ -5,7 +5,7 @@ use crate::{
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::{
     StackValue,
-    layout::HasLayout,
+    layout::{HasLayout, LayoutManager, Scalar},
     object::{HeapStorage, ObjectRef},
     pointer::ManagedPtr,
 };
@@ -69,7 +69,7 @@ pub fn ldfld<'gc, 'm: 'gc>(
         }
     }
 
-    if let StackValue::ObjectRef(ObjectRef(None)) = &parent {
+    if parent.is_null() {
         return ctx.throw_by_name("System.NullReferenceException");
     }
     let (origin, base_offset) = crate::instructions::objects::get_ptr_info(ctx, &parent);
@@ -125,7 +125,7 @@ pub fn stfld<'gc, 'm: 'gc>(
         AtomicOrdering::Release
     };
 
-    if let StackValue::ObjectRef(ObjectRef(None)) = &parent {
+    if parent.is_null() {
         return ctx.throw_by_name("System.NullReferenceException");
     }
     let (origin, base_offset) = crate::instructions::objects::get_ptr_info(ctx, &parent);
@@ -146,7 +146,10 @@ pub fn stfld<'gc, 'm: 'gc>(
             if offset.0 == 0 {
                 return ctx.throw_by_name("System.NullReferenceException");
             }
-            panic!("stfld failed: {}", e);
+            panic!(
+                "stfld failed: {:?}, offset={:?}, origin={:?}",
+                e, offset, base_offset
+            );
         }
     }
 
@@ -313,7 +316,7 @@ pub fn ldflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource)
         }
     }
 
-    if let StackValue::ObjectRef(ObjectRef(None)) = &parent {
+    if parent.is_null() {
         return ctx.throw_by_name("System.NullReferenceException");
     }
     let (origin, base_offset) = get_ptr_context(ctx, &parent);
@@ -338,16 +341,41 @@ pub fn ldflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource)
     let t = vm_try!(res_ctx.get_field_type(field));
     let target_type = vm_try!(ctx.loader().find_concrete_type(t));
 
-    let field_ptr = ctx.resolve_address(origin.clone(), field_offset);
-    let info = dotnet_value::pointer::ManagedPtrInfo {
-        address: Some(field_ptr),
-        origin,
-        offset: field_offset,
-    };
-    ctx.push(StackValue::ManagedPtr(ManagedPtr::from_info(
-        info,
-        target_type,
-    )));
+    // Check if this is a ref field (ManagedPtr layout)
+    if matches!(
+        &*field_layout.layout,
+        LayoutManager::Scalar(Scalar::ManagedPtr)
+    ) {
+        // This is a ref field - we need to deserialize the ManagedPtr from the field bytes
+        // to get its actual origin, not use the parent's origin!
+        // We must read the raw bytes and call ManagedPtr::read_branded directly.
+
+        use dotnet_value::pointer::ManagedPtr as MP;
+
+        let mut ptr_bytes = MP::serialization_buffer();
+        if let Err(e) = unsafe { ctx.read_bytes(origin.clone(), field_offset, &mut ptr_bytes) } {
+            return StepResult::Error(crate::error::ExecutionError::InternalError(e).into());
+        }
+
+        // Deserialize to get the actual origin
+        let info = unsafe { MP::read_branded(&ptr_bytes, &ctx.gc()) };
+        let managed_ptr = MP::from_info_full(info, target_type, false);
+
+        ctx.push(StackValue::ManagedPtr(managed_ptr));
+    } else {
+        // Regular field - use parent's origin + field offset
+        let field_ptr = ctx.resolve_address(origin.clone(), field_offset);
+        let info = dotnet_value::pointer::ManagedPtrInfo {
+            address: Some(field_ptr),
+            origin,
+            offset: field_offset,
+        };
+        ctx.push(StackValue::ManagedPtr(ManagedPtr::from_info_full(
+            info,
+            target_type,
+            false,
+        )));
+    }
 
     StepResult::Continue
 }

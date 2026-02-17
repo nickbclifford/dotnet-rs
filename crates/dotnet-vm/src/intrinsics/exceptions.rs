@@ -1,7 +1,10 @@
-use crate::{StepResult, stack::ops::VesOps, error::{VmError, ExecutionError}};
+use crate::{StepResult, error::ExecutionError, stack::ops::VesOps};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
-use dotnet_value::{StackValue, layout::{LayoutManager, Scalar}};
+use dotnet_value::{
+    StackValue,
+    layout::{LayoutManager, Scalar},
+};
 
 #[dotnet_intrinsic(
     "static void System.Exception::GetStackTracesDeepCopy(System.Exception, byte[]&, object[]&)"
@@ -18,11 +21,19 @@ pub fn intrinsic_get_stack_traces_deep_copy<'gc, 'm: 'gc>(
 
     let layout = LayoutManager::Scalar(Scalar::ObjectRef);
 
-    let (origin, offset) = crate::instructions::objects::get_ptr_info(ctx, &current_stack_trace_ptr);
-    vm_try!(unsafe { ctx.write_unaligned(origin, offset, StackValue::null(), &layout).map_err(ExecutionError::NotImplemented) });
+    let (origin, offset) =
+        crate::instructions::objects::get_ptr_info(ctx, &current_stack_trace_ptr);
+    vm_try!(unsafe {
+        ctx.write_unaligned(origin, offset, StackValue::null(), &layout)
+            .map_err(ExecutionError::NotImplemented)
+    });
 
-    let (origin, offset) = crate::instructions::objects::get_ptr_info(ctx, &dynamic_method_array_ptr);
-    vm_try!(unsafe { ctx.write_unaligned(origin, offset, StackValue::null(), &layout).map_err(ExecutionError::NotImplemented) });
+    let (origin, offset) =
+        crate::instructions::objects::get_ptr_info(ctx, &dynamic_method_array_ptr);
+    vm_try!(unsafe {
+        ctx.write_unaligned(origin, offset, StackValue::null(), &layout)
+            .map_err(ExecutionError::NotImplemented)
+    });
 
     StepResult::Continue
 }

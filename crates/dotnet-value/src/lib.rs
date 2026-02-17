@@ -43,16 +43,13 @@ pub mod string;
 mod validation_tests;
 
 pub use crate::{
-    object::{HeapStorage, Object, ObjectHandle, ObjectRef},
+    object::{HeapStorage, Object, ObjectHandle, ObjectPtr, ObjectRef},
     pointer::{ManagedPtr, PointerOrigin, UnmanagedPtr},
 };
 pub use dotnet_utils::{
     ArenaId, ArgumentIndex, ByteOffset, FieldIndex, LocalIndex, StackSlotIndex,
 };
 pub use string::CLRString;
-
-#[cfg(feature = "multithreaded-gc")]
-use object::ObjectPtr;
 
 #[derive(Clone, Debug)]
 pub enum StackValue<'gc> {
@@ -375,6 +372,15 @@ impl<'gc> StackValue<'gc> {
         matches!(self, Self::Int32(0) | Self::Int64(0) | Self::NativeInt(0))
     }
 
+    pub fn is_null(&self) -> bool {
+        match self {
+            Self::ObjectRef(o) => o.0.is_none(),
+            Self::ManagedPtr(m) => m.is_null(),
+            Self::UnmanagedPtr(_) => false,
+            _ => self.is_zero(),
+        }
+    }
+
     pub fn shr(self, other: Self, sgn: NumberSign) -> Self {
         let amount = match other {
             StackValue::Int32(i) => i as u32,
@@ -690,16 +696,12 @@ impl<'gc> Sub for StackValue<'gc> {
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
                 unsafe { ManagedPtr(m.offset(-(i as isize))) }
             }
-            (UnmanagedPtr(u), Int32(i)) => {
-                UnmanagedPtr(crate::pointer::UnmanagedPtr(unsafe {
-                    NonNull::new_unchecked(u.0.as_ptr().offset(-(i as isize)))
-                }))
-            }
-            (UnmanagedPtr(u), NativeInt(i)) => {
-                UnmanagedPtr(crate::pointer::UnmanagedPtr(unsafe {
-                    NonNull::new_unchecked(u.0.as_ptr().offset(-i))
-                }))
-            }
+            (UnmanagedPtr(u), Int32(i)) => UnmanagedPtr(crate::pointer::UnmanagedPtr(unsafe {
+                NonNull::new_unchecked(u.0.as_ptr().offset(-(i as isize)))
+            })),
+            (UnmanagedPtr(u), NativeInt(i)) => UnmanagedPtr(crate::pointer::UnmanagedPtr(unsafe {
+                NonNull::new_unchecked(u.0.as_ptr().offset(-i))
+            })),
             (ManagedPtr(m1), ManagedPtr(m2)) => {
                 let v1 = if let Some(owner) = m1.owner() {
                     unsafe {

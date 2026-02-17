@@ -152,16 +152,13 @@ pub fn classify_intrinsic(
         if let Ok(ctor) = loader.locate_attribute(method.resolution(), a)
             && ctor.parent.type_name() == INTRINSIC_ATTR
         {
-            if let Some(registry) = registry
-                && let Some(handler) = registry.get(&method)
-            {
-                // For attributed intrinsics without full metadata, default to DirectIntercept
-                return Some(IntrinsicMetadata::direct_intercept(
-                    handler,
-                    "Marked with IntrinsicAttribute",
-                ));
-            }
-            return None;
+            // If we're here, it means the intrinsic was NOT found in the registry (step 1).
+            // So we treat it as a missing intrinsic rather than recursively checking the registry.
+            use crate::intrinsics::get_missing_intrinsic_handler;
+            return Some(IntrinsicMetadata::direct_intercept(
+                get_missing_intrinsic_handler(),
+                "Marked with IntrinsicAttribute but not implemented",
+            ));
         }
     }
 
