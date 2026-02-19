@@ -8,9 +8,20 @@ use std::{
     ptr::{self, NonNull},
 };
 
+#[cfg(feature = "fuzzing")]
+use arbitrary::Arbitrary;
+
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct ResolutionS(Option<NonNull<Resolution<'static>>>);
+
+#[cfg(feature = "fuzzing")]
+impl<'a> Arbitrary<'a> for ResolutionS {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let ptr_val: usize = u.arbitrary()?;
+        Ok(Self::new(ptr_val as *const _))
+    }
+}
 unsafe_empty_collect!(ResolutionS);
 // SAFETY: ResolutionS is a transparent wrapper around a NonNull pointer to Resolution.
 // Resolution data is managed by the VM and persists for the program lifetime.

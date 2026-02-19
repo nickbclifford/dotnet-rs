@@ -1,5 +1,5 @@
 use crate::{
-    StepResult,
+    ExceptionOps, StepResult,
     intrinsics::intrinsic_call,
     layout::{LayoutFactory, type_layout},
     resolution::ValueResolution,
@@ -22,38 +22,38 @@ pub mod casting;
 pub mod fields;
 pub mod typed_references;
 
-pub(crate) fn get_ptr_info<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
-    _ctx: &T,
+pub(crate) fn get_ptr_info<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
+    ctx: &mut T,
     val: &StackValue<'gc>,
-) -> (PointerOrigin<'gc>, dotnet_utils::ByteOffset) {
+) -> Result<(PointerOrigin<'gc>, dotnet_utils::ByteOffset), StepResult> {
     match val {
-        StackValue::ObjectRef(o) => (
+        StackValue::ObjectRef(o) => Ok((
             o.0.map_or(PointerOrigin::Unmanaged, |h| {
                 PointerOrigin::Heap(ObjectRef(Some(h)))
             }),
             dotnet_utils::ByteOffset(0),
-        ),
-        StackValue::ManagedPtr(m) => (m.origin.clone(), m.offset),
-        StackValue::UnmanagedPtr(UnmanagedPtr(p)) => (
+        )),
+        StackValue::ManagedPtr(m) => Ok((m.origin.clone(), m.offset)),
+        StackValue::UnmanagedPtr(UnmanagedPtr(p)) => Ok((
             PointerOrigin::Unmanaged,
             dotnet_utils::ByteOffset(p.as_ptr() as usize),
-        ),
-        StackValue::NativeInt(p) => (
+        )),
+        StackValue::NativeInt(p) => Ok((
             PointerOrigin::Unmanaged,
             dotnet_utils::ByteOffset(*p as usize),
-        ),
-        StackValue::ValueType(obj) => (
+        )),
+        StackValue::ValueType(obj) => Ok((
             PointerOrigin::Transient(obj.clone()),
             dotnet_utils::ByteOffset(0),
-        ),
-        _ => panic!("Invalid parent for field/element access: {:?}", val),
+        )),
+        _ => Err(ctx.throw_by_name("System.InvalidProgramException")),
     }
 }
 
-pub(crate) fn get_ptr_context<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
-    ctx: &T,
+pub(crate) fn get_ptr_context<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
+    ctx: &mut T,
     val: &StackValue<'gc>,
-) -> (PointerOrigin<'gc>, dotnet_utils::ByteOffset) {
+) -> Result<(PointerOrigin<'gc>, dotnet_utils::ByteOffset), StepResult> {
     get_ptr_info(ctx, val)
 }
 
@@ -79,16 +79,15 @@ pub fn new_object<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, ctor: &UserMethod
             let concrete = vm_try!(concrete);
             if let BaseType::Array(element, shape) = concrete.get() {
                 let rank = shape.rank;
-                let mut dims: Vec<usize> = (0..rank)
-                    .map(|_| {
-                        let v = ctx.pop();
-                        match v {
-                            StackValue::Int32(i) => i as usize,
-                            StackValue::NativeInt(i) => i as usize,
-                            _ => panic!("Invalid dimension {:?}", v),
-                        }
-                    })
-                    .collect();
+                let mut dims: Vec<usize> = Vec::with_capacity(rank);
+                for _ in 0..rank {
+                    let v = ctx.pop();
+                    match v {
+                        StackValue::Int32(i) => dims.push(i as usize),
+                        StackValue::NativeInt(i) => dims.push(i as usize),
+                        _ => return ctx.throw_by_name("System.InvalidProgramException"),
+                    }
+                }
                 dims.reverse();
 
                 let total_len: usize = dims.iter().product();
@@ -154,7 +153,7 @@ pub fn new_object<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, ctor: &UserMethod
             StackValue::Int32(i) => i as isize,
             StackValue::Int64(i) => i as isize,
             StackValue::NativeInt(i) => i,
-            _ => panic!("Invalid argument for IntPtr constructor: {:?}", val),
+            _ => return ctx.throw_by_name("System.InvalidProgramException"),
         };
         ctx.push(StackValue::NativeInt(native_val));
         StepResult::Continue
@@ -237,7 +236,10 @@ pub fn ldobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType) -
         return ctx.throw_by_name("System.NullReferenceException");
     }
 
-    let (origin, offset) = get_ptr_context(ctx, &addr);
+    let (origin, offset) = match get_ptr_context(ctx, &addr) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
 
     let load_type = vm_try!(ctx.make_concrete(param0));
     let res_ctx = ctx.current_context();
@@ -265,7 +267,10 @@ pub fn stobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType) -
 
     let concrete_t = vm_try!(ctx.make_concrete(param0));
 
-    let (origin, offset) = get_ptr_context(ctx, &addr);
+    let (origin, offset) = match get_ptr_context(ctx, &addr) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
 
     let res_ctx = ctx.current_context();
     let layout = vm_try!(type_layout(concrete_t.clone(), &res_ctx));
@@ -294,7 +299,10 @@ pub fn initobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType)
         return ctx.throw_by_name("System.NullReferenceException");
     }
 
-    let (origin, offset) = get_ptr_context(ctx, &addr);
+    let (origin, offset) = match get_ptr_context(ctx, &addr) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
 
     let ct = vm_try!(ctx.make_concrete(param0));
     let res_ctx = ctx.current_context();

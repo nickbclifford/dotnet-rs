@@ -22,6 +22,7 @@ use dotnet_utils::{
 };
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, Collection, Gc};
+use sptr::Strict;
 use std::{
     cmp::Ordering,
     fmt::Debug,
@@ -29,6 +30,9 @@ use std::{
     ptr::NonNull,
     sync::Arc,
 };
+
+#[cfg(feature = "fuzzing")]
+use arbitrary::Arbitrary;
 
 #[cfg(test)]
 mod atomic_tests;
@@ -66,6 +70,35 @@ pub enum StackValue<'gc> {
     /// (ObjectPtr, OwningThreadID)
     #[cfg(feature = "multithreaded-gc")]
     CrossArenaObjectRef(ObjectPtr, ArenaId),
+}
+
+#[cfg(feature = "fuzzing")]
+impl<'a, 'gc> Arbitrary<'a> for StackValue<'gc> {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let variant = u.int_in_range(0..=9)?;
+        match variant {
+            0 => Ok(StackValue::Int32(u.arbitrary()?)),
+            1 => Ok(StackValue::Int64(u.arbitrary()?)),
+            2 => Ok(StackValue::NativeInt(u.arbitrary()?)),
+            3 => Ok(StackValue::NativeFloat(u.arbitrary()?)),
+            4 => Ok(StackValue::ObjectRef(u.arbitrary()?)),
+            5 => Ok(StackValue::UnmanagedPtr(u.arbitrary()?)),
+            6 => Ok(StackValue::ManagedPtr(u.arbitrary()?)),
+            7 => Ok(StackValue::ValueType(u.arbitrary()?)),
+            8 => Ok(StackValue::TypedRef(
+                u.arbitrary()?,
+                Arc::new(u.arbitrary()?),
+            )),
+            #[cfg(feature = "multithreaded-gc")]
+            9 => Ok(StackValue::CrossArenaObjectRef(
+                u.arbitrary()?,
+                u.arbitrary()?,
+            )),
+            #[cfg(not(feature = "multithreaded-gc"))]
+            9 => Ok(StackValue::Int32(u.arbitrary()?)),
+            _ => unreachable!(),
+        }
+    }
 }
 
 // SAFETY: StackValue contains several variants that hold GC-managed references.
@@ -302,7 +335,7 @@ impl<'gc> StackValue<'gc> {
 
     pub fn as_ptr(&self) -> *mut u8 {
         match self {
-            Self::NativeInt(i) => *i as *mut u8,
+            Self::NativeInt(i) => sptr::from_exposed_addr_mut(*i as usize),
             Self::UnmanagedPtr(UnmanagedPtr(p)) => p.as_ptr(),
             Self::ManagedPtr(m) | Self::TypedRef(m, _) => {
                 if m.is_null() {
@@ -467,7 +500,9 @@ impl<'gc> StackValue<'gc> {
             LoadType::Float64 => Self::NativeFloat(f64::from_bits(val)),
             LoadType::IntPtr => Self::NativeInt(val as isize),
             LoadType::Object => {
-                let ptr = val as usize as *const ThreadSafeLock<object::ObjectInner<'gc>>;
+                let ptr = sptr::from_exposed_addr::<ThreadSafeLock<object::ObjectInner<'gc>>>(
+                    val as usize,
+                );
                 let obj = if ptr.is_null() {
                     None
                 } else {
@@ -507,7 +542,7 @@ impl<'gc> StackValue<'gc> {
             StoreType::Object => {
                 let obj = self.as_object_ref();
                 let val = match obj.0 {
-                    Some(h) => Gc::as_ptr(h) as usize,
+                    Some(h) => Gc::as_ptr(h).expose_addr(),
                     None => 0,
                 };
                 (val as u64, ObjectRef::SIZE)

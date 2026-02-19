@@ -6,10 +6,22 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(feature = "fuzzing")]
+use arbitrary::Arbitrary;
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ConcreteType {
     source: ResolutionS,
     base: Arc<BaseType<Self>>,
+}
+
+#[cfg(feature = "fuzzing")]
+impl<'a> Arbitrary<'a> for ConcreteType {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let source: ResolutionS = u.arbitrary()?;
+        // Use a simple base type to avoid complex dotnetdll dependencies
+        Ok(Self::new(source, BaseType::Int32))
+    }
 }
 
 unsafe impl Collect for ConcreteType {
@@ -69,6 +81,18 @@ impl ResolvedDebug for ConcreteType {
 pub struct GenericLookup {
     pub type_generics: Arc<[ConcreteType]>,
     pub method_generics: Arc<[ConcreteType]>,
+}
+
+#[cfg(feature = "fuzzing")]
+impl<'a> Arbitrary<'a> for GenericLookup {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let type_generics: Vec<ConcreteType> = u.arbitrary()?;
+        let method_generics: Vec<ConcreteType> = u.arbitrary()?;
+        Ok(Self {
+            type_generics: type_generics.into(),
+            method_generics: method_generics.into(),
+        })
+    }
 }
 
 unsafe impl Collect for GenericLookup {

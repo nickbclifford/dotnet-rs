@@ -28,6 +28,14 @@ pub fn ldfld<'gc, 'm: 'gc>(
 
     let parent = ctx.pop();
 
+    if parent.is_null() {
+        return ctx.throw_by_name("System.NullReferenceException");
+    }
+    let (origin, base_offset) = match crate::instructions::objects::get_ptr_info(ctx, &parent) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+
     let res_ctx = ctx
         .current_context()
         .for_type_with_generics(field.parent, &lookup);
@@ -69,11 +77,6 @@ pub fn ldfld<'gc, 'm: 'gc>(
         }
     }
 
-    if parent.is_null() {
-        return ctx.throw_by_name("System.NullReferenceException");
-    }
-    let (origin, base_offset) = crate::instructions::objects::get_ptr_info(ctx, &parent);
-
     let layout = vm_try!(LayoutFactory::instance_field_layout_cached(
         field.parent,
         &res_ctx,
@@ -90,11 +93,11 @@ pub fn ldfld<'gc, 'm: 'gc>(
         ctx.read_unaligned(origin, offset, &field_layout.layout, Some(target_type))
     } {
         Ok(v) => v,
-        Err(e) => {
+        Err(_) => {
             if offset.0 == 0 {
                 return ctx.throw_by_name("System.NullReferenceException");
             }
-            panic!("ldfld failed: {}", e);
+            return ctx.throw_by_name("System.AccessViolationException");
         }
     };
 
@@ -113,6 +116,14 @@ pub fn stfld<'gc, 'm: 'gc>(
     let value = ctx.pop();
     let parent = ctx.pop();
 
+    if parent.is_null() {
+        return ctx.throw_by_name("System.NullReferenceException");
+    }
+    let (origin, base_offset) = match crate::instructions::objects::get_ptr_info(ctx, &parent) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+
     let res_ctx = ctx
         .current_context()
         .for_type_with_generics(field.parent, &lookup);
@@ -124,11 +135,6 @@ pub fn stfld<'gc, 'm: 'gc>(
     } else {
         AtomicOrdering::Release
     };
-
-    if parent.is_null() {
-        return ctx.throw_by_name("System.NullReferenceException");
-    }
-    let (origin, base_offset) = crate::instructions::objects::get_ptr_info(ctx, &parent);
 
     let layout = vm_try!(LayoutFactory::instance_field_layout_cached(
         field.parent,
@@ -142,14 +148,11 @@ pub fn stfld<'gc, 'm: 'gc>(
     // It also performs bounds checking and write barriers.
     match unsafe { ctx.write_unaligned(origin, offset, value, &field_layout.layout) } {
         Ok(_) => {}
-        Err(e) => {
+        Err(_) => {
             if offset.0 == 0 {
                 return ctx.throw_by_name("System.NullReferenceException");
             }
-            panic!(
-                "stfld failed: {:?}, offset={:?}, origin={:?}",
-                e, offset, base_offset
-            );
+            return ctx.throw_by_name("System.AccessViolationException");
         }
     }
 
@@ -319,7 +322,10 @@ pub fn ldflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource)
     if parent.is_null() {
         return ctx.throw_by_name("System.NullReferenceException");
     }
-    let (origin, base_offset) = get_ptr_context(ctx, &parent);
+    let (origin, base_offset) = match get_ptr_context(ctx, &parent) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
 
     let res_ctx = ctx
         .current_context()
@@ -358,7 +364,18 @@ pub fn ldflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource)
         }
 
         // Deserialize to get the actual origin
-        let info = unsafe { MP::read_branded(&ptr_bytes, &ctx.gc()) };
+        let info = match unsafe { MP::read_branded(&ptr_bytes, &ctx.gc()) } {
+            Ok(i) => i,
+            Err(e) => {
+                return StepResult::Error(
+                    crate::error::ExecutionError::InternalError(format!(
+                        "ManagedPtr deserialization failed: {:?}",
+                        e
+                    ))
+                    .into(),
+                );
+            }
+        };
         let managed_ptr = MP::from_info_full(info, target_type, false);
 
         ctx.push(StackValue::ManagedPtr(managed_ptr));

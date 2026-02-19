@@ -113,6 +113,7 @@ pub struct StandardAtomicAccess;
 impl AtomicAccess for StandardAtomicAccess {
     unsafe fn load_atomic(ptr: *const u8, size: usize, ordering: Ordering) -> u64 {
         validate_atomic_access(ptr, true);
+        crate::validate_alignment(ptr, size);
         validate_ordering(ordering, true);
         match size {
             1 => unsafe { AtomicU8::from_ptr(ptr as *mut u8) }.load(ordering) as u64,
@@ -125,6 +126,7 @@ impl AtomicAccess for StandardAtomicAccess {
 
     unsafe fn store_atomic(ptr: *mut u8, size: usize, value: u64, ordering: Ordering) {
         validate_atomic_access(ptr as *const u8, true);
+        crate::validate_alignment(ptr as *const u8, size);
         validate_ordering(ordering, false);
         match size {
             1 => unsafe { AtomicU8::from_ptr(ptr) }.store(value as u8, ordering),
@@ -143,6 +145,7 @@ impl AtomicAccess for StandardAtomicAccess {
         success: Ordering,
         failure: Ordering,
     ) -> Result<u64, u64> {
+        crate::validate_alignment(ptr as *const u8, size);
         match size {
             1 => unsafe { AtomicU8::from_ptr(ptr) }
                 .compare_exchange(expected as u8, new as u8, success, failure)
@@ -163,6 +166,7 @@ impl AtomicAccess for StandardAtomicAccess {
     }
 
     unsafe fn exchange_atomic(ptr: *mut u8, size: usize, new: u64, ordering: Ordering) -> u64 {
+        crate::validate_alignment(ptr as *const u8, size);
         match size {
             1 => unsafe { AtomicU8::from_ptr(ptr) }.swap(new as u8, ordering) as u64,
             2 => unsafe { AtomicU16::from_ptr(ptr as *mut u16) }.swap(new as u16, ordering) as u64,
@@ -177,26 +181,30 @@ impl AtomicAccess for StandardAtomicAccess {
 impl AtomicAccess for StandardAtomicAccess {
     unsafe fn load_atomic(ptr: *const u8, size: usize, _ordering: Ordering) -> u64 {
         validate_atomic_access(ptr, true);
+        crate::validate_alignment(ptr, size);
         // In single-threaded mode, we can use simple reads.
-        // Since the trait requires alignment, we can use ptr::read for all supported sizes.
+        // Although the trait requires alignment, we use unaligned reads
+        // during the transition period to avoid UB if alignment is missed.
         match size {
-            1 => unsafe { ptr::read(ptr) as u64 },
-            2 => unsafe { ptr::read(ptr as *const u16) as u64 },
-            4 => unsafe { ptr::read(ptr as *const u32) as u64 },
-            8 => unsafe { ptr::read(ptr as *const u64) },
+            1 => unsafe { ptr::read_unaligned(ptr) as u64 },
+            2 => unsafe { ptr::read_unaligned(ptr as *const u16) as u64 },
+            4 => unsafe { ptr::read_unaligned(ptr as *const u32) as u64 },
+            8 => unsafe { ptr::read_unaligned(ptr as *const u64) },
             _ => panic!("Unsupported atomic size: {}", size),
         }
     }
 
     unsafe fn store_atomic(ptr: *mut u8, size: usize, value: u64, _ordering: Ordering) {
         validate_atomic_access(ptr as *const u8, true);
+        crate::validate_alignment(ptr as *const u8, size);
         // In single-threaded mode, we can use simple writes.
-        // Since the trait requires alignment, we can use ptr::write for all supported sizes.
+        // Although the trait requires alignment, we use unaligned writes
+        // during the transition period to avoid UB if alignment is missed.
         match size {
-            1 => unsafe { ptr::write(ptr, value as u8) },
-            2 => unsafe { ptr::write(ptr as *mut u16, value as u16) },
-            4 => unsafe { ptr::write(ptr as *mut u32, value as u32) },
-            8 => unsafe { ptr::write(ptr as *mut u64, value) },
+            1 => unsafe { ptr::write_unaligned(ptr, value as u8) },
+            2 => unsafe { ptr::write_unaligned(ptr as *mut u16, value as u16) },
+            4 => unsafe { ptr::write_unaligned(ptr as *mut u32, value as u32) },
+            8 => unsafe { ptr::write_unaligned(ptr as *mut u64, value) },
             _ => panic!("Unsupported atomic size: {}", size),
         }
     }
@@ -361,8 +369,21 @@ mod tests {
         unsafe {
             // This should not panic, but it will populate ATOMIC_LOCATIONS
             StandardAtomicAccess::store_atomic(ptr, 8, 42, Ordering::SeqCst);
-            // This should trigger a warning (not a panic)
+            // This trigger a warning (not a panic)
             validate_atomic_access(ptr, false);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "memory-validation")]
+    #[should_panic(expected = "Alignment violation")]
+    fn test_misaligned_atomic() {
+        let data = [0u8; 16];
+        let ptr = data.as_ptr();
+        // Use a pointer offset of 1 to ensure it's misaligned for 4 and 8 byte ops
+        let misaligned_ptr = unsafe { ptr.add(1) };
+        unsafe {
+            StandardAtomicAccess::load_atomic(misaligned_ptr, 4, Ordering::SeqCst);
         }
     }
 }

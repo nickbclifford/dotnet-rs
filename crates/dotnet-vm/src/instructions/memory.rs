@@ -13,12 +13,20 @@ use dotnetdll::prelude::*;
 use std::ptr;
 
 #[dotnet_instruction(CopyMemoryBlock { })]
-pub fn cpblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ?Sized>(
+pub fn cpblk<
+    'gc,
+    'm: 'gc,
+    T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + ?Sized,
+>(
     ctx: &mut T,
 ) -> StepResult {
     let size = vm_pop!(ctx).as_isize() as usize;
     let src = vm_pop!(ctx).as_ptr();
     let dest = vm_pop!(ctx).as_ptr();
+
+    if src.is_null() || dest.is_null() {
+        return ctx.throw_by_name("System.NullReferenceException");
+    }
 
     // Check GC safe point before large memory block copy operations
     // Threshold: copying more than 4KB of data
@@ -39,12 +47,20 @@ pub fn cpblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(InitializeMemoryBlock { })]
-pub fn initblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ?Sized>(
+pub fn initblk<
+    'gc,
+    'm: 'gc,
+    T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + ?Sized,
+>(
     ctx: &mut T,
 ) -> StepResult {
     let size = vm_pop!(ctx).as_isize() as usize;
     let val = vm_pop!(ctx).as_isize() as u8;
     let addr = vm_pop!(ctx).as_ptr();
+
+    if addr.is_null() {
+        return ctx.throw_by_name("System.NullReferenceException");
+    }
 
     // Check GC safe point before large memory block initialization
     if size > 4096 {
@@ -117,7 +133,7 @@ pub fn stind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: StoreType) -> 
         StackValue::UnmanagedPtr(u) => {
             (PointerOrigin::Unmanaged, ByteOffset(u.0.as_ptr() as usize))
         }
-        _ => panic!("StoreIndirect: expected pointer, got {:?}", addr_val),
+        _ => return ctx.throw_by_name("System.InvalidProgramException"),
     };
 
     let layout = match param0 {
@@ -135,11 +151,11 @@ pub fn stind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: StoreType) -> 
     // write_unaligned handles GC-specific write barriers if a heap origin is provided.
     match unsafe { ctx.write_unaligned(origin.clone(), offset, val, &layout) } {
         Ok(_) => {}
-        Err(e) => {
+        Err(_) => {
             if matches!(origin, PointerOrigin::Unmanaged) && offset.0 == 0 {
                 return ctx.throw_by_name("System.NullReferenceException");
             }
-            panic!("StoreIndirect failed: {}", e);
+            return ctx.throw_by_name("System.AccessViolationException");
         }
     }
     StepResult::Continue
@@ -170,7 +186,7 @@ pub fn ldind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: LoadType) -> S
         StackValue::UnmanagedPtr(u) => {
             (PointerOrigin::Unmanaged, ByteOffset(u.0.as_ptr() as usize))
         }
-        _ => panic!("LoadIndirect: expected pointer, got {:?}", addr_val),
+        _ => return ctx.throw_by_name("System.InvalidProgramException"),
     };
 
     let layout = match param0 {
@@ -191,11 +207,11 @@ pub fn ldind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: LoadType) -> S
     // read_unaligned handles GC-safe reading from the heap if a heap origin is provided.
     let val = match unsafe { ctx.read_unaligned(origin.clone(), offset, &layout, None) } {
         Ok(v) => v,
-        Err(e) => {
+        Err(_) => {
             if matches!(origin, PointerOrigin::Unmanaged) && offset.0 == 0 {
                 return ctx.throw_by_name("System.NullReferenceException");
             }
-            panic!("LoadIndirect failed: {}", e);
+            return ctx.throw_by_name("System.AccessViolationException");
         }
     };
     ctx.push(val);

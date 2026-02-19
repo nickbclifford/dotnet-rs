@@ -50,49 +50,53 @@ pub fn unbox_any<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     if is_vt {
         // If it's a value type, unbox it.
         let StackValue::ObjectRef(obj) = val else {
-            panic!("unbox.any: expected object on stack, got {:?}", val);
+            return ctx.throw_by_name("System.InvalidProgramException");
         };
         if obj.0.is_none() {
             // unbox.any on null value type throws NullReferenceException (III.4.33)
             return ctx.throw_by_name("System.NullReferenceException");
         }
 
-        let result = vm_try!(obj.as_heap_storage(
-            |storage| -> Result<StackValue<'gc>, dotnet_types::error::TypeResolutionError> {
-                match storage {
-                    HeapStorage::Boxed(o) | HeapStorage::Obj(o) => {
-                        // Boxed value or struct is an Object.
-                        // If the target is a primitive, we need to extract it.
-                        let td = o.description;
-                        if let Some(e) = td.is_enum() {
-                            let enum_type = res_ctx.make_concrete(e)?;
-                            let cts = ctx.read_cts_value(&enum_type, &o.instance_storage.get())?;
-                            Ok(cts.into_stack())
-                        } else if td.definition().namespace.as_deref() == Some("System") {
-                            let name = &td.definition().name;
-                            match name.as_ref() as &str {
-                                "Boolean" | "Char" | "SByte" | "Byte" | "Int16" | "UInt16"
-                                | "Int32" | "UInt32" | "Int64" | "UInt64" | "Single" | "Double"
-                                | "IntPtr" | "UIntPtr" => {
-                                    let cts =
-                                        ctx.read_cts_value(&target_ct, &o.instance_storage.get())?;
-                                    Ok(cts.into_stack())
-                                }
-                                _ => Ok(StackValue::ValueType(o.clone())),
+        let result = obj.as_heap_storage(|storage| -> Result<StackValue<'gc>, ()> {
+            match storage {
+                HeapStorage::Boxed(o) | HeapStorage::Obj(o) => {
+                    // Boxed value or struct is an Object.
+                    // If the target is a primitive, we need to extract it.
+                    let td = o.description;
+                    if let Some(e) = td.is_enum() {
+                        let enum_type = res_ctx.make_concrete(e).map_err(|_| ())?;
+                        let cts = ctx
+                            .read_cts_value(&enum_type, &o.instance_storage.get())
+                            .map_err(|_| ())?;
+                        Ok(cts.into_stack())
+                    } else if td.definition().namespace.as_deref() == Some("System") {
+                        let name = &td.definition().name;
+                        match name.as_ref() as &str {
+                            "Boolean" | "Char" | "SByte" | "Byte" | "Int16" | "UInt16"
+                            | "Int32" | "UInt32" | "Int64" | "UInt64" | "Single" | "Double"
+                            | "IntPtr" | "UIntPtr" => {
+                                let cts = ctx
+                                    .read_cts_value(&target_ct, &o.instance_storage.get())
+                                    .map_err(|_| ())?;
+                                Ok(cts.into_stack())
                             }
-                        } else {
-                            Ok(StackValue::ValueType(o.clone()))
+                            _ => Ok(StackValue::ValueType(o.clone())),
                         }
+                    } else {
+                        Ok(StackValue::ValueType(o.clone()))
                     }
-                    _ => panic!("unbox.any: expected boxed value, got {:?}", storage),
                 }
+                _ => Err(()),
             }
-        ));
-        ctx.push(result);
+        });
+        match result {
+            Ok(v) => ctx.push(v),
+            Err(_) => return ctx.throw_by_name("System.InvalidCastException"),
+        }
     } else {
         // Reference type: identical to castclass.
         let StackValue::ObjectRef(target_obj) = val else {
-            panic!("unbox.any: expected object on stack, got {:?}", val);
+            return ctx.throw_by_name("System.InvalidProgramException");
         };
         if let ObjectRef(Some(o)) = target_obj {
             let obj_type = vm_try!(res_ctx.get_heap_description(o));
@@ -118,7 +122,7 @@ pub fn unbox<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let target_ct = vm_try!(res_ctx.make_concrete(param0));
 
     let StackValue::ObjectRef(obj) = value else {
-        panic!("unbox on non-object: {:?}", value);
+        return ctx.throw_by_name("System.InvalidProgramException");
     };
     let Some(h) = obj.0 else {
         return ctx.throw_by_name("System.NullReferenceException");
@@ -127,7 +131,7 @@ pub fn unbox<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let inner = h.borrow();
     let ptr = match &inner.storage {
         HeapStorage::Boxed(o) | HeapStorage::Obj(o) => o.instance_storage.get().as_ptr() as *mut u8,
-        _ => panic!("unbox on non-boxed struct"),
+        _ => return ctx.throw_by_name("System.InvalidCastException"),
     };
 
     let target_type = vm_try!(ctx.loader().find_concrete_type(target_ct));

@@ -1,0 +1,34 @@
+[package]
+name = "dotnet-value-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1.3", features = ["derive"] }
+dotnet-value = { path = "..", features = ["fuzzing"] }
+dotnet-utils = { path = "../../dotnet-utils", features = ["fuzzing"] }
+dotnet-types = { path = "../../dotnet-types", features = ["fuzzing"] }
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_managed_ptr_roundtrip"
+path = "fuzz_targets/fuzz_managed_ptr_roundtrip.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_managed_ptr_offset"
+path = "fuzz_targets/fuzz_managed_ptr_offset.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_raw_memory_access"
+path = "fuzz_targets/fuzz_raw_memory_access.rs"
+test = false
+doc = false

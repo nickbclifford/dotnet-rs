@@ -107,6 +107,7 @@ use dotnet_value::{
     storage::FieldStorage,
 };
 use dotnetdll::prelude::*;
+use sptr::Strict;
 use std::{
     any,
     collections::{HashSet, VecDeque},
@@ -885,7 +886,8 @@ impl<'m> ResolverService<'m> {
                 };
 
                 if data.len() >= ManagedPtr::SIZE {
-                    let info = unsafe { ManagedPtr::read_branded(&data[..ManagedPtr::SIZE], &gc) };
+                    let info = unsafe { ManagedPtr::read_branded(&data[..ManagedPtr::SIZE], &gc) }
+                        .expect("read_cts_value: ManagedPtr deserialization failed");
                     let m = ManagedPtr::from_info_full(info, inner_type, false);
                     Ok(CTSValue::Value(Pointer(m)))
                 } else {
@@ -893,7 +895,7 @@ impl<'m> ResolverService<'m> {
                     ptr_bytes.copy_from_slice(&data[0..ObjectRef::SIZE]);
                     let ptr = usize::from_ne_bytes(ptr_bytes);
                     Ok(CTSValue::Value(Pointer(ManagedPtr::new(
-                        NonNull::new(ptr as *mut u8),
+                        NonNull::new(sptr::from_exposed_addr_mut(ptr)),
                         inner_type,
                         None,
                         false,
@@ -939,7 +941,9 @@ impl<'m> ResolverService<'m> {
                     let addr_bytes = buf[0..ObjectRef::SIZE].try_into().unwrap();
                     let type_bytes = buf[ObjectRef::SIZE..ManagedPtr::SIZE].try_into().unwrap();
                     let addr = usize::from_ne_bytes(addr_bytes);
-                    let type_ptr = usize::from_ne_bytes(type_bytes) as *const TypeDescription;
+                    let type_ptr = sptr::from_exposed_addr::<TypeDescription>(
+                        usize::from_ne_bytes(type_bytes),
+                    );
 
                     if type_ptr.is_null() {
                         return Err(TypeResolutionError::InvalidHandle);
@@ -954,7 +958,7 @@ impl<'m> ResolverService<'m> {
                     };
 
                     let m = ManagedPtr::new(
-                        NonNull::new(addr as *mut u8),
+                        NonNull::new(sptr::from_exposed_addr_mut(addr)),
                         *type_desc.clone(),
                         None,
                         false,
@@ -1043,12 +1047,12 @@ fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(data: StackVal
         StackValue::NativeInt(i) => i
             .try_into()
             .unwrap_or_else(|_| panic!("failed to convert from isize")),
-        StackValue::UnmanagedPtr(p) => (p.0.as_ptr() as usize)
+        StackValue::UnmanagedPtr(p) => (p.0.as_ptr().expose_addr())
             .try_into()
             .unwrap_or_else(|_| panic!("failed to convert from pointer")),
         StackValue::ManagedPtr(p) => {
-            let ptr = unsafe { p.with_data(0, |data| data.as_ptr() as *mut u8) };
-            (ptr as usize)
+            let ptr = unsafe { p.with_data(0, |data| data.as_ptr()) };
+            (ptr.expose_addr())
                 .try_into()
                 .unwrap_or_else(|_| panic!("failed to convert from pointer"))
         }

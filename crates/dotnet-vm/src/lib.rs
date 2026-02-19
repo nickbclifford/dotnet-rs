@@ -24,6 +24,8 @@ pub mod dispatch;
 pub mod error;
 mod exceptions;
 mod executor;
+#[cfg(feature = "fuzzing")]
+pub mod fuzzing;
 pub mod gc;
 mod instructions;
 pub(crate) mod intrinsics;

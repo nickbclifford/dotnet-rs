@@ -27,14 +27,36 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(feature = "fuzzing")]
+use arbitrary::Arbitrary;
+
 #[cfg(feature = "multithreaded-gc")]
 use dotnet_utils::gc::{get_currently_tracing, record_cross_arena_ref};
 
 #[cfg(all(feature = "multithreaded-gc", feature = "memory-validation"))]
 use dotnet_utils::gc::{is_stw_in_progress, is_valid_cross_arena_ref};
 
+#[cfg(feature = "fuzzing")]
+static OBJECT_REGISTRY: std::sync::LazyLock<dashmap::DashSet<usize>> =
+    std::sync::LazyLock::new(dashmap::DashSet::new);
+
+#[cfg(feature = "fuzzing")]
+pub fn register_object_ptr(ptr: usize) {
+    OBJECT_REGISTRY.insert(ptr);
+}
+
+#[cfg(feature = "fuzzing")]
+pub fn is_valid_object_ptr(ptr: usize) -> bool {
+    OBJECT_REGISTRY.contains(&ptr)
+}
+
+#[cfg(feature = "fuzzing")]
+pub fn clear_object_registry() {
+    OBJECT_REGISTRY.clear();
+}
+
 #[cfg(any(feature = "memory-validation", debug_assertions))]
-const OBJECT_MAGIC: u64 = 0x5AFE_0B1E_C700_0000;
+pub const OBJECT_MAGIC: u64 = 0x5AFE_0B1E_C700_0000;
 
 #[derive(Collect, Debug)]
 #[collect(no_drop)]
@@ -100,6 +122,14 @@ impl<'gc> ObjectInner<'gc> {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ObjectPtr(pub NonNull<ThreadSafeLock<ObjectInner<'static>>>);
 
+#[cfg(feature = "fuzzing")]
+impl<'a> Arbitrary<'a> for ObjectPtr {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let ptr_val: usize = u.arbitrary()?;
+        Ok(unsafe { std::mem::transmute(ptr_val) })
+    }
+}
+
 // SAFETY: ObjectPtr is a transparent wrapper around a NonNull pointer to an ObjectInner.
 // ObjectInner is managed by the VM and thread-safety is handled via ThreadSafeLock.
 // This type is used primarily for cross-arena references where raw pointers are required.
@@ -150,6 +180,15 @@ pub type ObjectHandle<'gc> = Gc<'gc, ThreadSafeLock<ObjectInner<'gc>>>;
 #[derive(Copy, Clone)]
 #[repr(transparent)]
 pub struct ObjectRef<'gc>(pub Option<ObjectHandle<'gc>>);
+
+#[cfg(feature = "fuzzing")]
+impl<'a, 'gc> Arbitrary<'a> for ObjectRef<'gc> {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let ptr_val: usize = u.arbitrary()?;
+        // SAFETY: Used only for serialization fuzzing. Do NOT dereference.
+        Ok(unsafe { std::mem::transmute(ptr_val) })
+    }
+}
 
 unsafe impl<'gc> Collect for ObjectRef<'gc> {
     fn trace(&self, cc: &Collection) {
@@ -278,7 +317,7 @@ impl<'gc> ObjectRef<'gc> {
             gc.record_allocation(size);
         }
 
-        Self(Some(Gc::new(
+        let h = Gc::new(
             &gc,
             ThreadSafeLock::new(ObjectInner {
                 #[cfg(any(feature = "memory-validation", debug_assertions))]
@@ -286,7 +325,12 @@ impl<'gc> ObjectRef<'gc> {
                 owner_id,
                 storage: value,
             }),
-        )))
+        );
+
+        #[cfg(feature = "fuzzing")]
+        register_object_ptr(Gc::as_ptr(h) as usize);
+
+        Self(Some(h))
     }
 
     /// Reads an ObjectRef from a byte slice without lifetime branding.
@@ -1013,6 +1057,29 @@ pub struct Object<'gc> {
     /// None means no sync block allocated yet (lazy allocation).
     pub sync_block_index: Option<usize>,
     pub _phantom: PhantomData<&'gc ()>,
+}
+
+#[cfg(feature = "fuzzing")]
+impl<'a, 'gc> Arbitrary<'a> for Object<'gc> {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        Ok(Self {
+            description: u.arbitrary()?,
+            generics: u.arbitrary()?,
+            instance_storage: crate::storage::FieldStorage::new(
+                std::sync::Arc::new(crate::layout::FieldLayoutManager {
+                    fields: std::collections::HashMap::new(),
+                    total_size: 0,
+                    alignment: 1,
+                    gc_desc: crate::layout::GcDesc::default(),
+                    has_ref_fields: false,
+                }),
+                vec![],
+            ),
+            finalizer_suppressed: u.arbitrary()?,
+            sync_block_index: u.arbitrary()?,
+            _phantom: PhantomData,
+        })
+    }
 }
 
 impl<'gc> Clone for Object<'gc> {

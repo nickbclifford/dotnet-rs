@@ -20,6 +20,9 @@ use std::{
     ptr::NonNull,
 };
 
+#[cfg(feature = "fuzzing")]
+use arbitrary::Arbitrary;
+
 #[macro_use]
 mod macros;
 
@@ -49,6 +52,23 @@ pub struct TypeDescription {
     pub resolution: ResolutionS,
     definition_ptr: Option<NonNull<TypeDefinition<'static>>>,
     pub index: TypeIndex,
+}
+
+#[cfg(feature = "fuzzing")]
+impl<'a> Arbitrary<'a> for TypeDescription {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let resolution: ResolutionS = u.arbitrary()?;
+        let def_ptr_val: usize = u.arbitrary()?;
+        let definition_ptr = NonNull::new(def_ptr_val as *mut TypeDefinition<'static>);
+        let index_bytes: [u8; std::mem::size_of::<TypeIndex>()] = u.arbitrary()?;
+        let index = unsafe { std::mem::transmute_copy(&index_bytes) };
+
+        Ok(Self {
+            resolution,
+            definition_ptr,
+            index,
+        })
+    }
 }
 
 unsafe_empty_collect!(TypeDescription);

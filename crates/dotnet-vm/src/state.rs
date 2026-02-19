@@ -137,7 +137,12 @@ impl<'m> SharedGlobalState<'m> {
 
         Self {
             loader,
-            pinvoke: NativeLibraries::new(loader.get_root()),
+            pinvoke: {
+                let p = NativeLibraries::new(loader.get_root());
+                #[cfg(feature = "fuzzing")]
+                let p = p.with_sandbox(Arc::new(crate::pinvoke::DenySandbox));
+                p
+            },
             sync_blocks: SyncBlockManager::new(),
             thread_manager: ThreadManager::new(),
             metrics: RuntimeMetrics::new(),

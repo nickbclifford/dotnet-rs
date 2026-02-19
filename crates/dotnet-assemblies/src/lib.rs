@@ -65,7 +65,7 @@ pub const SUPPORT_ASSEMBLY: &str = "__dotnetrs_support";
 
 impl AssemblyLoader {
     pub fn new(assembly_root: String) -> Result<Self, AssemblyLoadError> {
-        let mut resolutions: HashMap<_, _> = fs::read_dir(&assembly_root)
+        let resolutions: HashMap<_, _> = fs::read_dir(&assembly_root)
             .map_err(|e| {
                 AssemblyLoadError::Io(format!(
                     "could not read assembly root {}: {}",
@@ -82,6 +82,37 @@ impl AssemblyLoader {
             })
             .collect();
 
+        Self::new_internal(assembly_root, resolutions)
+    }
+
+    /// Creates a new `AssemblyLoader` without scanning the assembly root for DLLs.
+    /// This is useful for testing or when all assemblies are registered manually.
+    pub fn new_bare(assembly_root: String) -> Result<Self, AssemblyLoadError> {
+        Self::new_internal(assembly_root, HashMap::new())
+    }
+
+    fn new_internal(
+        assembly_root: String,
+        resolutions: HashMap<String, Option<ResolutionS>>,
+    ) -> Result<Self, AssemblyLoadError> {
+        let mut this = Self {
+            assembly_root,
+            external: RwLock::new(resolutions),
+            stubs: HashMap::new(),
+            corlib_cache: DashMap::new(),
+            type_cache: DashMap::new(),
+            method_cache: DashMap::new(),
+            type_cache_hits: AtomicU64::new(0),
+            type_cache_misses: AtomicU64::new(0),
+            method_cache_hits: AtomicU64::new(0),
+            method_cache_misses: AtomicU64::new(0),
+        };
+
+        this.add_support_library()?;
+        Ok(this)
+    }
+
+    fn add_support_library(&mut self) -> Result<(), AssemblyLoadError> {
         // Ensure alignment for SUPPORT_LIBRARY
         let len = SUPPORT_LIBRARY.len();
         let cap = len.div_ceil(8);
@@ -108,22 +139,13 @@ impl AssemblyLoader {
                 AssemblyLoadError::InvalidFormat(format!("failed to parse support library: {}", e))
             })?;
         let support_res = Box::leak(Box::new(support_res_raw));
-        resolutions.insert(
-            SUPPORT_ASSEMBLY.to_string(),
-            Some(ResolutionS::new(support_res)),
-        );
-        let mut this = Self {
-            assembly_root,
-            external: RwLock::new(resolutions),
-            stubs: HashMap::new(),
-            corlib_cache: DashMap::new(),
-            type_cache: DashMap::new(),
-            method_cache: DashMap::new(),
-            type_cache_hits: AtomicU64::new(0),
-            type_cache_misses: AtomicU64::new(0),
-            method_cache_hits: AtomicU64::new(0),
-            method_cache_misses: AtomicU64::new(0),
-        };
+        {
+            let mut external = self.external.write();
+            external.insert(
+                SUPPORT_ASSEMBLY.to_string(),
+                Some(ResolutionS::new(support_res)),
+            );
+        }
 
         for (index, t) in support_res.type_definitions.iter().enumerate() {
             for a in &t.attributes {
@@ -136,7 +158,7 @@ impl AssemblyLoader {
                     }
                 };
                 if parent.type_name() == "DotnetRs.StubAttribute" {
-                    let data = a.instantiation_data(&this, &*support_res).map_err(|e| {
+                    let data = a.instantiation_data(self, &*support_res).map_err(|e| {
                         AssemblyLoadError::InvalidFormat(format!(
                             "failed to parse stub attribute data: {}",
                             e
@@ -153,7 +175,7 @@ impl AssemblyLoader {
                                             "failed to find type definition index".to_string(),
                                         )
                                     })?;
-                                this.stubs.insert(
+                                self.stubs.insert(
                                     target.to_string(),
                                     TypeDescription::new(
                                         ResolutionS::new(support_res),
@@ -168,8 +190,7 @@ impl AssemblyLoader {
                 }
             }
         }
-
-        Ok(this)
+        Ok(())
     }
 
     pub fn get_root(&self) -> &str {

@@ -10,10 +10,7 @@ pub fn castclass<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 ) -> StepResult {
     let target_obj_val = ctx.pop();
     let StackValue::ObjectRef(target_obj) = target_obj_val else {
-        panic!(
-            "castclass: expected object on stack, got {:?}",
-            target_obj_val
-        );
+        return ctx.throw_by_name("System.InvalidProgramException");
     };
 
     if let ObjectRef(Some(o)) = target_obj {
@@ -40,7 +37,7 @@ pub fn isinst<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 ) -> StepResult {
     let target_obj_val = ctx.pop();
     let StackValue::ObjectRef(target_obj) = target_obj_val else {
-        panic!("isinst: expected object on stack, got {:?}", target_obj_val);
+        return ctx.throw_by_name("System.InvalidProgramException");
     };
 
     if let ObjectRef(Some(o)) = target_obj {

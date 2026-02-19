@@ -1,0 +1,58 @@
+name: Fuzz
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 0 * * *' # Daily at midnight
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Setup .NET SDK (10.0.x)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+      - name: Fuzz ManagedPtr Roundtrip
+        run: cargo fuzz run fuzz_managed_ptr_roundtrip -- -max_total_time=60
+        working-directory: crates/dotnet-value
+      - name: Fuzz ManagedPtr Offset
+        run: cargo fuzz run fuzz_managed_ptr_offset -- -max_total_time=60
+        working-directory: crates/dotnet-value
+      - name: Fuzz Raw Memory Access
+        run: cargo fuzz run fuzz_raw_memory_access -- -max_total_time=60
+        working-directory: crates/dotnet-value
+
+      - name: Generate structured corpus (executor)
+        run: cargo run -p corpus-tools --bin generate_structured_corpus --release
+        working-directory: crates/dotnet-vm/fuzz
+      - name: Fuzz Executor (300s)
+        run: cargo +nightly fuzz run fuzz_executor corpus/fuzz_executor -- -max_total_time=300
+        working-directory: crates/dotnet-vm/fuzz
+      - name: Minimize crashes (if any)
+        if: failure()
+        run: |
+          for crash in artifacts/fuzz_executor/crash-*; do
+            if [ -f "$crash" ]; then
+              cargo +nightly fuzz tmin fuzz_executor "$crash" -- -max_total_time=30
+            fi
+          done
+        working-directory: crates/dotnet-vm/fuzz
+      - name: Upload fuzz artifacts (if any)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: crates/dotnet-vm/fuzz/artifacts/fuzz_executor
+          if-no-files-found: ignore

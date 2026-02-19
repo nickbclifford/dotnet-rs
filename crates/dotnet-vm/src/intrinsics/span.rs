@@ -24,7 +24,8 @@ pub fn read_span_reference<'gc>(span: &Object<'gc>) -> Result<ManagedPtrInfo<'gc
     let ptr_data = span
         .instance_storage
         .get_field_local(span.description, "_reference");
-    Ok(unsafe { ManagedPtr::read_unchecked(&ptr_data) })
+    unsafe { ManagedPtr::read_unchecked(&ptr_data) }
+        .map_err(|e| format!("Failed to deserialize span _reference: {:?}", e))
 }
 
 /// Read the _length from a Span/ReadOnlySpan value type.
@@ -65,7 +66,8 @@ pub fn read_span_reference_from_ptr<'gc, 'm>(
     .map_err(|e| format!("Failed to read span _reference bytes: {}", e))?;
 
     // Deserialize the ManagedPtrInfo from bytes
-    let info = unsafe { ManagedPtr::read_branded(&ptr_bytes, &ctx.gc()) };
+    let info = unsafe { ManagedPtr::read_branded(&ptr_bytes, &ctx.gc()) }
+        .map_err(|e| format!("Failed to deserialize span _reference: {:?}", e))?;
 
     // Reconstruct with proper type - use NULL for now, caller can adjust if needed
     Ok(ManagedPtr::from_info_full(
@@ -526,7 +528,10 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
 
     let res_ctx = ctx.with_generics(generics);
 
-    let (origin, mut offset) = crate::instructions::objects::get_ptr_info(ctx, &source);
+    let (origin, mut offset) = match crate::instructions::objects::get_ptr_info(ctx, &source) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
     let h_opt = match origin {
         dotnet_value::pointer::PointerOrigin::Heap(ObjectRef(Some(h))) => Some(h),
         _ => None,

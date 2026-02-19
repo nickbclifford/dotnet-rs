@@ -2,19 +2,25 @@
 mod tests {
     use crate::{LoadType, StackValue, StoreType};
     use dotnet_utils::sync::Ordering as AtomicOrdering;
+    #[repr(align(8))]
+    struct Aligned8([u8; 8]);
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "Miri ICE: weak_memory.rs:239 - atomic store buffer overlap"
+    )]
     fn test_atomic_load_store() {
-        let mut data = [0u8; 8];
-        let ptr = data.as_mut_ptr();
+        let mut data = Aligned8([0u8; 8]);
+        let ptr = data.0.as_mut_ptr();
         unsafe {
             StackValue::Int32(42).store_atomic(ptr, StoreType::Int8, AtomicOrdering::SeqCst);
             let val = StackValue::load_atomic(ptr, LoadType::Int8, AtomicOrdering::SeqCst);
             assert_eq!(val, StackValue::Int32(42));
-            assert_eq!(data[0], 42);
+            assert_eq!(data.0[0], 42);
             StackValue::Int32(-1).store_atomic(ptr, StoreType::Int8, AtomicOrdering::SeqCst);
             let val = StackValue::load_atomic(ptr, LoadType::Int8, AtomicOrdering::SeqCst);
             assert_eq!(val, StackValue::Int32(-1));
-            assert_eq!(data[0], 255);
+            assert_eq!(data.0[0], 255);
             StackValue::Int32(200).store_atomic(ptr, StoreType::Int8, AtomicOrdering::SeqCst);
             let val = StackValue::load_atomic(ptr, LoadType::UInt8, AtomicOrdering::SeqCst);
             assert_eq!(val, StackValue::Int32(200));
@@ -60,6 +66,10 @@ mod tests {
         }
     }
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "Miri ICE: weak_memory.rs:239 - atomic store buffer overlap"
+    )]
     fn test_concurrent_atomic_load_store() {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -102,6 +112,10 @@ mod tests {
         reader.join().unwrap();
     }
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "Miri ICE: weak_memory.rs:239 - atomic store buffer overlap"
+    )]
     fn test_atomic_object_load_store() {
         use crate::object::{HeapStorage, ObjectRef};
         use gc_arena::{Arena, Rootable};
@@ -121,8 +135,8 @@ mod tests {
                 dotnet_utils::ArenaId(0),
             );
             let obj = ObjectRef::new(gc_handle, storage);
-            let mut buffer = [0u8; 8];
-            let ptr = buffer.as_mut_ptr();
+            let mut buffer = Aligned8([0u8; 8]);
+            let ptr = buffer.0.as_mut_ptr();
             unsafe {
                 StackValue::ObjectRef(obj).store_atomic(
                     ptr,
@@ -161,6 +175,7 @@ mod tests {
             StackValue::load_atomic(ptr, LoadType::Int32, AtomicOrdering::Relaxed);
         }
     }
+    #[repr(align(8))]
     struct ThreadSafeBox([u8; 8]);
     unsafe impl Sync for ThreadSafeBox {}
     unsafe impl Send for ThreadSafeBox {}

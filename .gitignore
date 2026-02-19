@@ -12,7 +12,12 @@ obj/
 # Rust entry points (don't ignore src/bin inside crates)
 !crates/*/src/bin/
 crates/*/target
+**/fuzz/target/
+**/fuzz/corpus/
+**/fuzz/artifacts/
+*.profraw
 
 # Junie
 .junie/
 .output.txt
+rustc-ice-*.txt

@@ -1,6 +1,6 @@
 use crate::{
-    StepResult, context::ResolutionContext, layout::LayoutFactory, resolution::ValueResolution,
-    stack::ops::VesOps, tracer::Tracer,
+    StepResult, context::ResolutionContext, error::ExecutionError, layout::LayoutFactory,
+    resolution::ValueResolution, stack::ops::VesOps, tracer::Tracer,
 };
 use dashmap::DashMap;
 use dotnet_types::{
@@ -17,10 +17,11 @@ use dotnet_value::{
     string::CLRString,
 };
 use dotnetdll::prelude::*;
-use gc_arena::{Collect, unsafe_empty_collect};
+use gc_arena::{Collect, Gc, unsafe_empty_collect};
 use libffi::middle::*;
 use libloading::{Library, Symbol};
-use std::{ffi::c_void, path::PathBuf, ptr::NonNull, sync::Arc};
+use sptr::Strict;
+use std::{ffi::c_void, marker::PhantomPinned, path::PathBuf, ptr::NonNull, sync::Arc};
 
 pub static mut LAST_ERROR: i32 = 0;
 
@@ -47,9 +48,37 @@ impl std::fmt::Display for PInvokeError {
     }
 }
 
+pub trait PInvokeSandbox: Send + Sync {
+    fn allow_library(&self, name: &str) -> bool;
+    fn allow_function(&self, lib: &str, func: &str) -> bool;
+}
+
+pub struct DefaultSandbox;
+impl PInvokeSandbox for DefaultSandbox {
+    fn allow_library(&self, _name: &str) -> bool {
+        true
+    }
+    fn allow_function(&self, _lib: &str, _func: &str) -> bool {
+        true
+    }
+}
+
+#[cfg(feature = "fuzzing")]
+pub struct DenySandbox;
+#[cfg(feature = "fuzzing")]
+impl PInvokeSandbox for DenySandbox {
+    fn allow_library(&self, _name: &str) -> bool {
+        false
+    }
+    fn allow_function(&self, _lib: &str, _func: &str) -> bool {
+        false
+    }
+}
+
 pub struct NativeLibraries {
     root: PathBuf,
     libraries: DashMap<String, Library>,
+    sandbox: Arc<dyn PInvokeSandbox>,
 }
 unsafe_empty_collect!(NativeLibraries);
 impl NativeLibraries {
@@ -57,7 +86,13 @@ impl NativeLibraries {
         Self {
             root: PathBuf::from(root.as_ref()),
             libraries: DashMap::new(),
+            sandbox: Arc::new(DefaultSandbox),
         }
+    }
+
+    pub fn with_sandbox(mut self, sandbox: Arc<dyn PInvokeSandbox>) -> Self {
+        self.sandbox = sandbox;
+        self
     }
 
     fn find_library_path(&self, name: &str) -> Option<PathBuf> {
@@ -104,6 +139,10 @@ impl NativeLibraries {
         name: &str,
         mut tracer: Option<&mut Tracer>,
     ) -> Result<dashmap::mapref::one::Ref<'_, String, Library>, PInvokeError> {
+        if !self.sandbox.allow_library(name) {
+            return Err(PInvokeError::LibraryNotFound(name.to_string()));
+        }
+
         if let Some(lib) = self.libraries.get(name) {
             return Ok(lib);
         }
@@ -179,6 +218,12 @@ impl NativeLibraries {
         name: &str,
         tracer: Option<&mut Tracer>,
     ) -> Result<CodePtr, PInvokeError> {
+        if !self.sandbox.allow_function(library, name) {
+            return Err(PInvokeError::SymbolNotFound(
+                library.to_string(),
+                name.to_string(),
+            ));
+        }
         let l = self.get_library(library, tracer)?;
         let sym: Symbol<unsafe extern "C" fn()> = unsafe { l.get(name.as_bytes()) }
             .map_err(|_| PInvokeError::SymbolNotFound(library.to_string(), name.to_string()))?;
@@ -346,23 +391,26 @@ impl TempBuffer {
 }
 
 type ObjectReadGuard<'a, 'gc> = ThreadSafeReadGuard<'a, dotnet_value::object::ObjectInner<'gc>>;
-/// Extends the lifetime of an object read guard to the arena lifetime.
-///
-/// # Safety
-///
-/// This is sound because:
-/// 1. The object being guarded is pinned via `VesOps::pin_object` before the guard is created.
-/// 2. The pinned object is guaranteed to stay at a stable location in memory for the duration
-///    of the native call.
-/// 3. The guard itself is stored in `local_guards` (or `cross_arena_guards`), which live for
-///    the entire duration of the `external_call` function.
-/// 4. The native call is synchronous and does not outlive the `external_call` function.
-/// 5. By the time `external_call` returns, the native code has finished accessing the memory,
-///    and the guards are dropped before the objects are unpinned.
-fn extend_guard_lifetime<'ctx, 'gc>(
-    guard: ObjectReadGuard<'ctx, 'gc>,
-) -> ObjectReadGuard<'gc, 'gc> {
-    unsafe { std::mem::transmute(guard) }
+struct PinnedGuard<'gc> {
+    guard: ObjectReadGuard<'gc, 'gc>,
+    _pin: PhantomPinned,
+}
+
+impl<'gc> PinnedGuard<'gc> {
+    pub unsafe fn new(handle: dotnet_value::object::ObjectHandle<'gc>) -> Self {
+        // SAFETY: The caller must ensure that the object is pinned and will stay reachable.
+        // We use Gc::as_ptr to obtain a stable address and cast it to a reference with 'gc lifetime.
+        let guard = unsafe {
+            let lock_ref: &'gc dotnet_utils::gc::ThreadSafeLock<
+                dotnet_value::object::ObjectInner<'gc>,
+            > = &*Gc::as_ptr(handle);
+            lock_ref.borrow()
+        };
+        Self {
+            guard,
+            _pin: PhantomPinned,
+        }
+    }
 }
 
 pub fn external_call<'ctx, 'gc, 'm: 'gc>(
@@ -384,7 +432,7 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
     };
 
     let mut pinned_objects: Vec<ObjectRef<'gc>> = Vec::new();
-    let mut local_guards: Vec<ObjectReadGuard<'gc, 'gc>> = Vec::new();
+    let mut local_guards: Vec<PinnedGuard<'gc>> = Vec::new();
     #[cfg(feature = "multithreaded-gc")]
     let mut cross_arena_guards = Vec::new();
 
@@ -505,6 +553,25 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
     let mut arg_buffer_map: Vec<Option<usize>> = vec![None; stack_values.len()];
     let mut arg_ptrs: Vec<*mut c_void> = vec![std::ptr::null_mut(); stack_values.len()];
 
+    macro_rules! checked_narrow {
+        ($val:expr, $t:ty, $name:expr, $idx:expr) => {{
+            let v = <$t>::try_from(*$val).map_err(|_| {
+                ExecutionError::InternalError(format!(
+                    "P/Invoke marshalling: value {} out of range for {}",
+                    *$val, $name
+                ))
+            });
+            let v = match v {
+                Ok(v) => v,
+                Err(e) => return StepResult::Error(e.into()),
+            };
+            temp_buffers.push(TempBuffer::Bytes(v.to_ne_bytes().to_vec()));
+            let buf_idx = temp_buffers.len() - 1;
+            arg_buffer_map[$idx] = Some(buf_idx);
+            arg_ptrs[$idx] = temp_buffers[buf_idx].as_bytes().as_ptr() as *mut c_void;
+        }};
+    }
+
     // Pass 1: Prepare buffers
     for (i, (v, Parameter(_, p_type))) in stack_values
         .iter()
@@ -514,23 +581,83 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
         let ffi_size = unsafe { (*args[i].as_raw_ptr()).size };
         match v {
             StackValue::Int32(val) => {
-                temp_buffers.push(TempBuffer::I32(Box::new(*val)));
-                let idx = temp_buffers.len() - 1;
-                arg_buffer_map[i] = Some(idx);
-                arg_ptrs[i] = temp_buffers[idx].as_i32() as *const i32 as *mut i32 as *mut c_void;
+                let res_ctx = ctx.current_context();
+                let p_base_type = if let ParameterType::Value(t) = p_type {
+                    match res_ctx.make_concrete(t) {
+                        Ok(c) => c.get().clone(),
+                        Err(e) => return StepResult::Error(e.into()),
+                    }
+                } else {
+                    BaseType::IntPtr
+                };
+
+                match p_base_type {
+                    BaseType::Int8 => checked_narrow!(val, i8, "i8", i),
+                    BaseType::UInt8 | BaseType::Boolean => checked_narrow!(val, u8, "u8", i),
+                    BaseType::Int16 => checked_narrow!(val, i16, "i16", i),
+                    BaseType::UInt16 | BaseType::Char => checked_narrow!(val, u16, "u16", i),
+                    _ => {
+                        temp_buffers.push(TempBuffer::I32(Box::new(*val)));
+                        let idx = temp_buffers.len() - 1;
+                        arg_buffer_map[i] = Some(idx);
+                        arg_ptrs[i] =
+                            temp_buffers[idx].as_i32() as *const i32 as *mut i32 as *mut c_void;
+                    }
+                }
             }
             StackValue::Int64(val) => {
-                temp_buffers.push(TempBuffer::I64(Box::new(*val)));
-                let idx = temp_buffers.len() - 1;
-                arg_buffer_map[i] = Some(idx);
-                arg_ptrs[i] = temp_buffers[idx].as_i64() as *const i64 as *mut i64 as *mut c_void;
+                let res_ctx = ctx.current_context();
+                let p_base_type = if let ParameterType::Value(t) = p_type {
+                    match res_ctx.make_concrete(t) {
+                        Ok(c) => c.get().clone(),
+                        Err(e) => return StepResult::Error(e.into()),
+                    }
+                } else {
+                    BaseType::Int64
+                };
+
+                match p_base_type {
+                    BaseType::Int8 => checked_narrow!(val, i8, "i8", i),
+                    BaseType::UInt8 | BaseType::Boolean => checked_narrow!(val, u8, "u8", i),
+                    BaseType::Int16 => checked_narrow!(val, i16, "i16", i),
+                    BaseType::UInt16 | BaseType::Char => checked_narrow!(val, u16, "u16", i),
+                    BaseType::Int32 => checked_narrow!(val, i32, "i32", i),
+                    BaseType::UInt32 => checked_narrow!(val, u32, "u32", i),
+                    _ => {
+                        temp_buffers.push(TempBuffer::I64(Box::new(*val)));
+                        let idx = temp_buffers.len() - 1;
+                        arg_buffer_map[i] = Some(idx);
+                        arg_ptrs[i] =
+                            temp_buffers[idx].as_i64() as *const i64 as *mut i64 as *mut c_void;
+                    }
+                }
             }
             StackValue::NativeInt(val) => {
-                temp_buffers.push(TempBuffer::Isize(Box::new(*val)));
-                let idx = temp_buffers.len() - 1;
-                arg_buffer_map[i] = Some(idx);
-                arg_ptrs[i] =
-                    temp_buffers[idx].as_isize() as *const isize as *mut isize as *mut c_void;
+                let res_ctx = ctx.current_context();
+                let p_base_type = if let ParameterType::Value(t) = p_type {
+                    match res_ctx.make_concrete(t) {
+                        Ok(c) => c.get().clone(),
+                        Err(e) => return StepResult::Error(e.into()),
+                    }
+                } else {
+                    BaseType::IntPtr
+                };
+
+                match p_base_type {
+                    BaseType::Int8 => checked_narrow!(val, i8, "i8", i),
+                    BaseType::UInt8 | BaseType::Boolean => checked_narrow!(val, u8, "u8", i),
+                    BaseType::Int16 => checked_narrow!(val, i16, "i16", i),
+                    BaseType::UInt16 | BaseType::Char => checked_narrow!(val, u16, "u16", i),
+                    BaseType::Int32 => checked_narrow!(val, i32, "i32", i),
+                    BaseType::UInt32 => checked_narrow!(val, u32, "u32", i),
+                    _ => {
+                        temp_buffers.push(TempBuffer::Isize(Box::new(*val)));
+                        let idx = temp_buffers.len() - 1;
+                        arg_buffer_map[i] = Some(idx);
+                        arg_ptrs[i] = temp_buffers[idx].as_isize() as *const isize as *mut isize
+                            as *mut c_void;
+                    }
+                }
             }
             StackValue::NativeFloat(val) => {
                 temp_buffers.push(TempBuffer::F64(Box::new(*val)));
@@ -564,8 +691,8 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
                 let ptr = if let Some(h) = obj.0 {
                     ctx.pin_object(*obj);
                     pinned_objects.push(*obj);
-                    let guard = extend_guard_lifetime(h.borrow());
-                    let ptr = unsafe { guard.storage.raw_data_ptr() };
+                    let guard = unsafe { PinnedGuard::new(h) };
+                    let ptr = unsafe { guard.guard.storage.raw_data_ptr() };
                     local_guards.push(guard);
                     ptr
                 } else {
@@ -586,18 +713,18 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
                 let addr = unsafe {
                     if let PointerOrigin::Heap(obj) = p.origin {
                         if let Some(h) = obj.0 {
-                            let guard = extend_guard_lifetime(h.borrow());
-                            let ptr = guard.storage.raw_data_ptr().add(p.offset.as_usize());
+                            let guard = PinnedGuard::new(h);
+                            let ptr = guard.guard.storage.raw_data_ptr().add(p.offset.as_usize());
                             local_guards.push(guard);
-                            ptr as usize
+                            ptr.expose_addr()
                         } else {
                             p.offset.as_usize() // Should be null + offset
                         }
                     } else {
-                        p.with_data(0, |data| data.as_ptr() as usize)
+                        p.with_data(0, |data| data.as_ptr().expose_addr())
                     }
                 };
-                let type_ptr = Arc::as_ptr(t) as usize;
+                let type_ptr = Arc::as_ptr(t).expose_addr();
                 bytes[0..ObjectRef::SIZE].copy_from_slice(&addr.to_ne_bytes());
                 bytes[ObjectRef::SIZE..ManagedPtr::SIZE].copy_from_slice(&type_ptr.to_ne_bytes());
 
@@ -649,15 +776,16 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
                     let ptr = unsafe {
                         if let PointerOrigin::Heap(obj) = p.origin {
                             if let Some(h) = obj.0 {
-                                let guard = extend_guard_lifetime(h.borrow());
-                                let ptr = guard.storage.raw_data_ptr().add(p.offset.as_usize());
+                                let guard = PinnedGuard::new(h);
+                                let ptr =
+                                    guard.guard.storage.raw_data_ptr().add(p.offset.as_usize());
                                 local_guards.push(guard);
                                 ptr
                             } else {
-                                p.offset.as_usize() as *mut u8
+                                sptr::from_exposed_addr_mut::<u8>(p.offset.as_usize())
                             }
                         } else {
-                            p.with_data(0, |data| data.as_ptr() as *mut u8)
+                            p.with_data(0, |data| data.as_ptr().cast_mut())
                         }
                     };
 

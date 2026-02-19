@@ -108,13 +108,20 @@ pub fn bne<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T, target: usi
 }
 
 #[dotnet_instruction(BranchTruthy(target))]
-pub fn brtrue<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+pub fn brtrue<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
     ctx: &mut T,
-
     target: usize,
 ) -> StepResult {
     let v = ctx.pop();
-    if !is_nullish(v) {
+    let cond = match v {
+        StackValue::Int32(i) => i != 0,
+        StackValue::Int64(i) => i != 0,
+        StackValue::NativeInt(i) => i != 0,
+        StackValue::ObjectRef(r) => r.0.is_some(),
+        StackValue::UnmanagedPtr(_) | StackValue::ManagedPtr(_) => true,
+        _ => return ctx.throw_by_name("System.InvalidProgramException"),
+    };
+    if cond {
         StepResult::Jump(target)
     } else {
         StepResult::Continue
@@ -122,13 +129,20 @@ pub fn brtrue<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(BranchFalsy(target))]
-pub fn brfalse<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+pub fn brfalse<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
     ctx: &mut T,
-
     target: usize,
 ) -> StepResult {
     let v = ctx.pop();
-    if is_nullish(v) {
+    let cond = match v {
+        StackValue::Int32(i) => i == 0,
+        StackValue::Int64(i) => i == 0,
+        StackValue::NativeInt(i) => i == 0,
+        StackValue::ObjectRef(r) => r.0.is_none(),
+        StackValue::UnmanagedPtr(_) | StackValue::ManagedPtr(_) => false,
+        _ => return ctx.throw_by_name("System.InvalidProgramException"),
+    };
+    if cond {
         StepResult::Jump(target)
     } else {
         StepResult::Continue
@@ -136,15 +150,14 @@ pub fn brfalse<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(Switch(targets))]
-pub fn switch<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+pub fn switch<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
     ctx: &mut T,
-
     targets: &[usize],
 ) -> StepResult {
     let index = match ctx.pop() {
         StackValue::Int32(i) => i as u32 as usize,
         StackValue::NativeInt(i) => i as usize,
-        v => panic!("invalid type on stack ({:?}) for switch instruction", v),
+        _ => return ctx.throw_by_name("System.InvalidProgramException"),
     };
 
     if index < targets.len() {
@@ -157,15 +170,4 @@ pub fn switch<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 #[dotnet_instruction(Return)]
 pub fn ret<'gc, 'm: 'gc, T: ExceptionOps<'gc> + ?Sized>(ctx: &mut T) -> StepResult {
     ctx.ret()
-}
-
-fn is_nullish(val: StackValue) -> bool {
-    match val {
-        StackValue::Int32(i) => i == 0,
-        StackValue::Int64(i) => i == 0,
-        StackValue::NativeInt(i) => i == 0,
-        StackValue::ObjectRef(r) => r.0.is_none(),
-        StackValue::UnmanagedPtr(_) | StackValue::ManagedPtr(_) => false,
-        v => panic!("invalid type on stack ({:?}) for truthiness check", v),
-    }
 }

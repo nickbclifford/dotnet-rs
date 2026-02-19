@@ -7,7 +7,7 @@ use dotnet_value::{StackValue, pointer::UnmanagedPtr};
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(Convert(t))]
-pub fn conv<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+pub fn conv<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
     ctx: &mut T,
     t: ConversionType,
 ) -> StepResult {
@@ -20,11 +20,9 @@ pub fn conv<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
                 StackValue::Int64(i) => i as $t,
                 StackValue::NativeInt(i) => i as $t,
                 StackValue::NativeFloat(f) => f as $t,
-                v => panic!(
-                    "invalid type on stack ({:?}) for conversion to {}",
-                    v,
-                    stringify!($t)
-                ),
+                _ => {
+                    return ctx.throw_by_name("System.InvalidProgramException");
+                }
             }
         };
     }
@@ -70,7 +68,7 @@ pub fn conv<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
                     m.with_data(0, |data| data.as_ptr() as usize) as u64
                 },
                 StackValue::NativeFloat(f) => f as u64,
-                v => panic!("invalid type on stack ({:?}) for conversion to u64", v),
+                _ => return ctx.throw_by_name("System.InvalidProgramException"),
             };
             ctx.push(StackValue::Int64(i as i64));
         }
@@ -88,7 +86,7 @@ pub fn conv<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
                     m.with_data(0, |data| data.as_ptr() as usize)
                 },
                 StackValue::NativeFloat(f) => f as usize,
-                v => panic!("invalid type on stack ({:?}) for conversion to usize", v),
+                _ => return ctx.throw_by_name("System.InvalidProgramException"),
             };
             ctx.push(StackValue::NativeInt(i as isize));
         }
@@ -133,7 +131,7 @@ pub fn conv_ovf<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>
                         Ok(f as $target)
                     }
                 }
-                _ => panic!("invalid type on stack ({:?}) for checked conversion", value),
+                _ => return ctx.throw_by_name("System.InvalidProgramException"),
             };
 
             match result {
@@ -161,45 +159,45 @@ pub fn conv_ovf<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>
 }
 
 #[dotnet_instruction(ConvertFloat32)]
-pub fn conv_r4<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
+pub fn conv_r4<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
+    ctx: &mut T,
+) -> StepResult {
     let v = match ctx.pop() {
         StackValue::Int32(i) => i as f32,
         StackValue::Int64(i) => i as f32,
         StackValue::NativeInt(i) => i as f32,
         StackValue::NativeFloat(i) => i as f32,
-        rest => panic!(
-            "invalid type on stack ({:?}) for conversion to float32",
-            rest
-        ),
+        _ => return ctx.throw_by_name("System.InvalidProgramException"),
     };
     ctx.push(StackValue::NativeFloat(v as f64));
     StepResult::Continue
 }
 
 #[dotnet_instruction(ConvertFloat64)]
-pub fn conv_r8<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
+pub fn conv_r8<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
+    ctx: &mut T,
+) -> StepResult {
     let v = match ctx.pop() {
         StackValue::Int32(i) => i as f64,
         StackValue::Int64(i) => i as f64,
         StackValue::NativeInt(i) => i as f64,
         StackValue::NativeFloat(i) => i,
-        rest => panic!(
-            "invalid type on stack ({:?}) for conversion to float64",
-            rest
-        ),
+        _ => return ctx.throw_by_name("System.InvalidProgramException"),
     };
     ctx.push(StackValue::NativeFloat(v));
     StepResult::Continue
 }
 
 #[dotnet_instruction(ConvertUnsignedToFloat)]
-pub fn conv_r_un<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
+pub fn conv_r_un<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
+    ctx: &mut T,
+) -> StepResult {
     let value = ctx.pop();
     let f = match value {
         StackValue::Int32(i) => (i as u32) as f64,
         StackValue::Int64(i) => (i as u64) as f64,
         StackValue::NativeInt(i) => (i as usize) as f64,
-        v => panic!("invalid type on stack ({:?}) for conv.r.un", v),
+        _ => return ctx.throw_by_name("System.InvalidProgramException"),
     };
     ctx.push(StackValue::NativeFloat(f));
     StepResult::Continue

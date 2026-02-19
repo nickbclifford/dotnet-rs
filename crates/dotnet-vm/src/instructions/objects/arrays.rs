@@ -17,11 +17,11 @@ pub fn ldelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let index = match ctx.pop() {
         StackValue::Int32(i) => i as usize,
         StackValue::NativeInt(i) => i as usize,
-        rest => panic!("invalid index for ldelem: {:?}", rest),
+        _ => return ctx.throw_by_name("System.InvalidProgramException"),
     };
     let val = ctx.pop();
     let StackValue::ObjectRef(obj) = val else {
-        panic!("ldelem: expected object on stack, got {:?}", val);
+        return ctx.throw_by_name("System.InvalidProgramException");
     };
 
     if obj.0.is_none() {
@@ -53,15 +53,12 @@ pub fn ldelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let index = match ctx.pop() {
         StackValue::Int32(i) => i as usize,
         StackValue::NativeInt(i) => i as usize,
-        rest => panic!(
-            "invalid index for ldelem (expected int32 or native int, received {:?})",
-            rest
-        ),
+        _ => return ctx.throw_by_name("System.InvalidProgramException"),
     };
     let array = ctx.pop();
 
     let StackValue::ObjectRef(obj) = array else {
-        panic!("ldelem: expected object on stack, got {:?}", array);
+        return ctx.throw_by_name("System.InvalidProgramException");
     };
 
     if obj.0.is_none() {
@@ -118,14 +115,14 @@ fn ldelema_internal<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let index = match ctx.pop() {
         StackValue::Int32(i) => i as usize,
         StackValue::NativeInt(i) => i as usize,
-        rest => panic!("invalid index for ldelema: {:?}", rest),
+        _ => return ctx.throw_by_name("System.InvalidProgramException"),
     };
     let array = ctx.pop();
     if array.is_null() {
         return ctx.throw_by_name("System.NullReferenceException");
     }
     let StackValue::ObjectRef(obj) = array else {
-        panic!("ldelema: expected object on stack, got {:?}", array);
+        return ctx.throw_by_name("System.InvalidProgramException");
     };
 
     let res_ctx = ctx.current_context();
@@ -170,14 +167,14 @@ pub fn stelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let index = match ctx.pop() {
         StackValue::Int32(i) => i as usize,
         StackValue::NativeInt(i) => i as usize,
-        rest => panic!("invalid index for stelem: {:?}", rest),
+        _ => return ctx.throw_by_name("System.InvalidProgramException"),
     };
     let array = ctx.pop();
     if array.is_null() {
         return ctx.throw_by_name("System.NullReferenceException");
     }
     let StackValue::ObjectRef(obj) = array else {
-        panic!("stelem: expected object on stack, got {:?}", array);
+        return ctx.throw_by_name("System.InvalidProgramException");
     };
 
     let res_ctx = ctx.current_context();
@@ -201,14 +198,14 @@ pub fn stelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let index = match ctx.pop() {
         StackValue::Int32(i) => i as usize,
         StackValue::NativeInt(i) => i as usize,
-        rest => panic!("invalid index for stelem: {:?}", rest),
+        _ => return ctx.throw_by_name("System.InvalidProgramException"),
     };
     let array = ctx.pop();
     if array.is_null() {
         return ctx.throw_by_name("System.NullReferenceException");
     }
     let StackValue::ObjectRef(obj) = array else {
-        panic!("stelem: expected object on stack, got {:?}", array);
+        return ctx.throw_by_name("System.InvalidProgramException");
     };
 
     let layout = match param0 {
@@ -253,7 +250,7 @@ pub fn newarr<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             }
             i as usize
         }
-        rest => panic!("invalid length for newarr: {:?}", rest),
+        _ => return ctx.throw_by_name("System.InvalidProgramException"),
     };
 
     if length > LARGE_ARRAY_THRESHOLD {
@@ -277,7 +274,7 @@ pub fn ldlen<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResu
         return ctx.throw_by_name("System.NullReferenceException");
     }
     let StackValue::ObjectRef(obj) = array else {
-        panic!("ldlen: expected object on stack, got {:?}", array);
+        return ctx.throw_by_name("System.InvalidProgramException");
     };
 
     let h = obj.0.expect("ObjectRef cannot be null after is_null check");
@@ -286,11 +283,11 @@ pub fn ldlen<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResu
     let len = match &inner.storage {
         HeapStorage::Vec(v) => v.layout.length as isize,
         HeapStorage::Str(s) => s.len() as isize,
-        HeapStorage::Obj(o) => {
-            panic!("ldlen called on Obj: {:?}", o.description.type_name());
+        HeapStorage::Obj(_) => {
+            return ctx.throw_by_name("System.InvalidCastException");
         }
-        HeapStorage::Boxed(b) => {
-            panic!("ldlen called on Boxed value (expected Vec or Str): {:?}", b);
+        HeapStorage::Boxed(_) => {
+            return ctx.throw_by_name("System.InvalidCastException");
         }
     };
     ctx.push(StackValue::NativeInt(len));

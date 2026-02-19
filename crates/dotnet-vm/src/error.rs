@@ -37,6 +37,9 @@ pub enum ExecutionError {
 
     #[error("Internal error: {0}")]
     InternalError(String),
+
+    #[error("Fuzzing instruction budget exceeded")]
+    FuzzBudgetExceeded,
 }
 
 #[derive(Debug, Error, Clone, PartialEq)]

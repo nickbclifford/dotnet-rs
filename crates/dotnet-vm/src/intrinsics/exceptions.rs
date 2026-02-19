@@ -22,14 +22,20 @@ pub fn intrinsic_get_stack_traces_deep_copy<'gc, 'm: 'gc>(
     let layout = LayoutManager::Scalar(Scalar::ObjectRef);
 
     let (origin, offset) =
-        crate::instructions::objects::get_ptr_info(ctx, &current_stack_trace_ptr);
+        match crate::instructions::objects::get_ptr_info(ctx, &current_stack_trace_ptr) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
     vm_try!(unsafe {
         ctx.write_unaligned(origin, offset, StackValue::null(), &layout)
             .map_err(ExecutionError::NotImplemented)
     });
 
     let (origin, offset) =
-        crate::instructions::objects::get_ptr_info(ctx, &dynamic_method_array_ptr);
+        match crate::instructions::objects::get_ptr_info(ctx, &dynamic_method_array_ptr) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
     vm_try!(unsafe {
         ctx.write_unaligned(origin, offset, StackValue::null(), &layout)
             .map_err(ExecutionError::NotImplemented)

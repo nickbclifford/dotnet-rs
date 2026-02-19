@@ -9,7 +9,7 @@ use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
 };
-use dotnet_utils::ByteOffset;
+use dotnet_utils::{ByteOffset, atomic::validate_atomic_access};
 use dotnet_value::{
     StackValue,
     layout::{HasLayout, LayoutManager},
@@ -531,7 +531,10 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
         return ctx.throw_by_name("System.NullReferenceException");
     }
 
-    let (origin, offset) = crate::instructions::objects::get_ptr_info(ctx, &source);
+    let (origin, offset) = match crate::instructions::objects::get_ptr_info(ctx, &source) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
 
     let target = &generics.method_generics[0];
     let layout = vm_try!(type_layout(target.clone(), &ctx.current_context()));
@@ -590,7 +593,10 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
         return ctx.throw_by_name("System.NullReferenceException");
     }
 
-    let (origin, offset) = crate::instructions::objects::get_ptr_info(ctx, &dest);
+    let (origin, offset) = match crate::instructions::objects::get_ptr_info(ctx, &dest) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
 
     match unsafe { ctx.write_unaligned(origin, offset, value, &layout) } {
         Ok(_) => {}
@@ -605,6 +611,59 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
         }
     }
 
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic(
+    "static void System.Runtime.CompilerServices.Unsafe::CopyBlock(void*, void*, uint)"
+)]
+#[dotnet_intrinsic(
+    "static void System.Runtime.CompilerServices.Unsafe::CopyBlock(byte&, byte&, uint)"
+)]
+pub fn intrinsic_unsafe_copy_block<'gc, 'm: 'gc>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let size = ctx.pop_i32() as u32 as usize;
+    let src = ctx.pop_ptr();
+    let dest = ctx.pop_ptr();
+
+    if src.is_null() || dest.is_null() {
+        return ctx.throw_by_name("System.NullReferenceException");
+    }
+
+    unsafe {
+        validate_atomic_access(src, false);
+        validate_atomic_access(dest, false);
+        ptr::copy(src, dest, size);
+    }
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic(
+    "static void System.Runtime.CompilerServices.Unsafe::InitBlock(void*, byte, uint)"
+)]
+#[dotnet_intrinsic(
+    "static void System.Runtime.CompilerServices.Unsafe::InitBlock(byte&, byte, uint)"
+)]
+pub fn intrinsic_unsafe_init_block<'gc, 'm: 'gc>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let size = ctx.pop_i32() as u32 as usize;
+    let val = ctx.pop_i32() as u8;
+    let addr = ctx.pop_ptr();
+
+    if addr.is_null() {
+        return ctx.throw_by_name("System.NullReferenceException");
+    }
+
+    unsafe {
+        validate_atomic_access(addr, false);
+        ptr::write_bytes(addr, val, size);
+    }
     StepResult::Continue
 }
 

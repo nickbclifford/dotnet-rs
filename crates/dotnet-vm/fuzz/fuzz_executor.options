@@ -1,0 +1,27 @@
+# libFuzzer options for fuzz_executor
+# See https://llvm.org/docs/LibFuzzer.html#options for full documentation
+
+[libfuzzer]
+# Maximum length of test input (in bytes)
+max_len = 10000
+
+# Timeout for each test case (in seconds)
+timeout = 2
+
+# Memory limit per test case (in MB)
+rss_limit_mb = 2048
+
+# Number of runs before exiting (0 = run indefinitely)
+runs = 0
+
+# Use value profiling for better coverage
+use_value_profile = 1
+
+# Dictionary for common CIL opcodes (helps mutation discover valid instructions)
+# Note: This should be created as a separate .dict file
+
+# Reduce corpus to minimal set covering all unique paths
+reduce_inputs = 1
+
+# Report coverage every N seconds
+print_coverage = 1

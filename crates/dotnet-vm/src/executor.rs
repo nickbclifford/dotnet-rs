@@ -27,6 +27,8 @@ pub struct Executor {
     thread_id: dotnet_utils::ArenaId,
     #[cfg(not(feature = "multithreaded-gc"))]
     arena: Box<GCArena>,
+    #[cfg(feature = "fuzzing")]
+    pub instruction_budget: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -141,6 +143,8 @@ impl Executor {
             thread_id,
             #[cfg(not(feature = "multithreaded-gc"))]
             arena,
+            #[cfg(feature = "fuzzing")]
+            instruction_budget: None,
         }
     }
 
@@ -173,6 +177,16 @@ impl Executor {
     // assumes args are already on stack
     pub fn run(&mut self) -> ExecutorResult {
         let result = loop {
+            #[cfg(feature = "fuzzing")]
+            if let Some(budget) = self.instruction_budget.as_mut() {
+                if *budget == 0 {
+                    return ExecutorResult::Error(crate::error::VmError::Execution(
+                        crate::error::ExecutionError::FuzzBudgetExceeded,
+                    ));
+                }
+                *budget -= 1;
+            }
+
             // Perform incremental GC progress with finalization support
             // In a real VM this would be tuned based on allocation pressure
             #[cfg(not(feature = "multithreaded-gc"))]

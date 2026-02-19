@@ -1,4 +1,4 @@
-use crate::object::ObjectRef;
+use crate::{object::ObjectRef, pointer::ManagedPtr};
 use bitvec::prelude::*;
 use dotnet_types::TypeDescription;
 use dotnet_utils::sync::Arc;
@@ -131,7 +131,8 @@ impl LayoutManager {
                 unsafe { ObjectRef::read_unchecked(storage) }.trace(cc);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                let info = unsafe { crate::pointer::ManagedPtr::read_unchecked(storage) };
+                let info = unsafe { crate::pointer::ManagedPtr::read_unchecked(storage) }
+                    .expect("LayoutManager::trace: failed to read ManagedPtr");
                 info.origin.trace(cc);
             }
             LayoutManager::Field(f) => {
@@ -160,7 +161,8 @@ impl LayoutManager {
                 unsafe { ObjectRef::read_branded(storage, fc) }.resurrect(fc, visited, depth);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                let info = unsafe { crate::pointer::ManagedPtr::read_branded(storage, fc) };
+                let info = unsafe { crate::pointer::ManagedPtr::read_branded(storage, fc) }
+                    .expect("LayoutManager::resurrect: failed to read ManagedPtr");
                 info.origin.resurrect(fc, visited, depth);
             }
             LayoutManager::Field(f) => {
@@ -295,7 +297,8 @@ impl FieldLayoutManager {
                     // SAFETY: layout creation ensures this offset is valid and contains a ManagedPtr.
                     // ManagedPtr::read_unchecked is tag-aware and safe to use during GC tracing.
                     let info =
-                        unsafe { crate::pointer::ManagedPtr::read_unchecked(&storage[offset..]) };
+                        unsafe { crate::pointer::ManagedPtr::read_unchecked(&storage[offset..]) }
+                            .expect("FieldLayoutManager::trace: failed to read ManagedPtr");
                     info.origin.trace(cc);
                 }
             }
@@ -415,8 +418,8 @@ impl Scalar {
             Scalar::Int32 => 4,
             Scalar::Int64 => 8,
             Scalar::ObjectRef | Scalar::NativeInt => ObjectRef::SIZE,
-            // ManagedPtr is stored as (ObjectRef, Offset) to eliminate side-tables
-            Scalar::ManagedPtr => 2 * ObjectRef::SIZE,
+            // ManagedPtr is stored as (ObjectRef, Offset, Checksum) to eliminate side-tables
+            Scalar::ManagedPtr => ManagedPtr::SIZE,
             Scalar::Float32 => 4,
             Scalar::Float64 => 8,
         }

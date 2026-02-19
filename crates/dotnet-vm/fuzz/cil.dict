@@ -1,0 +1,49 @@
+# Dictionary of CIL opcodes and common instruction sequences
+# This helps libFuzzer discover valid instruction patterns faster
+
+# Single-byte opcodes (common)
+"nop"="\x00"
+"ldnull"="\x14"
+"ldc.i4.0"="\x16"
+"ldc.i4.1"="\x17"
+"ldc.i4.2"="\x18"
+"ldc.i4.3"="\x19"
+"ldc.i4.4"="\x1A"
+"ldc.i4.5"="\x1B"
+"ldc.i4.m1"="\x15"
+"dup"="\x25"
+"pop"="\x26"
+"ret"="\x2A"
+"add"="\x58"
+"sub"="\x59"
+"mul"="\x5A"
+"div"="\x5B"
+"rem"="\x5D"
+"and"="\x5F"
+"or"="\x60"
+"xor"="\x61"
+"shl"="\x62"
+"shr"="\x63"
+"neg"="\x65"
+"not"="\x66"
+
+# Load/store indirect
+"ldind.i4"="\x4A"
+"stind.i4"="\x54"
+"ldind.i8"="\x4C"
+"stind.i8"="\x57"
+
+# Multi-byte opcodes (prefix FE)
+"localloc"="\xFE\x0F"
+"cpblk"="\xFE\x17"
+"initblk"="\xFE\x18"
+
+# Common instruction sequences
+"push_42"="\x20\x2A\x00\x00\x00"
+"push_0_add"="\x16\x58"
+"dup_add"="\x25\x58"
+"null_check"="\x14\x4A"
+"loop_back"="\x2B\xFE"
+"branch_forward"="\x2B\x00"
+"brtrue_forward"="\x2C\x00"
+"brfalse_forward"="\x2D\x00"

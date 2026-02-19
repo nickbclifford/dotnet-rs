@@ -7,9 +7,11 @@ edition = "2024"
 gc-arena = { workspace = true }
 parking_lot = { workspace = true, optional = true }
 tracing = { workspace = true }
+arbitrary = { version = "1.3", features = ["derive"], optional = true }
 
 [features]
 default = ["multithreaded-gc"]
 multithreading = ["dep:parking_lot"]
 multithreaded-gc = ["multithreading"]
 memory-validation = []
+fuzzing = ["dep:arbitrary"]

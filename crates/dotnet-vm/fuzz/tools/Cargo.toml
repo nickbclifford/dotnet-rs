@@ -1,0 +1,16 @@
+[package]
+name = "corpus-tools"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "generate_corpus"
+path = "generate_corpus.rs"
+
+[[bin]]
+name = "generate_structured_corpus"
+path = "generate_structured_corpus.rs"
+
+[dependencies]
+dotnetdll = { git = "https://github.com/nickbclifford/dotnetdll" }
+walkdir = "2.5"

@@ -11,7 +11,7 @@ pub fn mkrefany<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 ) -> StepResult {
     let ptr = ctx.pop();
     let StackValue::ManagedPtr(m) = ptr else {
-        panic!("mkrefany: expected managed pointer on stack, got {:?}", ptr);
+        return ctx.throw_by_name("System.InvalidProgramException");
     };
     let target_type = vm_try!(ctx.make_concrete(class));
     let target_td = vm_try!(ctx.loader().find_concrete_type(target_type));
@@ -23,10 +23,7 @@ pub fn mkrefany<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 pub fn refanytype<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
     let tr = ctx.pop();
     let StackValue::TypedRef(_, td) = tr else {
-        panic!(
-            "refanytype: expected typed reference on stack, got {:?}",
-            tr
-        );
+        return ctx.throw_by_name("System.InvalidProgramException");
     };
     // refanytype pushes a RuntimeTypeHandle (which is a pointer to the type)
     ctx.push(StackValue::NativeInt(Arc::as_ptr(&td) as isize));
@@ -40,7 +37,7 @@ pub fn refanyval<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 ) -> StepResult {
     let tr = ctx.pop();
     let StackValue::TypedRef(m, td) = tr else {
-        panic!("refanyval: expected typed reference on stack, got {:?}", tr);
+        return ctx.throw_by_name("System.InvalidProgramException");
     };
     let target_type = vm_try!(ctx.make_concrete(class));
     let target_td = vm_try!(ctx.loader().find_concrete_type(target_type));

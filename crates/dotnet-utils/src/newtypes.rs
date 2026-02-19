@@ -4,8 +4,12 @@ use std::{
     ops::{Add, AddAssign, Mul, Sub, SubAssign},
 };
 
+#[cfg(feature = "fuzzing")]
+use arbitrary::Arbitrary;
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Collect)]
 #[collect(require_static)]
+#[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
 pub struct ByteOffset(pub usize);
 
 impl Display for ByteOffset {
@@ -111,6 +115,7 @@ impl SubAssign<ByteOffset> for ByteOffset {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Collect)]
 #[collect(require_static)]
+#[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
 pub struct FieldIndex(pub usize);
 
 impl Display for FieldIndex {
@@ -143,6 +148,7 @@ impl FieldIndex {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Collect)]
 #[collect(require_static)]
+#[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
 pub struct ArenaId(pub u64);
 
 impl Display for ArenaId {
@@ -177,6 +183,7 @@ impl ArenaId {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Collect)]
 #[collect(require_static)]
+#[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
 pub struct LocalIndex(pub usize);
 
 impl LocalIndex {
@@ -213,6 +220,7 @@ impl SubAssign<usize> for LocalIndex {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Collect)]
 #[collect(require_static)]
+#[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
 pub struct ArgumentIndex(pub usize);
 
 impl ArgumentIndex {
@@ -267,6 +275,7 @@ impl Display for StackSlotIndex {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Collect)]
 #[collect(require_static)]
+#[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
 pub struct StackSlotIndex(pub usize);
 
 impl StackSlotIndex {
