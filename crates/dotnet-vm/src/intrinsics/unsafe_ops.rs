@@ -50,6 +50,7 @@ pub fn intrinsic_marshal_set_last_pinvoke_error<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic("static void System.Buffer::Memmove(byte*, byte*, ulong)")]
 #[dotnet_intrinsic("static void System.Buffer::Memmove<T>(T&, T&, ulong)")]
+#[dotnet_intrinsic("static void System.Buffer::Memmove<T>(T&, T&, nuint)")]
 #[allow(unused_variables)]
 pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,

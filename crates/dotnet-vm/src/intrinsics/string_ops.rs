@@ -1,4 +1,4 @@
-use crate::{StepResult, intrinsics::span::with_span_data, stack::ops::VesOps};
+use crate::{StepResult, intrinsics::span::{intrinsic_as_span, with_span_data}, stack::ops::VesOps};
 use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{
     TypeDescription,
@@ -497,4 +497,13 @@ pub fn intrinsic_string_copy_string_content<'gc, 'm: 'gc>(
         return ctx.throw_by_name("System.ArgumentOutOfRangeException");
     }
     StepResult::Continue
+}
+
+#[dotnet_intrinsic("static System.ReadOnlySpan<char> System.String::op_Implicit(string)")]
+pub fn intrinsic_string_implicit_to_span<'gc, 'm: 'gc>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    intrinsic_as_span(ctx, method, generics)
 }

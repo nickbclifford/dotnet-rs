@@ -235,3 +235,14 @@ pub fn intrinsic_bitconverter_is_little_endian<'gc, 'm: 'gc>(
     ctx.push_i32(1);
     StepResult::Continue
 }
+
+#[dotnet_intrinsic("static int System.Numerics.BitOperations::Log2(ulong)")]
+pub fn intrinsic_bitoperations_log2_ulong<'gc, 'm: 'gc>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    _method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let val = ctx.pop_i64() as u64;
+    ctx.push_i32(val.leading_zeros() as i32);
+    StepResult::Continue
+}
