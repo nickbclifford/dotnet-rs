@@ -7,7 +7,9 @@ use std::{
 #[macro_export]
 macro_rules! with_string {
     ($stack:expr, $value:expr, |$s:ident| $code:expr) => {{
-        let obj = $value.as_object_ref();
+        let value = $value;
+        let _guard = $crate::BorrowGuard::new($stack);
+        let obj = value.as_object_ref();
         if let Some(handle) = obj.0 {
             let heap = handle.borrow();
             if let $crate::object::HeapStorage::Str(ref $s) = heap.storage {
@@ -27,7 +29,9 @@ macro_rules! with_string {
 #[macro_export]
 macro_rules! with_string_mut {
     ($stack:expr, $value:expr, |$s:ident| $code:expr) => {{
-        let obj = $value.as_object_ref();
+        let value = $value;
+        let _guard = $crate::BorrowGuard::new($stack);
+        let obj = value.as_object_ref();
         if let Some(handle) = obj.0 {
             let mut heap = handle.borrow_mut(&$stack.gc());
             if let $crate::object::HeapStorage::Str(ref mut $s) = heap.storage {

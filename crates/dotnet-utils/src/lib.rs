@@ -45,3 +45,32 @@ pub fn validate_alignment(ptr: *const u8, align: usize) {
 #[cfg(not(feature = "memory-validation"))]
 #[inline(always)]
 pub fn validate_alignment(_ptr: *const u8, _align: usize) {}
+
+pub trait BorrowScopeOps {
+    fn enter_borrow_scope(&self);
+    fn exit_borrow_scope(&self);
+}
+
+pub struct BorrowGuard {
+    ctx: *const (dyn BorrowScopeOps + 'static),
+}
+
+impl BorrowGuard {
+    pub fn new(ctx: &dyn BorrowScopeOps) -> Self {
+        ctx.enter_borrow_scope();
+        Self {
+            ctx: unsafe {
+                std::mem::transmute::<
+                    *const dyn BorrowScopeOps,
+                    *const (dyn BorrowScopeOps + 'static),
+                >(ctx as *const dyn BorrowScopeOps)
+            },
+        }
+    }
+}
+
+impl Drop for BorrowGuard {
+    fn drop(&mut self) {
+        unsafe { (*self.ctx).exit_borrow_scope() };
+    }
+}

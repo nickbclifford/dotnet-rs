@@ -21,7 +21,7 @@ use dotnet_types::{
     resolution::ResolutionS,
     runtime::RuntimeType,
 };
-use dotnet_utils::sync::{Arc, AtomicBool, Mutex, Ordering};
+use dotnet_utils::sync::{Arc, AtomicBool, Ordering};
 use dotnet_value::{
     layout::{FieldLayoutManager, LayoutManager},
     object::ObjectRef,
@@ -65,7 +65,7 @@ pub struct GlobalCaches {
 }
 
 impl GlobalCaches {
-    pub fn new(loader: &AssemblyLoader, tracer: &mut Tracer) -> Self {
+    pub fn new(loader: &AssemblyLoader, tracer: &Tracer) -> Self {
         let intrinsic_registry = IntrinsicRegistry::initialize(loader, Some(tracer));
         Self {
             layout_cache: DashMap::new(),
@@ -91,7 +91,7 @@ pub struct SharedGlobalState<'m> {
     pub sync_blocks: SyncBlockManager,
     pub thread_manager: Arc<ThreadManager>,
     pub metrics: RuntimeMetrics,
-    pub tracer: Mutex<Tracer>,
+    pub tracer: Tracer,
     pub tracer_enabled: Arc<AtomicBool>,
     pub empty_generics: GenericLookup,
     /// Grouped caches for type resolution and layout computation
@@ -124,8 +124,8 @@ pub struct SharedGlobalState<'m> {
 
 impl<'m> SharedGlobalState<'m> {
     pub fn new(loader: &'m AssemblyLoader) -> Self {
-        let mut tracer = Tracer::new();
-        let caches = Arc::new(GlobalCaches::new(loader, &mut tracer));
+        let tracer = Tracer::new();
+        let caches = Arc::new(GlobalCaches::new(loader, &tracer));
 
         let tracer_enabled = Arc::new(AtomicBool::new(tracer.is_enabled()));
 
@@ -146,7 +146,7 @@ impl<'m> SharedGlobalState<'m> {
             sync_blocks: SyncBlockManager::new(),
             thread_manager: ThreadManager::new(),
             metrics: RuntimeMetrics::new(),
-            tracer: Mutex::new(tracer),
+            tracer,
             tracer_enabled,
             empty_generics: GenericLookup::default(),
             caches,
@@ -210,6 +210,7 @@ pub struct ArenaLocalState<'gc> {
     pub runtime_method_objs: RefCell<HashMap<(MethodDescription, GenericLookup), ObjectRef<'gc>>>,
     pub runtime_fields: RefCell<Vec<(FieldDescription, GenericLookup)>>,
     pub runtime_field_objs: RefCell<HashMap<(FieldDescription, GenericLookup), ObjectRef<'gc>>>,
+    pub active_borrows: Cell<usize>,
 }
 
 // SAFETY: `ArenaLocalState` correctly traces all GC-managed fields in its `trace` implementation.
@@ -256,6 +257,7 @@ impl<'gc> ArenaLocalState<'gc> {
             runtime_method_objs: RefCell::new(HashMap::new()),
             runtime_fields: RefCell::new(vec![]),
             runtime_field_objs: RefCell::new(HashMap::new()),
+            active_borrows: Cell::new(0),
         }
     }
 }

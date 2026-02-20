@@ -67,7 +67,7 @@ use crate::{
     dispatch::ExecutionEngine,
     exceptions::ExceptionState,
     state::{ArenaLocalState, SharedGlobalState},
-    sync::{Arc, MutexGuard, Ordering},
+    sync::{Arc, Ordering},
     tracer::Tracer,
 };
 use dotnet_utils::gc::GCHandle;
@@ -229,7 +229,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         self.execution.frame_stack.len().saturating_sub(1)
     }
 
-    pub fn tracer(&self) -> MutexGuard<'_, Tracer> {
-        self.shared.tracer.lock()
+    pub fn tracer(&self) -> &Tracer {
+        &self.shared.tracer
     }
 }

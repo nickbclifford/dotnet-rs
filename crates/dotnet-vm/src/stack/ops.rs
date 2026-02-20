@@ -23,7 +23,7 @@
 //! for testing or specialized execution.
 use crate::{
     state::SharedGlobalState,
-    sync::{Arc, MutexGuard},
+    sync::Arc,
     tracer::Tracer,
 };
 use dotnet_types::{
@@ -33,7 +33,7 @@ use dotnet_types::{
     members::{FieldDescription, MethodDescription},
     runtime::RuntimeType,
 };
-use dotnet_utils::ByteOffset;
+use dotnet_utils::{BorrowScopeOps, ByteOffset};
 use dotnet_value::{
     CLRString, StackValue,
     object::{Object as ObjectInstance, ObjectHandle, ObjectRef},
@@ -182,7 +182,7 @@ pub trait PoolOps {
     fn localloc(&mut self, size: usize) -> *mut u8;
 }
 
-pub trait RawMemoryOps<'gc> {
+pub trait RawMemoryOps<'gc>: BorrowScopeOps {
     /// Resolves a `PointerOrigin` and `ByteOffset` to a concrete memory address.
     /// This is the central point for address calculation in the VM.
     fn resolve_address(
@@ -415,7 +415,7 @@ pub trait VesOps<'gc, 'm>:
     fn handle_return(&mut self) -> crate::StepResult;
     fn handle_exception(&mut self) -> crate::StepResult;
     fn tracer_enabled(&self) -> bool;
-    fn tracer(&self) -> MutexGuard<'_, Tracer>;
+    fn tracer(&self) -> &Tracer;
     fn indent(&self) -> usize;
     fn process_pending_finalizers(&mut self) -> crate::StepResult;
     fn back_up_ip(&mut self);

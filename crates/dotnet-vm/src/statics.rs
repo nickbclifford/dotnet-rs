@@ -82,32 +82,45 @@ impl Debug for StaticStorage {
     }
 }
 
+type StaticMap = HashMap<(TypeDescription, GenericLookup), Arc<StaticStorage>>;
+
 pub struct StaticStorageManager {
     /// Thread-safe map of types to their static storage.
-    /// We use a RwLock for the map itself to allow concurrent access to different types,
+    /// We use a striped lock table for better performance and to allow concurrent access to different types,
     /// and each StaticStorage has its own locks for even more granularity.
-    types: RwLock<HashMap<(TypeDescription, GenericLookup), Arc<StaticStorage>>>,
+    shards: [RwLock<StaticMap>; 16],
 }
+
+const NUM_SHARDS: usize = 16;
 
 // SAFETY: `StaticStorageManager::trace` correctly traces all `StaticStorage` values in its map.
 // The map keys are non-GC metadata and do not need tracing. Each `StaticStorage` value is traced,
-// which in turn traces all GC-managed references in static fields. The RwLock is acquired for
-// reading during tracing, which is safe during stop-the-world GC pauses.
+// which in turn traces all GC-managed references in static fields.
+// During tracing, we use data_ptr() to bypass locks, which is safe during stop-the-world GC pauses.
 unsafe impl Collect for StaticStorageManager {
     fn trace(&self, cc: &Collection) {
-        let types = self.types.read();
-        for v in types.values() {
-            v.trace(cc);
+        for shard in &self.shards {
+            // SAFETY: Tracing happens during a stop-the-world pause, so no other
+            // threads are running. We can safely access the inner value without
+            // acquiring the lock.
+            let map = unsafe { &*shard.data_ptr() };
+            for v in map.values() {
+                v.trace(cc);
+            }
         }
     }
 }
 
 impl Debug for StaticStorageManager {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let types = self.types.read();
-        f.debug_map()
-            .entries(types.iter().map(|(k, v)| (DebugStr(k.0.type_name()), v)))
-            .finish()
+        let mut map = f.debug_map();
+        for shard in &self.shards {
+            let shard = shard.read();
+            for (k, v) in shard.iter() {
+                map.entry(&DebugStr(k.0.type_name()), v);
+            }
+        }
+        map.finish()
     }
 }
 
@@ -128,8 +141,15 @@ pub enum StaticInitResult {
 impl StaticStorageManager {
     pub fn new() -> Self {
         Self {
-            types: RwLock::new(HashMap::new()),
+            shards: std::array::from_fn(|_| RwLock::new(HashMap::new())),
         }
+    }
+
+    fn get_shard_idx(&self, key: &(TypeDescription, GenericLookup)) -> usize {
+        use std::hash::{Hash, Hasher};
+        let mut s = std::collections::hash_map::DefaultHasher::new();
+        key.hash(&mut s);
+        (s.finish() as usize) % NUM_SHARDS
     }
 
     pub fn get_static_field_layout(
@@ -175,26 +195,32 @@ impl StaticStorageManager {
         description: TypeDescription,
         generics: &GenericLookup,
     ) -> Arc<StaticStorage> {
-        let types = self.types.read();
-        types
-            .get(&(description, generics.clone()))
+        let key = (description, generics.clone());
+        let shard_idx = self.get_shard_idx(&key);
+        let shard = self.shards[shard_idx].read();
+        shard
+            .get(&key)
             .cloned()
             .expect("missing type in static storage")
     }
 
     /// Get the current initialization state of a type.
     pub fn get_init_state(&self, description: TypeDescription, generics: &GenericLookup) -> u8 {
-        let types = self.types.read();
-        types
-            .get(&(description, generics.clone()))
+        let key = (description, generics.clone());
+        let shard_idx = self.get_shard_idx(&key);
+        let shard = self.shards[shard_idx].read();
+        shard
+            .get(&key)
             .map(|s| s.init_state.load(Ordering::Acquire))
             .unwrap_or(INIT_STATE_UNINITIALIZED)
     }
 
     /// Mark a type as failed after its .cctor throws an exception.
     pub fn mark_failed(&self, description: TypeDescription, generics: &GenericLookup) {
-        let types = self.types.read();
-        if let Some(storage) = types.get(&(description, generics.clone())) {
+        let key = (description, generics.clone());
+        let shard_idx = self.get_shard_idx(&key);
+        let shard = self.shards[shard_idx].read();
+        if let Some(storage) = shard.get(&key) {
             storage
                 .init_state
                 .store(INIT_STATE_FAILED, Ordering::Release);
@@ -218,25 +244,31 @@ impl StaticStorageManager {
         metrics: Option<&RuntimeMetrics>,
     ) -> Result<StaticInitResult, dotnet_types::error::TypeResolutionError> {
         let key = (description, context.generics.clone());
-        // Ensure the storage exists. We use a write lock on the types map for this.
-        {
-            let mut types = self.types.write();
-            if !types.contains_key(&key) {
-                // Use the cached layout if available, or create and cache it
-                let layout = self.get_static_field_layout(description, context, metrics)?;
-                let size = layout.size();
-                #[allow(clippy::arc_with_non_send_sync)]
-                types.insert(
-                    key.clone(),
-                    Arc::new(StaticStorage {
-                        init_state: AtomicU8::new(INIT_STATE_UNINITIALIZED),
-                        initializing_thread: AtomicU64::new(0),
-                        storage: FieldStorage::new(layout, vec![0; size.as_usize()]),
-                        init_cond: Arc::new(Condvar::new()),
-                        init_mutex: Arc::new(Mutex::new(())),
-                    }),
-                );
-            }
+        let shard_idx = self.get_shard_idx(&key);
+
+        // Ensure the storage exists.
+        let storage_exists = {
+            let shard = self.shards[shard_idx].read();
+            shard.contains_key(&key)
+        };
+
+        if !storage_exists {
+            // Use the cached layout if available, or create and cache it.
+            // DO NOT hold the shard lock while doing layout computation,
+            // as it might be expensive or trigger recursive resolutions.
+            let layout = self.get_static_field_layout(description, context, metrics)?;
+            let size = layout.size();
+            let mut shard = self.shards[shard_idx].write();
+            #[allow(clippy::arc_with_non_send_sync)]
+            shard.entry(key.clone()).or_insert_with(|| {
+                Arc::new(StaticStorage {
+                    init_state: AtomicU8::new(INIT_STATE_UNINITIALIZED),
+                    initializing_thread: AtomicU64::new(0),
+                    storage: FieldStorage::new(layout, vec![0; size.as_usize()]),
+                    init_cond: Arc::new(Condvar::new()),
+                    init_mutex: Arc::new(Mutex::new(())),
+                })
+            });
         }
 
         // Get the storage and check its state.
@@ -303,8 +335,10 @@ impl StaticStorageManager {
     /// Mark a type as fully initialized after its .cctor completes.
     /// This must be called after the .cctor returned by `init()` has finished executing.
     pub fn mark_initialized(&self, description: TypeDescription, generics: &GenericLookup) {
-        let types = self.types.read();
-        if let Some(storage) = types.get(&(description, generics.clone())) {
+        let key = (description, generics.clone());
+        let shard_idx = self.get_shard_idx(&key);
+        let shard = self.shards[shard_idx].read();
+        if let Some(storage) = shard.get(&key) {
             storage
                 .init_state
                 .store(INIT_STATE_INITIALIZED, Ordering::Release);

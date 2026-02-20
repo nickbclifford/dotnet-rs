@@ -4,6 +4,7 @@ use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
 };
+use dotnet_utils::BorrowGuard;
 use dotnet_value::{
     StackValue,
     layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
@@ -138,12 +139,14 @@ pub fn write_span_fields<'gc, 'm>(
     Ok(())
 }
 
-pub fn with_span_data<R>(
+pub fn with_span_data<'gc, 'm, R>(
+    ctx: &dyn VesOps<'gc, 'm>,
     span: Object,
     element_type: TypeDescription,
     element_size: usize,
     f: impl FnOnce(&[u8]) -> R,
 ) -> Result<R, String> {
+    let _borrow = BorrowGuard::new(ctx);
     let info = read_span_reference(&span)?;
     let len = read_span_length(&span)? as usize;
 
@@ -357,17 +360,48 @@ pub fn intrinsic_memory_extensions_sequence_equal<'gc, 'm: 'gc>(
         let element_size = layout.size().as_usize();
         let element_desc = vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
 
-        let res = match with_span_data(a, element_desc, element_size, |a_slice| {
-            with_span_data(b, element_desc, element_size, |b_slice| a_slice == b_slice)
-        }) {
-            Ok(Ok(val)) => val,
-            Ok(Err(e)) | Err(e) => {
-                return StepResult::Error(crate::error::ExecutionError::InternalError(e).into());
-            }
+        let a_ptr_info = match read_span_reference(&a) {
+            Ok(info) => info,
+            Err(e) => return StepResult::Error(crate::error::ExecutionError::InternalError(e).into()),
+        };
+        let b_ptr_info = match read_span_reference(&b) {
+            Ok(info) => info,
+            Err(e) => return StepResult::Error(crate::error::ExecutionError::InternalError(e).into()),
         };
 
+        let a_mptr = ManagedPtr::from_info_full(a_ptr_info, element_desc, false);
+        let b_mptr = ManagedPtr::from_info_full(b_ptr_info, element_desc, false);
+
+        let mut offset = 0;
+        let total_bytes = a_len as usize * element_size;
+        const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
+        let mut equal = true;
+
+        while offset < total_bytes {
+            let current_chunk = std::cmp::min(CHUNK_SIZE, total_bytes - offset);
+
+            let a_chunk = unsafe { a_mptr.clone().offset(offset as isize) };
+            let b_chunk = unsafe { b_mptr.clone().offset(offset as isize) };
+
+            let res = unsafe {
+                a_chunk.with_data(current_chunk, |a_slice| {
+                    b_chunk.with_data(current_chunk, |b_slice| a_slice == b_slice)
+                })
+            };
+
+            if !res {
+                equal = false;
+                break;
+            }
+
+            offset += current_chunk;
+            if offset < total_bytes {
+                ctx.check_gc_safe_point();
+            }
+        }
+
         ctx.pop_multiple(2);
-        ctx.push_i32(res as i32);
+        ctx.push_i32(equal as i32);
         StepResult::Continue
     } else {
         // Slow path: dispatch to MemoryExtensions.SequenceEqualSlowPath<T>
@@ -411,19 +445,76 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
+    let comparison_type = ctx.pop_i32();
     let b = ctx.pop_value_type();
     let a = ctx.pop_value_type();
 
-    let res = match with_span_data(a, TypeDescription::NULL, 2, |a_slice| {
-        with_span_data(b, TypeDescription::NULL, 2, |b_slice| a_slice == b_slice)
-    }) {
-        Ok(Ok(val)) => val,
-        Ok(Err(e)) | Err(e) => {
-            return StepResult::Error(crate::error::ExecutionError::InternalError(e).into());
-        }
+    // TODO: Support non-ordinal comparison types if needed
+    // In many .NET versions, Ordinal is 4. OrdinalIgnoreCase is 5.
+    if comparison_type != 4 && comparison_type != 5 {
+        // Fallback to ordinal for now but log a warning if we had a tracer
+    }
+
+    let a_len = match read_span_length(&a) {
+        Ok(l) => l,
+        Err(e) => return StepResult::Error(crate::error::ExecutionError::InternalError(e).into()),
+    };
+    let b_len = match read_span_length(&b) {
+        Ok(l) => l,
+        Err(e) => return StepResult::Error(crate::error::ExecutionError::InternalError(e).into()),
     };
 
-    ctx.push_i32(res as i32);
+    if a_len != b_len {
+        ctx.push_i32(0);
+        return StepResult::Continue;
+    }
+
+    if a_len == 0 {
+        ctx.push_i32(1);
+        return StepResult::Continue;
+    }
+
+    let a_ptr_info = match read_span_reference(&a) {
+        Ok(info) => info,
+        Err(e) => return StepResult::Error(crate::error::ExecutionError::InternalError(e).into()),
+    };
+    let b_ptr_info = match read_span_reference(&b) {
+        Ok(info) => info,
+        Err(e) => return StepResult::Error(crate::error::ExecutionError::InternalError(e).into()),
+    };
+
+    let a_mptr = ManagedPtr::from_info_full(a_ptr_info, TypeDescription::NULL, false);
+    let b_mptr = ManagedPtr::from_info_full(b_ptr_info, TypeDescription::NULL, false);
+
+    let mut offset = 0;
+    let total_bytes = a_len as usize * 2; // char is 2 bytes
+    const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
+    let mut equal = true;
+
+    while offset < total_bytes {
+        let current_chunk = std::cmp::min(CHUNK_SIZE, total_bytes - offset);
+
+        let a_chunk = unsafe { a_mptr.clone().offset(offset as isize) };
+        let b_chunk = unsafe { b_mptr.clone().offset(offset as isize) };
+
+        let res = unsafe {
+            a_chunk.with_data(current_chunk, |a_slice| {
+                b_chunk.with_data(current_chunk, |b_slice| a_slice == b_slice)
+            })
+        };
+
+        if !res {
+            equal = false;
+            break;
+        }
+
+        offset += current_chunk;
+        if offset < total_bytes {
+            ctx.check_gc_safe_point();
+        }
+    }
+
+    ctx.push_i32(equal as i32);
     StepResult::Continue
 }
 
@@ -449,13 +540,34 @@ pub fn intrinsic_span_helpers_sequence_equal<'gc, 'm: 'gc>(
         return StepResult::Continue;
     }
 
-    let res = unsafe {
-        let a_ptr = a.with_data(0, |data| data.as_ptr());
-        let b_ptr = b.with_data(0, |data| data.as_ptr());
-        std::slice::from_raw_parts(a_ptr, length) == std::slice::from_raw_parts(b_ptr, length)
-    };
+    let mut offset = 0;
+    const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
+    let mut equal = true;
 
-    ctx.push_i32(res as i32);
+    while offset < length {
+        let current_chunk = std::cmp::min(CHUNK_SIZE, length - offset);
+
+        let a_chunk = unsafe { a.clone().offset(offset as isize) };
+        let b_chunk = unsafe { b.clone().offset(offset as isize) };
+
+        let res = unsafe {
+            a_chunk.with_data(current_chunk, |a_slice| {
+                b_chunk.with_data(current_chunk, |b_slice| a_slice == b_slice)
+            })
+        };
+
+        if !res {
+            equal = false;
+            break;
+        }
+
+        offset += current_chunk;
+        if offset < length {
+            ctx.check_gc_safe_point();
+        }
+    }
+
+    ctx.push_i32(equal as i32);
     StepResult::Continue
 }
 #[dotnet_intrinsic("static System.ReadOnlySpan<char> System.MemoryExtensions::AsSpan(string)")]

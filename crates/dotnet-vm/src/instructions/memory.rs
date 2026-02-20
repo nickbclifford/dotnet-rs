@@ -28,20 +28,21 @@ pub fn cpblk<
         return ctx.throw_by_name("System.NullReferenceException");
     }
 
-    // Check GC safe point before large memory block copy operations
-    // Threshold: copying more than 4KB of data
-    const LARGE_COPY_THRESHOLD: usize = 4096;
-    if size > LARGE_COPY_THRESHOLD {
-        // ctx.check_gc_safe_point();
-    }
-
-    // SAFETY: The source and destination pointers are obtained from the evaluation stack
-    // and are assumed to be valid for the specified size. In .NET, it is the responsibility
-    // of the compiler/programmer to ensure these are valid when using cpblk.
-    unsafe {
-        validate_atomic_access(src, false);
-        validate_atomic_access(dest, false);
-        ptr::copy(src, dest, size);
+    // Perform the move in chunks to allow GC safe points if necessary.
+    // Since our GC is currently non-moving, raw pointers remain valid across safe points.
+    const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
+    let mut offset = 0;
+    while offset < size {
+        let current_chunk = std::cmp::min(size - offset, CHUNK_SIZE);
+        unsafe {
+            validate_atomic_access(src.add(offset), false);
+            validate_atomic_access(dest.add(offset), false);
+            ptr::copy(src.add(offset), dest.add(offset), current_chunk);
+        }
+        offset += current_chunk;
+        if offset < size {
+            ctx.check_gc_safe_point();
+        }
     }
     StepResult::Continue
 }
@@ -62,16 +63,19 @@ pub fn initblk<
         return ctx.throw_by_name("System.NullReferenceException");
     }
 
-    // Check GC safe point before large memory block initialization
-    if size > 4096 {
-        // ctx.check_gc_safe_point();
-    }
-
-    // SAFETY: The address and size are obtained from the evaluation stack.
-    // Validity of the memory range is the responsibility of the caller in CIL.
-    unsafe {
-        validate_atomic_access(addr, false);
-        ptr::write_bytes(addr, val, size);
+    // Perform the initialization in chunks to allow GC safe points if necessary.
+    const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
+    let mut offset = 0;
+    while offset < size {
+        let current_chunk = std::cmp::min(size - offset, CHUNK_SIZE);
+        unsafe {
+            validate_atomic_access(addr.add(offset), false);
+            ptr::write_bytes(addr.add(offset), val, current_chunk);
+        }
+        offset += current_chunk;
+        if offset < size {
+            ctx.check_gc_safe_point();
+        }
     }
     StepResult::Continue
 }

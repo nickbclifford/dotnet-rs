@@ -4,8 +4,8 @@ use crate::{
     stack::{
         context::VesContext,
         ops::{
-            CallOps, ExceptionOps, LoaderOps, ReflectionOps, ResolutionOps, StackOps, StaticsOps,
-            ThreadOps,
+            CallOps, ExceptionOps, LoaderOps, RawMemoryOps, ReflectionOps, ResolutionOps, StackOps,
+            StaticsOps, ThreadOps,
         },
     },
     state::{SharedGlobalState, StaticStorageManager},
@@ -51,7 +51,7 @@ impl<'a, 'gc, 'm: 'gc> StaticsOps<'gc> for VesContext<'a, 'gc, 'm> {
         generics: GenericLookup,
     ) -> StepResult {
         let _gc = self.gc;
-        // self.check_gc_safe_point();
+        self.check_gc_safe_point();
 
         let ctx = ResolutionContext {
             resolution: description.resolution,
@@ -87,7 +87,7 @@ impl<'a, 'gc, 'm: 'gc> StaticsOps<'gc> for VesContext<'a, 'gc, 'm> {
             }
             Initialized | Recursive => StepResult::Continue,
             Waiting => {
-                // self.check_gc_safe_point();
+                self.check_gc_safe_point();
                 StepResult::Yield
             }
             Failed => self.throw_by_name("System.TypeInitializationException"),

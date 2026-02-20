@@ -7,7 +7,6 @@ use crate::{
         ops::{CallOps, ReflectionOps, VesOps},
     },
     state::{ArenaLocalState, SharedGlobalState},
-    sync::MutexGuard,
     threading::ThreadManagerOps,
     tracer::Tracer,
 };
@@ -83,8 +82,8 @@ impl Executor {
         self.shared.tracer_enabled.load(Ordering::Relaxed)
     }
 
-    pub fn tracer(&self) -> MutexGuard<'_, Tracer> {
-        self.shared.tracer.lock()
+    pub fn tracer(&self) -> &Tracer {
+        &self.shared.tracer
     }
 
     pub fn indent(&self) -> usize {
@@ -370,7 +369,7 @@ impl Executor {
         // Unregister thread when execution completes
         self.shared.thread_manager.unregister_thread(self.thread_id);
 
-        self.shared.tracer.lock().flush();
+        self.shared.tracer.flush();
         result
     }
 

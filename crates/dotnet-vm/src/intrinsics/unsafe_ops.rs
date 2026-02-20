@@ -70,15 +70,21 @@ pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
         (layout.size() * (len as usize)).as_usize()
     };
 
-    // Check GC safe point before large bulk memory operations
-    const LARGE_MEMMOVE_THRESHOLD: usize = 4096;
-    if total_count > LARGE_MEMMOVE_THRESHOLD {
-        // ctx.check_gc_safe_point();
+    // Perform the move in chunks to allow GC safe points if necessary.
+    // Since our GC is currently non-moving, raw pointers remain valid across safe points.
+    const MEMMOVE_CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
+    let mut offset = 0;
+    while offset < total_count {
+        let current_chunk = std::cmp::min(total_count - offset, MEMMOVE_CHUNK_SIZE);
+        unsafe {
+            ptr::copy(src.add(offset), dst.add(offset), current_chunk);
+        }
+        offset += current_chunk;
+        if offset < total_count {
+            ctx.check_gc_safe_point();
+        }
     }
 
-    unsafe {
-        ptr::copy(src, dst, total_count);
-    }
     StepResult::Continue
 }
 
@@ -637,7 +643,17 @@ pub fn intrinsic_unsafe_copy_block<'gc, 'm: 'gc>(
     unsafe {
         validate_atomic_access(src, false);
         validate_atomic_access(dest, false);
-        ptr::copy(src, dest, size);
+
+        const COPY_BLOCK_CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
+        let mut offset = 0;
+        while offset < size {
+            let current_chunk = std::cmp::min(size - offset, COPY_BLOCK_CHUNK_SIZE);
+            ptr::copy(src.add(offset), dest.add(offset), current_chunk);
+            offset += current_chunk;
+            if offset < size {
+                ctx.check_gc_safe_point();
+            }
+        }
     }
     StepResult::Continue
 }
@@ -663,7 +679,17 @@ pub fn intrinsic_unsafe_init_block<'gc, 'm: 'gc>(
 
     unsafe {
         validate_atomic_access(addr, false);
-        ptr::write_bytes(addr, val, size);
+
+        const INIT_BLOCK_CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
+        let mut offset = 0;
+        while offset < size {
+            let current_chunk = std::cmp::min(size - offset, INIT_BLOCK_CHUNK_SIZE);
+            ptr::write_bytes(addr.add(offset), val, current_chunk);
+            offset += current_chunk;
+            if offset < size {
+                ctx.check_gc_safe_point();
+            }
+        }
     }
     StepResult::Continue
 }

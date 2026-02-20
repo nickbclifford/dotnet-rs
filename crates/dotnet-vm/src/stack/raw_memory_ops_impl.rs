@@ -7,6 +7,7 @@ use crate::{
     threading::ThreadManagerOps,
 };
 use dotnet_types::TypeDescription;
+use dotnet_utils::{BorrowGuard, BorrowScopeOps};
 use dotnet_value::{StackValue, layout::HasLayout, pointer::PointerOrigin};
 use sptr::Strict;
 
@@ -33,12 +34,29 @@ impl<'a, 'gc, 'm: 'gc> PoolOps for VesContext<'a, 'gc, 'm> {
     }
 }
 
+impl<'a, 'gc, 'm: 'gc> BorrowScopeOps for VesContext<'a, 'gc, 'm> {
+    fn enter_borrow_scope(&self) {
+        self.local
+            .active_borrows
+            .set(self.local.active_borrows.get() + 1);
+    }
+
+    fn exit_borrow_scope(&self) {
+        let current = self.local.active_borrows.get();
+        if current == 0 {
+            panic!("Borrow scope underflow");
+        }
+        self.local.active_borrows.set(current - 1);
+    }
+}
+
 impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
     fn resolve_address(
         &self,
         origin: PointerOrigin<'gc>,
         offset: dotnet_utils::ByteOffset,
     ) -> std::ptr::NonNull<u8> {
+        let _guard = BorrowGuard::new(self);
         match origin {
             PointerOrigin::Stack(idx) => {
                 let slot = self.evaluation_stack.get_slot_ref(idx);
@@ -90,6 +108,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         value: StackValue<'gc>,
         layout: &dotnet_value::layout::LayoutManager,
     ) -> Result<(), String> {
+        let _guard = BorrowGuard::new(self);
         match origin {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
@@ -164,6 +183,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         layout: &dotnet_value::layout::LayoutManager,
         type_desc: Option<TypeDescription>,
     ) -> Result<StackValue<'gc>, String> {
+        let _guard = BorrowGuard::new(self);
         match origin {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
@@ -231,6 +251,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         offset: dotnet_utils::ByteOffset,
         data: &[u8],
     ) -> Result<(), String> {
+        let _guard = BorrowGuard::new(self);
         match origin {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
@@ -296,6 +317,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         offset: dotnet_utils::ByteOffset,
         dest: &mut [u8],
     ) -> Result<(), String> {
+        let _guard = BorrowGuard::new(self);
         match origin {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
@@ -355,6 +377,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         success: dotnet_utils::sync::Ordering,
         failure: dotnet_utils::sync::Ordering,
     ) -> Result<u64, u64> {
+        let _guard = BorrowGuard::new(self);
         match origin {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
@@ -461,6 +484,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
     ) -> Result<u64, String> {
+        let _guard = BorrowGuard::new(self);
         match origin {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
@@ -552,6 +576,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
     ) -> Result<u64, String> {
+        let _guard = BorrowGuard::new(self);
         match origin {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
@@ -629,6 +654,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
     ) -> Result<(), String> {
+        let _guard = BorrowGuard::new(self);
         match origin {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
@@ -714,6 +740,10 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
 
     #[inline]
     fn check_gc_safe_point(&self) {
+        if self.local.active_borrows.get() > 0 {
+            // Cannot reach safe point while holding borrows!
+            return;
+        }
         let thread_manager = &self.shared.thread_manager;
         if thread_manager.is_gc_stop_requested() {
             let managed_id = self.thread_id.get();

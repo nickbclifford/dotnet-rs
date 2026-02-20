@@ -216,7 +216,7 @@ pub struct IntrinsicRegistry;
 
 impl IntrinsicRegistry {
     /// Initializes a new registry with intrinsic handlers.
-    pub fn initialize(_loader: &AssemblyLoader, _tracer: Option<&mut Tracer>) -> Self {
+    pub fn initialize(_loader: &AssemblyLoader, _tracer: Option<&Tracer>) -> Self {
         Self
     }
 

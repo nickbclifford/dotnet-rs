@@ -137,7 +137,7 @@ impl NativeLibraries {
     pub fn get_library(
         &self,
         name: &str,
-        mut tracer: Option<&mut Tracer>,
+        tracer: Option<&Tracer>,
     ) -> Result<dashmap::mapref::one::Ref<'_, String, Library>, PInvokeError> {
         if !self.sandbox.allow_library(name) {
             return Err(PInvokeError::LibraryNotFound(name.to_string()));
@@ -149,8 +149,7 @@ impl NativeLibraries {
 
         let path = self.find_library_path(name);
 
-        if let Some(t) = &mut tracer {
-            t.trace_interop(0, "RESOLVE", &format!("Resolving library '{}'...", name));
+        if let Some(t) = tracer {
             t.trace_interop(
                 0,
                 "RESOLVE",
@@ -216,7 +215,7 @@ impl NativeLibraries {
         &self,
         library: &str,
         name: &str,
-        tracer: Option<&mut Tracer>,
+        tracer: Option<&Tracer>,
     ) -> Result<CodePtr, PInvokeError> {
         if !self.sandbox.allow_function(library, name) {
             return Err(PInvokeError::SymbolNotFound(
@@ -467,10 +466,10 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
     vm_trace_interop!(ctx, "ARGS", "Values:    {:?}", stack_values);
 
     let target_res = if ctx.tracer_enabled() {
-        let mut guard = ctx.tracer();
+        let guard = ctx.tracer();
         ctx.shared()
             .pinvoke
-            .get_function(module, function, Some(&mut *guard))
+            .get_function(module, function, Some(guard))
     } else {
         ctx.shared().pinvoke.get_function(module, function, None)
     };

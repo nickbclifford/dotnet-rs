@@ -27,8 +27,8 @@ pub fn intrinsic_string_equals<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let b_val = ctx.pop();
-    let a_val = ctx.pop();
+    let b_val = ctx.peek_stack();
+    let a_val = ctx.peek_stack_at(1);
 
     let res = match (a_val, b_val) {
         (StackValue::ObjectRef(ObjectRef(None)), StackValue::ObjectRef(ObjectRef(None))) => true,
@@ -40,21 +40,68 @@ pub fn intrinsic_string_equals<'gc, 'm: 'gc>(
         ) => {
             // Compare the actual object pointers (for reference equality/interning check)
             use gc_arena::Gc;
-            let ptr_equal = Gc::as_ptr(a_handle) == Gc::as_ptr(b_handle);
-            if ptr_equal {
+            if Gc::as_ptr(a_handle) == Gc::as_ptr(b_handle) {
                 true
             } else {
-                let a_heap = a_handle.borrow();
-                let b_heap = b_handle.borrow();
-                match (&a_heap.storage, &b_heap.storage) {
-                    (HeapStorage::Str(a), HeapStorage::Str(b)) => a == b,
-                    _ => false,
+                let (a_len, a_is_str) = {
+                    let a_heap = a_handle.borrow();
+                    if let HeapStorage::Str(s) = &a_heap.storage {
+                        (s.len(), true)
+                    } else {
+                        (0, false)
+                    }
+                };
+                let (b_len, b_is_str) = {
+                    let b_heap = b_handle.borrow();
+                    if let HeapStorage::Str(s) = &b_heap.storage {
+                        (s.len(), true)
+                    } else {
+                        (0, false)
+                    }
+                };
+
+                if !a_is_str || !b_is_str || a_len != b_len {
+                    false
+                } else {
+                    let length = a_len;
+                    let mut offset = 0;
+                    const CHUNK_SIZE: usize = 4096; // 4K characters (8KB)
+                    let mut equal = true;
+
+                    while offset < length {
+                        let current_chunk = std::cmp::min(CHUNK_SIZE, length - offset);
+
+                        let chunk_equal = {
+                            let a_heap = a_handle.borrow();
+                            let b_heap = b_handle.borrow();
+                            if let (HeapStorage::Str(a), HeapStorage::Str(b)) =
+                                (&a_heap.storage, &b_heap.storage)
+                            {
+                                a[offset..offset + current_chunk]
+                                    == b[offset..offset + current_chunk]
+                            } else {
+                                false
+                            }
+                        };
+
+                        if !chunk_equal {
+                            equal = false;
+                            break;
+                        }
+
+                        offset += current_chunk;
+                        if offset < length {
+                            ctx.check_gc_safe_point();
+                        }
+                    }
+                    equal
                 }
             }
         }
         _ => false,
     };
 
+    ctx.pop_multiple(2);
     ctx.push_i32(if res { 1 } else { 0 });
     StepResult::Continue
 }
@@ -91,7 +138,7 @@ pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc>(
     // Check GC safe point before allocating large strings
     const LARGE_STRING_THRESHOLD: usize = 1024;
     if len > LARGE_STRING_THRESHOLD {
-        // ctx.check_gc_safe_point();
+        ctx.check_gc_safe_point();
     }
 
     let value = CLRString::new(vec![0u16; len]);
@@ -109,20 +156,42 @@ pub fn intrinsic_string_ctor_char_array<'gc, 'm: 'gc>(
     let arg = ctx.pop();
     let chars: Vec<u16> = match arg {
         StackValue::ObjectRef(ObjectRef(Some(handle))) => {
-            let obj = handle.borrow();
-            match &obj.storage {
-                HeapStorage::Vec(v) => {
-                    // Assuming u16 data (char is 2 bytes)
-                    // We need to interpret bytes as u16.
-                    // Vector stores data as Vec<u8>.
-                    let bytes = v.get();
-                    bytes
-                        .chunks_exact(2)
-                        .map(|c| u16::from_ne_bytes([c[0], c[1]]))
-                        .collect()
+            let len = {
+                let obj = handle.borrow();
+                match &obj.storage {
+                    HeapStorage::Vec(v) => v.layout.length,
+                    _ => 0,
                 }
-                _ => Vec::new(), // Should not happen for char[]
+            };
+
+            let mut result = Vec::with_capacity(len);
+            let mut offset = 0;
+            const CHUNK_SIZE: usize = 1024;
+
+            while offset < len {
+                let chunk_len = std::cmp::min(CHUNK_SIZE, len - offset);
+                {
+                    let _guard = dotnet_value::BorrowGuard::new(ctx);
+                    let obj = handle.borrow();
+                    match &obj.storage {
+                        HeapStorage::Vec(v) => {
+                            let bytes = v.get();
+                            for i in 0..chunk_len {
+                                let c_idx = (offset + i) * 2;
+                                if c_idx + 1 < bytes.len() {
+                                    result.push(u16::from_ne_bytes([bytes[c_idx], bytes[c_idx + 1]]));
+                                }
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+                offset += chunk_len;
+                if offset < len {
+                    ctx.check_gc_safe_point();
+                }
             }
+            result
         }
         _ => Vec::new(), // null or invalid
     };
@@ -160,6 +229,10 @@ pub fn intrinsic_string_ctor_char_ptr<'gc, 'm: 'gc>(
                 }
                 chars.push(c);
                 i += 1;
+
+                if i % 1024 == 0 {
+                    ctx.check_gc_safe_point();
+                }
             }
         }
         CLRString::new(chars)
@@ -218,33 +291,51 @@ pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let span2 = ctx.pop_value_type();
-    let span1 = ctx.pop_value_type();
-    let span0 = ctx.pop_value_type();
+    let span2 = ctx.peek_stack().as_value_type();
+    let span1 = ctx.peek_stack_at(1).as_value_type();
+    let span0 = ctx.peek_stack_at(2).as_value_type();
 
-    fn char_span_into_str(span: Object) -> Result<Vec<u16>, String> {
-        with_span_data(span, TypeDescription::NULL, 2, |slice| {
-            slice
-                .chunks_exact(2)
-                .map(|c| u16::from_ne_bytes([c[0], c[1]]))
-                .collect::<Vec<_>>()
-        })
-    }
+    let mut data0 = Vec::new();
+    let mut data1 = Vec::new();
+    let mut data2 = Vec::new();
 
-    let data0 =
-        vm_try!(char_span_into_str(span0).map_err(crate::error::ExecutionError::NotImplemented));
-    let data1 =
-        vm_try!(char_span_into_str(span1).map_err(crate::error::ExecutionError::NotImplemented));
-    let data2 =
-        vm_try!(char_span_into_str(span2).map_err(crate::error::ExecutionError::NotImplemented));
+    let copy_span_chunked =
+        |ctx: &mut dyn VesOps<'gc, 'm>, span: Object, dest: &mut Vec<u16>| -> Result<(), String> {
+            let len = with_span_data(ctx, span.clone(), TypeDescription::NULL, 2, |slice| slice.len() / 2)?;
+            let mut offset = 0;
+            const CHUNK_SIZE: usize = 1024;
+
+            while offset < len {
+                let chunk_len = std::cmp::min(CHUNK_SIZE, len - offset);
+                with_span_data(ctx, span.clone(), TypeDescription::NULL, 2, |slice| {
+                    for i in 0..chunk_len {
+                        let c_idx = (offset + i) * 2;
+                        dest.push(u16::from_ne_bytes([slice[c_idx], slice[c_idx + 1]]));
+                    }
+                })?;
+                offset += chunk_len;
+                if offset < len {
+                    ctx.check_gc_safe_point();
+                }
+            }
+            Ok(())
+        };
+
+    vm_try!(copy_span_chunked(ctx, span0, &mut data0)
+        .map_err(crate::error::ExecutionError::NotImplemented));
+    vm_try!(copy_span_chunked(ctx, span1, &mut data1)
+        .map_err(crate::error::ExecutionError::NotImplemented));
+    vm_try!(copy_span_chunked(ctx, span2, &mut data2)
+        .map_err(crate::error::ExecutionError::NotImplemented));
 
     let total_length = data0.len() + data1.len() + data2.len();
     const LARGE_STRING_CONCAT_THRESHOLD: usize = 1024;
     if total_length > LARGE_STRING_CONCAT_THRESHOLD {
-        // ctx.check_gc_safe_point();
+        ctx.check_gc_safe_point();
     }
 
     let value = CLRString::new(data0.into_iter().chain(data1).chain(data2).collect());
+    ctx.pop_multiple(3);
     ctx.push_string(value);
     StepResult::Continue
 }
@@ -345,36 +436,74 @@ pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let (start_at, length) = if method.method.signature.parameters.len() == 1 {
-        let start_at = ctx.pop_i32();
+        let start_at = ctx.peek_stack().as_i32();
         (start_at as usize, None)
     } else {
-        let length = ctx.pop_i32();
-        let start_at = ctx.pop_i32();
+        let length = ctx.peek_stack().as_i32();
+        let start_at = ctx.peek_stack_at(1).as_i32();
         (start_at as usize, Some(length as usize))
     };
 
-    let val = ctx.pop();
-    let value = match with_string!(ctx, val, |s| {
-        if start_at > s.len() {
-            Err("start_at out of range".to_string())
-        } else {
-            let sub = &s[start_at..];
-            match length {
-                None => Ok(sub.to_vec()),
+    let val = ctx.peek_stack_at(if length.is_some() { 2 } else { 1 });
+    
+    let result_vec = match &val {
+        StackValue::ObjectRef(ObjectRef(Some(handle))) => {
+            let s_len = {
+                let inner = handle.borrow();
+                match &inner.storage {
+                    HeapStorage::Str(s) => s.len(),
+                    _ => return ctx.throw_by_name("System.ArgumentException"),
+                }
+            };
+
+            if start_at > s_len {
+                return ctx.throw_by_name("System.ArgumentOutOfRangeException");
+            }
+
+            let l = match length {
+                None => s_len - start_at,
                 Some(l) => {
-                    if l > sub.len() {
-                        Err("length out of range".to_string())
-                    } else {
-                        Ok(sub[..l].to_vec())
+                    if start_at + l > s_len {
+                        return ctx.throw_by_name("System.ArgumentOutOfRangeException");
+                    }
+                    l
+                }
+            };
+
+            let mut result_vec = Vec::with_capacity(l);
+            let mut offset = 0;
+            const CHUNK_SIZE: usize = 1024 * 64; // 64K characters
+            while offset < l {
+                let current_chunk = std::cmp::min(l - offset, CHUNK_SIZE);
+                {
+                    let _guard = dotnet_value::BorrowGuard::new(ctx);
+                    let inner = handle.borrow();
+                    match &inner.storage {
+                        HeapStorage::Str(s) => {
+                            result_vec.extend_from_slice(&s[start_at + offset..start_at + offset + current_chunk]);
+                        }
+                        _ => break,
                     }
                 }
+                offset += current_chunk;
+                if offset < l {
+                    ctx.check_gc_safe_point();
+                }
             }
+            Ok(result_vec)
         }
-    }) {
-        Ok(v) => v,
-        Err(_) => return ctx.throw_by_name("System.ArgumentOutOfRangeException"),
+        StackValue::ObjectRef(ObjectRef(None)) => {
+            return ctx.throw_by_name("System.NullReferenceException");
+        }
+        _ => return ctx.throw_by_name("System.ArgumentException"),
     };
 
+    let value = match result_vec {
+        Ok(v) => v,
+        Err(e) => return StepResult::Error(crate::error::ExecutionError::InternalError(e).into()),
+    };
+
+    ctx.pop_multiple(if length.is_some() { 3 } else { 2 });
     ctx.push_string(CLRString::new(value));
     StepResult::Continue
 }
@@ -423,17 +552,65 @@ pub fn intrinsic_string_is_null_or_white_space<'gc, 'm: 'gc>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let str_val = ctx.pop();
+    let str_val = ctx.peek_stack();
     let is_null_or_white_space = match &str_val {
         StackValue::ObjectRef(ObjectRef(None)) => true,
-        _ => with_string!(ctx, str_val, |s| {
-            s.iter().all(|&c| {
-                char::from_u32(c as u32)
-                    .map(|c| c.is_whitespace())
-                    .unwrap_or(false)
-            })
-        }),
+        _ => {
+            let obj_ref = str_val.as_object_ref();
+            let Some(handle) = obj_ref.0 else { 
+                // This shouldn't happen given the match arms but we must return StepResult
+                ctx.pop();
+                ctx.push_i32(1);
+                return StepResult::Continue;
+            };
+            
+            let len = {
+                let inner = handle.borrow();
+                match &inner.storage {
+                    HeapStorage::Str(s) => s.len(),
+                    _ => return StepResult::Error(
+                        crate::error::ExecutionError::InternalError(
+                            "System.String::IsNullOrWhiteSpace called on non-string object".to_string(),
+                        ).into()
+                    ),
+                }
+            };
+
+            let mut offset = 0;
+            let mut all_white = true;
+            const CHUNK_SIZE: usize = 1024;
+            while offset < len {
+                let current_chunk_size = std::cmp::min(len - offset, CHUNK_SIZE);
+                {
+                    let _guard = dotnet_value::BorrowGuard::new(ctx);
+                    let inner = handle.borrow();
+                    match &inner.storage {
+                        HeapStorage::Str(s) => {
+                            for i in 0..current_chunk_size {
+                                let c = s[offset + i];
+                                if !char::from_u32(c as u32).map(|c| c.is_whitespace()).unwrap_or(false) {
+                                    all_white = false;
+                                    break;
+                                }
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+
+                if !all_white {
+                    break;
+                }
+
+                offset += current_chunk_size;
+                if offset < len {
+                    ctx.check_gc_safe_point();
+                }
+            }
+            all_white
+        }
     };
+    ctx.pop();
     ctx.push_i32(is_null_or_white_space as i32);
     StepResult::Continue
 }

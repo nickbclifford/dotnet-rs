@@ -51,7 +51,8 @@ pub use crate::{
     pointer::{ManagedPtr, PointerOrigin, UnmanagedPtr},
 };
 pub use dotnet_utils::{
-    ArenaId, ArgumentIndex, ByteOffset, FieldIndex, LocalIndex, StackSlotIndex,
+    ArenaId, ArgumentIndex, BorrowGuard, BorrowScopeOps, ByteOffset, FieldIndex, LocalIndex,
+    StackSlotIndex,
 };
 pub use string::CLRString;
 

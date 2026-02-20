@@ -129,7 +129,6 @@ impl<'gc, 'm> FrameStack<'gc, 'm> {
             let method_name = format!("{:?}", frame.state.info_handle.source);
             shared
                 .tracer
-                .lock()
                 .trace_method_exit(self.len(), &method_name);
         }
 

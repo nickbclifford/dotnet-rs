@@ -5,7 +5,7 @@ use crate::{
     resolution::{TypeResolutionExt, ValueResolution},
     stack::{evaluation_stack::EvaluationStack, frames::FrameStack, ops::*},
     state::{ArenaLocalState, SharedGlobalState},
-    sync::{Arc, MutexGuard},
+    sync::Arc,
     tracer::Tracer,
 };
 use dotnet_types::{
@@ -217,8 +217,8 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    pub(crate) fn tracer(&self) -> MutexGuard<'_, Tracer> {
-        self.shared.tracer.lock()
+    pub(crate) fn tracer(&self) -> &Tracer {
+        &self.shared.tracer
     }
 
     #[inline]
@@ -447,7 +447,7 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn tracer(&self) -> MutexGuard<'_, Tracer> {
+    fn tracer(&self) -> &Tracer {
         self.tracer()
     }
 
@@ -480,7 +480,6 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
                 let addr = gc_arena::Gc::as_ptr(ptr) as usize;
                 self.shared
                     .tracer
-                    .lock()
                     .trace_gc_finalization(self.indent(), &type_name, addr);
             }
 
