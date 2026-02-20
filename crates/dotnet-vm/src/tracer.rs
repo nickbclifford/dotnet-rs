@@ -9,12 +9,12 @@ use std::{
     env,
     fmt::Arguments,
     fs::File,
-    io::{stderr, stdout, Write},
+    io::{Write, stderr, stdout},
     sync::Once,
     thread,
 };
-use tracing::{debug, error, info, trace, Level};
-use tracing_subscriber::{fmt, prelude::*, EnvFilter, Registry};
+use tracing::{Level, debug, error, info, trace};
+use tracing_subscriber::{EnvFilter, Registry, fmt, prelude::*};
 
 static INIT: Once = Once::new();
 
@@ -103,15 +103,13 @@ impl Tracer {
     fn flusher(receiver: Receiver<LogEntry>) {
         while let Ok(entry) = receiver.recv() {
             match entry {
-                LogEntry::Msg(level, _indent, msg) => {
-                    match level {
-                        TraceLevel::Error => error!("{}", msg),
-                        TraceLevel::Info => info!("{}", msg),
-                        TraceLevel::Debug => debug!("{}", msg),
-                        TraceLevel::Trace => debug!("{}", msg),
-                        TraceLevel::Instruction => trace!("{}", msg),
-                    }
-                }
+                LogEntry::Msg(level, _indent, msg) => match level {
+                    TraceLevel::Error => error!("{}", msg),
+                    TraceLevel::Info => info!("{}", msg),
+                    TraceLevel::Debug => debug!("{}", msg),
+                    TraceLevel::Trace => debug!("{}", msg),
+                    TraceLevel::Instruction => trace!("{}", msg),
+                },
                 LogEntry::Instruction(indent, ip, instruction) => {
                     let padding = " ".repeat(indent * 2);
                     trace!(target: "instruction", frame = indent, "[IP:{:04}] {}{}", ip, padding, instruction);
@@ -215,12 +213,23 @@ impl Tracer {
                         debug!("║ [{:4}] {}", idx, content);
                     }
                 }
-                LogEntry::DumpFrame(frame_idx, method_name, ip, args_base, locals_base, stack_base, stack_height) => {
+                LogEntry::DumpFrame(
+                    frame_idx,
+                    method_name,
+                    ip,
+                    args_base,
+                    locals_base,
+                    stack_base,
+                    stack_height,
+                ) => {
                     debug!("FRAME #{} - {}", frame_idx, method_name);
                     debug!("║ IP:           {:04}", ip);
                     debug!("║ Arguments:    base = {}", args_base);
                     debug!("║ Locals:       base = {}", locals_base);
-                    debug!("║ Stack:        base = {}, height = {}", stack_base, stack_height);
+                    debug!(
+                        "║ Stack:        base = {}, height = {}",
+                        stack_base, stack_height
+                    );
                 }
                 LogEntry::DumpHeapObject(ptr_addr, obj_type, details) => {
                     debug!("OBJECT @ {:#x} ({})", ptr_addr, obj_type);
@@ -242,11 +251,23 @@ impl Tracer {
                     debug!("=== STATICS SNAPSHOT END ===");
                 }
                 LogEntry::DumpFullStateHeader => {
-                    debug!("╔══════════════════════════════════════════════════════════════════════════════╗");
-                    debug!("║ FULL RUNTIME STATE SNAPSHOT                                                  ║");
-                    debug!("╚══════════════════════════════════════════════════════════════════════════════╝");
+                    debug!(
+                        "╔══════════════════════════════════════════════════════════════════════════════╗"
+                    );
+                    debug!(
+                        "║ FULL RUNTIME STATE SNAPSHOT                                                  ║"
+                    );
+                    debug!(
+                        "╚══════════════════════════════════════════════════════════════════════════════╝"
+                    );
                 }
-                LogEntry::DumpGcStats(finalization_queue, pending_finalization, pinned_objects, gc_handles, all_objects) => {
+                LogEntry::DumpGcStats(
+                    finalization_queue,
+                    pending_finalization,
+                    pinned_objects,
+                    gc_handles,
+                    all_objects,
+                ) => {
                     debug!("║ GC Statistics:");
                     debug!("║   Finalization Queue:   {:>12}", finalization_queue);
                     debug!("║   Pending Finalizers:   {:>12}", pending_finalization);
@@ -254,7 +275,13 @@ impl Tracer {
                     debug!("║   GC Handles:           {:>12}", gc_handles);
                     debug!("║   Total Managed Objects:{:>12}", all_objects);
                 }
-                LogEntry::DumpRuntimeMetrics(gc_count, gc_total_us, lock_count, lock_total_us, stats) => {
+                LogEntry::DumpRuntimeMetrics(
+                    gc_count,
+                    gc_total_us,
+                    lock_count,
+                    lock_total_us,
+                    stats,
+                ) => {
                     debug!("║ Runtime Metrics:");
                     debug!("║   GC Pause Count:       {:>12}", gc_count);
                     debug!("║   GC Pause Total:       {:>12} μs", gc_total_us);
@@ -294,7 +321,11 @@ impl Tracer {
     }
 
     pub fn trace_method_entry(&self, indent: usize, name: &str, signature: &str) {
-        self.send(LogEntry::MethodEntry(indent, name.to_string(), signature.to_string()));
+        self.send(LogEntry::MethodEntry(
+            indent,
+            name.to_string(),
+            signature.to_string(),
+        ));
     }
 
     pub fn trace_method_exit(&self, indent: usize, name: &str) {
@@ -302,11 +333,19 @@ impl Tracer {
     }
 
     pub fn trace_exception(&self, indent: usize, exception: &str, location: &str) {
-        self.send(LogEntry::Exception(indent, exception.to_string(), location.to_string()));
+        self.send(LogEntry::Exception(
+            indent,
+            exception.to_string(),
+            location.to_string(),
+        ));
     }
 
     pub fn trace_gc_event(&self, indent: usize, event: &str, details: &str) {
-        self.send(LogEntry::GcEvent(indent, event.to_string(), details.to_string()));
+        self.send(LogEntry::GcEvent(
+            indent,
+            event.to_string(),
+            details.to_string(),
+        ));
     }
 
     pub fn trace_stack_op(&self, indent: usize, op: &str, value: &str) {
@@ -314,28 +353,54 @@ impl Tracer {
     }
 
     pub fn trace_field_access(&self, indent: usize, op: &str, field: &str, value: &str) {
-        self.send(LogEntry::FieldAccess(indent, op.to_string(), field.to_string(), value.to_string()));
+        self.send(LogEntry::FieldAccess(
+            indent,
+            op.to_string(),
+            field.to_string(),
+            value.to_string(),
+        ));
     }
 
     pub fn trace_branch(&self, indent: usize, branch_type: &str, target: usize, taken: bool) {
-        self.send(LogEntry::Branch(indent, branch_type.to_string(), target, taken));
+        self.send(LogEntry::Branch(
+            indent,
+            branch_type.to_string(),
+            target,
+            taken,
+        ));
     }
 
     pub fn trace_type_info(&self, indent: usize, operation: &str, type_name: &str) {
-        self.send(LogEntry::TypeInfo(indent, operation.to_string(), type_name.to_string()));
+        self.send(LogEntry::TypeInfo(
+            indent,
+            operation.to_string(),
+            type_name.to_string(),
+        ));
     }
 
     pub fn trace_intrinsic(&self, indent: usize, operation: &str, details: &str) {
-        self.send(LogEntry::Intrinsic(indent, operation.to_string(), details.to_string()));
+        self.send(LogEntry::Intrinsic(
+            indent,
+            operation.to_string(),
+            details.to_string(),
+        ));
     }
 
     pub fn trace_interop(&self, indent: usize, operation: &str, details: &str) {
-        self.send(LogEntry::Interop(indent, operation.to_string(), details.to_string()));
+        self.send(LogEntry::Interop(
+            indent,
+            operation.to_string(),
+            details.to_string(),
+        ));
     }
 
     // GC Helpers
     pub fn trace_gc_collection_start(&self, indent: usize, generation: usize, reason: &str) {
-        self.send(LogEntry::GcCollectionStart(indent, generation, reason.to_string()));
+        self.send(LogEntry::GcCollectionStart(
+            indent,
+            generation,
+            reason.to_string(),
+        ));
     }
 
     pub fn trace_gc_collection_end(
@@ -345,25 +410,37 @@ impl Tracer {
         collected: usize,
         duration_us: u64,
     ) {
-        self.send(LogEntry::GcCollectionEnd(indent, generation, collected, duration_us));
+        self.send(LogEntry::GcCollectionEnd(
+            indent,
+            generation,
+            collected,
+            duration_us,
+        ));
     }
 
     pub fn trace_gc_allocation(&self, indent: usize, type_name: &str, size_bytes: usize) {
-        self.send(LogEntry::GcAllocation(indent, type_name.to_string(), size_bytes));
+        self.send(LogEntry::GcAllocation(
+            indent,
+            type_name.to_string(),
+            size_bytes,
+        ));
     }
 
     pub fn trace_gc_finalization(&self, indent: usize, obj_type: &str, obj_addr: usize) {
-        self.send(LogEntry::GcFinalization(indent, obj_type.to_string(), obj_addr));
+        self.send(LogEntry::GcFinalization(
+            indent,
+            obj_type.to_string(),
+            obj_addr,
+        ));
     }
 
-    pub fn trace_gc_handle(
-        &self,
-        indent: usize,
-        operation: &str,
-        handle_type: &str,
-        addr: usize,
-    ) {
-        self.send(LogEntry::GcHandle(indent, operation.to_string(), handle_type.to_string(), addr));
+    pub fn trace_gc_handle(&self, indent: usize, operation: &str, handle_type: &str, addr: usize) {
+        self.send(LogEntry::GcHandle(
+            indent,
+            operation.to_string(),
+            handle_type.to_string(),
+            addr,
+        ));
     }
 
     pub fn trace_gc_pin(&self, indent: usize, operation: &str, obj_addr: usize) {
@@ -371,21 +448,24 @@ impl Tracer {
     }
 
     pub fn trace_gc_weak_ref(&self, indent: usize, operation: &str, handle_id: usize) {
-        self.send(LogEntry::GcWeakRef(indent, operation.to_string(), handle_id));
+        self.send(LogEntry::GcWeakRef(
+            indent,
+            operation.to_string(),
+            handle_id,
+        ));
     }
 
     pub fn trace_gc_resurrection(&self, indent: usize, obj_type: &str, obj_addr: usize) {
-        self.send(LogEntry::GcResurrection(indent, obj_type.to_string(), obj_addr));
+        self.send(LogEntry::GcResurrection(
+            indent,
+            obj_type.to_string(),
+            obj_addr,
+        ));
     }
 
     // Threading Helpers
     #[cfg(feature = "multithreading")]
-    pub fn trace_thread_create(
-        &self,
-        indent: usize,
-        thread_id: dotnet_utils::ArenaId,
-        name: &str,
-    ) {
+    pub fn trace_thread_create(&self, indent: usize, thread_id: dotnet_utils::ArenaId, name: &str) {
         self.send(LogEntry::ThreadCreate(indent, thread_id, name.to_string()));
     }
 
@@ -406,7 +486,11 @@ impl Tracer {
         thread_id: dotnet_utils::ArenaId,
         location: &str,
     ) {
-        self.send(LogEntry::ThreadSafepoint(indent, thread_id, location.to_string()));
+        self.send(LogEntry::ThreadSafepoint(
+            indent,
+            thread_id,
+            location.to_string(),
+        ));
     }
 
     #[cfg(feature = "multithreading")]
@@ -416,7 +500,11 @@ impl Tracer {
         thread_id: dotnet_utils::ArenaId,
         reason: &str,
     ) {
-        self.send(LogEntry::ThreadSuspend(indent, thread_id, reason.to_string()));
+        self.send(LogEntry::ThreadSuspend(
+            indent,
+            thread_id,
+            reason.to_string(),
+        ));
     }
 
     #[cfg(feature = "multithreading")]
@@ -442,7 +530,12 @@ impl Tracer {
         old_state: &str,
         new_state: &str,
     ) {
-        self.send(LogEntry::ThreadState(indent, thread_id, old_state.to_string(), new_state.to_string()));
+        self.send(LogEntry::ThreadState(
+            indent,
+            thread_id,
+            old_state.to_string(),
+            new_state.to_string(),
+        ));
     }
 
     #[cfg(feature = "multithreading")]
@@ -453,16 +546,20 @@ impl Tracer {
         operation: &str,
         obj_addr: usize,
     ) {
-        self.send(LogEntry::ThreadSync(indent, thread_id, operation.to_string(), obj_addr));
+        self.send(LogEntry::ThreadSync(
+            indent,
+            thread_id,
+            operation.to_string(),
+            obj_addr,
+        ));
     }
 
     // Snapshots
-    pub fn dump_stack_state(
-        &self,
-        stack_contents: &[String],
-        frame_markers: &[(usize, String)],
-    ) {
-        self.send(LogEntry::DumpStack(stack_contents.to_vec(), frame_markers.to_vec()));
+    pub fn dump_stack_state(&self, stack_contents: &[String], frame_markers: &[(usize, String)]) {
+        self.send(LogEntry::DumpStack(
+            stack_contents.to_vec(),
+            frame_markers.to_vec(),
+        ));
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -476,11 +573,23 @@ impl Tracer {
         stack_base: usize,
         stack_height: usize,
     ) {
-        self.send(LogEntry::DumpFrame(frame_idx, method_name.to_string(), ip, args_base, locals_base, stack_base, stack_height));
+        self.send(LogEntry::DumpFrame(
+            frame_idx,
+            method_name.to_string(),
+            ip,
+            args_base,
+            locals_base,
+            stack_base,
+            stack_height,
+        ));
     }
 
     pub fn dump_heap_object(&self, ptr_addr: usize, obj_type: &str, details: &str) {
-        self.send(LogEntry::DumpHeapObject(ptr_addr, obj_type.to_string(), details.to_string()));
+        self.send(LogEntry::DumpHeapObject(
+            ptr_addr,
+            obj_type.to_string(),
+            details.to_string(),
+        ));
     }
 
     pub fn dump_heap_snapshot_start(&self, object_count: usize) {
@@ -507,12 +616,18 @@ impl Tracer {
         gc_handles: usize,
         all_objects: usize,
     ) {
-        self.send(LogEntry::DumpGcStats(finalization_queue, pending_finalization, pinned_objects, gc_handles, all_objects));
+        self.send(LogEntry::DumpGcStats(
+            finalization_queue,
+            pending_finalization,
+            pinned_objects,
+            gc_handles,
+            all_objects,
+        ));
     }
 
     pub fn dump_runtime_metrics(&self, metrics: &RuntimeMetrics) {
-        use std::sync::atomic::Ordering;
         use crate::metrics::CacheSizes;
+        use std::sync::atomic::Ordering;
 
         let gc_pause_total = metrics.gc_pause_total_us.load(Ordering::Relaxed);
         let gc_pause_count = metrics.gc_pause_count.load(Ordering::Relaxed);

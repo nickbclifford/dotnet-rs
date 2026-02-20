@@ -127,9 +127,7 @@ impl<'gc, 'm> FrameStack<'gc, 'm> {
 
         if tracer_enabled {
             let method_name = format!("{:?}", frame.state.info_handle.source);
-            shared
-                .tracer
-                .trace_method_exit(self.len(), &method_name);
+            shared.tracer.trace_method_exit(self.len(), &method_name);
         }
 
         if frame.state.info_handle.is_cctor {

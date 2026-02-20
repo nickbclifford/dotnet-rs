@@ -21,11 +21,7 @@
 //! Handlers should typically take a generic parameter `T: VesOps<'gc, 'm> + ?Sized`.
 //! This allows them to work with both `VesContext` and potentially other implementations
 //! for testing or specialized execution.
-use crate::{
-    state::SharedGlobalState,
-    sync::Arc,
-    tracer::Tracer,
-};
+use crate::{state::SharedGlobalState, sync::Arc, tracer::Tracer};
 use dotnet_types::{
     TypeDescription,
     error::TypeResolutionError,

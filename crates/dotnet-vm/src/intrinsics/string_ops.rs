@@ -1,4 +1,8 @@
-use crate::{StepResult, intrinsics::span::{intrinsic_as_span, with_span_data}, stack::ops::VesOps};
+use crate::{
+    StepResult,
+    intrinsics::span::{intrinsic_as_span, with_span_data},
+    stack::ops::VesOps,
+};
 use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{
     TypeDescription,
@@ -179,7 +183,8 @@ pub fn intrinsic_string_ctor_char_array<'gc, 'm: 'gc>(
                             for i in 0..chunk_len {
                                 let c_idx = (offset + i) * 2;
                                 if c_idx + 1 < bytes.len() {
-                                    result.push(u16::from_ne_bytes([bytes[c_idx], bytes[c_idx + 1]]));
+                                    result
+                                        .push(u16::from_ne_bytes([bytes[c_idx], bytes[c_idx + 1]]));
                                 }
                             }
                         }
@@ -301,7 +306,9 @@ pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
 
     let copy_span_chunked =
         |ctx: &mut dyn VesOps<'gc, 'm>, span: Object, dest: &mut Vec<u16>| -> Result<(), String> {
-            let len = with_span_data(ctx, span.clone(), TypeDescription::NULL, 2, |slice| slice.len() / 2)?;
+            let len = with_span_data(ctx, span.clone(), TypeDescription::NULL, 2, |slice| {
+                slice.len() / 2
+            })?;
             let mut offset = 0;
             const CHUNK_SIZE: usize = 1024;
 
@@ -321,12 +328,18 @@ pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
             Ok(())
         };
 
-    vm_try!(copy_span_chunked(ctx, span0, &mut data0)
-        .map_err(crate::error::ExecutionError::NotImplemented));
-    vm_try!(copy_span_chunked(ctx, span1, &mut data1)
-        .map_err(crate::error::ExecutionError::NotImplemented));
-    vm_try!(copy_span_chunked(ctx, span2, &mut data2)
-        .map_err(crate::error::ExecutionError::NotImplemented));
+    vm_try!(
+        copy_span_chunked(ctx, span0, &mut data0)
+            .map_err(crate::error::ExecutionError::NotImplemented)
+    );
+    vm_try!(
+        copy_span_chunked(ctx, span1, &mut data1)
+            .map_err(crate::error::ExecutionError::NotImplemented)
+    );
+    vm_try!(
+        copy_span_chunked(ctx, span2, &mut data2)
+            .map_err(crate::error::ExecutionError::NotImplemented)
+    );
 
     let total_length = data0.len() + data1.len() + data2.len();
     const LARGE_STRING_CONCAT_THRESHOLD: usize = 1024;
@@ -445,7 +458,7 @@ pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
     };
 
     let val = ctx.peek_stack_at(if length.is_some() { 2 } else { 1 });
-    
+
     let result_vec = match &val {
         StackValue::ObjectRef(ObjectRef(Some(handle))) => {
             let s_len = {
@@ -480,7 +493,9 @@ pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
                     let inner = handle.borrow();
                     match &inner.storage {
                         HeapStorage::Str(s) => {
-                            result_vec.extend_from_slice(&s[start_at + offset..start_at + offset + current_chunk]);
+                            result_vec.extend_from_slice(
+                                &s[start_at + offset..start_at + offset + current_chunk],
+                            );
                         }
                         _ => break,
                     }
@@ -557,22 +572,26 @@ pub fn intrinsic_string_is_null_or_white_space<'gc, 'm: 'gc>(
         StackValue::ObjectRef(ObjectRef(None)) => true,
         _ => {
             let obj_ref = str_val.as_object_ref();
-            let Some(handle) = obj_ref.0 else { 
+            let Some(handle) = obj_ref.0 else {
                 // This shouldn't happen given the match arms but we must return StepResult
                 ctx.pop();
                 ctx.push_i32(1);
                 return StepResult::Continue;
             };
-            
+
             let len = {
                 let inner = handle.borrow();
                 match &inner.storage {
                     HeapStorage::Str(s) => s.len(),
-                    _ => return StepResult::Error(
-                        crate::error::ExecutionError::InternalError(
-                            "System.String::IsNullOrWhiteSpace called on non-string object".to_string(),
-                        ).into()
-                    ),
+                    _ => {
+                        return StepResult::Error(
+                            crate::error::ExecutionError::InternalError(
+                                "System.String::IsNullOrWhiteSpace called on non-string object"
+                                    .to_string(),
+                            )
+                            .into(),
+                        );
+                    }
                 }
             };
 
@@ -588,7 +607,10 @@ pub fn intrinsic_string_is_null_or_white_space<'gc, 'm: 'gc>(
                         HeapStorage::Str(s) => {
                             for i in 0..current_chunk_size {
                                 let c = s[offset + i];
-                                if !char::from_u32(c as u32).map(|c| c.is_whitespace()).unwrap_or(false) {
+                                if !char::from_u32(c as u32)
+                                    .map(|c| c.is_whitespace())
+                                    .unwrap_or(false)
+                                {
                                     all_white = false;
                                     break;
                                 }

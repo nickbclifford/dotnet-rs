@@ -148,11 +148,9 @@ impl<'gc> HeapManager<'gc> {
                                 HeapStorage::Boxed(_) => "Boxed".to_string(),
                             };
                             let addr = Gc::as_ptr(ptr) as usize;
-                            shared.tracer.trace_gc_resurrection(
-                                indent,
-                                &obj_type_name,
-                                addr,
-                            );
+                            shared
+                                .tracer
+                                .trace_gc_resurrection(indent, &obj_type_name, addr);
                         }
                         Gc::resurrect(fc, ptr);
                         ptr.borrow().storage.resurrect(fc, &mut resurrected, 0);

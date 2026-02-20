@@ -362,11 +362,15 @@ pub fn intrinsic_memory_extensions_sequence_equal<'gc, 'm: 'gc>(
 
         let a_ptr_info = match read_span_reference(&a) {
             Ok(info) => info,
-            Err(e) => return StepResult::Error(crate::error::ExecutionError::InternalError(e).into()),
+            Err(e) => {
+                return StepResult::Error(crate::error::ExecutionError::InternalError(e).into());
+            }
         };
         let b_ptr_info = match read_span_reference(&b) {
             Ok(info) => info,
-            Err(e) => return StepResult::Error(crate::error::ExecutionError::InternalError(e).into()),
+            Err(e) => {
+                return StepResult::Error(crate::error::ExecutionError::InternalError(e).into());
+            }
         };
 
         let a_mptr = ManagedPtr::from_info_full(a_ptr_info, element_desc, false);
