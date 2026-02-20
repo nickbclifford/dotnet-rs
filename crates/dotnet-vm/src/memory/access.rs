@@ -555,33 +555,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
                             #[cfg(feature = "multithreaded-gc")]
                             if let Some(owner) = _owner {
-                                let owner_tid = owner.owner_id();
-                                match m.origin {
-                                    PointerOrigin::Heap(r) => {
-                                        if let Some(h) = r.0 {
-                                            // SAFETY: During write, we hold a lock on the owner.
-                                            // If h is the same as the owner, we must not call borrow() as it would deadlock.
-                                            // owner_id is immutable after object creation, so we can safely read it via as_ptr().
-                                            let target_tid =
-                                                (*(*gc_arena::Gc::as_ptr(h)).as_ptr()).owner_id;
-                                            if target_tid != owner_tid {
-                                                dotnet_utils::gc::record_cross_arena_ref(
-                                                    target_tid,
-                                                    h.as_ptr() as usize,
-                                                );
-                                            }
-                                        }
-                                    }
-                                    PointerOrigin::CrossArenaObjectRef(p, target_tid) => {
-                                        if target_tid != owner_tid {
-                                            dotnet_utils::gc::record_cross_arena_ref(
-                                                target_tid,
-                                                p.as_ptr() as usize,
-                                            );
-                                        }
-                                    }
-                                    _ => {}
-                                }
+                                self.record_managedptr_cross_arena(&m, owner.owner_id());
                             }
                         } else {
                             return Err("Expected ManagedPtr".into());
@@ -595,15 +569,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
                             #[cfg(feature = "multithreaded-gc")]
                             if let Some(owner) = _owner {
-                                let owner_tid = owner.owner_id();
-                                if let Some((val_ptr, target_tid)) =
-                                    r.as_ptr_info().filter(|&(_, tid)| tid != owner_tid)
-                                {
-                                    dotnet_utils::gc::record_cross_arena_ref(
-                                        target_tid,
-                                        val_ptr.as_ptr() as usize,
-                                    );
-                                }
+                                self.record_objref_cross_arena(r, owner.owner_id());
                             }
                         } else {
                             return Err("Expected ObjectRef".into());
@@ -636,58 +602,15 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         gc: GCHandle<'gc>,
         ptr: *const u8,
         layout: &LayoutManager,
-        owner_tid: dotnet_utils::ArenaId,
+        owner_tid: ArenaId,
     ) {
         match layout {
-            LayoutManager::Scalar(Scalar::ObjectRef) => {
-                let mut buf = [0u8; ObjectRef::SIZE];
-                unsafe {
-                    ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), ObjectRef::SIZE);
-                    let r = ObjectRef::read_branded(&buf, &gc);
-                    if let Some(h) = r.0 {
-                        // SAFETY: owner_id is immutable; use raw access to avoid deadlock with write-locked owner.
-                        let target_tid = (*(*gc_arena::Gc::as_ptr(h)).as_ptr()).owner_id;
-                        if target_tid != owner_tid {
-                            dotnet_utils::gc::record_cross_arena_ref(
-                                target_tid,
-                                h.as_ptr() as usize,
-                            );
-                        }
-                    }
-                }
-            }
-            LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                let info = unsafe {
-                    ManagedPtr::read_branded(std::slice::from_raw_parts(ptr, ManagedPtr::SIZE), &gc)
-                }
-                .expect("record_refs_recursive: failed to read ManagedPtr");
-                match info.origin {
-                    PointerOrigin::Heap(r) => {
-                        if let Some(h) = r.0 {
-                            // SAFETY: owner_id is immutable; use raw access to avoid deadlock with write-locked owner.
-                            let target_tid =
-                                unsafe { (*(*gc_arena::Gc::as_ptr(h)).as_ptr()).owner_id };
-                            if target_tid != owner_tid {
-                                unsafe {
-                                    dotnet_utils::gc::record_cross_arena_ref(
-                                        target_tid,
-                                        h.as_ptr() as usize,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    PointerOrigin::CrossArenaObjectRef(p, target_tid) => {
-                        if target_tid != owner_tid {
-                            dotnet_utils::gc::record_cross_arena_ref(
-                                target_tid,
-                                p.as_ptr() as usize,
-                            );
-                        }
-                    }
-                    _ => {}
-                }
-            }
+            LayoutManager::Scalar(Scalar::ObjectRef) => unsafe {
+                self.record_objref_at_ptr(gc, ptr, owner_tid);
+            },
+            LayoutManager::Scalar(Scalar::ManagedPtr) => unsafe {
+                self.record_managedptr_at_ptr(gc, ptr, owner_tid);
+            },
             LayoutManager::Field(flm) => {
                 for field in flm.fields.values() {
                     if field.layout.is_or_contains_refs() {
@@ -727,7 +650,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         gc: GCHandle<'gc>,
         ptr: *const u8, // Base of the layout
         layout: &LayoutManager,
-        owner_tid: dotnet_utils::ArenaId,
+        owner_tid: ArenaId,
         range_start: usize,
         range_end: usize,
     ) {
@@ -860,6 +783,58 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 }
                 _ => return Err("Array read not supported".to_string()),
             })
+        }
+    }
+
+    #[cfg(feature = "multithreaded-gc")]
+    fn record_objref_cross_arena(&self, r: ObjectRef<'gc>, owner_tid: ArenaId) {
+        if let Some((val_ptr, target_tid)) = r.as_ptr_info().filter(|&(_, tid)| tid != owner_tid) {
+            dotnet_utils::gc::record_cross_arena_ref(target_tid, val_ptr.as_ptr() as usize);
+        }
+    }
+
+    #[cfg(feature = "multithreaded-gc")]
+    unsafe fn record_objref_at_ptr(&self, gc: GCHandle<'gc>, ptr: *const u8, owner_tid: ArenaId) {
+        let mut buf = [0u8; ObjectRef::SIZE];
+        unsafe {
+            ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), ObjectRef::SIZE);
+            let r = ObjectRef::read_branded(&buf, &gc);
+            self.record_objref_cross_arena(r, owner_tid);
+        }
+    }
+
+    #[cfg(feature = "multithreaded-gc")]
+    fn record_managedptr_cross_arena(&self, m: &ManagedPtr<'gc>, owner_tid: ArenaId) {
+        match &m.origin {
+            PointerOrigin::Heap(r) => self.record_objref_cross_arena(*r, owner_tid),
+            PointerOrigin::CrossArenaObjectRef(p, target_tid) => {
+                if *target_tid != owner_tid {
+                    dotnet_utils::gc::record_cross_arena_ref(*target_tid, p.as_ptr() as usize);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[cfg(feature = "multithreaded-gc")]
+    unsafe fn record_managedptr_at_ptr(
+        &self,
+        gc: GCHandle<'gc>,
+        ptr: *const u8,
+        owner_tid: ArenaId,
+    ) {
+        let info = unsafe {
+            ManagedPtr::read_branded(std::slice::from_raw_parts(ptr, ManagedPtr::SIZE), &gc)
+                .expect("record_managedptr_at_ptr: failed to read ManagedPtr")
+        };
+        match &info.origin {
+            PointerOrigin::Heap(r) => self.record_objref_cross_arena(*r, owner_tid),
+            PointerOrigin::CrossArenaObjectRef(p, target_tid) => {
+                if *target_tid != owner_tid {
+                    dotnet_utils::gc::record_cross_arena_ref(*target_tid, p.as_ptr() as usize);
+                }
+            }
+            _ => {}
         }
     }
 }

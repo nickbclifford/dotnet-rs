@@ -93,59 +93,26 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
     }
 
     // Check for multicast targets
-    let multicast_targets = delegate_ref.as_object(|instance| {
-        let multicast_type = ctx
-            .loader()
-            .corlib_type("System.MulticastDelegate")
-            .expect("System.MulticastDelegate must exist");
-
-        // We can't use is_assignable_to easily here because it needs a TypeComparer or similar
-        // Let's use is_delegate_type's logic or just check if it's a MulticastDelegate
-        let mut is_multicast = false;
-        let mut curr = instance.description;
-        loop {
-            let raw_type_name = curr.type_name();
-            if ctx.loader().canonical_type_name(&raw_type_name) == "System.MulticastDelegate" {
-                is_multicast = true;
-                break;
-            }
-            if let Some(parent) = curr.definition().extends.as_ref() {
-                let (ut, _) = decompose_type_source::<MemberType>(parent);
-                let next = ctx
-                    .resolver()
-                    .locate_type(curr.resolution, ut)
-                    .expect("Failed to locate base type");
-                if next == curr {
-                    break;
-                }
-                curr = next;
+    let multicast_targets = if let Some(targets_ref) = get_multicast_targets_ref(ctx, *delegate_ref)
+    {
+        let targets_len = targets_ref.as_vector(|v| v.layout.length);
+        if targets_len > 1 {
+            Some(targets_ref.0.unwrap())
+        } else {
+            // If len == 1, check if it's not 'this'
+            let first_target = targets_ref.as_vector(|v| {
+                let offset = 0;
+                unsafe { ObjectRef::read_branded(&v.get()[offset..], &ctx.gc()) }
+            });
+            if first_target != *delegate_ref {
+                Some(targets_ref.0.unwrap())
             } else {
-                break;
+                None
             }
         }
-
-        if is_multicast {
-            let targets_bytes = instance
-                .instance_storage
-                .get_field_local(multicast_type, "targets");
-            let targets_ref = unsafe { ObjectRef::read_branded(&targets_bytes, &ctx.gc()) };
-            if let Some(targets_handle) = targets_ref.0 {
-                let targets_len = targets_ref.as_vector(|v| v.layout.length);
-                if targets_len > 1 {
-                    return Some(targets_handle);
-                }
-                // If len == 1, check if it's not 'this'
-                let first_target = targets_ref.as_vector(|v| {
-                    let offset = 0;
-                    unsafe { ObjectRef::read_branded(&v.get()[offset..], &ctx.gc()) }
-                });
-                if first_target != *delegate_ref {
-                    return Some(targets_handle);
-                }
-            }
-        }
+    } else {
         None
-    });
+    };
 
     if let Some(targets_handle) = multicast_targets {
         // Push a dummy frame for the current Invoke method

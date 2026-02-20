@@ -131,7 +131,7 @@ impl LayoutManager {
                 unsafe { ObjectRef::read_unchecked(storage) }.trace(cc);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                let info = unsafe { crate::pointer::ManagedPtr::read_unchecked(storage) }
+                let info = unsafe { ManagedPtr::read_unchecked(storage) }
                     .expect("LayoutManager::trace: failed to read ManagedPtr");
                 info.origin.trace(cc);
             }
@@ -161,7 +161,7 @@ impl LayoutManager {
                 unsafe { ObjectRef::read_branded(storage, fc) }.resurrect(fc, visited, depth);
             }
             LayoutManager::Scalar(Scalar::ManagedPtr) => {
-                let info = unsafe { crate::pointer::ManagedPtr::read_branded(storage, fc) }
+                let info = unsafe { ManagedPtr::read_branded(storage, fc) }
                     .expect("LayoutManager::resurrect: failed to read ManagedPtr");
                 info.origin.resurrect(fc, visited, depth);
             }
@@ -296,9 +296,8 @@ impl FieldLayoutManager {
                 if offset + size <= storage.len() {
                     // SAFETY: layout creation ensures this offset is valid and contains a ManagedPtr.
                     // ManagedPtr::read_unchecked is tag-aware and safe to use during GC tracing.
-                    let info =
-                        unsafe { crate::pointer::ManagedPtr::read_unchecked(&storage[offset..]) }
-                            .expect("FieldLayoutManager::trace: failed to read ManagedPtr");
+                    let info = unsafe { ManagedPtr::read_unchecked(&storage[offset..]) }
+                        .expect("FieldLayoutManager::trace: failed to read ManagedPtr");
                     info.origin.trace(cc);
                 }
             }

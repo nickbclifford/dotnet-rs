@@ -137,7 +137,7 @@ impl<'gc> PointerOrigin<'gc> {
         }
     }
 
-    pub fn write_barrier_owner_id(&self) -> Option<crate::ArenaId> {
+    pub fn write_barrier_owner_id(&self) -> Option<ArenaId> {
         match self {
             Self::Heap(r) => r.0.as_ref().map(|h| unsafe { (*h.as_ptr()).owner_id }),
             #[cfg(feature = "multithreaded-gc")]
@@ -147,7 +147,7 @@ impl<'gc> PointerOrigin<'gc> {
     }
 
     #[cfg(feature = "multithreaded-gc")]
-    pub fn write_barrier_owner(&self) -> Option<(crate::object::ObjectPtr, crate::ArenaId)> {
+    pub fn write_barrier_owner(&self) -> Option<(ObjectPtr, ArenaId)> {
         match self {
             Self::Heap(r) => r.as_ptr_info(),
             Self::CrossArenaObjectRef(ptr, tid) => Some((*ptr, *tid)),
@@ -1179,7 +1179,7 @@ mod tests {
                 let base_addr = ptr_raw.expose_addr();
                 // SAFETY: `obj` is kept alive for the duration of this test closure.
                 // We only use this raw pointer to validate serialization/deserialization logic.
-                let ptr_lock = gc_arena::Gc::as_ptr(obj.0.unwrap())
+                let ptr_lock = Gc::as_ptr(obj.0.unwrap())
                     .cast::<ThreadSafeLock<crate::object::ObjectInner<'static>>>();
                 let ptr = unsafe { ObjectPtr::from_raw(ptr_lock).unwrap() };
                 let arena_id = ptr.owner_id();
@@ -1229,9 +1229,7 @@ mod tests {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
         #[cfg(feature = "multithreaded-gc")]
-        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(
-            crate::ArenaId(0),
-        )));
+        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(ArenaId(0))));
 
         arena.mutate(|gc, _root| {
             let _gc_handle = &dotnet_utils::gc::GCHandle::new(
@@ -1239,12 +1237,12 @@ mod tests {
                 #[cfg(feature = "multithreaded-gc")]
                 arena_handle.as_inner(),
                 #[cfg(feature = "memory-validation")]
-                crate::ArenaId(0),
+                ArenaId(0),
             );
             let mut buf = [0u8; ManagedPtr::SIZE];
 
             // 1. Transient origin (Fixed behavior in Stage 1)
-            let layout = std::sync::Arc::new(crate::layout::FieldLayoutManager {
+            let layout = Arc::new(crate::layout::FieldLayoutManager {
                 fields: std::collections::HashMap::new(),
                 total_size: 0,
                 alignment: 1,

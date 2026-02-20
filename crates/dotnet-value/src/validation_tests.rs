@@ -40,7 +40,7 @@ mod tests {
         let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(arena_id)));
         dotnet_utils::gc::register_arena(arena_id);
         arena.mutate(|gc, _root| {
-            dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(arena_id)));
+            dotnet_utils::sync::MANAGED_THREAD_ID.set(Some(arena_id));
             let gc_handle = dotnet_utils::gc::GCHandle::new(gc, arena_handle.as_inner(), arena_id);
             let obj = ObjectRef::new(
                 gc_handle,
@@ -50,7 +50,7 @@ mod tests {
             dotnet_utils::gc::unregister_arena(arena_id);
             let other_id = ArenaId(200);
             dotnet_utils::gc::register_arena(other_id);
-            dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(other_id)));
+            dotnet_utils::sync::MANAGED_THREAD_ID.set(Some(other_id));
             let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                 obj.as_heap_storage(|_| ());
             }));
@@ -69,13 +69,13 @@ mod tests {
         dotnet_utils::gc::register_arena(owner_id);
         dotnet_utils::gc::register_arena(current_id);
         arena.mutate(|gc, _root| {
-            dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(owner_id)));
+            dotnet_utils::sync::MANAGED_THREAD_ID.set(Some(owner_id));
             let gc_handle = dotnet_utils::gc::GCHandle::new(gc, owner_handle.as_inner(), owner_id);
             let obj = ObjectRef::new(
                 gc_handle,
                 HeapStorage::Str(crate::string::CLRString::from("test")),
             );
-            dotnet_utils::sync::MANAGED_THREAD_ID.with(|id| id.set(Some(current_id)));
+            dotnet_utils::sync::MANAGED_THREAD_ID.set(Some(current_id));
             obj.as_heap_storage(|_| ());
             dotnet_utils::gc::set_stw_in_progress(true);
             let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {

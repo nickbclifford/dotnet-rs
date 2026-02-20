@@ -1,6 +1,7 @@
 use crate::{StepResult, resolution::TypeResolutionExt, stack::ops::VesOps};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription, runtime::RuntimeType};
+use dotnet_utils::gc::GCHandle;
 use dotnet_value::{StackValue, object::ObjectRef};
 
 #[dotnet_intrinsic("string System.Reflection.MethodInfo::get_Name()")]
@@ -98,17 +99,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
         ("get_ReturnType" | "GetReturnType", 0) => {
             let obj = ctx.pop_obj();
             let (method, lookup) = ctx.resolve_runtime_method(obj);
-            let res_ctx = ctx.with_generics(&lookup);
-            let rt = match &method.method.signature.return_type.1 {
-                Some(dotnetdll::prelude::ParameterType::Value(t))
-                | Some(dotnetdll::prelude::ParameterType::Ref(t)) => {
-                    ctx.make_runtime_type(&res_ctx, t)
-                }
-                Some(dotnetdll::prelude::ParameterType::TypedReference) => {
-                    RuntimeType::TypedReference
-                }
-                None => RuntimeType::Void,
-            };
+            let rt = resolve_return_type(ctx, &method, &lookup);
             let rt_obj = ctx.get_runtime_type(rt);
             ctx.push_obj(rt_obj);
             Some(StepResult::Continue)
@@ -129,84 +120,14 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                 args.push(this_obj);
             }
 
-            if parameters_obj.0.is_some() {
-                let vector = parameters_obj.as_heap_storage(|s| {
-                    if let dotnet_value::object::HeapStorage::Vec(v) = s {
-                        v.clone()
-                    } else {
-                        panic!("parameters is not an array")
-                    }
-                });
+            let mut invoke_args =
+                match unmarshal_invoke_params(ctx, &gc, &method, &lookup, parameters_obj) {
+                    Ok(a) => a,
+                    Err(res) => return res,
+                };
+            args.append(&mut invoke_args);
 
-                for i in 0..vector.layout.length {
-                    let mut element_bytes = [0u8; ObjectRef::SIZE];
-                    element_bytes.copy_from_slice(
-                        &vector.get()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE],
-                    );
-                    let arg_obj = unsafe { ObjectRef::read_branded(&element_bytes, &gc) };
-
-                    let param_type = match &method.method.signature.parameters[i].1 {
-                        dotnetdll::prelude::ParameterType::Value(t)
-                        | dotnetdll::prelude::ParameterType::Ref(t) => t,
-                        dotnetdll::prelude::ParameterType::TypedReference => {
-                            if arg_obj.0.is_none() {
-                                panic!("TypedReference parameter cannot be null");
-                            }
-                            let val = arg_obj.as_heap_storage(|s| {
-                                if let dotnet_value::object::HeapStorage::Boxed(o) = s {
-                                    let tr_type = ctx
-                                        .loader()
-                                        .corlib_type("System.TypedReference")
-                                        .expect("System.TypedReference must exist");
-                                    ctx.read_cts_value(&tr_type.into(), &o.instance_storage.get())
-                                } else {
-                                    panic!("Expected boxed TypedReference for parameter {}", i)
-                                }
-                            });
-                            args.push(vm_try!(val).into_stack());
-                            continue;
-                        }
-                    };
-                    let res_ctx = ctx.with_generics(&lookup);
-                    let concrete_param_type = vm_try!(ctx.make_concrete(param_type));
-                    let td = ctx
-                        .loader()
-                        .find_concrete_type(concrete_param_type.clone())
-                        .expect("Parameter type must exist for MethodInfo.Invoke");
-
-                    if vm_try!(td.is_value_type(&res_ctx)) {
-                        if arg_obj.0.is_none() {
-                            args.push(StackValue::null());
-                        } else {
-                            let val = arg_obj.as_heap_storage(|s| {
-                                if let dotnet_value::object::HeapStorage::Boxed(o) = s {
-                                    ctx.read_cts_value(
-                                        &concrete_param_type,
-                                        &o.instance_storage.get(),
-                                    )
-                                } else {
-                                    panic!("Expected boxed value for parameter {}", i)
-                                }
-                            });
-                            args.push(vm_try!(val).into_stack());
-                        }
-                    } else {
-                        args.push(StackValue::ObjectRef(arg_obj));
-                    }
-                }
-            }
-
-            let res_ctx = ctx.with_generics(&lookup);
-            let return_type = match &method.method.signature.return_type.1 {
-                Some(dotnetdll::prelude::ParameterType::Value(t))
-                | Some(dotnetdll::prelude::ParameterType::Ref(t)) => {
-                    ctx.make_runtime_type(&res_ctx, t)
-                }
-                Some(dotnetdll::prelude::ParameterType::TypedReference) => {
-                    RuntimeType::TypedReference
-                }
-                None => RuntimeType::Void,
-            };
+            let return_type = resolve_return_type(ctx, &method, &lookup);
             ctx.frame_stack_mut()
                 .current_frame_mut()
                 .awaiting_invoke_return = Some(return_type);
@@ -234,72 +155,12 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
             let mut args = Vec::new();
             args.push(StackValue::ObjectRef(this_obj));
 
-            if parameters_obj.0.is_some() {
-                let vector = parameters_obj.as_heap_storage(|s| {
-                    if let dotnet_value::object::HeapStorage::Vec(v) = s {
-                        v.clone()
-                    } else {
-                        panic!("parameters is not an array")
-                    }
-                });
-
-                for i in 0..vector.layout.length {
-                    let mut element_bytes = [0u8; ObjectRef::SIZE];
-                    element_bytes.copy_from_slice(
-                        &vector.get()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE],
-                    );
-                    let arg_obj = unsafe { ObjectRef::read_branded(&element_bytes, &gc) };
-
-                    let param_type = match &method.method.signature.parameters[i].1 {
-                        dotnetdll::prelude::ParameterType::Value(t)
-                        | dotnetdll::prelude::ParameterType::Ref(t) => t,
-                        dotnetdll::prelude::ParameterType::TypedReference => {
-                            if arg_obj.0.is_none() {
-                                panic!("TypedReference parameter cannot be null");
-                            }
-                            let val = arg_obj.as_heap_storage(|s| {
-                                if let dotnet_value::object::HeapStorage::Boxed(o) = s {
-                                    let tr_type = ctx
-                                        .loader()
-                                        .corlib_type("System.TypedReference")
-                                        .expect("System.TypedReference must exist");
-                                    ctx.read_cts_value(&tr_type.into(), &o.instance_storage.get())
-                                } else {
-                                    panic!("Expected boxed TypedReference for parameter {}", i)
-                                }
-                            });
-                            args.push(vm_try!(val).into_stack());
-                            continue;
-                        }
-                    };
-                    let res_ctx = ctx.with_generics(&lookup);
-                    let concrete_param_type = vm_try!(ctx.make_concrete(param_type));
-                    let td = ctx
-                        .loader()
-                        .find_concrete_type(concrete_param_type.clone())
-                        .expect("Parameter type must exist for ConstructorInfo.Invoke");
-
-                    if vm_try!(td.is_value_type(&res_ctx)) {
-                        if arg_obj.0.is_none() {
-                            args.push(StackValue::null());
-                        } else {
-                            let val = arg_obj.as_heap_storage(|s| {
-                                if let dotnet_value::object::HeapStorage::Boxed(o) = s {
-                                    ctx.read_cts_value(
-                                        &concrete_param_type,
-                                        &o.instance_storage.get(),
-                                    )
-                                } else {
-                                    panic!("Expected boxed value for parameter {}", i)
-                                }
-                            });
-                            args.push(vm_try!(val).into_stack());
-                        }
-                    } else {
-                        args.push(StackValue::ObjectRef(arg_obj));
-                    }
-                }
-            }
+            let mut invoke_args =
+                match unmarshal_invoke_params(ctx, &gc, &method, &lookup, parameters_obj) {
+                    Ok(a) => a,
+                    Err(res) => return res,
+                };
+            args.append(&mut invoke_args);
 
             ctx.frame_stack_mut()
                 .current_frame_mut()
@@ -340,4 +201,107 @@ pub fn intrinsic_method_handle_get_function_pointer<'gc, 'm: 'gc>(
     let index = ctx.get_runtime_method_index(method, lookup);
     ctx.push_isize(index as isize);
     StepResult::Continue
+}
+
+fn resolve_return_type<'gc, 'm>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    method: &MethodDescription,
+    lookup: &GenericLookup,
+) -> RuntimeType {
+    let res_ctx = ctx.with_generics(lookup);
+    match &method.method.signature.return_type.1 {
+        Some(dotnetdll::prelude::ParameterType::Value(t))
+        | Some(dotnetdll::prelude::ParameterType::Ref(t)) => ctx.make_runtime_type(&res_ctx, t),
+        Some(dotnetdll::prelude::ParameterType::TypedReference) => RuntimeType::TypedReference,
+        None => RuntimeType::Void,
+    }
+}
+
+fn unmarshal_invoke_params<'gc, 'm>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    gc: &GCHandle<'gc>,
+    method: &MethodDescription,
+    lookup: &GenericLookup,
+    parameters_obj: ObjectRef<'gc>,
+) -> Result<Vec<StackValue<'gc>>, StepResult> {
+    let mut args = Vec::new();
+
+    if parameters_obj.0.is_some() {
+        let vector = parameters_obj.as_heap_storage(|s| {
+            if let dotnet_value::object::HeapStorage::Vec(v) = s {
+                v.clone()
+            } else {
+                panic!("parameters is not an array")
+            }
+        });
+
+        for i in 0..vector.layout.length {
+            let mut element_bytes = [0u8; ObjectRef::SIZE];
+            element_bytes
+                .copy_from_slice(&vector.get()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
+            let arg_obj = unsafe { ObjectRef::read_branded(&element_bytes, gc) };
+
+            let param_type = match &method.method.signature.parameters[i].1 {
+                dotnetdll::prelude::ParameterType::Value(t)
+                | dotnetdll::prelude::ParameterType::Ref(t) => t,
+                dotnetdll::prelude::ParameterType::TypedReference => {
+                    if arg_obj.0.is_none() {
+                        panic!("TypedReference parameter cannot be null");
+                    }
+                    let val = arg_obj.as_heap_storage(|s| {
+                        if let dotnet_value::object::HeapStorage::Boxed(o) = s {
+                            let tr_type = ctx
+                                .loader()
+                                .corlib_type("System.TypedReference")
+                                .expect("System.TypedReference must exist");
+                            ctx.read_cts_value(&tr_type.into(), &o.instance_storage.get())
+                        } else {
+                            panic!("Expected boxed TypedReference for parameter {}", i)
+                        }
+                    });
+                    match val {
+                        Ok(v) => {
+                            args.push(v.into_stack());
+                            continue;
+                        }
+                        Err(e) => return Err(StepResult::Error(e.into())),
+                    }
+                }
+            };
+            let res_ctx = ctx.with_generics(lookup);
+            let concrete_param_type = match ctx.make_concrete(param_type) {
+                Ok(v) => v,
+                Err(e) => return Err(StepResult::Error(e.into())),
+            };
+            let td = ctx
+                .loader()
+                .find_concrete_type(concrete_param_type.clone())
+                .expect("Parameter type must exist for MethodInfo.Invoke");
+
+            if match td.is_value_type(&res_ctx) {
+                Ok(v) => v,
+                Err(e) => return Err(StepResult::Error(e.into())),
+            } {
+                if arg_obj.0.is_none() {
+                    args.push(StackValue::null());
+                } else {
+                    let val = arg_obj.as_heap_storage(|s| {
+                        if let dotnet_value::object::HeapStorage::Boxed(o) = s {
+                            ctx.read_cts_value(&concrete_param_type, &o.instance_storage.get())
+                        } else {
+                            panic!("Expected boxed value for parameter {}", i)
+                        }
+                    });
+                    match val {
+                        Ok(v) => args.push(v.into_stack()),
+                        Err(e) => return Err(StepResult::Error(e.into())),
+                    }
+                }
+            } else {
+                args.push(StackValue::ObjectRef(arg_obj));
+            }
+        }
+    }
+
+    Ok(args)
 }

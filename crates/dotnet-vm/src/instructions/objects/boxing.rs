@@ -71,7 +71,7 @@ pub fn unbox_any<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
                         Ok(cts.into_stack())
                     } else if td.definition().namespace.as_deref() == Some("System") {
                         let name = &td.definition().name;
-                        match name.as_ref() as &str {
+                        match name.as_ref() {
                             "Boolean" | "Char" | "SByte" | "Byte" | "Int16" | "UInt16"
                             | "Int32" | "UInt32" | "Int64" | "UInt64" | "Single" | "Double"
                             | "IntPtr" | "UIntPtr" => {

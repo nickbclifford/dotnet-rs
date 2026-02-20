@@ -107,7 +107,7 @@ runtime_type_impls! {
         Type(td) => ConcreteType::from(*td),
         Generic(td, args) => {
             let source = TypeSource::Generic {
-                base: dotnetdll::prelude::UserType::Definition(td.index),
+                base: UserType::Definition(td.index),
                 parameters: args.iter().map(|a| a.to_concrete(loader)).collect(),
             };
             ConcreteType::new(

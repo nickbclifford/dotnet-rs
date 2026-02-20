@@ -157,11 +157,7 @@ impl ObjectPtr {
         inner.storage.with_data(f)
     }
 
-    pub fn with_data_mut<T>(
-        &self,
-        _gc: dotnet_utils::gc::GCHandle<'_>,
-        f: impl FnOnce(&mut [u8]) -> T,
-    ) -> T {
+    pub fn with_data_mut<T>(&self, _gc: GCHandle<'_>, f: impl FnOnce(&mut [u8]) -> T) -> T {
         // SAFETY: We have GCHandle which proves we are in a mutation context.
         // Even if the object is in another arena, we can still write to its storage
         // because we hold the ThreadSafeLock.
@@ -446,7 +442,7 @@ impl<'gc> ObjectRef<'gc> {
                     // 2. We use raw pointer access to avoid deadlocking with the write lock on the owner object.
                     //    The owner_id is immutable after object creation.
                     let current_id = get_current_thread_id();
-                    let owner_id = unsafe { (*(*gc_arena::Gc::as_ptr(s)).as_ptr()).owner_id };
+                    let owner_id = unsafe { (*(*Gc::as_ptr(s)).as_ptr()).owner_id };
                     if owner_id != current_id && owner_id != ArenaId::INVALID {
                         // This is a cross-arena reference - tag it with Tag 5
                         // The pointer must have low bits clear (it's allocated by gc-arena)

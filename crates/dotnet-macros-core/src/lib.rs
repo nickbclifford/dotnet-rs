@@ -97,55 +97,8 @@ pub fn parse_type(input: ParseStream) -> Result<String> {
         }
     }
 
-    let mut segments = Vec::new();
-    let mut separators = Vec::new();
-
-    loop {
-        let ident: Ident = input.call(Ident::parse_any)?;
-        let mut segment = ident.to_string();
-
-        // Check for generics <T, U> -> `2
-        let count = parse_generic_args_count(input)?;
-        if count > 0 {
-            segment.push('`');
-            segment.push_str(&count.to_string());
-        }
-
-        segments.push(segment);
-
-        if input.peek(Token![.]) {
-            input.parse::<Token![.]>()?;
-            separators.push('.');
-            continue;
-        } else if input.peek(Token![/]) {
-            input.parse::<Token![/]>()?;
-            separators.push('+');
-            continue;
-        } else if input.peek(Token![+]) {
-            input.parse::<Token![+]>()?;
-            separators.push('+');
-            continue;
-        } else {
-            break;
-        }
-    }
-
-    let mut suffix = String::new();
-    loop {
-        if input.peek(syn::token::Bracket) {
-            let _content;
-            syn::bracketed!(_content in input);
-            suffix.push_str("[]");
-        } else if input.peek(Token![&]) {
-            input.parse::<Token![&]>()?;
-            suffix.push('&');
-        } else if input.peek(Token![*]) {
-            input.parse::<Token![*]>()?;
-            suffix.push('*');
-        } else {
-            break;
-        }
-    }
+    let (segments, separators) = parse_dotted_segments(input)?;
+    let suffix = parse_type_suffix(input)?;
 
     // Normalize only if all separators were '.'
     let mut type_name = if separators.iter().all(|&c| c == '.') {
@@ -212,6 +165,19 @@ pub fn parse_type(input: ParseStream) -> Result<String> {
 }
 
 pub fn parse_class_name(input: ParseStream) -> Result<String> {
+    let (segments, separators) = parse_dotted_segments(input)?;
+    let suffix = parse_type_suffix(input)?;
+
+    let mut res = segments[0].clone();
+    for i in 0..separators.len() {
+        res.push(separators[i]);
+        res.push_str(&segments[i + 1]);
+    }
+    res.push_str(&suffix);
+    Ok(res)
+}
+
+fn parse_dotted_segments(input: ParseStream) -> Result<(Vec<String>, Vec<char>)> {
     let mut segments = Vec::new();
     let mut separators = Vec::new();
 
@@ -219,7 +185,7 @@ pub fn parse_class_name(input: ParseStream) -> Result<String> {
         let ident: Ident = input.call(Ident::parse_any)?;
         let mut segment = ident.to_string();
 
-        // Generics
+        // Check for generics <T, U> -> `2
         let count = parse_generic_args_count(input)?;
         if count > 0 {
             segment.push('`');
@@ -244,7 +210,10 @@ pub fn parse_class_name(input: ParseStream) -> Result<String> {
             break;
         }
     }
+    Ok((segments, separators))
+}
 
+fn parse_type_suffix(input: ParseStream) -> Result<String> {
     let mut suffix = String::new();
     loop {
         if input.peek(syn::token::Bracket) {
@@ -261,14 +230,7 @@ pub fn parse_class_name(input: ParseStream) -> Result<String> {
             break;
         }
     }
-
-    let mut res = segments[0].clone();
-    for i in 0..separators.len() {
-        res.push(separators[i]);
-        res.push_str(&segments[i + 1]);
-    }
-    res.push_str(&suffix);
-    Ok(res)
+    Ok(suffix)
 }
 
 pub fn parse_generic_args_count(input: ParseStream) -> Result<usize> {

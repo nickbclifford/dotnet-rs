@@ -219,6 +219,40 @@ pub fn with_span_data<'gc, 'm, R>(
     Ok(unsafe { m_ptr.with_data(total_size, f) })
 }
 
+fn chunked_sequence_equal<'gc, 'm>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    a: &ManagedPtr<'gc>,
+    b: &ManagedPtr<'gc>,
+    total_bytes: usize,
+) -> bool {
+    let mut offset = 0;
+    const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
+
+    while offset < total_bytes {
+        let current_chunk = std::cmp::min(CHUNK_SIZE, total_bytes - offset);
+
+        let a_chunk = unsafe { a.clone().offset(offset as isize) };
+        let b_chunk = unsafe { b.clone().offset(offset as isize) };
+
+        let res = unsafe {
+            a_chunk.with_data(current_chunk, |a_slice| {
+                b_chunk.with_data(current_chunk, |b_slice| a_slice == b_slice)
+            })
+        };
+
+        if !res {
+            return false;
+        }
+
+        offset += current_chunk;
+        if offset < total_bytes {
+            ctx.check_gc_safe_point();
+        }
+    }
+
+    true
+}
+
 use dotnet_macros::dotnet_intrinsic;
 
 #[dotnet_intrinsic("void System.Span<T>::.ctor(void*, int)")]
@@ -376,33 +410,8 @@ pub fn intrinsic_memory_extensions_sequence_equal<'gc, 'm: 'gc>(
         let a_mptr = ManagedPtr::from_info_full(a_ptr_info, element_desc, false);
         let b_mptr = ManagedPtr::from_info_full(b_ptr_info, element_desc, false);
 
-        let mut offset = 0;
         let total_bytes = a_len as usize * element_size;
-        const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
-        let mut equal = true;
-
-        while offset < total_bytes {
-            let current_chunk = std::cmp::min(CHUNK_SIZE, total_bytes - offset);
-
-            let a_chunk = unsafe { a_mptr.clone().offset(offset as isize) };
-            let b_chunk = unsafe { b_mptr.clone().offset(offset as isize) };
-
-            let res = unsafe {
-                a_chunk.with_data(current_chunk, |a_slice| {
-                    b_chunk.with_data(current_chunk, |b_slice| a_slice == b_slice)
-                })
-            };
-
-            if !res {
-                equal = false;
-                break;
-            }
-
-            offset += current_chunk;
-            if offset < total_bytes {
-                ctx.check_gc_safe_point();
-            }
-        }
+        let equal = chunked_sequence_equal(ctx, &a_mptr, &b_mptr, total_bytes);
 
         ctx.pop_multiple(2);
         ctx.push_i32(equal as i32);
@@ -490,33 +499,8 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
     let a_mptr = ManagedPtr::from_info_full(a_ptr_info, TypeDescription::NULL, false);
     let b_mptr = ManagedPtr::from_info_full(b_ptr_info, TypeDescription::NULL, false);
 
-    let mut offset = 0;
     let total_bytes = a_len as usize * 2; // char is 2 bytes
-    const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
-    let mut equal = true;
-
-    while offset < total_bytes {
-        let current_chunk = std::cmp::min(CHUNK_SIZE, total_bytes - offset);
-
-        let a_chunk = unsafe { a_mptr.clone().offset(offset as isize) };
-        let b_chunk = unsafe { b_mptr.clone().offset(offset as isize) };
-
-        let res = unsafe {
-            a_chunk.with_data(current_chunk, |a_slice| {
-                b_chunk.with_data(current_chunk, |b_slice| a_slice == b_slice)
-            })
-        };
-
-        if !res {
-            equal = false;
-            break;
-        }
-
-        offset += current_chunk;
-        if offset < total_bytes {
-            ctx.check_gc_safe_point();
-        }
-    }
+    let equal = chunked_sequence_equal(ctx, &a_mptr, &b_mptr, total_bytes);
 
     ctx.push_i32(equal as i32);
     StepResult::Continue
@@ -544,36 +528,23 @@ pub fn intrinsic_span_helpers_sequence_equal<'gc, 'm: 'gc>(
         return StepResult::Continue;
     }
 
-    let mut offset = 0;
-    const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
-    let mut equal = true;
-
-    while offset < length {
-        let current_chunk = std::cmp::min(CHUNK_SIZE, length - offset);
-
-        let a_chunk = unsafe { a.clone().offset(offset as isize) };
-        let b_chunk = unsafe { b.clone().offset(offset as isize) };
-
-        let res = unsafe {
-            a_chunk.with_data(current_chunk, |a_slice| {
-                b_chunk.with_data(current_chunk, |b_slice| a_slice == b_slice)
-            })
-        };
-
-        if !res {
-            equal = false;
-            break;
-        }
-
-        offset += current_chunk;
-        if offset < length {
-            ctx.check_gc_safe_point();
-        }
-    }
+    let equal = chunked_sequence_equal(ctx, &a, &b, length);
 
     ctx.push_i32(equal as i32);
     StepResult::Continue
 }
+fn pop_nonneg_usize<'gc, 'm>(ctx: &mut dyn VesOps<'gc, 'm>) -> Result<usize, StepResult> {
+    match ctx.pop() {
+        StackValue::Int32(i) => {
+            if i < 0 {
+                return Err(ctx.throw_by_name("System.ArgumentOutOfRangeException"));
+            }
+            Ok(i as usize)
+        }
+        _ => Err(ctx.throw_by_name("System.ArgumentException")),
+    }
+}
+
 #[dotnet_intrinsic("static System.ReadOnlySpan<char> System.MemoryExtensions::AsSpan(string)")]
 #[dotnet_intrinsic("static System.ReadOnlySpan<char> System.MemoryExtensions::AsSpan(string, int)")]
 #[dotnet_intrinsic(
@@ -605,35 +576,20 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
     let (start, length_override) = match param_count {
         1 => (0, None),
         2 => {
-            let start = match ctx.pop() {
-                StackValue::Int32(i) => {
-                    if i < 0 {
-                        return ctx.throw_by_name("System.ArgumentOutOfRangeException");
-                    }
-                    i as usize
-                }
-                _ => return ctx.throw_by_name("System.ArgumentException"),
+            let start = match pop_nonneg_usize(ctx) {
+                Ok(v) => v,
+                Err(e) => return e,
             };
             (start, None)
         }
         3 => {
-            let length = match ctx.pop() {
-                StackValue::Int32(i) => {
-                    if i < 0 {
-                        return ctx.throw_by_name("System.ArgumentOutOfRangeException");
-                    }
-                    i as usize
-                }
-                _ => return ctx.throw_by_name("System.ArgumentException"),
+            let length = match pop_nonneg_usize(ctx) {
+                Ok(v) => v,
+                Err(e) => return e,
             };
-            let start = match ctx.pop() {
-                StackValue::Int32(i) => {
-                    if i < 0 {
-                        return ctx.throw_by_name("System.ArgumentOutOfRangeException");
-                    }
-                    i as usize
-                }
-                _ => return ctx.throw_by_name("System.ArgumentException"),
+            let start = match pop_nonneg_usize(ctx) {
+                Ok(v) => v,
+                Err(e) => return e,
             };
             (start, Some(length))
         }

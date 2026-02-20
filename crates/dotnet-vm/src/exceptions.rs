@@ -84,7 +84,7 @@ pub struct ManagedException {
 }
 
 impl fmt::Display for ManagedException {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "Unhandled Exception: {}", self.type_name)?;
         if let Some(msg) = &self.message {
             write!(f, ": {}", msg)?;

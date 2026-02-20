@@ -698,12 +698,12 @@ impl<'gc> Add for StackValue<'gc> {
                 unsafe { ManagedPtr(m.offset(i)) }
             }
             (Int32(i), UnmanagedPtr(u)) | (UnmanagedPtr(u), Int32(i)) => {
-                UnmanagedPtr(crate::pointer::UnmanagedPtr(unsafe {
+                UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
                     NonNull::new_unchecked(u.0.as_ptr().offset(i as isize))
                 }))
             }
             (NativeInt(i), UnmanagedPtr(u)) | (UnmanagedPtr(u), NativeInt(i)) => {
-                UnmanagedPtr(crate::pointer::UnmanagedPtr(unsafe {
+                UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
                     NonNull::new_unchecked(u.0.as_ptr().offset(i))
                 }))
             }
@@ -732,10 +732,10 @@ impl<'gc> Sub for StackValue<'gc> {
                 // ManagedPtr::offset is an unsafe method that requires the resulting pointer to be within bounds.
                 unsafe { ManagedPtr(m.offset(-(i as isize))) }
             }
-            (UnmanagedPtr(u), Int32(i)) => UnmanagedPtr(crate::pointer::UnmanagedPtr(unsafe {
+            (UnmanagedPtr(u), Int32(i)) => UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
                 NonNull::new_unchecked(u.0.as_ptr().offset(-(i as isize)))
             })),
-            (UnmanagedPtr(u), NativeInt(i)) => UnmanagedPtr(crate::pointer::UnmanagedPtr(unsafe {
+            (UnmanagedPtr(u), NativeInt(i)) => UnmanagedPtr(pointer::UnmanagedPtr(unsafe {
                 NonNull::new_unchecked(u.0.as_ptr().offset(-i))
             })),
             (ManagedPtr(m1), ManagedPtr(m2)) => {

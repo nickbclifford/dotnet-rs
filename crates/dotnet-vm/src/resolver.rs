@@ -820,7 +820,7 @@ impl<'m> ResolverService<'m> {
                     {
                         let borrowed = handle.borrow();
                         match &borrowed.storage {
-                            dotnet_value::object::HeapStorage::Obj(obj) => {
+                            HeapStorage::Obj(obj) => {
                                 instance.instance_storage = obj.instance_storage.clone();
                             }
                             _ => panic!("cannot unbox from non-object storage"),
@@ -906,15 +906,13 @@ impl<'m> ResolverService<'m> {
             BaseType::Object
             | BaseType::String
             | BaseType::Vector(_, _)
-            | BaseType::Array(_, _) => Ok(CTSValue::Ref(unsafe {
-                dotnet_value::object::ObjectRef::read_branded(data, &gc)
-            })),
+            | BaseType::Array(_, _) => {
+                Ok(CTSValue::Ref(unsafe { ObjectRef::read_branded(data, &gc) }))
+            }
             BaseType::Type {
                 value_kind: Some(ValueKind::Class),
                 ..
-            } => Ok(CTSValue::Ref(unsafe {
-                dotnet_value::object::ObjectRef::read_branded(data, &gc)
-            })),
+            } => Ok(CTSValue::Ref(unsafe { ObjectRef::read_branded(data, &gc) })),
             BaseType::Type {
                 value_kind: None | Some(ValueKind::ValueType),
                 source,
@@ -925,9 +923,7 @@ impl<'m> ResolverService<'m> {
                 let td = new_ctx.locate_type(ut)?;
 
                 if !td.is_value_type(&new_ctx)? {
-                    return Ok(CTSValue::Ref(unsafe {
-                        dotnet_value::object::ObjectRef::read_branded(data, &gc)
-                    }));
+                    return Ok(CTSValue::Ref(unsafe { ObjectRef::read_branded(data, &gc) }));
                 }
 
                 if let Some(e) = td.is_enum() {
@@ -1047,12 +1043,15 @@ fn convert_num<T: TryFrom<i32> + TryFrom<isize> + TryFrom<usize>>(data: StackVal
         StackValue::NativeInt(i) => i
             .try_into()
             .unwrap_or_else(|_| panic!("failed to convert from isize")),
-        StackValue::UnmanagedPtr(p) => (p.0.as_ptr().expose_addr())
-            .try_into()
-            .unwrap_or_else(|_| panic!("failed to convert from pointer")),
+        StackValue::UnmanagedPtr(p) => {
+            p.0.as_ptr()
+                .expose_addr()
+                .try_into()
+                .unwrap_or_else(|_| panic!("failed to convert from pointer"))
+        }
         StackValue::ManagedPtr(p) => {
             let ptr = unsafe { p.with_data(0, |data| data.as_ptr()) };
-            (ptr.expose_addr())
+            ptr.expose_addr()
                 .try_into()
                 .unwrap_or_else(|_| panic!("failed to convert from pointer"))
         }
