@@ -93,8 +93,8 @@ pub(crate) fn get_runtime_type<'gc, 'm: 'gc>(
 
     let rt = ctx
         .loader()
-        .corlib_type("DotnetRs.RuntimeType")
-        .expect("RuntimeType not found");
+        .corlib_type("System.RuntimeType")
+        .expect("System.RuntimeType not found");
     let rt_obj = ctx
         .new_object(rt)
         .expect("Failed to create RuntimeType object");

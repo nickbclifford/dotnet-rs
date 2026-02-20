@@ -10,6 +10,9 @@ namespace DotnetRs
     }
 }
 
+// NOTE: These types must be in the System namespace for the C# compiler to allow
+// them to be 'ref structs' that interoperate with BCL-expected Span signatures.
+// They are still marked with [Stub] so the runtime treats them as the canonical BCL spans.
 namespace System
 {
     [Stub(InPlaceOf = "System.Span`1")]

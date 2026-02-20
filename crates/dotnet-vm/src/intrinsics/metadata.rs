@@ -128,7 +128,7 @@ pub fn classify_intrinsic(
 ) -> ClassificationResult {
     // 1. Check registry first if available (most efficient and now source of truth)
     if let Some(registry) = registry
-        && let Some(metadata) = registry.get_metadata(&method)
+        && let Some(metadata) = registry.get_metadata(&method, loader)
     {
         return Some(metadata);
     }
@@ -137,7 +137,7 @@ pub fn classify_intrinsic(
     if method.method.internal_call {
         // We still check registry.get(&method) in case it's registered without full metadata
         if let Some(registry) = registry
-            && let Some(handler) = registry.get(&method)
+            && let Some(handler) = registry.get(&method, loader)
         {
             return Some(IntrinsicMetadata::static_intrinsic(
                 handler,

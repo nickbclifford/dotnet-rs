@@ -119,44 +119,44 @@ pub fn intrinsic_type_get_type<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("System.Type[] System.Type::GetGenericArguments()")]
 #[dotnet_intrinsic("System.RuntimeTypeHandle System.Type::get_TypeHandle()")]
 #[dotnet_intrinsic("System.Type System.Type::MakeGenericType(System.Type[])")]
-#[dotnet_intrinsic("string DotnetRs.RuntimeType::get_Name()")]
-#[dotnet_intrinsic("string DotnetRs.RuntimeType::GetName()")]
-#[dotnet_intrinsic("string DotnetRs.RuntimeType::get_Namespace()")]
-#[dotnet_intrinsic("string DotnetRs.RuntimeType::GetNamespace()")]
-#[dotnet_intrinsic("System.Reflection.Assembly DotnetRs.RuntimeType::get_Assembly()")]
-#[dotnet_intrinsic("System.Reflection.Assembly DotnetRs.RuntimeType::GetAssembly()")]
-#[dotnet_intrinsic("System.Type DotnetRs.RuntimeType::get_BaseType()")]
-#[dotnet_intrinsic("System.Type DotnetRs.RuntimeType::GetBaseType()")]
-#[dotnet_intrinsic("bool DotnetRs.RuntimeType::get_IsGenericType()")]
-#[dotnet_intrinsic("bool DotnetRs.RuntimeType::GetIsGenericType()")]
-#[dotnet_intrinsic("System.Type DotnetRs.RuntimeType::get_GenericTypeDefinition()")]
-#[dotnet_intrinsic("System.Type DotnetRs.RuntimeType::GetGenericTypeDefinition()")]
-#[dotnet_intrinsic("System.Type[] DotnetRs.RuntimeType::GetGenericArguments()")]
-#[dotnet_intrinsic("System.RuntimeTypeHandle DotnetRs.RuntimeType::get_TypeHandle()")]
-#[dotnet_intrinsic("System.Type DotnetRs.RuntimeType::MakeGenericType(System.Type[])")]
+#[dotnet_intrinsic("string System.RuntimeType::get_Name()")]
+#[dotnet_intrinsic("string System.RuntimeType::GetName()")]
+#[dotnet_intrinsic("string System.RuntimeType::get_Namespace()")]
+#[dotnet_intrinsic("string System.RuntimeType::GetNamespace()")]
+#[dotnet_intrinsic("System.Reflection.Assembly System.RuntimeType::get_Assembly()")]
+#[dotnet_intrinsic("System.Reflection.Assembly System.RuntimeType::GetAssembly()")]
+#[dotnet_intrinsic("System.Type System.RuntimeType::get_BaseType()")]
+#[dotnet_intrinsic("System.Type System.RuntimeType::GetBaseType()")]
+#[dotnet_intrinsic("bool System.RuntimeType::get_IsGenericType()")]
+#[dotnet_intrinsic("bool System.RuntimeType::GetIsGenericType()")]
+#[dotnet_intrinsic("System.Type System.RuntimeType::get_GenericTypeDefinition()")]
+#[dotnet_intrinsic("System.Type System.RuntimeType::GetGenericTypeDefinition()")]
+#[dotnet_intrinsic("System.Type[] System.RuntimeType::GetGenericArguments()")]
+#[dotnet_intrinsic("System.RuntimeTypeHandle System.RuntimeType::get_TypeHandle()")]
+#[dotnet_intrinsic("System.Type System.RuntimeType::MakeGenericType(System.Type[])")]
 #[dotnet_intrinsic(
-    "System.Reflection.MethodInfo[] DotnetRs.RuntimeType::GetMethods(System.Reflection.BindingFlags)"
+    "System.Reflection.MethodInfo[] System.RuntimeType::GetMethods(System.Reflection.BindingFlags)"
 )]
 #[dotnet_intrinsic(
-    "System.Reflection.MethodInfo DotnetRs.RuntimeType::GetMethodImpl(string, System.Reflection.BindingFlags, System.Reflection.Binder, System.Reflection.CallingConventions, System.Type[], System.Reflection.ParameterModifier[])"
+    "System.Reflection.MethodInfo System.RuntimeType::GetMethodImpl(string, System.Reflection.BindingFlags, System.Reflection.Binder, System.Reflection.CallingConventions, System.Type[], System.Reflection.ParameterModifier[])"
 )]
 #[dotnet_intrinsic(
-    "System.Reflection.ConstructorInfo[] DotnetRs.RuntimeType::GetConstructors(System.Reflection.BindingFlags)"
+    "System.Reflection.ConstructorInfo[] System.RuntimeType::GetConstructors(System.Reflection.BindingFlags)"
 )]
 #[dotnet_intrinsic(
-    "System.Reflection.ConstructorInfo DotnetRs.RuntimeType::GetConstructorImpl(System.Reflection.BindingFlags, System.Reflection.Binder, System.Reflection.CallingConventions, System.Type[], System.Reflection.ParameterModifier[])"
+    "System.Reflection.ConstructorInfo System.RuntimeType::GetConstructorImpl(System.Reflection.BindingFlags, System.Reflection.Binder, System.Reflection.CallingConventions, System.Type[], System.Reflection.ParameterModifier[])"
 )]
 #[dotnet_intrinsic(
-    "System.Reflection.FieldInfo[] DotnetRs.RuntimeType::GetFields(System.Reflection.BindingFlags)"
+    "System.Reflection.FieldInfo[] System.RuntimeType::GetFields(System.Reflection.BindingFlags)"
 )]
 #[dotnet_intrinsic(
-    "System.Reflection.FieldInfo DotnetRs.RuntimeType::GetField(string, System.Reflection.BindingFlags)"
+    "System.Reflection.FieldInfo System.RuntimeType::GetField(string, System.Reflection.BindingFlags)"
 )]
 #[dotnet_intrinsic(
-    "System.Reflection.PropertyInfo[] DotnetRs.RuntimeType::GetProperties(System.Reflection.BindingFlags)"
+    "System.Reflection.PropertyInfo[] System.RuntimeType::GetProperties(System.Reflection.BindingFlags)"
 )]
 #[dotnet_intrinsic(
-    "System.Reflection.PropertyInfo DotnetRs.RuntimeType::GetPropertyImpl(string, System.Reflection.BindingFlags, System.Reflection.Binder, System.Type, System.Type[], System.Reflection.ParameterModifier[])"
+    "System.Reflection.PropertyInfo System.RuntimeType::GetPropertyImpl(string, System.Reflection.BindingFlags, System.Reflection.Binder, System.Type, System.Type[], System.Reflection.ParameterModifier[])"
 )]
 pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
@@ -191,9 +191,6 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic(
     "static void System.RuntimeTypeHandle::GetActivationInfo(System.RuntimeTypeHandle, System.IntPtr&, System.IntPtr&, System.IntPtr&, bool&)"
-)]
-#[dotnet_intrinsic(
-    "static void DotnetRs.RuntimeTypeHandle::GetActivationInfo(DotnetRs.RuntimeTypeHandle, System.IntPtr&, System.IntPtr&, System.IntPtr&, bool&)"
 )]
 pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
@@ -511,9 +508,6 @@ pub fn intrinsic_get_from_handle<'gc, 'm: 'gc>(
 #[dotnet_intrinsic(
     "static System.IntPtr System.RuntimeTypeHandle::ToIntPtr(System.RuntimeTypeHandle)"
 )]
-#[dotnet_intrinsic(
-    "static System.IntPtr DotnetRs.RuntimeTypeHandle::ToIntPtr(DotnetRs.RuntimeTypeHandle)"
-)]
 pub fn intrinsic_type_handle_to_int_ptr<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,
@@ -529,8 +523,8 @@ pub fn intrinsic_type_handle_to_int_ptr<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("bool System.Type::get_IsValueType()")]
-#[dotnet_intrinsic("bool DotnetRs.RuntimeType::get_IsValueType()")]
-#[dotnet_intrinsic("bool DotnetRs.RuntimeType::GetIsValueType()")]
+#[dotnet_intrinsic("bool System.RuntimeType::get_IsValueType()")]
+#[dotnet_intrinsic("bool System.RuntimeType::GetIsValueType()")]
 pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,
@@ -549,8 +543,8 @@ pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("bool System.Type::get_IsEnum()")]
-#[dotnet_intrinsic("bool DotnetRs.RuntimeType::get_IsEnum()")]
-#[dotnet_intrinsic("bool DotnetRs.RuntimeType::GetIsEnum()")]
+#[dotnet_intrinsic("bool System.RuntimeType::get_IsEnum()")]
+#[dotnet_intrinsic("bool System.RuntimeType::GetIsEnum()")]
 pub fn intrinsic_type_get_is_enum<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,
@@ -567,8 +561,8 @@ pub fn intrinsic_type_get_is_enum<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("bool System.Type::get_IsInterface()")]
-#[dotnet_intrinsic("bool DotnetRs.RuntimeType::get_IsInterface()")]
-#[dotnet_intrinsic("bool DotnetRs.RuntimeType::GetIsInterface()")]
+#[dotnet_intrinsic("bool System.RuntimeType::get_IsInterface()")]
+#[dotnet_intrinsic("bool System.RuntimeType::GetIsInterface()")]
 pub fn intrinsic_type_get_is_interface<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,

@@ -321,9 +321,6 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
 #[dotnet_intrinsic(
     "static System.IntPtr System.RuntimeMethodHandle::GetFunctionPointer(System.RuntimeMethodHandle)"
 )]
-#[dotnet_intrinsic(
-    "static System.IntPtr DotnetRs.RuntimeMethodHandle::GetFunctionPointer(DotnetRs.RuntimeMethodHandle)"
-)]
 pub fn intrinsic_method_handle_get_function_pointer<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,

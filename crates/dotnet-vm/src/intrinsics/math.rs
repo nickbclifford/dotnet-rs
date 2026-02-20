@@ -28,7 +28,7 @@ pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let target_type = generics.type_generics[0].clone();
-    let comparer_type_name = "System.Collections.Generic.GenericEqualityComparer`1";
+    let comparer_type_name = "DotnetRs.Comparers.Equality/GenericEqualityComparer`1";
     let comparer_td = vm_try!(ctx.loader().corlib_type(comparer_type_name));
 
     let new_lookup = GenericLookup::new(vec![target_type]);

@@ -23,13 +23,9 @@ pub fn is_delegate_type<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
 ) -> bool {
     loop {
         let definition = td.definition();
-        let type_name = definition.type_name();
+        let raw_type_name = definition.type_name();
+        let type_name = ctx.loader().canonical_type_name(&raw_type_name);
         if type_name == "System.Delegate" || type_name == "System.MulticastDelegate" {
-            return true;
-        }
-
-        // Also check for DotnetRs stubs
-        if type_name == "DotnetRs.Delegate" || type_name == "DotnetRs.MulticastDelegate" {
             return true;
         }
 
@@ -100,17 +96,16 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
     let multicast_targets = delegate_ref.as_object(|instance| {
         let multicast_type = ctx
             .loader()
-            .corlib_type("DotnetRs.MulticastDelegate")
-            .expect("DotnetRs.MulticastDelegate must exist");
+            .corlib_type("System.MulticastDelegate")
+            .expect("System.MulticastDelegate must exist");
 
         // We can't use is_assignable_to easily here because it needs a TypeComparer or similar
         // Let's use is_delegate_type's logic or just check if it's a MulticastDelegate
         let mut is_multicast = false;
         let mut curr = instance.description;
         loop {
-            if curr.type_name() == "DotnetRs.MulticastDelegate"
-                || curr.type_name() == "System.MulticastDelegate"
-            {
+            let raw_type_name = curr.type_name();
+            if ctx.loader().canonical_type_name(&raw_type_name) == "System.MulticastDelegate" {
                 is_multicast = true;
                 break;
             }
@@ -180,8 +175,8 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
     let (target, method_index) = delegate_ref.as_object(|instance| {
         let delegate_type = ctx
             .loader()
-            .corlib_type("DotnetRs.Delegate")
-            .expect("DotnetRs.Delegate must exist");
+            .corlib_type("System.Delegate")
+            .expect("System.Delegate must exist");
 
         // Read Target field
         let target_bytes = instance
@@ -219,7 +214,6 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_intrinsic("object System.Delegate::get_Target()")]
-#[dotnet_intrinsic("object DotnetRs.Delegate::get_Target()")]
 pub fn delegate_get_target<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,
@@ -233,8 +227,8 @@ pub fn delegate_get_target<'gc, 'm: 'gc>(
     let target = this.as_object(|instance| {
         let delegate_type = ctx
             .loader()
-            .corlib_type("DotnetRs.Delegate")
-            .expect("DotnetRs.Delegate must exist");
+            .corlib_type("System.Delegate")
+            .expect("System.Delegate must exist");
         let target_bytes = instance
             .instance_storage
             .get_field_local(delegate_type, "_target");
@@ -246,7 +240,6 @@ pub fn delegate_get_target<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("System.Reflection.MethodInfo System.Delegate::get_Method()")]
-#[dotnet_intrinsic("System.Reflection.MethodInfo DotnetRs.Delegate::get_Method()")]
 pub fn delegate_get_method<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,
@@ -260,8 +253,8 @@ pub fn delegate_get_method<'gc, 'm: 'gc>(
     let method_index = this.as_object(|instance| {
         let delegate_type = ctx
             .loader()
-            .corlib_type("DotnetRs.Delegate")
-            .expect("DotnetRs.Delegate must exist");
+            .corlib_type("System.Delegate")
+            .expect("System.Delegate must exist");
         let method_handle_bytes = instance
             .instance_storage
             .get_field_local(delegate_type, "_method");
@@ -279,9 +272,7 @@ pub fn delegate_get_method<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("bool System.Delegate::Equals(object)")]
-#[dotnet_intrinsic("bool DotnetRs.Delegate::Equals(object)")]
 #[dotnet_intrinsic("bool System.MulticastDelegate::Equals(object)")]
-#[dotnet_intrinsic("bool DotnetRs.MulticastDelegate::Equals(object)")]
 pub fn delegate_equals<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,
@@ -368,9 +359,7 @@ pub fn delegate_equals<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("int System.Delegate::GetHashCode()")]
-#[dotnet_intrinsic("int DotnetRs.Delegate::GetHashCode()")]
 #[dotnet_intrinsic("int System.MulticastDelegate::GetHashCode()")]
-#[dotnet_intrinsic("int DotnetRs.MulticastDelegate::GetHashCode()")]
 pub fn delegate_get_hash_code<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,
@@ -403,8 +392,8 @@ fn get_delegate_info<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
     obj.as_object(|instance| {
         let delegate_type = ctx
             .loader()
-            .corlib_type("DotnetRs.Delegate")
-            .expect("DotnetRs.Delegate must exist");
+            .corlib_type("System.Delegate")
+            .expect("System.Delegate must exist");
         let target_bytes = instance
             .instance_storage
             .get_field_local(delegate_type, "_target");
@@ -424,15 +413,14 @@ fn get_multicast_targets_ref<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
     obj.as_object(|instance| {
         let multicast_type = ctx
             .loader()
-            .corlib_type("DotnetRs.MulticastDelegate")
-            .expect("DotnetRs.MulticastDelegate must exist");
+            .corlib_type("System.MulticastDelegate")
+            .expect("System.MulticastDelegate must exist");
 
         let mut curr = instance.description;
         let mut is_multicast = false;
         loop {
-            if curr.type_name() == "DotnetRs.MulticastDelegate"
-                || curr.type_name() == "System.MulticastDelegate"
-            {
+            let raw_type_name = curr.type_name();
+            if ctx.loader().canonical_type_name(&raw_type_name) == "System.MulticastDelegate" {
                 is_multicast = true;
                 break;
             }
@@ -467,7 +455,6 @@ fn get_multicast_targets_ref<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_intrinsic("object System.Delegate::DynamicInvoke(object[])")]
-#[dotnet_intrinsic("object DotnetRs.Delegate::DynamicInvoke(object[])")]
 pub fn delegate_dynamic_invoke<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,
@@ -518,9 +505,6 @@ fn get_invocation_list<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
 #[dotnet_intrinsic(
     "static System.Delegate System.Delegate::Combine(System.Delegate, System.Delegate)"
 )]
-#[dotnet_intrinsic(
-    "static DotnetRs.Delegate DotnetRs.Delegate::Combine(DotnetRs.Delegate, DotnetRs.Delegate)"
-)]
 pub fn delegate_combine<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,
@@ -562,7 +546,7 @@ pub fn delegate_combine<'gc, 'm: 'gc>(
     });
 
     // Set 'targets' field on new_delegate
-    let multicast_type = vm_try!(ctx.loader().corlib_type("DotnetRs.MulticastDelegate"));
+    let multicast_type = vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
     new_delegate.as_object_mut(ctx.gc(), |instance| {
         array_obj.write(
             &mut instance
@@ -577,9 +561,6 @@ pub fn delegate_combine<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic(
     "static System.Delegate System.Delegate::Remove(System.Delegate, System.Delegate)"
-)]
-#[dotnet_intrinsic(
-    "static DotnetRs.Delegate DotnetRs.Delegate::Remove(DotnetRs.Delegate, DotnetRs.Delegate)"
 )]
 pub fn delegate_remove<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
@@ -649,7 +630,7 @@ pub fn delegate_remove<'gc, 'm: 'gc>(
                 }
             });
 
-            let multicast_type = vm_try!(ctx.loader().corlib_type("DotnetRs.MulticastDelegate"));
+            let multicast_type = vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
             new_delegate.as_object_mut(ctx.gc(), |instance| {
                 array_obj.write(
                     &mut instance

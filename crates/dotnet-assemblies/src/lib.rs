@@ -30,7 +30,13 @@ use error::AssemblyLoadError;
 pub struct AssemblyLoader {
     assembly_root: String,
     external: RwLock<HashMap<String, Option<ResolutionS>>>,
+    /// Mapping of canonical BCL names (e.g., "System.Delegate") to their implementation
+    /// in the support library (e.g., "DotnetRs.Delegate").
     stubs: HashMap<String, TypeDescription>,
+    /// Reverse mapping from support library type names to their canonical BCL names.
+    /// Used for name normalization during intrinsic dispatch.
+    /// E.g., "DotnetRs.Delegate" → "System.Delegate"
+    reverse_stubs: HashMap<String, String>,
     corlib_cache: DashMap<String, TypeDescription>,
     type_cache: DashMap<(ResolutionS, UserType), TypeDescription>,
     method_cache:
@@ -99,6 +105,7 @@ impl AssemblyLoader {
             assembly_root,
             external: RwLock::new(resolutions),
             stubs: HashMap::new(),
+            reverse_stubs: HashMap::new(),
             corlib_cache: DashMap::new(),
             type_cache: DashMap::new(),
             method_cache: DashMap::new(),
@@ -175,6 +182,7 @@ impl AssemblyLoader {
                                             "failed to find type definition index".to_string(),
                                         )
                                     })?;
+                                let support_type_name = t.type_name();
                                 self.stubs.insert(
                                     target.to_string(),
                                     TypeDescription::new(
@@ -183,6 +191,8 @@ impl AssemblyLoader {
                                         type_index,
                                     ),
                                 );
+                                self.reverse_stubs
+                                    .insert(support_type_name, target.to_string());
                             }
                             _ => {}
                         }
@@ -195,6 +205,20 @@ impl AssemblyLoader {
 
     pub fn get_root(&self) -> &str {
         &self.assembly_root
+    }
+
+    /// Returns the canonical (System.*) name for a stubbed type,
+    /// or the input unchanged for non-stub types.
+    pub fn canonical_type_name<'a>(&'a self, name: &'a str) -> &'a str {
+        self.reverse_stubs
+            .get(name)
+            .map(|s| s.as_str())
+            .unwrap_or(name)
+    }
+
+    /// Returns true if the given name is an alias for a stubbed type.
+    pub fn is_stub_alias(&self, name: &str) -> bool {
+        self.reverse_stubs.contains_key(name)
     }
 
     pub fn get_assembly(&self, name: &str) -> Result<ResolutionS, AssemblyLoadError> {
@@ -432,6 +456,23 @@ impl AssemblyLoader {
             }
         }
 
+        // Fallback for nested types or cases where namespace/name splitting is complex
+        if full_name.contains('+') || full_name.contains('/') {
+            let normalized_target = full_name.replace('/', "+");
+            for (index, t) in resolution.definition().type_definitions.iter().enumerate() {
+                if t.encloser.is_some() {
+                    let type_index = resolution
+                        .definition()
+                        .type_definition_index(index)
+                        .unwrap();
+                    let td = TypeDescription::new(resolution, t, type_index);
+                    if td.type_name().replace('/', "+") == normalized_target {
+                        return Some(td);
+                    }
+                }
+            }
+        }
+
         None
     }
 
@@ -634,7 +675,7 @@ impl AssemblyLoader {
                         if method_ref.name == ".ctor"
                             && let BaseType::Array(_, _) = concrete.get()
                         {
-                            let array_type = self.corlib_type("DotnetRs.Array")?;
+                            let array_type = self.corlib_type("System.Array")?;
                             for method in &array_type.definition().methods {
                                 if method.name == "CtorArraySentinel" {
                                     return Ok(MethodDescription {
@@ -645,7 +686,7 @@ impl AssemblyLoader {
                                 }
                             }
                             return Err(TypeResolutionError::MethodNotFound(
-                                "CtorArraySentinel not found in DotnetRs.Array".to_string(),
+                                "CtorArraySentinel not found in System.Array".to_string(),
                             ));
                         }
 

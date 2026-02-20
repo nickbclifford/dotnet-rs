@@ -8,7 +8,6 @@ use dotnet_value::{
 };
 
 #[dotnet_intrinsic("int System.Array::get_Length()")]
-#[dotnet_intrinsic("int DotnetRs.Array::get_Length()")]
 pub fn intrinsic_array_get_length<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,
@@ -30,7 +29,6 @@ pub fn intrinsic_array_get_length<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("int System.Array::get_Rank()")]
-#[dotnet_intrinsic("int DotnetRs.Array::get_Rank()")]
 pub fn intrinsic_array_get_rank<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,
@@ -54,9 +52,6 @@ pub fn intrinsic_array_get_rank<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("object System.Array::GetValue(int)")]
 #[dotnet_intrinsic("object System.Array::GetValue(long)")]
 #[dotnet_intrinsic("object System.Array::GetValue(int[])")]
-#[dotnet_intrinsic("object DotnetRs.Array::GetValue(int)")]
-#[dotnet_intrinsic("object DotnetRs.Array::GetValue(long)")]
-#[dotnet_intrinsic("object DotnetRs.Array::GetValue(int[])")]
 pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,
@@ -108,9 +103,6 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("void System.Array::SetValue(object, int)")]
 #[dotnet_intrinsic("void System.Array::SetValue(object, long)")]
 #[dotnet_intrinsic("void System.Array::SetValue(object, int[])")]
-#[dotnet_intrinsic("void DotnetRs.Array::SetValue(object, int)")]
-#[dotnet_intrinsic("void DotnetRs.Array::SetValue(object, long)")]
-#[dotnet_intrinsic("void DotnetRs.Array::SetValue(object, int[])")]
 pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _method: MethodDescription,

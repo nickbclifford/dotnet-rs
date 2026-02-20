@@ -77,6 +77,19 @@
 //!     - `"int System.String::get_Length()"`
 //!     - `"System.Type System.Type::GetTypeFromHandle(System.RuntimeTypeHandle)"`
 //!
+//! ### Support Library Conventions
+//!
+//! When implementing intrinsics for types in the support library (`crates/dotnet-assemblies/src/support/`):
+//!
+//! - **Stubbed Types**: If the C# type has a `[Stub(InPlaceOf = "System.X")]` attribute,
+//!   always use the canonical `System.X` name in the `#[dotnet_intrinsic]` signature.
+//!   The VM automatically normalizes `DotnetRs.X` to `System.X` during dispatch.
+//!   - *Example*: Use `System.Delegate` instead of `DotnetRs.Delegate`.
+//!
+//! - **Internal Types**: If the C# type is purely internal (no `[Stub]` attribute),
+//!   use its actual `DotnetRs.X` name in the `#[dotnet_intrinsic]` signature.
+//!   - *Example*: Use `DotnetRs.Assembly` (which extends `System.Reflection.Assembly`).
+//!
 //! 3.  **Ensure the method is marked as intrinsic**:
 //!     The method in the .NET assembly should be marked with `[IntrinsicAttribute]`
 //!     or be an `InternalCall`.
@@ -221,14 +234,22 @@ impl IntrinsicRegistry {
     }
 
     /// Looks up an intrinsic handler for the given method.
-    pub fn get(&self, method: &MethodDescription) -> Option<IntrinsicHandler> {
-        self.get_metadata(method).map(|m| m.handler)
+    pub fn get(
+        &self,
+        method: &MethodDescription,
+        loader: &AssemblyLoader,
+    ) -> Option<IntrinsicHandler> {
+        self.get_metadata(method, loader).map(|m| m.handler)
     }
 
     /// Looks up an intrinsic handler for the given field.
-    pub fn get_field(&self, field: &FieldDescription) -> Option<IntrinsicFieldHandler> {
+    pub fn get_field(
+        &self,
+        field: &FieldDescription,
+        loader: &AssemblyLoader,
+    ) -> Option<IntrinsicFieldHandler> {
         let mut buf = [0u8; 512];
-        let key = self.build_field_key(field, &mut buf)?;
+        let key = self.build_field_key(field, loader, &mut buf)?;
         let range = INTRINSIC_LOOKUP.get(key)?;
         for entry in &INTRINSIC_ENTRIES[range.start..range.start + range.len] {
             if let StaticIntrinsicHandler::Field(h) = entry.handler {
@@ -240,9 +261,13 @@ impl IntrinsicRegistry {
 
     /// Looks up intrinsic metadata for the given method.
     /// Returns full metadata including kind and documentation.
-    pub fn get_metadata(&self, method: &MethodDescription) -> Option<IntrinsicMetadata> {
+    pub fn get_metadata(
+        &self,
+        method: &MethodDescription,
+        loader: &AssemblyLoader,
+    ) -> Option<IntrinsicMetadata> {
         let mut buf = [0u8; 512];
-        let key = self.build_method_key(method, &mut buf)?;
+        let key = self.build_method_key(method, loader, &mut buf)?;
         let range = INTRINSIC_LOOKUP.get(key)?;
         for entry in &INTRINSIC_ENTRIES[range.start..range.start + range.len] {
             if let StaticIntrinsicHandler::Method(h) = entry.handler
@@ -268,6 +293,7 @@ impl IntrinsicRegistry {
     fn build_method_key<'a>(
         &self,
         method: &MethodDescription,
+        loader: &AssemblyLoader,
         buf: &'a mut [u8],
     ) -> Option<&'a str> {
         use std::fmt::Write;
@@ -277,17 +303,31 @@ impl IntrinsicRegistry {
         } else {
             method.method.signature.parameters.len()
         };
-        let type_name = method.parent.type_name().replace('/', "+");
-        write!(w, "M:{}::{}#{}", type_name, &*method.method.name, arity).ok()?;
+        let raw_type_name = method.parent.type_name();
+        let canonical_name = loader.canonical_type_name(&raw_type_name);
+        let normalized_name = canonical_name.replace('/', "+");
+        write!(
+            w,
+            "M:{}::{}#{}",
+            normalized_name, &*method.method.name, arity
+        )
+        .ok()?;
         let pos = w.pos;
         std::str::from_utf8(&buf[..pos]).ok()
     }
 
-    fn build_field_key<'a>(&self, field: &FieldDescription, buf: &'a mut [u8]) -> Option<&'a str> {
+    fn build_field_key<'a>(
+        &self,
+        field: &FieldDescription,
+        loader: &AssemblyLoader,
+        buf: &'a mut [u8],
+    ) -> Option<&'a str> {
         use std::fmt::Write;
         let mut w = StackWrite { buf, pos: 0 };
-        let type_name = field.parent.type_name().replace('/', "+");
-        write!(w, "F:{}::{}", type_name, &*field.field.name).ok()?;
+        let raw_type_name = field.parent.type_name();
+        let canonical_name = loader.canonical_type_name(&raw_type_name);
+        let normalized_name = canonical_name.replace('/', "+");
+        write!(w, "F:{}::{}", normalized_name, &*field.field.name).ok()?;
         let pos = w.pos;
         std::str::from_utf8(&buf[..pos]).ok()
     }
@@ -325,7 +365,7 @@ pub fn is_intrinsic_field(
     registry: &IntrinsicRegistry,
 ) -> bool {
     // Check registry first
-    if registry.get_field(&field).is_some() {
+    if registry.get_field(&field, loader).is_some() {
         return true;
     }
 
@@ -385,7 +425,12 @@ pub fn intrinsic_field<'gc, 'm: 'gc>(
         "FIELD-LOAD",
         &format!("{}.{}", field.parent.type_name(), field.field.name)
     );
-    if let Some(handler) = ctx.shared().caches.intrinsic_registry.get_field(&field) {
+    if let Some(handler) = ctx
+        .shared()
+        .caches
+        .intrinsic_registry
+        .get_field(&field, ctx.loader())
+    {
         handler(ctx, field, type_generics, is_address)
     } else {
         panic!("unsupported load from intrinsic field: {:?}", field);
