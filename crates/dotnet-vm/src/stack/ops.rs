@@ -152,6 +152,7 @@ pub trait StackOps<'gc, 'm>:
 
 pub trait ExceptionOps<'gc> {
     fn throw_by_name(&mut self, name: &str) -> crate::StepResult;
+    fn throw_by_name_with_message(&mut self, name: &str, message: &str) -> crate::StepResult;
     fn throw(&mut self, exception: ObjectRef<'gc>) -> crate::StepResult;
     fn rethrow(&mut self) -> crate::StepResult;
     fn leave(&mut self, target_ip: usize) -> crate::StepResult;

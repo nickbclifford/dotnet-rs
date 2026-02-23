@@ -5,6 +5,10 @@ use crate::{
     resolution::ValueResolution,
     stack::ops::{StackOps, VesOps},
 };
+
+const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
+const ACCESS_VIOLATION_MSG: &str = "Attempted to read or write protected memory.";
 use dotnet_macros::dotnet_instruction;
 use dotnet_types::{comparer::decompose_type_source, members::MethodDescription};
 use dotnet_value::{
@@ -46,7 +50,7 @@ pub(crate) fn get_ptr_info<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc
             PointerOrigin::Transient(obj.clone()),
             dotnet_utils::ByteOffset(0),
         )),
-        _ => Err(ctx.throw_by_name("System.InvalidProgramException")),
+        _ => Err(ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG)),
     }
 }
 
@@ -85,7 +89,7 @@ pub fn new_object<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, ctor: &UserMethod
                     match v {
                         StackValue::Int32(i) => dims.push(i as usize),
                         StackValue::NativeInt(i) => dims.push(i as usize),
-                        _ => return ctx.throw_by_name("System.InvalidProgramException"),
+                        _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
                     }
                 }
                 dims.reverse();
@@ -153,7 +157,7 @@ pub fn new_object<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, ctor: &UserMethod
             StackValue::Int32(i) => i as isize,
             StackValue::Int64(i) => i as isize,
             StackValue::NativeInt(i) => i,
-            _ => return ctx.throw_by_name("System.InvalidProgramException"),
+            _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
         };
         ctx.push(StackValue::NativeInt(native_val));
         StepResult::Continue
@@ -233,7 +237,7 @@ pub fn ldobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType) -
     let addr = ctx.pop();
 
     if addr.is_null() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     let (origin, offset) = match get_ptr_context(ctx, &addr) {
@@ -247,7 +251,7 @@ pub fn ldobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType) -
 
     let mut source_vec = vec![0u8; layout.size().as_usize()];
     if let Err(_e) = unsafe { ctx.read_bytes(origin.clone(), offset, &mut source_vec) } {
-        return ctx.throw_by_name("System.AccessViolationException");
+        return ctx.throw_by_name_with_message("System.AccessViolationException", ACCESS_VIOLATION_MSG);
     }
 
     let value = vm_try!(res_ctx.read_cts_value(&load_type, &source_vec, ctx.gc())).into_stack();
@@ -262,7 +266,7 @@ pub fn stobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType) -
     let addr = ctx.pop();
 
     if addr.is_null() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     let concrete_t = vm_try!(ctx.make_concrete(param0));
@@ -278,14 +282,14 @@ pub fn stobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType) -
     if layout.is_or_contains_refs() {
         if let Err(e) = unsafe { ctx.write_unaligned(origin, offset, value, &layout) } {
             error!("stobj failed: {}", e);
-            return ctx.throw_by_name("System.AccessViolationException");
+            return ctx.throw_by_name_with_message("System.AccessViolationException", ACCESS_VIOLATION_MSG);
         }
     } else {
         let mut bytes = vec![0u8; layout.size().as_usize()];
         vm_try!(res_ctx.new_cts_value(&concrete_t, value)).write(&mut bytes);
 
         if let Err(_e) = unsafe { ctx.write_bytes(origin, offset, &bytes) } {
-            return ctx.throw_by_name("System.AccessViolationException");
+            return ctx.throw_by_name_with_message("System.AccessViolationException", ACCESS_VIOLATION_MSG);
         }
     }
     StepResult::Continue
@@ -296,7 +300,7 @@ pub fn initobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType)
     let addr = ctx.pop();
 
     if addr.is_null() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     let (origin, offset) = match get_ptr_context(ctx, &addr) {
@@ -310,7 +314,7 @@ pub fn initobj<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &MethodType)
 
     let zero_bytes = vec![0u8; layout.size().as_usize()];
     if let Err(_e) = unsafe { ctx.write_bytes(origin, offset, &zero_bytes) } {
-        return ctx.throw_by_name("System.AccessViolationException");
+        return ctx.throw_by_name_with_message("System.AccessViolationException", ACCESS_VIOLATION_MSG);
     }
     StepResult::Continue
 }

@@ -1,4 +1,4 @@
-use crate::object::ObjectRef;
+use crate::{ArenaId, object::ObjectRef};
 use dashmap::DashMap;
 use dotnet_types::{TypeDescription, generics::GenericLookup};
 use gc_arena::{Collect, Collection, Mutation, unsafe_empty_collect};
@@ -23,7 +23,7 @@ fn nonnull_from_exposed_addr(addr: usize) -> Option<NonNull<u8>> {
 use arbitrary::Arbitrary;
 
 #[cfg(feature = "multithreaded-gc")]
-use crate::{ArenaId, object::ObjectPtr};
+use crate::object::ObjectPtr;
 #[cfg(feature = "multithreaded-gc")]
 use dotnet_utils::gc::ThreadSafeLock;
 

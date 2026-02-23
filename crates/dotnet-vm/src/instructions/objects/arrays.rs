@@ -1,4 +1,10 @@
 use crate::{StepResult, layout::type_layout, stack::ops::VesOps};
+
+const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
+const INDEX_OUT_OF_RANGE_MSG: &str = "Index was outside the bounds of the array.";
+const OVERFLOW_MSG: &str = "Arithmetic operation resulted in an overflow.";
+const INVALID_CAST_MSG: &str = "Specified cast is not valid.";
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::{
     StackValue,
@@ -17,15 +23,15 @@ pub fn ldelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let index = match ctx.pop() {
         StackValue::Int32(i) => i as usize,
         StackValue::NativeInt(i) => i as usize,
-        _ => return ctx.throw_by_name("System.InvalidProgramException"),
+        _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
     };
     let val = ctx.pop();
     let StackValue::ObjectRef(obj) = val else {
-        return ctx.throw_by_name("System.InvalidProgramException");
+        return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
     };
 
     if obj.0.is_none() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     let res_ctx = ctx.current_context();
@@ -39,7 +45,7 @@ pub fn ldelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         ctx.read_unaligned(PointerOrigin::Heap(obj), offset, &layout, Some(target_type))
     } {
         Ok(v) => v,
-        Err(_) => return ctx.throw_by_name("System.IndexOutOfRangeException"),
+        Err(_) => return ctx.throw_by_name_with_message("System.IndexOutOfRangeException", INDEX_OUT_OF_RANGE_MSG),
     };
     ctx.push(value);
     StepResult::Continue
@@ -53,16 +59,16 @@ pub fn ldelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let index = match ctx.pop() {
         StackValue::Int32(i) => i as usize,
         StackValue::NativeInt(i) => i as usize,
-        _ => return ctx.throw_by_name("System.InvalidProgramException"),
+        _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
     };
     let array = ctx.pop();
 
     let StackValue::ObjectRef(obj) = array else {
-        return ctx.throw_by_name("System.InvalidProgramException");
+        return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
     };
 
     if obj.0.is_none() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     let layout = match param0 {
@@ -84,7 +90,7 @@ pub fn ldelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let value = match unsafe { ctx.read_unaligned(PointerOrigin::Heap(obj), offset, &layout, None) }
     {
         Ok(v) => v,
-        Err(_) => return ctx.throw_by_name("System.IndexOutOfRangeException"),
+        Err(_) => return ctx.throw_by_name_with_message("System.IndexOutOfRangeException", INDEX_OUT_OF_RANGE_MSG),
     };
     ctx.push(value);
     StepResult::Continue
@@ -115,14 +121,14 @@ fn ldelema_internal<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let index = match ctx.pop() {
         StackValue::Int32(i) => i as usize,
         StackValue::NativeInt(i) => i as usize,
-        _ => return ctx.throw_by_name("System.InvalidProgramException"),
+        _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
     };
     let array = ctx.pop();
     if array.is_null() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
     let StackValue::ObjectRef(obj) = array else {
-        return ctx.throw_by_name("System.InvalidProgramException");
+        return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
     };
 
     let res_ctx = ctx.current_context();
@@ -140,7 +146,7 @@ fn ldelema_internal<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 
     let ptr = match result {
         Ok(p) => p,
-        Err(_) => return ctx.throw_by_name("System.IndexOutOfRangeException"),
+        Err(_) => return ctx.throw_by_name_with_message("System.IndexOutOfRangeException", INDEX_OUT_OF_RANGE_MSG),
     };
 
     let target_type: dotnet_types::TypeDescription = ctx
@@ -167,14 +173,14 @@ pub fn stelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let index = match ctx.pop() {
         StackValue::Int32(i) => i as usize,
         StackValue::NativeInt(i) => i as usize,
-        _ => return ctx.throw_by_name("System.InvalidProgramException"),
+        _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
     };
     let array = ctx.pop();
     if array.is_null() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
     let StackValue::ObjectRef(obj) = array else {
-        return ctx.throw_by_name("System.InvalidProgramException");
+        return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
     };
 
     let res_ctx = ctx.current_context();
@@ -185,7 +191,7 @@ pub fn stelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     // SAFETY: write_unaligned handles GC-safe writing to the heap with bounds checking and write barriers.
     match unsafe { ctx.write_unaligned(PointerOrigin::Heap(obj), offset, value, &layout) } {
         Ok(_) => StepResult::Continue,
-        Err(_) => ctx.throw_by_name("System.IndexOutOfRangeException"),
+        Err(_) => ctx.throw_by_name_with_message("System.IndexOutOfRangeException", INDEX_OUT_OF_RANGE_MSG),
     }
 }
 
@@ -198,14 +204,14 @@ pub fn stelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let index = match ctx.pop() {
         StackValue::Int32(i) => i as usize,
         StackValue::NativeInt(i) => i as usize,
-        _ => return ctx.throw_by_name("System.InvalidProgramException"),
+        _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
     };
     let array = ctx.pop();
     if array.is_null() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
     let StackValue::ObjectRef(obj) = array else {
-        return ctx.throw_by_name("System.InvalidProgramException");
+        return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
     };
 
     let layout = match param0 {
@@ -224,7 +230,7 @@ pub fn stelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     // SAFETY: write_unaligned handles GC-safe writing to the heap with bounds checking and write barriers.
     match unsafe { ctx.write_unaligned(PointerOrigin::Heap(obj), offset, value, &layout) } {
         Ok(_) => StepResult::Continue,
-        Err(_) => ctx.throw_by_name("System.IndexOutOfRangeException"),
+        Err(_) => ctx.throw_by_name_with_message("System.IndexOutOfRangeException", INDEX_OUT_OF_RANGE_MSG),
     }
 }
 
@@ -240,17 +246,17 @@ pub fn newarr<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let length = match ctx.pop() {
         StackValue::Int32(i) => {
             if i < 0 {
-                return ctx.throw_by_name("System.OverflowException");
+                return ctx.throw_by_name_with_message("System.OverflowException", OVERFLOW_MSG);
             }
             i as usize
         }
         StackValue::NativeInt(i) => {
             if i < 0 {
-                return ctx.throw_by_name("System.OverflowException");
+                return ctx.throw_by_name_with_message("System.OverflowException", OVERFLOW_MSG);
             }
             i as usize
         }
-        _ => return ctx.throw_by_name("System.InvalidProgramException"),
+        _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
     };
 
     if length > LARGE_ARRAY_THRESHOLD {
@@ -271,10 +277,10 @@ pub fn newarr<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 pub fn ldlen<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
     let array = ctx.pop();
     if array.is_null() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
     let StackValue::ObjectRef(obj) = array else {
-        return ctx.throw_by_name("System.InvalidProgramException");
+        return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
     };
 
     let h = obj.0.expect("ObjectRef cannot be null after is_null check");
@@ -284,10 +290,10 @@ pub fn ldlen<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResu
         HeapStorage::Vec(v) => v.layout.length as isize,
         HeapStorage::Str(s) => s.len() as isize,
         HeapStorage::Obj(_) => {
-            return ctx.throw_by_name("System.InvalidCastException");
+            return ctx.throw_by_name_with_message("System.InvalidCastException", INVALID_CAST_MSG);
         }
         HeapStorage::Boxed(_) => {
-            return ctx.throw_by_name("System.InvalidCastException");
+            return ctx.throw_by_name_with_message("System.InvalidCastException", INVALID_CAST_MSG);
         }
     };
     ctx.push(StackValue::NativeInt(len));

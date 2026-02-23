@@ -7,6 +7,9 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
 };
 
+const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+const INDEX_OUT_OF_RANGE_MSG: &str = "Index was outside the bounds of the array.";
+
 #[dotnet_intrinsic("int System.Array::get_Length()")]
 pub fn intrinsic_array_get_length<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
@@ -15,7 +18,7 @@ pub fn intrinsic_array_get_length<'gc, 'm: 'gc>(
 ) -> StepResult {
     let obj = ctx.pop_obj();
     let ObjectRef(Some(handle)) = obj else {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     };
 
     let heap = handle.borrow();
@@ -36,7 +39,7 @@ pub fn intrinsic_array_get_rank<'gc, 'm: 'gc>(
 ) -> StepResult {
     let obj = ctx.pop_obj();
     let ObjectRef(Some(handle)) = obj else {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     };
 
     let heap = handle.borrow();
@@ -61,7 +64,7 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
     let arg = ctx.pop();
     let this_val = ctx.pop();
     let StackValue::ObjectRef(ObjectRef(Some(handle))) = this_val else {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     };
 
     let index = match arg {
@@ -73,7 +76,10 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
                 panic!("Expected int array for indices");
             };
             if v.layout.length == 0 {
-                return ctx.throw_by_name("System.ArgumentException");
+                return ctx.throw_by_name_with_message(
+                    "System.ArgumentException",
+                    "The number of indices provided does not match the number of dimensions of the array.",
+                );
             }
             // For now only support 1D access via the first index in the array
             let bytes = &v.get()[0..4];
@@ -88,7 +94,7 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
     };
 
     if index >= v.layout.length {
-        return ctx.throw_by_name("System.IndexOutOfRangeException");
+        return ctx.throw_by_name_with_message("System.IndexOutOfRangeException", INDEX_OUT_OF_RANGE_MSG);
     }
 
     let elem_size = v.layout.element_layout.size();
@@ -113,7 +119,7 @@ pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
     let this_val = ctx.pop();
 
     let StackValue::ObjectRef(ObjectRef(Some(handle))) = this_val else {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     };
 
     let index = match index_arg {
@@ -125,7 +131,10 @@ pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
                 panic!("Expected int array for indices");
             };
             if v.layout.length == 0 {
-                return ctx.throw_by_name("System.ArgumentException");
+                return ctx.throw_by_name_with_message(
+                    "System.ArgumentException",
+                    "The number of indices provided does not match the number of dimensions of the array.",
+                );
             }
             let bytes = &v.get()[0..4];
             i32::from_ne_bytes(bytes.try_into().unwrap()) as usize
@@ -141,7 +150,7 @@ pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
 
         if index >= v.layout.length {
             drop(heap);
-            return ctx.throw_by_name("System.IndexOutOfRangeException");
+            return ctx.throw_by_name_with_message("System.IndexOutOfRangeException", INDEX_OUT_OF_RANGE_MSG);
         }
     }
     let mut heap = handle.borrow_mut(&ctx.gc());

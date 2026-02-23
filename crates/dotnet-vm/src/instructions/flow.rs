@@ -2,6 +2,8 @@ use crate::{
     StepResult,
     stack::ops::{ExceptionOps, StackOps},
 };
+
+const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::StackValue;
 use dotnetdll::prelude::*;
@@ -119,7 +121,7 @@ pub fn brtrue<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
         StackValue::NativeInt(i) => i != 0,
         StackValue::ObjectRef(r) => r.0.is_some(),
         StackValue::UnmanagedPtr(_) | StackValue::ManagedPtr(_) => true,
-        _ => return ctx.throw_by_name("System.InvalidProgramException"),
+        _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
     };
     if cond {
         StepResult::Jump(target)
@@ -140,7 +142,7 @@ pub fn brfalse<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
         StackValue::NativeInt(i) => i == 0,
         StackValue::ObjectRef(r) => r.0.is_none(),
         StackValue::UnmanagedPtr(_) | StackValue::ManagedPtr(_) => false,
-        _ => return ctx.throw_by_name("System.InvalidProgramException"),
+        _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
     };
     if cond {
         StepResult::Jump(target)
@@ -157,7 +159,7 @@ pub fn switch<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
     let index = match ctx.pop() {
         StackValue::Int32(i) => i as u32 as usize,
         StackValue::NativeInt(i) => i as usize,
-        _ => return ctx.throw_by_name("System.InvalidProgramException"),
+        _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
     };
 
     if index < targets.len() {

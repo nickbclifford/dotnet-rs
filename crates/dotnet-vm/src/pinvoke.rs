@@ -12,9 +12,8 @@ use dotnet_utils::{ByteOffset, gc::ThreadSafeReadGuard};
 use dotnet_value::{
     StackValue,
     layout::{FieldLayoutManager, LayoutManager, Scalar},
-    object::{HeapStorage, ObjectRef},
+    object::ObjectRef,
     pointer::{ManagedPtr, PointerOrigin},
-    string::CLRString,
 };
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, Gc, unsafe_empty_collect};
@@ -507,30 +506,11 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
                 ),
             };
 
-            let exception_type = match ctx.loader().corlib_type(exc_name) {
-                Ok(v) => v,
-                Err(e) => return StepResult::Error(e.into()),
-            };
-            let exception_instance = match ctx.current_context().new_object(exception_type) {
-                Ok(v) => v,
-                Err(e) => return StepResult::Error(e.into()),
-            };
-            let exception = ObjectRef::new(ctx.gc(), HeapStorage::Obj(exception_instance));
-
-            let message_ref =
-                StackValue::string(ctx.gc(), CLRString::from(msg.as_str())).as_object_ref();
-            exception.as_object_mut(ctx.gc(), |obj| {
-                if obj.instance_storage.has_field(exception_type, "_message") {
-                    let mut field = obj
-                        .instance_storage
-                        .get_field_mut_local(exception_type, "_message");
-                    message_ref.write(&mut field);
-                }
-            });
-
-            let _ = ctx.throw(exception);
-            let _ = ctx.pop_multiple(arg_count);
-            return StepResult::Exception;
+            let res = ctx.throw_by_name_with_message(exc_name, msg.as_str());
+            if res == StepResult::Exception {
+                let _ = ctx.pop_multiple(arg_count);
+            }
+            return res;
         }
     };
 

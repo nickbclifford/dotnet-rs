@@ -22,6 +22,8 @@ use std::{
     sync::Arc,
 };
 
+const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+
 fn offset_ptr<'gc>(val: StackValue<'gc>, byte_offset: isize) -> StackValue<'gc> {
     if let StackValue::ManagedPtr(m) = val {
         let new_m = unsafe { m.offset(byte_offset) };
@@ -110,12 +112,12 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<'gc, 'm: 'gc>(
 ) -> StepResult {
     let obj = ctx.pop_obj();
     let Some(array_handle) = obj.0 else {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     };
 
     let data_ptr = match &array_handle.borrow().storage {
         HeapStorage::Vec(v) => v.get().as_ptr() as *mut u8,
-        _ => return ctx.throw_by_name("System.ArgumentException"),
+        _ => return ctx.throw_by_name_with_message("System.ArgumentException", "The argument must be an array."),
     };
 
     let element_type = vm_try!(
@@ -177,10 +179,10 @@ pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
         if let Some(field) = flm.get_field(td, &field_name) {
             ctx.push_isize(field.position.as_usize() as isize);
         } else {
-            return ctx.throw_by_name("System.ArgumentException");
+            return ctx.throw_by_name_with_message("System.ArgumentException", "Field not found.");
         }
     } else {
-        return ctx.throw_by_name("System.ArgumentException");
+        return ctx.throw_by_name_with_message("System.ArgumentException", "Type must be a structure or a class.");
     }
     StepResult::Continue
 }
@@ -200,7 +202,12 @@ pub fn intrinsic_unsafe_as_pointer<'gc, 'm: 'gc>(
         StackValue::NativeInt(i) => i as *mut u8,
         StackValue::UnmanagedPtr(p) => p.0.as_ptr(),
         StackValue::ObjectRef(ObjectRef(None)) => ptr::null_mut(),
-        _ => return ctx.throw_by_name("System.ArgumentException"),
+        _ => {
+            return ctx.throw_by_name_with_message(
+                "System.ArgumentException",
+                "The argument must be a managed pointer or native integer.",
+            );
+        }
     };
     ctx.push_isize(ptr as isize);
     StepResult::Continue
@@ -222,7 +229,7 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     let offset = match offset_val {
         StackValue::Int32(i) => i as isize,
         StackValue::NativeInt(i) => i,
-        _ => return ctx.throw_by_name("System.ArgumentException"),
+        _ => return ctx.throw_by_name_with_message("System.ArgumentException", "The argument must be an integer."),
     };
 
     let m_val = ctx.pop();
@@ -248,7 +255,7 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
     let offset = match offset_val {
         StackValue::Int32(i) => i as isize,
         StackValue::NativeInt(i) => i,
-        _ => return ctx.throw_by_name("System.ArgumentException"),
+        _ => return ctx.throw_by_name_with_message("System.ArgumentException", "The argument must be an integer."),
     };
 
     let m_val = ctx.pop();
@@ -272,7 +279,7 @@ pub fn intrinsic_unsafe_subtract<'gc, 'm: 'gc>(
     let offset = match offset_val {
         StackValue::Int32(i) => i as isize,
         StackValue::NativeInt(i) => i,
-        _ => return ctx.throw_by_name("System.ArgumentException"),
+        _ => return ctx.throw_by_name_with_message("System.ArgumentException", "The argument must be an integer."),
     };
 
     let m_val = ctx.pop();
@@ -296,7 +303,7 @@ pub fn intrinsic_unsafe_subtract_byte_offset<'gc, 'm: 'gc>(
     let offset = match offset_val {
         StackValue::Int32(i) => i as isize,
         StackValue::NativeInt(i) => i,
-        _ => return ctx.throw_by_name("System.ArgumentException"),
+        _ => return ctx.throw_by_name_with_message("System.ArgumentException", "The argument must be an integer."),
     };
 
     let m_val = ctx.pop();
@@ -423,7 +430,12 @@ pub fn intrinsic_unsafe_as_ref_ptr<'gc, 'm: 'gc>(
             Some(m.offset),
         ),
         StackValue::UnmanagedPtr(p) => (p.0.as_ptr(), false, PointerOrigin::Unmanaged, None),
-        _ => return ctx.throw_by_name("System.ArgumentException"),
+        _ => {
+            return ctx.throw_by_name_with_message(
+                "System.ArgumentException",
+                "The argument must be a managed pointer or native integer.",
+            );
+        }
     };
 
     // Safety Check: Casting ptr to ref T
@@ -516,7 +528,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
 ) -> StepResult {
     let source = ctx.pop();
     if source.is_null() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     let (origin, offset) = match crate::instructions::objects::get_ptr_info(ctx, &source) {
@@ -574,7 +586,7 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
 
     let dest = ctx.pop();
     if dest.is_null() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     let (origin, offset) = match crate::instructions::objects::get_ptr_info(ctx, &dest) {
@@ -614,7 +626,7 @@ pub fn intrinsic_unsafe_copy_block<'gc, 'm: 'gc>(
     let dest = ctx.pop_ptr();
 
     if src.is_null() || dest.is_null() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     unsafe {
@@ -651,7 +663,7 @@ pub fn intrinsic_unsafe_init_block<'gc, 'm: 'gc>(
     let addr = ctx.pop_ptr();
 
     if addr.is_null() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     unsafe {

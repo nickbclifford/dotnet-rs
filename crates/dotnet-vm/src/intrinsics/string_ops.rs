@@ -20,6 +20,8 @@ use std::{
     sync::Arc,
 };
 
+const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+
 /// System.String::Equals(string, string)
 /// System.String::Equals(string)
 /// System.String::Equals(object)
@@ -121,7 +123,7 @@ pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc>(
     let len = if method.method.signature.parameters.len() == 1 {
         let i = ctx.pop_i32();
         if i < 0 {
-            return ctx.throw_by_name("System.OverflowException");
+            return ctx.throw_by_name_with_message("System.OverflowException", "Arithmetic operation resulted in an overflow.");
         }
         i as usize
     } else {
@@ -129,14 +131,14 @@ pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc>(
         let i = ctx.pop_isize();
         let _ = ctx.pop(); // pop method table pointer
         if i < 0 {
-            return ctx.throw_by_name("System.OverflowException");
+            return ctx.throw_by_name_with_message("System.OverflowException", "Arithmetic operation resulted in an overflow.");
         }
         i as usize
     };
 
     // Defensive check: limit string size to 512MB characters
     if len > 0x2000_0000 {
-        return ctx.throw_by_name("System.OutOfMemoryException");
+        return ctx.throw_by_name_with_message("System.OutOfMemoryException", "Insufficient memory to continue the execution of the program.");
     }
 
     // Check GC safe point before allocating large strings
@@ -259,7 +261,7 @@ pub fn intrinsic_string_get_chars<'gc, 'm: 'gc>(
     let index = ctx.pop_i32();
     let val = ctx.pop();
     if val.as_object_ref().0.is_none() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
     let char_opt = with_string!(ctx, val, |s| if index >= 0 && (index as usize) < s.len() {
         Some(s[index as usize])
@@ -270,7 +272,10 @@ pub fn intrinsic_string_get_chars<'gc, 'm: 'gc>(
         ctx.push_i32(value as i32);
         StepResult::Continue
     } else {
-        ctx.throw_by_name("System.IndexOutOfRangeException")
+        ctx.throw_by_name_with_message(
+            "System.IndexOutOfRangeException",
+            "Index was out of range. Must be non-negative and less than the size of the collection.",
+        )
     }
 }
 
@@ -407,7 +412,7 @@ pub fn intrinsic_string_get_raw_data<'gc, 'm: 'gc>(
             )
         }
     } else {
-        ctx.throw_by_name("System.NullReferenceException")
+        ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG)
     }
 }
 
@@ -465,19 +470,19 @@ pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
                 let inner = handle.borrow();
                 match &inner.storage {
                     HeapStorage::Str(s) => s.len(),
-                    _ => return ctx.throw_by_name("System.ArgumentException"),
+                    _ => return ctx.throw_by_name_with_message("System.ArgumentException", "The argument must be a string."),
                 }
             };
 
             if start_at > s_len {
-                return ctx.throw_by_name("System.ArgumentOutOfRangeException");
+                return ctx.throw_by_name_with_message("System.ArgumentOutOfRangeException", "startIndex");
             }
 
             let l = match length {
                 None => s_len - start_at,
                 Some(l) => {
                     if start_at + l > s_len {
-                        return ctx.throw_by_name("System.ArgumentOutOfRangeException");
+                        return ctx.throw_by_name_with_message("System.ArgumentOutOfRangeException", "length");
                     }
                     l
                 }
@@ -508,9 +513,9 @@ pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
             Ok(result_vec)
         }
         StackValue::ObjectRef(ObjectRef(None)) => {
-            return ctx.throw_by_name("System.NullReferenceException");
+            return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
         }
-        _ => return ctx.throw_by_name("System.ArgumentException"),
+        _ => return ctx.throw_by_name_with_message("System.ArgumentException", "The argument must be a string."),
     };
 
     let value = match result_vec {
@@ -693,7 +698,7 @@ pub fn intrinsic_string_copy_string_content<'gc, 'm: 'gc>(
         }
     });
     if res.is_err() {
-        return ctx.throw_by_name("System.ArgumentOutOfRangeException");
+        return ctx.throw_by_name_with_message("System.ArgumentOutOfRangeException", "Destination is too short.");
     }
     StepResult::Continue
 }

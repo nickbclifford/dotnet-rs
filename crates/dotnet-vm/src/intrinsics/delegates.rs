@@ -16,6 +16,9 @@ use dotnet_types::{
 use dotnet_value::{StackValue, object::ObjectRef};
 use dotnetdll::prelude::*;
 
+const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+const NOT_SUPPORTED_MSG: &str = "BeginInvoke and EndInvoke are not supported.";
+
 /// Check if a type is a delegate type (inherits from System.Delegate or System.MulticastDelegate)
 pub fn is_delegate_type<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
     ctx: &T,
@@ -66,8 +69,8 @@ pub fn try_delegate_dispatch<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
     match method_name {
         "Invoke" => Some(invoke_delegate(ctx, method, lookup)),
         ".ctor" => None, // Constructor is handled by support library stub
-        "BeginInvoke" => Some(ctx.throw_by_name("System.NotSupportedException")),
-        "EndInvoke" => Some(ctx.throw_by_name("System.NotSupportedException")),
+        "BeginInvoke" => Some(ctx.throw_by_name_with_message("System.NotSupportedException", NOT_SUPPORTED_MSG)),
+        "EndInvoke" => Some(ctx.throw_by_name_with_message("System.NotSupportedException", NOT_SUPPORTED_MSG)),
         _ => None,
     }
 }
@@ -89,7 +92,7 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
     };
 
     if delegate_ref.0.is_none() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     // Check for multicast targets
@@ -188,7 +191,7 @@ pub fn delegate_get_target<'gc, 'm: 'gc>(
 ) -> StepResult {
     let this = ctx.pop_obj();
     if this.0.is_none() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     let target = this.as_object(|instance| {
@@ -214,7 +217,7 @@ pub fn delegate_get_method<'gc, 'm: 'gc>(
 ) -> StepResult {
     let this = ctx.pop_obj();
     if this.0.is_none() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     let method_index = this.as_object(|instance| {
@@ -249,7 +252,7 @@ pub fn delegate_equals<'gc, 'm: 'gc>(
     let this_obj = ctx.pop_obj();
 
     if this_obj.0.is_none() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     let other_obj = match other_val {
@@ -334,7 +337,7 @@ pub fn delegate_get_hash_code<'gc, 'm: 'gc>(
 ) -> StepResult {
     let this = ctx.pop_obj();
     if this.0.is_none() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     let (target, index) = get_delegate_info(ctx, this);
@@ -428,7 +431,7 @@ pub fn delegate_dynamic_invoke<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     // ...
-    ctx.throw_by_name("System.NotSupportedException")
+    ctx.throw_by_name_with_message("System.NotSupportedException", "DynamicInvoke is not supported.")
 }
 
 fn delegates_equal<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(

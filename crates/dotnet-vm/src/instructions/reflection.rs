@@ -26,7 +26,10 @@ pub fn ldvirtftn<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 ) -> StepResult {
     let obj = ctx.pop_obj();
     if !skip_null_check && obj.0.is_none() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message(
+            "System.NullReferenceException",
+            "Object reference not set to an instance of an object.",
+        );
     }
 
     let (base_method, lookup) = vm_try!(

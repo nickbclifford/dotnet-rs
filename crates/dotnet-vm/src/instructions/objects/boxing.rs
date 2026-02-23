@@ -1,4 +1,8 @@
 use crate::{StepResult, resolution::TypeResolutionExt, stack::ops::VesOps};
+
+const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
+const INVALID_CAST_MSG: &str = "Specified cast is not valid.";
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::{
     StackValue,
@@ -50,11 +54,11 @@ pub fn unbox_any<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     if is_vt {
         // If it's a value type, unbox it.
         let StackValue::ObjectRef(obj) = val else {
-            return ctx.throw_by_name("System.InvalidProgramException");
+            return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
         };
         if obj.0.is_none() {
             // unbox.any on null value type throws NullReferenceException (III.4.33)
-            return ctx.throw_by_name("System.NullReferenceException");
+            return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
         }
 
         let result = obj.as_heap_storage(|storage| -> Result<StackValue<'gc>, ()> {
@@ -91,19 +95,19 @@ pub fn unbox_any<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         });
         match result {
             Ok(v) => ctx.push(v),
-            Err(_) => return ctx.throw_by_name("System.InvalidCastException"),
+            Err(_) => return ctx.throw_by_name_with_message("System.InvalidCastException", INVALID_CAST_MSG),
         }
     } else {
         // Reference type: identical to castclass.
         let StackValue::ObjectRef(target_obj) = val else {
-            return ctx.throw_by_name("System.InvalidProgramException");
+            return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
         };
         if let ObjectRef(Some(o)) = target_obj {
             let obj_type = vm_try!(res_ctx.get_heap_description(o));
             if vm_try!(res_ctx.is_a(obj_type.into(), target_ct)) {
                 ctx.push(StackValue::ObjectRef(target_obj));
             } else {
-                return ctx.throw_by_name("System.InvalidCastException");
+                return ctx.throw_by_name_with_message("System.InvalidCastException", INVALID_CAST_MSG);
             }
         } else {
             ctx.push(StackValue::ObjectRef(ObjectRef(None)));
@@ -122,16 +126,16 @@ pub fn unbox<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let target_ct = vm_try!(res_ctx.make_concrete(param0));
 
     let StackValue::ObjectRef(obj) = value else {
-        return ctx.throw_by_name("System.InvalidProgramException");
+        return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
     };
     let Some(h) = obj.0 else {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     };
 
     let inner = h.borrow();
     let ptr = match &inner.storage {
         HeapStorage::Boxed(o) | HeapStorage::Obj(o) => o.instance_storage.get().as_ptr() as *mut u8,
-        _ => return ctx.throw_by_name("System.InvalidCastException"),
+        _ => return ctx.throw_by_name_with_message("System.InvalidCastException", INVALID_CAST_MSG),
     };
 
     let target_type = vm_try!(ctx.loader().find_concrete_type(target_ct));

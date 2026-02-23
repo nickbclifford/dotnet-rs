@@ -10,6 +10,8 @@ use dotnet_value::{ManagedPtr, StackValue, object::ObjectRef};
 use dotnetdll::prelude::{BaseType, Parameter, ParameterType};
 use gc_arena::Gc;
 
+const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+
 /// System.Threading.Monitor::Exit(object) - Releases the lock on an object.
 #[dotnet_intrinsic("static void System.Threading.Monitor::Exit(object)")]
 pub fn intrinsic_monitor_exit<'gc, 'm: 'gc>(
@@ -357,7 +359,7 @@ pub fn intrinsic_monitor_enter_obj<'gc, 'm: 'gc>(
             return StepResult::Yield;
         }
     } else {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     StepResult::Continue
@@ -410,7 +412,7 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
     } else {
         let _ = ctx.pop();
         let _ = ctx.pop();
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     StepResult::Continue
@@ -438,7 +440,7 @@ pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc>(
         let success = sync_block.try_enter(thread_id);
         ctx.push_i32(if success { 1 } else { 0 });
     } else {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     StepResult::Continue
@@ -504,7 +506,7 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
         let _ = ctx.pop();
         let _ = ctx.pop();
         let _ = ctx.pop();
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     StepResult::Continue
@@ -545,7 +547,7 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
 
         ctx.push_i32(if success { 1 } else { 0 });
     } else {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     StepResult::Continue

@@ -41,7 +41,7 @@ macro_rules! binary_op_result {
                     ctx.push(v);
                     StepResult::Continue
                 }
-                Err(e) => ctx.throw_by_name(e),
+                Err(e) => ctx.throw_by_name_with_message(e.exception_type, e.message),
             }
         }
     };

@@ -23,6 +23,8 @@ use dotnetdll::prelude::{
     Accessibility, BaseType, Kind, MemberAccessibility, MemberType, TypeDefinition, TypeSource,
 };
 
+const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+
 #[dotnet_intrinsic("object[] System.Reflection.Assembly::GetCustomAttributes(System.Type, bool)")]
 pub fn intrinsic_assembly_get_custom_attributes<'gc, 'm: 'gc>(
     ctx: &mut dyn VesOps<'gc, 'm>,
@@ -372,7 +374,7 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc>(
     let object_type = match obj {
         StackValue::ObjectRef(ObjectRef(Some(h))) => res_ctx.get_heap_description(h),
         StackValue::ObjectRef(ObjectRef(None)) => {
-            return ctx.throw_by_name("System.NullReferenceException");
+            return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
         }
         _ => panic!("invalid type on stack"),
     };
@@ -1014,7 +1016,10 @@ fn handle_get_generic_type_definition<'gc, 'm>(
             ctx.push_obj(rt_obj);
             StepResult::Continue
         }
-        _ => ctx.throw_by_name("System.InvalidOperationException"),
+        _ => ctx.throw_by_name_with_message(
+            "System.InvalidOperationException",
+            "This operation is only valid on generic types.",
+        ),
     }
 }
 
@@ -1099,7 +1104,10 @@ fn handle_make_generic_type<'gc, 'm>(
         ctx.push_obj(rt_obj);
         StepResult::Continue
     } else {
-        ctx.throw_by_name("System.InvalidOperationException")
+        ctx.throw_by_name_with_message(
+            "System.InvalidOperationException",
+            "MakeGenericType may only be called on a type for which IsGenericTypeDefinition is true.",
+        )
     }
 }
 

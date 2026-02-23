@@ -21,7 +21,10 @@ macro_rules! with_string {
                 )
             }
         } else {
-            return $stack.throw_by_name("System.NullReferenceException");
+            return $stack.throw_by_name_with_message(
+                "System.NullReferenceException",
+                "Object reference not set to an instance of an object.",
+            );
         }
     }};
 }
@@ -43,7 +46,10 @@ macro_rules! with_string_mut {
                 )
             }
         } else {
-            return $stack.throw_by_name("System.NullReferenceException");
+            return $stack.throw_by_name_with_message(
+                "System.NullReferenceException",
+                "Object reference not set to an instance of an object.",
+            );
         }
     }};
 }

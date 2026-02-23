@@ -155,6 +155,8 @@ use super::{StepResult, context::ResolutionContext, tracer::Tracer};
 
 pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttribute";
 
+const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+
 // ============================================================================
 // Intrinsic Registry Infrastructure
 // ============================================================================
@@ -454,7 +456,7 @@ fn object_to_string<'gc, 'm: 'gc>(
                 HeapStorage::Boxed(_) => "System.ValueType".to_string(),
             })
         } else {
-            return ctx.throw_by_name("System.NullReferenceException");
+            return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
         }
     } else {
         "System.Object".to_string()
@@ -475,7 +477,7 @@ fn object_get_type<'gc, 'm: 'gc>(
 ) -> StepResult {
     let this = ctx.pop_obj();
     if this.0.is_none() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     let rt: RuntimeType = this.as_heap_storage(|storage| match storage {

@@ -9,16 +9,43 @@ use crate::{
         ops::{ExceptionOps, StackOps},
     },
 };
-use dotnet_value::object::{HeapStorage, ObjectRef};
+use dotnet_value::{
+    StackValue,
+    object::{HeapStorage, ObjectRef},
+    string::CLRString,
+};
 
 impl<'a, 'gc, 'm: 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn throw_by_name(&mut self, name: &str) -> StepResult {
+        self.throw_by_name_with_message(name, "")
+    }
+
+    #[inline]
+    fn throw_by_name_with_message(&mut self, name: &str, message: &str) -> StepResult {
         let gc = self.gc;
         let exception_type = vm_try!(self.shared.loader.corlib_type(name));
         let instance = vm_try!(self.new_object(exception_type));
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(instance));
         self.register_new_object(&obj_ref);
+
+        if !message.is_empty() {
+            let base_exception_type = vm_try!(self.shared.loader.corlib_type("System.Exception"));
+            let message_ref = StackValue::string(gc, CLRString::from(message)).as_object_ref();
+            self.register_new_object(&message_ref);
+            obj_ref.as_object_mut(gc, |obj| {
+                if obj
+                    .instance_storage
+                    .has_field(base_exception_type, "_message")
+                {
+                    let mut field = obj
+                        .instance_storage
+                        .get_field_mut_local(base_exception_type, "_message");
+                    message_ref.write(&mut field);
+                }
+            });
+        }
+
         *self.exception_mode = ExceptionState::Throwing(obj_ref, false);
         StepResult::Exception
     }

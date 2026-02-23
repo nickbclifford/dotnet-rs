@@ -1,4 +1,7 @@
 use crate::{StepResult, stack::ops::VesOps};
+
+const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
+const INVALID_CAST_MSG: &str = "Specified cast is not valid.";
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::{StackValue, object::ObjectRef};
 use dotnetdll::prelude::*;
@@ -10,7 +13,7 @@ pub fn castclass<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 ) -> StepResult {
     let target_obj_val = ctx.pop();
     let StackValue::ObjectRef(target_obj) = target_obj_val else {
-        return ctx.throw_by_name("System.InvalidProgramException");
+        return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
     };
 
     if let ObjectRef(Some(o)) = target_obj {
@@ -21,7 +24,7 @@ pub fn castclass<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         if vm_try!(res_ctx.is_a(obj_type.into(), target_ct)) {
             ctx.push(StackValue::ObjectRef(target_obj));
         } else {
-            return ctx.throw_by_name("System.InvalidCastException");
+            return ctx.throw_by_name_with_message("System.InvalidCastException", INVALID_CAST_MSG);
         }
     } else {
         // castclass returns null for null (III.4.3)
@@ -37,7 +40,7 @@ pub fn isinst<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 ) -> StepResult {
     let target_obj_val = ctx.pop();
     let StackValue::ObjectRef(target_obj) = target_obj_val else {
-        return ctx.throw_by_name("System.InvalidProgramException");
+        return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
     };
 
     if let ObjectRef(Some(o)) = target_obj {

@@ -56,6 +56,12 @@ pub use dotnet_utils::{
 };
 pub use string::CLRString;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ManagedExceptionError {
+    pub exception_type: &'static str,
+    pub message: &'static str,
+}
+
 #[derive(Clone, Debug)]
 pub enum StackValue<'gc> {
     Int32(i32),
@@ -128,46 +134,76 @@ macro_rules! checked_arithmetic_op {
             (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Signed) => l
                 .$op(r)
                 .map(StackValue::Int32)
-                .ok_or("System.OverflowException"),
+                .ok_or(ManagedExceptionError {
+                    exception_type: "System.OverflowException",
+                    message: "Arithmetic operation resulted in an overflow.",
+                }),
             (StackValue::Int32(l), StackValue::Int32(r), NumberSign::Unsigned) => (l as u32)
                 .$op(r as u32)
                 .map(|v| StackValue::Int32(v as i32))
-                .ok_or("System.OverflowException"),
+                .ok_or(ManagedExceptionError {
+                    exception_type: "System.OverflowException",
+                    message: "Arithmetic operation resulted in an overflow.",
+                }),
             (StackValue::Int64(l), StackValue::Int64(r), NumberSign::Signed) => l
                 .$op(r)
                 .map(StackValue::Int64)
-                .ok_or("System.OverflowException"),
+                .ok_or(ManagedExceptionError {
+                    exception_type: "System.OverflowException",
+                    message: "Arithmetic operation resulted in an overflow.",
+                }),
             (StackValue::Int64(l), StackValue::Int64(r), NumberSign::Unsigned) => (l as u64)
                 .$op(r as u64)
                 .map(|v| StackValue::Int64(v as i64))
-                .ok_or("System.OverflowException"),
+                .ok_or(ManagedExceptionError {
+                    exception_type: "System.OverflowException",
+                    message: "Arithmetic operation resulted in an overflow.",
+                }),
             (StackValue::NativeInt(l), StackValue::NativeInt(r), NumberSign::Signed) => l
                 .$op(r)
                 .map(StackValue::NativeInt)
-                .ok_or("System.OverflowException"),
+                .ok_or(ManagedExceptionError {
+                    exception_type: "System.OverflowException",
+                    message: "Arithmetic operation resulted in an overflow.",
+                }),
             (StackValue::NativeInt(l), StackValue::NativeInt(r), NumberSign::Unsigned) => (l
                 as usize)
                 .$op(r as usize)
                 .map(|v| StackValue::NativeInt(v as isize))
-                .ok_or("System.OverflowException"),
+                .ok_or(ManagedExceptionError {
+                    exception_type: "System.OverflowException",
+                    message: "Arithmetic operation resulted in an overflow.",
+                }),
             // Mixed types (Int32 <-> NativeInt)
             (StackValue::NativeInt(l), StackValue::Int32(r), NumberSign::Signed) => l
                 .$op(r as isize)
                 .map(StackValue::NativeInt)
-                .ok_or("System.OverflowException"),
+                .ok_or(ManagedExceptionError {
+                    exception_type: "System.OverflowException",
+                    message: "Arithmetic operation resulted in an overflow.",
+                }),
             (StackValue::NativeInt(l), StackValue::Int32(r), NumberSign::Unsigned) => (l as usize)
                 .$op((r as u32) as usize)
                 .map(|v| StackValue::NativeInt(v as isize))
-                .ok_or("System.OverflowException"),
+                .ok_or(ManagedExceptionError {
+                    exception_type: "System.OverflowException",
+                    message: "Arithmetic operation resulted in an overflow.",
+                }),
             (StackValue::Int32(l), StackValue::NativeInt(r), NumberSign::Signed) => (l as isize)
                 .$op(r)
                 .map(StackValue::NativeInt)
-                .ok_or("System.OverflowException"),
+                .ok_or(ManagedExceptionError {
+                    exception_type: "System.OverflowException",
+                    message: "Arithmetic operation resulted in an overflow.",
+                }),
             (StackValue::Int32(l), StackValue::NativeInt(r), NumberSign::Unsigned) => ((l as u32)
                 as usize)
                 .$op(r as usize)
                 .map(|v| StackValue::NativeInt(v as isize))
-                .ok_or("System.OverflowException"),
+                .ok_or(ManagedExceptionError {
+                    exception_type: "System.OverflowException",
+                    message: "Arithmetic operation resulted in an overflow.",
+                }),
             (l, r, _) => panic!("invalid types for checked operation: {:?}, {:?}", l, r),
         }
     };
@@ -424,16 +460,22 @@ impl<'gc> StackValue<'gc> {
         shift_op!(self, amount, sgn, >>)
     }
 
-    pub fn div(self, other: Self, sgn: NumberSign) -> Result<Self, &'static str> {
+    pub fn div(self, other: Self, sgn: NumberSign) -> Result<Self, ManagedExceptionError> {
         if other.is_zero() {
-            return Err("System.DivideByZeroException");
+            return Err(ManagedExceptionError {
+                exception_type: "System.DivideByZeroException",
+                message: "Attempted to divide by zero.",
+            });
         }
         Ok(arithmetic_op!(self, other, sgn, /))
     }
 
-    pub fn rem(self, other: Self, sgn: NumberSign) -> Result<Self, &'static str> {
+    pub fn rem(self, other: Self, sgn: NumberSign) -> Result<Self, ManagedExceptionError> {
         if other.is_zero() {
-            return Err("System.DivideByZeroException");
+            return Err(ManagedExceptionError {
+                exception_type: "System.DivideByZeroException",
+                message: "Attempted to divide by zero.",
+            });
         }
         Ok(arithmetic_op!(self, other, sgn, %))
     }
@@ -451,15 +493,15 @@ impl<'gc> StackValue<'gc> {
         }
     }
 
-    pub fn checked_add(self, other: Self, sgn: NumberSign) -> Result<Self, &'static str> {
+    pub fn checked_add(self, other: Self, sgn: NumberSign) -> Result<Self, ManagedExceptionError> {
         checked_arithmetic_op!(self, other, sgn, checked_add)
     }
 
-    pub fn checked_sub(self, other: Self, sgn: NumberSign) -> Result<Self, &'static str> {
+    pub fn checked_sub(self, other: Self, sgn: NumberSign) -> Result<Self, ManagedExceptionError> {
         checked_arithmetic_op!(self, other, sgn, checked_sub)
     }
 
-    pub fn checked_mul(self, other: Self, sgn: NumberSign) -> Result<Self, &'static str> {
+    pub fn checked_mul(self, other: Self, sgn: NumberSign) -> Result<Self, ManagedExceptionError> {
         checked_arithmetic_op!(self, other, sgn, checked_mul)
     }
 
@@ -858,5 +900,22 @@ mod tests {
         let v4 = StackValue::Int32(10);
         let diff = v3 - v4;
         assert_eq!(diff, StackValue::Int32(20));
+
+        // Test division by zero
+        let v_zero = StackValue::Int32(0);
+        let res = v1.div(v_zero, NumberSign::Signed);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(err.exception_type, "System.DivideByZeroException");
+        assert_eq!(err.message, "Attempted to divide by zero.");
+
+        // Test checked overflow
+        let v_max = StackValue::Int32(i32::MAX);
+        let v_one = StackValue::Int32(1);
+        let res = v_max.checked_add(v_one, NumberSign::Signed);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(err.exception_type, "System.OverflowException");
+        assert_eq!(err.message, "Arithmetic operation resulted in an overflow.");
     }
 }

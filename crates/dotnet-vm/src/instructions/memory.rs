@@ -12,6 +12,12 @@ use dotnet_value::{
 use dotnetdll::prelude::*;
 use std::ptr;
 
+const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
+const OVERFLOW_MSG: &str = "Arithmetic operation resulted in an overflow.";
+const OUT_OF_MEMORY_MSG: &str = "Insufficient memory to continue the execution of the program.";
+const ACCESS_VIOLATION_MSG: &str = "Attempted to read or write protected memory.";
+
 #[dotnet_instruction(CopyMemoryBlock { })]
 pub fn cpblk<
     'gc,
@@ -25,7 +31,7 @@ pub fn cpblk<
     let dest = vm_pop!(ctx).as_ptr();
 
     if src.is_null() || dest.is_null() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     // Perform the move in chunks to allow GC safe points if necessary.
@@ -60,7 +66,7 @@ pub fn initblk<
     let addr = vm_pop!(ctx).as_ptr();
 
     if addr.is_null() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     // Perform the initialization in chunks to allow GC safe points if necessary.
@@ -86,18 +92,18 @@ pub fn localloc<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + PoolOps + ExceptionOps<'gc>
 ) -> StepResult {
     let size_isize = ctx.pop_isize();
     if size_isize < 0 {
-        return ctx.throw_by_name("System.OverflowException");
+        return ctx.throw_by_name_with_message("System.OverflowException", OVERFLOW_MSG);
     }
     let size = size_isize as usize;
 
     // Defensive check: limit local allocation to 128MB
     if size > 0x800_0000 {
-        return ctx.throw_by_name("System.OutOfMemoryException");
+        return ctx.throw_by_name_with_message("System.OutOfMemoryException", OUT_OF_MEMORY_MSG);
     }
 
     let ptr = ctx.localloc(size);
     if ptr.is_null() {
-        return ctx.throw_by_name("System.OutOfMemoryException");
+        return ctx.throw_by_name_with_message("System.OutOfMemoryException", OUT_OF_MEMORY_MSG);
     }
 
     ctx.push(StackValue::UnmanagedPtr(UnmanagedPtr(
@@ -114,21 +120,16 @@ pub fn stind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: StoreType) -> 
     if let StackValue::ManagedPtr(m) = &addr_val
         && let Some((slot_idx, off)) = m.stack_slot_origin()
         && off == ByteOffset::ZERO
+        && !matches!(ctx.get_slot_ref(slot_idx), StackValue::ValueType(..))
     {
-        // Direct write to slot - use typed write to maintain StackValue discriminant correctness.
-        // Exception: if the slot currently contains a ValueType, we must use raw write to
-        // avoid replacing the entire struct with a scalar. Structs on the stack have stable
-        // FieldStorage that can be partially overwritten.
-        if !matches!(ctx.get_slot_ref(slot_idx), StackValue::ValueType(..)) {
-            let typed_val = convert_to_stack_value(val, param0);
-            ctx.set_slot(slot_idx, typed_val);
-            return StepResult::Continue;
-        }
+        let typed_val = convert_to_stack_value(val, param0);
+        ctx.set_slot(slot_idx, typed_val);
+        return StepResult::Continue;
     }
 
     // Check for null pointer before extracting origin/offset
     if addr_val.is_null() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     let (origin, offset) = match addr_val {
@@ -137,7 +138,7 @@ pub fn stind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: StoreType) -> 
         StackValue::UnmanagedPtr(u) => {
             (PointerOrigin::Unmanaged, ByteOffset(u.0.as_ptr() as usize))
         }
-        _ => return ctx.throw_by_name("System.InvalidProgramException"),
+        _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
     };
 
     let layout = match param0 {
@@ -157,9 +158,9 @@ pub fn stind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: StoreType) -> 
         Ok(_) => {}
         Err(_) => {
             if matches!(origin, PointerOrigin::Unmanaged) && offset.0 == 0 {
-                return ctx.throw_by_name("System.NullReferenceException");
+                return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
             }
-            return ctx.throw_by_name("System.AccessViolationException");
+            return ctx.throw_by_name_with_message("System.AccessViolationException", ACCESS_VIOLATION_MSG);
         }
     }
     StepResult::Continue
@@ -181,7 +182,7 @@ pub fn ldind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: LoadType) -> S
 
     // Check for null pointer before extracting origin/offset
     if addr_val.is_null() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
     let (origin, offset) = match addr_val {
@@ -190,7 +191,7 @@ pub fn ldind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: LoadType) -> S
         StackValue::UnmanagedPtr(u) => {
             (PointerOrigin::Unmanaged, ByteOffset(u.0.as_ptr() as usize))
         }
-        _ => return ctx.throw_by_name("System.InvalidProgramException"),
+        _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
     };
 
     let layout = match param0 {
@@ -213,9 +214,9 @@ pub fn ldind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: LoadType) -> S
         Ok(v) => v,
         Err(_) => {
             if matches!(origin, PointerOrigin::Unmanaged) && offset.0 == 0 {
-                return ctx.throw_by_name("System.NullReferenceException");
+                return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
             }
-            return ctx.throw_by_name("System.AccessViolationException");
+            return ctx.throw_by_name_with_message("System.AccessViolationException", ACCESS_VIOLATION_MSG);
         }
     };
     ctx.push(val);

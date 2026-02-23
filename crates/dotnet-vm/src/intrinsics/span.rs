@@ -267,7 +267,7 @@ pub fn intrinsic_span_ctor_from_pointer<'gc, 'm: 'gc>(
     let this_ptr = ctx.pop_managed_ptr();
 
     if length < 0 {
-        return ctx.throw_by_name("System.ArgumentOutOfRangeException");
+        return ctx.throw_by_name_with_message("System.ArgumentOutOfRangeException", "length");
     }
 
     let element_type = &generics.type_generics[0];
@@ -278,14 +278,14 @@ pub fn intrinsic_span_ctor_from_pointer<'gc, 'm: 'gc>(
 
     // Span<T>(void*, int) is only valid for types that do not contain references
     if element_layout.is_or_contains_refs() {
-        return ctx.throw_by_name("System.ArgumentException");
+        return ctx.throw_by_name_with_message("System.ArgumentException", "The type cannot contain references.");
     }
 
     // The pointer can be a NativeInt, ManagedPtr, or UnmanagedPtr
     let managed = match ptr_val {
         StackValue::NativeInt(ptr) => {
             if ptr == 0 && length > 0 {
-                return ctx.throw_by_name("System.ArgumentOutOfRangeException");
+                return ctx.throw_by_name_with_message("System.ArgumentOutOfRangeException", "ptr");
             }
             // Create a ManagedPtr from the native pointer
             ManagedPtr::new(
@@ -308,18 +308,18 @@ pub fn intrinsic_span_ctor_from_pointer<'gc, 'm: 'gc>(
         }
         StackValue::ManagedPtr(m) => {
             if m.is_null() && length > 0 {
-                return ctx.throw_by_name("System.ArgumentOutOfRangeException");
+                return ctx.throw_by_name_with_message("System.ArgumentOutOfRangeException", "ptr");
             }
             // Already a managed pointer, just use it
             m
         }
         StackValue::ObjectRef(ObjectRef(None)) => {
             if length > 0 {
-                return ctx.throw_by_name("System.ArgumentOutOfRangeException");
+                return ctx.throw_by_name_with_message("System.ArgumentOutOfRangeException", "ptr");
             }
             ManagedPtr::new(None, element_desc, None, false, None)
         }
-        _ => return ctx.throw_by_name("System.ArgumentException"),
+        _ => return ctx.throw_by_name_with_message("System.ArgumentException", "Invalid pointer value."),
     };
 
     let span_type = this_ptr.inner_type;
@@ -537,11 +537,14 @@ fn pop_nonneg_usize<'gc, 'm>(ctx: &mut dyn VesOps<'gc, 'm>) -> Result<usize, Ste
     match ctx.pop() {
         StackValue::Int32(i) => {
             if i < 0 {
-                return Err(ctx.throw_by_name("System.ArgumentOutOfRangeException"));
+                return Err(ctx.throw_by_name_with_message(
+                    "System.ArgumentOutOfRangeException",
+                    "Specified argument was out of the range of valid values.",
+                ));
             }
             Ok(i as usize)
         }
-        _ => Err(ctx.throw_by_name("System.ArgumentException")),
+        _ => Err(ctx.throw_by_name_with_message("System.ArgumentException", "The argument must be an integer.")),
     }
 }
 
@@ -593,7 +596,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
             };
             (start, Some(length))
         }
-        _ => return ctx.throw_by_name("System.ArgumentException"),
+        _ => return ctx.throw_by_name_with_message("System.ArgumentException", "Invalid number of arguments."),
     };
 
     let source = ctx.pop();
@@ -648,16 +651,16 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
             };
             (std::ptr::null_mut(), 0, element_type, 2)
         }
-        _ => return ctx.throw_by_name("System.ArgumentException"),
+        _ => return ctx.throw_by_name_with_message("System.ArgumentException", "The argument must be a string or an array."),
     };
 
     // Apply start and length_override
     if start > total_len {
-        return ctx.throw_by_name("System.ArgumentOutOfRangeException");
+        return ctx.throw_by_name_with_message("System.ArgumentOutOfRangeException", "start");
     }
     let actual_length = if let Some(len) = length_override {
         if start + len > total_len {
-            return ctx.throw_by_name("System.ArgumentOutOfRangeException");
+            return ctx.throw_by_name_with_message("System.ArgumentOutOfRangeException", "length");
         }
         len
     } else {
@@ -810,7 +813,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
     let field_desc = vm_try!(ctx.loader().find_concrete_type(field_type.clone()));
 
     let Some(initial_data) = &field.initial_value else {
-        return ctx.throw_by_name("System.ArgumentException");
+        return ctx.throw_by_name_with_message("System.ArgumentException", "The field does not have initial data.");
     };
 
     if field_desc
@@ -1014,7 +1017,10 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
         );
         ctx.push_managed_ptr(managed);
     } else {
-        return ctx.throw_by_name("System.ArgumentException");
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "The field is not a static array initialization field.",
+        );
     }
     StepResult::Continue
 }

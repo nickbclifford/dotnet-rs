@@ -2,6 +2,9 @@ use crate::{
     StepResult, instructions::objects::get_ptr_context, layout::LayoutFactory,
     resolution::ValueResolution, stack::ops::VesOps, sync::Ordering as AtomicOrdering,
 };
+
+const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+const ACCESS_VIOLATION_MSG: &str = "Attempted to read or write protected memory.";
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::{
     StackValue,
@@ -29,7 +32,7 @@ pub fn ldfld<'gc, 'm: 'gc>(
     let parent = ctx.pop();
 
     if parent.is_null() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
     let (origin, base_offset) = match crate::instructions::objects::get_ptr_info(ctx, &parent) {
         Ok(v) => v,
@@ -95,9 +98,9 @@ pub fn ldfld<'gc, 'm: 'gc>(
         Ok(v) => v,
         Err(_) => {
             if offset.0 == 0 {
-                return ctx.throw_by_name("System.NullReferenceException");
+                return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
             }
-            return ctx.throw_by_name("System.AccessViolationException");
+            return ctx.throw_by_name_with_message("System.AccessViolationException", ACCESS_VIOLATION_MSG);
         }
     };
 
@@ -117,7 +120,7 @@ pub fn stfld<'gc, 'm: 'gc>(
     let parent = ctx.pop();
 
     if parent.is_null() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
     let (origin, base_offset) = match crate::instructions::objects::get_ptr_info(ctx, &parent) {
         Ok(v) => v,
@@ -150,9 +153,9 @@ pub fn stfld<'gc, 'm: 'gc>(
         Ok(_) => {}
         Err(_) => {
             if offset.0 == 0 {
-                return ctx.throw_by_name("System.NullReferenceException");
+                return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
             }
-            return ctx.throw_by_name("System.AccessViolationException");
+            return ctx.throw_by_name_with_message("System.AccessViolationException", ACCESS_VIOLATION_MSG);
         }
     }
 
@@ -320,7 +323,7 @@ pub fn ldflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource)
     }
 
     if parent.is_null() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
     let (origin, base_offset) = match get_ptr_context(ctx, &parent) {
         Ok(v) => v,

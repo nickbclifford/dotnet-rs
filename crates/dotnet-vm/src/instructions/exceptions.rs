@@ -32,7 +32,10 @@ pub fn throw<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
 ) -> StepResult {
     let exc = ctx.pop_obj();
     if exc.0.is_none() {
-        return ctx.throw_by_name("System.NullReferenceException");
+        return ctx.throw_by_name_with_message(
+            "System.NullReferenceException",
+            "Object reference not set to an instance of an object.",
+        );
     }
     ctx.throw(exc)
 }

@@ -2,6 +2,9 @@ use crate::{
     StepResult,
     stack::ops::{ExceptionOps, StackOps},
 };
+
+const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
+const OVERFLOW_MSG: &str = "Arithmetic operation resulted in an overflow.";
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::{StackValue, pointer::UnmanagedPtr};
 use dotnetdll::prelude::*;
@@ -21,7 +24,7 @@ pub fn conv<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
                 StackValue::NativeInt(i) => i as $t,
                 StackValue::NativeFloat(f) => f as $t,
                 _ => {
-                    return ctx.throw_by_name("System.InvalidProgramException");
+                    return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
                 }
             }
         };
@@ -68,7 +71,7 @@ pub fn conv<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
                     m.with_data(0, |data| data.as_ptr() as usize) as u64
                 },
                 StackValue::NativeFloat(f) => f as u64,
-                _ => return ctx.throw_by_name("System.InvalidProgramException"),
+                _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
             };
             ctx.push(StackValue::Int64(i as i64));
         }
@@ -86,7 +89,7 @@ pub fn conv<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
                     m.with_data(0, |data| data.as_ptr() as usize)
                 },
                 StackValue::NativeFloat(f) => f as usize,
-                _ => return ctx.throw_by_name("System.InvalidProgramException"),
+                _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
             };
             ctx.push(StackValue::NativeInt(i as isize));
         }
@@ -131,7 +134,7 @@ pub fn conv_ovf<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>
                         Ok(f as $target)
                     }
                 }
-                _ => return ctx.throw_by_name("System.InvalidProgramException"),
+                _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
             };
 
             match result {
@@ -139,7 +142,7 @@ pub fn conv_ovf<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>
                     ctx.push(StackValue::$stack_variant(v as _));
                     StepResult::Continue
                 }
-                Err(_) => ctx.throw_by_name("System.OverflowException"),
+                Err(_) => ctx.throw_by_name_with_message("System.OverflowException", OVERFLOW_MSG),
             }
         }};
     }
@@ -167,7 +170,7 @@ pub fn conv_r4<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
         StackValue::Int64(i) => i as f32,
         StackValue::NativeInt(i) => i as f32,
         StackValue::NativeFloat(i) => i as f32,
-        _ => return ctx.throw_by_name("System.InvalidProgramException"),
+        _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
     };
     ctx.push(StackValue::NativeFloat(v as f64));
     StepResult::Continue
@@ -182,7 +185,7 @@ pub fn conv_r8<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
         StackValue::Int64(i) => i as f64,
         StackValue::NativeInt(i) => i as f64,
         StackValue::NativeFloat(i) => i,
-        _ => return ctx.throw_by_name("System.InvalidProgramException"),
+        _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
     };
     ctx.push(StackValue::NativeFloat(v));
     StepResult::Continue
@@ -197,7 +200,7 @@ pub fn conv_r_un<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized
         StackValue::Int32(i) => (i as u32) as f64,
         StackValue::Int64(i) => (i as u64) as f64,
         StackValue::NativeInt(i) => (i as usize) as f64,
-        _ => return ctx.throw_by_name("System.InvalidProgramException"),
+        _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
     };
     ctx.push(StackValue::NativeFloat(f));
     StepResult::Continue

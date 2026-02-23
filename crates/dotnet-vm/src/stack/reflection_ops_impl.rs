@@ -90,7 +90,13 @@ impl<'a, 'gc, 'm: 'gc> StaticsOps<'gc> for VesContext<'a, 'gc, 'm> {
                 self.check_gc_safe_point();
                 StepResult::Yield
             }
-            Failed => self.throw_by_name("System.TypeInitializationException"),
+            Failed => self.throw_by_name_with_message(
+                "System.TypeInitializationException",
+                &format!(
+                    "The type initializer for '{}' threw an exception.",
+                    description.type_name()
+                ),
+            ),
         }
     }
 }

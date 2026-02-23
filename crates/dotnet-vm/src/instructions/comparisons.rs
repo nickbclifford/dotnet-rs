@@ -27,7 +27,10 @@ comparison_op!(
 pub fn ckfinite<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
     let f = ctx.pop_f64();
     if f.is_infinite() || f.is_nan() {
-        return ctx.throw_by_name("System.ArithmeticException");
+        return ctx.throw_by_name_with_message(
+            "System.ArithmeticException",
+            "Overflow or underflow in the arithmetic operation.",
+        );
     }
     ctx.push_f64(f);
     StepResult::Continue
