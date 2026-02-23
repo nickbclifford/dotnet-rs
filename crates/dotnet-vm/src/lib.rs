@@ -14,7 +14,6 @@
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnetdll::prelude::*;
 use gc_arena::{Collect, unsafe_empty_collect};
-use std::rc::Rc;
 
 #[macro_use]
 mod macros;
@@ -75,7 +74,7 @@ unsafe_empty_collect!(MethodState<'_>);
 pub struct MethodInfo<'a> {
     signature: &'a ManagedMethod<MethodType>,
     locals: &'a [LocalVariable],
-    exceptions: Vec<Rc<exceptions::ProtectedSection>>,
+    exceptions: Vec<Arc<exceptions::ProtectedSection>>,
     pub instructions: &'a [Instruction],
     pub source: MethodDescription,
     pub is_cctor: bool,
@@ -120,7 +119,7 @@ impl MethodInfo<'static> {
                 locals: &body.header.local_variables,
                 exceptions: exceptions::parse(exceptions, &ctx)?
                     .into_iter()
-                    .map(Rc::new)
+                    .map(Arc::new)
                     .collect(),
                 instructions: body.instructions.as_slice(),
                 source: method,

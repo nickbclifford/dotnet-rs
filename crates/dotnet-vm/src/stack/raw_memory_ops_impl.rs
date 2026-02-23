@@ -739,20 +739,15 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn check_gc_safe_point(&self) {
+    fn check_gc_safe_point(&self) -> bool {
         if self.local.active_borrows.get() > 0 {
             // Cannot reach safe point while holding borrows!
-            return;
+            return false;
         }
         let thread_manager = &self.shared.thread_manager;
         if thread_manager.is_gc_stop_requested() {
-            let managed_id = self.thread_id.get();
-            if managed_id != dotnet_utils::ArenaId::INVALID {
-                #[cfg(feature = "multithreaded-gc")]
-                thread_manager.safe_point(managed_id, &self.shared.gc_coordinator);
-                #[cfg(not(feature = "multithreaded-gc"))]
-                thread_manager.safe_point(managed_id, &Default::default());
-            }
+            return true;
         }
+        false
     }
 }

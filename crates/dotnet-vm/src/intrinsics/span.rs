@@ -246,7 +246,7 @@ fn chunked_sequence_equal<'gc, 'm>(
 
         offset += current_chunk;
         if offset < total_bytes {
-            ctx.check_gc_safe_point();
+            let _ = ctx.check_gc_safe_point();
         }
     }
 

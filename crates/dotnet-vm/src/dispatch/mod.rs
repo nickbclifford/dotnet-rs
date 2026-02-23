@@ -4,7 +4,7 @@
 //! which orchestrates the fetch-decode-execute cycle. It also provides
 //! the [`InstructionRegistry`] for looking up instruction handlers.
 use crate::{
-    MethodInfo, ResolutionContext, StepResult,
+    ResolutionContext, StepResult,
     exceptions::ExceptionState,
     stack::{CallStack, ops::*},
     threading::ThreadManagerOps,
@@ -31,17 +31,9 @@ impl InstructionRegistry {
 
 impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     #[inline]
-    pub fn check_gc_safe_point(&self) {
+    pub fn check_gc_safe_point(&self) -> bool {
         let thread_manager = &self.shared.thread_manager;
-        if thread_manager.is_gc_stop_requested() {
-            let managed_id = self.thread_id.get();
-            if managed_id != dotnet_utils::ArenaId::INVALID {
-                #[cfg(feature = "multithreaded-gc")]
-                thread_manager.safe_point(managed_id, &self.shared.gc_coordinator);
-                #[cfg(not(feature = "multithreaded-gc"))]
-                thread_manager.safe_point(managed_id, &Default::default());
-            }
-        }
+        thread_manager.is_gc_stop_requested()
     }
 }
 
@@ -153,6 +145,9 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
     /// Run the engine until it needs to yield, returns from the entry point, or throws an unhandled exception.
     pub fn run(&mut self, gc: GCHandle<'gc>) -> StepResult {
         loop {
+            if self.stack.shared.thread_manager.is_gc_stop_requested() {
+                return StepResult::Yield;
+            }
             let res = match self.stack.execution.exception_mode {
                 ExceptionState::None
                 | ExceptionState::ExecutingHandler(_)
@@ -241,7 +236,7 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
             }
 
             vm_try!(ctx.call_frame(
-                vm_try!(MethodInfo::new(method, &lookup, ctx.shared.clone())),
+                vm_try!(ctx.shared.caches.get_method_info(method, &lookup, ctx.shared.clone())),
                 lookup,
             ));
             StepResult::FramePushed

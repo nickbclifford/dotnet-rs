@@ -1,5 +1,5 @@
 use crate::{
-    MethodInfo, StepResult,
+    StepResult,
     dispatch::ExecutionEngine,
     metrics::CacheStats,
     stack::{
@@ -164,7 +164,9 @@ impl Executor {
                 );
 
                 let shared = c.stack.shared.clone();
-                let info = MethodInfo::new(method, &Default::default(), shared)
+                let info = shared
+                    .caches
+                    .get_method_info(method, &Default::default(), shared.clone())
                     .expect("Failed to resolve entrypoint");
                 c.ves_context(gc_handle)
                     .entrypoint_frame(info, Default::default(), vec![])

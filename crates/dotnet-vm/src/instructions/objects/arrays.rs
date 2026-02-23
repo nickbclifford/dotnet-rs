@@ -260,7 +260,7 @@ pub fn newarr<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     };
 
     if length > LARGE_ARRAY_THRESHOLD {
-        ctx.check_gc_safe_point();
+        if ctx.check_gc_safe_point() { return StepResult::Yield; }
     }
 
     let res_ctx = ctx.current_context();

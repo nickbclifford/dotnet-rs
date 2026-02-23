@@ -661,6 +661,7 @@ fn test_volatile_sharing() {
     }
 }
 
+
 /// Test that verifies cross-arena reference tracking works
 #[test]
 #[cfg(feature = "multithreaded-gc")]
@@ -724,4 +725,61 @@ fn test_allocation_pressure_triggers_collection() {
     shared
         .gc_coordinator
         .unregister_arena(dotnet_utils::ArenaId(1));
+}
+
+
+#[test]
+#[cfg(all(feature = "multithreaded-gc", feature = "multithreading"))]
+fn test_stw_stress() {
+    use dotnet_vm::state;
+    use std::sync::Arc;
+    use std::thread;
+
+    let harness = TestHarness::get();
+    let fixture_path = Path::new("tests/fixtures/span_comprehensive_0.cs");
+    let dll_path = harness.build(fixture_path).unwrap();
+
+    let shared = Arc::new(state::SharedGlobalState::new(harness.loader));
+    let resolution = try_static_res_from_file(dll_path.to_str().unwrap())
+        .expect("Failed to load assembly");
+    shared.loader.register_assembly(resolution);
+
+    let num_threads = 8usize;
+    let iters_per_thread = 10usize;
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    let handles: Vec<_> = (0..num_threads)
+        .map(|i| {
+            let harness_ptr = harness as *const TestHarness as usize;
+            let shared = Arc::clone(&shared);
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let harness = unsafe { &*(harness_ptr as *const TestHarness) };
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    for _ in 0..iters_per_thread {
+                        let code = harness.run_with_shared(resolution, shared.clone());
+                        assert_eq!(code, 0, "Managed program must exit 0");
+                    }
+                }));
+                tx.send((i, result)).ok();
+            })
+        })
+        .collect();
+
+    // Wait for all threads to complete with a bounded timeout to avoid hangs
+    let timeout = std::time::Duration::from_secs(20);
+    for _ in 0..num_threads {
+        match rx.recv_timeout(timeout) {
+            Ok((_i, result)) => {
+                if let Err(e) = result {
+                    panic!("Thread panicked: {:?}", e);
+                }
+            }
+            Err(_) => panic!("test_stw_stress timed out"),
+        }
+    }
+
+    for h in handles {
+        h.join().expect("Thread should complete");
+    }
 }

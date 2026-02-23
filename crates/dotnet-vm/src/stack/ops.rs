@@ -294,7 +294,8 @@ pub trait RawMemoryOps<'gc>: BorrowScopeOps {
         ordering: dotnet_utils::sync::Ordering,
     ) -> Result<(), String>;
 
-    fn check_gc_safe_point(&self);
+    #[must_use]
+    fn check_gc_safe_point(&self) -> bool;
 }
 
 pub trait ReflectionOps<'gc, 'm>: MemoryOps<'gc> {

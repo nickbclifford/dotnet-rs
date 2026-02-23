@@ -94,7 +94,7 @@ pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
         }
         offset += current_chunk;
         if offset < total_count {
-            ctx.check_gc_safe_point();
+            if ctx.check_gc_safe_point() { return StepResult::Yield; }
         }
     }
 
@@ -640,7 +640,7 @@ pub fn intrinsic_unsafe_copy_block<'gc, 'm: 'gc>(
             ptr::copy(src.add(offset), dest.add(offset), current_chunk);
             offset += current_chunk;
             if offset < size {
-                ctx.check_gc_safe_point();
+                if ctx.check_gc_safe_point() { return StepResult::Yield; }
             }
         }
     }
@@ -676,7 +676,7 @@ pub fn intrinsic_unsafe_init_block<'gc, 'm: 'gc>(
             ptr::write_bytes(addr.add(offset), val, current_chunk);
             offset += current_chunk;
             if offset < size {
-                ctx.check_gc_safe_point();
+                if ctx.check_gc_safe_point() { return StepResult::Yield; }
             }
         }
     }

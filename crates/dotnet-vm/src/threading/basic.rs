@@ -90,6 +90,9 @@ pub struct ThreadManager {
     #[cfg(feature = "multithreaded-gc")]
     /// Mutex for GC coordination
     pub(super) gc_coordination: Mutex<()>,
+    #[cfg(feature = "multithreaded-gc")]
+    /// Reference to the GC coordinator for resume signaling
+    pub(super) coordinator: Mutex<Option<sync::Weak<GCCoordinator>>>,
 }
 
 impl ThreadManager {
@@ -107,6 +110,8 @@ impl ThreadManager {
             all_threads_stopped: Condvar::new(),
             #[cfg(feature = "multithreaded-gc")]
             gc_coordination: Mutex::new(()),
+            #[cfg(feature = "multithreaded-gc")]
+            coordinator: Mutex::new(None),
         });
         let _ = manager.self_weak.set(Arc::downgrade(&manager));
         manager
@@ -116,6 +121,26 @@ impl ThreadManager {
     pub(super) fn resume_threads(&self) {
         self.gc_stop_requested.store(false, Ordering::Release);
         self.all_threads_stopped.notify_all();
+
+        // Notify all arenas to check their resume condition
+        let coordinator_opt = { self.coordinator.lock().clone() };
+        if let Some(weak) = coordinator_opt {
+            if let Some(coordinator) = weak.upgrade() {
+                coordinator.notify_resume();
+            }
+        }
+    }
+
+    #[cfg(feature = "multithreaded-gc")]
+    pub fn set_coordinator(&self, coordinator: sync::Weak<GCCoordinator>) {
+        let mut guard = self.coordinator.lock();
+        *guard = Some(coordinator);
+    }
+
+    #[cfg(feature = "multithreaded-gc")]
+    fn get_coordinator(&self) -> Option<sync::Arc<GCCoordinator>> {
+        let guard = self.coordinator.lock();
+        guard.as_ref()?.upgrade()
     }
 }
 
@@ -244,18 +269,10 @@ impl ThreadManagerOps for ThreadManager {
                 thread.set_state(ThreadState::AtSafePoint);
                 self.threads_at_safepoint.fetch_add(1, Ordering::AcqRel);
                 self.all_threads_stopped.notify_all();
-
-                {
-                    let mut guard = self.gc_coordination.lock();
-                    while self.gc_stop_requested.load(Ordering::Acquire) {
-                        if coordinator.has_command(managed_id)
-                            && let Some(command) = coordinator.get_command(managed_id)
-                        {
-                            self.execute_gc_command(command, coordinator);
-                            coordinator.command_finished(managed_id);
-                        }
-                        self.all_threads_stopped.wait(&mut guard);
-                    }
+                
+                while let Some(command) = coordinator.wait_for_command_or_resume(managed_id, &self.gc_stop_requested) {
+                    self.execute_gc_command(command, coordinator);
+                    coordinator.command_finished(managed_id);
                 }
 
                 self.threads_at_safepoint.fetch_sub(1, Ordering::Release);
@@ -302,12 +319,28 @@ impl ThreadManagerOps for ThreadManager {
     fn request_stop_the_world(&self) -> Self::Guard {
         #[cfg(feature = "multithreaded-gc")]
         {
-            let mut guard = self.gc_coordination.lock();
             let start_time = Instant::now();
             const WARN_TIMEOUT: Duration = Duration::from_secs(1);
             let mut warned = false;
 
+            // Signal all threads to stop.
+            // Multiple threads might do this simultaneously, which is fine.
             self.gc_stop_requested.store(true, Ordering::Release);
+
+            let mut guard = loop {
+                if let Some(g) = self.gc_coordination.try_lock() {
+                    break g;
+                }
+
+                // If we're not the one holding the coordination lock, we might be
+                // requested to stop by the thread that DOES hold it.
+                if let Some(id) = self.current_thread_id() {
+                    if let Some(coordinator) = self.get_coordinator() {
+                        self.safe_point(id, &coordinator);
+                    }
+                }
+                thread::yield_now();
+            };
 
             loop {
                 let thread_count = self.thread_count();

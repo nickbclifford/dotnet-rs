@@ -254,6 +254,33 @@ impl GCCoordinator {
         }
     }
 
+    /// Wait for a command or for the GC to finish.
+    /// Returns Some(command) if a command was received, or None if the GC finished.
+    pub fn wait_for_command_or_resume(
+        &self,
+        thread_id: dotnet_utils::ArenaId,
+        stop_requested: &AtomicBool,
+    ) -> Option<GCCommand> {
+        if let Some(handle) = self.get_arena(thread_id) {
+            let mut cmd_guard = handle.current_command().lock();
+            while stop_requested.load(Ordering::Acquire) {
+                if let Some(cmd) = cmd_guard.clone() {
+                    return Some(cmd);
+                }
+                handle.command_signal().wait(&mut cmd_guard);
+            }
+        }
+        None
+    }
+
+    /// Notify all arenas that they should check their resume condition.
+    pub fn notify_resume(&self) {
+        let arenas = self.arenas.lock();
+        for handle in arenas.values() {
+            handle.command_signal().notify_all();
+        }
+    }
+
     /// Record a cross-arena reference found during marking.
     pub fn record_cross_arena_ref(&self, target_thread_id: dotnet_utils::ArenaId, ptr: ObjectPtr) {
         let mut refs = self.cross_arena_refs.lock();

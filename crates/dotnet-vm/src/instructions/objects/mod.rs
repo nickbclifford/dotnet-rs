@@ -221,7 +221,7 @@ pub fn new_object<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, ctor: &UserMethod
 
         vm_try!(ctx.constructor_frame(
             instance,
-            vm_try!(crate::MethodInfo::new(
+            vm_try!(ctx.shared().caches.get_method_info(
                 method,
                 &lookup,
                 ctx.shared().clone()

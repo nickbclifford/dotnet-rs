@@ -1,5 +1,5 @@
 use crate::{
-    MethodInfo, MethodType, ResolutionContext, StepResult,
+    MethodType, ResolutionContext, StepResult,
     resolver::ResolverService,
     stack::{
         context::VesContext,
@@ -51,7 +51,7 @@ impl<'a, 'gc, 'm: 'gc> StaticsOps<'gc> for VesContext<'a, 'gc, 'm> {
         generics: GenericLookup,
     ) -> StepResult {
         let _gc = self.gc;
-        self.check_gc_safe_point();
+        if self.check_gc_safe_point() { return StepResult::Yield; }
 
         let ctx = ResolutionContext {
             resolution: description.resolution,
@@ -80,14 +80,14 @@ impl<'a, 'gc, 'm: 'gc> StaticsOps<'gc> for VesContext<'a, 'gc, 'm> {
                     self.current_frame().state.ip
                 );
                 vm_try!(self.call_frame(
-                    vm_try!(MethodInfo::new(m, &generics, self.shared.clone())),
+                    vm_try!(self.shared.caches.get_method_info(m, &generics, self.shared.clone())),
                     generics.clone(),
                 ));
                 StepResult::FramePushed
             }
             Initialized | Recursive => StepResult::Continue,
             Waiting => {
-                self.check_gc_safe_point();
+                if self.check_gc_safe_point() { return StepResult::Yield; }
                 StepResult::Yield
             }
             Failed => self.throw_by_name_with_message(

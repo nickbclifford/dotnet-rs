@@ -13,7 +13,7 @@ use dotnet_value::{
     StackValue,
     object::{HeapStorage, Object, ObjectRef},
     string::CLRString,
-    with_string, with_string_mut,
+    with_string,
 };
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
@@ -97,7 +97,7 @@ pub fn intrinsic_string_equals<'gc, 'm: 'gc>(
 
                         offset += current_chunk;
                         if offset < length {
-                            ctx.check_gc_safe_point();
+                            if ctx.check_gc_safe_point() { return StepResult::Yield; }
                         }
                     }
                     equal
@@ -144,7 +144,7 @@ pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc>(
     // Check GC safe point before allocating large strings
     const LARGE_STRING_THRESHOLD: usize = 1024;
     if len > LARGE_STRING_THRESHOLD {
-        ctx.check_gc_safe_point();
+        if ctx.check_gc_safe_point() { return StepResult::Yield; }
     }
 
     let value = CLRString::new(vec![0u16; len]);
@@ -195,7 +195,7 @@ pub fn intrinsic_string_ctor_char_array<'gc, 'm: 'gc>(
                 }
                 offset += chunk_len;
                 if offset < len {
-                    ctx.check_gc_safe_point();
+                    if ctx.check_gc_safe_point() { return StepResult::Yield; }
                 }
             }
             result
@@ -238,7 +238,7 @@ pub fn intrinsic_string_ctor_char_ptr<'gc, 'm: 'gc>(
                 i += 1;
 
                 if i % 1024 == 0 {
-                    ctx.check_gc_safe_point();
+                    if ctx.check_gc_safe_point() { return StepResult::Yield; }
                 }
             }
         }
@@ -327,7 +327,7 @@ pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
                 })?;
                 offset += chunk_len;
                 if offset < len {
-                    ctx.check_gc_safe_point();
+                    let _ = ctx.check_gc_safe_point();
                 }
             }
             Ok(())
@@ -349,7 +349,7 @@ pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
     let total_length = data0.len() + data1.len() + data2.len();
     const LARGE_STRING_CONCAT_THRESHOLD: usize = 1024;
     if total_length > LARGE_STRING_CONCAT_THRESHOLD {
-        ctx.check_gc_safe_point();
+        if ctx.check_gc_safe_point() { return StepResult::Yield; }
     }
 
     let value = CLRString::new(data0.into_iter().chain(data1).chain(data2).collect());
@@ -367,9 +367,52 @@ pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<'gc, 'm: 'gc>(
 ) -> StepResult {
     let val = ctx.pop();
     let mut h = DefaultHasher::new();
-    let value = with_string!(ctx, val, |s| String::from_utf16_lossy(s)
-        .to_uppercase()
-        .into_bytes());
+
+    let chars = match &val {
+        StackValue::ObjectRef(ObjectRef(Some(handle))) => {
+            let len = {
+                let inner = handle.borrow();
+                match &inner.storage {
+                    HeapStorage::Str(s) => s.len(),
+                    _ => {
+                        return StepResult::Error(
+                            crate::error::ExecutionError::InternalError(
+                                "System.String::GetHashCodeOrdinalIgnoreCase called on non-string object"
+                                    .to_string(),
+                            )
+                            .into(),
+                        );
+                    }
+                }
+            };
+
+            let mut result = Vec::with_capacity(len);
+            let mut offset = 0;
+            const CHUNK_SIZE: usize = 1024;
+
+            while offset < len {
+                let chunk_len = std::cmp::min(CHUNK_SIZE, len - offset);
+                {
+                    let _guard = dotnet_value::BorrowGuard::new(ctx);
+                    let inner = handle.borrow();
+                    match &inner.storage {
+                        HeapStorage::Str(s) => {
+                            result.extend_from_slice(&s[offset..offset + chunk_len]);
+                        }
+                        _ => break,
+                    }
+                }
+                offset += chunk_len;
+                if offset < len {
+                    if ctx.check_gc_safe_point() { return StepResult::Yield; }
+                }
+            }
+            result
+        }
+        _ => Vec::new(),
+    };
+
+    let value = String::from_utf16_lossy(&chars).to_uppercase().into_bytes();
     value.hash(&mut h);
     let code = h.finish();
 
@@ -391,9 +434,16 @@ pub fn intrinsic_string_get_raw_data<'gc, 'm: 'gc>(
 
     let obj = val.as_object_ref();
     if let Some(handle) = obj.0 {
-        let heap = handle.borrow();
-        if let HeapStorage::Str(_) = &heap.storage {
-            let ptr = unsafe { heap.storage.raw_data_ptr() };
+        let (ptr, is_str) = {
+            let heap = handle.borrow();
+            if let HeapStorage::Str(_) = &heap.storage {
+                (unsafe { heap.storage.raw_data_ptr() }, true)
+            } else {
+                (std::ptr::null_mut(), false)
+            }
+        };
+
+        if is_str {
             ctx.push_ptr(
                 ptr,
                 char_type,
@@ -403,6 +453,7 @@ pub fn intrinsic_string_get_raw_data<'gc, 'm: 'gc>(
             );
             StepResult::Continue
         } else {
+            let heap = handle.borrow();
             StepResult::Error(
                 crate::error::ExecutionError::InternalError(format!(
                     "invalid type on stack, expected string, received {:?}",
@@ -507,7 +558,7 @@ pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
                 }
                 offset += current_chunk;
                 if offset < l {
-                    ctx.check_gc_safe_point();
+                    if ctx.check_gc_safe_point() { return StepResult::Yield; }
                 }
             }
             Ok(result_vec)
@@ -631,7 +682,7 @@ pub fn intrinsic_string_is_null_or_white_space<'gc, 'm: 'gc>(
 
                 offset += current_chunk_size;
                 if offset < len {
-                    ctx.check_gc_safe_point();
+                    if ctx.check_gc_safe_point() { return StepResult::Yield; }
                 }
             }
             all_white
@@ -683,22 +734,68 @@ pub fn intrinsic_string_copy_string_content<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     let src_val = ctx.pop_obj();
-    let dest_pos = ctx.pop_i32();
+    let dest_pos = ctx.pop_i32() as usize;
     let dest_val = ctx.pop_obj();
 
-    let src = with_string!(ctx, StackValue::ObjectRef(src_val), |s| s.to_vec());
-    let res = with_string_mut!(ctx, StackValue::ObjectRef(dest_val), |dest| {
-        let dest_pos = dest_pos as usize;
-        let len = src.len();
-        if dest_pos + len > dest.len() {
-            Err("destination too small".to_string())
-        } else {
-            dest.as_mut_slice()[dest_pos..dest_pos + len].copy_from_slice(&src);
-            Ok(())
+    let src_handle = match src_val.0 {
+        Some(h) => h,
+        None => {
+            return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
         }
-    });
-    if res.is_err() {
-        return ctx.throw_by_name_with_message("System.ArgumentOutOfRangeException", "Destination is too short.");
+    };
+    let dest_handle = match dest_val.0 {
+        Some(h) => h,
+        None => {
+            return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+        }
+    };
+
+    let src_len = {
+        let heap = src_handle.borrow();
+        match &heap.storage {
+            HeapStorage::Str(s) => s.len(),
+            _ => 0,
+        }
+    };
+
+    let mut offset = 0;
+    const CHUNK_SIZE: usize = 1024;
+    while offset < src_len {
+        let chunk_len = std::cmp::min(CHUNK_SIZE, src_len - offset);
+        let mut chunk_buf = Vec::with_capacity(chunk_len);
+        {
+            let _guard = dotnet_value::BorrowGuard::new(ctx);
+            let src_heap = src_handle.borrow();
+            match &src_heap.storage {
+                HeapStorage::Str(s) => {
+                    chunk_buf.extend_from_slice(&s[offset..offset + chunk_len]);
+                }
+                _ => break,
+            }
+        }
+
+        {
+            let _guard = dotnet_value::BorrowGuard::new(ctx);
+            let mut dest_heap = dest_handle.borrow_mut(ctx.gc().mutation());
+            match &mut dest_heap.storage {
+                HeapStorage::Str(dest) => {
+                    let d_pos = dest_pos + offset;
+                    if d_pos + chunk_len > dest.len() {
+                        return ctx.throw_by_name_with_message(
+                            "System.ArgumentOutOfRangeException",
+                            "Destination is too short.",
+                        );
+                    }
+                    dest.as_mut_slice()[d_pos..d_pos + chunk_len].copy_from_slice(&chunk_buf);
+                }
+                _ => break,
+            }
+        }
+
+        offset += chunk_len;
+        if offset < src_len {
+            if ctx.check_gc_safe_point() { return StepResult::Yield; }
+        }
     }
     StepResult::Continue
 }

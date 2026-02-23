@@ -60,6 +60,8 @@ pub struct GlobalCaches {
     /// Cache for resolved overrides: (TypeDescription, GenericLookup) -> Map<DeclMethod, ImplMethod>
     pub overrides_cache:
         DashMap<(TypeDescription, GenericLookup), Arc<HashMap<usize, MethodDescription>>>,
+    /// Cache for method info: (Method, Lookup) -> MethodInfo
+    pub method_info_cache: DashMap<(MethodDescription, GenericLookup), Arc<crate::MethodInfo<'static>>>,
     /// Registry of intrinsic methods
     pub intrinsic_registry: IntrinsicRegistry,
 }
@@ -78,6 +80,7 @@ impl GlobalCaches {
             value_type_cache: DashMap::new(),
             has_finalizer_cache: DashMap::new(),
             overrides_cache: DashMap::new(),
+            method_info_cache: DashMap::new(),
             intrinsic_registry,
         }
     }
@@ -122,6 +125,24 @@ pub struct SharedGlobalState<'m> {
     pub next_runtime_field_index: AtomicUsize,
 }
 
+impl GlobalCaches {
+    pub fn get_method_info(
+        &self,
+        method: MethodDescription,
+        generics: &GenericLookup,
+        shared: Arc<SharedGlobalState>,
+    ) -> Result<crate::MethodInfo<'static>, crate::error::TypeResolutionError> {
+        let key = (method, generics.clone());
+        if let Some(entry) = self.method_info_cache.get(&key) {
+            return Ok((**entry).clone());
+        }
+        let built = crate::MethodInfo::new(method, generics, shared)?;
+        self.method_info_cache
+            .insert(key, Arc::new(built.clone()));
+        Ok(built)
+    }
+}
+
 impl<'m> SharedGlobalState<'m> {
     pub fn new(loader: &'m AssemblyLoader) -> Self {
         let tracer = Tracer::new();
@@ -135,7 +156,7 @@ impl<'m> SharedGlobalState<'m> {
         #[cfg(feature = "multithreaded-gc")]
         dotnet_utils::gc::reset_arena_registry();
 
-        Self {
+        let state = Self {
             loader,
             pinvoke: {
                 let p = NativeLibraries::new(loader.get_root());
@@ -171,7 +192,12 @@ impl<'m> SharedGlobalState<'m> {
             shared_runtime_fields_rev: DashMap::new(),
             #[cfg(feature = "multithreaded-gc")]
             next_runtime_field_index: AtomicUsize::new(0),
-        }
+        };
+
+        #[cfg(feature = "multithreaded-gc")]
+        state.thread_manager.set_coordinator(Arc::downgrade(&state.gc_coordinator));
+
+        state
     }
 
     pub fn get_cache_stats(&self) -> CacheStats {

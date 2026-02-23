@@ -3,7 +3,7 @@
 //! Delegates have methods (ctor, Invoke, BeginInvoke, EndInvoke) with no CIL body -
 //! they are implemented by the runtime (ECMA-335 §II.14.6).
 use crate::{
-    MethodInfo, StepResult,
+    StepResult,
     stack::{context::MulticastState, ops::VesOps},
 };
 use dotnet_macros::dotnet_intrinsic;
@@ -119,7 +119,7 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
 
     if let Some(targets_handle) = multicast_targets {
         // Push a dummy frame for the current Invoke method
-        let method_info = vm_try!(MethodInfo::new(
+        let method_info = vm_try!(ctx.shared().caches.get_method_info(
             invoke_method,
             _lookup,
             ctx.shared().clone()

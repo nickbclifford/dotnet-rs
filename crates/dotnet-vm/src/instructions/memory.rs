@@ -47,7 +47,7 @@ pub fn cpblk<
         }
         offset += current_chunk;
         if offset < size {
-            ctx.check_gc_safe_point();
+            if ctx.check_gc_safe_point() { return StepResult::Yield; }
         }
     }
     StepResult::Continue
@@ -80,7 +80,7 @@ pub fn initblk<
         }
         offset += current_chunk;
         if offset < size {
-            ctx.check_gc_safe_point();
+            if ctx.check_gc_safe_point() { return StepResult::Yield; }
         }
     }
     StepResult::Continue
