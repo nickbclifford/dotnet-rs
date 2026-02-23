@@ -278,7 +278,10 @@ pub fn intrinsic_span_ctor_from_pointer<'gc, 'm: 'gc>(
 
     // Span<T>(void*, int) is only valid for types that do not contain references
     if element_layout.is_or_contains_refs() {
-        return ctx.throw_by_name_with_message("System.ArgumentException", "The type cannot contain references.");
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "The type cannot contain references.",
+        );
     }
 
     // The pointer can be a NativeInt, ManagedPtr, or UnmanagedPtr
@@ -319,7 +322,10 @@ pub fn intrinsic_span_ctor_from_pointer<'gc, 'm: 'gc>(
             }
             ManagedPtr::new(None, element_desc, None, false, None)
         }
-        _ => return ctx.throw_by_name_with_message("System.ArgumentException", "Invalid pointer value."),
+        _ => {
+            return ctx
+                .throw_by_name_with_message("System.ArgumentException", "Invalid pointer value.");
+        }
     };
 
     let span_type = this_ptr.inner_type;
@@ -544,7 +550,10 @@ fn pop_nonneg_usize<'gc, 'm>(ctx: &mut dyn VesOps<'gc, 'm>) -> Result<usize, Ste
             }
             Ok(i as usize)
         }
-        _ => Err(ctx.throw_by_name_with_message("System.ArgumentException", "The argument must be an integer.")),
+        _ => Err(ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "The argument must be an integer.",
+        )),
     }
 }
 
@@ -596,7 +605,12 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
             };
             (start, Some(length))
         }
-        _ => return ctx.throw_by_name_with_message("System.ArgumentException", "Invalid number of arguments."),
+        _ => {
+            return ctx.throw_by_name_with_message(
+                "System.ArgumentException",
+                "Invalid number of arguments.",
+            );
+        }
     };
 
     let source = ctx.pop();
@@ -651,7 +665,12 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
             };
             (std::ptr::null_mut(), 0, element_type, 2)
         }
-        _ => return ctx.throw_by_name_with_message("System.ArgumentException", "The argument must be a string or an array."),
+        _ => {
+            return ctx.throw_by_name_with_message(
+                "System.ArgumentException",
+                "The argument must be a string or an array.",
+            );
+        }
     };
 
     // Apply start and length_override
@@ -813,7 +832,10 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
     let field_desc = vm_try!(ctx.loader().find_concrete_type(field_type.clone()));
 
     let Some(initial_data) = &field.initial_value else {
-        return ctx.throw_by_name_with_message("System.ArgumentException", "The field does not have initial data.");
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "The field does not have initial data.",
+        );
     };
 
     if field_desc

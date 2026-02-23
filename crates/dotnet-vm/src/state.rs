@@ -61,7 +61,8 @@ pub struct GlobalCaches {
     pub overrides_cache:
         DashMap<(TypeDescription, GenericLookup), Arc<HashMap<usize, MethodDescription>>>,
     /// Cache for method info: (Method, Lookup) -> MethodInfo
-    pub method_info_cache: DashMap<(MethodDescription, GenericLookup), Arc<crate::MethodInfo<'static>>>,
+    pub method_info_cache:
+        DashMap<(MethodDescription, GenericLookup), Arc<crate::MethodInfo<'static>>>,
     /// Registry of intrinsic methods
     pub intrinsic_registry: IntrinsicRegistry,
 }
@@ -137,8 +138,7 @@ impl GlobalCaches {
             return Ok((**entry).clone());
         }
         let built = crate::MethodInfo::new(method, generics, shared)?;
-        self.method_info_cache
-            .insert(key, Arc::new(built.clone()));
+        self.method_info_cache.insert(key, Arc::new(built.clone()));
         Ok(built)
     }
 }
@@ -195,7 +195,9 @@ impl<'m> SharedGlobalState<'m> {
         };
 
         #[cfg(feature = "multithreaded-gc")]
-        state.thread_manager.set_coordinator(Arc::downgrade(&state.gc_coordinator));
+        state
+            .thread_manager
+            .set_coordinator(Arc::downgrade(&state.gc_coordinator));
 
         state
     }

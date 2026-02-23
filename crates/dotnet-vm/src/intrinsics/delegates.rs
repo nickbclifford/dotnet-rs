@@ -69,8 +69,12 @@ pub fn try_delegate_dispatch<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
     match method_name {
         "Invoke" => Some(invoke_delegate(ctx, method, lookup)),
         ".ctor" => None, // Constructor is handled by support library stub
-        "BeginInvoke" => Some(ctx.throw_by_name_with_message("System.NotSupportedException", NOT_SUPPORTED_MSG)),
-        "EndInvoke" => Some(ctx.throw_by_name_with_message("System.NotSupportedException", NOT_SUPPORTED_MSG)),
+        "BeginInvoke" => {
+            Some(ctx.throw_by_name_with_message("System.NotSupportedException", NOT_SUPPORTED_MSG))
+        }
+        "EndInvoke" => {
+            Some(ctx.throw_by_name_with_message("System.NotSupportedException", NOT_SUPPORTED_MSG))
+        }
         _ => None,
     }
 }
@@ -431,7 +435,10 @@ pub fn delegate_dynamic_invoke<'gc, 'm: 'gc>(
     _generics: &GenericLookup,
 ) -> StepResult {
     // ...
-    ctx.throw_by_name_with_message("System.NotSupportedException", "DynamicInvoke is not supported.")
+    ctx.throw_by_name_with_message(
+        "System.NotSupportedException",
+        "DynamicInvoke is not supported.",
+    )
 }
 
 fn delegates_equal<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(

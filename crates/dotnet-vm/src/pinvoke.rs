@@ -573,11 +573,11 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
         match v {
             StackValue::Int32(val) => {
                 let res_ctx = ctx.current_context();
-                let p_base_type = match resolve_parameter_base_type(p_type, &res_ctx, BaseType::IntPtr)
-                {
-                    Ok(v) => v,
-                    Err(e) => return StepResult::Error(e.into()),
-                };
+                let p_base_type =
+                    match resolve_parameter_base_type(p_type, &res_ctx, BaseType::IntPtr) {
+                        Ok(v) => v,
+                        Err(e) => return StepResult::Error(e.into()),
+                    };
 
                 match p_base_type {
                     BaseType::Int8 => checked_narrow!(val, i8, "i8", i),
@@ -595,11 +595,11 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
             }
             StackValue::Int64(val) => {
                 let res_ctx = ctx.current_context();
-                let p_base_type = match resolve_parameter_base_type(p_type, &res_ctx, BaseType::Int64)
-                {
-                    Ok(v) => v,
-                    Err(e) => return StepResult::Error(e.into()),
-                };
+                let p_base_type =
+                    match resolve_parameter_base_type(p_type, &res_ctx, BaseType::Int64) {
+                        Ok(v) => v,
+                        Err(e) => return StepResult::Error(e.into()),
+                    };
 
                 match p_base_type {
                     BaseType::Int8 => checked_narrow!(val, i8, "i8", i),

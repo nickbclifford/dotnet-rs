@@ -94,7 +94,8 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
     };
 
     if index >= v.layout.length {
-        return ctx.throw_by_name_with_message("System.IndexOutOfRangeException", INDEX_OUT_OF_RANGE_MSG);
+        return ctx
+            .throw_by_name_with_message("System.IndexOutOfRangeException", INDEX_OUT_OF_RANGE_MSG);
     }
 
     let elem_size = v.layout.element_layout.size();
@@ -150,7 +151,10 @@ pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
 
         if index >= v.layout.length {
             drop(heap);
-            return ctx.throw_by_name_with_message("System.IndexOutOfRangeException", INDEX_OUT_OF_RANGE_MSG);
+            return ctx.throw_by_name_with_message(
+                "System.IndexOutOfRangeException",
+                INDEX_OUT_OF_RANGE_MSG,
+            );
         }
     }
     let mut heap = handle.borrow_mut(&ctx.gc());

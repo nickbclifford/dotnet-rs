@@ -96,8 +96,8 @@ pub fn intrinsic_string_equals<'gc, 'm: 'gc>(
                         }
 
                         offset += current_chunk;
-                        if offset < length {
-                            if ctx.check_gc_safe_point() { return StepResult::Yield; }
+                        if offset < length && ctx.check_gc_safe_point() {
+                            return StepResult::Yield;
                         }
                     }
                     equal
@@ -123,7 +123,10 @@ pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc>(
     let len = if method.method.signature.parameters.len() == 1 {
         let i = ctx.pop_i32();
         if i < 0 {
-            return ctx.throw_by_name_with_message("System.OverflowException", "Arithmetic operation resulted in an overflow.");
+            return ctx.throw_by_name_with_message(
+                "System.OverflowException",
+                "Arithmetic operation resulted in an overflow.",
+            );
         }
         i as usize
     } else {
@@ -131,20 +134,26 @@ pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc>(
         let i = ctx.pop_isize();
         let _ = ctx.pop(); // pop method table pointer
         if i < 0 {
-            return ctx.throw_by_name_with_message("System.OverflowException", "Arithmetic operation resulted in an overflow.");
+            return ctx.throw_by_name_with_message(
+                "System.OverflowException",
+                "Arithmetic operation resulted in an overflow.",
+            );
         }
         i as usize
     };
 
     // Defensive check: limit string size to 512MB characters
     if len > 0x2000_0000 {
-        return ctx.throw_by_name_with_message("System.OutOfMemoryException", "Insufficient memory to continue the execution of the program.");
+        return ctx.throw_by_name_with_message(
+            "System.OutOfMemoryException",
+            "Insufficient memory to continue the execution of the program.",
+        );
     }
 
     // Check GC safe point before allocating large strings
     const LARGE_STRING_THRESHOLD: usize = 1024;
-    if len > LARGE_STRING_THRESHOLD {
-        if ctx.check_gc_safe_point() { return StepResult::Yield; }
+    if len > LARGE_STRING_THRESHOLD && ctx.check_gc_safe_point() {
+        return StepResult::Yield;
     }
 
     let value = CLRString::new(vec![0u16; len]);
@@ -194,8 +203,8 @@ pub fn intrinsic_string_ctor_char_array<'gc, 'm: 'gc>(
                     }
                 }
                 offset += chunk_len;
-                if offset < len {
-                    if ctx.check_gc_safe_point() { return StepResult::Yield; }
+                if offset < len && ctx.check_gc_safe_point() {
+                    return StepResult::Yield;
                 }
             }
             result
@@ -237,8 +246,8 @@ pub fn intrinsic_string_ctor_char_ptr<'gc, 'm: 'gc>(
                 chars.push(c);
                 i += 1;
 
-                if i % 1024 == 0 {
-                    if ctx.check_gc_safe_point() { return StepResult::Yield; }
+                if i % 1024 == 0 && ctx.check_gc_safe_point() {
+                    return StepResult::Yield;
                 }
             }
         }
@@ -348,8 +357,8 @@ pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc>(
 
     let total_length = data0.len() + data1.len() + data2.len();
     const LARGE_STRING_CONCAT_THRESHOLD: usize = 1024;
-    if total_length > LARGE_STRING_CONCAT_THRESHOLD {
-        if ctx.check_gc_safe_point() { return StepResult::Yield; }
+    if total_length > LARGE_STRING_CONCAT_THRESHOLD && ctx.check_gc_safe_point() {
+        return StepResult::Yield;
     }
 
     let value = CLRString::new(data0.into_iter().chain(data1).chain(data2).collect());
@@ -403,8 +412,8 @@ pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<'gc, 'm: 'gc>(
                     }
                 }
                 offset += chunk_len;
-                if offset < len {
-                    if ctx.check_gc_safe_point() { return StepResult::Yield; }
+                if offset < len && ctx.check_gc_safe_point() {
+                    return StepResult::Yield;
                 }
             }
             result
@@ -521,19 +530,30 @@ pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
                 let inner = handle.borrow();
                 match &inner.storage {
                     HeapStorage::Str(s) => s.len(),
-                    _ => return ctx.throw_by_name_with_message("System.ArgumentException", "The argument must be a string."),
+                    _ => {
+                        return ctx.throw_by_name_with_message(
+                            "System.ArgumentException",
+                            "The argument must be a string.",
+                        );
+                    }
                 }
             };
 
             if start_at > s_len {
-                return ctx.throw_by_name_with_message("System.ArgumentOutOfRangeException", "startIndex");
+                return ctx.throw_by_name_with_message(
+                    "System.ArgumentOutOfRangeException",
+                    "startIndex",
+                );
             }
 
             let l = match length {
                 None => s_len - start_at,
                 Some(l) => {
                     if start_at + l > s_len {
-                        return ctx.throw_by_name_with_message("System.ArgumentOutOfRangeException", "length");
+                        return ctx.throw_by_name_with_message(
+                            "System.ArgumentOutOfRangeException",
+                            "length",
+                        );
                     }
                     l
                 }
@@ -557,8 +577,8 @@ pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
                     }
                 }
                 offset += current_chunk;
-                if offset < l {
-                    if ctx.check_gc_safe_point() { return StepResult::Yield; }
+                if offset < l && ctx.check_gc_safe_point() {
+                    return StepResult::Yield;
                 }
             }
             Ok(result_vec)
@@ -566,7 +586,12 @@ pub fn intrinsic_string_substring<'gc, 'm: 'gc>(
         StackValue::ObjectRef(ObjectRef(None)) => {
             return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
         }
-        _ => return ctx.throw_by_name_with_message("System.ArgumentException", "The argument must be a string."),
+        _ => {
+            return ctx.throw_by_name_with_message(
+                "System.ArgumentException",
+                "The argument must be a string.",
+            );
+        }
     };
 
     let value = match result_vec {
@@ -681,8 +706,8 @@ pub fn intrinsic_string_is_null_or_white_space<'gc, 'm: 'gc>(
                 }
 
                 offset += current_chunk_size;
-                if offset < len {
-                    if ctx.check_gc_safe_point() { return StepResult::Yield; }
+                if offset < len && ctx.check_gc_safe_point() {
+                    return StepResult::Yield;
                 }
             }
             all_white
@@ -793,8 +818,8 @@ pub fn intrinsic_string_copy_string_content<'gc, 'm: 'gc>(
         }
 
         offset += chunk_len;
-        if offset < src_len {
-            if ctx.check_gc_safe_point() { return StepResult::Yield; }
+        if offset < src_len && ctx.check_gc_safe_point() {
+            return StepResult::Yield;
         }
     }
     StepResult::Continue

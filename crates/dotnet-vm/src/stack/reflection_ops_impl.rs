@@ -51,7 +51,9 @@ impl<'a, 'gc, 'm: 'gc> StaticsOps<'gc> for VesContext<'a, 'gc, 'm> {
         generics: GenericLookup,
     ) -> StepResult {
         let _gc = self.gc;
-        if self.check_gc_safe_point() { return StepResult::Yield; }
+        if self.check_gc_safe_point() {
+            return StepResult::Yield;
+        }
 
         let ctx = ResolutionContext {
             resolution: description.resolution,
@@ -87,7 +89,9 @@ impl<'a, 'gc, 'm: 'gc> StaticsOps<'gc> for VesContext<'a, 'gc, 'm> {
             }
             Initialized | Recursive => StepResult::Continue,
             Waiting => {
-                if self.check_gc_safe_point() { return StepResult::Yield; }
+                if self.check_gc_safe_point() {
+                    return StepResult::Yield;
+                }
                 StepResult::Yield
             }
             Failed => self.throw_by_name_with_message(

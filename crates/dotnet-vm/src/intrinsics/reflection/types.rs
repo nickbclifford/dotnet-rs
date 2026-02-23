@@ -505,7 +505,11 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
 
                 vm_try!(ctx.constructor_frame(
                     instance,
-                    vm_try!(ctx.shared().caches.get_method_info(desc, &new_lookup, ctx.shared().clone())),
+                    vm_try!(ctx.shared().caches.get_method_info(
+                        desc,
+                        &new_lookup,
+                        ctx.shared().clone()
+                    )),
                     new_lookup,
                 ));
                 return StepResult::FramePushed;
@@ -1036,7 +1040,9 @@ fn handle_get_generic_arguments<'gc, 'm>(
     };
 
     // Check GC safe point before allocating type array
-    if ctx.check_gc_safe_point() { return StepResult::Yield; }
+    if ctx.check_gc_safe_point() {
+        return StepResult::Yield;
+    }
 
     let type_type_td = vm_try!(ctx.loader().corlib_type("System.Type"));
     let type_type = ConcreteType::from(type_type_td);
@@ -1048,8 +1054,8 @@ fn handle_get_generic_arguments<'gc, 'm>(
     {
         // Check GC safe point periodically during loops with allocations
         // Check every 16 iterations
-        if i % 16 == 0 {
-            if ctx.check_gc_safe_point() { return StepResult::Yield; }
+        if i % 16 == 0 && ctx.check_gc_safe_point() {
+            return StepResult::Yield;
         }
         let arg_obj = ctx.get_runtime_type(arg);
         arg_obj.write(chunk);
@@ -1083,7 +1089,9 @@ fn handle_make_generic_type<'gc, 'm>(
     let target = ctx.pop_obj();
 
     // Check GC safe point before potentially allocating generic type objects
-    if ctx.check_gc_safe_point() { return StepResult::Yield; }
+    if ctx.check_gc_safe_point() {
+        return StepResult::Yield;
+    }
 
     let target_rt = ctx.resolve_runtime_type(target);
 
@@ -1120,7 +1128,9 @@ fn handle_create_instance_default_ctor<'gc, 'm>(
     let target_obj = ctx.pop_obj();
 
     // Check GC safe point before object instantiation
-    if ctx.check_gc_safe_point() { return StepResult::Yield; }
+    if ctx.check_gc_safe_point() {
+        return StepResult::Yield;
+    }
 
     let target_rt = ctx.resolve_runtime_type(target_obj);
 
@@ -1153,7 +1163,11 @@ fn handle_create_instance_default_ctor<'gc, 'm>(
 
             vm_try!(ctx.constructor_frame(
                 instance,
-                vm_try!(ctx.shared().caches.get_method_info(desc, &new_lookup, ctx.shared().clone())),
+                vm_try!(ctx.shared().caches.get_method_info(
+                    desc,
+                    &new_lookup,
+                    ctx.shared().clone()
+                )),
                 new_lookup,
             ));
             return StepResult::FramePushed;

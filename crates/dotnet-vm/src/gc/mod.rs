@@ -4,6 +4,8 @@
 //! - Arena-based memory management
 //! - Cross-thread GC coordination (when multithreaded-gc feature is enabled)
 //! - Runtime execution tracing for GC events
+use gc_arena::arena::MarkedArena;
+
 #[cfg(feature = "multithreaded-gc")]
 pub mod arena;
 pub mod coordinator;
@@ -12,8 +14,6 @@ pub mod coordinator;
 pub use arena::THREAD_ARENA;
 
 pub use coordinator::*;
-
-use gc_arena::arena::MarkedArena;
 
 /// Perform post-marking finalization check for a GC arena.
 /// This handles object finalization by checking which objects are no longer reachable.

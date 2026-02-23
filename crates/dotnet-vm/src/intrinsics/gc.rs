@@ -17,7 +17,8 @@ pub fn intrinsic_argument_null_exception_throw_if_null<'gc, 'm: 'gc>(
     let _param_name_obj = ctx.pop_obj();
     let target = ctx.pop_obj();
     if target.0.is_none() {
-        return ctx.throw_by_name_with_message("System.ArgumentNullException", "Value cannot be null.");
+        return ctx
+            .throw_by_name_with_message("System.ArgumentNullException", "Value cannot be null.");
     }
     StepResult::Continue
 }

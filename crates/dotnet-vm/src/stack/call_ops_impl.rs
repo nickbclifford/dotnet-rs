@@ -202,10 +202,15 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
                 );
             }
 
-            let info = match self.shared.caches.get_method_info(method, &lookup, self.shared.clone()) {
-                Ok(v) => v,
-                Err(e) => return StepResult::Error(e.into()),
-            };
+            let info =
+                match self
+                    .shared
+                    .caches
+                    .get_method_info(method, &lookup, self.shared.clone())
+                {
+                    Ok(v) => v,
+                    Err(e) => return StepResult::Error(e.into()),
+                };
             vm_try!(self.call_frame(info, lookup));
             StepResult::FramePushed
         }

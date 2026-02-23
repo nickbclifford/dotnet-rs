@@ -124,10 +124,10 @@ impl ThreadManager {
 
         // Notify all arenas to check their resume condition
         let coordinator_opt = { self.coordinator.lock().clone() };
-        if let Some(weak) = coordinator_opt {
-            if let Some(coordinator) = weak.upgrade() {
-                coordinator.notify_resume();
-            }
+        if let Some(weak) = coordinator_opt
+            && let Some(coordinator) = weak.upgrade()
+        {
+            coordinator.notify_resume();
         }
     }
 
@@ -269,8 +269,10 @@ impl ThreadManagerOps for ThreadManager {
                 thread.set_state(ThreadState::AtSafePoint);
                 self.threads_at_safepoint.fetch_add(1, Ordering::AcqRel);
                 self.all_threads_stopped.notify_all();
-                
-                while let Some(command) = coordinator.wait_for_command_or_resume(managed_id, &self.gc_stop_requested) {
+
+                while let Some(command) =
+                    coordinator.wait_for_command_or_resume(managed_id, &self.gc_stop_requested)
+                {
                     self.execute_gc_command(command, coordinator);
                     coordinator.command_finished(managed_id);
                 }
@@ -334,10 +336,10 @@ impl ThreadManagerOps for ThreadManager {
 
                 // If we're not the one holding the coordination lock, we might be
                 // requested to stop by the thread that DOES hold it.
-                if let Some(id) = self.current_thread_id() {
-                    if let Some(coordinator) = self.get_coordinator() {
-                        self.safe_point(id, &coordinator);
-                    }
+                if let Some(id) = self.current_thread_id()
+                    && let Some(coordinator) = self.get_coordinator()
+                {
+                    self.safe_point(id, &coordinator);
                 }
                 thread::yield_now();
             };

@@ -46,8 +46,8 @@ pub fn cpblk<
             ptr::copy(src.add(offset), dest.add(offset), current_chunk);
         }
         offset += current_chunk;
-        if offset < size {
-            if ctx.check_gc_safe_point() { return StepResult::Yield; }
+        if offset < size && ctx.check_gc_safe_point() {
+            return StepResult::Yield;
         }
     }
     StepResult::Continue
@@ -79,8 +79,8 @@ pub fn initblk<
             ptr::write_bytes(addr.add(offset), val, current_chunk);
         }
         offset += current_chunk;
-        if offset < size {
-            if ctx.check_gc_safe_point() { return StepResult::Yield; }
+        if offset < size && ctx.check_gc_safe_point() {
+            return StepResult::Yield;
         }
     }
     StepResult::Continue
@@ -138,7 +138,10 @@ pub fn stind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: StoreType) -> 
         StackValue::UnmanagedPtr(u) => {
             (PointerOrigin::Unmanaged, ByteOffset(u.0.as_ptr() as usize))
         }
-        _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
+        _ => {
+            return ctx
+                .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
+        }
     };
 
     let layout = match param0 {
@@ -158,9 +161,13 @@ pub fn stind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: StoreType) -> 
         Ok(_) => {}
         Err(_) => {
             if matches!(origin, PointerOrigin::Unmanaged) && offset.0 == 0 {
-                return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+                return ctx
+                    .throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
             }
-            return ctx.throw_by_name_with_message("System.AccessViolationException", ACCESS_VIOLATION_MSG);
+            return ctx.throw_by_name_with_message(
+                "System.AccessViolationException",
+                ACCESS_VIOLATION_MSG,
+            );
         }
     }
     StepResult::Continue
@@ -191,7 +198,10 @@ pub fn ldind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: LoadType) -> S
         StackValue::UnmanagedPtr(u) => {
             (PointerOrigin::Unmanaged, ByteOffset(u.0.as_ptr() as usize))
         }
-        _ => return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG),
+        _ => {
+            return ctx
+                .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
+        }
     };
 
     let layout = match param0 {
@@ -214,9 +224,13 @@ pub fn ldind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: LoadType) -> S
         Ok(v) => v,
         Err(_) => {
             if matches!(origin, PointerOrigin::Unmanaged) && offset.0 == 0 {
-                return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+                return ctx
+                    .throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
             }
-            return ctx.throw_by_name_with_message("System.AccessViolationException", ACCESS_VIOLATION_MSG);
+            return ctx.throw_by_name_with_message(
+                "System.AccessViolationException",
+                ACCESS_VIOLATION_MSG,
+            );
         }
     };
     ctx.push(val);

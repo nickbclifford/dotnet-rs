@@ -98,9 +98,13 @@ pub fn ldfld<'gc, 'm: 'gc>(
         Ok(v) => v,
         Err(_) => {
             if offset.0 == 0 {
-                return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+                return ctx
+                    .throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
             }
-            return ctx.throw_by_name_with_message("System.AccessViolationException", ACCESS_VIOLATION_MSG);
+            return ctx.throw_by_name_with_message(
+                "System.AccessViolationException",
+                ACCESS_VIOLATION_MSG,
+            );
         }
     };
 
@@ -153,9 +157,13 @@ pub fn stfld<'gc, 'm: 'gc>(
         Ok(_) => {}
         Err(_) => {
             if offset.0 == 0 {
-                return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+                return ctx
+                    .throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
             }
-            return ctx.throw_by_name_with_message("System.AccessViolationException", ACCESS_VIOLATION_MSG);
+            return ctx.throw_by_name_with_message(
+                "System.AccessViolationException",
+                ACCESS_VIOLATION_MSG,
+            );
         }
     }
 

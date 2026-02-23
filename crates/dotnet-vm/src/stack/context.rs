@@ -526,7 +526,11 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
                 return StepResult::Continue;
             };
 
-            let method_info = vm_try!(self.shared.caches.get_method_info(finalizer, &generics, self.shared.clone()));
+            let method_info = vm_try!(self.shared.caches.get_method_info(
+                finalizer,
+                &generics,
+                self.shared.clone()
+            ));
 
             // Push the object as 'this'
             self.push(StackValue::ObjectRef(instance));

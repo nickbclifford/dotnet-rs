@@ -138,7 +138,8 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             // No override: box the value and use base implementation
             let m = args[0].as_managed_ptr();
             if m.is_null() {
-                return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+                return ctx
+                    .throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
             }
 
             let constraint_concrete = vm_try!(ctx.make_concrete(constraint));
@@ -151,7 +152,12 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
                 ctx.read_unaligned(m.origin.clone(), m.offset, &layout, Some(constraint_type))
             } {
                 Ok(v) => v,
-                Err(_) => return ctx.throw_by_name_with_message("System.AccessViolationException", ACCESS_VIOLATION_MSG),
+                Err(_) => {
+                    return ctx.throw_by_name_with_message(
+                        "System.AccessViolationException",
+                        ACCESS_VIOLATION_MSG,
+                    );
+                }
             };
 
             let boxed = vm_try!(ctx.box_value(&constraint_type_source, value));
@@ -171,7 +177,8 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             StackValue::ObjectRef(o) => *o,
             StackValue::ManagedPtr(m) => {
                 if m.is_null() {
-                    return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+                    return ctx
+                        .throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
                 }
                 // If the managed pointer originates from the evaluation stack (ldarga/ldloca),
                 // and targets a reference type with zero offset, the pointed memory holds a

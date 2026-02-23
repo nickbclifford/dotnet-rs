@@ -93,8 +93,8 @@ pub fn intrinsic_buffer_memmove<'gc, 'm: 'gc>(
             ptr::copy(src.add(offset), dst.add(offset), current_chunk);
         }
         offset += current_chunk;
-        if offset < total_count {
-            if ctx.check_gc_safe_point() { return StepResult::Yield; }
+        if offset < total_count && ctx.check_gc_safe_point() {
+            return StepResult::Yield;
         }
     }
 
@@ -117,7 +117,12 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<'gc, 'm: 'gc>(
 
     let data_ptr = match &array_handle.borrow().storage {
         HeapStorage::Vec(v) => v.get().as_ptr() as *mut u8,
-        _ => return ctx.throw_by_name_with_message("System.ArgumentException", "The argument must be an array."),
+        _ => {
+            return ctx.throw_by_name_with_message(
+                "System.ArgumentException",
+                "The argument must be an array.",
+            );
+        }
     };
 
     let element_type = vm_try!(
@@ -182,7 +187,10 @@ pub fn intrinsic_marshal_offset_of<'gc, 'm: 'gc>(
             return ctx.throw_by_name_with_message("System.ArgumentException", "Field not found.");
         }
     } else {
-        return ctx.throw_by_name_with_message("System.ArgumentException", "Type must be a structure or a class.");
+        return ctx.throw_by_name_with_message(
+            "System.ArgumentException",
+            "Type must be a structure or a class.",
+        );
     }
     StepResult::Continue
 }
@@ -229,7 +237,12 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
     let offset = match offset_val {
         StackValue::Int32(i) => i as isize,
         StackValue::NativeInt(i) => i,
-        _ => return ctx.throw_by_name_with_message("System.ArgumentException", "The argument must be an integer."),
+        _ => {
+            return ctx.throw_by_name_with_message(
+                "System.ArgumentException",
+                "The argument must be an integer.",
+            );
+        }
     };
 
     let m_val = ctx.pop();
@@ -255,7 +268,12 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
     let offset = match offset_val {
         StackValue::Int32(i) => i as isize,
         StackValue::NativeInt(i) => i,
-        _ => return ctx.throw_by_name_with_message("System.ArgumentException", "The argument must be an integer."),
+        _ => {
+            return ctx.throw_by_name_with_message(
+                "System.ArgumentException",
+                "The argument must be an integer.",
+            );
+        }
     };
 
     let m_val = ctx.pop();
@@ -279,7 +297,12 @@ pub fn intrinsic_unsafe_subtract<'gc, 'm: 'gc>(
     let offset = match offset_val {
         StackValue::Int32(i) => i as isize,
         StackValue::NativeInt(i) => i,
-        _ => return ctx.throw_by_name_with_message("System.ArgumentException", "The argument must be an integer."),
+        _ => {
+            return ctx.throw_by_name_with_message(
+                "System.ArgumentException",
+                "The argument must be an integer.",
+            );
+        }
     };
 
     let m_val = ctx.pop();
@@ -303,7 +326,12 @@ pub fn intrinsic_unsafe_subtract_byte_offset<'gc, 'm: 'gc>(
     let offset = match offset_val {
         StackValue::Int32(i) => i as isize,
         StackValue::NativeInt(i) => i,
-        _ => return ctx.throw_by_name_with_message("System.ArgumentException", "The argument must be an integer."),
+        _ => {
+            return ctx.throw_by_name_with_message(
+                "System.ArgumentException",
+                "The argument must be an integer.",
+            );
+        }
     };
 
     let m_val = ctx.pop();
@@ -639,8 +667,8 @@ pub fn intrinsic_unsafe_copy_block<'gc, 'm: 'gc>(
             let current_chunk = std::cmp::min(size - offset, COPY_BLOCK_CHUNK_SIZE);
             ptr::copy(src.add(offset), dest.add(offset), current_chunk);
             offset += current_chunk;
-            if offset < size {
-                if ctx.check_gc_safe_point() { return StepResult::Yield; }
+            if offset < size && ctx.check_gc_safe_point() {
+                return StepResult::Yield;
             }
         }
     }
@@ -675,8 +703,8 @@ pub fn intrinsic_unsafe_init_block<'gc, 'm: 'gc>(
             let current_chunk = std::cmp::min(size - offset, INIT_BLOCK_CHUNK_SIZE);
             ptr::write_bytes(addr.add(offset), val, current_chunk);
             offset += current_chunk;
-            if offset < size {
-                if ctx.check_gc_safe_point() { return StepResult::Yield; }
+            if offset < size && ctx.check_gc_safe_point() {
+                return StepResult::Yield;
             }
         }
     }

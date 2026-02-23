@@ -661,7 +661,6 @@ fn test_volatile_sharing() {
     }
 }
 
-
 /// Test that verifies cross-arena reference tracking works
 #[test]
 #[cfg(feature = "multithreaded-gc")]
@@ -727,7 +726,6 @@ fn test_allocation_pressure_triggers_collection() {
         .unregister_arena(dotnet_utils::ArenaId(1));
 }
 
-
 #[test]
 #[cfg(all(feature = "multithreaded-gc", feature = "multithreading"))]
 fn test_stw_stress() {
@@ -740,8 +738,8 @@ fn test_stw_stress() {
     let dll_path = harness.build(fixture_path).unwrap();
 
     let shared = Arc::new(state::SharedGlobalState::new(harness.loader));
-    let resolution = try_static_res_from_file(dll_path.to_str().unwrap())
-        .expect("Failed to load assembly");
+    let resolution =
+        try_static_res_from_file(dll_path.to_str().unwrap()).expect("Failed to load assembly");
     shared.loader.register_assembly(resolution);
 
     let num_threads = 8usize;

@@ -13,7 +13,8 @@ pub fn castclass<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 ) -> StepResult {
     let target_obj_val = ctx.pop();
     let StackValue::ObjectRef(target_obj) = target_obj_val else {
-        return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
+        return ctx
+            .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
     };
 
     if let ObjectRef(Some(o)) = target_obj {
@@ -40,7 +41,8 @@ pub fn isinst<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 ) -> StepResult {
     let target_obj_val = ctx.pop();
     let StackValue::ObjectRef(target_obj) = target_obj_val else {
-        return ctx.throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
+        return ctx
+            .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
     };
 
     if let ObjectRef(Some(o)) = target_obj {
