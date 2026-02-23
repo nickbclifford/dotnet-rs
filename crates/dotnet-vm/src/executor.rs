@@ -435,12 +435,7 @@ impl Executor {
                     marked = arena.mark_all();
                 }
                 if let Some(marked) = marked {
-                    marked.finalize(|fc, c| {
-                        c.stack
-                            .local
-                            .heap
-                            .finalize_check(fc, &c.stack.shared, c.stack.indent())
-                    });
+                    crate::gc::finalize_arena(marked);
                 }
                 arena.collect_all();
             });

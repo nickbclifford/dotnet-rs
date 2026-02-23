@@ -189,6 +189,38 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
     }
 }
 
+fn build_generic_lookup_from_runtime_type<'gc, 'm>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    target_type: &RuntimeType,
+) -> GenericLookup {
+    let mut lookup = GenericLookup::default();
+    if let RuntimeType::Generic(_, args) = target_type {
+        lookup.type_generics = args
+            .iter()
+            .map(|a| a.to_concrete(ctx.loader()))
+            .collect::<Vec<_>>()
+            .into();
+    }
+    lookup
+}
+
+fn populate_reflection_array<'gc, 'm>(
+    ctx: &mut dyn VesOps<'gc, 'm>,
+    items: Vec<ObjectRef<'gc>>,
+    item_type: ConcreteType,
+) -> StepResult {
+    let gc = ctx.gc();
+    let mut vector = match ctx.new_vector(item_type, items.len()) {
+        Ok(v) => v,
+        Err(e) => return StepResult::Error(e.into()),
+    };
+    for (i, item) in items.into_iter().enumerate() {
+        item.write(&mut vector.get_mut()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
+    }
+    ctx.push_obj(ObjectRef::new(gc, HeapStorage::Vec(vector)));
+    StepResult::Continue
+}
+
 #[dotnet_intrinsic(
     "static void System.RuntimeTypeHandle::GetActivationInfo(System.RuntimeTypeHandle, System.IntPtr&, System.IntPtr&, System.IntPtr&, bool&)"
 )]
@@ -709,7 +741,6 @@ fn handle_get_methods<'gc, 'm>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc();
     let flags = ctx.pop_i32();
     let obj = ctx.pop_obj();
     let target_type = ctx.resolve_runtime_type(obj);
@@ -742,27 +773,14 @@ fn handle_get_methods<'gc, 'm>(
                     method: m,
                     method_resolution: td.resolution,
                 };
-                let mut lookup = GenericLookup::default();
-                if let RuntimeType::Generic(_, args) = &target_type {
-                    lookup.type_generics = args
-                        .iter()
-                        .map(|a| a.to_concrete(ctx.loader()))
-                        .collect::<Vec<_>>()
-                        .into();
-                }
+                let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
                 methods_objs.push(ctx.get_runtime_method_obj(desc, lookup));
             }
         }
     }
 
     let method_info_type = vm_try!(ctx.loader().corlib_type("System.Reflection.MethodInfo"));
-    let mut vector =
-        vm_try!(ctx.new_vector(ConcreteType::from(method_info_type), methods_objs.len()));
-    for (i, m) in methods_objs.into_iter().enumerate() {
-        m.write(&mut vector.get_mut()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
-    }
-    ctx.push_obj(ObjectRef::new(gc, HeapStorage::Vec(vector)));
-    StepResult::Continue
+    populate_reflection_array(ctx, methods_objs, ConcreteType::from(method_info_type))
 }
 
 fn handle_get_method_impl<'gc, 'm>(
@@ -817,14 +835,7 @@ fn handle_get_method_impl<'gc, 'm>(
                     method: m,
                     method_resolution: td.resolution,
                 };
-                let mut lookup = GenericLookup::default();
-                if let RuntimeType::Generic(_, args) = &target_type {
-                    lookup.type_generics = args
-                        .iter()
-                        .map(|a| a.to_concrete(ctx.loader()))
-                        .collect::<Vec<_>>()
-                        .into();
-                }
+                let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
                 found_method = Some(ctx.get_runtime_method_obj(desc, lookup));
                 break;
             }
@@ -843,7 +854,6 @@ fn handle_get_constructors<'gc, 'm>(
     ctx: &mut dyn VesOps<'gc, 'm>,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc();
     let flags = ctx.pop_i32();
     let obj = ctx.pop_obj();
     let target_type = ctx.resolve_runtime_type(obj);
@@ -876,14 +886,7 @@ fn handle_get_constructors<'gc, 'm>(
                     method: m,
                     method_resolution: td.resolution,
                 };
-                let mut lookup = GenericLookup::default();
-                if let RuntimeType::Generic(_, args) = &target_type {
-                    lookup.type_generics = args
-                        .iter()
-                        .map(|a| a.to_concrete(ctx.loader()))
-                        .collect::<Vec<_>>()
-                        .into();
-                }
+                let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
                 methods_objs.push(ctx.get_runtime_method_obj(desc, lookup));
             }
         }
@@ -893,15 +896,7 @@ fn handle_get_constructors<'gc, 'm>(
         ctx.loader()
             .corlib_type("System.Reflection.ConstructorInfo")
     );
-    let mut vector = vm_try!(ctx.new_vector(
-        ConcreteType::from(constructor_info_type),
-        methods_objs.len()
-    ));
-    for (i, m) in methods_objs.into_iter().enumerate() {
-        m.write(&mut vector.get_mut()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
-    }
-    ctx.push_obj(ObjectRef::new(gc, HeapStorage::Vec(vector)));
-    StepResult::Continue
+    populate_reflection_array(ctx, methods_objs, ConcreteType::from(constructor_info_type))
 }
 
 fn handle_get_name<'gc, 'm>(

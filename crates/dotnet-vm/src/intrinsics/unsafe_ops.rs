@@ -22,6 +22,17 @@ use std::{
     sync::Arc,
 };
 
+fn offset_ptr<'gc>(val: StackValue<'gc>, byte_offset: isize) -> StackValue<'gc> {
+    if let StackValue::ManagedPtr(m) = val {
+        let new_m = unsafe { m.offset(byte_offset) };
+        StackValue::ManagedPtr(new_m)
+    } else {
+        let ptr = val.as_ptr();
+        let result_ptr = unsafe { ptr.offset(byte_offset) };
+        StackValue::NativeInt(result_ptr as isize)
+    }
+}
+
 #[dotnet_intrinsic("static int System.Runtime.InteropServices.Marshal::GetLastPInvokeError()")]
 #[allow(unused_variables)]
 pub fn intrinsic_marshal_get_last_pinvoke_error<'gc, 'm: 'gc>(
@@ -216,14 +227,7 @@ pub fn intrinsic_unsafe_add<'gc, 'm: 'gc>(
 
     let m_val = ctx.pop();
     let byte_offset = offset * layout.size().as_usize() as isize;
-    if let StackValue::ManagedPtr(m) = m_val {
-        let new_m = unsafe { m.offset(byte_offset) };
-        ctx.push(StackValue::ManagedPtr(new_m));
-    } else {
-        let ptr = m_val.as_ptr();
-        let result_ptr = unsafe { ptr.offset(byte_offset) };
-        ctx.push(StackValue::NativeInt(result_ptr as isize));
-    }
+    ctx.push(offset_ptr(m_val, byte_offset));
     StepResult::Continue
 }
 
@@ -248,13 +252,7 @@ pub fn intrinsic_unsafe_add_byte_offset<'gc, 'm: 'gc>(
     };
 
     let m_val = ctx.pop();
-    if let StackValue::ManagedPtr(m) = m_val {
-        let new_m = unsafe { m.offset(offset) };
-        ctx.push(StackValue::ManagedPtr(new_m));
-    } else {
-        let m = m_val.as_ptr();
-        ctx.push(StackValue::NativeInt(unsafe { m.offset(offset) } as isize));
-    }
+    ctx.push(offset_ptr(m_val, offset));
     StepResult::Continue
 }
 
@@ -279,14 +277,7 @@ pub fn intrinsic_unsafe_subtract<'gc, 'm: 'gc>(
 
     let m_val = ctx.pop();
     let byte_offset = -(offset * layout.size().as_usize() as isize);
-    if let StackValue::ManagedPtr(m) = m_val {
-        let new_m = unsafe { m.offset(byte_offset) };
-        ctx.push(StackValue::ManagedPtr(new_m));
-    } else {
-        let ptr = m_val.as_ptr();
-        let result_ptr = unsafe { ptr.offset(byte_offset) };
-        ctx.push(StackValue::NativeInt(result_ptr as isize));
-    }
+    ctx.push(offset_ptr(m_val, byte_offset));
     StepResult::Continue
 }
 
@@ -309,13 +300,7 @@ pub fn intrinsic_unsafe_subtract_byte_offset<'gc, 'm: 'gc>(
     };
 
     let m_val = ctx.pop();
-    if let StackValue::ManagedPtr(m) = m_val {
-        let new_m = unsafe { m.offset(-offset) };
-        ctx.push(StackValue::ManagedPtr(new_m));
-    } else {
-        let m = m_val.as_ptr();
-        ctx.push(StackValue::NativeInt(unsafe { m.offset(-offset) } as isize));
-    }
+    ctx.push(offset_ptr(m_val, -offset));
     StepResult::Continue
 }
 
@@ -530,11 +515,7 @@ pub fn intrinsic_unsafe_read_unaligned<'gc, 'm: 'gc>(
     generics: &GenericLookup,
 ) -> StepResult {
     let source = ctx.pop();
-    if let StackValue::ManagedPtr(m) = &source {
-        if m.is_null() {
-            return ctx.throw_by_name("System.NullReferenceException");
-        }
-    } else if let StackValue::NativeInt(0) = &source {
+    if source.is_null() {
         return ctx.throw_by_name("System.NullReferenceException");
     }
 
@@ -592,11 +573,7 @@ pub fn intrinsic_unsafe_write_unaligned<'gc, 'm: 'gc>(
     let value = ctx.pop();
 
     let dest = ctx.pop();
-    if let StackValue::ManagedPtr(m) = &dest {
-        if m.is_null() {
-            return ctx.throw_by_name("System.NullReferenceException");
-        }
-    } else if let StackValue::NativeInt(0) = &dest {
+    if dest.is_null() {
         return ctx.throw_by_name("System.NullReferenceException");
     }
 

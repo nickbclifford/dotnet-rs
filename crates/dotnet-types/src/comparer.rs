@@ -44,20 +44,8 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         b: &MethodType,
         generics2: Option<&GenericLookup>,
     ) -> bool {
-        if let Some(generics) = generics1 {
-            match a {
-                MethodType::TypeGeneric(idx) => {
-                    if let Some(concrete) = generics.type_generics.get(*idx) {
-                        return self.concrete_equals_method_type(concrete, res2, b, generics2);
-                    }
-                }
-                MethodType::MethodGeneric(idx) => {
-                    if let Some(concrete) = generics.method_generics.get(*idx) {
-                        return self.concrete_equals_method_type(concrete, res2, b, generics2);
-                    }
-                }
-                _ => {}
-            }
+        if let Some(concrete) = Self::resolve_generic_type(generics1, a) {
+            return self.concrete_equals_method_type(concrete, res2, b, generics2);
         }
 
         match (a, b) {
@@ -136,25 +124,23 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                 false
             }
             _ => {
-                if let Some(generics) = generics2 {
-                    match b {
-                        MethodType::TypeGeneric(idx) => {
-                            if let Some(concrete) = generics.type_generics.get(*idx) {
-                                return self
-                                    .concrete_equals_method_type(concrete, res1, a, generics1);
-                            }
-                        }
-                        MethodType::MethodGeneric(idx) => {
-                            if let Some(concrete) = generics.method_generics.get(*idx) {
-                                return self
-                                    .concrete_equals_method_type(concrete, res1, a, generics1);
-                            }
-                        }
-                        _ => {}
-                    }
+                if let Some(concrete) = Self::resolve_generic_type(generics2, b) {
+                    return self.concrete_equals_method_type(concrete, res1, a, generics1);
                 }
                 false
             }
+        }
+    }
+
+    fn resolve_generic_type<'g>(
+        generics: Option<&'g GenericLookup>,
+        ty: &MethodType,
+    ) -> Option<&'g ConcreteType> {
+        let generics = generics?;
+        match ty {
+            MethodType::TypeGeneric(idx) => generics.type_generics.get(*idx),
+            MethodType::MethodGeneric(idx) => generics.method_generics.get(*idx),
+            _ => None,
         }
     }
 

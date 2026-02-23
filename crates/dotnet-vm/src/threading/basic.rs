@@ -518,13 +518,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                         }
 
                         if let Some(marked) = marked {
-                            marked.finalize(|fc, c| {
-                                c.stack.local.heap.finalize_check(
-                                    fc,
-                                    &c.stack.shared,
-                                    c.stack.indent(),
-                                )
-                            });
+                            crate::gc::finalize_arena(marked);
                         }
                     }
                 });

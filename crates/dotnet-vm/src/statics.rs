@@ -190,37 +190,36 @@ impl Default for StaticStorageManager {
 }
 
 impl StaticStorageManager {
+    fn lookup_in_shard(
+        &self,
+        description: TypeDescription,
+        generics: &GenericLookup,
+    ) -> Option<Arc<StaticStorage>> {
+        let key = (description, generics.clone());
+        let shard_idx = self.get_shard_idx(&key);
+        let shard = self.shards[shard_idx].read();
+        shard.get(&key).cloned()
+    }
+
     pub fn get(
         &self,
         description: TypeDescription,
         generics: &GenericLookup,
     ) -> Arc<StaticStorage> {
-        let key = (description, generics.clone());
-        let shard_idx = self.get_shard_idx(&key);
-        let shard = self.shards[shard_idx].read();
-        shard
-            .get(&key)
-            .cloned()
-            .expect("missing type in static storage")
+        self.lookup_in_shard(description, generics)
+            .expect("Static storage should have been initialized via init()")
     }
 
     /// Get the current initialization state of a type.
     pub fn get_init_state(&self, description: TypeDescription, generics: &GenericLookup) -> u8 {
-        let key = (description, generics.clone());
-        let shard_idx = self.get_shard_idx(&key);
-        let shard = self.shards[shard_idx].read();
-        shard
-            .get(&key)
+        self.lookup_in_shard(description, generics)
             .map(|s| s.init_state.load(Ordering::Acquire))
             .unwrap_or(INIT_STATE_UNINITIALIZED)
     }
 
     /// Mark a type as failed after its .cctor throws an exception.
     pub fn mark_failed(&self, description: TypeDescription, generics: &GenericLookup) {
-        let key = (description, generics.clone());
-        let shard_idx = self.get_shard_idx(&key);
-        let shard = self.shards[shard_idx].read();
-        if let Some(storage) = shard.get(&key) {
+        if let Some(storage) = self.lookup_in_shard(description, generics) {
             storage
                 .init_state
                 .store(INIT_STATE_FAILED, Ordering::Release);
@@ -335,10 +334,7 @@ impl StaticStorageManager {
     /// Mark a type as fully initialized after its .cctor completes.
     /// This must be called after the .cctor returned by `init()` has finished executing.
     pub fn mark_initialized(&self, description: TypeDescription, generics: &GenericLookup) {
-        let key = (description, generics.clone());
-        let shard_idx = self.get_shard_idx(&key);
-        let shard = self.shards[shard_idx].read();
-        if let Some(storage) = shard.get(&key) {
+        if let Some(storage) = self.lookup_in_shard(description, generics) {
             storage
                 .init_state
                 .store(INIT_STATE_INITIALIZED, Ordering::Release);
