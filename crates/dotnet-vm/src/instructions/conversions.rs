@@ -180,9 +180,7 @@ pub fn conv_ovf<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(ConvertFloat32)]
-pub fn conv_r4<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
-    ctx: &mut T,
-) -> StepResult {
+pub fn conv_r4<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(ctx: &mut T) -> StepResult {
     let v = match ctx.pop() {
         StackValue::Int32(i) => i as f32,
         StackValue::Int64(i) => i as f32,
@@ -198,9 +196,7 @@ pub fn conv_r4<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(ConvertFloat64)]
-pub fn conv_r8<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
-    ctx: &mut T,
-) -> StepResult {
+pub fn conv_r8<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(ctx: &mut T) -> StepResult {
     let v = match ctx.pop() {
         StackValue::Int32(i) => i as f64,
         StackValue::Int64(i) => i as f64,

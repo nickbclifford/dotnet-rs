@@ -96,10 +96,10 @@ pub struct ResolverService<'m> {
     pub shared: Option<Arc<SharedGlobalState<'m>>>,
 }
 
+mod factory;
 mod layout;
 mod methods;
 mod types;
-mod factory;
 
 impl<'m> ResolverService<'m> {
     pub fn new(shared: Arc<SharedGlobalState<'m>>) -> Self {
@@ -125,18 +125,4 @@ impl<'m> ResolverService<'m> {
     pub fn loader(&self) -> &'m AssemblyLoader {
         self.loader
     }
-
-
-
-
-
-
-
-
-
-
-
 }
-
-
-

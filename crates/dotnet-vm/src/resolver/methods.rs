@@ -1,11 +1,10 @@
-use super::ResolverService;
-use crate::context::ResolutionContext;
+use crate::{context::ResolutionContext, resolver::ResolverService};
 use dotnet_types::{
+    TypeDescription,
     error::TypeResolutionError,
-    generics::{GenericLookup, ConcreteType},
+    generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     resolution::ResolutionS,
-    TypeDescription,
 };
 use dotnetdll::prelude::*;
 use std::sync::Arc;

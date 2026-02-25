@@ -256,10 +256,9 @@ impl Executor {
             // - Long-running operations
             #[cfg(feature = "multithreading")]
             if self.shared.thread_manager.is_gc_stop_requested() {
-                self.shared.thread_manager.safe_point(
-                    self.thread_id,
-                    &self.shared.gc_coordinator,
-                );
+                self.shared
+                    .thread_manager
+                    .safe_point(self.thread_id, &self.shared.gc_coordinator);
             }
 
             #[cfg(feature = "memory-validation")]

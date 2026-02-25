@@ -5,22 +5,18 @@ use crate::{
 };
 use dotnet_utils::{
     ArenaId,
-    sync::{Arc, AtomicU64, MANAGED_THREAD_ID, Mutex, Ordering},
-};
-use std::{
-    cell::Cell,
-    collections::HashMap,
-    sync,
-    thread::{self, ThreadId},
-};
-
-use dotnet_utils::{
     gc::{register_arena, set_currently_tracing, take_found_cross_arena_refs, unregister_arena},
-    sync::{AtomicBool, AtomicUsize, Condvar, MutexGuard, get_current_thread_id},
+    sync::{
+        Arc, AtomicBool, AtomicU64, AtomicUsize, Condvar, MANAGED_THREAD_ID, Mutex, MutexGuard,
+        Ordering, get_current_thread_id,
+    },
 };
 use dotnet_value::object::ObjectPtr;
 use std::{
-    mem,
+    cell::Cell,
+    collections::HashMap,
+    mem, sync,
+    thread::{self, ThreadId},
     time::{Duration, Instant},
 };
 use tracing::warn;

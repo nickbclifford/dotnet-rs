@@ -1,5 +1,6 @@
-use super::ResolverService;
-use crate::{context::ResolutionContext, layout::type_layout_with_metrics};
+use crate::{
+    context::ResolutionContext, layout::type_layout_with_metrics, resolver::ResolverService,
+};
 use dotnet_types::{error::TypeResolutionError, generics::ConcreteType};
 use std::sync::Arc;
 

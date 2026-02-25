@@ -5,15 +5,14 @@ use std::ops::{Deref, DerefMut};
 #[cfg(feature = "multithreading")]
 use crate::sync::{Arc, AtomicBool, AtomicUsize, Condvar, Mutex, Ordering};
 #[cfg(feature = "multithreading")]
+use parking_lot::{
+    MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
+};
+#[cfg(feature = "multithreading")]
 use std::{
     cell::{Cell, RefCell},
     collections::HashSet,
     mem,
-};
-
-#[cfg(feature = "multithreading")]
-use parking_lot::{
-    MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
 };
 
 #[cfg(not(feature = "multithreading"))]

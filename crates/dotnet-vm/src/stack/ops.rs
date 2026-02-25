@@ -144,7 +144,10 @@ impl<'gc, T: LocalOps<'gc> + ArgumentOps<'gc> + ?Sized> VariableOps<'gc> for T {
 
 /// A combination trait for all stack-related operations (evaluation stack, typed ops, and variables).
 pub trait AllStackOps<'gc>: EvalStackOps<'gc> + TypedStackOps<'gc> + VariableOps<'gc> {}
-impl<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + VariableOps<'gc> + ?Sized> AllStackOps<'gc> for T {}
+impl<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + VariableOps<'gc> + ?Sized> AllStackOps<'gc>
+    for T
+{
+}
 
 pub trait StackOps<'gc, 'm>: AllStackOps<'gc> {
     fn current_frame(&self) -> &crate::stack::StackFrame<'gc, 'm>;

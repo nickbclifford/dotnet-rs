@@ -1086,7 +1086,7 @@ mod tests {
 
     #[test]
     fn test_managed_ptr_serialization_roundtrip() {
-            let _guard = static_reg_test_lock().lock().unwrap();
+        let _guard = static_reg_test_lock().lock().unwrap();
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
         #[cfg(feature = "multithreading")]
@@ -1288,7 +1288,7 @@ mod tests {
 
     #[test]
     fn test_static_registry_deduplication() {
-            let _guard = static_reg_test_lock().lock().unwrap();
+        let _guard = static_reg_test_lock().lock().unwrap();
         reset_static_registry();
 
         let type_desc = TypeDescription::NULL;
@@ -1368,6 +1368,3 @@ mod tests {
         assert_eq!(info.offset.as_usize(), addr);
     }
 }
-
-
-

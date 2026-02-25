@@ -1,23 +1,22 @@
-use super::ResolverService;
-use crate::{context::ResolutionContext, resolution::TypeResolutionExt};
+use crate::{context::ResolutionContext, resolution::TypeResolutionExt, resolver::ResolverService};
 use dotnet_types::{
+    TypeDescription,
     comparer::decompose_type_source,
     error::TypeResolutionError,
     generics::{ConcreteType, GenericLookup},
     members::FieldDescription,
-    TypeDescription,
 };
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
+    StackValue,
     layout::HasLayout,
     object::{CTSValue, HeapStorage, Object, ObjectRef, ValueType, Vector},
     pointer::ManagedPtr,
     storage::FieldStorage,
-    StackValue,
 };
 use dotnetdll::prelude::*;
-use std::{ptr::NonNull, any, error::Error, sync::Arc};
 use sptr::Strict;
+use std::{any, error::Error, ptr::NonNull, sync::Arc};
 
 impl<'m> ResolverService<'m> {
     pub fn new_object<'gc>(

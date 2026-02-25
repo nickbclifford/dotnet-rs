@@ -1,15 +1,15 @@
-use super::ResolverService;
+use crate::resolver::ResolverService;
 use dotnet_types::{
+    TypeDescription,
     comparer::decompose_type_source,
     error::TypeResolutionError,
     generics::{ConcreteType, GenericLookup},
     members::FieldDescription,
     resolution::ResolutionS,
-    TypeDescription,
 };
 use dotnet_value::{
-    object::{ObjectHandle, ValueType},
     StackValue,
+    object::{ObjectHandle, ValueType},
 };
 use dotnetdll::prelude::*;
 use std::collections::{HashSet, VecDeque};
