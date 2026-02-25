@@ -422,7 +422,7 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
 
     let mut pinned_objects: Vec<ObjectRef<'gc>> = Vec::new();
     let mut local_guards: Vec<PinnedGuard<'gc>> = Vec::new();
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     let mut cross_arena_guards = Vec::new();
 
     let arg_count = method.method.signature.parameters.len();
@@ -757,7 +757,7 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
                         temp_buffers[idx].as_ptr() as *const *mut u8 as *mut *mut u8 as *mut c_void;
                 }
             }
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             StackValue::CrossArenaObjectRef(ptr, _) => {
                 let lock = unsafe { &*ptr.as_ptr() };
                 let guard = lock.borrow();

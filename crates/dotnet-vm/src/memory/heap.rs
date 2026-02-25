@@ -7,7 +7,7 @@ use std::{
     collections::{BTreeMap, HashSet},
 };
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 use dotnet_value::object::ObjectPtr;
 
 pub struct HeapManager<'gc> {
@@ -19,7 +19,7 @@ pub struct HeapManager<'gc> {
     pub needs_full_collect: Cell<bool>,
     /// Roots for objects in this arena that are referenced by other arenas.
     /// This is populated during the coordinated GC marking phase.
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     pub cross_arena_roots: RefCell<HashSet<ObjectPtr>>,
     /// Untraced handles to every heap object in this arena.
     /// Used by the tracer during debugging and for conservative stack scanning.
@@ -195,7 +195,7 @@ unsafe impl<'gc> Collect for HeapManager<'gc> {
         for obj in self.pinned_objects.borrow().iter() {
             obj.trace(cc);
         }
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         for ptr in self.cross_arena_roots.borrow().iter() {
             unsafe {
                 Gc::from_ptr(ptr.as_ptr()).trace(cc);

@@ -14,19 +14,15 @@ use std::{
     thread::{self, ThreadId},
 };
 
-#[cfg(feature = "multithreaded-gc")]
 use dotnet_utils::{
     gc::{register_arena, set_currently_tracing, take_found_cross_arena_refs, unregister_arena},
     sync::{AtomicBool, AtomicUsize, Condvar, MutexGuard, get_current_thread_id},
 };
-#[cfg(feature = "multithreaded-gc")]
 use dotnet_value::object::ObjectPtr;
-#[cfg(feature = "multithreaded-gc")]
 use std::{
     mem,
     time::{Duration, Instant},
 };
-#[cfg(feature = "multithreaded-gc")]
 use tracing::warn;
 
 thread_local! {
@@ -78,21 +74,15 @@ pub struct ThreadManager {
     /// Weak reference to self for creating guards
     pub(super) self_weak: sync::OnceLock<sync::Weak<ThreadManager>>,
 
-    #[cfg(feature = "multithreaded-gc")]
-    /// Whether a GC stop-the-world is currently requested
-    pub(super) gc_stop_requested: AtomicBool,
-    #[cfg(feature = "multithreaded-gc")]
+    gc_stop_requested: AtomicBool,
     /// Number of threads that have reached safe point during GC
-    pub(super) threads_at_safepoint: AtomicUsize,
-    #[cfg(feature = "multithreaded-gc")]
+    threads_at_safepoint: AtomicUsize,
     /// Condvar for notifying when all threads reach safe point
-    pub(super) all_threads_stopped: Condvar,
-    #[cfg(feature = "multithreaded-gc")]
+    all_threads_stopped: Condvar,
     /// Mutex for GC coordination
-    pub(super) gc_coordination: Mutex<()>,
-    #[cfg(feature = "multithreaded-gc")]
+    gc_coordination: Mutex<()>,
     /// Reference to the GC coordinator for resume signaling
-    pub(super) coordinator: Mutex<Option<sync::Weak<GCCoordinator>>>,
+    coordinator: Mutex<Option<sync::Weak<GCCoordinator>>>,
 }
 
 impl ThreadManager {
@@ -102,22 +92,16 @@ impl ThreadManager {
             next_thread_id: AtomicU64::new(1), // Thread ID 0 is reserved
             self_weak: sync::OnceLock::new(),
 
-            #[cfg(feature = "multithreaded-gc")]
             gc_stop_requested: AtomicBool::new(false),
-            #[cfg(feature = "multithreaded-gc")]
             threads_at_safepoint: AtomicUsize::new(0),
-            #[cfg(feature = "multithreaded-gc")]
             all_threads_stopped: Condvar::new(),
-            #[cfg(feature = "multithreaded-gc")]
             gc_coordination: Mutex::new(()),
-            #[cfg(feature = "multithreaded-gc")]
             coordinator: Mutex::new(None),
         });
         let _ = manager.self_weak.set(Arc::downgrade(&manager));
         manager
     }
 
-    #[cfg(feature = "multithreaded-gc")]
     pub(super) fn resume_threads(&self) {
         self.gc_stop_requested.store(false, Ordering::Release);
         self.all_threads_stopped.notify_all();
@@ -131,13 +115,11 @@ impl ThreadManager {
         }
     }
 
-    #[cfg(feature = "multithreaded-gc")]
     pub fn set_coordinator(&self, coordinator: sync::Weak<GCCoordinator>) {
         let mut guard = self.coordinator.lock();
         *guard = Some(coordinator);
     }
 
-    #[cfg(feature = "multithreaded-gc")]
     fn get_coordinator(&self) -> Option<sync::Arc<GCCoordinator>> {
         let guard = self.coordinator.lock();
         guard.as_ref()?.upgrade()
@@ -164,7 +146,7 @@ impl ThreadManagerOps for ThreadManager {
         // Cache the managed ID in thread-local storage
         MANAGED_THREAD_ID.set(Some(managed_id));
 
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         register_arena(managed_id);
 
         managed_id
@@ -188,10 +170,10 @@ impl ThreadManagerOps for ThreadManager {
         // Clear thread-local cache
         MANAGED_THREAD_ID.set(None);
 
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         unregister_arena(managed_id);
 
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         {
             // If we were at a safe point, decrement the counter
             if self.threads_at_safepoint.load(Ordering::Acquire) > 0 {
@@ -239,63 +221,42 @@ impl ThreadManagerOps for ThreadManager {
     }
 
     fn is_gc_stop_requested(&self) -> bool {
-        #[cfg(feature = "multithreaded-gc")]
-        {
-            self.gc_stop_requested.load(Ordering::Acquire)
-        }
-        #[cfg(not(feature = "multithreaded-gc"))]
-        {
-            false
-        }
+        self.gc_stop_requested.load(Ordering::Acquire)
     }
 
     fn safe_point(&self, managed_id: ArenaId, coordinator: &GCCoordinator) {
-        #[cfg(feature = "multithreaded-gc")]
-        {
-            if !self.is_gc_stop_requested() {
-                return;
-            }
-
-            if IS_PERFORMING_GC.get() {
-                return;
-            }
-
-            let thread_info = {
-                let threads = self.threads.lock();
-                threads.get(&managed_id).cloned()
-            };
-
-            if let Some(thread) = thread_info {
-                thread.set_state(ThreadState::AtSafePoint);
-                self.threads_at_safepoint.fetch_add(1, Ordering::AcqRel);
-                self.all_threads_stopped.notify_all();
-
-                while let Some(command) =
-                    coordinator.wait_for_command_or_resume(managed_id, &self.gc_stop_requested)
-                {
-                    self.execute_gc_command(command, coordinator);
-                    coordinator.command_finished(managed_id);
-                }
-
-                self.threads_at_safepoint.fetch_sub(1, Ordering::Release);
-                thread.set_state(ThreadState::Running);
-            }
+        if !self.is_gc_stop_requested() {
+            return;
         }
-        #[cfg(not(feature = "multithreaded-gc"))]
-        {
-            let _ = (managed_id, coordinator);
+
+        if IS_PERFORMING_GC.get() {
+            return;
+        }
+
+        let thread_info = {
+            let threads = self.threads.lock();
+            threads.get(&managed_id).cloned()
+        };
+
+        if let Some(thread) = thread_info {
+            thread.set_state(ThreadState::AtSafePoint);
+            self.threads_at_safepoint.fetch_add(1, Ordering::AcqRel);
+            self.all_threads_stopped.notify_all();
+
+            while let Some(command) =
+                coordinator.wait_for_command_or_resume(managed_id, &self.gc_stop_requested)
+            {
+                self.execute_gc_command(command, coordinator);
+                coordinator.command_finished(managed_id);
+            }
+
+            self.threads_at_safepoint.fetch_sub(1, Ordering::Release);
+            thread.set_state(ThreadState::Running);
         }
     }
 
     fn execute_gc_command(&self, command: GCCommand, coordinator: &GCCoordinator) {
-        #[cfg(feature = "multithreaded-gc")]
-        {
-            execute_gc_command_for_current_thread(command, coordinator);
-        }
-        #[cfg(not(feature = "multithreaded-gc"))]
-        {
-            let _ = (command, coordinator);
-        }
+        execute_gc_command_for_current_thread(command, coordinator);
     }
 
     fn safe_point_traced(
@@ -305,142 +266,116 @@ impl ThreadManagerOps for ThreadManager {
         tracer: &mut Tracer,
         location: &str,
     ) {
-        #[cfg(feature = "multithreaded-gc")]
-        {
-            if tracer.is_enabled() && self.is_gc_stop_requested() {
-                tracer.trace_thread_safepoint(0, managed_id, location);
-            }
-            self.safe_point(managed_id, coordinator);
+        if tracer.is_enabled() && self.is_gc_stop_requested() {
+            tracer.trace_thread_safepoint(0, managed_id, location);
         }
-        #[cfg(not(feature = "multithreaded-gc"))]
-        {
-            let _ = (managed_id, coordinator, tracer, location);
-        }
+        self.safe_point(managed_id, coordinator);
     }
 
     fn request_stop_the_world(&self) -> Self::Guard {
-        #[cfg(feature = "multithreaded-gc")]
-        {
-            let start_time = Instant::now();
-            const WARN_TIMEOUT: Duration = Duration::from_secs(1);
-            let mut warned = false;
+        let start_time = Instant::now();
+        const WARN_TIMEOUT: Duration = Duration::from_secs(1);
+        let mut warned = false;
 
-            // Signal all threads to stop.
-            // Multiple threads might do this simultaneously, which is fine.
-            self.gc_stop_requested.store(true, Ordering::Release);
+        // Signal all threads to stop.
+        // Multiple threads might do this simultaneously, which is fine.
+        self.gc_stop_requested.store(true, Ordering::Release);
 
-            let mut guard = loop {
-                if let Some(g) = self.gc_coordination.try_lock() {
-                    break g;
-                }
+        let mut guard = loop {
+            if let Some(g) = self.gc_coordination.try_lock() {
+                break g;
+            }
 
-                // If we're not the one holding the coordination lock, we might be
-                // requested to stop by the thread that DOES hold it.
-                if let Some(id) = self.current_thread_id()
-                    && let Some(coordinator) = self.get_coordinator()
-                {
-                    self.safe_point(id, &coordinator);
-                }
-                thread::yield_now();
+            // If we're not the one holding the coordination lock, we might be
+            // requested to stop by the thread that DOES hold it.
+            if let Some(id) = self.current_thread_id()
+                && let Some(coordinator) = self.get_coordinator()
+            {
+                self.safe_point(id, &coordinator);
+            }
+            thread::yield_now();
+        };
+
+        loop {
+            let thread_count = self.thread_count();
+            let current_id = self.current_thread_id();
+            let target_stopped = if current_id.is_some() {
+                thread_count.saturating_sub(1)
+            } else {
+                thread_count
             };
 
-            loop {
-                let thread_count = self.thread_count();
-                let current_id = self.current_thread_id();
-                let target_stopped = if current_id.is_some() {
-                    thread_count.saturating_sub(1)
-                } else {
-                    thread_count
-                };
-
-                if self.threads_at_safepoint.load(Ordering::Acquire) >= target_stopped {
-                    break;
-                }
-
-                if !warned && start_time.elapsed() > WARN_TIMEOUT {
-                    warn!("[GC WARNING] Stop-the-world pause taking longer than expected:");
-                    warn!("  Total threads: {}", thread_count);
-                    warn!(
-                        "  Threads at safe point: {}",
-                        self.threads_at_safepoint.load(Ordering::Acquire)
-                    );
-
-                    let threads = self.threads.lock();
-                    warn!("  Threads not at safe point:");
-                    for (tid, thread) in threads.iter() {
-                        if thread.get_state() != ThreadState::AtSafePoint {
-                            warn!(
-                                "    - Thread ID {}: {:?} (native: {:?})",
-                                tid,
-                                thread.get_state(),
-                                thread.native_id
-                            );
-                        }
-                    }
-                    drop(threads);
-                    warned = true;
-                }
-
-                self.all_threads_stopped.wait(&mut guard);
+            if self.threads_at_safepoint.load(Ordering::Acquire) >= target_stopped {
+                break;
             }
 
-            if warned {
+            if !warned && start_time.elapsed() > WARN_TIMEOUT {
+                warn!("[GC WARNING] Stop-the-world pause taking longer than expected:");
+                warn!("  Total threads: {}", thread_count);
                 warn!(
-                    "[GC] Stop-the-world completed after {} ms",
-                    start_time.elapsed().as_millis()
+                    "  Threads at safe point: {}",
+                    self.threads_at_safepoint.load(Ordering::Acquire)
                 );
+
+                let threads = self.threads.lock();
+                warn!("  Threads not at safe point:");
+                for (tid, thread) in threads.iter() {
+                    if thread.get_state() != ThreadState::AtSafePoint {
+                        warn!(
+                            "    - Thread ID {}: {:?} (native: {:?})",
+                            tid,
+                            thread.get_state(),
+                            thread.native_id
+                        );
+                    }
+                }
+                drop(threads);
+                warned = true;
             }
 
-            // Upgrade the weak reference to get an Arc
-            let manager_arc = self
-                .self_weak
-                .get()
-                .expect("ThreadManager::self_weak not initialized")
-                .upgrade()
-                .expect("ThreadManager dropped while request_stop_the_world was called");
+            self.all_threads_stopped.wait(&mut guard);
+        }
 
-            // SAFETY: We transmute the guard lifetime to 'static. This is safe because:
-            // 1. We're storing an Arc<ThreadManager> which keeps the ThreadManager alive
-            // 2. The guard borrows from the ThreadManager's gc_coordination mutex
-            // 3. The StopTheWorldGuard holds both the Arc and the guard, ensuring the mutex
-            //    outlives the guard
-            let guard_static: MutexGuard<'static, ()> = unsafe { mem::transmute(guard) };
-            StopTheWorldGuard::new(manager_arc, guard_static, start_time)
+        if warned {
+            warn!(
+                "[GC] Stop-the-world completed after {} ms",
+                start_time.elapsed().as_millis()
+            );
         }
-        #[cfg(not(feature = "multithreaded-gc"))]
-        {
-            StopTheWorldGuard {}
-        }
+
+        // Upgrade the weak reference to get an Arc
+        let manager_arc = self
+            .self_weak
+            .get()
+            .expect("ThreadManager::self_weak not initialized")
+            .upgrade()
+            .expect("ThreadManager dropped while request_stop_the_world was called");
+
+        // SAFETY: We transmute the guard lifetime to 'static. This is safe because:
+        // 1. We're storing an Arc<ThreadManager> which keeps the ThreadManager alive
+        // 2. The guard borrows from the ThreadManager's gc_coordination mutex
+        // 3. The StopTheWorldGuard holds both the Arc and the guard, ensuring the mutex
+        //    outlives the guard
+        let guard_static: MutexGuard<'static, ()> = unsafe { mem::transmute(guard) };
+        StopTheWorldGuard::new(manager_arc, guard_static, start_time)
     }
 
     fn request_stop_the_world_traced(&self, tracer: &mut Tracer) -> Self::Guard {
-        #[cfg(feature = "multithreaded-gc")]
-        {
-            let thread_count = self.thread_count();
-            if tracer.is_enabled() {
-                tracer.trace_stw_start(0, thread_count);
-            }
-            self.request_stop_the_world()
+        let thread_count = self.thread_count();
+        if tracer.is_enabled() {
+            tracer.trace_stw_start(0, thread_count);
         }
-        #[cfg(not(feature = "multithreaded-gc"))]
-        {
-            let _ = tracer;
-            self.request_stop_the_world()
-        }
+        self.request_stop_the_world()
     }
 }
 
 pub struct StopTheWorldGuard {
-    #[cfg(feature = "multithreaded-gc")]
     manager: Arc<ThreadManager>,
-    #[cfg(feature = "multithreaded-gc")]
     _lock: MutexGuard<'static, ()>,
-    #[cfg(feature = "multithreaded-gc")]
     start_time: Instant,
 }
 
 impl StopTheWorldGuard {
-    #[cfg(feature = "multithreaded-gc")]
     pub(super) fn new(
         manager: Arc<ThreadManager>,
         lock: MutexGuard<'static, ()>,
@@ -457,28 +392,17 @@ impl StopTheWorldGuard {
 
 impl STWGuardOps for StopTheWorldGuard {
     fn elapsed_micros(&self) -> u64 {
-        #[cfg(feature = "multithreaded-gc")]
-        {
-            self.start_time.elapsed().as_micros() as u64
-        }
-        #[cfg(not(feature = "multithreaded-gc"))]
-        {
-            0
-        }
+        self.start_time.elapsed().as_micros() as u64
     }
 }
 
 impl Drop for StopTheWorldGuard {
     fn drop(&mut self) {
-        #[cfg(feature = "multithreaded-gc")]
-        {
-            self.manager.resume_threads();
-            IS_PERFORMING_GC.set(false);
-        }
+        self.manager.resume_threads();
+        IS_PERFORMING_GC.set(false);
     }
 }
 
-#[cfg(feature = "multithreaded-gc")]
 fn record_found_cross_arena_refs(coordinator: &GCCoordinator) {
     for (target_id, ptr_usize) in take_found_cross_arena_refs() {
         let ptr = unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
@@ -487,90 +411,83 @@ fn record_found_cross_arena_refs(coordinator: &GCCoordinator) {
 }
 
 pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &GCCoordinator) {
-    #[cfg(feature = "multithreaded-gc")]
-    {
-        use crate::gc::arena::THREAD_ARENA;
-        match command {
-            GCCommand::MarkAll => {
-                THREAD_ARENA.with(|cell| {
-                    let mut arena_opt = cell.borrow_mut();
-                    if let Some(arena) = arena_opt.as_mut() {
-                        let thread_id = get_current_thread_id();
-                        set_currently_tracing(Some(thread_id));
+    use crate::gc::arena::THREAD_ARENA;
+    match command {
+        GCCommand::MarkAll => {
+            THREAD_ARENA.with(|cell| {
+                let mut arena_opt = cell.borrow_mut();
+                if let Some(arena) = arena_opt.as_mut() {
+                    let thread_id = get_current_thread_id();
+                    set_currently_tracing(Some(thread_id));
 
-                        arena.mutate(|_, c| {
-                            c.stack.local.heap.cross_arena_roots.borrow_mut().clear();
-                        });
+                    arena.mutate(|_, c| {
+                        c.stack.local.heap.cross_arena_roots.borrow_mut().clear();
+                    });
 
-                        let mut marked = None;
-                        while marked.is_none() {
-                            marked = arena.mark_all();
-                        }
-                        // Do not finalize or sweep yet.
-
-                        set_currently_tracing(None);
-
-                        record_found_cross_arena_refs(coordinator);
+                    let mut marked = None;
+                    while marked.is_none() {
+                        marked = arena.mark_all();
                     }
-                });
-            }
-            GCCommand::MarkObjects(ptrs) => {
-                THREAD_ARENA.with(|cell| {
-                    let mut arena_opt = cell.borrow_mut();
-                    if let Some(arena) = arena_opt.as_mut() {
-                        let thread_id = get_current_thread_id();
-                        set_currently_tracing(Some(thread_id));
+                    // Do not finalize or sweep yet.
 
-                        arena.mutate(|_, c| {
-                            let mut roots = c.stack.local.heap.cross_arena_roots.borrow_mut();
-                            for ptr_usize in ptrs {
-                                let ptr =
-                                    unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
-                                roots.insert(ptr);
-                            }
-                        });
+                    set_currently_tracing(None);
 
-                        let mut marked = None;
-                        while marked.is_none() {
-                            marked = arena.mark_all();
-                        }
-                        // Do not finalize or sweep yet.
-
-                        set_currently_tracing(None);
-
-                        record_found_cross_arena_refs(coordinator);
-                    }
-                });
-            }
-            GCCommand::Finalize => {
-                THREAD_ARENA.with(|cell| {
-                    let mut arena_opt = cell.borrow_mut();
-                    if let Some(arena) = arena_opt.as_mut() {
-                        // Ensure we are in Marked phase
-                        let mut marked = None;
-                        while marked.is_none() {
-                            marked = arena.mark_all();
-                        }
-
-                        if let Some(marked) = marked {
-                            crate::gc::finalize_arena(marked);
-                        }
-                    }
-                });
-            }
-            GCCommand::Sweep => {
-                THREAD_ARENA.with(|cell| {
-                    let mut arena_opt = cell.borrow_mut();
-                    if let Some(arena) = arena_opt.as_mut() {
-                        // Finish the collection (finalize and sweep)
-                        arena.collect_all();
-                    }
-                });
-            }
+                    record_found_cross_arena_refs(coordinator);
+                }
+            });
         }
-    }
-    #[cfg(not(feature = "multithreaded-gc"))]
-    {
-        let _ = (command, coordinator);
+        GCCommand::MarkObjects(ptrs) => {
+            THREAD_ARENA.with(|cell| {
+                let mut arena_opt = cell.borrow_mut();
+                if let Some(arena) = arena_opt.as_mut() {
+                    let thread_id = get_current_thread_id();
+                    set_currently_tracing(Some(thread_id));
+
+                    arena.mutate(|_, c| {
+                        let mut roots = c.stack.local.heap.cross_arena_roots.borrow_mut();
+                        for ptr_usize in ptrs {
+                            let ptr =
+                                unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
+                            roots.insert(ptr);
+                        }
+                    });
+
+                    let mut marked = None;
+                    while marked.is_none() {
+                        marked = arena.mark_all();
+                    }
+                    // Do not finalize or sweep yet.
+
+                    set_currently_tracing(None);
+
+                    record_found_cross_arena_refs(coordinator);
+                }
+            });
+        }
+        GCCommand::Finalize => {
+            THREAD_ARENA.with(|cell| {
+                let mut arena_opt = cell.borrow_mut();
+                if let Some(arena) = arena_opt.as_mut() {
+                    // Ensure we are in Marked phase
+                    let mut marked = None;
+                    while marked.is_none() {
+                        marked = arena.mark_all();
+                    }
+
+                    if let Some(marked) = marked {
+                        crate::gc::finalize_arena(marked);
+                    }
+                }
+            });
+        }
+        GCCommand::Sweep => {
+            THREAD_ARENA.with(|cell| {
+                let mut arena_opt = cell.borrow_mut();
+                if let Some(arena) = arena_opt.as_mut() {
+                    // Finish the collection (finalize and sweep)
+                    arena.collect_all();
+                }
+            });
+        }
     }
 }

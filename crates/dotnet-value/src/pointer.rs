@@ -22,9 +22,9 @@ fn nonnull_from_exposed_addr(addr: usize) -> Option<NonNull<u8>> {
 #[cfg(feature = "fuzzing")]
 use arbitrary::Arbitrary;
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 use crate::object::ObjectPtr;
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 use dotnet_utils::gc::ThreadSafeLock;
 
 pub struct StaticMetadata {
@@ -70,7 +70,7 @@ pub enum PointerOrigin<'gc> {
     Stack(crate::StackSlotIndex),
     Static(TypeDescription, GenericLookup),
     Unmanaged,
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     CrossArenaObjectRef(ObjectPtr, ArenaId),
     /// A value type resident on the evaluation stack (transient).
     Transient(crate::object::Object<'gc>),
@@ -85,9 +85,9 @@ impl<'a, 'gc> Arbitrary<'a> for PointerOrigin<'gc> {
             1 => Ok(Self::Stack(u.arbitrary()?)),
             2 => Ok(Self::Static(u.arbitrary()?, u.arbitrary()?)),
             3 => Ok(Self::Unmanaged),
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             4 => Ok(Self::CrossArenaObjectRef(u.arbitrary()?, u.arbitrary()?)),
-            #[cfg(not(feature = "multithreaded-gc"))]
+            #[cfg(not(feature = "multithreading"))]
             4 => Ok(Self::Unmanaged),
             5 => Ok(Self::Transient(u.arbitrary()?)),
             _ => unreachable!(),
@@ -102,7 +102,7 @@ unsafe impl<'gc> Collect for PointerOrigin<'gc> {
     fn trace(&self, cc: &Collection) {
         match self {
             Self::Heap(r) => r.trace(cc),
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             Self::CrossArenaObjectRef(ptr, tid) => {
                 dotnet_utils::gc::record_cross_arena_ref(*tid, ptr.as_ptr() as usize);
             }
@@ -140,13 +140,13 @@ impl<'gc> PointerOrigin<'gc> {
     pub fn write_barrier_owner_id(&self) -> Option<ArenaId> {
         match self {
             Self::Heap(r) => r.0.as_ref().map(|h| unsafe { (*h.as_ptr()).owner_id }),
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             Self::CrossArenaObjectRef(_, tid) => Some(*tid),
             _ => None,
         }
     }
 
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     pub fn write_barrier_owner(&self) -> Option<(ObjectPtr, ArenaId)> {
         match self {
             Self::Heap(r) => r.as_ptr_info(),
@@ -163,7 +163,7 @@ impl<'gc> PointerOrigin<'gc> {
     ) {
         match self {
             PointerOrigin::Heap(r) => r.resurrect(fc, visited, depth),
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 dotnet_utils::gc::record_cross_arena_ref(*tid, ptr.as_ptr().expose_addr());
             }
@@ -316,7 +316,7 @@ impl<'gc> ManagedPtr<'gc> {
         [0u8; ObjectRef::SIZE * 3]
     }
 
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     pub fn new_cross_arena(
         value: Option<NonNull<u8>>,
         inner_type: TypeDescription,
@@ -550,7 +550,7 @@ impl<'gc> ManagedPtr<'gc> {
                 5 => {
                     // CrossArenaObjectRef (Tag 5)
                     // Recover ObjectPtr from Word 0 and offset from Word 1
-                    #[cfg(feature = "multithreaded-gc")]
+                    #[cfg(feature = "multithreading")]
                     {
                         let lock_ptr = sptr::from_exposed_addr::<
                             ThreadSafeLock<crate::object::ObjectInner<'static>>,
@@ -591,9 +591,9 @@ impl<'gc> ManagedPtr<'gc> {
                             offset: crate::ByteOffset(word1),
                         })
                     }
-                    #[cfg(not(feature = "multithreaded-gc"))]
+                    #[cfg(not(feature = "multithreading"))]
                     {
-                        // Fallback for non-multithreaded-gc mode (should not happen)
+                        // Fallback for non-multithreading mode (should not happen)
                         Err(PointerDeserializationError::UnknownTag(tag))
                     }
                 }
@@ -722,7 +722,7 @@ impl<'gc> ManagedPtr<'gc> {
                 let w1 = self._value.map_or(0, |p| p.as_ptr().expose_addr());
                 (w0, w1)
             }
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, _) => {
                 let w0: usize = ptr.as_ptr().expose_addr() | 5;
                 let w1 = self.offset.as_usize();
@@ -1019,13 +1019,13 @@ mod tests {
     fn test_managed_ptr_offset_oob() {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(ArenaId(0))));
 
         arena.mutate(|gc, _root| {
             let gc_handle = dotnet_utils::gc::GCHandle::new(
                 gc,
-                #[cfg(feature = "multithreaded-gc")]
+                #[cfg(feature = "multithreading")]
                 arena_handle.as_inner(),
                 #[cfg(feature = "memory-validation")]
                 ArenaId(0),
@@ -1054,13 +1054,13 @@ mod tests {
     fn test_managed_ptr_offset_valid() {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(ArenaId(0))));
 
         arena.mutate(|gc, _root| {
             let gc_handle = dotnet_utils::gc::GCHandle::new(
                 gc,
-                #[cfg(feature = "multithreaded-gc")]
+                #[cfg(feature = "multithreading")]
                 arena_handle.as_inner(),
                 #[cfg(feature = "memory-validation")]
                 ArenaId(0),
@@ -1089,13 +1089,13 @@ mod tests {
             let _guard = static_reg_test_lock().lock().unwrap();
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(ArenaId(0))));
 
         arena.mutate(|gc, _root| {
             let gc_handle = dotnet_utils::gc::GCHandle::new(
                 gc,
-                #[cfg(feature = "multithreaded-gc")]
+                #[cfg(feature = "multithreading")]
                 arena_handle.as_inner(),
                 #[cfg(feature = "memory-validation")]
                 ArenaId(0),
@@ -1180,7 +1180,7 @@ mod tests {
             assert_eq!(info.offset.as_usize(), static_offset);
 
             // 5. CrossArenaObjectRef (if enabled)
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             {
                 use crate::object::ObjectPtr;
                 let ptr_raw = obj.with_data(|d| d.as_ptr());
@@ -1236,13 +1236,13 @@ mod tests {
     fn test_managed_ptr_serialization_bugs_reproduction() {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(ArenaId(0))));
 
         arena.mutate(|gc, _root| {
             let _gc_handle = &dotnet_utils::gc::GCHandle::new(
                 gc,
-                #[cfg(feature = "multithreaded-gc")]
+                #[cfg(feature = "multithreading")]
                 arena_handle.as_inner(),
                 #[cfg(feature = "memory-validation")]
                 ArenaId(0),

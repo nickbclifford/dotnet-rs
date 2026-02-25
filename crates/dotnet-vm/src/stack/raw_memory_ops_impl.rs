@@ -81,7 +81,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 std::ptr::NonNull::new(sptr::from_exposed_addr_mut::<u8>(offset.as_usize()))
                     .expect("resolve_address: null unmanaged pointer (offset=0)")
             }
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
                 let lock = unsafe { ptr.0.as_ref() };
                 let guard = lock.borrow();
@@ -144,7 +144,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe { memory.write_unaligned(self.gc, None, offset, value, layout) }
             }
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 let heap = &self.local.heap;
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
@@ -219,7 +219,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 let memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe { memory.read_unaligned(self.gc, None, offset, layout, type_desc) }
             }
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 let heap = &self.local.heap;
                 let memory = crate::memory::RawMemoryAccess::new(heap);
@@ -286,7 +286,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe { memory.write_bytes(self.gc, None, offset, data) }
             }
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 let heap = &self.local.heap;
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
@@ -349,7 +349,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 let memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe { memory.read_bytes(None, offset, dest) }
             }
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 let heap = &self.local.heap;
                 let memory = crate::memory::RawMemoryAccess::new(heap);
@@ -455,7 +455,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                     )
                 }
             }
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 let heap = &self.local.heap;
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
@@ -550,7 +550,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe { memory.exchange_atomic(self.gc, None, offset, value, size, ordering) }
             }
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 let heap = &self.local.heap;
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
@@ -629,7 +629,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 let memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe { memory.load_atomic(None, offset, size, ordering) }
             }
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 let heap = &self.local.heap;
                 let memory = crate::memory::RawMemoryAccess::new(heap);
@@ -720,7 +720,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe { memory.store_atomic(self.gc, None, offset, value, size, ordering) }
             }
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 let heap = &self.local.heap;
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);

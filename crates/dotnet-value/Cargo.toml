@@ -14,8 +14,7 @@ sptr = "0.3"
 arbitrary = { version = "1.3", features = ["derive"], optional = true }
 
 [features]
-default = ["multithreaded-gc"]
+default = ["multithreading"]
 multithreading = ["dotnet-utils/multithreading"]
-multithreaded-gc = ["multithreading", "dotnet-utils/multithreaded-gc"]
 memory-validation = ["dotnet-utils/memory-validation"]
 fuzzing = ["dep:arbitrary", "dotnet-types/fuzzing", "dotnet-utils/fuzzing"]

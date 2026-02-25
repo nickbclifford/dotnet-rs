@@ -17,14 +17,14 @@ use dotnet_utils::{
 };
 use dotnet_value::StackValue;
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 use crate::gc::{arena::THREAD_ARENA, coordinator::*};
 
 pub struct Executor {
     shared: Arc<SharedGlobalState<'static>>,
     /// Thread ID for this executor
     thread_id: dotnet_utils::ArenaId,
-    #[cfg(not(feature = "multithreaded-gc"))]
+    #[cfg(not(feature = "multithreading"))]
     arena: Box<GCArena>,
     #[cfg(feature = "fuzzing")]
     pub instruction_budget: Option<u64>,
@@ -49,7 +49,7 @@ impl std::fmt::Display for ExecutorResult {
 
 impl Executor {
     fn with_arena<R>(&mut self, f: impl FnOnce(&mut GCArena) -> R) -> R {
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         {
             THREAD_ARENA.with(|cell| {
                 let mut arena_opt = cell.borrow_mut();
@@ -57,14 +57,14 @@ impl Executor {
                 f(arena)
             })
         }
-        #[cfg(not(feature = "multithreaded-gc"))]
+        #[cfg(not(feature = "multithreading"))]
         {
             f(&mut self.arena)
         }
     }
 
     fn with_arena_ref<R>(&self, f: impl FnOnce(&GCArena) -> R) -> R {
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         {
             THREAD_ARENA.with(|cell| {
                 let arena_opt = cell.borrow();
@@ -72,7 +72,7 @@ impl Executor {
                 f(arena)
             })
         }
-        #[cfg(not(feature = "multithreaded-gc"))]
+        #[cfg(not(feature = "multithreading"))]
         {
             f(&self.arena)
         }
@@ -104,7 +104,7 @@ impl Executor {
         let thread_id = shared.thread_manager.register_thread();
 
         // Register with GC coordinator
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         {
             let handle = ArenaHandle::new(thread_id);
             shared.gc_coordinator.register_arena(handle.clone());
@@ -113,14 +113,14 @@ impl Executor {
         // Set thread id in arena and pre-initialize reflection
         arena.mutate_root(|gc, c| {
             c.stack.thread_id.set(thread_id);
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             {
                 c.stack.arena = ArenaHandle::new(thread_id);
             }
 
             let gc_handle = GCHandle::new(
                 gc,
-                #[cfg(feature = "multithreaded-gc")]
+                #[cfg(feature = "multithreading")]
                 unsafe {
                     c.stack.arena_inner_gc()
                 },
@@ -132,7 +132,7 @@ impl Executor {
             ctx.pre_initialize_reflection();
         });
 
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         THREAD_ARENA.with(|cell| {
             *cell.borrow_mut() = Some(arena);
         });
@@ -140,7 +140,7 @@ impl Executor {
         Self {
             shared,
             thread_id,
-            #[cfg(not(feature = "multithreaded-gc"))]
+            #[cfg(not(feature = "multithreading"))]
             arena,
             #[cfg(feature = "fuzzing")]
             instruction_budget: None,
@@ -155,7 +155,7 @@ impl Executor {
             arena.mutate_root(|gc, c| {
                 let gc_handle = GCHandle::new(
                     gc,
-                    #[cfg(feature = "multithreaded-gc")]
+                    #[cfg(feature = "multithreading")]
                     unsafe {
                         c.stack.arena_inner_gc()
                     },
@@ -190,7 +190,7 @@ impl Executor {
 
             // Perform incremental GC progress with finalization support
             // In a real VM this would be tuned based on allocation pressure
-            #[cfg(not(feature = "multithreaded-gc"))]
+            #[cfg(not(feature = "multithreading"))]
             self.with_arena(|arena| {
                 if let Some(marked) = arena.mark_debt() {
                     marked.finalize(|fc, c| {
@@ -202,7 +202,7 @@ impl Executor {
                 }
             });
 
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             let (_full_collect, collection_requested) = self.with_arena(|arena| {
                 arena.mutate(|_, c| {
                     let full_collect = if c.stack.local.heap.needs_full_collect.get() {
@@ -217,7 +217,7 @@ impl Executor {
                 })
             });
 
-            #[cfg(not(feature = "multithreaded-gc"))]
+            #[cfg(not(feature = "multithreading"))]
             let (_full_collect, collection_requested) = self.with_arena(|arena| {
                 arena.mutate(|_, c| {
                     let full_collect = if c.stack.local.heap.needs_full_collect.get() {
@@ -232,7 +232,7 @@ impl Executor {
 
             if collection_requested {
                 self.perform_full_gc();
-                #[cfg(feature = "multithreaded-gc")]
+                #[cfg(feature = "multithreading")]
                 self.with_arena(|arena| {
                     arena.mutate(|_, c| {
                         c.stack
@@ -256,19 +256,10 @@ impl Executor {
             // - Long-running operations
             #[cfg(feature = "multithreading")]
             if self.shared.thread_manager.is_gc_stop_requested() {
-                let coordinator = {
-                    #[cfg(feature = "multithreaded-gc")]
-                    {
-                        &self.shared.gc_coordinator
-                    }
-                    #[cfg(not(feature = "multithreaded-gc"))]
-                    {
-                        &Default::default()
-                    }
-                };
-                self.shared
-                    .thread_manager
-                    .safe_point(self.thread_id, coordinator);
+                self.shared.thread_manager.safe_point(
+                    self.thread_id,
+                    &self.shared.gc_coordinator,
+                );
             }
 
             #[cfg(feature = "memory-validation")]
@@ -277,7 +268,7 @@ impl Executor {
                 let _ = arena.mutate_root(|gc, c| {
                     let gc_handle = GCHandle::new(
                         gc,
-                        #[cfg(feature = "multithreaded-gc")]
+                        #[cfg(feature = "multithreading")]
                         unsafe {
                             c.stack.arena_inner_gc()
                         },
@@ -294,7 +285,7 @@ impl Executor {
                 arena.mutate_root(|gc, c| {
                     let gc_handle = GCHandle::new(
                         gc,
-                        #[cfg(feature = "multithreaded-gc")]
+                        #[cfg(feature = "multithreading")]
                         unsafe {
                             c.stack.arena_inner_gc()
                         },
@@ -336,7 +327,7 @@ impl Executor {
                     )
                 });
 
-                #[cfg(feature = "multithreaded-gc")]
+                #[cfg(feature = "multithreading")]
                 {
                     // Update the arena's metrics directly
                     self.with_arena(|arena| {
@@ -359,7 +350,7 @@ impl Executor {
                         .metrics
                         .update_gc_metrics(total_gc as u64, total_ext as u64);
                 }
-                #[cfg(not(feature = "multithreaded-gc"))]
+                #[cfg(not(feature = "multithreading"))]
                 {
                     self.shared
                         .metrics
@@ -377,7 +368,7 @@ impl Executor {
 
     /// Perform a full GC collection with stop-the-world coordination.
     fn perform_full_gc(&mut self) {
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         {
             use std::time::Instant;
             let start_time = Instant::now();
@@ -424,13 +415,13 @@ impl Executor {
                 });
             });
         }
-        #[cfg(not(feature = "multithreaded-gc"))]
+        #[cfg(not(feature = "multithreading"))]
         {
             use std::time::Instant;
             let start_time = Instant::now();
             vm_trace_gc_collection_start!(self, 0, "allocation pressure");
 
-            // Perform full collection with finalization (mimics multithreaded-gc behavior)
+            // Perform full collection with finalization (mimics multithreading behavior)
             self.with_arena(|arena| {
                 let mut marked = None;
                 while marked.is_none() {
@@ -454,7 +445,7 @@ impl Drop for Executor {
         // Ensure thread is unregistered if not already done
         self.shared.thread_manager.unregister_thread(self.thread_id);
 
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         {
             self.shared.gc_coordinator.unregister_arena(self.thread_id);
 

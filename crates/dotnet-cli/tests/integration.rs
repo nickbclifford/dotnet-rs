@@ -328,6 +328,7 @@ fn hello_world() {
 }
 
 // Spawn multiple threads, each creating its own arena and running the same program
+#[cfg(feature = "multithreading")]
 multi_arena_test!(
     test_multiple_arenas_basic,
     "tests/fixtures/basic/basic_42.cs",
@@ -336,6 +337,7 @@ multi_arena_test!(
 );
 
 // Run GC tests in parallel threads to test cross-arena coordination
+#[cfg(feature = "multithreading")]
 multi_arena_test!(
     test_multiple_arenas_with_gc,
     "tests/fixtures/gc/gc_finalization_42.cs",
@@ -344,6 +346,7 @@ multi_arena_test!(
 );
 
 // Test that static fields work correctly across multiple arenas
+#[cfg(feature = "multithreading")]
 multi_arena_test!(
     test_multiple_arenas_static_fields,
     "tests/fixtures/fields/static_field_42.cs",
@@ -352,7 +355,7 @@ multi_arena_test!(
 );
 
 #[test]
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 fn test_multiple_arenas_static_ref() {
     use std::thread;
 
@@ -410,6 +413,7 @@ fn test_multiple_arenas_allocation_stress() {
 }
 
 // Test that arena-local state (reflection caches, etc.) is properly isolated
+#[cfg(feature = "multithreading")]
 multi_arena_test!(
     test_arena_local_state_isolation,
     "tests/fixtures/generics/generic_0.cs",
@@ -538,7 +542,7 @@ fn test_multiple_arenas_simple() {
 }
 
 #[test]
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 fn test_reflection_race_condition() {
     use dotnet_vm::state;
     use std::sync::Arc;
@@ -591,7 +595,7 @@ fn test_reflection_race_condition() {
 
 /// Test that verifies the GC coordinator properly tracks multiple arenas
 #[test]
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 fn test_gc_coordinator_multi_arena_tracking() {
     use dotnet_vm::state;
     use std::sync::Arc;
@@ -657,7 +661,7 @@ fn test_volatile_sharing() {
 
 /// Test that verifies cross-arena reference tracking works
 #[test]
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 fn test_cross_arena_reference_tracking() {
     use dotnet_vm::state;
     use std::sync::Arc;
@@ -693,7 +697,7 @@ fn test_cross_arena_reference_tracking() {
 
 /// Test that allocation pressure triggers collection requests
 #[test]
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 fn test_allocation_pressure_triggers_collection() {
     use dotnet_vm::state;
     use std::sync::Arc;
@@ -721,7 +725,7 @@ fn test_allocation_pressure_triggers_collection() {
 }
 
 #[test]
-#[cfg(all(feature = "multithreaded-gc", feature = "multithreading"))]
+#[cfg(feature = "multithreading")]
 fn test_stw_stress() {
     use dotnet_vm::state;
     use std::sync::Arc;

@@ -6,11 +6,10 @@ This document describes the threading model, feature-gated implementations, moni
 
 Threading is feature-gated with **two parallel implementations** that share a common trait interface:
 
-| Feature            | Threading Module                  | Sync Module                            | Behavior                       |
-|--------------------|-----------------------------------|----------------------------------------|--------------------------------|
-| (none)             | `threading/stub.rs` (~72 lines)   | `sync/single_threaded.rs` (~151 lines) | No-op thread ops, no locking   |
-| `multithreading`   | `threading/basic.rs` (~576 lines) | `sync/threaded.rs` (~320 lines)        | Real OS threads, monitor locks |
-| `multithreaded-gc` | (implies `multithreading`)        | (implies `threaded`)                   | Adds STW GC coordination       |
+| Feature          | Threading Module                  | Sync Module                            | Behavior                                                |
+|------------------|-----------------------------------|----------------------------------------|---------------------------------------------------------|
+| (none)           | `threading/stub.rs` (~72 lines)   | `sync/single_threaded.rs` (~151 lines) | No-op thread ops, no locking                            |
+| `multithreading` | `threading/basic.rs` (~576 lines) | `sync/threaded.rs` (~320 lines)        | Real OS threads, monitor locks, and STW GC coordination |
 
 ## Thread Lifecycle (`threading/`)
 
@@ -165,9 +164,8 @@ Monitor locks are keyed by a lazily allocated sync block index stored in the obj
 - Sync blocks can be dynamically allocated on demand.
 
 ### Feature Flag Interactions
-- `multithreading` alone: Real threads but no coordinated multi-arena GC
-- `multithreaded-gc` implies `multithreading`: Full STW coordination across arenas
-- The stub threading module compiles out ALL threading overhead, including atomic operations in some cases
+- `multithreading`: Full multi-threaded execution with per-thread arenas, monitor locking, and STW coordination across arenas.
+- The stub threading module compiles out ALL threading overhead, including atomic operations in some cases.
 
 ## Subsystem Details
 

@@ -470,7 +470,7 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
 
         let sync_block = get_or_create_sync_block(&ctx.shared().sync_blocks, obj_ref, gc);
 
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         let success = sync_block.enter_with_timeout_safe(
             thread_id,
             timeout_ms as u64,
@@ -478,7 +478,7 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
             ctx.shared().thread_manager.as_ref(),
             &ctx.shared().gc_coordinator,
         );
-        #[cfg(not(feature = "multithreaded-gc"))]
+        #[cfg(not(feature = "multithreading"))]
         let success =
             sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &ctx.shared().metrics);
 
@@ -533,7 +533,7 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
 
         let sync_block = get_or_create_sync_block(&ctx.shared().sync_blocks, obj_ref, gc);
 
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         let success = sync_block.enter_with_timeout_safe(
             thread_id,
             timeout_ms as u64,
@@ -541,7 +541,7 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
             ctx.shared().thread_manager.as_ref(),
             &ctx.shared().gc_coordinator,
         );
-        #[cfg(not(feature = "multithreaded-gc"))]
+        #[cfg(not(feature = "multithreading"))]
         let success =
             sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &ctx.shared().metrics);
 

@@ -4,9 +4,13 @@ version = "0.2.0"
 edition = "2024"
 
 [features]
-default = ["multithreaded-gc"]
-multithreading = ["dep:parking_lot", "dotnet-utils/multithreading", "dotnet-vm/multithreading"]
-multithreaded-gc = ["multithreading", "dotnet-utils/multithreaded-gc", "dotnet-value/multithreaded-gc", "dotnet-vm/multithreaded-gc"]
+default = ["multithreading"]
+multithreading = [
+    "dep:parking_lot",
+    "dotnet-utils/multithreading",
+    "dotnet-value/multithreading",
+    "dotnet-vm/multithreading",
+]
 memory-validation = ["dotnet-vm/memory-validation", "dotnet-value/memory-validation"]
 
 [dependencies]

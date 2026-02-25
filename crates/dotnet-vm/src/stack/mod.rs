@@ -97,7 +97,7 @@ pub struct CallStack<'gc, 'm> {
     pub shared: Arc<SharedGlobalState<'m>>,
     pub local: ArenaLocalState<'gc>,
     pub thread_id: Cell<dotnet_utils::ArenaId>,
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     pub arena: dotnet_utils::gc::ArenaHandle,
 }
 
@@ -132,12 +132,12 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
             shared,
             local,
             thread_id: Cell::new(dotnet_utils::ArenaId::INVALID),
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             arena: dotnet_utils::gc::ArenaHandle::new(dotnet_utils::ArenaId::INVALID),
         }
     }
 
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     /// Returns the arena inner handle with the GC lifetime.
     ///
     /// # Safety

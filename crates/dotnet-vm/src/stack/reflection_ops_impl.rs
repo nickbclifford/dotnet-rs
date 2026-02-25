@@ -204,7 +204,7 @@ impl<'a, 'gc, 'm: 'gc> ReflectionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
 
     #[inline]
     fn lookup_method_by_index(&self, index: usize) -> (MethodDescription, GenericLookup) {
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         return self
             .shared
             .shared_runtime_methods_rev
@@ -212,7 +212,7 @@ impl<'a, 'gc, 'm: 'gc> ReflectionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
             .map(|e| e.clone())
             .expect("invalid method index in delegate");
 
-        #[cfg(not(feature = "multithreaded-gc"))]
+        #[cfg(not(feature = "multithreading"))]
         self.reflection().methods_read()[index].clone()
     }
 

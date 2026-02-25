@@ -10,7 +10,7 @@
 //! - **[`ManagedPtr`]**: Pointer to a location within a managed object or the stack.
 //! - **[`Object`]**: Internal representation of an object's instance data and layout.
 //! - **[`CLRString`]**: Specialized representation for .NET strings.
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 use dotnet_utils::gc::record_cross_arena_ref;
 
 use dotnet_types::TypeDescription;
@@ -76,7 +76,7 @@ pub enum StackValue<'gc> {
     TypedRef(ManagedPtr<'gc>, Arc<TypeDescription>),
     /// Reference to an object in another thread's arena.
     /// (ObjectPtr, OwningThreadID)
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     CrossArenaObjectRef(ObjectPtr, ArenaId),
 }
 
@@ -97,12 +97,12 @@ impl<'a, 'gc> Arbitrary<'a> for StackValue<'gc> {
                 u.arbitrary()?,
                 Arc::new(u.arbitrary()?),
             )),
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             9 => Ok(StackValue::CrossArenaObjectRef(
                 u.arbitrary()?,
                 u.arbitrary()?,
             )),
-            #[cfg(not(feature = "multithreaded-gc"))]
+            #[cfg(not(feature = "multithreading"))]
             9 => Ok(StackValue::Int32(u.arbitrary()?)),
             _ => unreachable!(),
         }
@@ -121,7 +121,7 @@ unsafe impl<'gc> Collect for StackValue<'gc> {
             Self::ValueType(v) => {
                 v.trace(cc);
             }
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             Self::CrossArenaObjectRef(ptr, tid) => {
                 record_cross_arena_ref(*tid, ptr.as_ptr() as usize);
             }
@@ -366,7 +366,7 @@ impl<'gc> StackValue<'gc> {
                     unsafe { o.instance_storage.raw_data_unsynchronized().as_ptr() as *mut u8 };
                 NonNull::new(ptr).unwrap()
             }
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             Self::CrossArenaObjectRef(p, _) => ref_to_ptr(p),
         }
     }

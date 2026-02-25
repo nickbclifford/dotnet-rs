@@ -121,7 +121,7 @@ mod tests {
         use gc_arena::{Arena, Rootable};
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(
             dotnet_utils::ArenaId(0),
         )));
@@ -129,7 +129,7 @@ mod tests {
             let storage = HeapStorage::Str(crate::string::CLRString::from("test"));
             let gc_handle = dotnet_utils::gc::GCHandle::new(
                 gc,
-                #[cfg(feature = "multithreaded-gc")]
+                #[cfg(feature = "multithreading")]
                 arena_handle.as_inner(),
                 #[cfg(feature = "memory-validation")]
                 dotnet_utils::ArenaId(0),

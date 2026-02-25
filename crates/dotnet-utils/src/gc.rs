@@ -2,9 +2,9 @@
 use gc_arena::{Collect, Collection, Mutation, barrier::Unlock};
 use std::ops::{Deref, DerefMut};
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 use crate::sync::{Arc, AtomicBool, AtomicUsize, Condvar, Mutex, Ordering};
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 use std::{
     cell::{Cell, RefCell},
     collections::HashSet,
@@ -25,7 +25,7 @@ use std::cell::{Ref as MappedRwLockReadGuard, RefMut as MappedRwLockWriteGuard};
 #[derive(Copy, Clone)]
 pub struct GCHandle<'gc> {
     pub(crate) mutation: &'gc Mutation<'gc>,
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     pub(crate) arena: &'gc ArenaHandleInner,
     #[cfg(feature = "memory-validation")]
     pub(crate) thread_id: crate::ArenaId,
@@ -34,10 +34,10 @@ pub struct GCHandle<'gc> {
 impl<'gc> GCHandle<'gc> {
     pub fn new(
         mutation: &'gc Mutation<'gc>,
-        #[cfg(feature = "multithreaded-gc")] arena: &'gc ArenaHandleInner,
+        #[cfg(feature = "multithreading")] arena: &'gc ArenaHandleInner,
         #[cfg(feature = "memory-validation")] thread_id: crate::ArenaId,
     ) -> Self {
-        #[cfg(all(feature = "memory-validation", feature = "multithreaded-gc"))]
+        #[cfg(all(feature = "memory-validation", feature = "multithreading"))]
         {
             if arena.thread_id != thread_id {
                 tracing::error!(
@@ -49,7 +49,7 @@ impl<'gc> GCHandle<'gc> {
         }
         Self {
             mutation,
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             arena,
             #[cfg(feature = "memory-validation")]
             thread_id,
@@ -70,7 +70,7 @@ impl<'gc> GCHandle<'gc> {
                 self.thread_id, current_thread
             );
         }
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         {
             if self.arena.thread_id != self.thread_id {
                 tracing::error!(
@@ -98,7 +98,7 @@ impl<'gc> GCHandle<'gc> {
         #[cfg(feature = "memory-validation")]
         self.validate_thread();
 
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         {
             self.arena.record_allocation(_size);
         }
@@ -332,43 +332,43 @@ impl<T: ?Sized> DerefMut for ThreadSafeWriteGuard<'_, T> {
 unsafe impl<T: Send> Send for ThreadSafeLock<T> {}
 unsafe impl<T: Send> Sync for ThreadSafeLock<T> {}
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 static VALID_ARENAS: std::sync::LazyLock<RwLock<HashSet<crate::ArenaId>>> =
     std::sync::LazyLock::new(|| RwLock::new(HashSet::new()));
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 static STW_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 pub fn register_arena(thread_id: crate::ArenaId) {
     VALID_ARENAS.write().insert(thread_id);
 }
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 pub fn unregister_arena(thread_id: crate::ArenaId) {
     VALID_ARENAS.write().remove(&thread_id);
 }
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 pub fn is_valid_cross_arena_ref(target_thread_id: crate::ArenaId) -> bool {
     VALID_ARENAS.read().contains(&target_thread_id)
 }
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 pub fn reset_arena_registry() {
     VALID_ARENAS.write().clear();
 }
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 pub fn set_stw_in_progress(in_progress: bool) {
     STW_IN_PROGRESS.store(in_progress, Ordering::Release);
 }
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 pub fn is_stw_in_progress() -> bool {
     STW_IN_PROGRESS.load(Ordering::Acquire)
 }
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 thread_local! {
     /// Found cross-arena references during the current marking phase.
     static FOUND_CROSS_ARENA_REFS: RefCell<Vec<(crate::ArenaId, usize)>> = const { RefCell::new(Vec::new()) };
@@ -376,7 +376,7 @@ thread_local! {
     static CURRENTLY_TRACING_THREAD_ID: Cell<Option<crate::ArenaId>> = const { Cell::new(None) };
 }
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 /// Set the thread ID of the arena currently being traced.
 pub fn set_currently_tracing(thread_id: Option<crate::ArenaId>) {
     CURRENTLY_TRACING_THREAD_ID.with(|id| {
@@ -384,13 +384,13 @@ pub fn set_currently_tracing(thread_id: Option<crate::ArenaId>) {
     });
 }
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 /// Get the thread ID of the arena currently being traced.
 pub fn get_currently_tracing() -> Option<crate::ArenaId> {
     CURRENTLY_TRACING_THREAD_ID.get()
 }
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 /// Take all found cross-arena references and clear the local list.
 pub fn take_found_cross_arena_refs() -> Vec<(crate::ArenaId, usize)> {
     FOUND_CROSS_ARENA_REFS.with(|refs| {
@@ -399,7 +399,7 @@ pub fn take_found_cross_arena_refs() -> Vec<(crate::ArenaId, usize)> {
     })
 }
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 /// Record a cross-arena reference found during marking.
 pub fn record_cross_arena_ref(target_thread_id: crate::ArenaId, ptr: usize) {
     if !is_valid_cross_arena_ref(target_thread_id) {
@@ -413,7 +413,7 @@ pub fn record_cross_arena_ref(target_thread_id: crate::ArenaId, ptr: usize) {
     });
 }
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 /// Clear tracing-related thread-local state.
 pub fn clear_tracing_state() {
     CURRENTLY_TRACING_THREAD_ID.with(|id| {
@@ -424,7 +424,7 @@ pub fn clear_tracing_state() {
     });
 }
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 /// GC commands sent from the coordinator to worker threads.
 #[derive(Debug, Clone)]
 pub enum GCCommand {
@@ -439,14 +439,14 @@ pub enum GCCommand {
     Sweep,
 }
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 /// Metadata about each thread's arena and its communication channel.
 #[derive(Debug, Clone)]
 pub struct ArenaHandle {
     inner: Arc<ArenaHandleInner>,
 }
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 #[derive(Debug)]
 pub struct ArenaHandleInner {
     pub thread_id: crate::ArenaId,
@@ -464,7 +464,7 @@ pub struct ArenaHandleInner {
     pub finish_signal: Condvar,
 }
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 impl ArenaHandleInner {
     /// Record an allocation and check if we've exceeded the threshold.
     pub fn record_allocation(&self, size: usize) {
@@ -478,7 +478,7 @@ impl ArenaHandleInner {
     }
 }
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 impl ArenaHandle {
     pub fn new(thread_id: crate::ArenaId) -> Self {
         Self {
@@ -539,7 +539,7 @@ impl ArenaHandle {
     }
 }
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 /// Allocation threshold in bytes that triggers a GC request for a thread-local arena.
 pub const ALLOCATION_THRESHOLD: usize = 1024 * 1024; // 1MB per-thread trigger
 

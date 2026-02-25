@@ -512,12 +512,12 @@ impl Tracer {
         self.send(LogEntry::ThreadResume(indent, thread_id));
     }
 
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     pub fn trace_stw_start(&self, indent: usize, active_threads: usize) {
         self.send(LogEntry::StwStart(indent, active_threads));
     }
 
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     pub fn trace_stw_end(&self, indent: usize, duration_us: u64) {
         self.send(LogEntry::StwEnd(indent, duration_us));
     }

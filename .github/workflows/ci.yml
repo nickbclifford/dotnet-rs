@@ -35,8 +35,7 @@ jobs:
       matrix:
         features:
           - ""                                    # No features
-          - "multithreading"                      # Multithreading only
-          - "multithreaded-gc"                    # Multithreaded GC (default)
+          - "multithreading"                      # Multithreading (full)
     steps:
       - uses: actions/checkout@v4
 
@@ -69,13 +68,9 @@ jobs:
           - name: "No features"
             features: ""
 
-          # Multithreading configurations
-          - name: "Multithreading only"
+          # Multithreading configurations (full)
+          - name: "Multithreading"
             features: "multithreading"
-
-          # Multithreaded GC configurations (includes multithreading)
-          - name: "Default (multithreaded-gc)"
-            features: "multithreaded-gc"
 
     steps:
       - uses: actions/checkout@v4

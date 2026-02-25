@@ -288,7 +288,7 @@ impl<'m> ResolverService<'m> {
             StackValue::ManagedPtr(m) => Ok(m.inner_type),
             StackValue::ValueType(o) => Ok(o.description),
             StackValue::TypedRef(_, _) => self.loader.corlib_type("System.TypedReference"),
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             StackValue::CrossArenaObjectRef(ptr, _) => {
                 let lock = unsafe { ptr.0.as_ref() };
                 let guard = lock.borrow();

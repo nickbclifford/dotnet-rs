@@ -4,7 +4,6 @@ set -e
 FEATURES_COMBINATIONS=(
     ""
     "multithreading"
-    "multithreaded-gc"
 )
 
 echo "Running checks for all feature combinations..."

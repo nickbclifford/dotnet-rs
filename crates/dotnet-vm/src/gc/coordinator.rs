@@ -1,19 +1,19 @@
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 use crate::threading::execute_gc_command_for_current_thread;
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 use dotnet_utils::sync::{AtomicBool, Mutex, Ordering};
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 use dotnet_value::object::ObjectPtr;
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 use std::collections::{HashMap, HashSet};
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 pub use dotnet_utils::gc::{
     ALLOCATION_THRESHOLD, ArenaHandle, GCCommand, clear_tracing_state, get_currently_tracing,
     set_currently_tracing, take_found_cross_arena_refs,
 };
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 /// Coordinates stop-the-world collections across multiple thread-local arenas.
 pub struct GCCoordinator {
     /// thread_id -> arena metadata
@@ -26,7 +26,7 @@ pub struct GCCoordinator {
     cross_arena_refs: Mutex<HashMap<dotnet_utils::ArenaId, HashSet<ObjectPtr>>>,
 }
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 impl GCCoordinator {
     pub fn new() -> Self {
         Self {
@@ -288,17 +288,17 @@ impl GCCoordinator {
     }
 }
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 impl Default for GCCoordinator {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 pub type MutexGuard<'a, T> = crate::sync::MutexGuard<'a, T>;
 
-#[cfg(not(feature = "multithreaded-gc"))]
+#[cfg(not(feature = "multithreading"))]
 pub mod stubs {
     use crate::sync::MutexGuard;
     use dotnet_value::object::ObjectPtr;
@@ -371,10 +371,10 @@ pub mod stubs {
     }
 }
 
-#[cfg(not(feature = "multithreaded-gc"))]
+#[cfg(not(feature = "multithreading"))]
 pub use stubs::*;
 
-#[cfg(all(test, feature = "multithreaded-gc"))]
+#[cfg(all(test, feature = "multithreading"))]
 mod tests {
     use super::*;
     use crate::sync::{Arc, AtomicBool, Ordering};

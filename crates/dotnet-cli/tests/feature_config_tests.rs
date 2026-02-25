@@ -39,39 +39,8 @@ fn test_single_threaded_sync_block_manager() {
 }
 
 // ============================================================================
-// Multithreading Configuration Tests (multithreading feature only)
+// Multithreading Configuration Tests
 // ============================================================================
-
-#[test]
-#[cfg(all(feature = "multithreading", not(feature = "multithreaded-gc")))]
-fn test_multithreading_thread_registration() {
-    let loader = create_test_loader();
-    let shared = Arc::new(state::SharedGlobalState::new(loader));
-
-    // Thread manager should support multiple threads
-    let id1 = shared.thread_manager.register_thread();
-    let id2 = shared.thread_manager.register_thread();
-
-    assert_ne!(id1, id2, "Thread IDs should be unique");
-    assert_eq!(shared.thread_manager.thread_count(), 2);
-
-    shared.thread_manager.unregister_thread(id1);
-    assert_eq!(shared.thread_manager.thread_count(), 1);
-
-    shared.thread_manager.unregister_thread(id2);
-    assert_eq!(shared.thread_manager.thread_count(), 0);
-}
-
-#[test]
-#[cfg(all(feature = "multithreading", not(feature = "multithreaded-gc")))]
-fn test_multithreading_no_gc_coordinator() {
-    let loader = create_test_loader();
-    let shared = Arc::new(state::SharedGlobalState::new(loader));
-
-    // In multithreading-only mode, gc_coordinator field should not exist
-    // This is a compile-time test - if this compiles, the test passes
-    let _ = shared;
-}
 
 #[test]
 #[cfg(feature = "multithreading")]
@@ -93,13 +62,9 @@ fn test_multithreading_sync_blocks() {
     handle.join().unwrap();
 }
 
-// ============================================================================
-// Multithreaded-GC Configuration Tests (full features)
-// ============================================================================
-
 #[test]
-#[cfg(feature = "multithreaded-gc")]
-fn test_multithreaded_gc_coordinator_exists() {
+#[cfg(feature = "multithreading")]
+fn test_multithreading_gc_coordinator_exists() {
     let loader = create_test_loader();
     let shared = Arc::new(state::SharedGlobalState::new(loader));
 
@@ -108,8 +73,8 @@ fn test_multithreaded_gc_coordinator_exists() {
 }
 
 #[test]
-#[cfg(feature = "multithreaded-gc")]
-fn test_multithreaded_gc_arena_handle() {
+#[cfg(feature = "multithreading")]
+fn test_multithreading_arena_handle() {
     let loader = create_test_loader();
     let shared = Arc::new(state::SharedGlobalState::new(loader));
 
@@ -124,8 +89,8 @@ fn test_multithreaded_gc_arena_handle() {
 }
 
 #[test]
-#[cfg(feature = "multithreaded-gc")]
-fn test_multithreaded_gc_cross_arena_value() {
+#[cfg(feature = "multithreading")]
+fn test_multithreading_cross_arena_value() {
     use dotnet_value::StackValue;
 
     // Test that CrossArenaObjectRef variant exists
@@ -133,23 +98,6 @@ fn test_multithreaded_gc_cross_arena_value() {
     let ptr = unsafe { std::mem::transmute::<usize, dotnet_value::object::ObjectPtr>(0x1000) };
     let _value = StackValue::CrossArenaObjectRef(ptr, dotnet_utils::ArenaId(1));
     // If this compiles, the variant exists and works
-}
-
-// ============================================================================
-// Feature Dependency Tests
-// ============================================================================
-
-#[test]
-#[cfg(feature = "multithreaded-gc")]
-fn test_multithreaded_gc_implies_multithreading() {
-    // If multithreaded-gc is enabled, multithreading should also be available
-    let loader = create_test_loader();
-    let shared = Arc::new(state::SharedGlobalState::new(loader));
-
-    // Thread manager should support multiple threads
-    let id = shared.thread_manager.register_thread();
-    assert!(id > dotnet_utils::ArenaId(0));
-    shared.thread_manager.unregister_thread(id);
 }
 
 // ============================================================================

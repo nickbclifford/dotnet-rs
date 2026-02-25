@@ -49,9 +49,9 @@ graph TD
 
 ### `GCCoordinator` (`gc/coordinator.rs`)
 
-Two implementations are selected via the `multithreaded-gc` feature flag:
+Two implementations are selected via the `multithreading` feature flag:
 
-**Multi-threaded (`cfg(feature = "multithreaded-gc")`)**:
+**Multi-threaded (`cfg(feature = "multithreading")`)**:
 - Tracks all arena handles via `register_arena`/`unregister_arena`.
 - Monitors allocation pressure via `ArenaHandleInner::record_allocation`. If `allocation_counter + size > ALLOCATION_THRESHOLD`, sets a `needs_collection` flag. The coordinator checks this flag in `should_collect`.
 - Orchestrates STW collection via `collect_all_arenas` using a phase-based approach:
@@ -60,7 +60,7 @@ Two implementations are selected via the `multithreaded-gc` feature flag:
   3. **Phase 3 (Finalize)**: Sends `Finalize` command to run finalizers on unreachable objects.
   4. **Phase 4 (Sweep)**: Sends `Sweep` to all arenas to reclaim dead objects.
 
-**Single-threaded (`cfg(not(feature = "multithreaded-gc"))`)**:
+**Single-threaded (`cfg(not(feature = "multithreading"))`)**:
 - Stub implementation — `should_collect` always returns false (relies on `gc-arena`'s own local collection).
 - No cross-arena tracking needed.
 

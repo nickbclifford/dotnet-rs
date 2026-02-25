@@ -1,6 +1,6 @@
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 use crate::gc::GCCoordinator;
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 use dotnet_utils::sync::AtomicUsize;
 
 use crate::{
@@ -101,28 +101,28 @@ pub struct SharedGlobalState<'m> {
     /// Grouped caches for type resolution and layout computation
     pub caches: Arc<GlobalCaches>,
     pub statics: Arc<StaticStorageManager>,
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     pub gc_coordinator: Arc<GCCoordinator>,
     /// Cache for shared reflection objects: RuntimeType -> index
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     pub shared_runtime_types: DashMap<RuntimeType, usize>,
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     pub shared_runtime_types_rev: DashMap<usize, RuntimeType>,
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     pub next_runtime_type_index: AtomicUsize,
     /// Cache for shared method reflection objects: (Method, Lookup) -> index
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     pub shared_runtime_methods: DashMap<(MethodDescription, GenericLookup), usize>,
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     pub shared_runtime_methods_rev: DashMap<usize, (MethodDescription, GenericLookup)>,
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     pub next_runtime_method_index: AtomicUsize,
     /// Cache for shared field reflection objects: (Field, Lookup) -> index
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     pub shared_runtime_fields: DashMap<(FieldDescription, GenericLookup), usize>,
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     pub shared_runtime_fields_rev: DashMap<usize, (FieldDescription, GenericLookup)>,
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     pub next_runtime_field_index: AtomicUsize,
 }
 
@@ -153,7 +153,7 @@ impl<'m> SharedGlobalState<'m> {
         // Reset the static registry to ensure a clean state for the new VM.
         dotnet_value::pointer::reset_static_registry();
 
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         dotnet_utils::gc::reset_arena_registry();
 
         let state = Self {
@@ -172,29 +172,29 @@ impl<'m> SharedGlobalState<'m> {
             empty_generics: GenericLookup::default(),
             caches,
             statics: Arc::new(StaticStorageManager::new()),
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             gc_coordinator: Arc::new(GCCoordinator::new()),
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             shared_runtime_types: DashMap::new(),
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             shared_runtime_types_rev: DashMap::new(),
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             next_runtime_type_index: AtomicUsize::new(0),
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             shared_runtime_methods: DashMap::new(),
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             shared_runtime_methods_rev: DashMap::new(),
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             next_runtime_method_index: AtomicUsize::new(0),
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             shared_runtime_fields: DashMap::new(),
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             shared_runtime_fields_rev: DashMap::new(),
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             next_runtime_field_index: AtomicUsize::new(0),
         };
 
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         state
             .thread_manager
             .set_coordinator(Arc::downgrade(&state.gc_coordinator));
@@ -274,7 +274,7 @@ impl<'gc> ArenaLocalState<'gc> {
                 gchandles: RefCell::new(vec![]),
                 processing_finalizer: Cell::new(false),
                 needs_full_collect: Cell::new(false),
-                #[cfg(feature = "multithreaded-gc")]
+                #[cfg(feature = "multithreading")]
                 cross_arena_roots: RefCell::new(HashSet::new()),
             },
             statics,

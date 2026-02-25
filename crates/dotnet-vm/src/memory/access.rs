@@ -10,13 +10,13 @@ use dotnet_value::{
 };
 use std::{ptr, sync::Arc};
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 use dotnet_value::{object::ObjectPtr, pointer::PointerOrigin};
 
 #[derive(Copy, Clone)]
 pub enum MemoryOwner<'gc> {
     Local(ObjectRef<'gc>),
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     CrossArena(ObjectPtr, ArenaId),
 }
 
@@ -27,7 +27,7 @@ impl<'gc> MemoryOwner<'gc> {
                 r.0.map(|h| unsafe { (*h.as_ptr()).owner_id })
                     .unwrap_or(ArenaId(0))
             }
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             Self::CrossArena(_, tid) => *tid,
         }
     }
@@ -35,7 +35,7 @@ impl<'gc> MemoryOwner<'gc> {
     pub fn with_data<T>(&self, f: impl FnOnce(&[u8]) -> T) -> T {
         match self {
             Self::Local(r) => r.with_data(f),
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             Self::CrossArena(p, _) => p.with_data(f),
         }
     }
@@ -43,7 +43,7 @@ impl<'gc> MemoryOwner<'gc> {
     pub fn with_data_mut<T>(&self, gc: GCHandle<'gc>, f: impl FnOnce(&mut [u8]) -> T) -> T {
         match self {
             Self::Local(r) => r.with_data_mut(gc, f),
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             Self::CrossArena(p, _) => p.with_data_mut(gc, f),
         }
     }
@@ -51,7 +51,7 @@ impl<'gc> MemoryOwner<'gc> {
     pub fn as_heap_storage<T>(&self, f: impl FnOnce(&HeapStorage<'gc>) -> T) -> T {
         match self {
             Self::Local(r) => r.as_heap_storage(f),
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             Self::CrossArena(p, _) => p.as_heap_storage(|s| {
                 // SAFETY: Casting 'static to 'gc for transient access is safe.
                 f(unsafe { std::mem::transmute::<&HeapStorage<'static>, &HeapStorage<'gc>>(s) })
@@ -184,9 +184,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             owner.as_heap_storage(|_storage| {});
 
             // Get layout before locking to avoid deadlock
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             let layout = self.get_layout_from_owner(owner);
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             let owner_tid = owner.owner_id();
 
             owner.with_data_mut(gc, |obj_data| {
@@ -203,7 +203,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
                 }
 
-                #[cfg(feature = "multithreaded-gc")]
+                #[cfg(feature = "multithreading")]
                 {
                     if let Some(layout) = layout {
                         unsafe {
@@ -553,7 +553,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             }
                             m.write(std::slice::from_raw_parts_mut(ptr, ManagedPtr::SIZE));
 
-                            #[cfg(feature = "multithreaded-gc")]
+                            #[cfg(feature = "multithreading")]
                             if let Some(owner) = _owner {
                                 self.record_managedptr_cross_arena(&m, owner.owner_id());
                             }
@@ -567,7 +567,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             // This ensures cross-arena references are tagged correctly.
                             r.write(std::slice::from_raw_parts_mut(ptr, ObjectRef::SIZE));
 
-                            #[cfg(feature = "multithreaded-gc")]
+                            #[cfg(feature = "multithreading")]
                             if let Some(owner) = _owner {
                                 self.record_objref_cross_arena(r, owner.owner_id());
                             }
@@ -581,7 +581,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         let src_ptr = src_obj.instance_storage.raw_data_ptr();
                         ptr::copy_nonoverlapping(src_ptr, ptr, flm.size().as_usize());
 
-                        #[cfg(feature = "multithreaded-gc")]
+                        #[cfg(feature = "multithreading")]
                         if let Some(owner) = _owner {
                             let owner_tid = owner.owner_id();
                             self.record_refs_recursive(_gc, ptr, layout, owner_tid);
@@ -596,7 +596,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         }
     }
 
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     unsafe fn record_refs_recursive(
         &self,
         gc: GCHandle<'gc>,
@@ -644,7 +644,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         }
     }
 
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     unsafe fn record_refs_in_range(
         &self,
         gc: GCHandle<'gc>,
@@ -786,14 +786,14 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         }
     }
 
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     fn record_objref_cross_arena(&self, r: ObjectRef<'gc>, owner_tid: ArenaId) {
         if let Some((val_ptr, target_tid)) = r.as_ptr_info().filter(|&(_, tid)| tid != owner_tid) {
             dotnet_utils::gc::record_cross_arena_ref(target_tid, val_ptr.as_ptr() as usize);
         }
     }
 
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     unsafe fn record_objref_at_ptr(&self, gc: GCHandle<'gc>, ptr: *const u8, owner_tid: ArenaId) {
         let mut buf = [0u8; ObjectRef::SIZE];
         unsafe {
@@ -803,7 +803,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         }
     }
 
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     fn record_managedptr_cross_arena(&self, m: &ManagedPtr<'gc>, owner_tid: ArenaId) {
         match &m.origin {
             PointerOrigin::Heap(r) => self.record_objref_cross_arena(*r, owner_tid),
@@ -816,7 +816,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         }
     }
 
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     unsafe fn record_managedptr_at_ptr(
         &self,
         gc: GCHandle<'gc>,

@@ -9,9 +9,9 @@ mod tests {
     #[test]
     #[cfg(feature = "memory-validation")]
     fn test_arena_mismatch_panics() {
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         {}
-        #[cfg(not(feature = "multithreaded-gc"))]
+        #[cfg(not(feature = "multithreading"))]
         {
             type TestRoot = Rootable![()];
             let arena = Arena::<TestRoot>::new(|_mc| ());
@@ -32,7 +32,7 @@ mod tests {
         }
     }
     #[test]
-    #[cfg(all(feature = "memory-validation", feature = "multithreaded-gc"))]
+    #[cfg(all(feature = "memory-validation", feature = "multithreading"))]
     fn test_dangling_arena_panics() {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
@@ -59,7 +59,7 @@ mod tests {
         });
     }
     #[test]
-    #[cfg(all(feature = "memory-validation", feature = "multithreaded-gc"))]
+    #[cfg(all(feature = "memory-validation", feature = "multithreading"))]
     fn test_uncoordinated_stw_access_panics() {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());

@@ -11,10 +11,10 @@ use dotnet_types::{
 use dotnet_value::object::{HeapStorage, ObjectRef};
 use dotnetdll::prelude::{BaseType, MethodType};
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 use dotnet_utils::sync::Ordering;
 
-#[cfg(not(feature = "multithreaded-gc"))]
+#[cfg(not(feature = "multithreading"))]
 pub(crate) fn get_runtime_member_index<T: PartialEq>(
     members: &mut Vec<(T, GenericLookup)>,
     member: T,
@@ -67,7 +67,7 @@ pub(crate) fn get_runtime_type<'gc, 'm: 'gc>(
         return *obj;
     }
 
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     let index = *ctx
         .shared()
         .shared_runtime_types
@@ -83,7 +83,7 @@ pub(crate) fn get_runtime_type<'gc, 'm: 'gc>(
             idx
         });
 
-    #[cfg(not(feature = "multithreaded-gc"))]
+    #[cfg(not(feature = "multithreading"))]
     let index = {
         let mut list = ctx.reflection().types_list_write();
         let index = list.len();
@@ -122,7 +122,7 @@ pub(crate) fn resolve_runtime_type<'gc, 'm: 'gc>(
             .instance_storage
             .get_field_local(instance.description, "index");
         let index = usize::from_ne_bytes((&*ct).try_into().unwrap());
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         return ctx
             .shared()
             .shared_runtime_types_rev
@@ -130,7 +130,7 @@ pub(crate) fn resolve_runtime_type<'gc, 'm: 'gc>(
             .map(|e: dashmap::mapref::one::Ref<usize, RuntimeType>| e.clone())
             .expect("invalid runtime type index");
 
-        #[cfg(not(feature = "multithreaded-gc"))]
+        #[cfg(not(feature = "multithreading"))]
         ctx.reflection().types_list_read()[index].clone()
     })
 }
@@ -144,7 +144,7 @@ pub(crate) fn resolve_runtime_method<'gc, 'm: 'gc>(
             .instance_storage
             .get_field_local(instance.description, "index");
         let index = usize::from_ne_bytes((*data).try_into().unwrap());
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         return ctx
             .shared()
             .shared_runtime_methods_rev
@@ -154,7 +154,7 @@ pub(crate) fn resolve_runtime_method<'gc, 'm: 'gc>(
             )
             .expect("invalid runtime method index");
 
-        #[cfg(not(feature = "multithreaded-gc"))]
+        #[cfg(not(feature = "multithreading"))]
         ctx.reflection().methods_read()[index].clone()
     })
 }
@@ -168,7 +168,7 @@ pub(crate) fn resolve_runtime_field<'gc, 'm: 'gc>(
             .instance_storage
             .get_field_local(instance.description, "index");
         let index = usize::from_ne_bytes((*data).try_into().unwrap());
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         return ctx
             .shared()
             .shared_runtime_fields_rev
@@ -176,7 +176,7 @@ pub(crate) fn resolve_runtime_field<'gc, 'm: 'gc>(
             .map(|e: dashmap::mapref::one::Ref<usize, (FieldDescription, GenericLookup)>| e.clone())
             .expect("invalid runtime field index");
 
-        #[cfg(not(feature = "multithreaded-gc"))]
+        #[cfg(not(feature = "multithreading"))]
         ctx.reflection().fields_read()[index].clone()
     })
 }
@@ -246,7 +246,7 @@ pub(crate) fn get_runtime_method_index<'gc, 'm: 'gc>(
     method: MethodDescription,
     lookup: GenericLookup,
 ) -> u16 {
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     {
         let index = *ctx
             .shared()
@@ -265,7 +265,7 @@ pub(crate) fn get_runtime_method_index<'gc, 'm: 'gc>(
         index as u16
     }
 
-    #[cfg(not(feature = "multithreaded-gc"))]
+    #[cfg(not(feature = "multithreading"))]
     {
         let mut methods = ctx.reflection().methods_write();
         let idx = get_runtime_member_index(&mut methods, method, lookup);
@@ -278,7 +278,7 @@ pub(crate) fn get_runtime_field_index<'gc, 'm: 'gc>(
     field: FieldDescription,
     lookup: GenericLookup,
 ) -> u16 {
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     {
         let index = *ctx
             .shared()
@@ -297,7 +297,7 @@ pub(crate) fn get_runtime_field_index<'gc, 'm: 'gc>(
         index as u16
     }
 
-    #[cfg(not(feature = "multithreaded-gc"))]
+    #[cfg(not(feature = "multithreading"))]
     {
         let mut fields = ctx.reflection().fields_write();
         let idx = get_runtime_member_index(&mut fields, field, lookup);

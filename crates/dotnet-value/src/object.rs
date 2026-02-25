@@ -30,10 +30,10 @@ use std::{
 #[cfg(feature = "fuzzing")]
 use arbitrary::Arbitrary;
 
-#[cfg(feature = "multithreaded-gc")]
+#[cfg(feature = "multithreading")]
 use dotnet_utils::gc::{get_currently_tracing, record_cross_arena_ref};
 
-#[cfg(all(feature = "multithreaded-gc", feature = "memory-validation"))]
+#[cfg(all(feature = "multithreading", feature = "memory-validation"))]
 use dotnet_utils::gc::{is_stw_in_progress, is_valid_cross_arena_ref};
 
 #[cfg(feature = "fuzzing")]
@@ -74,15 +74,15 @@ impl<'gc> ObjectInner<'gc> {
         {
             let current_id = get_current_thread_id();
             if self.owner_id != current_id && self.owner_id != ArenaId::INVALID {
-                // In multithreaded-gc mode, this might be a valid cross-arena reference.
+                // In multithreading mode, this might be a valid cross-arena reference.
                 // But it's unsafe to borrow it directly without coordination.
-                #[cfg(not(feature = "multithreaded-gc"))]
+                #[cfg(not(feature = "multithreading"))]
                 panic!(
                     "Arena mismatch: object owned by {:?}, but accessed by {:?}",
                     self.owner_id, current_id
                 );
 
-                #[cfg(feature = "multithreaded-gc")]
+                #[cfg(feature = "multithreading")]
                 {
                     if !is_valid_cross_arena_ref(self.owner_id) {
                         panic!(
@@ -189,7 +189,7 @@ impl<'a, 'gc> Arbitrary<'a> for ObjectRef<'gc> {
 unsafe impl<'gc> Collect for ObjectRef<'gc> {
     fn trace(&self, cc: &Collection) {
         if let Some(h) = self.0 {
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             {
                 // Check for cross-arena reference
                 if let Some(tracing_id) = get_currently_tracing() {
@@ -272,7 +272,7 @@ impl<'gc> ObjectRef<'gc> {
             .map(|h| unsafe { ObjectPtr::from_raw(Gc::as_ptr(h) as *const _).unwrap() })
     }
 
-    #[cfg(feature = "multithreaded-gc")]
+    #[cfg(feature = "multithreading")]
     pub fn as_ptr_info(&self) -> Option<(ObjectPtr, ArenaId)> {
         self.0.map(|h| {
             let ptr = unsafe { ObjectPtr::from_raw(Gc::as_ptr(h) as *const _).unwrap() };
@@ -307,7 +307,7 @@ impl<'gc> ObjectRef<'gc> {
 
     pub fn new(gc: GCHandle<'gc>, value: HeapStorage<'gc>) -> Self {
         let owner_id = get_current_thread_id();
-        #[cfg(feature = "multithreaded-gc")]
+        #[cfg(feature = "multithreading")]
         {
             let size = size_of::<ObjectInner>() + value.size_bytes();
             gc.record_allocation(size);
@@ -343,7 +343,7 @@ impl<'gc> ObjectRef<'gc> {
                 (source.as_ptr() as *const usize).read_unaligned()
             };
 
-            #[cfg(feature = "multithreaded-gc")]
+            #[cfg(feature = "multithreading")]
             {
                 let tag = ptr_val & 7;
                 if tag == 5 {
@@ -434,7 +434,7 @@ impl<'gc> ObjectRef<'gc> {
             None => 0,
             Some(s) => {
                 let ptr = Gc::as_ptr(s) as usize;
-                #[cfg(feature = "multithreaded-gc")]
+                #[cfg(feature = "multithreading")]
                 {
                     // Tag cross-arena references with Tag 5
                     // SAFETY: We can safely access owner_id during write because:
@@ -452,7 +452,7 @@ impl<'gc> ObjectRef<'gc> {
                         ptr
                     }
                 }
-                #[cfg(not(feature = "multithreaded-gc"))]
+                #[cfg(not(feature = "multithreading"))]
                 ptr
             }
         };
