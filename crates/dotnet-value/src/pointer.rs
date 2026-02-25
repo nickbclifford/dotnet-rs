@@ -195,26 +195,7 @@ impl<'a> Arbitrary<'a> for ManagedPtrStackInfo {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PointerDeserializationError {
-    UnknownTag(usize),
-    UnknownSubtag(usize),
-    InvalidStaticId(u32),
-    ChecksumMismatch,
-}
-
-#[cfg(feature = "fuzzing")]
-impl Arbitrary<'_> for PointerDeserializationError {
-    fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
-        let tag = u.int_in_range(0..=2)?;
-        match tag {
-            0 => Ok(Self::UnknownTag(u.arbitrary()?)),
-            1 => Ok(Self::UnknownSubtag(u.arbitrary()?)),
-            2 => Ok(Self::InvalidStaticId(u.arbitrary()?)),
-            _ => unreachable!(),
-        }
-    }
-}
+pub use dotnet_types::error::PointerDeserializationError;
 
 /// Detailed information about a [`ManagedPtr`] read from memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -998,11 +979,37 @@ impl<'gc> ManagedPtr<'gc> {
     }
 }
 
+impl<'gc> crate::ptr_common::PointerLike for ManagedPtr<'gc> {
+    #[inline]
+    fn pointer(&self) -> Option<NonNull<u8>> {
+        self.validate_magic();
+        if let Some(owner) = self.owner() {
+            let handle = owner.0?;
+            let base_ptr = unsafe { handle.borrow().storage.raw_data_ptr() };
+            if base_ptr.is_null() {
+                None
+            } else {
+                // SAFETY: offset calculation mirrors ManagedPtr::with_data bounds scheme; caller must ensure validity
+                NonNull::new(unsafe { base_ptr.add(self.offset.as_usize()) })
+            }
+        } else {
+            // For stack/static/absolute pointers, use cached value
+            self._value
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::object::{HeapStorage, ObjectRef};
     use gc_arena::{Arena, Gc, Rootable};
+    use std::sync::{Mutex, OnceLock};
+
+    fn static_reg_test_lock() -> &'static Mutex<()> {
+        static L: OnceLock<Mutex<()>> = OnceLock::new();
+        L.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     #[cfg_attr(
@@ -1079,6 +1086,7 @@ mod tests {
 
     #[test]
     fn test_managed_ptr_serialization_roundtrip() {
+            let _guard = static_reg_test_lock().lock().unwrap();
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
         #[cfg(feature = "multithreaded-gc")]
@@ -1280,6 +1288,7 @@ mod tests {
 
     #[test]
     fn test_static_registry_deduplication() {
+            let _guard = static_reg_test_lock().lock().unwrap();
         reset_static_registry();
 
         let type_desc = TypeDescription::NULL;
@@ -1359,3 +1368,6 @@ mod tests {
         assert_eq!(info.offset.as_usize(), addr);
     }
 }
+
+
+

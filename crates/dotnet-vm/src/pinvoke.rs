@@ -24,28 +24,7 @@ use std::{ffi::c_void, marker::PhantomPinned, path::PathBuf, ptr::NonNull, sync:
 
 pub static mut LAST_ERROR: i32 = 0;
 
-#[derive(Debug)]
-pub enum PInvokeError {
-    LibraryNotFound(String),
-    SymbolNotFound(String, String),
-    LoadError(String, String),
-}
-
-impl std::fmt::Display for PInvokeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PInvokeError::LibraryNotFound(name) => write!(f, "Unable to find library '{}'", name),
-            PInvokeError::SymbolNotFound(lib, sym) => write!(
-                f,
-                "Unable to find entry point '{}' in library '{}'",
-                sym, lib
-            ),
-            PInvokeError::LoadError(name, err) => {
-                write!(f, "Failed to load library '{}': {}", name, err)
-            }
-        }
-    }
-}
+pub use dotnet_types::error::PInvokeError;
 
 pub trait PInvokeSandbox: Send + Sync {
     fn allow_library(&self, name: &str) -> bool;

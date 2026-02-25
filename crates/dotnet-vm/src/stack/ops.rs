@@ -138,9 +138,15 @@ pub trait ArgumentOps<'gc> {
     fn get_argument_address(&self, index: crate::ArgumentIndex) -> std::ptr::NonNull<u8>;
 }
 
-pub trait StackOps<'gc, 'm>:
-    EvalStackOps<'gc> + TypedStackOps<'gc> + LocalOps<'gc> + ArgumentOps<'gc>
-{
+/// A combination trait for operations on local variables and arguments.
+pub trait VariableOps<'gc>: LocalOps<'gc> + ArgumentOps<'gc> {}
+impl<'gc, T: LocalOps<'gc> + ArgumentOps<'gc> + ?Sized> VariableOps<'gc> for T {}
+
+/// A combination trait for all stack-related operations (evaluation stack, typed ops, and variables).
+pub trait AllStackOps<'gc>: EvalStackOps<'gc> + TypedStackOps<'gc> + VariableOps<'gc> {}
+impl<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + VariableOps<'gc> + ?Sized> AllStackOps<'gc> for T {}
+
+pub trait StackOps<'gc, 'm>: AllStackOps<'gc> {
     fn current_frame(&self) -> &crate::stack::StackFrame<'gc, 'm>;
     fn current_frame_mut(&mut self) -> &mut crate::stack::StackFrame<'gc, 'm>;
 
@@ -394,10 +400,6 @@ pub trait CallOps<'gc, 'm> {
 
 pub trait VesOps<'gc, 'm>:
     StackOps<'gc, 'm>
-    + EvalStackOps<'gc>
-    + TypedStackOps<'gc>
-    + LocalOps<'gc>
-    + ArgumentOps<'gc>
     + ExceptionOps<'gc>
     + ResolutionOps<'gc, 'm>
     + ReflectionOps<'gc, 'm>

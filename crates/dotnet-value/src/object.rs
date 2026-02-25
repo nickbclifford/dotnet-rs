@@ -126,7 +126,7 @@ pub struct ObjectPtr(pub NonNull<ThreadSafeLock<ObjectInner<'static>>>);
 impl<'a> Arbitrary<'a> for ObjectPtr {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let ptr_val: usize = u.arbitrary()?;
-        Ok(unsafe { std::mem::transmute(ptr_val) })
+        Ok(unsafe { std::mem::transmute::<usize, ObjectPtr>(ptr_val) })
     }
 }
 
@@ -182,7 +182,7 @@ impl<'a, 'gc> Arbitrary<'a> for ObjectRef<'gc> {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let ptr_val: usize = u.arbitrary()?;
         // SAFETY: Used only for serialization fuzzing. Do NOT dereference.
-        Ok(unsafe { std::mem::transmute(ptr_val) })
+        Ok(unsafe { std::mem::transmute::<usize, ObjectRef<'_>>(ptr_val) })
     }
 }
 
@@ -614,6 +614,13 @@ impl Debug for ObjectRef<'_> {
                 write!(f, "{} @ {:#?}", desc, Gc::as_ptr(gc))
             }
         }
+    }
+}
+
+impl<'gc> crate::ptr_common::PointerLike for ObjectRef<'gc> {
+    #[inline]
+    fn pointer(&self) -> Option<NonNull<u8>> {
+        ObjectRef::pointer(self)
     }
 }
 

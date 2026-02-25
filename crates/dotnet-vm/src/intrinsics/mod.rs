@@ -130,6 +130,10 @@ use dotnet_value::{
 };
 use std::sync::Arc;
 
+// ============================================================================
+// Helper Macros for Intrinsic Boilerplate Reduction
+// ============================================================================
+
 pub mod array_ops;
 pub mod cpu_intrinsics;
 pub mod delegates;

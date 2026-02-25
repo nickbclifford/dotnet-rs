@@ -1,6 +1,6 @@
 use crate::{
     StepResult,
-    stack::ops::{ExceptionOps, StackOps},
+    stack::ops::{EvalStackOps, ExceptionOps},
 };
 
 const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
@@ -9,12 +9,12 @@ use dotnet_value::StackValue;
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(Branch(target))]
-pub fn br<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(_ctx: &mut T, target: usize) -> StepResult {
+pub fn br<T: ?Sized>(_ctx: &mut T, target: usize) -> StepResult {
     StepResult::Jump(target)
 }
 
 #[dotnet_instruction(BranchEqual(target))]
-pub fn beq<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T, target: usize) -> StepResult {
+pub fn beq<'gc, T: EvalStackOps<'gc> + ?Sized>(ctx: &mut T, target: usize) -> StepResult {
     let v2 = ctx.pop();
     let v1 = ctx.pop();
     if v1 == v2 {
@@ -25,7 +25,7 @@ pub fn beq<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T, target: usi
 }
 
 #[dotnet_instruction(BranchGreaterOrEqual(sgn, target))]
-pub fn bge<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+pub fn bge<'gc, T: EvalStackOps<'gc> + ?Sized>(
     ctx: &mut T,
 
     sgn: NumberSign,
@@ -45,7 +45,7 @@ pub fn bge<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(BranchGreater(sgn, target))]
-pub fn bgt<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+pub fn bgt<'gc, T: EvalStackOps<'gc> + ?Sized>(
     ctx: &mut T,
 
     sgn: NumberSign,
@@ -62,7 +62,7 @@ pub fn bgt<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(BranchLessOrEqual(sgn, target))]
-pub fn ble<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+pub fn ble<'gc, T: EvalStackOps<'gc> + ?Sized>(
     ctx: &mut T,
 
     sgn: NumberSign,
@@ -82,7 +82,7 @@ pub fn ble<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(BranchLess(sgn, target))]
-pub fn blt<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
+pub fn blt<'gc, T: EvalStackOps<'gc> + ?Sized>(
     ctx: &mut T,
 
     sgn: NumberSign,
@@ -99,7 +99,7 @@ pub fn blt<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(BranchNotEqual(target))]
-pub fn bne<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T, target: usize) -> StepResult {
+pub fn bne<'gc, T: EvalStackOps<'gc> + ?Sized>(ctx: &mut T, target: usize) -> StepResult {
     let v2 = ctx.pop();
     let v1 = ctx.pop();
     if v1 != v2 {
@@ -110,7 +110,7 @@ pub fn bne<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T, target: usi
 }
 
 #[dotnet_instruction(BranchTruthy(target))]
-pub fn brtrue<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
+pub fn brtrue<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
     ctx: &mut T,
     target: usize,
 ) -> StepResult {
@@ -134,7 +134,7 @@ pub fn brtrue<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(BranchFalsy(target))]
-pub fn brfalse<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
+pub fn brfalse<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
     ctx: &mut T,
     target: usize,
 ) -> StepResult {
@@ -158,7 +158,7 @@ pub fn brfalse<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(Switch(targets))]
-pub fn switch<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
+pub fn switch<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
     ctx: &mut T,
     targets: &[usize],
 ) -> StepResult {
@@ -179,6 +179,6 @@ pub fn switch<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(Return)]
-pub fn ret<'gc, 'm: 'gc, T: ExceptionOps<'gc> + ?Sized>(ctx: &mut T) -> StepResult {
+pub fn ret<'gc, T: ExceptionOps<'gc> + ?Sized>(ctx: &mut T) -> StepResult {
     ctx.ret()
 }

@@ -1,6 +1,6 @@
 use crate::{
     StepResult,
-    stack::ops::{ExceptionOps, StackOps},
+    stack::ops::{EvalStackOps, ExceptionOps},
 };
 
 const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
@@ -10,7 +10,7 @@ use dotnet_value::{StackValue, pointer::UnmanagedPtr};
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(Convert(t))]
-pub fn conv<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
+pub fn conv<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
     ctx: &mut T,
     t: ConversionType,
 ) -> StepResult {
@@ -111,7 +111,7 @@ pub fn conv<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(ConvertOverflow(t, sgn))]
-pub fn conv_ovf<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
+pub fn conv_ovf<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
     ctx: &mut T,
     t: ConversionType,
     sgn: NumberSign,
@@ -180,7 +180,7 @@ pub fn conv_ovf<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>
 }
 
 #[dotnet_instruction(ConvertFloat32)]
-pub fn conv_r4<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
+pub fn conv_r4<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
     ctx: &mut T,
 ) -> StepResult {
     let v = match ctx.pop() {
@@ -198,7 +198,7 @@ pub fn conv_r4<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(ConvertFloat64)]
-pub fn conv_r8<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
+pub fn conv_r8<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
     ctx: &mut T,
 ) -> StepResult {
     let v = match ctx.pop() {
@@ -216,7 +216,7 @@ pub fn conv_r8<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(ConvertUnsignedToFloat)]
-pub fn conv_r_un<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
+pub fn conv_r_un<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
     ctx: &mut T,
 ) -> StepResult {
     let value = ctx.pop();

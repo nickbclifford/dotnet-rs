@@ -1,17 +1,17 @@
 use crate::{
     StepResult,
-    stack::ops::{LoaderOps, ResolutionOps, StackOps},
+    stack::ops::{EvalStackOps, LoaderOps, ResolutionOps, StackOps},
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::StackValue;
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(NoOperation)]
-pub fn nop<'gc, 'm: 'gc>(_ctx: &mut dyn crate::stack::ops::VesOps<'gc, 'm>) -> StepResult {
+pub fn nop<T: ?Sized>(_ctx: &mut T) -> StepResult {
     StepResult::Continue
 }
 #[dotnet_instruction(Pop)]
-pub fn pop<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
+pub fn pop<'gc, T: EvalStackOps<'gc> + ?Sized>(ctx: &mut T) -> StepResult {
     match ctx.pop_safe() {
         Ok(_) => StepResult::Continue,
         Err(e) => StepResult::Error(e),
@@ -19,7 +19,7 @@ pub fn pop<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResu
 }
 
 #[dotnet_instruction(Duplicate)]
-pub fn duplicate<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
+pub fn duplicate<'gc, T: EvalStackOps<'gc> + ?Sized>(ctx: &mut T) -> StepResult {
     match ctx.pop_safe() {
         Ok(val) => {
             ctx.push(val.clone());
@@ -55,7 +55,7 @@ load_const!(
     StackValue::NativeFloat
 );
 #[dotnet_instruction(LoadNull)]
-pub fn ldnull<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
+pub fn ldnull<'gc, T: EvalStackOps<'gc> + ?Sized>(ctx: &mut T) -> StepResult {
     ctx.push(StackValue::null());
     StepResult::Continue
 }

@@ -204,9 +204,9 @@ pub enum FuzzInstruction {
 #[derive(Debug, Arbitrary, Clone)]
 pub struct FuzzProgram {
     pub instructions: Vec<FuzzInstruction>,
-    #[arbitrary(with = |u: &mut arbitrary::Unstructured| Ok(u.int_in_range(0..=10)?))]
+    #[arbitrary(with = |u: &mut arbitrary::Unstructured| u.int_in_range(0..=10))]
     pub num_locals: u8,
-    #[arbitrary(with = |u: &mut arbitrary::Unstructured| Ok(u.int_in_range(1..=10)?))]
+    #[arbitrary(with = |u: &mut arbitrary::Unstructured| u.int_in_range(1..=10))]
     pub num_args: u8,
 }
 
@@ -869,7 +869,7 @@ mod tests {
     fn miri_float_ops() {
         run_program(
             vec![
-                FuzzInstruction::LdcR8(3.14),
+                FuzzInstruction::LdcR8(std::f64::consts::PI),
                 FuzzInstruction::Dup,
                 FuzzInstruction::Mul,
                 FuzzInstruction::Pop,

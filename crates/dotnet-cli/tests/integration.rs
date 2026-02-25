@@ -187,6 +187,76 @@ macro_rules! fixture_test {
     };
 }
 
+// ============================================================================
+// Multi-Arena Test Helpers
+// ============================================================================
+
+/// Helper function to set up a multi-arena test.
+///
+/// Returns the built DLL path for the given fixture.
+/// Used by multi-arena tests that spawn threads to run the same program.
+#[cfg(feature = "multithreading")]
+fn setup_multi_arena_fixture(fixture_path: &str) -> PathBuf {
+    let harness = TestHarness::get();
+    harness.build(Path::new(fixture_path)).unwrap()
+}
+
+/// Macro for multi-arena tests that run the same fixture across multiple threads.
+///
+/// This encapsulates the common pattern of:
+/// 1. Building a fixture
+/// 2. Spawning N threads
+/// 3. Running the fixture in each thread
+/// 4. Asserting the expected exit code
+/// 5. Joining all threads
+///
+/// # Arguments
+/// * `$name` - Test function name
+/// * `$fixture` - Path to the fixture file
+/// * `$thread_count` - Number of threads to spawn
+/// * `$expected` - Expected exit code
+///
+/// # Example
+/// ```ignore
+/// multi_arena_test!(test_basic, "tests/fixtures/basic/basic_42.cs", 3, 42);
+/// ```
+#[cfg(feature = "multithreading")]
+macro_rules! multi_arena_test {
+    ($name:ident, $fixture:literal, $thread_count:expr, $expected:expr) => {
+        #[test]
+        #[cfg(feature = "multithreading")]
+        fn $name() {
+            use std::thread;
+
+            let dll_path = setup_multi_arena_fixture($fixture);
+            let harness = TestHarness::get();
+
+            let handles: Vec<_> = (0..$thread_count)
+                .map(|_| {
+                    let dll_path = dll_path.clone();
+                    let harness_ptr = harness as *const TestHarness as usize;
+                    thread::spawn(move || {
+                        let harness = unsafe { &*(harness_ptr as *const TestHarness) };
+                        let exit_code = harness.run(&dll_path);
+                        assert_eq!(
+                            exit_code,
+                            $expected,
+                            "Multi-arena test {} failed: expected exit code {}, got {}",
+                            stringify!($name),
+                            $expected,
+                            exit_code
+                        );
+                    })
+                })
+                .collect();
+
+            for handle in handles {
+                handle.join().expect("Thread should complete without panic");
+            }
+        }
+    };
+}
+
 include!(concat!(env!("OUT_DIR"), "/tests.rs"));
 
 #[test]
@@ -257,86 +327,29 @@ fn hello_world() {
     assert_eq!(exit_code, 0);
 }
 
-#[test]
-#[cfg(feature = "multithreading")]
-fn test_multiple_arenas_basic() {
-    use std::thread;
+// Spawn multiple threads, each creating its own arena and running the same program
+multi_arena_test!(
+    test_multiple_arenas_basic,
+    "tests/fixtures/basic/basic_42.cs",
+    3,
+    42
+);
 
-    let harness = TestHarness::get();
-    let fixture_path = Path::new("tests/fixtures/basic/basic_42.cs");
-    let dll_path = harness.build(fixture_path).unwrap();
+// Run GC tests in parallel threads to test cross-arena coordination
+multi_arena_test!(
+    test_multiple_arenas_with_gc,
+    "tests/fixtures/gc/gc_finalization_42.cs",
+    3,
+    42
+);
 
-    // Spawn multiple threads, each creating its own arena and running the same program
-    let handles: Vec<_> = (0..3)
-        .map(|_| {
-            let dll_path = dll_path.clone();
-            let harness_ptr = harness as *const TestHarness as usize;
-            thread::spawn(move || {
-                let harness = unsafe { &*(harness_ptr as *const TestHarness) };
-                let exit_code = harness.run(&dll_path);
-                assert_eq!(exit_code, 42);
-            })
-        })
-        .collect();
-
-    for handle in handles {
-        handle.join().unwrap();
-    }
-}
-
-#[test]
-#[cfg(feature = "multithreading")]
-fn test_multiple_arenas_with_gc() {
-    use std::thread;
-
-    let harness = TestHarness::get();
-    let fixture_path = Path::new("tests/fixtures/gc/gc_finalization_42.cs");
-    let dll_path = harness.build(fixture_path).unwrap();
-
-    // Run GC tests in parallel threads to test cross-arena coordination
-    let handles: Vec<_> = (0..3)
-        .map(|_| {
-            let dll_path = dll_path.clone();
-            let harness_ptr = harness as *const TestHarness as usize;
-            thread::spawn(move || {
-                let harness = unsafe { &*(harness_ptr as *const TestHarness) };
-                let exit_code = harness.run(&dll_path);
-                assert_eq!(exit_code, 42);
-            })
-        })
-        .collect();
-
-    for handle in handles {
-        handle.join().unwrap();
-    }
-}
-
-#[test]
-#[cfg(feature = "multithreading")]
-fn test_multiple_arenas_static_fields() {
-    use std::thread;
-
-    let harness = TestHarness::get();
-    let fixture_path = Path::new("tests/fixtures/fields/static_field_42.cs");
-    let dll_path = harness.build(fixture_path).unwrap();
-
-    // Test that static fields work correctly across multiple arenas
-    let handles: Vec<_> = (0..3)
-        .map(|_| {
-            let dll_path = dll_path.clone();
-            let harness_ptr = harness as *const TestHarness as usize;
-            thread::spawn(move || {
-                let harness = unsafe { &*(harness_ptr as *const TestHarness) };
-                let exit_code = harness.run(&dll_path);
-                assert_eq!(exit_code, 42);
-            })
-        })
-        .collect();
-
-    for handle in handles {
-        handle.join().unwrap();
-    }
-}
+// Test that static fields work correctly across multiple arenas
+multi_arena_test!(
+    test_multiple_arenas_static_fields,
+    "tests/fixtures/fields/static_field_42.cs",
+    3,
+    42
+);
 
 #[test]
 #[cfg(feature = "multithreaded-gc")]
@@ -396,32 +409,13 @@ fn test_multiple_arenas_allocation_stress() {
     }
 }
 
-#[test]
-#[cfg(feature = "multithreading")]
-fn test_arena_local_state_isolation() {
-    use std::thread;
-
-    let harness = TestHarness::get();
-    let fixture_path = Path::new("tests/fixtures/generics/generic_0.cs");
-    let dll_path = harness.build(fixture_path).unwrap();
-
-    // Test that arena-local state (reflection caches, etc.) is properly isolated
-    let handles: Vec<_> = (0..4)
-        .map(|_| {
-            let dll_path = dll_path.clone();
-            let harness_ptr = harness as *const TestHarness as usize;
-            thread::spawn(move || {
-                let harness = unsafe { &*(harness_ptr as *const TestHarness) };
-                let exit_code = harness.run(&dll_path);
-                assert_eq!(exit_code, 0);
-            })
-        })
-        .collect();
-
-    for handle in handles {
-        handle.join().unwrap();
-    }
-}
+// Test that arena-local state (reflection caches, etc.) is properly isolated
+multi_arena_test!(
+    test_arena_local_state_isolation,
+    "tests/fixtures/generics/generic_0.cs",
+    4,
+    0
+);
 
 #[test]
 #[cfg(feature = "multithreading")]

@@ -41,6 +41,7 @@ pub mod object;
 #[cfg(test)]
 mod object_tests;
 pub mod pointer;
+pub mod ptr_common;
 pub mod storage;
 pub mod string;
 #[cfg(test)]
