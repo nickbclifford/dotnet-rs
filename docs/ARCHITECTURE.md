@@ -24,15 +24,17 @@ The project is divided into several crates, each with a focused responsibility:
     - Dispatches the instruction to its handler.
     - Updates the `EvaluationStack` with results.
     - Handles flow control (jumps, calls, returns).
-5. **Instruction Dispatch**: Instructions are handled by functions marked with `#[dotnet_instruction]`. These functions use the `VesOps` trait to interact with the VM state.
+5. **Instruction Dispatch**: Instructions are handled by functions marked with `#[dotnet_instruction]`. These functions use the `VesOps` trait to interact with the VM state. (See [Build-Time Code Generation](BUILD_TIME_CODE_GENERATION.md) for details on the dispatch table).
 6. **Method Calls**:
     - Static calls resolve the target method and push a new `StackFrame`.
     - Virtual calls use the object's vtable (computed via the layout system) to find the correct method implementation.
     - Intrinsic calls are intercepted and handled by native Rust code (marked with `#[dotnet_intrinsic]`).
+    
+    (See [Delegates and Dispatch](DELEGATES_AND_DISPATCH.md) for more details on invocation paths).
 
 ## Memory and Garbage Collection
 
-`dotnet-rs` uses a Stop-The-World (STW) garbage collector based on the `gc-arena` crate.
+`dotnet-rs` uses a Stop-The-World (STW) garbage collector based on the `gc-arena` crate. (See [GC and Memory Safety](GC_AND_MEMORY_SAFETY.md) for an in-depth look).
 
 - **Heap Management**: `HeapManager` handles the allocation of objects. Each thread typically has its own arena for allocation to minimize contention.
 - **GC Roots**: The evaluation stack, local variables, and static fields serve as the primary roots for GC.
@@ -42,13 +44,24 @@ The project is divided into several crates, each with a focused responsibility:
 
 ## Threading Model
 
-The VM supports multi-threading (feature-gated via `multithreading`):
+The VM supports multi-threading (feature-gated via `multithreading`). For detailed mechanics, see [Threading and Synchronization](THREADING_AND_SYNCHRONIZATION.md):
 
 - **Thread Manager**: Manages the lifecycle of managed threads and coordinates STW pauses.
 - **Safe Points**: Execution periodically checks if a GC or suspension has been requested via `ctx.check_gc_safe_point()`.
 - **Synchronization**: .NET `Monitor` (lock/unlock) is implemented using `SyncBlockManager`, providing thread-safe access to objects with monitor-style semantics.
 
+## Exception Handling
+
+`dotnet-rs` implements the ECMA-335 structured exception handling (SEH) model using a two-pass approach.
+- **State Machine**: Exception processing is modeled as a state machine (`Throwing` → `Searching` → `Unwinding` → `ExecutingHandler`).
+- **Filter Clauses**: Support for dynamic `filter` blocks that run user CIL code during the search phase.
+- **Unwinding**: The `leave` instruction and exception unwinding properly execute `finally` and `fault` blocks.
+
+See [Exception Handling](EXCEPTION_HANDLING.md) for full details on the state machine and unwinding process.
+
 ## Type System and Layout
+
+For more details on caching and resolution pipelines, see [Type Resolution and Caching](TYPE_RESOLUTION_AND_CACHING.md).
 
 - **Type Resolution**: Types are resolved lazily. `ResolutionContext` manages the scope of resolution, including generic parameters.
 - **Layout Calculation**: `LayoutFactory` computes the physical memory layout of objects and value types, including field offsets and GC descriptors (which fields are references).
