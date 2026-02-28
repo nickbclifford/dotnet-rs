@@ -8,13 +8,11 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::Mutex,
+    time::Duration,
 };
 
 #[cfg(feature = "multithreading")]
 use dotnet_vm::threading::ThreadManagerOps;
-
-
-use std::time::Duration;
 
 fn get_test_timeout(default_secs: u64) -> Duration {
     let secs = std::env::var("DOTNET_TEST_TIMEOUT_SECS")
@@ -313,15 +311,15 @@ macro_rules! multi_arena_test {
         #[test]
         #[cfg(feature = "multithreading")]
         fn $name() {
-            use std::thread;
+            use std::sync::atomic::Ordering;
             use std::sync::mpsc;
-                        use std::sync::atomic::Ordering;
-
+            use std::thread;
 
             let dll_path = setup_multi_arena_fixture($fixture);
             let harness = TestHarness::get();
             let dll_path_str = dll_path.to_str().unwrap().to_string();
-            let resolution = try_static_res_from_file(&dll_path_str).expect("Failed to load assembly");
+            let resolution =
+                try_static_res_from_file(&dll_path_str).expect("Failed to load assembly");
 
             let (tx, rx) = mpsc::channel();
             let mut abort_flags = Vec::new();
@@ -330,14 +328,16 @@ macro_rules! multi_arena_test {
             for _ in 0..$thread_count {
                 let harness_ptr = harness as *const TestHarness as usize;
                 let tx = tx.clone();
-                let shared = std::sync::Arc::new(dotnet_vm::state::SharedGlobalState::new(harness.loader));
+                let shared =
+                    std::sync::Arc::new(dotnet_vm::state::SharedGlobalState::new(harness.loader));
                 abort_flags.push(std::sync::Arc::clone(&shared.abort_requested));
 
                 let handle = thread::spawn(move || {
                     let harness = unsafe { &*(harness_ptr as *const TestHarness) };
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                        harness.run_with_shared(resolution, shared)
-                    }));
+                    let result =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                            harness.run_with_shared(resolution, shared)
+                        }));
                     let _ = tx.send(result);
                 });
                 handles.push(handle);
@@ -492,10 +492,9 @@ multi_arena_test!(
 #[test]
 #[cfg(feature = "multithreading")]
 fn test_multiple_arenas_static_ref() {
-    use std::thread;
+    use std::sync::atomic::Ordering;
     use std::sync::mpsc;
-        use std::sync::atomic::Ordering;
-
+    use std::thread;
 
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/fields/static_ref_42.cs");
@@ -567,9 +566,9 @@ fn test_multiple_arenas_static_ref() {
 #[test]
 #[cfg(feature = "multithreading")]
 fn test_multiple_arenas_allocation_stress() {
-    use std::thread;
+    use std::sync::atomic::Ordering;
     use std::sync::mpsc;
-        use std::sync::atomic::Ordering;
+    use std::thread;
 
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/arrays/array_0.cs");
@@ -766,7 +765,6 @@ fn test_reflection_race_condition() {
     use std::sync::Arc;
     use std::thread;
 
-
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/reflection/reflection_stress_0.cs");
     let dll_path = harness.build(fixture_path).unwrap();
@@ -792,7 +790,7 @@ fn test_reflection_race_condition() {
                     harness.run_with_shared(resolution, shared.clone())
                 }));
                 match result {
-                    Ok(0) => {},
+                    Ok(0) => {}
                     Ok(exit_code) => {
                         let _ = tx.send(Err(Ok(exit_code)));
                         return;
@@ -814,20 +812,24 @@ fn test_reflection_race_condition() {
     for _ in 0..num_threads {
         let remaining = timeout.saturating_sub(start.elapsed());
         match rx.recv_timeout(remaining) {
-            Ok(Ok(())) => {},
+            Ok(Ok(())) => {}
             Ok(Err(Ok(exit_code))) => {
                 test_error = Some(format!("Test failed with exit code {}", exit_code));
                 break;
             }
             Ok(Err(Err(panic_info))) => {
-                shared.abort_requested.store(true, std::sync::atomic::Ordering::Relaxed);
+                shared
+                    .abort_requested
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 for handle in handles {
                     let _ = handle.join();
                 }
                 std::panic::resume_unwind(panic_info);
             }
             Err(_) => {
-                shared.abort_requested.store(true, std::sync::atomic::Ordering::Relaxed);
+                shared
+                    .abort_requested
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 test_error = Some("TIMEOUT in test_reflection_race_condition".to_string());
                 break;
             }
@@ -882,17 +884,17 @@ fn test_gc_coordinator_multi_arena_tracking() {
 #[cfg(feature = "multithreading")]
 fn test_volatile_sharing() {
     use dotnet_vm::state;
-    use std::thread;
+    use std::sync::atomic::Ordering;
     use std::sync::mpsc;
-        use std::sync::atomic::Ordering;
+    use std::thread;
 
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/threading/volatile_sharing_42.cs");
     let dll_path = harness.build(fixture_path).unwrap();
 
     let shared = std::sync::Arc::new(state::SharedGlobalState::new(harness.loader));
-    let resolution = try_static_res_from_file(dll_path.to_str().unwrap())
-        .expect("Failed to load assembly");
+    let resolution =
+        try_static_res_from_file(dll_path.to_str().unwrap()).expect("Failed to load assembly");
 
     let (tx, rx) = mpsc::channel();
     let mut handles = Vec::new();
@@ -1008,9 +1010,9 @@ fn test_allocation_pressure_triggers_collection() {
 fn test_stw_stress() {
     use dotnet_vm::state;
     use std::sync::Arc;
-    use std::thread;
+    use std::sync::atomic::Ordering;
     use std::sync::mpsc;
-        use std::sync::atomic::Ordering;
+    use std::thread;
 
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/span_comprehensive_0.cs");
@@ -1050,7 +1052,7 @@ fn test_stw_stress() {
     for _ in 0..num_threads {
         let remaining = timeout.saturating_sub(start.elapsed());
         match rx.recv_timeout(remaining) {
-            Ok(Ok(())) => {},
+            Ok(Ok(())) => {}
             Ok(Err(code)) => {
                 test_error = Some(format!("test_stw_stress failed with code {}", code));
                 break;

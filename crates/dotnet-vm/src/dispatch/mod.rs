@@ -10,8 +10,7 @@ use crate::{
     threading::ThreadManagerOps,
 };
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
-use dotnet_utils::sync::Ordering;
-use dotnet_utils::gc::GCHandle;
+use dotnet_utils::{gc::GCHandle, sync::Ordering};
 use dotnet_value::{StackValue, layout::HasLayout, object::ObjectRef};
 use dotnetdll::prelude::*;
 use gc_arena::Collect;

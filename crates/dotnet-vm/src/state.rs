@@ -171,7 +171,9 @@ impl<'m> SharedGlobalState<'m> {
             empty_generics: GenericLookup::default(),
             caches,
             statics: Arc::new(StaticStorageManager::new()),
-            last_instructions: std::sync::Arc::new(std::sync::Mutex::new(InstructionRingBuffer::new())),
+            last_instructions: std::sync::Arc::new(std::sync::Mutex::new(
+                InstructionRingBuffer::new(),
+            )),
             abort_requested: Arc::new(AtomicBool::new(false)),
             #[cfg(feature = "multithreading")]
             gc_coordinator: Arc::new(GCCoordinator::new(stw_in_progress)),

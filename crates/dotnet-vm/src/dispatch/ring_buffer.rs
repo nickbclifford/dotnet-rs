@@ -43,7 +43,7 @@ mod tests {
     fn test_ring_buffer_wrapping() {
         let mut buffer = InstructionRingBuffer::new();
         for i in 0..15 {
-            buffer.push(i, "Add");
+            buffer.push(i, "Add".to_string());
         }
 
         let dump = buffer.dump();
