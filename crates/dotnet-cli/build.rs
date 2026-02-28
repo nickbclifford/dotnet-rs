@@ -1,5 +1,13 @@
 use std::{fs::File, io::Write, path::Path, process::Command};
 
+/// Returns true when we should skip expensive dotnet build steps.
+/// This is the case during `cargo clippy` (detected via CARGO_CFG_CLIPPY) or
+/// when the user explicitly sets `DOTNET_SKIP_BUILD=1`.
+fn should_skip_dotnet_build() -> bool {
+    std::env::var("CARGO_CFG_CLIPPY").is_ok()
+        || std::env::var("DOTNET_SKIP_BUILD").is_ok_and(|v| v == "1")
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=tests/fixtures");
     println!("cargo:rerun-if-changed=tests/SingleFile.csproj");
@@ -14,25 +22,27 @@ fn main() {
     let fixtures_dir = tests_dir.join("fixtures");
     let output_base = manifest_dir.join("target").join("dotnet-fixtures");
 
-    // Phase 1: Batch compile all fixtures
-    let status = Command::new("dotnet")
-        .args([
-            "build",
-            "BatchFixtures.csproj",
-            "-m",              // parallel MSBuild nodes
-            "-v:q",            // quiet verbosity
-            "--nologo",        // suppress banner
-            "-clp:ErrorsOnly", // only show errors
-        ])
-        .arg(format!("-p:FixtureOutputBase={}/", output_base.display()))
-        .current_dir(&tests_dir)
-        .status()
-        .expect("Failed to run dotnet build. Is the .NET SDK installed?");
+    if !should_skip_dotnet_build() {
+        // Phase 1: Batch compile all fixtures
+        let status = Command::new("dotnet")
+            .args([
+                "build",
+                "BatchFixtures.csproj",
+                "-m",              // parallel MSBuild nodes
+                "-v:q",            // quiet verbosity
+                "--nologo",        // suppress banner
+                "-clp:ErrorsOnly", // only show errors
+            ])
+            .arg(format!("-p:FixtureOutputBase={}/", output_base.display()))
+            .current_dir(&tests_dir)
+            .status()
+            .expect("Failed to run dotnet build. Is the .NET SDK installed?");
 
-    assert!(
-        status.success(),
-        "dotnet build BatchFixtures.csproj failed. Check that the .NET 10 SDK is installed."
-    );
+        assert!(
+            status.success(),
+            "dotnet build BatchFixtures.csproj failed. Check that the .NET 10 SDK is installed."
+        );
+    }
 
     let mut fixtures = Vec::new();
     find_fixtures(&fixtures_dir, &mut fixtures);

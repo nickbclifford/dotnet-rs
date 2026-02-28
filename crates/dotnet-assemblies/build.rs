@@ -1,5 +1,13 @@
 use std::{path::Path, process::Command};
 
+/// Returns true when we should skip expensive dotnet build steps.
+/// This is the case during `cargo clippy` (detected via CARGO_CFG_CLIPPY) or
+/// when the user explicitly sets `DOTNET_SKIP_BUILD=1`.
+fn should_skip_dotnet_build() -> bool {
+    std::env::var("CARGO_CFG_CLIPPY").is_ok()
+        || std::env::var("DOTNET_SKIP_BUILD").is_ok_and(|v| v == "1")
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=src/support/support.csproj");
 
@@ -23,6 +31,16 @@ fn main() {
     }
 
     let out_dir = std::env::var("OUT_DIR").unwrap();
+    let dll_path = Path::new(&out_dir).join("support.dll");
+
+    if should_skip_dotnet_build() {
+        // Create an empty stub so that `include_bytes!` in lib.rs can resolve the path.
+        // The real DLL is only needed at runtime, not during check/clippy.
+        if !dll_path.exists() {
+            std::fs::write(&dll_path, b"").expect("failed to create stub support.dll");
+        }
+        return;
+    }
 
     let status = Command::new("dotnet")
         .args([
