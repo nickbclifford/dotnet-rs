@@ -44,7 +44,7 @@ pub struct ExecutionEngine<'gc, 'm: 'gc> {
 }
 
 // SAFETY: `ExecutionEngine` correctly traces its GC-managed fields (`stack`) in its
-// `trace` implementation. `ring_buffer` is `require_static` and does not contain GC pointers.
+// `trace` implementation. `ring_buffer` does not contain GC pointers.
 unsafe impl<'gc, 'm: 'gc> Collect for ExecutionEngine<'gc, 'm> {
     fn trace(&self, cc: &gc_arena::Collection) {
         self.stack.trace(cc);
@@ -97,18 +97,12 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
         self.stack.execution.original_stack_height =
             self.stack.execution.evaluation_stack.top_of_stack();
 
-        // Record for local ring buffer (very fast, no lock)
-        self.ring_buffer.push(ip, i.name());
+        // Record for local ring buffer (provides more context on timeout/panic)
+        let resolution = self.stack.state().info_handle.source.resolution();
+        self.ring_buffer.push(ip, i.show(resolution.definition()));
 
         if self.stack.shared.tracer_enabled.load(Ordering::Relaxed) {
-            let instr_text = i.show(
-                self.stack
-                    .state()
-                    .info_handle
-                    .source
-                    .resolution()
-                    .definition(),
-            );
+            let instr_text = i.show(resolution.definition());
             vm_trace_instruction!(self.stack, ip, &instr_text);
         }
 

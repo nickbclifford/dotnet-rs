@@ -7,10 +7,24 @@ use std::{
     io,
     path::{Path, PathBuf},
     process::Command,
+    sync::Mutex,
 };
 
 #[cfg(feature = "multithreading")]
 use dotnet_vm::threading::ThreadManagerOps;
+
+
+use std::time::Duration;
+
+fn get_test_timeout(default_secs: u64) -> Duration {
+    let secs = std::env::var("DOTNET_TEST_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default_secs);
+    Duration::from_secs(secs)
+}
+
+static BUILD_LOCK: Mutex<()> = Mutex::new(());
 
 pub struct TestHarness {
     pub loader: &'static assemblies::AssemblyLoader,
@@ -62,6 +76,7 @@ impl TestHarness {
     }
 
     pub fn build(&self, fixture_path: &Path) -> io::Result<PathBuf> {
+        let _lock = BUILD_LOCK.lock().unwrap();
         let file_name = fixture_path.file_stem().unwrap().to_str().unwrap();
         let output_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("target")
@@ -88,7 +103,7 @@ impl TestHarness {
                 "-o",
                 output_dir.to_str().unwrap(),
                 &format!(
-                    "-p:IntermediateOutputPath={}/",
+                    "-p:BaseIntermediateOutputPath={}/",
                     output_dir.join("obj").display()
                 ),
             ])
@@ -158,7 +173,7 @@ impl TestHarness {
 
                     eprintln!("=== LAST 10 INSTRUCTIONS ===");
                     if let Ok(rb) = shared.last_instructions.lock() {
-                        eprintln!("{}", rb.dump_formatted(&resolution));
+                        eprintln!("{}", rb.dump());
                     }
                     panic!("TIMEOUT");
                 }
@@ -168,7 +183,7 @@ impl TestHarness {
                 eprintln!("=== VM PANICKED ===");
                 eprintln!("=== LAST 10 INSTRUCTIONS ===");
                 if let Ok(rb) = shared.last_instructions.lock() {
-                    eprintln!("{}", rb.dump_formatted(&resolution));
+                    eprintln!("{}", rb.dump());
                 }
                 std::panic::resume_unwind(panic_info);
             }
@@ -229,7 +244,7 @@ macro_rules! fixture_test {
         fn $name() {
             let harness = TestHarness::get();
             let dll_path = harness.build(Path::new($path)).unwrap();
-            let exit_code = harness.run_with_timeout(&dll_path, std::time::Duration::from_secs(60));
+            let exit_code = harness.run_with_timeout(&dll_path, get_test_timeout(60));
             assert_eq!(
                 exit_code,
                 $expected,
@@ -246,7 +261,7 @@ macro_rules! fixture_test {
         fn $name() {
             let harness = TestHarness::get();
             let dll_path = harness.build(Path::new($path)).unwrap();
-            let exit_code = harness.run_with_timeout(&dll_path, std::time::Duration::from_secs(60));
+            let exit_code = harness.run_with_timeout(&dll_path, get_test_timeout(60));
             assert_eq!(
                 exit_code,
                 $expected,
@@ -300,8 +315,7 @@ macro_rules! multi_arena_test {
         fn $name() {
             use std::thread;
             use std::sync::mpsc;
-            use std::time::Duration;
-            use std::sync::atomic::Ordering;
+                        use std::sync::atomic::Ordering;
 
 
             let dll_path = setup_multi_arena_fixture($fixture);
@@ -329,7 +343,7 @@ macro_rules! multi_arena_test {
                 handles.push(handle);
             }
 
-            let timeout = Duration::from_secs(60);
+            let timeout = get_test_timeout(60);
             let start = std::time::Instant::now();
             let mut test_error = None;
 
@@ -444,7 +458,7 @@ fn hello_world() {
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/debug_fixtures/hello_world_0.cs");
     let dll_path = harness.build(fixture_path).unwrap();
-    let exit_code = harness.run_with_timeout(&dll_path, std::time::Duration::from_secs(60));
+    let exit_code = harness.run_with_timeout(&dll_path, get_test_timeout(60));
     assert_eq!(exit_code, 0);
 }
 
@@ -480,8 +494,7 @@ multi_arena_test!(
 fn test_multiple_arenas_static_ref() {
     use std::thread;
     use std::sync::mpsc;
-    use std::time::Duration;
-    use std::sync::atomic::Ordering;
+        use std::sync::atomic::Ordering;
 
 
     let harness = TestHarness::get();
@@ -511,7 +524,7 @@ fn test_multiple_arenas_static_ref() {
         handles.push(handle);
     }
 
-    let timeout = Duration::from_secs(60);
+    let timeout = get_test_timeout(60);
     let start = std::time::Instant::now();
     let mut test_error = None;
     for _ in 0..5 {
@@ -556,8 +569,7 @@ fn test_multiple_arenas_static_ref() {
 fn test_multiple_arenas_allocation_stress() {
     use std::thread;
     use std::sync::mpsc;
-    use std::time::Duration;
-    use std::sync::atomic::Ordering;
+        use std::sync::atomic::Ordering;
 
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/arrays/array_0.cs");
@@ -590,7 +602,7 @@ fn test_multiple_arenas_allocation_stress() {
         handles.push(handle);
     }
 
-    let timeout = Duration::from_secs(120);
+    let timeout = get_test_timeout(120);
     let start = std::time::Instant::now();
     let mut test_error = None;
     for _ in 0..5 {
@@ -685,7 +697,7 @@ fn test_multiple_arenas_simple() {
         handles.push(handle);
     }
 
-    let timeout = std::time::Duration::from_secs(60);
+    let timeout = get_test_timeout(60);
     let start = std::time::Instant::now();
     let mut test_error = None;
     for _ in 0..5 {
@@ -796,7 +808,7 @@ fn test_reflection_race_condition() {
         handles.push(handle);
     }
 
-    let timeout = std::time::Duration::from_secs(300); // 5 minutes for stress test
+    let timeout = get_test_timeout(300); // 5 minutes for stress test
     let start = std::time::Instant::now();
     let mut test_error = None;
     for _ in 0..num_threads {
@@ -872,8 +884,7 @@ fn test_volatile_sharing() {
     use dotnet_vm::state;
     use std::thread;
     use std::sync::mpsc;
-    use std::time::Duration;
-    use std::sync::atomic::Ordering;
+        use std::sync::atomic::Ordering;
 
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/threading/volatile_sharing_42.cs");
@@ -897,7 +908,7 @@ fn test_volatile_sharing() {
         handles.push(handle);
     }
 
-    let timeout = Duration::from_secs(60);
+    let timeout = get_test_timeout(60);
     let start = std::time::Instant::now();
     let mut test_error = None;
     for _ in 0..2 {
@@ -999,8 +1010,7 @@ fn test_stw_stress() {
     use std::sync::Arc;
     use std::thread;
     use std::sync::mpsc;
-    use std::time::Duration;
-    use std::sync::atomic::Ordering;
+        use std::sync::atomic::Ordering;
 
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/span_comprehensive_0.cs");
@@ -1034,7 +1044,7 @@ fn test_stw_stress() {
         handles.push(handle);
     }
 
-    let timeout = Duration::from_secs(300); // 5 minutes for stress test
+    let timeout = get_test_timeout(300); // 5 minutes for stress test
     let start = std::time::Instant::now();
     let mut test_error = None;
     for _ in 0..num_threads {

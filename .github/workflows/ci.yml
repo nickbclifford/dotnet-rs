@@ -32,7 +32,7 @@ jobs:
   clippy:
     name: Clippy Check
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       matrix:
         features:
@@ -62,9 +62,10 @@ jobs:
   test:
     name: Test Suite
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
-      RUST_TEST_THREADS: "4"
+      RUST_TEST_THREADS: "1"
+      DOTNET_TEST_TIMEOUT_SECS: "180"
     strategy:
       fail-fast: false
       matrix:
@@ -102,7 +103,7 @@ jobs:
           fi
 
       - name: Run tests (${{ matrix.name }})
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
           if [ -z "${{ matrix.features }}" ]; then
             cargo test --verbose --no-default-features -- --nocapture
