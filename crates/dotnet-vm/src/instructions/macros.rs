@@ -12,7 +12,7 @@ macro_rules! vm_pop {
 macro_rules! binary_op {
     ($(#[$attr:meta])* $func_name:ident, $op:tt) => {
         $(#[$attr])*
-        pub fn $func_name<'gc, 'm: 'gc, T: $crate::stack::ops::EvalStackOps<'gc> + ?Sized>(
+        pub fn $func_name<'gc, 'm: 'gc, T: $crate::stack::ops::EvalStackOps<'gc>>(
             ctx: &mut T,
         ) -> StepResult {
             #[allow(unused_imports)]
@@ -28,7 +28,7 @@ macro_rules! binary_op {
 macro_rules! binary_op_result {
     ($(#[$attr:meta])* $func_name:ident, $method:ident) => {
         $(#[$attr])*
-        pub fn $func_name<'gc, 'm: 'gc, T: $crate::stack::ops::EvalStackOps<'gc> + $crate::stack::ops::ExceptionOps<'gc> + ?Sized>(
+        pub fn $func_name<'gc, 'm: 'gc, T: $crate::stack::ops::EvalStackOps<'gc> + $crate::stack::ops::ExceptionOps<'gc>>(
             ctx: &mut T,
             sgn: NumberSign,
         ) -> StepResult {
@@ -50,7 +50,7 @@ macro_rules! binary_op_result {
 macro_rules! binary_op_sgn {
     ($(#[$attr:meta])* $func_name:ident, $method:ident) => {
         $(#[$attr])*
-        pub fn $func_name<'gc, 'm: 'gc, T: $crate::stack::ops::EvalStackOps<'gc> + ?Sized>(
+        pub fn $func_name<'gc, 'm: 'gc, T: $crate::stack::ops::EvalStackOps<'gc>>(
             ctx: &mut T,
             sgn: NumberSign,
         ) -> StepResult {
@@ -67,7 +67,7 @@ macro_rules! binary_op_sgn {
 macro_rules! unary_op {
     ($(#[$attr:meta])* $func_name:ident, $op:tt) => {
         $(#[$attr])*
-        pub fn $func_name<'gc, 'm: 'gc, T: $crate::stack::ops::EvalStackOps<'gc> + ?Sized>(
+        pub fn $func_name<'gc, 'm: 'gc, T: $crate::stack::ops::EvalStackOps<'gc>>(
             ctx: &mut T,
         ) -> StepResult {
             #[allow(unused_imports)]
@@ -82,7 +82,7 @@ macro_rules! unary_op {
 macro_rules! comparison_op {
     ($(#[$attr:meta])* $func_name:ident, $pat:pat) => {
         $(#[$attr])*
-        pub fn $func_name<'gc, 'm: 'gc, T: $crate::stack::ops::AllStackOps<'gc> + ?Sized>(
+        pub fn $func_name<'gc, 'm: 'gc, T: $crate::stack::ops::EvalStackOps<'gc> + $crate::stack::ops::TypedStackOps<'gc>>(
             ctx: &mut T,
             sgn: NumberSign,
         ) -> StepResult {
@@ -100,7 +100,7 @@ macro_rules! comparison_op {
 macro_rules! load_var {
     ($(#[$attr:meta])* $func_name:ident, $get_method:ident, $index_type:ident) => {
         $(#[$attr])*
-        pub fn $func_name<'gc, 'm: 'gc, T: $crate::stack::ops::AllStackOps<'gc> + ?Sized>(
+        pub fn $func_name<'gc, 'm: 'gc, T: $crate::stack::ops::VariableOps<'gc> + $crate::stack::ops::EvalStackOps<'gc>>(
             ctx: &mut T,
             index: u16,
         ) -> StepResult {
@@ -116,7 +116,7 @@ macro_rules! load_var {
 macro_rules! store_var {
     ($(#[$attr:meta])* $func_name:ident, $set_method:ident, $index_type:ident) => {
         $(#[$attr])*
-        pub fn $func_name<'gc, 'm: 'gc, T: $crate::stack::ops::AllStackOps<'gc> + ?Sized>(
+        pub fn $func_name<'gc, 'm: 'gc, T: $crate::stack::ops::VariableOps<'gc> + $crate::stack::ops::EvalStackOps<'gc>>(
             ctx: &mut T,
             index: u16,
         ) -> StepResult {
@@ -132,7 +132,7 @@ macro_rules! store_var {
 macro_rules! load_const {
     ($(#[$attr:meta])* $func_name:ident, $arg_type:ty, $expr:expr) => {
         $(#[$attr])*
-        pub fn $func_name<'gc, 'm: 'gc, T: $crate::stack::ops::EvalStackOps<'gc> + ?Sized>(
+        pub fn $func_name<'gc, 'm: 'gc, T: $crate::stack::ops::EvalStackOps<'gc>>(
             ctx: &mut T,
             val: $arg_type,
         ) -> StepResult {

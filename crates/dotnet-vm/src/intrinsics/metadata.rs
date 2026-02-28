@@ -19,7 +19,7 @@
 //! Methods that MUST bypass any BCL implementation for correctness or performance.
 //! The VM intercepts these calls even when a BCL implementation exists.
 //! Examples: String.Length (internal representation differs), Math functions (performance)
-use crate::intrinsics::{INTRINSIC_ATTR, IntrinsicHandler, IntrinsicRegistry};
+use crate::intrinsics::{INTRINSIC_ATTR, IntrinsicHandler, IntrinsicRegistry, MethodIntrinsicId};
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::members::MethodDescription;
 
@@ -48,8 +48,8 @@ pub struct IntrinsicMetadata {
     /// The kind of intrinsic, determining dispatch behavior
     pub kind: IntrinsicKind,
 
-    /// The handler function that implements this intrinsic
-    pub handler: IntrinsicHandler,
+    /// The handler ID that implements this intrinsic
+    pub handler: MethodIntrinsicId,
 
     /// Human-readable explanation of why this method is intrinsic.
     /// Should explain the technical reason (e.g., "VM internal representation",
@@ -182,15 +182,14 @@ mod tests {
 
     #[test]
     fn test_metadata_constructors() {
-        use crate::StepResult;
-
         // Create a dummy handler for testing
-        let dummy_handler: IntrinsicHandler = |_, _, _| StepResult::Continue;
+        let dummy_handler = MethodIntrinsicId::Missing;
 
         // Test static constructor
         let static_meta = IntrinsicMetadata::static_intrinsic(dummy_handler, "test reason");
         assert_eq!(static_meta.kind, IntrinsicKind::Static);
         assert_eq!(static_meta.reason, "test reason");
+        assert_eq!(static_meta.handler, dummy_handler);
 
         // Test virtual override constructor
         let virtual_meta = IntrinsicMetadata::virtual_override(dummy_handler, "virtual reason");
@@ -237,9 +236,7 @@ mod tests {
     #[test]
     fn test_intrinsic_metadata_reason_field() {
         // Verify that metadata includes human-readable reasons for intrinsics
-        use crate::StepResult;
-
-        let dummy_handler: IntrinsicHandler = |_, _, _| StepResult::Continue;
+        let dummy_handler = MethodIntrinsicId::Missing;
 
         // Test that each constructor creates metadata with the correct reason
         let direct_meta = IntrinsicMetadata::direct_intercept(
@@ -267,30 +264,15 @@ mod tests {
 
     #[test]
     fn test_intrinsic_metadata_handler_storage() {
-        // Verify that metadata correctly stores handler function pointers
-        use crate::StepResult;
-
-        let handler1: IntrinsicHandler = |_, _, _| StepResult::Continue;
-        let handler2: IntrinsicHandler = |_, _, _| {
-            StepResult::MethodThrew(crate::exceptions::ManagedException {
-                type_name: "TestException".to_string(),
-                message: None,
-                stack_trace: None,
-            })
-        };
+        // Verify that metadata correctly stores handler IDs
+        let handler1 = MethodIntrinsicId::Missing;
+        let handler2 = MethodIntrinsicId::Missing; // Since we only have Missing for now in unit tests
 
         let meta1 = IntrinsicMetadata::static_intrinsic(handler1, "test1");
         let meta2 = IntrinsicMetadata::static_intrinsic(handler2, "test2");
 
-        // Handler function pointers should be stored correctly
-        // (comparing function pointers directly)
-        assert_eq!(
-            meta1.handler as usize, handler1 as usize,
-            "Handler should match original"
-        );
-        assert_ne!(
-            meta1.handler as usize, meta2.handler as usize,
-            "Different handlers should have different addresses"
-        );
+        // Handler IDs should be stored correctly
+        assert_eq!(meta1.handler, handler1, "Handler should match original");
+        assert_eq!(meta2.handler, handler2, "Handler should match original");
     }
 }

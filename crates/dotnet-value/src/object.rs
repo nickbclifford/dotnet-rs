@@ -120,7 +120,7 @@ impl<'gc> ObjectInner<'gc> {
 
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ObjectPtr(pub NonNull<ThreadSafeLock<ObjectInner<'static>>>);
+pub struct ObjectPtr(NonNull<ThreadSafeLock<ObjectInner<'static>>>);
 
 #[cfg(feature = "fuzzing")]
 impl<'a> Arbitrary<'a> for ObjectPtr {
@@ -137,6 +137,10 @@ unsafe impl Send for ObjectPtr {}
 unsafe impl Sync for ObjectPtr {}
 
 impl ObjectPtr {
+    pub(crate) fn from_handle<'gc>(handle: ObjectHandle<'gc>) -> Self {
+        ObjectPtr(NonNull::new(Gc::as_ptr(handle) as *mut _).unwrap())
+    }
+
     /// # Safety
     ///
     /// The pointer must be valid for the program lifetime and properly aligned.
@@ -269,13 +273,13 @@ impl<'gc> ObjectRef<'gc> {
 
     pub fn as_ptr(&self) -> Option<ObjectPtr> {
         self.0
-            .map(|h| unsafe { ObjectPtr::from_raw(Gc::as_ptr(h) as *const _).unwrap() })
+            .map(|h| ObjectPtr::from_handle(h))
     }
 
     #[cfg(feature = "multithreading")]
     pub fn as_ptr_info(&self) -> Option<(ObjectPtr, ArenaId)> {
         self.0.map(|h| {
-            let ptr = unsafe { ObjectPtr::from_raw(Gc::as_ptr(h) as *const _).unwrap() };
+            let ptr = ObjectPtr::from_handle(h);
             let tid = ptr.owner_id();
             (ptr, tid)
         })
@@ -566,12 +570,12 @@ impl<'gc> ObjectRef<'gc> {
         inner.validate_magic();
         match &inner.storage {
             HeapStorage::Vec(v) => f(&v.storage),
-            HeapStorage::Obj(o) => f(&o.instance_storage.get()),
+            HeapStorage::Obj(o) => o.instance_storage.with_data(f),
             HeapStorage::Str(s) => unsafe {
                 let bytes = std::slice::from_raw_parts(s.as_ptr() as *const u8, s.len() * 2);
                 f(bytes)
             },
-            HeapStorage::Boxed(o) => f(&o.instance_storage.get()),
+            HeapStorage::Boxed(o) => o.instance_storage.with_data(f),
         }
     }
 
@@ -589,8 +593,8 @@ impl<'gc> ObjectRef<'gc> {
         inner.validate_magic();
         match &mut inner.storage {
             HeapStorage::Vec(v) => f(&mut v.storage),
-            HeapStorage::Obj(o) => f(&mut o.instance_storage.get_mut()),
-            HeapStorage::Boxed(o) => f(&mut o.instance_storage.get_mut()),
+            HeapStorage::Obj(o) => o.instance_storage.with_data_mut(f),
+            HeapStorage::Boxed(o) => o.instance_storage.with_data_mut(f),
             HeapStorage::Str(_) => {
                 panic!("Strings are immutable and cannot be accessed via with_data_mut")
             }
@@ -697,8 +701,8 @@ impl<'gc> HeapStorage<'gc> {
                 let bytes = std::slice::from_raw_parts(s.as_ptr() as *const u8, s.len() * 2);
                 f(bytes)
             },
-            HeapStorage::Obj(o) => f(&o.instance_storage.get()),
-            HeapStorage::Boxed(o) => f(&o.instance_storage.get()),
+            HeapStorage::Obj(o) => o.instance_storage.with_data(f),
+            HeapStorage::Boxed(o) => o.instance_storage.with_data(f),
         }
     }
 
@@ -706,8 +710,8 @@ impl<'gc> HeapStorage<'gc> {
         match self {
             HeapStorage::Vec(v) => f(&mut v.storage),
             HeapStorage::Str(_) => panic!("Cannot modify CLRString directly"),
-            HeapStorage::Obj(o) => f(&mut o.instance_storage.get_mut()),
-            HeapStorage::Boxed(o) => f(&mut o.instance_storage.get_mut()),
+            HeapStorage::Obj(o) => o.instance_storage.with_data_mut(f),
+            HeapStorage::Boxed(o) => o.instance_storage.with_data_mut(f),
         }
     }
 
@@ -862,7 +866,7 @@ impl<'gc> CTSValue<'gc> {
                     dest[0..8].copy_from_slice(&addr.to_ne_bytes());
                     dest[8..16].copy_from_slice(&type_ptr.to_ne_bytes());
                 }
-                Struct(o) => dest.copy_from_slice(&o.instance_storage.get()),
+                Struct(o) => o.instance_storage.with_data(|d| dest.copy_from_slice(d)),
             },
             CTSValue::Ref(o) => o.write(dest),
         }
@@ -1126,8 +1130,7 @@ impl<'gc> Object<'gc> {
 
     /// Safely accesses the object's data as a byte slice.
     pub fn with_data<T>(&self, f: impl FnOnce(&[u8]) -> T) -> T {
-        let data = self.instance_storage.get();
-        f(&data)
+        self.instance_storage.with_data(f)
     }
 
     pub fn validate_resurrection_invariants(&self) {
@@ -1172,7 +1175,7 @@ impl Debug for Object<'_> {
             .field(&self.instance_storage)
             .field(&DebugStr(format!(
                 "stored at {:#?}",
-                self.instance_storage.get().as_ptr()
+                self.instance_storage.with_data(|d| d.as_ptr())
             )))
             .finish()
     }

@@ -24,11 +24,11 @@ The project is divided into several crates, each with a focused responsibility:
     - Dispatches the instruction to its handler.
     - Updates the `EvaluationStack` with results.
     - Handles flow control (jumps, calls, returns).
-5. **Instruction Dispatch**: Instructions are handled by functions marked with `#[dotnet_instruction]`. These functions use the `VesOps` trait to interact with the VM state. (See [Build-Time Code Generation](BUILD_TIME_CODE_GENERATION.md) for details on the dispatch table).
+5. **Instruction Dispatch**: Instructions are handled by functions marked with `#[dotnet_instruction]`. The build script generates a monomorphic dispatcher (`dispatch_monomorphic`) that uses a `match` statement on the instruction enum to call the appropriate handler. This allows for extensive inlining and avoids the overhead of dynamic dispatch or function pointers. (See [Build-Time Code Generation](BUILD_TIME_CODE_GENERATION.md) for details).
 6. **Method Calls**:
     - Static calls resolve the target method and push a new `StackFrame`.
     - Virtual calls use the object's vtable (computed via the layout system) to find the correct method implementation.
-    - Intrinsic calls are intercepted and handled by native Rust code (marked with `#[dotnet_intrinsic]`).
+    - Intrinsic calls are intercepted and handled by native Rust code (marked with `#[dotnet_intrinsic]`). Similar to instructions, intrinsics use a monomorphic ID-based dispatch system to ensure high performance.
     
     (See [Delegates and Dispatch](DELEGATES_AND_DISPATCH.md) for more details on invocation paths).
 

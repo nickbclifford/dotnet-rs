@@ -1,4 +1,5 @@
-use crate::layout::{FieldLayoutManager, HasLayout};
+use crate::layout::{FieldLayoutManager, FieldType, HasLayout};
+use std::marker::PhantomData;
 use dotnet_types::TypeDescription;
 use dotnet_utils::{
     atomic::{self, Atomic},
@@ -16,6 +17,45 @@ use std::{
 
 #[cfg(any(feature = "memory-validation", debug_assertions))]
 const FIELD_STORAGE_MAGIC: u64 = 0x5AFE_F1E1_D500_0000;
+
+/// A reference to a specific field, carrying its layout type
+pub struct FieldRef<'a, T: FieldType> {
+    storage: &'a FieldStorage,
+    offset: usize,
+    _type: PhantomData<T>,
+}
+
+impl<T: FieldType> FieldRef<'_, T> {
+    pub fn read(&self) -> T {
+        self.storage.with_data(|data| T::read_from(&data[self.offset..]))
+    }
+    pub fn write(&self, value: T) {
+        self.storage.with_data_mut(|data| value.write_to(&mut data[self.offset..]))
+    }
+}
+
+pub struct BoundedPtr {
+    ptr: *mut u8,
+    len: usize,
+}
+
+impl BoundedPtr {
+    pub fn new(ptr: *mut u8, len: usize) -> Self {
+        Self { ptr, len }
+    }
+
+    /// # Safety
+    /// The caller must ensure that `offset` is within the bounds of `self.ptr` and `self.len`.
+    pub unsafe fn read<T: FieldType>(&self, offset: usize) -> T {
+        assert!(offset + std::mem::size_of::<T>() <= self.len);
+        unsafe {
+            T::read_from(std::slice::from_raw_parts(
+                self.ptr.add(offset),
+                std::mem::size_of::<T>(),
+            ))
+        }
+    }
+}
 
 pub struct FieldStorage {
     #[cfg(any(feature = "memory-validation", debug_assertions))]
@@ -67,14 +107,20 @@ impl FieldStorage {
         }
     }
 
-    pub fn get(&self) -> MappedRwLockReadGuard<'_, [u8]> {
-        self.validate_magic();
-        RwLockReadGuard::map(self.data.read(), |v| v.as_slice())
-    }
 
-    pub fn get_mut(&self) -> MappedRwLockWriteGuard<'_, [u8]> {
-        self.validate_magic();
-        RwLockWriteGuard::map(self.data.write(), |v| v.as_mut_slice())
+    /// Get a typed field reference — validates layout at construction time
+    pub fn field<T: FieldType>(
+        &self,
+        owner: TypeDescription,
+        name: &str,
+    ) -> Option<FieldRef<'_, T>> {
+        let field = self.layout.get_field(owner, name)?;
+        assert_eq!(T::SCALAR.size_const(), field.layout.size().as_usize());
+        Some(FieldRef {
+            storage: self,
+            offset: field.position.as_usize(),
+            _type: PhantomData,
+        })
     }
 
     pub fn with_data<T>(&self, f: impl FnOnce(&[u8]) -> T) -> T {
@@ -164,9 +210,8 @@ impl FieldStorage {
         let field = self.layout.get_field(owner, name).expect("Field not found");
         let alignment = field.layout.alignment();
         let size = field.layout.size();
-        let data = self.get();
-        let ptr = data.as_ptr();
-        let field_ptr = unsafe { ptr.add(field.position.as_usize()) };
+        let guard = self.get_field_local(owner, name);
+        let field_ptr = guard.as_ptr();
         validate_alignment(field_ptr, alignment);
         unsafe { Atomic::load_field(field_ptr, size.as_usize(), ord) }
     }
@@ -189,9 +234,8 @@ impl FieldStorage {
         let field = self.layout.get_field(owner, name).expect("Field not found");
         let alignment = field.layout.alignment();
         // Let's just use get_mut() to be safe and consistent with synchronized.
-        let data = self.get_mut();
-        let ptr = data.as_ptr() as *mut u8;
-        let field_ptr = unsafe { ptr.add(field.position.as_usize()) };
+        let mut guard = self.get_field_mut_local(owner, name);
+        let field_ptr = guard.as_mut_ptr();
         validate_alignment(field_ptr, alignment);
         unsafe { Atomic::store_field(field_ptr, value, ord) }
     }

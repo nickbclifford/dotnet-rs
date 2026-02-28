@@ -1,4 +1,4 @@
-use crate::intrinsics::{IntrinsicFieldHandler, IntrinsicHandler};
+use crate::intrinsics::{MethodIntrinsicId, FieldIntrinsicId};
 use dotnet_types::members::MethodDescription;
 
 pub type SignatureFilter = fn(&MethodDescription) -> bool;
@@ -11,8 +11,8 @@ pub struct Range {
 }
 
 pub enum StaticIntrinsicHandler {
-    Method(IntrinsicHandler),
-    Field(IntrinsicFieldHandler),
+    Method(MethodIntrinsicId),
+    Field(FieldIntrinsicId),
 }
 
 pub struct StaticIntrinsicEntry {

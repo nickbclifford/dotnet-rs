@@ -2,7 +2,9 @@
 //!
 //! Core logic for macro expansion used by `dotnet-macros`.
 //! This crate contains the parsing and transformation logic for .NET signatures.
+use quote::quote;
 use syn::{
+    braced, parenthesized,
     Ident, Result, Token,
     ext::IdentExt,
     parse::{Parse, ParseStream},
@@ -83,6 +85,246 @@ impl Parse for ParsedFieldSignature {
             class_name,
             field_name,
         })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum InstructionMapping {
+    Unit(Ident),
+    Tuple(Ident, Punctuated<Ident, Token![,]>),
+    Struct(Ident, Punctuated<FieldMapping, Token![,]>),
+}
+
+impl InstructionMapping {
+    pub fn variant_ident(&self) -> &Ident {
+        match self {
+            InstructionMapping::Unit(ident) => ident,
+            InstructionMapping::Tuple(ident, _) => ident,
+            InstructionMapping::Struct(ident, _) => ident,
+        }
+    }
+
+    pub fn to_match_arm(
+        &self,
+        func_name: &Ident,
+        extra_arg_info: &[(&Ident, bool)],
+    ) -> proc_macro2::TokenStream {
+        self.to_match_arm_path(func_name, extra_arg_info)
+    }
+
+    pub fn to_match_arm_path<T: quote::ToTokens>(
+        &self,
+        func_path: &T,
+        extra_arg_info: &[(&Ident, bool)],
+    ) -> proc_macro2::TokenStream {
+        match self {
+            InstructionMapping::Unit(variant) => {
+                quote! {
+                    Instruction::#variant => #func_path(ctx)
+                }
+            }
+            InstructionMapping::Tuple(variant, bindings) => {
+                let bindings_iter = bindings.iter();
+                let calls = bindings.iter().enumerate().map(|(i, binding)| {
+                    if extra_arg_info[i].1 {
+                        quote! { #binding }
+                    } else {
+                        quote! { *#binding }
+                    }
+                });
+                quote! {
+                    Instruction::#variant(#(#bindings_iter),*) => #func_path(ctx, #(#calls),*)
+                }
+            }
+            InstructionMapping::Struct(variant, fields) => {
+                let patterns = fields.iter().map(|f| {
+                    let field_name = &f.field_name;
+                    let binding_name = &f.binding_name;
+                    if field_name == binding_name {
+                        quote! { #field_name }
+                    } else {
+                        quote! { #field_name: #binding_name }
+                    }
+                });
+
+                let calls = extra_arg_info.iter().map(|(param_name, is_ref)| {
+                    let field = fields
+                        .iter()
+                        .find(|f| &f.binding_name == *param_name)
+                        .expect("Validation should have caught missing binding");
+                    let binding = &field.binding_name;
+                    if *is_ref {
+                        quote! { #binding }
+                    } else {
+                        quote! { *#binding }
+                    }
+                });
+
+                quote! {
+                    Instruction::#variant { #(#patterns,)* .. } => #func_path(ctx, #(#calls),*)
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FieldMapping {
+    pub field_name: Ident,
+    pub binding_name: Ident,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedInstruction {
+    pub variant_name: String,
+    pub handler_name: Ident,
+    pub handler_path: Option<String>,
+    pub mapping: InstructionMapping,
+    pub extra_arg_info: Vec<(Ident, bool)>,
+}
+
+impl ParsedInstruction {
+    pub fn parse(attr_mapping: InstructionMapping, func: &syn::ItemFn) -> Result<Self> {
+        let handler_name = func.sig.ident.clone();
+        let variant_ident = attr_mapping.variant_ident();
+        let variant_name = variant_ident.to_string();
+
+        let args = &func.sig.inputs;
+        let extra_args = args.iter().skip(1);
+        let mut extra_arg_info = Vec::new();
+        let mut extra_arg_names = Vec::new();
+
+        for arg in extra_args {
+            if let syn::FnArg::Typed(pat_type) = arg {
+                if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
+                    let name = &pat_ident.ident;
+                    extra_arg_names.push(name.clone());
+                    let is_ref = matches!(&*pat_type.ty, syn::Type::Reference(_));
+                    extra_arg_info.push((name.clone(), is_ref));
+                } else {
+                    return Err(syn::Error::new_spanned(
+                        arg,
+                        "Instruction handler must have named parameters",
+                    ));
+                }
+            } else {
+                return Err(syn::Error::new_spanned(
+                    arg,
+                    "Instruction handler must have named parameters",
+                ));
+            }
+        }
+
+        let extra_args_count = extra_arg_names.len();
+        match &attr_mapping {
+            InstructionMapping::Unit(_) => {
+                if extra_args_count != 0 {
+                    return Err(syn::Error::new(
+                        variant_ident.span(),
+                        format!(
+                            "Instruction variant {} expects 0 parameters, but function has {}. Use explicit mapping syntax.",
+                            variant_name,
+                            extra_args_count
+                        ),
+                    ));
+                }
+            }
+            InstructionMapping::Tuple(_, bindings) => {
+                if bindings.len() != extra_args_count {
+                    return Err(syn::Error::new(
+                        variant_ident.span(),
+                        format!(
+                            "Instruction variant {} expects {} parameters, but function has {}",
+                            variant_name,
+                            bindings.len(),
+                            extra_args_count
+                        ),
+                    ));
+                }
+                for (i, binding) in bindings.iter().enumerate() {
+                    if binding != &extra_arg_names[i] {
+                        return Err(syn::Error::new(
+                            binding.span(),
+                            format!(
+                                "Binding name '{}' at position {} does not match function parameter '{}'",
+                                binding, i, extra_arg_names[i]
+                            ),
+                        ));
+                    }
+                }
+            }
+            InstructionMapping::Struct(_, fields) => {
+                if fields.len() != extra_args_count {
+                    return Err(syn::Error::new(
+                        variant_ident.span(),
+                        format!(
+                            "Instruction variant {} expects {} parameters, but function has {}",
+                            variant_name,
+                            fields.len(),
+                            extra_args_count
+                        ),
+                    ));
+                }
+                for field in fields {
+                    if !extra_arg_names.contains(&field.binding_name) {
+                        return Err(syn::Error::new(
+                            field.binding_name.span(),
+                            format!(
+                                "Binding name '{}' not found in function parameters",
+                                field.binding_name
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(ParsedInstruction {
+            variant_name,
+            handler_name,
+            handler_path: None,
+            mapping: attr_mapping,
+            extra_arg_info,
+        })
+    }
+}
+
+impl Parse for InstructionMapping {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let variant_ident: Ident = input.parse()?;
+        if input.peek(syn::token::Paren) {
+            let content;
+            parenthesized!(content in input);
+            let fields = content.parse_terminated(Ident::parse, Token![,])?;
+            Ok(InstructionMapping::Tuple(variant_ident, fields))
+        } else if input.peek(syn::token::Brace) {
+            let content;
+            braced!(content in input);
+            let fields = content.parse_terminated(FieldMapping::parse, Token![,])?;
+            Ok(InstructionMapping::Struct(variant_ident, fields))
+        } else {
+            Ok(InstructionMapping::Unit(variant_ident))
+        }
+    }
+}
+
+impl Parse for FieldMapping {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let field_name: Ident = input.parse()?;
+        if input.peek(Token![:]) {
+            input.parse::<Token![:]>()?;
+            let binding_name: Ident = input.parse()?;
+            Ok(FieldMapping {
+                field_name,
+                binding_name,
+            })
+        } else {
+            let binding_name = field_name.clone();
+            Ok(FieldMapping {
+                field_name,
+                binding_name,
+            })
+        }
     }
 }
 

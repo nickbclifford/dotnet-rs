@@ -1,4 +1,8 @@
-use crate::{StepResult, resolution::ValueResolution, stack::ops::VesOps};
+use crate::{
+    resolution::ValueResolution,
+    stack::ops::{LoaderOps, MemoryOps, ResolutionOps, TypedStackOps},
+    StepResult,
+};
 use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_value::{
@@ -10,8 +14,8 @@ use std::sync::Arc;
 #[dotnet_intrinsic("static bool System.Runtime.Intrinsics.Vector128::get_IsHardwareAccelerated()")]
 #[dotnet_intrinsic("static bool System.Runtime.Intrinsics.Vector256::get_IsHardwareAccelerated()")]
 #[dotnet_intrinsic("static bool System.Numerics.Vector::get_IsHardwareAccelerated()")]
-pub fn intrinsic_vector_is_hardware_accelerated<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_vector_is_hardware_accelerated<'gc, 'm: 'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -22,8 +26,8 @@ pub fn intrinsic_vector_is_hardware_accelerated<'gc, 'm: 'gc>(
 #[dotnet_intrinsic(
     "static System.Collections.Generic.EqualityComparer<T> System.Collections.Generic.EqualityComparer<T>::get_Default()"
 )]
-pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc, T: LoaderOps<'m> + ResolutionOps<'gc, 'm> + MemoryOps<'gc> + TypedStackOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
@@ -34,7 +38,7 @@ pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc>(
     let new_lookup = GenericLookup::new(vec![target_type]);
     let res_ctx = ctx.with_generics(generics).with_generics(&new_lookup);
     let instance = ObjectRef::new(
-        ctx.gc(),
+        ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
         HeapStorage::Obj(vm_try!(res_ctx.new_object(comparer_td))),
     );
 
@@ -52,8 +56,8 @@ pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static long System.Int64::CreateTruncating<T>(T)")]
 #[dotnet_intrinsic("static nuint System.UIntPtr::CreateTruncating<T>(T)")]
 #[dotnet_intrinsic("static nint System.IntPtr::CreateTruncating<T>(T)")]
-pub fn intrinsic_numeric_create_truncating<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_numeric_create_truncating<'gc, 'm: 'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -89,8 +93,8 @@ pub fn intrinsic_numeric_create_truncating<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static bool System.Double::IsInfinity(double)")]
-pub fn intrinsic_double_is_infinity<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_double_is_infinity<'gc, 'm: 'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -100,8 +104,8 @@ pub fn intrinsic_double_is_infinity<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static bool System.Double::IsNaN(double)")]
-pub fn intrinsic_double_is_nan<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_double_is_nan<'gc, 'm: 'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -111,8 +115,8 @@ pub fn intrinsic_double_is_nan<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static bool System.Double::IsNegativeInfinity(double)")]
-pub fn intrinsic_double_is_negative_infinity<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_double_is_negative_infinity<'gc, 'm: 'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -122,8 +126,8 @@ pub fn intrinsic_double_is_negative_infinity<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static bool System.Double::IsPositiveInfinity(double)")]
-pub fn intrinsic_double_is_positive_infinity<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_double_is_positive_infinity<'gc, 'm: 'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -133,8 +137,8 @@ pub fn intrinsic_double_is_positive_infinity<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static double System.Math::Min(double, double)")]
-pub fn intrinsic_math_min_double<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_math_min_double<'gc, 'm: 'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -145,8 +149,8 @@ pub fn intrinsic_math_min_double<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static double System.Math::Max(double, double)")]
-pub fn intrinsic_math_max_double<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_math_max_double<'gc, 'm: 'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -157,8 +161,8 @@ pub fn intrinsic_math_max_double<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static double System.Math::Abs(double)")]
-pub fn intrinsic_math_abs_double<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_math_abs_double<'gc, 'm: 'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -168,8 +172,8 @@ pub fn intrinsic_math_abs_double<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static double System.Math::Pow(double, double)")]
-pub fn intrinsic_math_pow_double<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_math_pow_double<'gc, 'm: 'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -180,8 +184,8 @@ pub fn intrinsic_math_pow_double<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static int System.Math::Min(int, int)")]
-pub fn intrinsic_math_min_int<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_math_min_int<'gc, 'm: 'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -192,8 +196,8 @@ pub fn intrinsic_math_min_int<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static int System.Math::Max(int, int)")]
-pub fn intrinsic_math_max_int<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_math_max_int<'gc, 'm: 'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -204,8 +208,8 @@ pub fn intrinsic_math_max_int<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static int System.Math::Abs(int)")]
-pub fn intrinsic_math_abs_int<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_math_abs_int<'gc, 'm: 'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -215,8 +219,8 @@ pub fn intrinsic_math_abs_int<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static double System.Math::Sqrt(double)")]
-pub fn intrinsic_math_sqrt<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_math_sqrt<'gc, 'm: 'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -226,8 +230,8 @@ pub fn intrinsic_math_sqrt<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic_field("static bool System.BitConverter::IsLittleEndian")]
-pub fn intrinsic_bitconverter_is_little_endian<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_bitconverter_is_little_endian<'gc, 'm: 'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
     _field: dotnet_types::members::FieldDescription,
     _type_generics: Arc<[dotnet_types::generics::ConcreteType]>,
     _is_address: bool,
@@ -237,8 +241,8 @@ pub fn intrinsic_bitconverter_is_little_endian<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static int System.Numerics.BitOperations::Log2(ulong)")]
-pub fn intrinsic_bitoperations_log2_ulong<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_bitoperations_log2_ulong<'gc, 'm: 'gc, T: TypedStackOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {

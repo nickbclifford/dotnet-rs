@@ -1,4 +1,4 @@
-use crate::{StepResult, layout::type_layout, stack::ops::VesOps};
+use crate::{StepResult, layout::type_layout, stack::ops::{EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ResolutionOps, TypedStackOps}};
 
 const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
@@ -16,7 +16,7 @@ use dotnetdll::prelude::*;
 use std::ptr::NonNull;
 
 #[dotnet_instruction(LoadElement { param0 })]
-pub fn ldelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn ldelem<'gc, 'm: 'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + RawMemoryOps<'gc> + MemoryOps<'gc> + TypedStackOps<'gc>>(
     ctx: &mut T,
     param0: &MethodType,
 ) -> StepResult {
@@ -61,7 +61,7 @@ pub fn ldelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(LoadElementPrimitive { param0 })]
-pub fn ldelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn ldelem_primitive<'gc, 'm: 'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + RawMemoryOps<'gc> + MemoryOps<'gc> + TypedStackOps<'gc>>(
     ctx: &mut T,
     param0: LoadType,
 ) -> StepResult {
@@ -115,7 +115,7 @@ pub fn ldelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(LoadElementAddress { param0 })]
-pub fn ldelema<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn ldelema<'gc, 'm: 'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + RawMemoryOps<'gc> + MemoryOps<'gc> + TypedStackOps<'gc>>(
     ctx: &mut T,
 
     param0: &MethodType,
@@ -124,14 +124,14 @@ pub fn ldelema<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(LoadElementAddressReadonly(param0))]
-pub fn ldelema_readonly<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn ldelema_readonly<'gc, 'm: 'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + RawMemoryOps<'gc> + MemoryOps<'gc> + TypedStackOps<'gc>>(
     ctx: &mut T,
     param0: &MethodType,
 ) -> StepResult {
     ldelema_internal(ctx, param0, true)
 }
 
-fn ldelema_internal<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+fn ldelema_internal<'gc, 'm: 'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + RawMemoryOps<'gc> + MemoryOps<'gc> + TypedStackOps<'gc>>(
     ctx: &mut T,
     param0: &MethodType,
     readonly: bool,
@@ -192,7 +192,7 @@ fn ldelema_internal<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(StoreElement { param0 })]
-pub fn stelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn stelem<'gc, 'm: 'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + RawMemoryOps<'gc> + MemoryOps<'gc> + TypedStackOps<'gc>>(
     ctx: &mut T,
     param0: &MethodType,
 ) -> StepResult {
@@ -228,7 +228,7 @@ pub fn stelem<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(StoreElementPrimitive { param0 })]
-pub fn stelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn stelem_primitive<'gc, 'm: 'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + RawMemoryOps<'gc> + MemoryOps<'gc> + TypedStackOps<'gc>>(
     ctx: &mut T,
     param0: StoreType,
 ) -> StepResult {
@@ -272,7 +272,7 @@ pub fn stelem_primitive<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(NewArray(param0))]
-pub fn newarr<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn newarr<'gc, 'm: 'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + RawMemoryOps<'gc> + MemoryOps<'gc> + TypedStackOps<'gc>>(
     ctx: &mut T,
     param0: &MethodType,
 ) -> StepResult {
@@ -307,14 +307,14 @@ pub fn newarr<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let elem_type = vm_try!(res_ctx.normalize_type(vm_try!(res_ctx.make_concrete(param0))));
 
     let v = vm_try!(ctx.new_vector(elem_type, length));
-    let o = ObjectRef::new(ctx.gc(), HeapStorage::Vec(v));
+    let o = ObjectRef::new(ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()), HeapStorage::Vec(v));
     ctx.register_new_object(&o);
     ctx.push(StackValue::ObjectRef(o));
     StepResult::Continue
 }
 
 #[dotnet_instruction(LoadLength)]
-pub fn ldlen<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
+pub fn ldlen<'gc, 'm: 'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + RawMemoryOps<'gc> + MemoryOps<'gc> + TypedStackOps<'gc>>(ctx: &mut T) -> StepResult {
     let array = ctx.pop();
     if array.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);

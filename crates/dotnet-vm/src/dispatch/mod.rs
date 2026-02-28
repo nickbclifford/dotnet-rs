@@ -20,12 +20,11 @@ pub mod registry;
 pub struct InstructionRegistry;
 
 impl InstructionRegistry {
-    pub fn dispatch<'gc, 'm>(
-        ctx: &mut dyn VesOps<'gc, 'm>,
+    pub fn dispatch<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+        ctx: &mut T,
         instr: &Instruction,
-    ) -> Option<StepResult> {
-        let handler = registry::get_handler(instr.opcode())?;
-        Some(handler(ctx, instr))
+    ) -> StepResult {
+        registry::dispatch_monomorphic(ctx, instr)
     }
 }
 
@@ -114,11 +113,7 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
         );
 
         let mut ctx = self.ves_context(gc);
-        let res = if let Some(res) = InstructionRegistry::dispatch(&mut ctx, i) {
-            res
-        } else {
-            panic!("Unregistered instruction: {:?}", i);
-        };
+        let res = InstructionRegistry::dispatch(&mut ctx, i);
 
         tracing::debug!("step_normal: res={:?}", res);
 

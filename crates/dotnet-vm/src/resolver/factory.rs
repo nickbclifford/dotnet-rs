@@ -44,7 +44,9 @@ impl<'m> ResolverService<'m> {
                 let td = self.loader.find_concrete_type(t)?;
                 let obj_instance = self.new_object(td, ctx)?;
                 let size = v.size_bytes();
-                CTSValue::Value(v).write(&mut obj_instance.instance_storage.get_mut()[..size]);
+                obj_instance.instance_storage.with_data_mut(|data| {
+                    CTSValue::Value(v).write(&mut data[..size]);
+                });
                 Ok(ObjectRef::new(gc, HeapStorage::Boxed(obj_instance)))
             }
             CTSValue::Ref(r) => Ok(r),
@@ -348,42 +350,43 @@ impl<'m> ResolverService<'m> {
 
                 let instance = self.new_object(td, &new_ctx)?;
                 let layout = instance.instance_storage.layout().clone();
-                let mut storage = instance.instance_storage.get_mut();
 
-                if layout.has_ref_fields {
-                    for (key, field_layout) in &layout.fields {
-                        let pos = field_layout.position.as_usize();
-                        let size = field_layout.layout.size().as_usize();
-                        let field_data = &data[pos..pos + size];
+                instance.instance_storage.with_data_mut(|storage| {
+                    if layout.has_ref_fields {
+                        for (key, field_layout) in &layout.fields {
+                            let pos = field_layout.position.as_usize();
+                            let size = field_layout.layout.size().as_usize();
+                            let field_data = &data[pos..pos + size];
 
-                        if field_layout.layout.has_managed_ptrs() {
-                            let field_info = td
-                                .definition()
-                                .fields
-                                .iter()
-                                .find(|f| f.name == key.name)
-                                .expect("field not found during read_cts_value patching");
+                            if field_layout.layout.has_managed_ptrs() {
+                                let field_info = td
+                                    .definition()
+                                    .fields
+                                    .iter()
+                                    .find(|f| f.name == key.name)
+                                    .expect("field not found during read_cts_value patching");
 
-                            let field_desc = FieldDescription {
-                                parent: td,
-                                field_resolution: td.resolution,
-                                field: field_info,
-                                index: 0,
-                            };
-                            let field_type =
-                                self.get_field_type(td.resolution, new_ctx.generics, field_desc)?;
+                                let field_desc = FieldDescription {
+                                    parent: td,
+                                    field_resolution: td.resolution,
+                                    field: field_info,
+                                    index: 0,
+                                };
+                                let field_type =
+                                    self.get_field_type(td.resolution, new_ctx.generics, field_desc)?;
 
-                            let val = self.read_cts_value(&field_type, field_data, gc, &new_ctx)?;
-                            val.write(&mut storage[pos..pos + size]);
-                        } else {
-                            storage[pos..pos + size].copy_from_slice(field_data);
+                                let val = self.read_cts_value(&field_type, field_data, gc, &new_ctx)?;
+                                val.write(&mut storage[pos..pos + size]);
+                            } else {
+                                storage[pos..pos + size].copy_from_slice(field_data);
+                            }
                         }
+                    } else {
+                        storage.copy_from_slice(data);
                     }
-                } else {
-                    storage.copy_from_slice(data);
-                }
+                    Ok::<_, TypeResolutionError>(())
+                })?;
 
-                drop(storage);
                 Ok(CTSValue::Value(Struct(instance)))
             }
         }

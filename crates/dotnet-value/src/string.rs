@@ -8,9 +8,9 @@ use std::{
 macro_rules! with_string {
     ($stack:expr, $value:expr, |$s:ident| $code:expr) => {{
         let value = $value;
-        let _guard = $crate::BorrowGuard::new($stack);
         let obj = value.as_object_ref();
         if let Some(handle) = obj.0 {
+            let (_active, _guard) = $crate::BorrowGuardHandle::new($stack.as_borrow_scope(), $crate::NoActiveBorrows::new());
             let heap = handle.borrow();
             if let $crate::object::HeapStorage::Str(ref $s) = heap.storage {
                 $code
@@ -33,10 +33,10 @@ macro_rules! with_string {
 macro_rules! with_string_mut {
     ($stack:expr, $value:expr, |$s:ident| $code:expr) => {{
         let value = $value;
-        let _guard = $crate::BorrowGuard::new($stack);
         let obj = value.as_object_ref();
         if let Some(handle) = obj.0 {
-            let mut heap = handle.borrow_mut(&$stack.gc());
+            let (_active, _guard) = $crate::BorrowGuardHandle::new($stack.as_borrow_scope(), $crate::NoActiveBorrows::new());
+            let mut heap = handle.borrow_mut(&$stack.gc_with_token(&$crate::NoActiveBorrows::new()));
             if let $crate::object::HeapStorage::Str(ref mut $s) = heap.storage {
                 $code
             } else {

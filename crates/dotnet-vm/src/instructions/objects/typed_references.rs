@@ -8,7 +8,7 @@ use dotnetdll::prelude::*;
 use std::sync::Arc;
 
 #[dotnet_instruction(MakeTypedReference(class))]
-pub fn mkrefany<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn mkrefany<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     ctx: &mut T,
     class: &MethodType,
 ) -> StepResult {
@@ -24,7 +24,7 @@ pub fn mkrefany<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(ReadTypedReferenceType)]
-pub fn refanytype<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> StepResult {
+pub fn refanytype<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T) -> StepResult {
     let tr = ctx.pop();
     let StackValue::TypedRef(_, td) = tr else {
         return ctx
@@ -36,7 +36,7 @@ pub fn refanytype<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(ctx: &mut T) -> Ste
 }
 
 #[dotnet_instruction(ReadTypedReferenceValue(class))]
-pub fn refanyval<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn refanyval<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     ctx: &mut T,
     class: &MethodType,
 ) -> StepResult {

@@ -34,5 +34,7 @@ fuzzing = ["dep:arbitrary", "dotnet-value/fuzzing", "dotnet-types/fuzzing", "dot
 dotnet-macros-core = { workspace = true }
 phf_codegen = "0.13"
 syn = { version = "2", features = ["full"] }
+quote = "1.0"
+proc-macro2 = "1.0"
 walkdir = "2"
 dotnetdll = { workspace = true }

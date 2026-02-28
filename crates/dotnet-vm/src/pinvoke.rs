@@ -11,7 +11,7 @@ use dotnet_types::{
 use dotnet_utils::{ByteOffset, gc::ThreadSafeReadGuard};
 use dotnet_value::{
     StackValue,
-    layout::{FieldLayoutManager, LayoutManager, Scalar},
+    layout::{FieldLayoutManager, LayoutManager, Scalar, HasLayout},
     object::ObjectRef,
     pointer::{ManagedPtr, PointerOrigin},
 };
@@ -672,14 +672,14 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
                 }
                 let mut bytes = ManagedPtr::serialization_buffer();
                 let addr = unsafe {
-                    if let PointerOrigin::Heap(obj) = p.origin {
+                    if let PointerOrigin::Heap(obj) = p.origin() {
                         if let Some(h) = obj.0 {
                             let guard = PinnedGuard::new(h);
-                            let ptr = guard.guard.storage.raw_data_ptr().add(p.offset.as_usize());
+                            let ptr = guard.guard.storage.raw_data_ptr().add(p.byte_offset().as_usize());
                             local_guards.push(guard);
                             ptr.expose_addr()
                         } else {
-                            p.offset.as_usize() // Should be null + offset
+                            p.byte_offset().as_usize() // Should be null + offset
                         }
                     } else {
                         p.with_data(0, |data| data.as_ptr().expose_addr())
@@ -721,7 +721,7 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
                     }
 
                     write_backs.push((
-                        WriteBackSource::Managed(p.origin.clone(), p.offset),
+                        WriteBackSource::Managed(p.origin().clone(), p.byte_offset()),
                         buf_idx,
                         buf_len,
                     ));
@@ -735,15 +735,15 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
                     }
 
                     let ptr = unsafe {
-                        if let PointerOrigin::Heap(obj) = p.origin {
+                        if let PointerOrigin::Heap(obj) = p.origin() {
                             if let Some(h) = obj.0 {
                                 let guard = PinnedGuard::new(h);
                                 let ptr =
-                                    guard.guard.storage.raw_data_ptr().add(p.offset.as_usize());
+                                    guard.guard.storage.raw_data_ptr().add(p.byte_offset().as_usize());
                                 local_guards.push(guard);
                                 ptr
                             } else {
-                                sptr::from_exposed_addr_mut::<u8>(p.offset.as_usize())
+                                sptr::from_exposed_addr_mut::<u8>(p.byte_offset().as_usize())
                             }
                         } else {
                             p.with_data(0, |data| data.as_ptr().cast_mut())
@@ -881,7 +881,7 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
                         function,
                         arg_ptrs.len()
                     );
-                    let allocated_size = instance.instance_storage.get().len();
+                    let allocated_size = instance.instance_storage.layout().size().as_usize();
                     let ffi_size = unsafe { (*return_type.as_raw_ptr()).size };
 
                     // Check for buffer overflow risk
@@ -904,17 +904,20 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
                             temp_buffer.set_len(ffi_size);
                         }
                         // Copy valid data back to the object
-                        let mut guard = instance.instance_storage.get_mut();
-                        guard.copy_from_slice(&temp_buffer[..allocated_size]);
+                        instance.instance_storage.with_data_mut(|guard| {
+                            guard.copy_from_slice(&temp_buffer[..allocated_size]);
+                        });
                     } else {
-                        unsafe {
-                            libffi::raw::ffi_call(
-                                cif.as_raw_ptr(),
-                                Some(target_fn),
-                                instance.instance_storage.get_mut().as_mut_ptr() as *mut c_void,
-                                arg_ptrs.as_mut_ptr(),
-                            );
-                        }
+                        instance.instance_storage.with_data_mut(|guard| {
+                            unsafe {
+                                libffi::raw::ffi_call(
+                                    cif.as_raw_ptr(),
+                                    Some(target_fn),
+                                    guard.as_mut_ptr() as *mut c_void,
+                                    arg_ptrs.as_mut_ptr(),
+                                );
+                            }
+                        });
                     }
                     do_write_back(ctx);
                     vm_trace_interop!(ctx, "POST-CALL", "(struct) {}::{}", module, function);

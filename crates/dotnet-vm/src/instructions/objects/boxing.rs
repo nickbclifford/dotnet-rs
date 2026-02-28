@@ -1,4 +1,8 @@
-use crate::{StepResult, resolution::TypeResolutionExt, stack::ops::VesOps};
+use crate::{
+    StepResult,
+    resolution::TypeResolutionExt,
+    stack::ops::{EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, ReflectionOps, ResolutionOps},
+};
 
 const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
@@ -13,7 +17,7 @@ use dotnetdll::prelude::*;
 use std::ptr::NonNull;
 
 #[dotnet_instruction(BoxValue(param0))]
-pub fn box_value<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn box_value<'gc, 'm: 'gc, T: ResolutionOps<'gc, 'm> + EvalStackOps<'gc> + MemoryOps<'gc>>(
     ctx: &mut T,
     param0: &MethodType,
 ) -> StepResult {
@@ -32,7 +36,11 @@ pub fn box_value<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(UnboxIntoValue(param0))]
-pub fn unbox_any<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn unbox_any<
+    'gc,
+    'm: 'gc,
+    T: ResolutionOps<'gc, 'm> + LoaderOps<'m> + ExceptionOps<'gc> + EvalStackOps<'gc> + MemoryOps<'gc> + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     param0: &MethodType,
 ) -> StepResult {
@@ -70,8 +78,7 @@ pub fn unbox_any<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
                     let td = o.description;
                     if let Some(e) = td.is_enum() {
                         let enum_type = res_ctx.make_concrete(e).map_err(|_| ())?;
-                        let cts = ctx
-                            .read_cts_value(&enum_type, &o.instance_storage.get())
+                        let cts = o.instance_storage.with_data(|d| ctx.read_cts_value(&enum_type, d))
                             .map_err(|_| ())?;
                         Ok(cts.into_stack())
                     } else if td.definition().namespace.as_deref() == Some("System") {
@@ -80,8 +87,7 @@ pub fn unbox_any<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
                             "Boolean" | "Char" | "SByte" | "Byte" | "Int16" | "UInt16"
                             | "Int32" | "UInt32" | "Int64" | "UInt64" | "Single" | "Double"
                             | "IntPtr" | "UIntPtr" => {
-                                let cts = ctx
-                                    .read_cts_value(&target_ct, &o.instance_storage.get())
+                                let cts = o.instance_storage.with_data(|d| ctx.read_cts_value(&target_ct, d))
                                     .map_err(|_| ())?;
                                 Ok(cts.into_stack())
                             }
@@ -123,7 +129,11 @@ pub fn unbox_any<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(UnboxIntoAddress { param0 })]
-pub fn unbox<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn unbox<
+    'gc,
+    'm: 'gc,
+    T: ResolutionOps<'gc, 'm> + ExceptionOps<'gc> + EvalStackOps<'gc> + LoaderOps<'m>,
+>(
     ctx: &mut T,
     param0: &MethodType,
 ) -> StepResult {
@@ -141,7 +151,7 @@ pub fn unbox<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 
     let inner = h.borrow();
     let ptr = match &inner.storage {
-        HeapStorage::Boxed(o) | HeapStorage::Obj(o) => o.instance_storage.get().as_ptr() as *mut u8,
+        HeapStorage::Boxed(_) | HeapStorage::Obj(_) => unsafe { inner.storage.raw_data_ptr() },
         _ => {
             return ctx.throw_by_name_with_message("System.InvalidCastException", INVALID_CAST_MSG);
         }

@@ -1,4 +1,4 @@
-use crate::{StepResult, stack::ops::VesOps};
+use crate::{StepResult, stack::ops::{VesOps, EvalStackOps, TypedStackOps, MemoryOps, CallOps, ResolutionOps, RawMemoryOps, ExceptionOps, LoaderOps, ThreadOps}};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandleType;
@@ -9,8 +9,8 @@ use dotnet_value::{
 
 /// System.ArgumentNullException::ThrowIfNull(object, string)
 #[dotnet_intrinsic("static void System.ArgumentNullException::ThrowIfNull(object, string)")]
-pub fn intrinsic_argument_null_exception_throw_if_null<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_argument_null_exception_throw_if_null<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -25,8 +25,8 @@ pub fn intrinsic_argument_null_exception_throw_if_null<'gc, 'm: 'gc>(
 
 /// System.Environment::GetEnvironmentVariableCore(string)
 #[dotnet_intrinsic("static string System.Environment::GetEnvironmentVariableCore(string)")]
-pub fn intrinsic_environment_get_variable_core<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_environment_get_variable_core<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -41,8 +41,8 @@ pub fn intrinsic_environment_get_variable_core<'gc, 'm: 'gc>(
 /// System.GC::KeepAlive(object) - Prevents the GC from collecting an object
 /// until this method is called.
 #[dotnet_intrinsic("static void System.GC::KeepAlive(object)")]
-pub fn intrinsic_gc_keep_alive<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_gc_keep_alive<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -52,14 +52,14 @@ pub fn intrinsic_gc_keep_alive<'gc, 'm: 'gc>(
 
 /// System.GC::SuppressFinalize(object)
 #[dotnet_intrinsic("static void System.GC::SuppressFinalize(object)")]
-pub fn intrinsic_gc_suppress_finalize<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_gc_suppress_finalize<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + RawMemoryOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
     if let Some(handle) = obj.0
-        && let Some(o) = handle.borrow_mut(&ctx.gc()).storage.as_obj_mut()
+        && let Some(o) = handle.borrow_mut(&ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new())).storage.as_obj_mut()
     {
         o.finalizer_suppressed = true;
     }
@@ -68,8 +68,8 @@ pub fn intrinsic_gc_suppress_finalize<'gc, 'm: 'gc>(
 
 /// System.GC::ReRegisterForFinalize(object)
 #[dotnet_intrinsic("static void System.GC::ReRegisterForFinalize(object)")]
-pub fn intrinsic_gc_reregister_for_finalize<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_gc_reregister_for_finalize<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + RawMemoryOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -78,7 +78,7 @@ pub fn intrinsic_gc_reregister_for_finalize<'gc, 'm: 'gc>(
         let is_obj = handle.borrow().storage.as_obj().is_some();
         if is_obj {
             handle
-                .borrow_mut(&ctx.gc())
+                .borrow_mut(&ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()))
                 .storage
                 .as_obj_mut()
                 .unwrap()
@@ -90,8 +90,8 @@ pub fn intrinsic_gc_reregister_for_finalize<'gc, 'm: 'gc>(
 
 /// System.GC::Collect()
 #[dotnet_intrinsic("static void System.GC::Collect()")]
-pub fn intrinsic_gc_collect_0<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_gc_collect_0<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -102,8 +102,8 @@ pub fn intrinsic_gc_collect_0<'gc, 'm: 'gc>(
 
 /// System.GC::Collect(int)
 #[dotnet_intrinsic("static void System.GC::Collect(int)")]
-pub fn intrinsic_gc_collect_1<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_gc_collect_1<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -115,8 +115,8 @@ pub fn intrinsic_gc_collect_1<'gc, 'm: 'gc>(
 
 /// System.GC::Collect(int, GCCollectionMode)
 #[dotnet_intrinsic("static void System.GC::Collect(int, System.GCCollectionMode)")]
-pub fn intrinsic_gc_collect_2<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_gc_collect_2<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -128,8 +128,8 @@ pub fn intrinsic_gc_collect_2<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static void System.GC::WaitForPendingFinalizers()")]
-pub fn intrinsic_gc_wait_for_pending_finalizers<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_gc_wait_for_pending_finalizers<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ThreadOps>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -145,8 +145,8 @@ pub fn intrinsic_gc_wait_for_pending_finalizers<'gc, 'm: 'gc>(
 #[dotnet_intrinsic(
     "static IntPtr System.Runtime.InteropServices.GCHandle::InternalAlloc(object, System.Runtime.InteropServices.GCHandleType)"
 )]
-pub fn intrinsic_gchandle_internal_alloc<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_gchandle_internal_alloc<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -186,8 +186,8 @@ pub fn intrinsic_gchandle_internal_alloc<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static void System.Runtime.InteropServices.GCHandle::InternalFree(IntPtr)")]
-pub fn intrinsic_gchandle_internal_free<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_gchandle_internal_free<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -222,8 +222,8 @@ pub fn intrinsic_gchandle_internal_free<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static object System.Runtime.InteropServices.GCHandle::InternalGet(IntPtr)")]
-pub fn intrinsic_gchandle_internal_get<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_gchandle_internal_get<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -245,8 +245,8 @@ pub fn intrinsic_gchandle_internal_get<'gc, 'm: 'gc>(
 #[dotnet_intrinsic(
     "static void System.Runtime.InteropServices.GCHandle::InternalSet(IntPtr, object)"
 )]
-pub fn intrinsic_gchandle_internal_set<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_gchandle_internal_set<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + RawMemoryOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -272,8 +272,8 @@ pub fn intrinsic_gchandle_internal_set<'gc, 'm: 'gc>(
 #[dotnet_intrinsic(
     "static IntPtr System.Runtime.InteropServices.GCHandle::InternalAddrOfPinnedObject(IntPtr)"
 )]
-pub fn intrinsic_gchandle_internal_addr_of_pinned_object<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_gchandle_internal_addr_of_pinned_object<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ThreadOps>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {

@@ -6,8 +6,8 @@ This document describes the two build-time code generation systems that wire up 
 
 The `dotnet-vm` build script (`crates/dotnet-vm/build.rs`, ~260 lines) scans source files at compile time and generates two lookup tables:
 
-1. **Instruction dispatch table** — maps CIL opcode discriminants to handler functions
-2. **Intrinsic PHF lookup table** — maps string keys (type + method signature) to native handler functions
+1. **Instruction dispatch** — generates a monomorphic `match`-based dispatcher for CIL instructions
+2. **Intrinsic PHF lookup table** — maps string keys to native handler IDs and generates ID-based dispatchers
 
 Both tables are generated into `$OUT_DIR/` and included via `include!()` in the compiled crate.
 
@@ -19,7 +19,7 @@ Instruction handlers are annotated in `src/instructions/**/*.rs`:
 
 ```rust
 #[dotnet_instruction(Add)]
-pub fn handle_add<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn handle_add<'gc, 'm, T: VesOps<'gc, 'm>>(
     ctx: &mut T,
     _instr: &Instruction,
 ) -> StepResult { ... }
@@ -30,19 +30,22 @@ pub fn handle_add<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
 1. `process_instruction_file` walks all `.rs` files in `src/instructions/`
 2. Parses each file with `syn` looking for functions with `#[dotnet_instruction(...)]`
 3. Extracts the opcode variant name and the module path of the handler function
-4. `generate_instruction_table` creates an array `INSTRUCTION_TABLE: [Option<InstructionHandler>; Instruction::VARIANT_COUNT]` indexed by opcode discriminant
+4. `generate_instruction_table` creates `instruction_dispatch.rs` containing the `dispatch_monomorphic` function.
 
 ### Runtime Usage (`dispatch/registry.rs`)
 
 ```rust
-include!(concat!(env!("OUT_DIR"), "/instruction_table.rs"));
+include!(concat!(env!("OUT_DIR"), "/instruction_dispatch.rs"));
 
-pub fn get_handler(opcode: usize) -> Option<InstructionHandler> {
-    INSTRUCTION_TABLE[opcode]
+pub fn dispatch<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
+    instr: &Instruction,
+) -> StepResult {
+    dispatch_monomorphic(ctx, instr)
 }
 ```
 
-`InstructionRegistry::dispatch` in `dispatch/mod.rs` calls `get_handler` to find and invoke the handler for each instruction.
+`InstructionRegistry::dispatch` in `dispatch/mod.rs` calls this function to execute each instruction. The monomorphic dispatcher uses a `match` on the `Instruction` enum, allowing the Rust compiler to inline and optimize instruction handlers effectively.
 
 ## Intrinsic PHF Table Generation
 
@@ -52,7 +55,7 @@ Intrinsic implementations are annotated in `src/intrinsics/**/*.rs`:
 
 ```rust
 #[dotnet_intrinsic("System.Math::Abs(System.Int32)")]
-fn math_abs_i32(ctx: &mut dyn VesOps<'gc, 'm>, ...) -> StepResult { ... }
+fn math_abs_i32<T: VesOps<'gc, 'm>>(ctx: &mut T, ...) -> StepResult { ... }
 ```
 
 ### Build Process
@@ -61,7 +64,9 @@ fn math_abs_i32(ctx: &mut dyn VesOps<'gc, 'm>, ...) -> StepResult { ... }
 2. Parses `#[dotnet_intrinsic("...")]` attributes using `ParsedSignature` from `dotnet-macros-core`
 3. Extracts: type name, member name, arity, is_static, handler path
 4. Also handles `#[dotnet_intrinsic_field("...")]` for field intrinsics
-5. `generate_intrinsic_phf` creates a **perfect hash function** (PHF) table via the `phf_codegen` crate
+5. `generate_intrinsic_phf` creates:
+    - `intrinsics_dispatch.rs`: Contains `MethodIntrinsicId` and `FieldIntrinsicId` enums and their respective `dispatch_*` functions.
+    - `intrinsics_phf.rs`: Contains the perfect hash function (PHF) table via the `phf_codegen` crate.
 
 ### Key Format
 
@@ -75,13 +80,15 @@ Methods use the format `M:{NormalizedType}::{MemberName}#{Arity}`.
 Fields use the format `F:{NormalizedType}::{MemberName}`.
 - Example: `F:System.String::Empty`
 
-When searching, `IntrinsicRegistry` formats the appropriate key string into a stack-allocated buffer (`StackWrite`) to avoid heap allocations on the hot path. The PHF table (`INTRINSIC_LOOKUP`) maps this string to a `Range` indexing into a static array `INTRINSIC_ENTRIES`.
+When searching, `IntrinsicRegistry` formats the appropriate key string into a stack-allocated buffer (`StackWrite`) to avoid heap allocations on the hot path. The PHF table (`INTRINSIC_LOOKUP`) maps this string to a `Range` indexing into a static array `INTRINSIC_ENTRIES`. Each entry in `INTRINSIC_ENTRIES` stores a handler ID (`MethodIntrinsicId` or `FieldIntrinsicId`) instead of a function pointer.
 
 ### Runtime Usage (`intrinsics/mod.rs`)
 
-- `IntrinsicRegistry` loads the generated PHF table
-- `get()` looks up a `MethodDescription` by building a key string into a stack-allocated buffer (`StackWrite`) to avoid heap allocation on every lookup
-- The resolver caches intrinsic check results (`GlobalCaches`) so repeated lookups for the same method don't rebuild the key
+- `IntrinsicRegistry` loads the generated PHF table and ID-based dispatchers.
+- `get()` looks up a `MethodDescription` by building a key string and retrieving a range of candidates from the PHF.
+- Each candidate is checked against its filter function.
+- The selected candidate's `MethodIntrinsicId` is returned.
+- Dispatch is performed via `dispatch_method_intrinsic`, which matches on the ID.
 
 ### Metadata and Filtering
 
@@ -114,7 +121,7 @@ The build script uses `DefaultHasher` to deduplicate handler registrations — i
 
 ### Missing Handler Error Behavior
 
-If the runtime encounters an opcode that has no registered handler, `InstructionRegistry::dispatch` returns `None`. The execution engine (`ExecutionEngine::step_normal`) will immediately panic with `panic!("Unregistered instruction: {:?}", i)`.
+If the runtime encounters an opcode that has no registered handler, the generated `dispatch_monomorphic` function returns a `VmError::Execution(ExecutionError::NotImplemented)`.
 
 Similarly, for methods explicitly marked as `internal_call` in their IL metadata, if no intrinsic is found during dispatch, the engine will panic with `panic!("intrinsic not found: {:?}", method)`.
 
@@ -131,22 +138,41 @@ These tell Cargo to skip re-running `build.rs` unless files within those directo
 
 The build process emits two main files into the `OUT_DIR`.
 
-**1. `instruction_table.rs`**
+**1. `instruction_dispatch.rs`**
 ```rust
-pub const INSTRUCTION_TABLE: InstructionTable = {
-    let mut table = [None; Instruction::VARIANT_COUNT];
-    // Example opcode registration:
-    table[88] = Some(unsafe { 
-        std::mem::transmute::<*const (), crate::dispatch::registry::InstructionHandler>(
-            crate::instructions::arithmetic::Add_wrapper as *const ()
-        ) 
-    });
-    // ...
-    table
-};
+pub fn dispatch_monomorphic<'gc, 'm: 'gc, T: crate::stack::ops::VesOps<'gc, 'm>>(
+    ctx: &mut T,
+    instr: &Instruction,
+) -> crate::StepResult {
+    match instr {
+        Instruction::Add => crate::instructions::arithmetic::handle_add(ctx, instr),
+        // ...
+        _ => crate::StepResult::Error(...)
+    }
+}
 ```
 
-**2. `intrinsics_phf.rs`**
+**2. `intrinsics_dispatch.rs`**
+```rust
+pub enum MethodIntrinsicId {
+    Missing,
+    System_Math_Abs_1a2b3c4d,
+    // ...
+}
+
+pub fn dispatch_method_intrinsic<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    id: MethodIntrinsicId,
+    ctx: &mut T,
+    // ...
+) -> StepResult {
+    match id {
+        MethodIntrinsicId::System_Math_Abs_1a2b3c4d => crate::intrinsics::math::math_abs_i32(ctx, ...),
+        // ...
+    }
+}
+```
+
+**3. `intrinsics_phf.rs`**
 ```rust
 use crate::intrinsics::static_registry::{StaticIntrinsicEntry, StaticIntrinsicHandler, Range};
 
@@ -156,16 +182,13 @@ pub static INTRINSIC_ENTRIES: &[StaticIntrinsicEntry] = &[
         member_name: "Abs", 
         arity: 1, 
         is_static: true, 
-        handler: StaticIntrinsicHandler::Method(unsafe { 
-            std::mem::transmute::<*const (), IntrinsicHandler>(crate::intrinsics::math::math_abs_i32 as *const ()) 
-        }), 
+        handler: StaticIntrinsicHandler::Method(MethodIntrinsicId::System_Math_Abs_1a2b3c4d), 
         filter: Some(crate::intrinsics::math::math_abs_i32_filter_1a2b3c4d) 
     },
     // ...
 ];
 
-#[allow(dead_code)]
-pub static INTRINSIC_LOOKUP: phf::Map<&'static str, Range> = ...; // PHF generated code
+pub static INTRINSIC_LOOKUP: phf::Map<&'static str, Range> = ...;
 ```
 
 ## Notes for Future Documentation

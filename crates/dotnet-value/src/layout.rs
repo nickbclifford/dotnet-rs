@@ -436,3 +436,62 @@ impl Scalar {
         self.alignment_const()
     }
 }
+
+/// Trait for types that can be read/written to field storage
+pub trait FieldType: Sized {
+    const SCALAR: Scalar;
+    fn read_from(bytes: &[u8]) -> Self;
+    fn write_to(&self, bytes: &mut [u8]);
+}
+
+macro_rules! impl_scalar_field_type {
+    ($type:ty, $scalar:expr) => {
+        impl FieldType for $type {
+            const SCALAR: Scalar = $scalar;
+            fn read_from(bytes: &[u8]) -> Self {
+                let size = std::mem::size_of::<Self>();
+                let mut buf = [0u8; std::mem::size_of::<Self>()];
+                buf.copy_from_slice(&bytes[..size]);
+                <$type>::from_le_bytes(buf)
+            }
+            fn write_to(&self, bytes: &mut [u8]) {
+                let size = std::mem::size_of::<Self>();
+                bytes[..size].copy_from_slice(&self.to_le_bytes());
+            }
+        }
+    };
+}
+
+impl_scalar_field_type!(i8, Scalar::Int8);
+impl_scalar_field_type!(u8, Scalar::UInt8);
+impl_scalar_field_type!(i16, Scalar::Int16);
+impl_scalar_field_type!(u16, Scalar::UInt16);
+impl_scalar_field_type!(i32, Scalar::Int32);
+impl_scalar_field_type!(u32, Scalar::Int32); // u32 uses Int32 layout
+impl_scalar_field_type!(i64, Scalar::Int64);
+impl_scalar_field_type!(u64, Scalar::Int64); // u64 uses Int64 layout
+impl_scalar_field_type!(f32, Scalar::Float32);
+impl_scalar_field_type!(f64, Scalar::Float64);
+impl_scalar_field_type!(isize, Scalar::NativeInt);
+impl_scalar_field_type!(usize, Scalar::NativeInt);
+
+impl<'gc> FieldType for ObjectRef<'gc> {
+    const SCALAR: Scalar = Scalar::ObjectRef;
+    fn read_from(bytes: &[u8]) -> Self {
+        unsafe { ObjectRef::read_unchecked(bytes) }
+    }
+    fn write_to(&self, bytes: &mut [u8]) {
+        self.write(bytes);
+    }
+}
+
+impl<'gc> FieldType for ManagedPtr<'gc> {
+    const SCALAR: Scalar = Scalar::ManagedPtr;
+    fn read_from(bytes: &[u8]) -> Self {
+        let info = unsafe { ManagedPtr::read_unchecked(bytes).unwrap() };
+        ManagedPtr::from_info_full(info, dotnet_types::TypeDescription::NULL, false)
+    }
+    fn write_to(&self, bytes: &mut [u8]) {
+        self.write(bytes);
+    }
+}

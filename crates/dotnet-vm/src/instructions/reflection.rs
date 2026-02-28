@@ -1,10 +1,18 @@
-use crate::{StepResult, resolution::ValueResolution, stack::ops::VesOps};
+use crate::{
+    StepResult,
+    resolution::ValueResolution,
+    stack::ops::{EvalStackOps, ExceptionOps, LoaderOps, ReflectionOps, ResolutionOps, TypedStackOps},
+};
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::StackValue;
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(LoadMethodPointer(param0))]
-pub fn ldftn<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn ldftn<
+    'gc,
+    'm: 'gc,
+    T: ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm> + LoaderOps<'m> + TypedStackOps<'gc>,
+>(
     ctx: &mut T,
     param0: &MethodSource,
 ) -> StepResult {
@@ -19,7 +27,11 @@ pub fn ldftn<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(LoadVirtualMethodPointer { param0, skip_null_check })]
-pub fn ldvirtftn<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn ldvirtftn<
+    'gc,
+    'm: 'gc,
+    T: ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm> + LoaderOps<'m> + TypedStackOps<'gc> + ExceptionOps<'gc>,
+>(
     ctx: &mut T,
     param0: &MethodSource,
     skip_null_check: bool,
@@ -53,7 +65,11 @@ pub fn ldvirtftn<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(LoadTokenType(param0))]
-pub fn ldtoken_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn ldtoken_type<
+    'gc,
+    'm: 'gc,
+    T: ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm> + LoaderOps<'m> + EvalStackOps<'gc>,
+>(
     ctx: &mut T,
     param0: &MethodType,
 ) -> StepResult {
@@ -74,7 +90,11 @@ pub fn ldtoken_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(LoadTokenMethod(param0))]
-pub fn ldtoken_method<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn ldtoken_method<
+    'gc,
+    'm: 'gc,
+    T: ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm> + LoaderOps<'m> + EvalStackOps<'gc>,
+>(
     ctx: &mut T,
     param0: &MethodSource,
 ) -> StepResult {
@@ -95,7 +115,11 @@ pub fn ldtoken_method<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(LoadTokenField(param0))]
-pub fn ldtoken_field<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn ldtoken_field<
+    'gc,
+    'm: 'gc,
+    T: ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm> + LoaderOps<'m> + EvalStackOps<'gc>,
+>(
     ctx: &mut T,
     param0: &FieldSource,
 ) -> StepResult {

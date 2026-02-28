@@ -184,7 +184,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
             self.loader(),
             Some(&self.shared.caches.intrinsic_registry),
         ) {
-            (metadata.handler)(self, method, &lookup)
+            crate::intrinsics::dispatch_method_intrinsic(metadata.handler, self, method, &lookup)
         } else if method.method.pinvoke.is_some() {
             crate::pinvoke::external_call(self, method)
         } else {

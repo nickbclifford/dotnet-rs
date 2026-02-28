@@ -20,6 +20,48 @@ pub enum MemoryOwner<'gc> {
     CrossArena(ObjectPtr, ArenaId),
 }
 
+#[derive(Copy, Clone)]
+pub struct HeapWriteTarget<'gc>(pub MemoryOwner<'gc>);
+
+pub struct WriteBarrierRecorder<'gc> {
+    #[allow(dead_code)]
+    arena_id: ArenaId,
+    _gc: std::marker::PhantomData<&'gc ()>,
+}
+
+impl<'gc> WriteBarrierRecorder<'gc> {
+    pub fn new(arena_id: ArenaId) -> Self {
+        Self { arena_id, _gc: std::marker::PhantomData }
+    }
+
+    #[cfg(feature = "multithreading")]
+    pub fn record_ref(&self, target: ObjectRef<'gc>) {
+        if let Some(h) = target.0 {
+            let ref_tid = unsafe { (*h.as_ptr()).owner_id };
+            if ref_tid != self.arena_id {
+                dotnet_utils::gc::record_cross_arena_ref(ref_tid, gc_arena::Gc::as_ptr(h) as usize);
+            }
+        }
+    }
+
+    #[cfg(feature = "multithreading")]
+    pub fn record_managed_ptr(&self, target: &ManagedPtr<'gc>) {
+        if let PointerOrigin::CrossArenaObjectRef(p, ref_tid) = target.origin() {
+            if *ref_tid != self.arena_id {
+                dotnet_utils::gc::record_cross_arena_ref(*ref_tid, p.as_ptr() as usize);
+            }
+        } else if let PointerOrigin::Heap(r) = target.origin() {
+            self.record_ref(*r);
+        }
+    }
+
+    #[cfg(not(feature = "multithreading"))]
+    pub fn record_ref(&self, _target: ObjectRef<'gc>) {}
+
+    #[cfg(not(feature = "multithreading"))]
+    pub fn record_managed_ptr(&self, _target: &ManagedPtr<'gc>) {}
+}
+
 impl<'gc> MemoryOwner<'gc> {
     pub fn owner_id(&self) -> ArenaId {
         match self {
@@ -74,6 +116,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     ///
     /// # Safety
     /// The caller must ensure that `offset` represents a valid memory location if `owner` is None.
+    #[deprecated(note = "Use write_to_heap or write_to_unmanaged instead")]
+    #[allow(deprecated)]
     pub unsafe fn write_unaligned(
         &mut self,
         gc: GCHandle<'gc>,
@@ -412,13 +456,10 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         if let Some(h) = owner.0 {
             let obj = h.borrow();
             match &obj.storage {
-                HeapStorage::Obj(o) | HeapStorage::Boxed(o) => {
-                    let guard = o.instance_storage.get();
-                    (guard.as_ptr(), guard.len())
-                }
-                HeapStorage::Vec(v) => {
-                    let guard = v.get();
-                    (guard.as_ptr(), guard.len())
+                HeapStorage::Obj(_) | HeapStorage::Boxed(_) | HeapStorage::Vec(_) => {
+                    let ptr = unsafe { obj.storage.raw_data_ptr() } as *const u8;
+                    let size = obj.storage.size_bytes();
+                    (ptr, size)
                 }
                 _ => (ptr::null(), 0),
             }
@@ -494,6 +535,59 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         })
     }
 
+    /// Writes a value to a heap-allocated object, ensuring memory bounds,
+    /// layout integrity, and GC write barriers.
+    ///
+    /// # Safety
+    /// The caller must ensure that `offset` lies within the `owner`'s storage.
+    pub unsafe fn write_to_heap(
+        &mut self,
+        gc: GCHandle<'gc>,
+        target: HeapWriteTarget<'gc>,
+        offset: ByteOffset,
+        value: StackValue<'gc>,
+        layout: &LayoutManager,
+    ) -> Result<(), String> {
+        let owner = target.0;
+        owner.as_heap_storage(|_storage| {}); 
+
+        let dest_layout = self.get_layout_from_owner(owner);
+
+        owner.with_data_mut(gc, |data| {
+            let base = data.as_mut_ptr();
+            let len = data.len();
+            let ptr = base.wrapping_add(offset.0);
+            validate_atomic_access(ptr as *const u8, false);
+
+            self.check_bounds_internal(ptr, base, len, layout.size().as_usize())?;
+            self.check_integrity_internal_with_layout(ptr, dest_layout, base, layout)?;
+
+            #[allow(deprecated)]
+            unsafe { self.perform_write(gc, ptr, Some(owner), value, layout) }
+        })
+    }
+
+    /// Writes a value to unmanaged or static memory (e.g. stack, static fields, unmanaged pointers).
+    ///
+    /// # Safety
+    /// The caller must ensure that `ptr` is a valid, writable address and has enough space
+    /// for the value layout.
+    pub unsafe fn write_to_unmanaged(
+        &mut self,
+        gc: GCHandle<'gc>,
+        ptr: *mut u8,
+        value: StackValue<'gc>,
+        layout: &LayoutManager,
+    ) -> Result<(), String> {
+        if ptr.is_null() {
+            return Err("NullReferenceException: writing to unmanaged null pointer".into());
+        }
+        validate_atomic_access(ptr as *const u8, false);
+        #[allow(deprecated)]
+        unsafe { self.perform_write(gc, ptr, None, value, layout) }
+    }
+
+    #[deprecated(note = "Use write_to_heap or write_to_unmanaged instead")]
     pub(crate) unsafe fn perform_write(
         &mut self,
         _gc: GCHandle<'gc>,
@@ -788,9 +882,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
     #[cfg(feature = "multithreading")]
     fn record_objref_cross_arena(&self, r: ObjectRef<'gc>, owner_tid: ArenaId) {
-        if let Some((val_ptr, target_tid)) = r.as_ptr_info().filter(|&(_, tid)| tid != owner_tid) {
-            dotnet_utils::gc::record_cross_arena_ref(target_tid, val_ptr.as_ptr() as usize);
-        }
+        let recorder = WriteBarrierRecorder::new(owner_tid);
+        recorder.record_ref(r);
     }
 
     #[cfg(feature = "multithreading")]
@@ -805,15 +898,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
     #[cfg(feature = "multithreading")]
     fn record_managedptr_cross_arena(&self, m: &ManagedPtr<'gc>, owner_tid: ArenaId) {
-        match &m.origin {
-            PointerOrigin::Heap(r) => self.record_objref_cross_arena(*r, owner_tid),
-            PointerOrigin::CrossArenaObjectRef(p, target_tid) => {
-                if *target_tid != owner_tid {
-                    dotnet_utils::gc::record_cross_arena_ref(*target_tid, p.as_ptr() as usize);
-                }
-            }
-            _ => {}
-        }
+        let recorder = WriteBarrierRecorder::new(owner_tid);
+        recorder.record_managed_ptr(m);
     }
 
     #[cfg(feature = "multithreading")]

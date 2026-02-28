@@ -26,12 +26,12 @@ use dotnetdll::prelude::{
 const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 
 #[dotnet_intrinsic("object[] System.Reflection.Assembly::GetCustomAttributes(System.Type, bool)")]
-pub fn intrinsic_assembly_get_custom_attributes<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_assembly_get_custom_attributes<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc();
+    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let num_args = _method.method.signature.parameters.len()
         + if _method.method.signature.instance {
             1
@@ -55,12 +55,12 @@ pub fn intrinsic_assembly_get_custom_attributes<'gc, 'm: 'gc>(
 #[dotnet_intrinsic(
     "static System.Attribute[] System.Attribute::GetCustomAttributes(System.Reflection.MemberInfo, System.Type, bool)"
 )]
-pub fn intrinsic_attribute_get_custom_attributes<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_attribute_get_custom_attributes<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc();
+    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let num_args = _method.method.signature.parameters.len()
         + if _method.method.signature.instance {
             1
@@ -82,8 +82,8 @@ pub fn intrinsic_attribute_get_custom_attributes<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static System.Type System.Type::GetType(string)")]
-pub fn intrinsic_type_get_type<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_type_get_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -160,8 +160,8 @@ pub fn intrinsic_type_get_type<'gc, 'm: 'gc>(
 #[dotnet_intrinsic(
     "System.Reflection.PropertyInfo System.RuntimeType::GetPropertyImpl(string, System.Reflection.BindingFlags, System.Reflection.Binder, System.Type, System.Type[], System.Reflection.ParameterModifier[])"
 )]
-pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
@@ -191,8 +191,8 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc>(
     }
 }
 
-fn build_generic_lookup_from_runtime_type<'gc, 'm>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn build_generic_lookup_from_runtime_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     target_type: &RuntimeType,
 ) -> GenericLookup {
     let mut lookup = GenericLookup::default();
@@ -206,12 +206,12 @@ fn build_generic_lookup_from_runtime_type<'gc, 'm>(
     lookup
 }
 
-fn populate_reflection_array<'gc, 'm>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn populate_reflection_array<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     items: Vec<ObjectRef<'gc>>,
     item_type: ConcreteType,
 ) -> StepResult {
-    let gc = ctx.gc();
+    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let mut vector = match ctx.new_vector(item_type, items.len()) {
         Ok(v) => v,
         Err(e) => return StepResult::Error(e.into()),
@@ -226,12 +226,12 @@ fn populate_reflection_array<'gc, 'm>(
 #[dotnet_intrinsic(
     "static void System.RuntimeTypeHandle::GetActivationInfo(System.RuntimeTypeHandle, System.IntPtr&, System.IntPtr&, System.IntPtr&, bool&)"
 )]
-pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc();
+    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let method_name = &*method.method.name;
     let param_count = method.method.signature.parameters.len();
 
@@ -244,13 +244,12 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
             let pfn_allocator = ctx.pop_managed_ptr();
 
             let rt_obj = match ctx.pop() {
-                StackValue::ValueType(rth_handle) => unsafe {
-                    ObjectRef::read_branded(
-                        &rth_handle
-                            .instance_storage
-                            .get_field_local(rth_handle.description, "_value"),
-                        &gc,
-                    )
+                StackValue::ValueType(rth_handle) => {
+                    rth_handle
+                        .instance_storage
+                        .field::<ObjectRef<'gc>>(rth_handle.description, "_value")
+                        .unwrap()
+                        .read()
                 },
                 StackValue::ObjectRef(rt_obj) => rt_obj,
                 v => panic!(
@@ -271,8 +270,8 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
             let layout = LayoutManager::Scalar(Scalar::NativeInt);
             unsafe {
                 ctx.write_unaligned(
-                    pfn_allocator.origin.clone(),
-                    pfn_allocator.offset,
+                    pfn_allocator.origin().clone(),
+                    pfn_allocator.byte_offset(),
                     val,
                     &layout,
                 )
@@ -283,8 +282,8 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
             let val = StackValue::NativeInt(0);
             unsafe {
                 ctx.write_unaligned(
-                    allocator_first_arg.origin.clone(),
-                    allocator_first_arg.offset,
+                    allocator_first_arg.origin().clone(),
+                    allocator_first_arg.byte_offset(),
                     val,
                     &layout,
                 )
@@ -317,8 +316,8 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
                     let layout = LayoutManager::Scalar(Scalar::NativeInt);
                     unsafe {
                         ctx.write_unaligned(
-                            pfn_ctor.origin.clone(),
-                            pfn_ctor.offset,
+                            pfn_ctor.origin().clone(),
+                            pfn_ctor.byte_offset(),
                             method_val,
                             &layout,
                         )
@@ -329,8 +328,8 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
                     let byte_layout = LayoutManager::Scalar(Scalar::Int8);
                     unsafe {
                         ctx.write_unaligned(
-                            ctor_is_public.origin.clone(),
-                            ctor_is_public.offset,
+                            ctor_is_public.origin().clone(),
+                            ctor_is_public.byte_offset(),
                             public_val,
                             &byte_layout,
                         )
@@ -358,8 +357,8 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc>(
 #[dotnet_intrinsic(
     "static System.RuntimeTypeHandle System.Runtime.CompilerServices.RuntimeHelpers::GetMethodTable(System.RuntimeTypeHandle)"
 )]
-pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
@@ -387,8 +386,8 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc>(
 #[dotnet_intrinsic(
     "static bool System.Runtime.CompilerServices.RuntimeHelpers::IsBitwiseEquatable<T>()"
 )]
-pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
@@ -406,8 +405,8 @@ pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc>(
 #[dotnet_intrinsic(
     "static bool System.Runtime.CompilerServices.RuntimeHelpers::IsReferenceOrContainsReferences()"
 )]
-pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
@@ -422,12 +421,12 @@ pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<'gc, 'm: 'g
 #[dotnet_intrinsic(
     "static void System.Runtime.CompilerServices.RuntimeHelpers::RunClassConstructor(System.RuntimeTypeHandle)"
 )]
-pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc();
+    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let arg = ctx.peek_stack();
     let StackValue::ValueType(handle) = arg else {
         panic!(
@@ -436,14 +435,11 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc>(
         )
     };
 
-    let target_obj = unsafe {
-        ObjectRef::read_branded(
-            &handle
-                .instance_storage
-                .get_field_local(handle.description, "_value"),
-            &gc,
-        )
-    };
+    let target_obj = handle
+        .instance_storage
+        .field::<ObjectRef<'gc>>(handle.description, "_value")
+        .unwrap()
+        .read();
     let target_type = ctx.resolve_runtime_type(target_obj);
     let target_ct = target_type.to_concrete(ctx.loader());
     let target_desc = ctx
@@ -462,8 +458,8 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static object System.Activator::CreateInstance()")]
-pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
@@ -524,21 +520,18 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static System.Type System.Type::GetTypeFromHandle(System.RuntimeTypeHandle)")]
-pub fn intrinsic_get_from_handle<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_get_from_handle<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc();
+    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let handle = ctx.pop_value_type();
-    let target = unsafe {
-        ObjectRef::read_branded(
-            &handle
-                .instance_storage
-                .get_field_local(handle.description, "_value"),
-            &gc,
-        )
-    };
+    let target = handle
+        .instance_storage
+        .field::<ObjectRef<'gc>>(handle.description, "_value")
+        .unwrap()
+        .read();
     ctx.push_obj(target);
     StepResult::Continue
 }
@@ -546,16 +539,18 @@ pub fn intrinsic_get_from_handle<'gc, 'm: 'gc>(
 #[dotnet_intrinsic(
     "static System.IntPtr System.RuntimeTypeHandle::ToIntPtr(System.RuntimeTypeHandle)"
 )]
-pub fn intrinsic_type_handle_to_int_ptr<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_type_handle_to_int_ptr<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
     let handle = ctx.pop_value_type();
     let target = handle
         .instance_storage
-        .get_field_local(handle.description, "_value");
-    let val = usize::from_ne_bytes((&*target).try_into().unwrap());
+        .field::<usize>(handle.description, "_value")
+        .unwrap()
+        .read();
+    let val = target;
     ctx.push_isize(val as isize);
     StepResult::Continue
 }
@@ -563,8 +558,8 @@ pub fn intrinsic_type_handle_to_int_ptr<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("bool System.Type::get_IsValueType()")]
 #[dotnet_intrinsic("bool System.RuntimeType::get_IsValueType()")]
 #[dotnet_intrinsic("bool System.RuntimeType::GetIsValueType()")]
-pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -583,8 +578,8 @@ pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("bool System.Type::get_IsEnum()")]
 #[dotnet_intrinsic("bool System.RuntimeType::get_IsEnum()")]
 #[dotnet_intrinsic("bool System.RuntimeType::GetIsEnum()")]
-pub fn intrinsic_type_get_is_enum<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_type_get_is_enum<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -601,8 +596,8 @@ pub fn intrinsic_type_get_is_enum<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("bool System.Type::get_IsInterface()")]
 #[dotnet_intrinsic("bool System.RuntimeType::get_IsInterface()")]
 #[dotnet_intrinsic("bool System.RuntimeType::GetIsInterface()")]
-pub fn intrinsic_type_get_is_interface<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_type_get_is_interface<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -619,8 +614,8 @@ pub fn intrinsic_type_get_is_interface<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static bool System.Type::op_Equality(System.Type, System.Type)")]
-pub fn intrinsic_type_op_equality<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_type_op_equality<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -631,8 +626,8 @@ pub fn intrinsic_type_op_equality<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static bool System.Type::op_Inequality(System.Type, System.Type)")]
-pub fn intrinsic_type_op_inequality<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_type_op_inequality<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -643,8 +638,8 @@ pub fn intrinsic_type_op_inequality<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static System.RuntimeTypeHandle System.Type::GetTypeHandle(object)")]
-pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
@@ -659,14 +654,14 @@ pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc>(
         Some(ctx.shared().clone()),
     );
     let instance = vm_try!(res_ctx.new_object(rth));
-    obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
+    instance.instance_storage.field::<ObjectRef<'gc>>(rth, "_value").unwrap().write(obj);
 
     ctx.push_value_type(instance);
     StepResult::Continue
 }
 
-fn handle_create_instance_check_this<'gc, 'm>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn handle_create_instance_check_this<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
     let _obj = ctx.pop_obj();
@@ -675,11 +670,11 @@ fn handle_create_instance_check_this<'gc, 'm>(
     StepResult::Continue
 }
 
-fn handle_get_assembly<'gc, 'm>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn handle_get_assembly<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc();
+    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let obj = ctx.pop_obj();
 
     let target_type = ctx.resolve_runtime_type(obj);
@@ -712,11 +707,11 @@ fn handle_get_assembly<'gc, 'm>(
     );
     let asm_handle =
         vm_try!(res_ctx.new_object(TypeDescription::new(support_res, definition, type_index)));
-    let data = (resolution.as_raw() as usize).to_ne_bytes();
     asm_handle
         .instance_storage
-        .get_field_mut_local(asm_handle.description, "resolution")
-        .copy_from_slice(&data);
+        .field::<usize>(asm_handle.description, "resolution")
+        .unwrap()
+        .write(resolution.as_raw() as usize);
     let v = ObjectRef::new(gc, HeapStorage::Obj(asm_handle));
     ctx.register_new_object(&v);
 
@@ -725,8 +720,8 @@ fn handle_get_assembly<'gc, 'm>(
     StepResult::Continue
 }
 
-fn handle_get_namespace<'gc, 'm>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn handle_get_namespace<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
@@ -743,8 +738,8 @@ fn handle_get_namespace<'gc, 'm>(
     StepResult::Continue
 }
 
-fn handle_get_methods<'gc, 'm>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn handle_get_methods<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
     let flags = ctx.pop_i32();
@@ -789,8 +784,8 @@ fn handle_get_methods<'gc, 'm>(
     populate_reflection_array(ctx, methods_objs, ConcreteType::from(method_info_type))
 }
 
-fn handle_get_method_impl<'gc, 'm>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn handle_get_method_impl<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
     let _modifiers = ctx.pop();
@@ -856,8 +851,8 @@ fn handle_get_method_impl<'gc, 'm>(
     StepResult::Continue
 }
 
-fn handle_get_constructors<'gc, 'm>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn handle_get_constructors<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
     let flags = ctx.pop_i32();
@@ -905,8 +900,8 @@ fn handle_get_constructors<'gc, 'm>(
     populate_reflection_array(ctx, methods_objs, ConcreteType::from(constructor_info_type))
 }
 
-fn handle_get_name<'gc, 'm>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn handle_get_name<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
@@ -915,8 +910,8 @@ fn handle_get_name<'gc, 'm>(
     StepResult::Continue
 }
 
-fn handle_get_base_type<'gc, 'm>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn handle_get_base_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
@@ -992,8 +987,8 @@ fn handle_get_base_type<'gc, 'm>(
     StepResult::Continue
 }
 
-fn handle_get_is_generic_type<'gc, 'm>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn handle_get_is_generic_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
@@ -1003,8 +998,8 @@ fn handle_get_is_generic_type<'gc, 'm>(
     StepResult::Continue
 }
 
-fn handle_get_generic_type_definition<'gc, 'm>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn handle_get_generic_type_definition<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
@@ -1027,11 +1022,11 @@ fn handle_get_generic_type_definition<'gc, 'm>(
     }
 }
 
-fn handle_get_generic_arguments<'gc, 'm>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn handle_get_generic_arguments<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc();
+    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let obj = ctx.pop_obj();
     let target_type = ctx.resolve_runtime_type(obj);
     let args = match target_type {
@@ -1066,8 +1061,8 @@ fn handle_get_generic_arguments<'gc, 'm>(
     StepResult::Continue
 }
 
-fn handle_get_type_handle<'gc, 'm>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn handle_get_type_handle<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
     let obj = ctx.pop_obj();
@@ -1080,11 +1075,11 @@ fn handle_get_type_handle<'gc, 'm>(
     StepResult::Continue
 }
 
-fn handle_make_generic_type<'gc, 'm>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn handle_make_generic_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc();
+    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let parameters = ctx.pop_obj();
     let target = ctx.pop_obj();
 
@@ -1119,8 +1114,8 @@ fn handle_make_generic_type<'gc, 'm>(
     }
 }
 
-fn handle_create_instance_default_ctor<'gc, 'm>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn handle_create_instance_default_ctor<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
     let _ = ctx.pop(); // skipCheck

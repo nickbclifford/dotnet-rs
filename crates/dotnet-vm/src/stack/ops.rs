@@ -189,6 +189,8 @@ pub trait PoolOps {
 }
 
 pub trait RawMemoryOps<'gc>: BorrowScopeOps {
+    fn as_borrow_scope(&self) -> &dyn BorrowScopeOps;
+
     /// Resolves a `PointerOrigin` and `ByteOffset` to a concrete memory address.
     /// This is the central point for address calculation in the VM.
     fn resolve_address(
@@ -345,6 +347,17 @@ pub trait ReflectionOps<'gc, 'm>: MemoryOps<'gc> {
     fn resolve_runtime_field(&self, obj: ObjectRef<'gc>) -> (FieldDescription, GenericLookup);
     fn lookup_method_by_index(&self, index: usize) -> (MethodDescription, GenericLookup);
     fn reflection(&self) -> crate::state::ReflectionRegistry<'_, 'gc>;
+    fn execute_intrinsic_field(
+        &mut self,
+        field: FieldDescription,
+        type_generics: Arc<[ConcreteType]>,
+        is_address: bool,
+    ) -> crate::StepResult;
+    fn execute_intrinsic_call(
+        &mut self,
+        method: MethodDescription,
+        lookup: &GenericLookup,
+    ) -> crate::StepResult;
 }
 
 pub trait LoaderOps<'m> {

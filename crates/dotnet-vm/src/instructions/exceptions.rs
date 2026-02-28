@@ -1,12 +1,11 @@
 use crate::{
     StepResult,
-    stack::ops::{ExceptionOps, StackOps},
+    stack::ops::{ExceptionOps, TypedStackOps},
 };
 use dotnet_macros::dotnet_instruction;
-use dotnetdll::prelude::*;
 
 #[dotnet_instruction(Leave(jump_target))]
-pub fn leave<'gc, 'm: 'gc, T: ExceptionOps<'gc> + ?Sized>(
+pub fn leave<'gc, 'm: 'gc, T: ExceptionOps<'gc>>(
     ctx: &mut T,
     jump_target: usize,
 ) -> StepResult {
@@ -14,12 +13,12 @@ pub fn leave<'gc, 'm: 'gc, T: ExceptionOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(EndFinally)]
-pub fn endfinally<'gc, 'm: 'gc, T: ExceptionOps<'gc> + ?Sized>(ctx: &mut T) -> StepResult {
+pub fn endfinally<'gc, 'm: 'gc, T: ExceptionOps<'gc>>(ctx: &mut T) -> StepResult {
     ctx.endfinally()
 }
 
 #[dotnet_instruction(EndFilter)]
-pub fn endfilter<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
+pub fn endfilter<'gc, 'm: 'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
 ) -> StepResult {
     let result_val = ctx.pop_i32();
@@ -27,7 +26,7 @@ pub fn endfilter<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized
 }
 
 #[dotnet_instruction(Throw)]
-pub fn throw<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
+pub fn throw<'gc, 'm: 'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
 ) -> StepResult {
     let exc = ctx.pop_obj();
@@ -41,6 +40,6 @@ pub fn throw<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(Rethrow)]
-pub fn rethrow<'gc, 'm: 'gc, T: ExceptionOps<'gc> + ?Sized>(ctx: &mut T) -> StepResult {
+pub fn rethrow<'gc, 'm: 'gc, T: ExceptionOps<'gc>>(ctx: &mut T) -> StepResult {
     ctx.rethrow()
 }

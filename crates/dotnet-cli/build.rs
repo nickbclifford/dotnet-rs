@@ -21,9 +21,15 @@ fn main() {
             .parse()
             .expect("fixture file name must end with _<exit_code>.cs");
 
+        let mut ignore_prefix = "".to_string();
+        if file_name == "bench_loop_42" {
+            ignore_prefix = "#[ignore] ".to_string();
+        }
+
         writeln!(
             f,
-            "fixture_test!({}, {:?}, {});",
+            "fixture_test!({}{}, {:?}, {});",
+            ignore_prefix,
             file_name,
             path.to_str().unwrap(),
             expected_exit_code

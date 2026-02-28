@@ -1,6 +1,9 @@
 use crate::{
     StepResult,
-    stack::ops::VesOps,
+    stack::ops::{
+        ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps,
+        ResolutionOps, StackOps, ThreadOps,
+    },
     sync::{Arc, Ordering, SyncBlockOps, SyncManagerOps},
 };
 use dotnet_macros::dotnet_intrinsic;
@@ -14,12 +17,12 @@ const NULL_REF_MSG: &str = "Object reference not set to an instance of an object
 
 /// System.Threading.Monitor::Exit(object) - Releases the lock on an object.
 #[dotnet_intrinsic("static void System.Threading.Monitor::Exit(object)")]
-pub fn intrinsic_monitor_exit<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_monitor_exit<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + MemoryOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc();
+    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let obj_ref = ctx.pop_obj();
 
     if obj_ref.0.is_some() {
@@ -65,12 +68,12 @@ pub fn intrinsic_monitor_exit<'gc, 'm: 'gc>(
     "static object System.Threading.Interlocked::CompareExchange(object&, object, object)"
 )]
 #[dotnet_intrinsic("static T System.Threading.Interlocked::CompareExchange<T>(T&, T, T)")]
-pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + MemoryOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm>>(
+    ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc();
+    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let params = &method.method.signature.parameters;
     // CompareExchange(ref T, T, T) -> T
     // params[0] is 'ref T'.
@@ -93,8 +96,8 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
 
             let prev = match unsafe {
                 ctx.compare_exchange_atomic(
-                    target_ptr.origin.clone(),
-                    target_ptr.offset,
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
                     comparand as u64,
                     value as u64,
                     4,
@@ -114,8 +117,8 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
 
             let prev = match unsafe {
                 ctx.compare_exchange_atomic(
-                    target_ptr.origin.clone(),
-                    target_ptr.offset,
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
                     comparand as u64,
                     value as u64,
                     8,
@@ -136,8 +139,8 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
             let size = ObjectRef::SIZE;
             let prev = match unsafe {
                 ctx.compare_exchange_atomic(
-                    target_ptr.origin.clone(),
-                    target_ptr.offset,
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
                     comparand as u64,
                     value as u64,
                     size,
@@ -168,8 +171,8 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
             let size = ObjectRef::SIZE;
             let prev_raw = match unsafe {
                 ctx.compare_exchange_atomic(
-                    target_ptr.origin.clone(),
-                    target_ptr.offset,
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
                     comp_raw as u64,
                     val_raw as u64,
                     size,
@@ -199,12 +202,12 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static IntPtr System.Threading.Interlocked::Exchange(IntPtr&, IntPtr)")]
 #[dotnet_intrinsic("static object System.Threading.Interlocked::Exchange(object&, object)")]
 #[dotnet_intrinsic("static T System.Threading.Interlocked::Exchange<T>(T&, T)")]
-pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + MemoryOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm>>(
+    ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc();
+    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let params = &method.method.signature.parameters;
     // Exchange(ref T, T) -> T
     // params[0] is 'ref T'.
@@ -226,8 +229,8 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
 
             let prev = unsafe {
                 ctx.exchange_atomic(
-                    target_ptr.origin.clone(),
-                    target_ptr.offset,
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
                     value as u64,
                     4,
                     Ordering::SeqCst,
@@ -243,8 +246,8 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
 
             let prev = unsafe {
                 ctx.exchange_atomic(
-                    target_ptr.origin.clone(),
-                    target_ptr.offset,
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
                     value as u64,
                     8,
                     Ordering::SeqCst,
@@ -261,8 +264,8 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
             let size = ObjectRef::SIZE;
             let prev = unsafe {
                 ctx.exchange_atomic(
-                    target_ptr.origin.clone(),
-                    target_ptr.offset,
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
                     value as u64,
                     size,
                     Ordering::SeqCst,
@@ -291,8 +294,8 @@ pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc>(
             let size = ObjectRef::SIZE;
             let prev_raw = unsafe {
                 ctx.exchange_atomic(
-                    target_ptr.origin.clone(),
-                    target_ptr.offset,
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
                     val_raw as u64,
                     size,
                     Ordering::SeqCst,
@@ -324,8 +327,8 @@ fn get_or_create_sync_block<'gc, T: SyncManagerOps>(
     result
 }
 
-fn find_success_flag_index(_ctx: &dyn VesOps, success_ptr: &ManagedPtr) -> Option<usize> {
-    if let dotnet_value::pointer::PointerOrigin::Stack(idx) = &success_ptr.origin {
+fn find_success_flag_index<'gc, T: RawMemoryOps<'gc>>(_ctx: &T, success_ptr: &ManagedPtr) -> Option<usize> {
+    if let dotnet_value::pointer::PointerOrigin::Stack(idx) = &success_ptr.origin() {
         return Some(idx.0);
     }
     None
@@ -333,12 +336,12 @@ fn find_success_flag_index(_ctx: &dyn VesOps, success_ptr: &ManagedPtr) -> Optio
 
 /// System.Threading.Monitor::Enter(object)
 #[dotnet_intrinsic("static void System.Threading.Monitor::Enter(object)")]
-pub fn intrinsic_monitor_enter_obj<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_monitor_enter_obj<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + MemoryOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc();
+    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let obj_ref = ctx.pop_obj();
 
     if obj_ref.0.is_some() {
@@ -368,12 +371,12 @@ pub fn intrinsic_monitor_enter_obj<'gc, 'm: 'gc>(
 /// System.Threading.Monitor::ReliableEnter(object, ref bool)
 #[dotnet_intrinsic("static void System.Threading.Monitor::ReliableEnter(object, bool&)")]
 #[dotnet_intrinsic("static void System.Threading.Monitor::Enter(object, bool&)")]
-pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + MemoryOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc();
+    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let success_ptr = ctx.peek_stack_at(0).as_managed_ptr();
     let obj_ref = ctx.peek_stack_at(1).as_object_ref();
 
@@ -401,7 +404,7 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
             ctx.set_slot(crate::StackSlotIndex(index), StackValue::Int32(1));
         } else {
             unsafe {
-                ctx.write_bytes(success_ptr.origin.clone(), success_ptr.offset, &[1u8])
+                ctx.write_bytes(success_ptr.origin().clone(), success_ptr.byte_offset(), &[1u8])
                     .expect("Failed to write success flag");
             }
         };
@@ -420,12 +423,12 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc>(
 
 /// System.Threading.Monitor::TryEnter_FastPath(object)
 #[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter_FastPath(object)")]
-pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + MemoryOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc();
+    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let obj_ref = ctx.pop_obj();
 
     if obj_ref.0.is_some() {
@@ -448,12 +451,12 @@ pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc>(
 
 /// System.Threading.Monitor::TryEnter(object, int, ref bool)
 #[dotnet_intrinsic("static void System.Threading.Monitor::TryEnter(object, int, bool&)")]
-pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + MemoryOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc();
+    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let success_ptr = ctx.peek_stack_at(0).as_managed_ptr();
     let timeout_ms = ctx.peek_stack_at(1).as_i32();
     let obj_ref = ctx.peek_stack_at(2).as_object_ref();
@@ -490,8 +493,8 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
         } else {
             unsafe {
                 ctx.write_bytes(
-                    success_ptr.origin.clone(),
-                    success_ptr.offset,
+                    success_ptr.origin().clone(),
+                    success_ptr.byte_offset(),
                     &[if success { 1u8 } else { 0u8 }],
                 )
                 .expect("Failed to write success flag");
@@ -514,12 +517,12 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc>(
 
 /// System.Threading.Monitor::TryEnter(object, int)
 #[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter(object, int)")]
-pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + MemoryOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc();
+    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let timeout_ms = ctx.pop_i32();
     let obj_ref = ctx.pop_obj();
 
@@ -568,12 +571,12 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static UIntPtr System.Threading.Volatile::Read(UIntPtr&)")]
 #[dotnet_intrinsic("static float System.Threading.Volatile::Read(float&)")]
 #[dotnet_intrinsic("static double System.Threading.Volatile::Read(double&)")]
-pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_volatile_read<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + MemoryOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm>>(
+    ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc();
+    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let params = &method.method.signature.parameters;
     let Parameter(_, first_param_type) = &params[0];
 
@@ -591,8 +594,8 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
             let target_ptr = ctx.pop_managed_ptr();
             let val = unsafe {
                 ctx.load_atomic(
-                    target_ptr.origin.clone(),
-                    target_ptr.offset,
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
                     1,
                     Ordering::Acquire,
                 )
@@ -604,8 +607,8 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
             let target_ptr = ctx.pop_managed_ptr();
             let val = unsafe {
                 ctx.load_atomic(
-                    target_ptr.origin.clone(),
-                    target_ptr.offset,
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
                     2,
                     Ordering::Acquire,
                 )
@@ -617,8 +620,8 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
             let target_ptr = ctx.pop_managed_ptr();
             let val = unsafe {
                 ctx.load_atomic(
-                    target_ptr.origin.clone(),
-                    target_ptr.offset,
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
                     4,
                     Ordering::Acquire,
                 )
@@ -634,8 +637,8 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
             let target_ptr = ctx.pop_managed_ptr();
             let val = unsafe {
                 ctx.load_atomic(
-                    target_ptr.origin.clone(),
-                    target_ptr.offset,
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
                     8,
                     Ordering::Acquire,
                 )
@@ -652,8 +655,8 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
             let size = ObjectRef::SIZE;
             let val = unsafe {
                 ctx.load_atomic(
-                    target_ptr.origin.clone(),
-                    target_ptr.offset,
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
                     size,
                     Ordering::Acquire,
                 )
@@ -666,8 +669,8 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
             let target_ptr = ctx.pop_managed_ptr();
             let val = unsafe {
                 ctx.load_atomic(
-                    target_ptr.origin.clone(),
-                    target_ptr.offset,
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
                     ObjectRef::SIZE,
                     Ordering::Acquire,
                 )
@@ -700,12 +703,12 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("static void System.Threading.Volatile::Write(UIntPtr&, UIntPtr)")]
 #[dotnet_intrinsic("static void System.Threading.Volatile::Write(float&, float)")]
 #[dotnet_intrinsic("static void System.Threading.Volatile::Write(double&, double)")]
-pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_volatile_write<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + MemoryOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm>>(
+    ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc();
+    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let value = ctx.pop();
     let target_ptr = ctx.pop_managed_ptr();
 
@@ -729,8 +732,8 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
             };
             unsafe {
                 ctx.store_atomic(
-                    target_ptr.origin.clone(),
-                    target_ptr.offset,
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
                     val,
                     1,
                     Ordering::Release,
@@ -745,8 +748,8 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
             };
             unsafe {
                 ctx.store_atomic(
-                    target_ptr.origin.clone(),
-                    target_ptr.offset,
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
                     val,
                     2,
                     Ordering::Release,
@@ -762,8 +765,8 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
             };
             unsafe {
                 ctx.store_atomic(
-                    target_ptr.origin.clone(),
-                    target_ptr.offset,
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
                     val,
                     4,
                     Ordering::Release,
@@ -779,8 +782,8 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
             };
             unsafe {
                 ctx.store_atomic(
-                    target_ptr.origin.clone(),
-                    target_ptr.offset,
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
                     val,
                     8,
                     Ordering::Release,
@@ -796,8 +799,8 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
             let size = ObjectRef::SIZE;
             unsafe {
                 ctx.store_atomic(
-                    target_ptr.origin.clone(),
-                    target_ptr.offset,
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
                     val,
                     size,
                     Ordering::Release,
@@ -816,8 +819,8 @@ pub fn intrinsic_volatile_write<'gc, 'm: 'gc>(
             let size = ObjectRef::SIZE;
             unsafe {
                 ctx.store_atomic(
-                    target_ptr.origin.clone(),
-                    target_ptr.offset,
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
                     val_raw,
                     size,
                     Ordering::Release,

@@ -20,7 +20,7 @@ const NULL_REF_MSG: &str = "Object reference not set to an instance of an object
 const NOT_SUPPORTED_MSG: &str = "BeginInvoke and EndInvoke are not supported.";
 
 /// Check if a type is a delegate type (inherits from System.Delegate or System.MulticastDelegate)
-pub fn is_delegate_type<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn is_delegate_type<'gc, 'm, T: VesOps<'gc, 'm>>(
     ctx: &T,
     mut td: TypeDescription,
 ) -> bool {
@@ -50,7 +50,7 @@ pub fn is_delegate_type<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 /// Try to dispatch a delegate runtime method. Returns Some(result) if handled.
-pub fn try_delegate_dispatch<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn try_delegate_dispatch<'gc, 'm, T: VesOps<'gc, 'm>>(
     ctx: &mut T,
     method: MethodDescription,
     lookup: &GenericLookup,
@@ -79,7 +79,7 @@ pub fn try_delegate_dispatch<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
     }
 }
 
-fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
+fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm>>(
     ctx: &mut T,
     invoke_method: MethodDescription,
     _lookup: &GenericLookup,
@@ -109,7 +109,7 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
             // If len == 1, check if it's not 'this'
             let first_target = targets_ref.as_vector(|v| {
                 let offset = 0;
-                unsafe { ObjectRef::read_branded(&v.get()[offset..], &ctx.gc()) }
+                unsafe { ObjectRef::read_branded(&v.get()[offset..], &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new())) }
             });
             if first_target != *delegate_ref {
                 Some(targets_ref.0.unwrap())
@@ -153,20 +153,18 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
             .expect("System.Delegate must exist");
 
         // Read Target field
-        let target_bytes = instance
+        let target = instance
             .instance_storage
-            .get_field_local(delegate_type, "_target");
-        let target = unsafe { ObjectRef::read_branded(&target_bytes, &ctx.gc()) };
+            .field::<ObjectRef<'gc>>(delegate_type, "_target")
+            .unwrap()
+            .read();
 
         // Read _method field
-        let method_handle_bytes = instance
+        let method_index = instance
             .instance_storage
-            .get_field_local(delegate_type, "_method");
-        let method_index = isize::from_ne_bytes(
-            method_handle_bytes[..8]
-                .try_into()
-                .expect("RuntimeMethodHandle size mismatch"),
-        ) as usize;
+            .field::<usize>(delegate_type, "_method")
+            .unwrap()
+            .read();
 
         (target, method_index)
     });
@@ -188,8 +186,8 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_intrinsic("object System.Delegate::get_Target()")]
-pub fn delegate_get_target<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn delegate_get_target<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -203,10 +201,11 @@ pub fn delegate_get_target<'gc, 'm: 'gc>(
             .loader()
             .corlib_type("System.Delegate")
             .expect("System.Delegate must exist");
-        let target_bytes = instance
+        instance
             .instance_storage
-            .get_field_local(delegate_type, "_target");
-        unsafe { ObjectRef::read_branded(&target_bytes, &ctx.gc()) }
+            .field::<ObjectRef<'gc>>(delegate_type, "_target")
+            .unwrap()
+            .read()
     });
 
     ctx.push_obj(target);
@@ -214,8 +213,8 @@ pub fn delegate_get_target<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("System.Reflection.MethodInfo System.Delegate::get_Method()")]
-pub fn delegate_get_method<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn delegate_get_method<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -229,14 +228,11 @@ pub fn delegate_get_method<'gc, 'm: 'gc>(
             .loader()
             .corlib_type("System.Delegate")
             .expect("System.Delegate must exist");
-        let method_handle_bytes = instance
+        instance
             .instance_storage
-            .get_field_local(delegate_type, "_method");
-        isize::from_ne_bytes(
-            method_handle_bytes[..8]
-                .try_into()
-                .expect("RuntimeMethodHandle size mismatch"),
-        ) as usize
+            .field::<usize>(delegate_type, "_method")
+            .unwrap()
+            .read()
     });
 
     let (target_method, target_lookup) = ctx.lookup_method_by_index(method_index);
@@ -247,8 +243,8 @@ pub fn delegate_get_method<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic("bool System.Delegate::Equals(object)")]
 #[dotnet_intrinsic("bool System.MulticastDelegate::Equals(object)")]
-pub fn delegate_equals<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn delegate_equals<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -308,10 +304,10 @@ pub fn delegate_equals<'gc, 'm: 'gc>(
                 let mut equal = true;
                 for i in 0..this_len {
                     let t1 = this_ref.as_vector(|v| unsafe {
-                        ObjectRef::read_branded(&v.get()[i * ObjectRef::SIZE..], &ctx.gc())
+                        ObjectRef::read_branded(&v.get()[i * ObjectRef::SIZE..], &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()))
                     });
                     let t2 = other_ref.as_vector(|v| unsafe {
-                        ObjectRef::read_branded(&v.get()[i * ObjectRef::SIZE..], &ctx.gc())
+                        ObjectRef::read_branded(&v.get()[i * ObjectRef::SIZE..], &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()))
                     });
                     // We should probably call Equals recursively or compare info
                     // For now, let's just compare info of elements
@@ -334,8 +330,8 @@ pub fn delegate_equals<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic("int System.Delegate::GetHashCode()")]
 #[dotnet_intrinsic("int System.MulticastDelegate::GetHashCode()")]
-pub fn delegate_get_hash_code<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn delegate_get_hash_code<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -359,7 +355,7 @@ pub fn delegate_get_hash_code<'gc, 'm: 'gc>(
     StepResult::Continue
 }
 
-fn get_delegate_info<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
+fn get_delegate_info<'gc, 'm, T: VesOps<'gc, 'm>>(
     ctx: &T,
     obj: ObjectRef<'gc>,
 ) -> (ObjectRef<'gc>, usize) {
@@ -368,19 +364,21 @@ fn get_delegate_info<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
             .loader()
             .corlib_type("System.Delegate")
             .expect("System.Delegate must exist");
-        let target_bytes = instance
+        let target = instance
             .instance_storage
-            .get_field_local(delegate_type, "_target");
-        let target = unsafe { ObjectRef::read_branded(&target_bytes, &ctx.gc()) };
-        let method_handle_bytes = instance
+            .field::<ObjectRef<'gc>>(delegate_type, "_target")
+            .unwrap()
+            .read();
+        let index = instance
             .instance_storage
-            .get_field_local(delegate_type, "_method");
-        let index = isize::from_ne_bytes(method_handle_bytes[..8].try_into().unwrap()) as usize;
+            .field::<usize>(delegate_type, "_method")
+            .unwrap()
+            .read();
         (target, index)
     })
 }
 
-fn get_multicast_targets_ref<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
+fn get_multicast_targets_ref<'gc, 'm, T: VesOps<'gc, 'm>>(
     ctx: &T,
     obj: ObjectRef<'gc>,
 ) -> Option<ObjectRef<'gc>> {
@@ -416,10 +414,11 @@ fn get_multicast_targets_ref<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
             return None;
         }
 
-        let targets_bytes = instance
+        let targets_ref = instance
             .instance_storage
-            .get_field_local(multicast_type, "targets");
-        let targets_ref = unsafe { ObjectRef::read_branded(&targets_bytes, &ctx.gc()) };
+            .field::<ObjectRef<'gc>>(multicast_type, "targets")
+            .unwrap()
+            .read();
         if targets_ref.0.is_some() {
             Some(targets_ref)
         } else {
@@ -429,8 +428,8 @@ fn get_multicast_targets_ref<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_intrinsic("object System.Delegate::DynamicInvoke(object[])")]
-pub fn delegate_dynamic_invoke<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn delegate_dynamic_invoke<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -441,7 +440,7 @@ pub fn delegate_dynamic_invoke<'gc, 'm: 'gc>(
     )
 }
 
-fn delegates_equal<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
+fn delegates_equal<'gc, 'm, T: VesOps<'gc, 'm>>(
     ctx: &T,
     a: ObjectRef<'gc>,
     b: ObjectRef<'gc>,
@@ -459,7 +458,7 @@ fn delegates_equal<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
     target_a == target_b && index_a == index_b
 }
 
-fn get_invocation_list<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
+fn get_invocation_list<'gc, 'm, T: VesOps<'gc, 'm>>(
     ctx: &T,
     obj: ObjectRef<'gc>,
 ) -> Vec<ObjectRef<'gc>> {
@@ -469,7 +468,7 @@ fn get_invocation_list<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
             let mut result = Vec::with_capacity(len);
             for i in 0..len {
                 let entry =
-                    unsafe { ObjectRef::read_branded(&v.get()[i * ObjectRef::SIZE..], &ctx.gc()) };
+                    unsafe { ObjectRef::read_branded(&v.get()[i * ObjectRef::SIZE..], &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new())) };
                 result.push(entry);
             }
             result
@@ -482,8 +481,8 @@ fn get_invocation_list<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(
 #[dotnet_intrinsic(
     "static System.Delegate System.Delegate::Combine(System.Delegate, System.Delegate)"
 )]
-pub fn delegate_combine<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn delegate_combine<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -513,10 +512,10 @@ pub fn delegate_combine<'gc, 'm: 'gc>(
     let delegate_type = vm_try!(ctx.loader().corlib_type("System.Delegate"));
     let delegate_concrete = ConcreteType::from(delegate_type);
     let array_v = vm_try!(ctx.new_vector(delegate_concrete, combined.len()));
-    let array_obj = ObjectRef::new(ctx.gc(), dotnet_value::object::HeapStorage::Vec(array_v));
+    let array_obj = ObjectRef::new(ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()), dotnet_value::object::HeapStorage::Vec(array_v));
     ctx.register_new_object(&array_obj);
 
-    array_obj.as_vector_mut(ctx.gc(), |v| {
+    array_obj.as_vector_mut(ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()), |v| {
         for (i, &el) in combined.iter().enumerate() {
             el.write(&mut v.get_mut()[i * ObjectRef::SIZE..]);
         }
@@ -524,7 +523,7 @@ pub fn delegate_combine<'gc, 'm: 'gc>(
 
     // Set 'targets' field on new_delegate
     let multicast_type = vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
-    new_delegate.as_object_mut(ctx.gc(), |instance| {
+    new_delegate.as_object_mut(ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()), |instance| {
         array_obj.write(
             &mut instance
                 .instance_storage
@@ -539,8 +538,8 @@ pub fn delegate_combine<'gc, 'm: 'gc>(
 #[dotnet_intrinsic(
     "static System.Delegate System.Delegate::Remove(System.Delegate, System.Delegate)"
 )]
-pub fn delegate_remove<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn delegate_remove<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -598,17 +597,17 @@ pub fn delegate_remove<'gc, 'm: 'gc>(
             let delegate_concrete = ConcreteType::from(delegate_type);
             let array_v = vm_try!(ctx.new_vector(delegate_concrete, new_list.len()));
             let array_obj =
-                ObjectRef::new(ctx.gc(), dotnet_value::object::HeapStorage::Vec(array_v));
+                ObjectRef::new(ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()), dotnet_value::object::HeapStorage::Vec(array_v));
             ctx.register_new_object(&array_obj);
 
-            array_obj.as_vector_mut(ctx.gc(), |v| {
+            array_obj.as_vector_mut(ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()), |v| {
                 for (i, &el) in new_list.iter().enumerate() {
                     el.write(&mut v.get_mut()[i * ObjectRef::SIZE..]);
                 }
             });
 
             let multicast_type = vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
-            new_delegate.as_object_mut(ctx.gc(), |instance| {
+            new_delegate.as_object_mut(ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()), |instance| {
                 array_obj.write(
                     &mut instance
                         .instance_storage
@@ -626,7 +625,7 @@ pub fn delegate_remove<'gc, 'm: 'gc>(
 }
 
 /*
-fn get_runtime_return_type<'gc, 'm, T: VesOps<'gc, 'm> + ?Sized>(ctx: &T, res_ctx: &crate::ResolutionContext<'_, 'm>, method: &MethodDescription) -> RuntimeType {
+fn get_runtime_return_type<'gc, 'm, T: VesOps<'gc, 'm>>(ctx: &T, res_ctx: &crate::ResolutionContext<'_, 'm>, method: &MethodDescription) -> RuntimeType {
     match &method.method.signature.return_type.1 {
         Some(dotnetdll::prelude::ParameterType::Value(t))
         | Some(dotnetdll::prelude::ParameterType::Ref(t)) => {

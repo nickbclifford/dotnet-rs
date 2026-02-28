@@ -285,12 +285,12 @@ impl<'m> ResolverService<'m> {
             StackValue::NativeFloat(_) => self.loader.corlib_type("System.Double"),
             StackValue::ObjectRef(ObjectRef(Some(o))) => self.get_heap_description(*o),
             StackValue::ObjectRef(ObjectRef(None)) => self.loader.corlib_type("System.Object"),
-            StackValue::ManagedPtr(m) => Ok(m.inner_type),
+            StackValue::ManagedPtr(m) => Ok(m.inner_type()),
             StackValue::ValueType(o) => Ok(o.description),
             StackValue::TypedRef(_, _) => self.loader.corlib_type("System.TypedReference"),
             #[cfg(feature = "multithreading")]
             StackValue::CrossArenaObjectRef(ptr, _) => {
-                let lock = unsafe { ptr.0.as_ref() };
+                let lock = unsafe { &*ptr.as_ptr() };
                 let guard = lock.borrow();
                 self.get_heap_description_inner(&guard)
             }

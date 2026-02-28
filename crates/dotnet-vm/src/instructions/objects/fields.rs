@@ -16,8 +16,8 @@ use dotnetdll::prelude::*;
 use std::ptr::{self, NonNull};
 
 #[dotnet_instruction(LoadField { param0, volatile })]
-pub fn ldfld<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn ldfld<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     param0: &FieldSource,
     volatile: bool,
 ) -> StepResult {
@@ -26,7 +26,7 @@ pub fn ldfld<'gc, 'm: 'gc>(
     // Special fields check (intrinsic fields)
     if ctx.is_intrinsic_field_cached(field) {
         let type_generics = ctx.current_context().generics.type_generics.clone();
-        return crate::intrinsics::intrinsic_field(ctx, field, type_generics, false);
+        return ctx.execute_intrinsic_field(field, type_generics, false);
     }
 
     let parent = ctx.pop();
@@ -113,8 +113,8 @@ pub fn ldfld<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(StoreField { param0, volatile })]
-pub fn stfld<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn stfld<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     param0: &FieldSource,
     volatile: bool,
 ) -> StepResult {
@@ -171,8 +171,8 @@ pub fn stfld<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(LoadStaticField { param0, volatile })]
-pub fn ldsfld<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn ldsfld<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     param0: &FieldSource,
     volatile: bool,
 ) -> StepResult {
@@ -182,7 +182,7 @@ pub fn ldsfld<'gc, 'm: 'gc>(
     // Special fields check (intrinsic fields)
     if ctx.is_intrinsic_field_cached(field) {
         let type_generics = ctx.current_context().generics.type_generics.clone();
-        return crate::intrinsics::intrinsic_field(ctx, field, type_generics, false);
+        return ctx.execute_intrinsic_field(field, type_generics, false);
     }
 
     let res = ctx.initialize_static_storage(field.parent, lookup.clone());
@@ -207,15 +207,15 @@ pub fn ldsfld<'gc, 'm: 'gc>(
     let val_bytes = storage
         .storage
         .get_field_atomic(field.parent, name, ordering);
-    let value = vm_try!(res_ctx.read_cts_value(&t, &val_bytes, ctx.gc()));
+    let value = vm_try!(res_ctx.read_cts_value(&t, &val_bytes, ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new())));
 
     ctx.push(value.into_stack());
     StepResult::Continue
 }
 
 #[dotnet_instruction(StoreStaticField { param0, volatile })]
-pub fn stsfld<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn stsfld<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     param0: &FieldSource,
     volatile: bool,
 ) -> StepResult {
@@ -255,13 +255,16 @@ pub fn stsfld<'gc, 'm: 'gc>(
 }
 
 #[dotnet_instruction(LoadFieldAddress(param0))]
-pub fn ldflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource) -> StepResult {
+pub fn ldflda<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
+    param0: &FieldSource,
+) -> StepResult {
     let (field, lookup) = vm_try!(ctx.locate_field(*param0));
 
     // Special fields check (intrinsic fields)
     if ctx.is_intrinsic_field_cached(field) {
         let type_generics = ctx.current_context().generics.type_generics.clone();
-        return crate::intrinsics::intrinsic_field(ctx, field, type_generics, true);
+        return ctx.execute_intrinsic_field(field, type_generics, true);
     }
 
     let parent = ctx.pop();
@@ -375,7 +378,7 @@ pub fn ldflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource)
         }
 
         // Deserialize to get the actual origin
-        let info = match unsafe { MP::read_branded(&ptr_bytes, &ctx.gc()) } {
+        let info = match unsafe { MP::read_branded(&ptr_bytes, &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new())) } {
             Ok(i) => i,
             Err(e) => {
                 return StepResult::Error(
@@ -409,7 +412,10 @@ pub fn ldflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource)
 }
 
 #[dotnet_instruction(LoadStaticFieldAddress(param0))]
-pub fn ldsflda<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: &FieldSource) -> StepResult {
+pub fn ldsflda<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
+    param0: &FieldSource,
+) -> StepResult {
     let (field, lookup): (_, dotnet_types::generics::GenericLookup) =
         vm_try!(ctx.locate_field(*param0));
 

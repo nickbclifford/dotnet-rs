@@ -10,7 +10,7 @@ use dotnet_value::{StackValue, pointer::UnmanagedPtr};
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(Convert(t))]
-pub fn conv<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
+pub fn conv<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
     t: ConversionType,
 ) -> StepResult {
@@ -111,7 +111,7 @@ pub fn conv<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(ConvertOverflow(t, sgn))]
-pub fn conv_ovf<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
+pub fn conv_ovf<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
     t: ConversionType,
     sgn: NumberSign,
@@ -180,7 +180,7 @@ pub fn conv_ovf<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(ConvertFloat32)]
-pub fn conv_r4<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(ctx: &mut T) -> StepResult {
+pub fn conv_r4<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(ctx: &mut T) -> StepResult {
     let v = match ctx.pop() {
         StackValue::Int32(i) => i as f32,
         StackValue::Int64(i) => i as f32,
@@ -196,7 +196,7 @@ pub fn conv_r4<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(ctx: &mut
 }
 
 #[dotnet_instruction(ConvertFloat64)]
-pub fn conv_r8<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(ctx: &mut T) -> StepResult {
+pub fn conv_r8<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(ctx: &mut T) -> StepResult {
     let v = match ctx.pop() {
         StackValue::Int32(i) => i as f64,
         StackValue::Int64(i) => i as f64,
@@ -212,7 +212,7 @@ pub fn conv_r8<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(ctx: &mut
 }
 
 #[dotnet_instruction(ConvertUnsignedToFloat)]
-pub fn conv_r_un<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
+pub fn conv_r_un<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
 ) -> StepResult {
     let value = ctx.pop();

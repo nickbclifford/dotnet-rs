@@ -60,12 +60,12 @@ use dotnet_value::{StackValue, object::ObjectRef};
 #[dotnet_intrinsic(
     "object DotnetRs.ConstructorInfo::Invoke(System.Reflection.BindingFlags, System.Reflection.Binder, object[], System.Globalization.CultureInfo)"
 )]
-pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc();
+    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let method_name = &*method.method.name;
     let param_count = method.method.signature.parameters.len();
 
@@ -91,7 +91,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
                 .corlib_type("System.RuntimeMethodHandle")
                 .expect("System.RuntimeMethodHandle must exist");
             let instance = vm_try!(ctx.new_object(rmh));
-            obj.write(&mut instance.instance_storage.get_field_mut_local(rmh, "_value"));
+            instance.instance_storage.field::<ObjectRef<'gc>>(rmh, "_value").unwrap().write(obj);
 
             ctx.push(StackValue::ValueType(instance));
             Some(StepResult::Continue)
@@ -182,29 +182,26 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc>(
 #[dotnet_intrinsic(
     "static System.IntPtr System.RuntimeMethodHandle::GetFunctionPointer(System.RuntimeMethodHandle)"
 )]
-pub fn intrinsic_method_handle_get_function_pointer<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_method_handle_get_function_pointer<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc();
+    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let handle = ctx.pop_value_type();
-    let method_obj = unsafe {
-        ObjectRef::read_branded(
-            &handle
-                .instance_storage
-                .get_field_local(handle.description, "_value"),
-            &gc,
-        )
-    };
+    let method_obj = handle
+        .instance_storage
+        .field::<ObjectRef<'gc>>(handle.description, "_value")
+        .unwrap()
+        .read();
     let (method, lookup) = ctx.resolve_runtime_method(method_obj);
     let index = ctx.get_runtime_method_index(method, lookup);
     ctx.push_isize(index as isize);
     StepResult::Continue
 }
 
-fn resolve_return_type<'gc, 'm>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn resolve_return_type<'gc, 'm, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     method: &MethodDescription,
     lookup: &GenericLookup,
 ) -> RuntimeType {
@@ -217,8 +214,8 @@ fn resolve_return_type<'gc, 'm>(
     }
 }
 
-fn unmarshal_invoke_params<'gc, 'm>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn unmarshal_invoke_params<'gc, 'm, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     gc: &GCHandle<'gc>,
     method: &MethodDescription,
     lookup: &GenericLookup,
@@ -254,7 +251,7 @@ fn unmarshal_invoke_params<'gc, 'm>(
                                 .loader()
                                 .corlib_type("System.TypedReference")
                                 .expect("System.TypedReference must exist");
-                            ctx.read_cts_value(&tr_type.into(), &o.instance_storage.get())
+                            o.instance_storage.with_data(|data| ctx.read_cts_value(&tr_type.into(), data))
                         } else {
                             panic!("Expected boxed TypedReference for parameter {}", i)
                         }
@@ -287,7 +284,7 @@ fn unmarshal_invoke_params<'gc, 'm>(
                 } else {
                     let val = arg_obj.as_heap_storage(|s| {
                         if let dotnet_value::object::HeapStorage::Boxed(o) = s {
-                            ctx.read_cts_value(&concrete_param_type, &o.instance_storage.get())
+                            o.instance_storage.with_data(|data| ctx.read_cts_value(&concrete_param_type, data))
                         } else {
                             panic!("Expected boxed value for parameter {}", i)
                         }

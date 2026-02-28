@@ -32,7 +32,7 @@ pub(crate) fn get_runtime_member_index<T: PartialEq>(
 pub(crate) fn pre_initialize_reflection<'gc, 'm: 'gc>(
     ctx: &mut (impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
 ) {
-    let _gc = ctx.gc();
+    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let blessed = [
         RuntimeType::Void,
         RuntimeType::Boolean,
@@ -62,7 +62,7 @@ pub(crate) fn get_runtime_type<'gc, 'm: 'gc>(
     ctx: &mut (impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
     target: RuntimeType,
 ) -> ObjectRef<'gc> {
-    let gc = ctx.gc();
+    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     if let Some(obj) = ctx.reflection().types_read().get(&target) {
         return *obj;
     }
@@ -105,8 +105,9 @@ pub(crate) fn get_runtime_type<'gc, 'm: 'gc>(
     obj_ref.as_object_mut(gc, |instance| {
         instance
             .instance_storage
-            .get_field_mut_local(rt, "index")
-            .copy_from_slice(&index.to_ne_bytes());
+            .field::<usize>(rt, "index")
+            .unwrap()
+            .write(index);
     });
 
     ctx.reflection().types_write().insert(target, obj_ref);
@@ -118,10 +119,11 @@ pub(crate) fn resolve_runtime_type<'gc, 'm: 'gc>(
     obj: ObjectRef<'gc>,
 ) -> RuntimeType {
     obj.as_object(|instance| {
-        let ct = instance
+        let index = instance
             .instance_storage
-            .get_field_local(instance.description, "index");
-        let index = usize::from_ne_bytes((&*ct).try_into().unwrap());
+            .field::<usize>(instance.description, "index")
+            .unwrap()
+            .read();
         #[cfg(feature = "multithreading")]
         return ctx
             .shared()
@@ -140,10 +142,11 @@ pub(crate) fn resolve_runtime_method<'gc, 'm: 'gc>(
     obj: ObjectRef<'gc>,
 ) -> (MethodDescription, GenericLookup) {
     obj.as_object(|instance| {
-        let data = instance
+        let index = instance
             .instance_storage
-            .get_field_local(instance.description, "index");
-        let index = usize::from_ne_bytes((*data).try_into().unwrap());
+            .field::<usize>(instance.description, "index")
+            .unwrap()
+            .read();
         #[cfg(feature = "multithreading")]
         return ctx
             .shared()
@@ -164,10 +167,11 @@ pub(crate) fn resolve_runtime_field<'gc, 'm: 'gc>(
     obj: ObjectRef<'gc>,
 ) -> (FieldDescription, GenericLookup) {
     obj.as_object(|instance| {
-        let data = instance
+        let index = instance
             .instance_storage
-            .get_field_local(instance.description, "index");
-        let index = usize::from_ne_bytes((*data).try_into().unwrap());
+            .field::<usize>(instance.description, "index")
+            .unwrap()
+            .read();
         #[cfg(feature = "multithreading")]
         return ctx
             .shared()
@@ -310,7 +314,7 @@ pub(crate) fn get_runtime_method_obj<'gc, 'm: 'gc>(
     method: MethodDescription,
     lookup: GenericLookup,
 ) -> ObjectRef<'gc> {
-    let gc = ctx.gc();
+    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     if let Some(obj) = ctx
         .reflection()
         .method_objs_read()
@@ -342,8 +346,9 @@ pub(crate) fn get_runtime_method_obj<'gc, 'm: 'gc>(
     obj_ref.as_object_mut(gc, |instance| {
         instance
             .instance_storage
-            .get_field_mut_local(rt, "index")
-            .copy_from_slice(&index.to_ne_bytes());
+            .field::<usize>(rt, "index")
+            .unwrap()
+            .write(index);
     });
 
     ctx.reflection()
@@ -357,7 +362,7 @@ pub(crate) fn get_runtime_field_obj<'gc, 'm: 'gc>(
     field: FieldDescription,
     lookup: GenericLookup,
 ) -> ObjectRef<'gc> {
-    let gc = ctx.gc();
+    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     if let Some(obj) = ctx
         .reflection()
         .field_objs_read()
@@ -382,8 +387,9 @@ pub(crate) fn get_runtime_field_obj<'gc, 'm: 'gc>(
     obj_ref.as_object_mut(gc, |instance| {
         instance
             .instance_storage
-            .get_field_mut_local(rt, "index")
-            .copy_from_slice(&index.to_ne_bytes());
+            .field::<usize>(rt, "index")
+            .unwrap()
+            .write(index);
     });
 
     ctx.reflection()

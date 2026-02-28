@@ -4,8 +4,8 @@ use dotnet_types::{generics::GenericLookup, members::MethodDescription, runtime:
 use dotnet_value::StackValue;
 
 #[dotnet_intrinsic("string DotnetRs.FieldInfo::GetName()")]
-pub fn intrinsic_field_info_get_name<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_field_info_get_name<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -16,8 +16,8 @@ pub fn intrinsic_field_info_get_name<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("System.Type DotnetRs.FieldInfo::GetDeclaringType()")]
-pub fn intrinsic_field_info_get_declaring_type<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_field_info_get_declaring_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -29,8 +29,8 @@ pub fn intrinsic_field_info_get_declaring_type<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("System.RuntimeFieldHandle DotnetRs.FieldInfo::GetFieldHandle()")]
-pub fn intrinsic_field_info_get_field_handle<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_field_info_get_field_handle<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {

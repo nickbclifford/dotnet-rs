@@ -109,7 +109,7 @@ While waiting for another thread's `.cctor` to complete, the waiting thread must
 ## Non-Obvious Connections
 
 ### Resolution ↔ Intrinsics
-The resolver checks the intrinsic cache before dispatching a method call. If a method is intrinsic, execution bypasses CIL interpretation entirely and calls the native Rust handler. This check happens in `resolver/methods.rs` and is cached in `GlobalCaches`.
+The resolver checks the intrinsic cache before dispatching a method call. If a method is intrinsic, execution bypasses CIL interpretation entirely. Instead, the `IntrinsicRegistry` uses a Perfect Hash Function (PHF) to map the method signature to a stable `MethodIntrinsicId`. This ID is then passed to a monomorphic dispatcher that calls the native Rust handler. This pipeline ensures that intrinsic lookups are fast and that the final call is a direct, inlinable function call. This check happens in `resolver/methods.rs` and is cached in `GlobalCaches`.
 
 ### Resolution ↔ Layout ↔ GC
 Layout computation produces `GcDesc` which the GC uses during tracing to know which bytes in an object are managed references. This connects the type system to the garbage collector.

@@ -1,10 +1,18 @@
-use crate::{StepResult, layout::type_layout, resolution::ValueResolution, stack::ops::VesOps};
+use crate::{
+    StepResult,
+    layout::type_layout,
+    resolution::ValueResolution,
+    stack::ops::{
+        CallOps, EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps,
+        ResolutionOps, StackOps, TypedStackOps,
+    },
+};
 use dotnet_types::{
     TypeDescription,
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
 };
-use dotnet_utils::BorrowGuard;
+use dotnet_utils::{BorrowGuardHandle, NoActiveBorrows};
 use dotnet_value::{
     StackValue,
     layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
@@ -16,37 +24,28 @@ use std::ptr::NonNull;
 
 /// Read the _reference ManagedPtr from a Span/ReadOnlySpan value type.
 pub fn read_span_reference<'gc>(span: &Object<'gc>) -> Result<ManagedPtrInfo<'gc>, String> {
-    if !span
+    let ptr = span
         .instance_storage
-        .has_field(span.description, "_reference")
-    {
-        return Err("Span must have _reference field".to_string());
-    }
-    let ptr_data = span
-        .instance_storage
-        .get_field_local(span.description, "_reference");
-    unsafe { ManagedPtr::read_unchecked(&ptr_data) }
-        .map_err(|e| format!("Failed to deserialize span _reference: {:?}", e))
+        .field::<ManagedPtr<'gc>>(span.description, "_reference")
+        .ok_or_else(|| "Span must have _reference field".to_string())?
+        .read();
+    Ok(ptr.into_info())
 }
 
 /// Read the _length from a Span/ReadOnlySpan value type.
 pub fn read_span_length(span: &Object) -> Result<i32, String> {
-    if !span.instance_storage.has_field(span.description, "_length") {
-        return Err("Span must have _length field".to_string());
-    }
-    let len_data = span
+    Ok(span
         .instance_storage
-        .get_field_local(span.description, "_length");
-    Ok(i32::from_ne_bytes(len_data[..4].try_into().map_err(
-        |_| "Failed to convert span length bytes".to_string(),
-    )?))
+        .field::<i32>(span.description, "_length")
+        .ok_or_else(|| "Span must have _length field".to_string())?
+        .read())
 }
 
 /// Read the _reference ManagedPtr from a ManagedPtr that points to a Span.
-pub fn read_span_reference_from_ptr<'gc, 'm>(
+pub fn read_span_reference_from_ptr<'gc, 'm, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + ExceptionOps<'gc> + RawMemoryOps<'gc> + MemoryOps<'gc> + ReflectionOps<'gc, 'm>>(
     span_ptr: &ManagedPtr<'gc>,
     layout: &FieldLayoutManager,
-    ctx: &dyn VesOps<'gc, 'm>,
+    ctx: &T,
 ) -> Result<ManagedPtr<'gc>, String> {
     let ref_field = layout
         .get_field_by_name("_reference")
@@ -59,15 +58,15 @@ pub fn read_span_reference_from_ptr<'gc, 'm>(
     let mut ptr_bytes = ManagedPtr::serialization_buffer();
     unsafe {
         ctx.read_bytes(
-            span_ptr.origin.clone(),
-            span_ptr.offset + ref_field.position,
+            span_ptr.origin().clone(),
+            span_ptr.byte_offset() + ref_field.position,
             &mut ptr_bytes,
         )
     }
     .map_err(|e| format!("Failed to read span _reference bytes: {}", e))?;
 
     // Deserialize the ManagedPtrInfo from bytes
-    let info = unsafe { ManagedPtr::read_branded(&ptr_bytes, &ctx.gc()) }
+    let info = unsafe { ManagedPtr::read_branded(&ptr_bytes, &ctx.gc_with_token(&NoActiveBorrows::new())) }
         .map_err(|e| format!("Failed to deserialize span _reference: {:?}", e))?;
 
     // Reconstruct with proper type - use NULL for now, caller can adjust if needed
@@ -79,18 +78,18 @@ pub fn read_span_reference_from_ptr<'gc, 'm>(
 }
 
 /// Read the _length from a ManagedPtr that points to a Span.
-pub fn read_span_length_from_ptr<'gc, 'm>(
+pub fn read_span_length_from_ptr<'gc, 'm, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + ExceptionOps<'gc> + RawMemoryOps<'gc> + MemoryOps<'gc> + ReflectionOps<'gc, 'm>>(
     span_ptr: &ManagedPtr<'gc>,
     layout: &FieldLayoutManager,
-    ctx: &dyn VesOps<'gc, 'm>,
+    ctx: &T,
 ) -> Result<i32, String> {
     let length_field = layout
         .get_field_by_name("_length")
         .ok_or_else(|| "Span must have _length field".to_string())?;
     let val = unsafe {
         ctx.read_unaligned(
-            span_ptr.origin.clone(),
-            span_ptr.offset + length_field.position,
+            span_ptr.origin().clone(),
+            span_ptr.byte_offset() + length_field.position,
             &length_field.layout,
             None,
         )
@@ -100,12 +99,12 @@ pub fn read_span_length_from_ptr<'gc, 'm>(
 }
 
 /// Write a ManagedPtr + length into a Span/ReadOnlySpan value type.
-pub fn write_span_fields<'gc, 'm>(
+pub fn write_span_fields<'gc, 'm, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + ExceptionOps<'gc> + RawMemoryOps<'gc> + MemoryOps<'gc> + ReflectionOps<'gc, 'm>>(
     span_ptr: &ManagedPtr<'gc>,
     managed: &ManagedPtr<'gc>,
     length: i32,
     layout: &FieldLayoutManager,
-    ctx: &mut dyn VesOps<'gc, 'm>,
+    ctx: &mut T,
 ) -> Result<(), String> {
     let ref_field = layout
         .get_field_by_name("_reference")
@@ -117,8 +116,8 @@ pub fn write_span_fields<'gc, 'm>(
     // Write _reference
     unsafe {
         ctx.write_unaligned(
-            span_ptr.origin.clone(),
-            span_ptr.offset + ref_field.position,
+            span_ptr.origin().clone(),
+            span_ptr.byte_offset() + ref_field.position,
             StackValue::ManagedPtr(managed.clone()),
             &ref_field.layout,
         )
@@ -128,8 +127,8 @@ pub fn write_span_fields<'gc, 'm>(
     // Write _length
     unsafe {
         ctx.write_unaligned(
-            span_ptr.origin.clone(),
-            span_ptr.offset + length_field.position,
+            span_ptr.origin().clone(),
+            span_ptr.byte_offset() + length_field.position,
             StackValue::Int32(length),
             &length_field.layout,
         )
@@ -139,14 +138,14 @@ pub fn write_span_fields<'gc, 'm>(
     Ok(())
 }
 
-pub fn with_span_data<'gc, 'm, R>(
-    ctx: &dyn VesOps<'gc, 'm>,
+pub fn with_span_data<'gc, 'm, R, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + ExceptionOps<'gc> + RawMemoryOps<'gc> + MemoryOps<'gc> + ReflectionOps<'gc, 'm>>(
+    ctx: &T,
     span: Object,
     element_type: TypeDescription,
     element_size: usize,
     f: impl FnOnce(&[u8]) -> R,
 ) -> Result<R, String> {
-    let _borrow = BorrowGuard::new(ctx);
+    let (_active, _borrow) = BorrowGuardHandle::new(ctx.as_borrow_scope(), NoActiveBorrows::new());
     let info = read_span_reference(&span)?;
     let len = read_span_length(&span)? as usize;
 
@@ -173,7 +172,7 @@ pub fn with_span_data<'gc, 'm, R>(
                 let data_len = v.layout.length * elem_size;
 
                 // Calculate pointer value from owner + offset
-                let ptr_val = data_ptr + m_ptr.offset.as_usize();
+                let ptr_val = data_ptr + m_ptr.byte_offset().as_usize();
 
                 // Check if the range [ptr_val, ptr_val + total_size) is within [data_ptr, data_ptr + data_len)
                 if ptr_val < data_ptr || ptr_val + total_size > data_ptr + data_len {
@@ -189,23 +188,23 @@ pub fn with_span_data<'gc, 'm, R>(
             _ => {
                 // Inline storage (Object/Boxed): check offset relative to object header
                 let obj_size = inner.storage.size_bytes();
-                if m_ptr.offset.as_usize() + total_size > obj_size {
+                if m_ptr.byte_offset().as_usize() + total_size > obj_size {
                     return Err(format!(
                         "Span bounds violation: offset {} + size {} > owner size {}",
-                        m_ptr.offset.as_usize(),
+                        m_ptr.byte_offset().as_usize(),
                         total_size,
                         obj_size
                     ));
                 }
             }
         }
-    } else if let dotnet_value::pointer::PointerOrigin::Transient(obj) = &m_ptr.origin {
+    } else if let dotnet_value::pointer::PointerOrigin::Transient(obj) = &m_ptr.origin() {
         let mut bounds_error = None;
         obj.with_data(|data| {
-            if m_ptr.offset.as_usize() + total_size > data.len() {
+            if m_ptr.byte_offset().as_usize() + total_size > data.len() {
                 bounds_error = Some(format!(
                     "Span bounds violation (transient): offset {} + size {} > owner size {}",
-                    m_ptr.offset.as_usize(),
+                    m_ptr.byte_offset().as_usize(),
                     total_size,
                     data.len()
                 ));
@@ -219,8 +218,8 @@ pub fn with_span_data<'gc, 'm, R>(
     Ok(unsafe { m_ptr.with_data(total_size, f) })
 }
 
-fn chunked_sequence_equal<'gc, 'm>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn chunked_sequence_equal<'gc, 'm, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + ExceptionOps<'gc> + RawMemoryOps<'gc> + MemoryOps<'gc> + ReflectionOps<'gc, 'm>>(
+    ctx: &mut T,
     a: &ManagedPtr<'gc>,
     b: &ManagedPtr<'gc>,
     total_bytes: usize,
@@ -257,8 +256,8 @@ use dotnet_macros::dotnet_intrinsic;
 
 #[dotnet_intrinsic("void System.Span<T>::.ctor(void*, int)")]
 #[dotnet_intrinsic("void System.ReadOnlySpan<T>::.ctor(void*, int)")]
-pub fn intrinsic_span_ctor_from_pointer<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_span_ctor_from_pointer<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + ExceptionOps<'gc> + RawMemoryOps<'gc> + MemoryOps<'gc> + ReflectionOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
@@ -328,7 +327,7 @@ pub fn intrinsic_span_ctor_from_pointer<'gc, 'm: 'gc>(
         }
     };
 
-    let span_type = this_ptr.inner_type;
+    let span_type = this_ptr.inner_type();
     let res_ctx = ctx.current_context();
     let layout = vm_try!(type_layout(ConcreteType::from(span_type), &res_ctx));
 
@@ -351,8 +350,8 @@ pub fn intrinsic_span_ctor_from_pointer<'gc, 'm: 'gc>(
 #[dotnet_intrinsic(
     "static bool System.MemoryExtensions::SequenceEqual<T>(System.ReadOnlySpan<T>, System.ReadOnlySpan<T>)"
 )]
-pub fn intrinsic_memory_extensions_sequence_equal<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_memory_extensions_sequence_equal<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + ExceptionOps<'gc> + RawMemoryOps<'gc> + MemoryOps<'gc> + ReflectionOps<'gc, 'm> + CallOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
@@ -459,8 +458,8 @@ pub fn intrinsic_memory_extensions_sequence_equal<'gc, 'm: 'gc>(
 #[dotnet_intrinsic(
     "static bool System.MemoryExtensions::Equals(System.ReadOnlySpan<char>, System.ReadOnlySpan<char>, System.StringComparison)"
 )]
-pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + ExceptionOps<'gc> + RawMemoryOps<'gc> + MemoryOps<'gc> + ReflectionOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -513,8 +512,8 @@ pub fn intrinsic_memory_extensions_equals_span_char<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static bool System.SpanHelpers::SequenceEqual(ref byte, ref byte, nuint)")]
-pub fn intrinsic_span_helpers_sequence_equal<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_span_helpers_sequence_equal<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + ExceptionOps<'gc> + RawMemoryOps<'gc> + MemoryOps<'gc> + ReflectionOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -539,7 +538,7 @@ pub fn intrinsic_span_helpers_sequence_equal<'gc, 'm: 'gc>(
     ctx.push_i32(equal as i32);
     StepResult::Continue
 }
-fn pop_nonneg_usize<'gc, 'm>(ctx: &mut dyn VesOps<'gc, 'm>) -> Result<usize, StepResult> {
+fn pop_nonneg_usize<'gc, 'm, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + ExceptionOps<'gc> + RawMemoryOps<'gc> + MemoryOps<'gc> + ReflectionOps<'gc, 'm>>(ctx: &mut T) -> Result<usize, StepResult> {
     match ctx.pop() {
         StackValue::Int32(i) => {
             if i < 0 {
@@ -570,12 +569,12 @@ fn pop_nonneg_usize<'gc, 'm>(ctx: &mut dyn VesOps<'gc, 'm>) -> Result<usize, Ste
 #[dotnet_intrinsic(
     "static System.ReadOnlySpan<T> System.MemoryExtensions::AsSpan<T>(T[], int, int)"
 )]
-pub fn intrinsic_as_span<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_as_span<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + ExceptionOps<'gc> + RawMemoryOps<'gc> + MemoryOps<'gc> + ReflectionOps<'gc, 'm>>(
+    ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc();
+    let _gc = ctx.gc_with_token(&NoActiveBorrows::new());
     let param_count = method.method.signature.parameters.len();
 
     // AsSpan can have 1, 2, or 3 parameters:
@@ -719,7 +718,7 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
 
     let layout = vm_try!(type_layout(span_type_concrete.clone(), &res_ctx));
 
-    let (ref_offset_rel, length_offset_rel) = match &*layout {
+    let (_ref_offset_rel, _length_offset_rel) = match &*layout {
         LayoutManager::Field(f) => {
             let ref_off = vm_try!(f.get_field_by_name("_reference").ok_or_else(|| {
                 crate::error::ExecutionError::InternalError(
@@ -758,17 +757,14 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
         false,
         Some(offset),
     );
-    {
-        let mut data = span.instance_storage.get_mut();
-        let start = ref_offset_rel.as_usize();
-        managed.write(&mut data[start..start + ManagedPtr::SIZE]);
-    }
-
-    {
-        let mut data = span.instance_storage.get_mut();
-        let start = length_offset_rel.as_usize();
-        data[start..start + 4].copy_from_slice(&(len as i32).to_ne_bytes());
-    }
+    span.instance_storage
+        .field::<ManagedPtr<'gc>>(span.description, "_reference")
+        .unwrap()
+        .write(managed);
+    span.instance_storage
+        .field::<i32>(span.description, "_length")
+        .unwrap()
+        .write(len as i32);
 
     ctx.push_value_type(span);
     StepResult::Continue
@@ -777,12 +773,12 @@ pub fn intrinsic_as_span<'gc, 'm: 'gc>(
 #[dotnet_intrinsic(
     "static System.Span<T> System.Runtime.CompilerServices.RuntimeHelpers::CreateSpan<T>(System.RuntimeFieldHandle)"
 )]
-pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + ExceptionOps<'gc> + RawMemoryOps<'gc> + MemoryOps<'gc> + ReflectionOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc();
+    let _gc = ctx.gc_with_token(&NoActiveBorrows::new());
     let element_type = &generics.method_generics[0];
     let res_ctx = ctx.with_generics(generics);
     let element_size = vm_try!(type_layout(element_type.clone(), &res_ctx)).size();
@@ -794,7 +790,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
         ConcreteType::from(field_handle.description),
         &res_ctx_handle
     ));
-    let value_offset = match &*handle_layout {
+    let _value_offset = match &*handle_layout {
         LayoutManager::Field(f) => vm_try!(f.get_field_by_name("_value").ok_or_else(|| {
             crate::error::ExecutionError::InternalError(
                 "RuntimeFieldHandle must have _value field".to_string(),
@@ -820,12 +816,11 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
         },
         lookup,
     ) = {
-        let mut ptr_buf = [0u8; ObjectRef::SIZE];
-        {
-            let data = field_handle.instance_storage.get();
-            ptr_buf.copy_from_slice(&data[value_offset..value_offset + ObjectRef::SIZE]);
-        }
-        let obj_ref = unsafe { ObjectRef::read_branded(&ptr_buf, &gc) };
+        let obj_ref = field_handle
+            .instance_storage
+            .field::<ObjectRef<'gc>>(field_handle.description, "_value")
+            .unwrap()
+            .read();
         ctx.resolve_runtime_field(obj_ref)
     };
     let field_type = vm_try!(lookup.make_concrete(field_resolution, field.return_type.clone()));
@@ -860,7 +855,7 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
         let span_instance = vm_try!(span_res_ctx.new_object(span_type));
 
         let layout = vm_try!(type_layout(ConcreteType::from(span_type), &span_res_ctx));
-        let (ref_offset, length_offset) = match &*layout {
+        let (_ref_offset, _length_offset) = match &*layout {
             LayoutManager::Field(f) => {
                 let ref_off = vm_try!(f.get_field_by_name("_reference").ok_or_else(|| {
                     crate::error::ExecutionError::NotImplemented(
@@ -894,18 +889,18 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
             false,
             None,
         );
-        {
-            let mut data = span_instance.instance_storage.get_mut();
-            managed
-                .write(&mut data[ref_offset.as_usize()..ref_offset.as_usize() + ManagedPtr::SIZE]);
-        }
+        span_instance
+            .instance_storage
+            .field::<ManagedPtr<'gc>>(span_instance.description, "_reference")
+            .unwrap()
+            .write(managed);
 
         let element_count = (array_size / element_size.as_usize()) as i32;
-        {
-            let mut data = span_instance.instance_storage.get_mut();
-            data[length_offset.as_usize()..length_offset.as_usize() + 4]
-                .copy_from_slice(&element_count.to_ne_bytes());
-        }
+        span_instance
+            .instance_storage
+            .field::<i32>(span_instance.description, "_length")
+            .unwrap()
+            .write(element_count);
 
         ctx.push_value_type(span_instance);
         StepResult::Continue
@@ -917,12 +912,12 @@ pub fn intrinsic_runtime_helpers_create_span<'gc, 'm: 'gc>(
 #[dotnet_intrinsic(
     "static T& System.Runtime.CompilerServices.RuntimeHelpers::GetSpanDataFrom<T>(T&, System.Type, int&)"
 )]
-pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + ExceptionOps<'gc> + RawMemoryOps<'gc> + MemoryOps<'gc> + ReflectionOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc();
+    let _gc = ctx.gc_with_token(&NoActiveBorrows::new());
     let length_ref = ctx.pop_managed_ptr();
     let type_handle = ctx.pop_value_type();
     let field_handle = ctx.pop_value_type();
@@ -933,7 +928,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
         ConcreteType::from(field_handle.description),
         &res_ctx_field
     ));
-    let field_value_offset = match &*field_layout {
+    let _field_value_offset = match &*field_layout {
         LayoutManager::Field(f) => vm_try!(f.get_field_by_name("_value").ok_or_else(|| {
             crate::error::ExecutionError::NotImplemented(
                 "RuntimeFieldHandle must have _value field".to_string(),
@@ -952,13 +947,11 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
     };
 
     let (FieldDescription { field, .. }, _) = {
-        let mut ptr_buf = [0u8; ObjectRef::SIZE];
-        {
-            let data = field_handle.instance_storage.get();
-            ptr_buf
-                .copy_from_slice(&data[field_value_offset..field_value_offset + ObjectRef::SIZE]);
-        }
-        let obj_ref = unsafe { ObjectRef::read_branded(&ptr_buf, &gc) };
+        let obj_ref = field_handle
+            .instance_storage
+            .field::<ObjectRef<'gc>>(field_handle.description, "_value")
+            .unwrap()
+            .read();
         ctx.resolve_runtime_field(obj_ref)
     };
 
@@ -968,7 +961,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
         ConcreteType::from(type_handle.description),
         &res_ctx_type
     ));
-    let type_value_offset = match &*runtime_type_layout {
+    let _type_value_offset = match &*runtime_type_layout {
         LayoutManager::Field(f) => vm_try!(f.get_field_by_name("_value").ok_or_else(|| {
             crate::error::ExecutionError::NotImplemented(
                 "RuntimeTypeHandle must have _value field".to_string(),
@@ -987,12 +980,11 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
     };
 
     let element_type_runtime = {
-        let mut ptr_buf = [0u8; ObjectRef::SIZE];
-        {
-            let data = type_handle.instance_storage.get();
-            ptr_buf.copy_from_slice(&data[type_value_offset..type_value_offset + ObjectRef::SIZE]);
-        }
-        let obj_ref = unsafe { ObjectRef::read_branded(&ptr_buf, &gc) };
+        let obj_ref = type_handle
+            .instance_storage
+            .field::<ObjectRef<'gc>>(type_handle.description, "_value")
+            .unwrap()
+            .read();
         ctx.resolve_runtime_type(obj_ref)
     };
 
@@ -1021,8 +1013,8 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
         vm_try!(
             unsafe {
                 ctx.write_bytes(
-                    length_ref.origin.clone(),
-                    length_ref.offset,
+                    length_ref.origin().clone(),
+                    length_ref.byte_offset(),
                     &element_count.to_ne_bytes(),
                 )
             }
@@ -1048,12 +1040,12 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("static byte& DotnetRs.Internal::GetArrayData(System.Array)")]
-pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + ExceptionOps<'gc> + RawMemoryOps<'gc> + MemoryOps<'gc> + ReflectionOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc();
+    let _gc = ctx.gc_with_token(&NoActiveBorrows::new());
     let array_ref = ctx.pop_obj();
 
     let element_type = if !generics.method_generics.is_empty() {
@@ -1104,19 +1096,19 @@ pub fn intrinsic_internal_get_array_data<'gc, 'm: 'gc>(
 
 #[dotnet_intrinsic("T& System.Span<T>::GetPinnableReference()")]
 #[dotnet_intrinsic("T& System.ReadOnlySpan<T>::GetPinnableReference()")]
-pub fn intrinsic_span_get_pinnable_reference<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_span_get_pinnable_reference<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ResolutionOps<'gc, 'm> + LoaderOps<'m> + ExceptionOps<'gc> + RawMemoryOps<'gc> + MemoryOps<'gc> + ReflectionOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc();
+    let _gc = ctx.gc_with_token(&NoActiveBorrows::new());
     let span = ctx.pop_managed_ptr();
 
     let element_type = &generics.type_generics[0];
     let element_desc = vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
 
     let res_ctx = ctx.current_context();
-    let layout = vm_try!(type_layout(ConcreteType::from(span.inner_type), &res_ctx));
+    let layout = vm_try!(type_layout(ConcreteType::from(span.inner_type()), &res_ctx));
 
     let LayoutManager::Field(f) = &*layout else {
         return StepResult::Error(
@@ -1144,7 +1136,7 @@ pub fn intrinsic_span_get_pinnable_reference<'gc, 'm: 'gc>(
     } else {
         // Return a managed pointer to the first element
         let mut managed = managed_ref;
-        managed.inner_type = element_desc;
+        managed = managed.with_inner_type(element_desc);
         ctx.push_managed_ptr(managed);
     }
 

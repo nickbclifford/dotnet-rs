@@ -292,13 +292,7 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
                         let ip = self.state().ip;
                         let i = &self.state().info_handle.instructions[ip];
 
-                        last_res = if let Some(res) =
-                            crate::dispatch::InstructionRegistry::dispatch(self, i)
-                        {
-                            res
-                        } else {
-                            panic!("Unregistered instruction: {:?}", i);
-                        };
+                        last_res = crate::dispatch::InstructionRegistry::dispatch(self, i);
 
                         match last_res {
                             StepResult::Continue => {

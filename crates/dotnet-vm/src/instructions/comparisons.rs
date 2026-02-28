@@ -1,13 +1,13 @@
 use crate::{
     StepResult,
-    stack::ops::{AllStackOps, ExceptionOps, TypedStackOps},
+    stack::ops::{EvalStackOps, ExceptionOps, TypedStackOps},
 };
 use dotnet_macros::dotnet_instruction;
 use dotnetdll::prelude::*;
 use std::cmp::Ordering as CmpOrdering;
 
 #[dotnet_instruction(CompareEqual)]
-pub fn ceq<'gc, T: AllStackOps<'gc> + ?Sized>(ctx: &mut T) -> StepResult {
+pub fn ceq<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>(ctx: &mut T) -> StepResult {
     let v2 = vm_pop!(ctx);
     let v1 = vm_pop!(ctx);
     let val = (v1 == v2) as i32;
@@ -27,7 +27,7 @@ comparison_op!(
 );
 
 #[dotnet_instruction(CheckFinite)]
-pub fn ckfinite<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
+pub fn ckfinite<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
 ) -> StepResult {
     let f = ctx.pop_f64();

@@ -185,6 +185,23 @@ macro_rules! fixture_test {
             );
         }
     };
+    (#[ignore] $name:ident, $path:expr, $expected:expr) => {
+        #[test]
+        #[ignore]
+        fn $name() {
+            let harness = TestHarness::get();
+            let dll_path = harness.build(Path::new($path)).unwrap();
+            let exit_code = harness.run(&dll_path);
+            assert_eq!(
+                exit_code,
+                $expected,
+                "Test {} failed: expected exit code {}, got {}",
+                stringify!($name),
+                $expected,
+                exit_code
+            );
+        }
+    };
 }
 
 // ============================================================================

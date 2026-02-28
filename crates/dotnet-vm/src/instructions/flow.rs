@@ -14,7 +14,7 @@ pub fn br<T: ?Sized>(_ctx: &mut T, target: usize) -> StepResult {
 }
 
 #[dotnet_instruction(BranchEqual(target))]
-pub fn beq<'gc, T: EvalStackOps<'gc> + ?Sized>(ctx: &mut T, target: usize) -> StepResult {
+pub fn beq<'gc, T: EvalStackOps<'gc>>(ctx: &mut T, target: usize) -> StepResult {
     let v2 = ctx.pop();
     let v1 = ctx.pop();
     if v1 == v2 {
@@ -25,7 +25,7 @@ pub fn beq<'gc, T: EvalStackOps<'gc> + ?Sized>(ctx: &mut T, target: usize) -> St
 }
 
 #[dotnet_instruction(BranchGreaterOrEqual(sgn, target))]
-pub fn bge<'gc, T: EvalStackOps<'gc> + ?Sized>(
+pub fn bge<'gc, T: EvalStackOps<'gc>>(
     ctx: &mut T,
 
     sgn: NumberSign,
@@ -45,7 +45,7 @@ pub fn bge<'gc, T: EvalStackOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(BranchGreater(sgn, target))]
-pub fn bgt<'gc, T: EvalStackOps<'gc> + ?Sized>(
+pub fn bgt<'gc, T: EvalStackOps<'gc>>(
     ctx: &mut T,
 
     sgn: NumberSign,
@@ -62,7 +62,7 @@ pub fn bgt<'gc, T: EvalStackOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(BranchLessOrEqual(sgn, target))]
-pub fn ble<'gc, T: EvalStackOps<'gc> + ?Sized>(
+pub fn ble<'gc, T: EvalStackOps<'gc>>(
     ctx: &mut T,
 
     sgn: NumberSign,
@@ -82,7 +82,7 @@ pub fn ble<'gc, T: EvalStackOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(BranchLess(sgn, target))]
-pub fn blt<'gc, T: EvalStackOps<'gc> + ?Sized>(
+pub fn blt<'gc, T: EvalStackOps<'gc>>(
     ctx: &mut T,
 
     sgn: NumberSign,
@@ -99,7 +99,7 @@ pub fn blt<'gc, T: EvalStackOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(BranchNotEqual(target))]
-pub fn bne<'gc, T: EvalStackOps<'gc> + ?Sized>(ctx: &mut T, target: usize) -> StepResult {
+pub fn bne<'gc, T: EvalStackOps<'gc>>(ctx: &mut T, target: usize) -> StepResult {
     let v2 = ctx.pop();
     let v1 = ctx.pop();
     if v1 != v2 {
@@ -110,7 +110,7 @@ pub fn bne<'gc, T: EvalStackOps<'gc> + ?Sized>(ctx: &mut T, target: usize) -> St
 }
 
 #[dotnet_instruction(BranchTruthy(target))]
-pub fn brtrue<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
+pub fn brtrue<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
     target: usize,
 ) -> StepResult {
@@ -134,7 +134,7 @@ pub fn brtrue<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(BranchFalsy(target))]
-pub fn brfalse<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
+pub fn brfalse<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
     target: usize,
 ) -> StepResult {
@@ -158,7 +158,7 @@ pub fn brfalse<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(Switch(targets))]
-pub fn switch<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
+pub fn switch<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
     targets: &[usize],
 ) -> StepResult {
@@ -179,6 +179,6 @@ pub fn switch<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc> + ?Sized>(
 }
 
 #[dotnet_instruction(Return)]
-pub fn ret<'gc, T: ExceptionOps<'gc> + ?Sized>(ctx: &mut T) -> StepResult {
+pub fn ret<'gc, T: ExceptionOps<'gc>>(ctx: &mut T) -> StepResult {
     ctx.ret()
 }

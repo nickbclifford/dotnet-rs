@@ -1,4 +1,12 @@
-use crate::{StepResult, layout::type_layout, resolution::TypeResolutionExt, stack::ops::VesOps};
+use crate::{
+    StepResult,
+    layout::type_layout,
+    resolution::TypeResolutionExt,
+    stack::ops::{
+        CallOps, EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps,
+        ResolutionOps, StackOps,
+    },
+};
 
 const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 const ACCESS_VIOLATION_MSG: &str = "Attempted to read or write protected memory.";
@@ -7,7 +15,7 @@ use dotnet_value::{StackValue, object::ObjectRef};
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(Call { param0 })]
-pub fn call<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn call<'gc, 'm: 'gc, T: CallOps<'gc, 'm>>(
     ctx: &mut T,
     param0: &MethodSource,
 ) -> StepResult {
@@ -16,7 +24,11 @@ pub fn call<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(CallVirtual { param0 })]
-pub fn callvirt<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn callvirt<
+    'gc,
+    'm: 'gc,
+    T: CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + ExceptionOps<'gc> + EvalStackOps<'gc> + LoaderOps<'m> + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     param0: &MethodSource,
 ) -> StepResult {
@@ -40,7 +52,7 @@ pub fn callvirt<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
         StackValue::ObjectRef(ObjectRef(Some(o))) => {
             vm_try!(ctx.current_context().get_heap_description(o))
         }
-        StackValue::ManagedPtr(m) => m.inner_type,
+        StackValue::ManagedPtr(m) => m.inner_type(),
         rest => {
             return StepResult::Error(crate::error::VmError::Execution(
                 crate::error::ExecutionError::TypeMismatch {
@@ -59,7 +71,11 @@ pub fn callvirt<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(CallConstrained(constraint, source))]
-pub fn call_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn call_constrained<
+    'gc,
+    'm: 'gc,
+    T: CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + LoaderOps<'m>,
+>(
     ctx: &mut T,
     constraint: &MethodType,
     source: &MethodSource,
@@ -74,7 +90,7 @@ pub fn call_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             .find_generic_method(source, &ctx.current_context())
     );
 
-    let td = vm_try!(ctx.loader().find_concrete_type(constraint_type.clone()));
+    let td: dotnet_types::TypeDescription = vm_try!(ctx.loader().find_concrete_type(constraint_type.clone()));
 
     for o in td.definition().overrides.iter() {
         let target = vm_try!(
@@ -87,7 +103,7 @@ pub fn call_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             None
         ));
         if method == declaration {
-            vm_trace!(ctx, "-- dispatching to {:?} --", target);
+            // vm_trace!(ctx, "-- dispatching to {:?} --", target);
             // Note: Uses dispatch_method directly since method is already resolved
             return ctx.dispatch_method(target, lookup);
         }
@@ -102,7 +118,11 @@ pub fn call_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
 }
 
 #[dotnet_instruction(CallVirtualConstrained(constraint, source))]
-pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
+pub fn callvirt_constrained<
+    'gc,
+    'm: 'gc,
+    T: CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + ExceptionOps<'gc> + StackOps<'gc, 'm> + MemoryOps<'gc> + RawMemoryOps<'gc> + LoaderOps<'m> + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     constraint: &MethodType,
     source: &MethodSource,
@@ -117,7 +137,7 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
     let mut args = ctx.pop_multiple(num_args);
 
     let constraint_type_source = vm_try!(ctx.make_concrete(constraint));
-    let constraint_type = vm_try!(
+    let constraint_type: dotnet_types::TypeDescription = vm_try!(
         ctx.loader()
             .find_concrete_type(constraint_type_source.clone())
     );
@@ -149,7 +169,7 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
             ));
 
             let value = match unsafe {
-                ctx.read_unaligned(m.origin.clone(), m.offset, &layout, Some(constraint_type))
+                ctx.read_unaligned(m.origin().clone(), m.byte_offset(), &layout, Some(constraint_type))
             } {
                 Ok(v) => v,
                 Err(_) => {
@@ -183,7 +203,7 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
                 // If the managed pointer originates from the evaluation stack (ldarga/ldloca),
                 // and targets a reference type with zero offset, the pointed memory holds a
                 // StackValue::ObjectRef, not a serialized ObjectRef. Read it via the slot.
-                match (&m.origin, m.offset) {
+                match (m.origin(), m.byte_offset()) {
                     (dotnet_value::pointer::PointerOrigin::Stack(idx), off)
                         if off.as_usize() == 0 =>
                     {
@@ -202,7 +222,7 @@ pub fn callvirt_constrained<'gc, 'm: 'gc, T: VesOps<'gc, 'm> + ?Sized>(
                     _ => unsafe {
                         // Heap/static/transient: the target stores a serialized ObjectRef
                         m.with_data(ObjectRef::SIZE, |data| {
-                            ObjectRef::read_branded(data, &ctx.gc())
+                            ObjectRef::read_branded(data, &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()))
                         })
                     },
                 }

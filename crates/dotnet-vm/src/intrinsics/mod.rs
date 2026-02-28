@@ -56,9 +56,8 @@
 //!     Create a function with the following signature and apply the `#[dotnet_intrinsic]` attribute:
 //!     ```rust,ignore
 //!     #[dotnet_intrinsic("static double System.Math::Min(double, double)")]
-//!     pub fn math_min_double<'gc, 'm: 'gc>(
-//!         ctx: &mut dyn VesOps<'gc, 'm>,
-//!         gc: GCHandle<'gc>,
+//!     pub fn math_min_double<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+//!         ctx: &mut T,
 //!         method: MethodDescription,
 //!         generics: &GenericLookup,
 //!     ) -> StepResult { ... }
@@ -115,7 +114,7 @@
 //!   ├─→ external_call() [if P/Invoke]
 //!   └─→ call_frame() [managed CIL]
 //! ```
-use crate::stack::ops::VesOps;
+use crate::stack::ops::{EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, ReflectionOps, TypedStackOps, VesOps};
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
@@ -144,7 +143,9 @@ pub mod span;
 pub mod static_registry;
 pub mod string_ops;
 
+include!(concat!(env!("OUT_DIR"), "/intrinsics_dispatch.rs"));
 include!(concat!(env!("OUT_DIR"), "/intrinsics_phf.rs"));
+
 pub mod text_ops;
 pub mod threading;
 pub mod unsafe_ops;
@@ -169,26 +170,13 @@ const NULL_REF_MSG: &str = "Object reference not set to an instance of an object
 /// 3. Pushing any return value onto the stack
 /// 4. Returning a StepResult indicating the outcome
 ///
-/// Note: The actual implementations should use `'m: 'gc` bound, but we can't
-/// express this in higher-ranked trait bounds. The registry uses transmute
-/// to work around this limitation safely.
-///
 /// GenericLookup is passed by reference to avoid cloning on every intrinsic call.
-pub type IntrinsicHandler = for<'gc, 'm> fn(
-    ctx: &mut dyn VesOps<'gc, 'm>,
-    method: MethodDescription,
-    generics: &GenericLookup,
-) -> StepResult;
+pub type IntrinsicHandler = MethodIntrinsicId;
 
-pub type IntrinsicFieldHandler = for<'gc, 'm> fn(
-    ctx: &mut dyn VesOps<'gc, 'm>,
-    field: FieldDescription,
-    type_generics: Arc<[ConcreteType]>,
-    is_address: bool,
-) -> StepResult;
+pub type IntrinsicFieldHandler = FieldIntrinsicId;
 
-pub fn missing_intrinsic_handler<'gc, 'm: 'gc>(
-    _ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn missing_intrinsic_handler<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    _ctx: &mut T,
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -202,24 +190,8 @@ pub fn missing_intrinsic_handler<'gc, 'm: 'gc>(
 }
 
 pub fn get_missing_intrinsic_handler() -> IntrinsicHandler {
-    // SAFETY: Transmuting to the higher-ranked trait bound fn pointer.
-    // This is safe because the function signature matches exactly,
-    // only the lifetime bounds are different (generic vs specific).
-    unsafe {
-        std::mem::transmute::<*const (), IntrinsicHandler>(missing_intrinsic_handler as *const ())
-    }
+    MethodIntrinsicId::Missing
 }
-
-// Note on transmute safety:
-// Throughout this file, we use `unsafe { std::mem::transmute::<_, IntrinsicHandler>(...) }`
-// to convert concrete function pointers to the IntrinsicHandler type. This is safe because:
-// 1. Both function types have identical memory layouts and ABI
-// 2. We're converting between function pointers with the same parameter/return types
-// 3. The only difference is the lifetime representation ('m: 'gc vs higher-ranked 'for')
-// 4. The transmute is from a concrete function pointer to a higher-ranked one, which
-//    is valid since the concrete function can be called with any valid lifetime combination
-// 5. The Rust type system cannot express 'm: 'gc in higher-ranked trait bounds, but the
-//    actual runtime behavior is identical
 
 /// Registry for intrinsic method implementations.
 ///
@@ -383,8 +355,8 @@ pub fn is_intrinsic_field(
     false
 }
 
-pub fn intrinsic_call<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_call<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
@@ -408,7 +380,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
         Some(&ctx.shared().caches.intrinsic_registry),
     ) {
         ctx.set_current_intrinsic(Some(method));
-        let res = (metadata.handler)(ctx, method, generics);
+        let res = dispatch_method_intrinsic(metadata.handler, ctx, method, generics);
         ctx.set_current_intrinsic(None);
         return res;
     }
@@ -416,8 +388,8 @@ pub fn intrinsic_call<'gc, 'm: 'gc>(
     panic!("unsupported intrinsic {:?}", method);
 }
 
-pub fn intrinsic_field<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_field<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+    ctx: &mut T,
     field: FieldDescription,
     type_generics: Arc<[ConcreteType]>,
     is_address: bool,
@@ -433,15 +405,15 @@ pub fn intrinsic_field<'gc, 'm: 'gc>(
         .intrinsic_registry
         .get_field(&field, ctx.loader())
     {
-        handler(ctx, field, type_generics, is_address)
+        dispatch_field_intrinsic(handler, ctx, field, type_generics, is_address)
     } else {
         panic!("unsupported load from intrinsic field: {:?}", field);
     }
 }
 
 #[dotnet_intrinsic("string System.Object::ToString()")]
-fn object_to_string<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn object_to_string<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + ExceptionOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -464,14 +436,14 @@ fn object_to_string<'gc, 'm: 'gc>(
 
     let str_val = CLRString::from(type_name);
     let storage = HeapStorage::Str(str_val);
-    let obj_ref = ObjectRef::new(ctx.gc(), storage);
+    let obj_ref = ObjectRef::new(ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()), storage);
     ctx.push_obj(obj_ref);
     StepResult::Continue
 }
 
 #[dotnet_intrinsic("System.Type System.Object::GetType()")]
-fn object_get_type<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+fn object_get_type<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + ReflectionOps<'gc, 'm> + LoaderOps<'m>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {

@@ -1,6 +1,6 @@
 use crate::{
     StepResult,
-    ops::{ExceptionOps, PoolOps, RawMemoryOps, StackOps, VesOps},
+    ops::{ExceptionOps, PoolOps, RawMemoryOps, StackOps},
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::{ByteOffset, atomic::validate_atomic_access};
@@ -22,7 +22,7 @@ const ACCESS_VIOLATION_MSG: &str = "Attempted to read or write protected memory.
 pub fn cpblk<
     'gc,
     'm: 'gc,
-    T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + ?Sized,
+    T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc>,
 >(
     ctx: &mut T,
 ) -> StepResult {
@@ -57,7 +57,7 @@ pub fn cpblk<
 pub fn initblk<
     'gc,
     'm: 'gc,
-    T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + ?Sized,
+    T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc>,
 >(
     ctx: &mut T,
 ) -> StepResult {
@@ -87,7 +87,7 @@ pub fn initblk<
 }
 
 #[dotnet_instruction(LocalMemoryAllocate)]
-pub fn localloc<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + PoolOps + ExceptionOps<'gc> + ?Sized>(
+pub fn localloc<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + PoolOps + ExceptionOps<'gc>>(
     ctx: &mut T,
 ) -> StepResult {
     let size_isize = ctx.pop_isize();
@@ -113,7 +113,14 @@ pub fn localloc<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + PoolOps + ExceptionOps<'gc>
 }
 
 #[dotnet_instruction(StoreIndirect { param0 })]
-pub fn stind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: StoreType) -> StepResult {
+pub fn stind<
+    'gc,
+    'm: 'gc,
+    T: StackOps<'gc, 'm> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
+>(
+    ctx: &mut T,
+    param0: StoreType,
+) -> StepResult {
     let val = ctx.pop();
     let addr_val = ctx.pop();
 
@@ -132,9 +139,9 @@ pub fn stind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: StoreType) -> 
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
-    let (origin, offset) = match addr_val {
+    let (origin, offset): (PointerOrigin<'gc>, ByteOffset) = match addr_val {
         StackValue::NativeInt(p) => (PointerOrigin::Unmanaged, ByteOffset(p as usize)),
-        StackValue::ManagedPtr(m) => (m.origin, m.offset),
+        StackValue::ManagedPtr(m) => (m.origin().clone(), m.byte_offset()),
         StackValue::UnmanagedPtr(u) => {
             (PointerOrigin::Unmanaged, ByteOffset(u.0.as_ptr() as usize))
         }
@@ -174,7 +181,14 @@ pub fn stind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: StoreType) -> 
 }
 
 #[dotnet_instruction(LoadIndirect { param0 })]
-pub fn ldind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: LoadType) -> StepResult {
+pub fn ldind<
+    'gc,
+    'm: 'gc,
+    T: StackOps<'gc, 'm> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
+>(
+    ctx: &mut T,
+    param0: LoadType,
+) -> StepResult {
     let addr_val = ctx.pop();
 
     if let StackValue::ManagedPtr(m) = &addr_val
@@ -192,9 +206,9 @@ pub fn ldind<'gc, 'm: 'gc>(ctx: &mut dyn VesOps<'gc, 'm>, param0: LoadType) -> S
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 
-    let (origin, offset) = match addr_val {
+    let (origin, offset): (PointerOrigin<'gc>, ByteOffset) = match addr_val {
         StackValue::NativeInt(p) => (PointerOrigin::Unmanaged, ByteOffset(p as usize)),
-        StackValue::ManagedPtr(m) => (m.origin, m.offset),
+        StackValue::ManagedPtr(m) => (m.origin().clone(), m.byte_offset()),
         StackValue::UnmanagedPtr(u) => {
             (PointerOrigin::Unmanaged, ByteOffset(u.0.as_ptr() as usize))
         }

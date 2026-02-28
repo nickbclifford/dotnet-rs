@@ -1,4 +1,5 @@
-use crate::{StepResult, resolution::ValueResolution, stack::ops::VesOps};
+use crate::{StepResult, resolution::ValueResolution, stack::ops::{EvalStackOps, ExceptionOps, ResolutionOps, TypedStackOps}};
+use crate::memory::ops::MemoryOps;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_value::{
@@ -11,8 +12,8 @@ const NULL_REF_MSG: &str = "Object reference not set to an instance of an object
 const INDEX_OUT_OF_RANGE_MSG: &str = "Index was outside the bounds of the array.";
 
 #[dotnet_intrinsic("int System.Array::get_Length()")]
-pub fn intrinsic_array_get_length<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_array_get_length<'gc, 'm: 'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -32,8 +33,8 @@ pub fn intrinsic_array_get_length<'gc, 'm: 'gc>(
 }
 
 #[dotnet_intrinsic("int System.Array::get_Rank()")]
-pub fn intrinsic_array_get_rank<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_array_get_rank<'gc, 'm: 'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -55,8 +56,8 @@ pub fn intrinsic_array_get_rank<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("object System.Array::GetValue(int)")]
 #[dotnet_intrinsic("object System.Array::GetValue(long)")]
 #[dotnet_intrinsic("object System.Array::GetValue(int[])")]
-pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_array_get_value<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc> + ResolutionOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -110,8 +111,8 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc>(
 #[dotnet_intrinsic("void System.Array::SetValue(object, int)")]
 #[dotnet_intrinsic("void System.Array::SetValue(object, long)")]
 #[dotnet_intrinsic("void System.Array::SetValue(object, int[])")]
-pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
-    ctx: &mut dyn VesOps<'gc, 'm>,
+pub fn intrinsic_array_set_value<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc> + ResolutionOps<'gc, 'm>>(
+    ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -157,7 +158,7 @@ pub fn intrinsic_array_set_value<'gc, 'm: 'gc>(
             );
         }
     }
-    let mut heap = handle.borrow_mut(&ctx.gc());
+    let mut heap = handle.borrow_mut(&ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()));
     let HeapStorage::Vec(v) = &mut heap.storage else {
         panic!("Not an array");
     };

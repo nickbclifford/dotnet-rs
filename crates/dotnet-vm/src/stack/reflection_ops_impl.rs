@@ -220,4 +220,23 @@ impl<'a, 'gc, 'm: 'gc> ReflectionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     fn reflection(&self) -> crate::state::ReflectionRegistry<'_, 'gc> {
         crate::state::ReflectionRegistry::new(self.local)
     }
+
+    #[inline]
+    fn execute_intrinsic_field(
+        &mut self,
+        field: FieldDescription,
+        type_generics: Arc<[dotnet_types::generics::ConcreteType]>,
+        is_address: bool,
+    ) -> crate::StepResult {
+        crate::intrinsics::intrinsic_field(self, field, type_generics, is_address)
+    }
+
+    #[inline]
+    fn execute_intrinsic_call(
+        &mut self,
+        method: MethodDescription,
+        lookup: &GenericLookup,
+    ) -> crate::StepResult {
+        crate::intrinsics::intrinsic_call(self, method, lookup)
+    }
 }

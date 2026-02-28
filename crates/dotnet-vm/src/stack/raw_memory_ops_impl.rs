@@ -7,7 +7,7 @@ use crate::{
     threading::ThreadManagerOps,
 };
 use dotnet_types::TypeDescription;
-use dotnet_utils::{BorrowGuard, BorrowScopeOps};
+use dotnet_utils::{BorrowGuardHandle, BorrowScopeOps, NoActiveBorrows};
 use dotnet_value::{StackValue, layout::HasLayout, pointer::PointerOrigin};
 use sptr::Strict;
 
@@ -51,12 +51,16 @@ impl<'a, 'gc, 'm: 'gc> BorrowScopeOps for VesContext<'a, 'gc, 'm> {
 }
 
 impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
+    fn as_borrow_scope(&self) -> &dyn BorrowScopeOps {
+        self
+    }
+
     fn resolve_address(
         &self,
         origin: PointerOrigin<'gc>,
         offset: dotnet_utils::ByteOffset,
     ) -> std::ptr::NonNull<u8> {
-        let _guard = BorrowGuard::new(self);
+        let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
         match origin {
             PointerOrigin::Stack(idx) => {
                 let slot = self.evaluation_stack.get_slot_ref(idx);
@@ -83,7 +87,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
             }
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, _tid) => {
-                let lock = unsafe { ptr.0.as_ref() };
+                let lock = unsafe { &*ptr.as_ptr() };
                 let guard = lock.borrow();
                 let storage = &guard.storage;
                 unsafe {
@@ -108,12 +112,12 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         value: StackValue<'gc>,
         layout: &dotnet_value::layout::LayoutManager,
     ) -> Result<(), String> {
-        let _guard = BorrowGuard::new(self);
+        let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
         match origin {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
                 let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                unsafe { memory.perform_write(self.gc, ptr.as_ptr(), None, value, layout) }
+                unsafe { memory.write_to_unmanaged(self.gc, ptr.as_ptr(), value, layout) }
             }
             PointerOrigin::Static(static_type, lookup) => {
                 let storage = self.statics().get(static_type, &lookup);
@@ -123,16 +127,17 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                     }
                     let ptr = unsafe { data.as_mut_ptr().add(offset.as_usize()) };
                     let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                    unsafe { memory.perform_write(self.gc, ptr, None, value, layout) }
+                    unsafe { memory.write_to_unmanaged(self.gc, ptr, value, layout) }
                 })
             }
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe {
-                    memory.write_unaligned(
+                    use crate::memory::access::HeapWriteTarget;
+                    memory.write_to_heap(
                         self.gc,
-                        Some(MemoryOwner::Local(owner)),
+                        HeapWriteTarget(MemoryOwner::Local(owner)),
                         offset,
                         value,
                         layout,
@@ -142,16 +147,18 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
             PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
-                unsafe { memory.write_unaligned(self.gc, None, offset, value, layout) }
+                let ptr = sptr::from_exposed_addr_mut::<u8>(offset.0);
+                unsafe { memory.write_to_unmanaged(self.gc, ptr, value, layout) }
             }
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 let heap = &self.local.heap;
                 let mut memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe {
-                    memory.write_unaligned(
+                    use crate::memory::access::HeapWriteTarget;
+                    memory.write_to_heap(
                         self.gc,
-                        Some(MemoryOwner::CrossArena(ptr, tid)),
+                        HeapWriteTarget(MemoryOwner::CrossArena(ptr, tid)),
                         offset,
                         value,
                         layout,
@@ -165,7 +172,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                     }
                     let ptr = unsafe { data.as_mut_ptr().add(offset.as_usize()) };
                     let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                    unsafe { memory.perform_write(self.gc, ptr, None, value, layout) }
+                    unsafe { memory.write_to_unmanaged(self.gc, ptr, value, layout) }
                 })
             }
         }
@@ -183,7 +190,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         layout: &dotnet_value::layout::LayoutManager,
         type_desc: Option<TypeDescription>,
     ) -> Result<StackValue<'gc>, String> {
-        let _guard = BorrowGuard::new(self);
+        let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
         match origin {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
@@ -251,7 +258,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         offset: dotnet_utils::ByteOffset,
         data: &[u8],
     ) -> Result<(), String> {
-        let _guard = BorrowGuard::new(self);
+        let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
         match origin {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
@@ -267,12 +274,13 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
             }
             PointerOrigin::Static(type_desc, lookup) => {
                 let storage = self.statics().get(type_desc, &lookup);
-                let mut obj_data = storage.storage.get_mut();
-                if offset.as_usize() + data.len() > obj_data.len() {
-                    return Err("Static storage access out of bounds".to_string());
-                }
-                obj_data[offset.as_usize()..offset.as_usize() + data.len()].copy_from_slice(data);
-                Ok(())
+                storage.storage.with_data_mut(|obj_data| {
+                    if offset.as_usize() + data.len() > obj_data.len() {
+                        return Err("Static storage access out of bounds".to_string());
+                    }
+                    obj_data[offset.as_usize()..offset.as_usize() + data.len()].copy_from_slice(data);
+                    Ok(())
+                })
             }
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
@@ -300,12 +308,13 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 }
             }
             PointerOrigin::Transient(obj) => {
-                let mut obj_data = obj.instance_storage.get_mut();
-                if offset.as_usize() + data.len() > obj_data.len() {
-                    return Err("Transient object access out of bounds".to_string());
-                }
-                obj_data[offset.as_usize()..offset.as_usize() + data.len()].copy_from_slice(data);
-                Ok(())
+                obj.instance_storage.with_data_mut(|obj_data| {
+                    if offset.as_usize() + data.len() > obj_data.len() {
+                        return Err("Transient object access out of bounds".to_string());
+                    }
+                    obj_data[offset.as_usize()..offset.as_usize() + data.len()].copy_from_slice(data);
+                    Ok(())
+                })
             }
         }
     }
@@ -317,7 +326,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         offset: dotnet_utils::ByteOffset,
         dest: &mut [u8],
     ) -> Result<(), String> {
-        let _guard = BorrowGuard::new(self);
+        let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
         match origin {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
@@ -332,12 +341,13 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
             }
             PointerOrigin::Static(type_desc, lookup) => {
                 let storage = self.statics().get(type_desc, &lookup);
-                let obj_data = storage.storage.get();
-                if offset.as_usize() + dest.len() > obj_data.len() {
-                    return Err("Static storage access out of bounds".to_string());
-                }
-                dest.copy_from_slice(&obj_data[offset.as_usize()..offset.as_usize() + dest.len()]);
-                Ok(())
+                storage.storage.with_data(|obj_data| {
+                    if offset.as_usize() + dest.len() > obj_data.len() {
+                        return Err("Static storage access out of bounds".to_string());
+                    }
+                    dest.copy_from_slice(&obj_data[offset.as_usize()..offset.as_usize() + dest.len()]);
+                    Ok(())
+                })
             }
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
@@ -356,12 +366,13 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 unsafe { memory.read_bytes(Some(MemoryOwner::CrossArena(ptr, tid)), offset, dest) }
             }
             PointerOrigin::Transient(obj) => {
-                let obj_data = obj.instance_storage.get();
-                if offset.as_usize() + dest.len() > obj_data.len() {
-                    return Err("Transient object access out of bounds".to_string());
-                }
-                dest.copy_from_slice(&obj_data[offset.as_usize()..offset.as_usize() + dest.len()]);
-                Ok(())
+                obj.instance_storage.with_data(|obj_data| {
+                    if offset.as_usize() + dest.len() > obj_data.len() {
+                        return Err("Transient object access out of bounds".to_string());
+                    }
+                    dest.copy_from_slice(&obj_data[offset.as_usize()..offset.as_usize() + dest.len()]);
+                    Ok(())
+                })
             }
         }
     }
@@ -377,7 +388,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         success: dotnet_utils::sync::Ordering,
         failure: dotnet_utils::sync::Ordering,
     ) -> Result<u64, u64> {
-        let _guard = BorrowGuard::new(self);
+        let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
         match origin {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
@@ -484,7 +495,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
     ) -> Result<u64, String> {
-        let _guard = BorrowGuard::new(self);
+        let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
         match origin {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
@@ -576,7 +587,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
     ) -> Result<u64, String> {
-        let _guard = BorrowGuard::new(self);
+        let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
         match origin {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
@@ -654,7 +665,7 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
     ) -> Result<(), String> {
-        let _guard = BorrowGuard::new(self);
+        let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
         match origin {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
