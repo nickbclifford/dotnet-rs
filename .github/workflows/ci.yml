@@ -63,6 +63,8 @@ jobs:
     name: Test Suite
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      RUST_TEST_THREADS: "4"
     strategy:
       fail-fast: false
       matrix:

@@ -98,7 +98,7 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
             self.stack.execution.evaluation_stack.top_of_stack();
 
         // Record for local ring buffer (very fast, no lock)
-        self.ring_buffer.push(ip, i.clone());
+        self.ring_buffer.push(ip, i.name());
 
         if self.stack.shared.tracer_enabled.load(Ordering::Relaxed) {
             let instr_text = i.show(
@@ -173,16 +173,30 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
                     // Batch multiple instructions to reduce dispatch overhead.
                     // Safe because any state-changing instruction must return a non-Continue result
                     // (e.g., Jump/Return/Exception), which breaks out of this loop.
-                    for _ in 0..128 {
+                    for i in 0..128 {
                         last_res = self.step_normal(gc);
                         if last_res != StepResult::Continue {
                             break;
                         }
+
+                        // Check abort/safe-point every 32 instructions within a batch
+                        if i % 32 == 31 {
+                            if self.stack.shared.abort_requested.load(Ordering::Relaxed) {
+                                last_res = StepResult::Yield;
+                                break;
+                            }
+                            if self.stack.shared.thread_manager.is_gc_stop_requested() {
+                                last_res = StepResult::Yield;
+                                break;
+                            }
+                        }
                     }
-                    // Snapshot the local ring buffer to the shared one periodically
+
+                    // Snapshot the local ring buffer to the shared one
                     if let Ok(mut shared_rb) = self.stack.shared.last_instructions.lock() {
                         *shared_rb = self.ring_buffer.clone();
                     }
+
                     last_res
                 }
                 _ => {
