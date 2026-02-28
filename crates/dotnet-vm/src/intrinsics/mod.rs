@@ -132,6 +132,7 @@ use dotnet_value::{
 use std::sync::Arc;
 
 pub mod array_ops;
+pub mod constants;
 pub mod cpu_intrinsics;
 pub mod delegates;
 pub mod diagnostics;

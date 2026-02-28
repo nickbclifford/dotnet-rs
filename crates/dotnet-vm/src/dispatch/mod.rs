@@ -105,7 +105,11 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
         vm_trace_instruction!(self.stack, ip, &instr_text);
 
         // Record for ring buffer
-        self.stack.shared.last_instructions.lock().push(ip, instr_text);
+        self.stack
+            .shared
+            .last_instructions
+            .lock()
+            .push(ip, instr_text);
 
         tracing::debug!(
             "step_normal: frame={}, ip={}, instr={:?}",

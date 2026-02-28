@@ -1,4 +1,3 @@
-// AI-GENERATED FILE
 use gc_arena::Collect;
 
 #[derive(Default, Collect, Clone)]
@@ -24,13 +23,16 @@ impl InstructionRingBuffer {
         // To dump them in chronological order, we start from the oldest instruction.
         // If the buffer is not full, the oldest is at index 0.
         // If the buffer is full, the oldest is at `index`.
-        
+
         // Simpler way: just iterate 10 times from (index) to (index + 9) % 10
         for i in 0..10 {
             let idx = (self.index + i) % 10;
             if let Some((ip, text)) = &self.buffer[idx] {
-                res.push_str(&format!("[{:04x}] {}
-", ip, text));
+                res.push_str(&format!(
+                    "[{:04x}] {}
+",
+                    ip, text
+                ));
             }
         }
         res
@@ -47,13 +49,13 @@ mod tests {
         for i in 0..15 {
             buffer.push(i, format!("instr {}", i));
         }
-        
+
         let dump = buffer.dump();
         // Should contain instrs 5 to 14
         assert!(!dump.contains("instr 4"));
         assert!(dump.contains("instr 5"));
         assert!(dump.contains("instr 14"));
-        
+
         let lines: Vec<_> = dump.lines().collect();
         assert_eq!(lines.len(), 10);
         assert!(lines[0].contains("instr 5"));

@@ -329,7 +329,9 @@ pub mod stubs {
     pub struct GCCoordinator;
 
     impl GCCoordinator {
-        pub fn new(_stw_in_progress: dotnet_utils::sync::Arc<dotnet_utils::sync::AtomicBool>) -> Self {
+        pub fn new(
+            _stw_in_progress: dotnet_utils::sync::Arc<dotnet_utils::sync::AtomicBool>,
+        ) -> Self {
             Self
         }
         pub fn register_arena(&self, _handle: ArenaHandle) {}
@@ -369,7 +371,9 @@ pub mod stubs {
 
     impl Default for GCCoordinator {
         fn default() -> Self {
-            Self::new(dotnet_utils::sync::Arc::new(dotnet_utils::sync::AtomicBool::new(false)))
+            Self::new(dotnet_utils::sync::Arc::new(
+                dotnet_utils::sync::AtomicBool::new(false),
+            ))
         }
     }
 }

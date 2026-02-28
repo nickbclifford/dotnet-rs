@@ -282,7 +282,8 @@ macro_rules! multi_arena_test {
                     let harness_ptr = harness as *const TestHarness as usize;
                     thread::spawn(move || {
                         let harness = unsafe { &*(harness_ptr as *const TestHarness) };
-                        let exit_code = harness.run_with_timeout(&dll_path, std::time::Duration::from_secs(60));
+                        let exit_code =
+                            harness.run_with_timeout(&dll_path, std::time::Duration::from_secs(60));
                         assert_eq!(
                             exit_code,
                             $expected,
@@ -416,7 +417,8 @@ fn test_multiple_arenas_static_ref() {
             let harness_ptr = harness as *const TestHarness as usize;
             thread::spawn(move || {
                 let harness = unsafe { &*(harness_ptr as *const TestHarness) };
-                let exit_code = harness.run_with_timeout(&dll_path, std::time::Duration::from_secs(60));
+                let exit_code =
+                    harness.run_with_timeout(&dll_path, std::time::Duration::from_secs(60));
                 assert_eq!(exit_code, 42);
             })
         })
@@ -445,7 +447,8 @@ fn test_multiple_arenas_allocation_stress() {
                 let harness = unsafe { &*(harness_ptr as *const TestHarness) };
                 // Run multiple times to increase allocation pressure
                 for _ in 0..3 {
-                    let exit_code = harness.run_with_timeout(&dll_path, std::time::Duration::from_secs(60));
+                    let exit_code =
+                        harness.run_with_timeout(&dll_path, std::time::Duration::from_secs(60));
                     assert_eq!(exit_code, 0);
                 }
             })
@@ -513,8 +516,11 @@ fn test_multiple_arenas_simple() {
             let shared = Arc::clone(&shared);
             thread::spawn(move || {
                 let harness = unsafe { &*(harness_ptr as *const TestHarness) };
-                let exit_code =
-                    harness.run_with_shared_timeout(resolution, shared, std::time::Duration::from_secs(60));
+                let exit_code = harness.run_with_shared_timeout(
+                    resolution,
+                    shared,
+                    std::time::Duration::from_secs(60),
+                );
                 assert_eq!(exit_code, 0);
             })
         })
@@ -582,8 +588,11 @@ fn test_reflection_race_condition() {
             thread::spawn(move || {
                 let harness = unsafe { &*(harness_ptr as *const TestHarness) };
                 for _ in 0..50 {
-                    let exit_code =
-                        harness.run_with_shared_timeout(resolution, shared.clone(), std::time::Duration::from_secs(60));
+                    let exit_code = harness.run_with_shared_timeout(
+                        resolution,
+                        shared.clone(),
+                        std::time::Duration::from_secs(60),
+                    );
                     assert_eq!(exit_code, 0);
                 }
             })
@@ -650,8 +659,11 @@ fn test_volatile_sharing() {
                 let harness = unsafe { &*(harness_ptr as *const TestHarness) };
                 let resolution = try_static_res_from_file(dll_path.to_str().unwrap())
                     .expect("Failed to load assembly");
-                let exit_code =
-                    harness.run_with_shared_timeout(resolution, shared, std::time::Duration::from_secs(60));
+                let exit_code = harness.run_with_shared_timeout(
+                    resolution,
+                    shared,
+                    std::time::Duration::from_secs(60),
+                );
                 assert_eq!(exit_code, 42);
             })
         })
@@ -754,8 +766,11 @@ fn test_stw_stress() {
             thread::spawn(move || {
                 let harness = unsafe { &*(harness_ptr as *const TestHarness) };
                 for _ in 0..iters_per_thread {
-                    let code =
-                        harness.run_with_shared_timeout(resolution, shared.clone(), std::time::Duration::from_secs(60));
+                    let code = harness.run_with_shared_timeout(
+                        resolution,
+                        shared.clone(),
+                        std::time::Duration::from_secs(60),
+                    );
                     assert_eq!(code, 0, "Managed program must exit 0");
                 }
             })
