@@ -45,6 +45,10 @@ impl<'gc> HeapManager<'gc> {
         if ptr < start + size { Some(obj) } else { None }
     }
 
+    pub fn has_pending_finalizers(&self) -> bool {
+        !self.pending_finalization.borrow().is_empty()
+    }
+
     pub fn finalize_check(
         &self,
         fc: &'gc gc_arena::Finalization<'gc>,

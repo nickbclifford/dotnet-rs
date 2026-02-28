@@ -185,8 +185,12 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
                         }
                     }
 
-                    // Snapshot the local ring buffer to the shared one
-                    if let Ok(mut shared_rb) = self.stack.shared.last_instructions.lock() {
+                    // Snapshot the ring buffer only on non-normal exits or periodically
+                    // for timeout diagnostics. Normal Continue paths skip the snapshot
+                    // to avoid mutex + clone overhead on every batch.
+                    if last_res != StepResult::Continue
+                        && let Ok(mut shared_rb) = self.stack.shared.last_instructions.lock()
+                    {
                         *shared_rb = self.ring_buffer.clone();
                     }
 

@@ -260,9 +260,12 @@ macro_rules! fixture_test {
             let dll_path = Path::new($dll_path);
             let exit_code = harness.run_with_timeout(dll_path, get_test_timeout(60));
             assert_eq!(
-                exit_code, $expected,
+                exit_code,
+                $expected,
                 "Test {} failed: expected exit code {}, got {}",
-                stringify!($name), $expected, exit_code
+                stringify!($name),
+                $expected,
+                exit_code
             );
         }
     };
@@ -274,9 +277,12 @@ macro_rules! fixture_test {
             let dll_path = Path::new($dll_path);
             let exit_code = harness.run_with_timeout(dll_path, get_test_timeout(60));
             assert_eq!(
-                exit_code, $expected,
+                exit_code,
+                $expected,
                 "Test {} failed: expected exit code {}, got {}",
-                stringify!($name), $expected, exit_code
+                stringify!($name),
+                $expected,
+                exit_code
             );
         }
     };

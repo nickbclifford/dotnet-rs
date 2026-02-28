@@ -28,6 +28,8 @@ pub struct Executor {
     arena: Box<GCArena>,
     #[cfg(feature = "fuzzing")]
     pub instruction_budget: Option<u64>,
+    #[cfg(not(feature = "multithreading"))]
+    gc_tick_counter: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -148,6 +150,8 @@ impl Executor {
             arena,
             #[cfg(feature = "fuzzing")]
             instruction_budget: None,
+            #[cfg(not(feature = "multithreading"))]
+            gc_tick_counter: 0,
         }
     }
 
@@ -201,16 +205,23 @@ impl Executor {
             // Perform incremental GC progress with finalization support
             // In a real VM this would be tuned based on allocation pressure
             #[cfg(not(feature = "multithreading"))]
-            self.with_arena(|arena| {
-                if let Some(marked) = arena.mark_debt() {
-                    marked.finalize(|fc, c| {
-                        c.stack
-                            .local
-                            .heap
-                            .finalize_check(fc, &c.stack.shared, c.stack.indent())
+            {
+                self.gc_tick_counter += 1;
+                // Only mark debt every 8 ticks to reduce overhead
+                if self.gc_tick_counter.is_multiple_of(8) {
+                    self.with_arena(|arena| {
+                        if let Some(marked) = arena.mark_debt() {
+                            marked.finalize(|fc, c| {
+                                c.stack.local.heap.finalize_check(
+                                    fc,
+                                    &c.stack.shared,
+                                    c.stack.indent(),
+                                )
+                            });
+                        }
                     });
                 }
-            });
+            }
 
             #[cfg(feature = "multithreading")]
             let (_full_collect, collection_requested) = self.with_arena(|arena| {
@@ -274,18 +285,22 @@ impl Executor {
             #[cfg(feature = "memory-validation")]
             let thread_id = self.thread_id;
             self.with_arena(|arena| {
-                let _ = arena.mutate_root(|gc, c| {
-                    let gc_handle = GCHandle::new(
-                        gc,
-                        #[cfg(feature = "multithreading")]
-                        unsafe {
-                            c.stack.arena_inner_gc()
-                        },
-                        #[cfg(feature = "memory-validation")]
-                        thread_id,
-                    );
-                    c.ves_context(gc_handle).process_pending_finalizers()
-                });
+                // Optimization: Only mutate the root to process finalizers if there are actually pending finalizers
+                let has_pending = arena.mutate(|_, c| c.stack.local.heap.has_pending_finalizers());
+                if has_pending {
+                    let _ = arena.mutate_root(|gc, c| {
+                        let gc_handle = GCHandle::new(
+                            gc,
+                            #[cfg(feature = "multithreading")]
+                            unsafe {
+                                c.stack.arena_inner_gc()
+                            },
+                            #[cfg(feature = "memory-validation")]
+                            thread_id,
+                        );
+                        c.ves_context(gc_handle).process_pending_finalizers()
+                    });
+                }
             });
 
             #[cfg(feature = "memory-validation")]
@@ -429,17 +444,22 @@ impl Executor {
             let start_time = Instant::now();
             vm_trace_gc_collection_start!(self, 0, "allocation pressure");
 
-            // Perform full collection with finalization (mimics multithreading behavior)
-            self.with_arena(|arena| {
-                let mut marked = None;
-                while marked.is_none() {
-                    marked = arena.mark_all();
-                }
-                if let Some(marked) = marked {
-                    crate::gc::finalize_arena(marked);
-                }
-                arena.collect_all();
-            });
+            if !self.shared.abort_requested.load(Ordering::Relaxed) {
+                // Perform full collection with finalization (mimics multithreading behavior)
+                self.with_arena(|arena| {
+                    // Try to mark all remaining objects. If mark_all() returns None,
+                    // the arena is not in a markable phase (e.g., already in Collecting
+                    // or Sleep phase). In that case, fall through to collect_all() which
+                    // handles all phases correctly by performing a full collection cycle.
+                    if let Some(marked) = arena.mark_all() {
+                        crate::gc::finalize_arena(marked);
+                    }
+                    // collect_all() performs a full collection regardless of current phase.
+                    // It internally calls do_collection with no early stop, which handles
+                    // Mark, Collecting, and Sleep phases correctly.
+                    arena.collect_all();
+                });
+            }
 
             let duration = start_time.elapsed();
             self.shared.metrics.record_gc_pause(duration);

@@ -19,10 +19,10 @@ fn main() {
         .args([
             "build",
             "BatchFixtures.csproj",
-            "-m",               // parallel MSBuild nodes
-            "-v:q",             // quiet verbosity
-            "--nologo",         // suppress banner
-            "-clp:ErrorsOnly",  // only show errors
+            "-m",              // parallel MSBuild nodes
+            "-v:q",            // quiet verbosity
+            "--nologo",        // suppress banner
+            "-clp:ErrorsOnly", // only show errors
         ])
         .arg(format!("-p:FixtureOutputBase={}/", output_base.display()))
         .current_dir(&tests_dir)
