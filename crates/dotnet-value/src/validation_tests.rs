@@ -37,8 +37,9 @@ mod tests {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
         let arena_id = ArenaId(100);
+        let stw_flag = dotnet_utils::sync::Arc::new(dotnet_utils::sync::AtomicBool::new(false));
         let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(arena_id)));
-        dotnet_utils::gc::register_arena(arena_id);
+        dotnet_utils::gc::register_arena(arena_id, stw_flag.clone());
         arena.mutate(|gc, _root| {
             dotnet_utils::sync::MANAGED_THREAD_ID.set(Some(arena_id));
             let gc_handle = dotnet_utils::gc::GCHandle::new(gc, arena_handle.as_inner(), arena_id);
@@ -49,7 +50,7 @@ mod tests {
             obj.as_heap_storage(|_| ());
             dotnet_utils::gc::unregister_arena(arena_id);
             let other_id = ArenaId(200);
-            dotnet_utils::gc::register_arena(other_id);
+            dotnet_utils::gc::register_arena(other_id, stw_flag.clone());
             dotnet_utils::sync::MANAGED_THREAD_ID.set(Some(other_id));
             let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                 obj.as_heap_storage(|_| ());
@@ -65,9 +66,10 @@ mod tests {
         let arena = Arena::<TestRoot>::new(|_mc| ());
         let owner_id = ArenaId(101);
         let current_id = ArenaId(102);
+        let stw_flag = dotnet_utils::sync::Arc::new(dotnet_utils::sync::AtomicBool::new(false));
         let owner_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(owner_id)));
-        dotnet_utils::gc::register_arena(owner_id);
-        dotnet_utils::gc::register_arena(current_id);
+        dotnet_utils::gc::register_arena(owner_id, stw_flag.clone());
+        dotnet_utils::gc::register_arena(current_id, stw_flag.clone());
         arena.mutate(|gc, _root| {
             dotnet_utils::sync::MANAGED_THREAD_ID.set(Some(owner_id));
             let gc_handle = dotnet_utils::gc::GCHandle::new(gc, owner_handle.as_inner(), owner_id);
@@ -77,7 +79,7 @@ mod tests {
             );
             dotnet_utils::sync::MANAGED_THREAD_ID.set(Some(current_id));
             obj.as_heap_storage(|_| ());
-            dotnet_utils::gc::set_stw_in_progress(true);
+            dotnet_utils::gc::set_stw_in_progress(owner_id, true);
             let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                 obj.as_heap_storage(|_| ());
             }));
@@ -85,7 +87,7 @@ mod tests {
             dotnet_utils::gc::set_currently_tracing(Some(current_id));
             obj.as_heap_storage(|_| ());
             dotnet_utils::gc::set_currently_tracing(None);
-            dotnet_utils::gc::set_stw_in_progress(false);
+            dotnet_utils::gc::set_stw_in_progress(owner_id, false);
         });
         dotnet_utils::gc::unregister_arena(owner_id);
         dotnet_utils::gc::unregister_arena(current_id);

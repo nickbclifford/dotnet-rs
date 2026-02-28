@@ -11,7 +11,7 @@ use parking_lot::{
 #[cfg(feature = "multithreading")]
 use std::{
     cell::{Cell, RefCell},
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     mem,
 };
 
@@ -332,15 +332,12 @@ unsafe impl<T: Send> Send for ThreadSafeLock<T> {}
 unsafe impl<T: Send> Sync for ThreadSafeLock<T> {}
 
 #[cfg(feature = "multithreading")]
-static VALID_ARENAS: std::sync::LazyLock<RwLock<HashSet<crate::ArenaId>>> =
-    std::sync::LazyLock::new(|| RwLock::new(HashSet::new()));
+static VALID_ARENAS: std::sync::LazyLock<RwLock<HashMap<crate::ArenaId, Arc<AtomicBool>>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
 
 #[cfg(feature = "multithreading")]
-static STW_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
-
-#[cfg(feature = "multithreading")]
-pub fn register_arena(thread_id: crate::ArenaId) {
-    VALID_ARENAS.write().insert(thread_id);
+pub fn register_arena(thread_id: crate::ArenaId, stw_in_progress: Arc<AtomicBool>) {
+    VALID_ARENAS.write().insert(thread_id, stw_in_progress);
 }
 
 #[cfg(feature = "multithreading")]
@@ -350,7 +347,7 @@ pub fn unregister_arena(thread_id: crate::ArenaId) {
 
 #[cfg(feature = "multithreading")]
 pub fn is_valid_cross_arena_ref(target_thread_id: crate::ArenaId) -> bool {
-    VALID_ARENAS.read().contains(&target_thread_id)
+    VALID_ARENAS.read().contains_key(&target_thread_id)
 }
 
 #[cfg(feature = "multithreading")]
@@ -359,13 +356,19 @@ pub fn reset_arena_registry() {
 }
 
 #[cfg(feature = "multithreading")]
-pub fn set_stw_in_progress(in_progress: bool) {
-    STW_IN_PROGRESS.store(in_progress, Ordering::Release);
+pub fn set_stw_in_progress(arena_id: crate::ArenaId, in_progress: bool) {
+    if let Some(flag) = VALID_ARENAS.read().get(&arena_id) {
+        flag.store(in_progress, Ordering::Release);
+    }
 }
 
 #[cfg(feature = "multithreading")]
-pub fn is_stw_in_progress() -> bool {
-    STW_IN_PROGRESS.load(Ordering::Acquire)
+pub fn is_stw_in_progress(arena_id: crate::ArenaId) -> bool {
+    VALID_ARENAS
+        .read()
+        .get(&arena_id)
+        .map(|flag| flag.load(Ordering::Acquire))
+        .unwrap_or(false)
 }
 #[cfg(feature = "multithreading")]
 thread_local! {

@@ -77,12 +77,14 @@ pub struct ThreadManager {
     all_threads_stopped: Condvar,
     /// Mutex for GC coordination
     gc_coordination: Mutex<()>,
+    /// Flag indicating if a stop-the-world pause is in progress
+    stw_in_progress: Arc<AtomicBool>,
     /// Reference to the GC coordinator for resume signaling
     coordinator: Mutex<Option<sync::Weak<GCCoordinator>>>,
 }
 
 impl ThreadManager {
-    pub fn new() -> Arc<Self> {
+    pub fn new(stw_in_progress: Arc<AtomicBool>) -> Arc<Self> {
         let manager = Arc::new(Self {
             threads: Mutex::new(HashMap::new()),
             next_thread_id: AtomicU64::new(1), // Thread ID 0 is reserved
@@ -92,6 +94,7 @@ impl ThreadManager {
             threads_at_safepoint: AtomicUsize::new(0),
             all_threads_stopped: Condvar::new(),
             gc_coordination: Mutex::new(()),
+            stw_in_progress,
             coordinator: Mutex::new(None),
         });
         let _ = manager.self_weak.set(Arc::downgrade(&manager));
@@ -143,7 +146,7 @@ impl ThreadManagerOps for ThreadManager {
         MANAGED_THREAD_ID.set(Some(managed_id));
 
         #[cfg(feature = "multithreading")]
-        register_arena(managed_id);
+        register_arena(managed_id, self.stw_in_progress.clone());
 
         managed_id
     }

@@ -150,11 +150,7 @@ impl<'m> SharedGlobalState<'m> {
 
         let tracer_enabled = Arc::new(AtomicBool::new(tracer.is_enabled()));
 
-        // Reset the static registry to ensure a clean state for the new VM.
-        dotnet_value::pointer::reset_static_registry();
-
-        #[cfg(feature = "multithreading")]
-        dotnet_utils::gc::reset_arena_registry();
+        let stw_in_progress = Arc::new(AtomicBool::new(false));
 
         let state = Self {
             loader,
@@ -165,7 +161,7 @@ impl<'m> SharedGlobalState<'m> {
                 p
             },
             sync_blocks: SyncBlockManager::new(),
-            thread_manager: ThreadManager::new(),
+            thread_manager: ThreadManager::new(stw_in_progress.clone()),
             metrics: RuntimeMetrics::new(),
             tracer,
             tracer_enabled,
@@ -173,7 +169,7 @@ impl<'m> SharedGlobalState<'m> {
             caches,
             statics: Arc::new(StaticStorageManager::new()),
             #[cfg(feature = "multithreading")]
-            gc_coordinator: Arc::new(GCCoordinator::new()),
+            gc_coordinator: Arc::new(GCCoordinator::new(stw_in_progress)),
             #[cfg(feature = "multithreading")]
             shared_runtime_types: DashMap::new(),
             #[cfg(feature = "multithreading")]

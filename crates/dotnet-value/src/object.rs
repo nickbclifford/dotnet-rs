@@ -91,7 +91,7 @@ impl<'gc> ObjectInner<'gc> {
                         );
                     }
 
-                    if is_stw_in_progress() && get_currently_tracing().is_none() {
+                    if is_stw_in_progress(self.owner_id) && get_currently_tracing().is_none() {
                         panic!(
                             "Uncoordinated cross-arena access during STW GC: object owned by {:?}, accessed by {:?}",
                             self.owner_id, current_id

@@ -1,7 +1,7 @@
 #[cfg(feature = "multithreading")]
 use crate::threading::execute_gc_command_for_current_thread;
 #[cfg(feature = "multithreading")]
-use dotnet_utils::sync::{AtomicBool, Mutex, Ordering};
+use dotnet_utils::sync::{Arc, AtomicBool, Mutex, Ordering};
 #[cfg(feature = "multithreading")]
 use dotnet_value::object::ObjectPtr;
 #[cfg(feature = "multithreading")]
@@ -22,17 +22,20 @@ pub struct GCCoordinator {
     collection_lock: Mutex<()>,
     /// Flag indicating if a collection is currently in progress
     is_collecting: AtomicBool,
+    /// Flag indicating if a stop-the-world pause is in progress (shared with arenas)
+    stw_in_progress: Arc<AtomicBool>,
     /// Cross-arena references found during marking
     cross_arena_refs: Mutex<HashMap<dotnet_utils::ArenaId, HashSet<ObjectPtr>>>,
 }
 
 #[cfg(feature = "multithreading")]
 impl GCCoordinator {
-    pub fn new() -> Self {
+    pub fn new(stw_in_progress: Arc<AtomicBool>) -> Self {
         Self {
             arenas: Mutex::new(HashMap::new()),
             collection_lock: Mutex::new(()),
             is_collecting: AtomicBool::new(false),
+            stw_in_progress,
             cross_arena_refs: Mutex::new(HashMap::new()),
         }
     }
@@ -64,14 +67,14 @@ impl GCCoordinator {
     pub fn start_collection(&self) -> Option<MutexGuard<'_, ()>> {
         let guard = self.collection_lock.try_lock()?;
         self.is_collecting.store(true, Ordering::Release);
-        dotnet_utils::gc::set_stw_in_progress(true);
+        self.stw_in_progress.store(true, Ordering::Release);
         Some(guard)
     }
 
     /// Mark that a collection has finished.
     pub fn finish_collection(&self) {
         self.is_collecting.store(false, Ordering::Release);
-        dotnet_utils::gc::set_stw_in_progress(false);
+        self.stw_in_progress.store(false, Ordering::Release);
 
         // Reset all collection flags
         let arenas = self.arenas.lock();
@@ -291,7 +294,7 @@ impl GCCoordinator {
 #[cfg(feature = "multithreading")]
 impl Default for GCCoordinator {
     fn default() -> Self {
-        Self::new()
+        Self::new(Arc::new(AtomicBool::new(false)))
     }
 }
 
@@ -326,7 +329,7 @@ pub mod stubs {
     pub struct GCCoordinator;
 
     impl GCCoordinator {
-        pub fn new() -> Self {
+        pub fn new(_stw_in_progress: dotnet_utils::sync::Arc<dotnet_utils::sync::AtomicBool>) -> Self {
             Self
         }
         pub fn register_arena(&self, _handle: ArenaHandle) {}
@@ -366,7 +369,7 @@ pub mod stubs {
 
     impl Default for GCCoordinator {
         fn default() -> Self {
-            Self::new()
+            Self::new(dotnet_utils::sync::Arc::new(dotnet_utils::sync::AtomicBool::new(false)))
         }
     }
 }
@@ -381,7 +384,8 @@ mod tests {
 
     #[test]
     fn test_coordinator_registration() {
-        let coordinator = GCCoordinator::new();
+        let stw_flag = Arc::new(AtomicBool::new(false));
+        let coordinator = GCCoordinator::new(stw_flag);
         let handle = ArenaHandle::new(dotnet_utils::ArenaId(1));
 
         handle.allocation_counter().store(100, Ordering::Release);
@@ -404,7 +408,8 @@ mod tests {
 
     #[test]
     fn test_allocation_pressure_trigger() {
-        let coordinator = GCCoordinator::new();
+        let stw_flag = Arc::new(AtomicBool::new(false));
+        let coordinator = GCCoordinator::new(stw_flag);
         let handle = ArenaHandle::new(dotnet_utils::ArenaId(1));
 
         coordinator.register_arena(handle.clone());
@@ -427,7 +432,8 @@ mod tests {
         use std::thread;
         use std::time::Duration;
 
-        let coordinator = Arc::new(GCCoordinator::new());
+        let stw_flag = Arc::new(AtomicBool::new(false));
+        let coordinator = Arc::new(GCCoordinator::new(stw_flag));
 
         let handle1 = ArenaHandle::new(dotnet_utils::ArenaId(1));
         let handle2 = ArenaHandle::new(dotnet_utils::ArenaId(2));

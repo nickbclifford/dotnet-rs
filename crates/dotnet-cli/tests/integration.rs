@@ -689,10 +689,11 @@ fn test_cross_arena_reference_tracking() {
     let handle1 = vm::gc::coordinator::ArenaHandle::new(dotnet_utils::ArenaId(1));
     let handle2 = vm::gc::coordinator::ArenaHandle::new(dotnet_utils::ArenaId(2));
 
+    let stw_flag = Arc::new(dotnet_utils::sync::AtomicBool::new(false));
     shared.gc_coordinator.register_arena(handle1.clone());
     shared.gc_coordinator.register_arena(handle2.clone());
-    dotnet_utils::gc::register_arena(dotnet_utils::ArenaId(1));
-    dotnet_utils::gc::register_arena(dotnet_utils::ArenaId(2));
+    dotnet_utils::gc::register_arena(dotnet_utils::ArenaId(1), stw_flag.clone());
+    dotnet_utils::gc::register_arena(dotnet_utils::ArenaId(2), stw_flag.clone());
 
     // Record some cross-arena references
     let ptr1 = unsafe { dotnet_value::object::ObjectPtr::from_raw(0x1000 as *const _).unwrap() };

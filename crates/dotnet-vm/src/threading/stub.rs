@@ -9,7 +9,7 @@ use std::sync::Arc;
 pub struct ThreadManager;
 
 impl ThreadManager {
-    pub fn new() -> Arc<Self> {
+    pub fn new(_stw_in_progress: Arc<dotnet_utils::sync::AtomicBool>) -> Arc<Self> {
         Arc::new(Self)
     }
 }
