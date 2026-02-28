@@ -177,6 +177,34 @@ impl Executor {
 
     // assumes args are already on stack
     pub fn run(&mut self) -> ExecutorResult {
+        // Define cleanup guard to ensure thread is unregistered even on panic.
+        // This is critical for CI where OS threads are reused across tests.
+        #[cfg(feature = "multithreading")]
+        struct ThreadCleanupGuard {
+            thread_id: dotnet_utils::ArenaId,
+            shared: Arc<SharedGlobalState<'static>>,
+        }
+
+        #[cfg(feature = "multithreading")]
+        impl Drop for ThreadCleanupGuard {
+            fn drop(&mut self) {
+                self.shared.thread_manager.unregister_thread(self.thread_id);
+                self.shared.gc_coordinator.unregister_arena(self.thread_id);
+                crate::threading::IS_PERFORMING_GC.set(false);
+                // Clear thread-local GC state to prevent leakage across tests
+                THREAD_ARENA.with(|cell| {
+                    *cell.borrow_mut() = None;
+                });
+                clear_tracing_state();
+            }
+        }
+
+        #[cfg(feature = "multithreading")]
+        let _cleanup = ThreadCleanupGuard {
+            thread_id: self.thread_id,
+            shared: Arc::clone(&self.shared),
+        };
+
         let result = loop {
             #[cfg(feature = "fuzzing")]
             if let Some(budget) = self.instruction_budget.as_mut() {
@@ -358,9 +386,8 @@ impl Executor {
             }
         };
 
-        // Unregister thread when execution completes
-        self.shared.thread_manager.unregister_thread(self.thread_id);
-
+        // Thread unregistration is now handled by ThreadCleanupGuard::drop
+        // which runs when this function returns or panics.
         self.shared.tracer.flush();
         result
     }
@@ -441,14 +468,16 @@ impl Executor {
 
 impl Drop for Executor {
     fn drop(&mut self) {
-        // Ensure thread is unregistered if not already done
+        // Ensure thread is unregistered if not already done.
+        // This handles cases where run() was never called or failed early.
         self.shared.thread_manager.unregister_thread(self.thread_id);
 
         #[cfg(feature = "multithreading")]
         {
             self.shared.gc_coordinator.unregister_arena(self.thread_id);
 
-            // Clear thread-local GC state to prevent leakage across tests
+            // Clear thread-local state to prevent leakage across tests
+            crate::threading::IS_PERFORMING_GC.set(false);
             THREAD_ARENA.with(|cell| {
                 *cell.borrow_mut() = None;
             });

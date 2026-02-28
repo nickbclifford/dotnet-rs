@@ -23,8 +23,12 @@ use tracing::warn;
 
 thread_local! {
     /// Flag indicating if this thread is currently performing GC
-    pub(super) static IS_PERFORMING_GC: Cell<bool> = const { Cell::new(false) };
+    pub(crate) static IS_PERFORMING_GC: Cell<bool> = const { Cell::new(false) };
 }
+
+/// Global counter for allocating managed thread IDs across all thread managers.
+/// This prevents ArenaId collisions when parallel tests each create their own ThreadManager.
+static NEXT_GLOBAL_THREAD_ID: AtomicU64 = AtomicU64::new(1); // Thread ID 0 is reserved
 
 /// Information about a managed .NET thread.
 #[derive(Debug)]
@@ -65,8 +69,6 @@ impl ManagedThread {
 pub struct ThreadManager {
     /// Map from managed thread ID to thread info
     pub(super) threads: Mutex<HashMap<ArenaId, Arc<ManagedThread>>>,
-    /// Counter for allocating managed thread IDs
-    pub(super) next_thread_id: AtomicU64,
     /// Weak reference to self for creating guards
     pub(super) self_weak: sync::OnceLock<sync::Weak<ThreadManager>>,
 
@@ -87,7 +89,6 @@ impl ThreadManager {
     pub fn new(stw_in_progress: Arc<AtomicBool>) -> Arc<Self> {
         let manager = Arc::new(Self {
             threads: Mutex::new(HashMap::new()),
-            next_thread_id: AtomicU64::new(1), // Thread ID 0 is reserved
             self_weak: sync::OnceLock::new(),
 
             gc_stop_requested: AtomicBool::new(false),
@@ -132,7 +133,7 @@ impl ThreadManagerOps for ThreadManager {
     /// Returns the managed thread ID assigned to this thread.
     fn register_thread(&self) -> ArenaId {
         let native_id = thread::current().id();
-        let managed_id_u64 = self.next_thread_id.fetch_add(1, Ordering::Relaxed);
+        let managed_id_u64 = NEXT_GLOBAL_THREAD_ID.fetch_add(1, Ordering::Relaxed);
         let managed_id = ArenaId::new(managed_id_u64);
 
         let thread_info = Arc::new(ManagedThread::new(native_id, managed_id));
@@ -144,6 +145,9 @@ impl ThreadManagerOps for ThreadManager {
 
         // Cache the managed ID in thread-local storage
         MANAGED_THREAD_ID.set(Some(managed_id));
+
+        // Defensive: clear any leaked state from a previous test on this OS thread
+        IS_PERFORMING_GC.set(false);
 
         #[cfg(feature = "multithreading")]
         register_arena(managed_id, self.stw_in_progress.clone());
