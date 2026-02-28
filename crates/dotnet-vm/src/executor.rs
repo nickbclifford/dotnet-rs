@@ -95,7 +95,7 @@ impl Executor {
     }
 
     pub fn dump_last_instructions(&self) -> String {
-        self.shared.last_instructions.lock().dump()
+        self.shared.last_instructions.lock().unwrap().dump()
     }
 
     pub fn new(shared: Arc<SharedGlobalState<'static>>) -> Self {
@@ -181,34 +181,6 @@ impl Executor {
 
     // assumes args are already on stack
     pub fn run(&mut self) -> ExecutorResult {
-        // Define cleanup guard to ensure thread is unregistered even on panic.
-        // This is critical for CI where OS threads are reused across tests.
-        #[cfg(feature = "multithreading")]
-        struct ThreadCleanupGuard {
-            thread_id: dotnet_utils::ArenaId,
-            shared: Arc<SharedGlobalState<'static>>,
-        }
-
-        #[cfg(feature = "multithreading")]
-        impl Drop for ThreadCleanupGuard {
-            fn drop(&mut self) {
-                self.shared.thread_manager.unregister_thread(self.thread_id);
-                self.shared.gc_coordinator.unregister_arena(self.thread_id);
-                crate::threading::IS_PERFORMING_GC.set(false);
-                // Clear thread-local GC state to prevent leakage across tests
-                THREAD_ARENA.with(|cell| {
-                    *cell.borrow_mut() = None;
-                });
-                clear_tracing_state();
-            }
-        }
-
-        #[cfg(feature = "multithreading")]
-        let _cleanup = ThreadCleanupGuard {
-            thread_id: self.thread_id,
-            shared: Arc::clone(&self.shared),
-        };
-
         let result = loop {
             if self.shared.abort_requested.load(Ordering::Relaxed) {
                 break ExecutorResult::Error(crate::error::VmError::Execution(

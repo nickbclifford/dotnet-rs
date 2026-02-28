@@ -10,6 +10,7 @@ use crate::{
     threading::ThreadManagerOps,
 };
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
+use dotnet_utils::sync::Ordering;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{StackValue, layout::HasLayout, object::ObjectRef};
 use dotnetdll::prelude::*;
@@ -39,11 +40,11 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
 
 pub struct ExecutionEngine<'gc, 'm: 'gc> {
     pub stack: CallStack<'gc, 'm>,
+    pub ring_buffer: ring_buffer::InstructionRingBuffer,
 }
 
-// SAFETY: `ExecutionEngine` correctly traces its only GC-managed field (`stack`) in its
-// `trace` implementation. This implementation is safe because it delegates to the `Collect`
-// implementation of `CallStack`, which correctly traces all GC-managed references.
+// SAFETY: `ExecutionEngine` correctly traces its GC-managed fields (`stack`) in its
+// `trace` implementation. `ring_buffer` is `require_static` and does not contain GC pointers.
 unsafe impl<'gc, 'm: 'gc> Collect for ExecutionEngine<'gc, 'm> {
     fn trace(&self, cc: &gc_arena::Collection) {
         self.stack.trace(cc);
@@ -52,7 +53,10 @@ unsafe impl<'gc, 'm: 'gc> Collect for ExecutionEngine<'gc, 'm> {
 
 impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
     pub fn new(stack: CallStack<'gc, 'm>) -> Self {
-        Self { stack }
+        Self {
+            stack,
+            ring_buffer: ring_buffer::InstructionRingBuffer::new(),
+        }
     }
 
     pub fn ves_context(&mut self, gc: GCHandle<'gc>) -> crate::stack::VesContext<'_, 'gc, 'm> {
@@ -93,23 +97,20 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
         self.stack.execution.original_stack_height =
             self.stack.execution.evaluation_stack.top_of_stack();
 
-        let instr_text = i.show(
-            self.stack
-                .state()
-                .info_handle
-                .source
-                .resolution()
-                .definition(),
-        );
+        // Record for local ring buffer (very fast, no lock)
+        self.ring_buffer.push(ip, i.clone());
 
-        vm_trace_instruction!(self.stack, ip, &instr_text);
-
-        // Record for ring buffer
-        self.stack
-            .shared
-            .last_instructions
-            .lock()
-            .push(ip, instr_text);
+        if self.stack.shared.tracer_enabled.load(Ordering::Relaxed) {
+            let instr_text = i.show(
+                self.stack
+                    .state()
+                    .info_handle
+                    .source
+                    .resolution()
+                    .definition(),
+            );
+            vm_trace_instruction!(self.stack, ip, &instr_text);
+        }
 
         tracing::debug!(
             "step_normal: frame={}, ip={}, instr={:?}",
@@ -146,7 +147,19 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
     /// Run the engine until it needs to yield, returns from the entry point, or throws an unhandled exception.
     pub fn run(&mut self, gc: GCHandle<'gc>) -> StepResult {
         loop {
+            if self.stack.shared.abort_requested.load(Ordering::Relaxed) {
+                // Final snapshot before aborting to ensures correct dump in test harness
+                if let Ok(mut shared_rb) = self.stack.shared.last_instructions.lock() {
+                    *shared_rb = self.ring_buffer.clone();
+                }
+                return StepResult::Yield;
+            }
+
             if self.stack.shared.thread_manager.is_gc_stop_requested() {
+                // Snapshot before yielding
+                if let Ok(mut shared_rb) = self.stack.shared.last_instructions.lock() {
+                    *shared_rb = self.ring_buffer.clone();
+                }
                 return StepResult::Yield;
             }
             let res = match self.stack.execution.exception_mode {
@@ -165,6 +178,10 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
                         if last_res != StepResult::Continue {
                             break;
                         }
+                    }
+                    // Snapshot the local ring buffer to the shared one periodically
+                    if let Ok(mut shared_rb) = self.stack.shared.last_instructions.lock() {
+                        *shared_rb = self.ring_buffer.clone();
                     }
                     last_res
                 }

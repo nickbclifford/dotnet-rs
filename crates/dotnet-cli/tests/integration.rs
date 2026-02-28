@@ -133,7 +133,9 @@ impl TestHarness {
             Ok(Err(panic_info)) => {
                 eprintln!("=== VM PANICKED ===");
                 eprintln!("=== LAST 10 INSTRUCTIONS ===");
-                eprintln!("{}", shared.last_instructions.lock().dump());
+                if let Ok(rb) = shared.last_instructions.lock() {
+                    eprintln!("{}", rb.dump_formatted(&resolution));
+                }
                 std::panic::resume_unwind(panic_info);
             }
             Err(_) => {
@@ -142,7 +144,11 @@ impl TestHarness {
                     .store(true, std::sync::atomic::Ordering::Relaxed);
                 eprintln!("=== TEST TIMEOUT (after {:?}) ===", timeout);
                 eprintln!("=== LAST 10 INSTRUCTIONS ===");
-                eprintln!("{}", shared.last_instructions.lock().dump());
+                // Wait a bit for the VM thread to see the abort flag and update the ring buffer
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                if let Ok(rb) = shared.last_instructions.lock() {
+                    eprintln!("{}", rb.dump_formatted(&resolution));
+                }
                 panic!("TIMEOUT");
             }
         }
@@ -272,18 +278,38 @@ macro_rules! multi_arena_test {
         #[cfg(feature = "multithreading")]
         fn $name() {
             use std::thread;
+            use std::sync::mpsc;
+            use std::time::Duration;
+            use std::sync::atomic::Ordering;
 
             let dll_path = setup_multi_arena_fixture($fixture);
             let harness = TestHarness::get();
+            let dll_path_str = dll_path.to_str().unwrap().to_string();
+            let resolution = try_static_res_from_file(&dll_path_str).expect("Failed to load assembly");
 
-            let handles: Vec<_> = (0..$thread_count)
-                .map(|_| {
-                    let dll_path = dll_path.clone();
-                    let harness_ptr = harness as *const TestHarness as usize;
-                    thread::spawn(move || {
-                        let harness = unsafe { &*(harness_ptr as *const TestHarness) };
-                        let exit_code =
-                            harness.run_with_timeout(&dll_path, std::time::Duration::from_secs(60));
+            let (tx, rx) = mpsc::channel();
+            let mut abort_flags = Vec::new();
+
+            for _ in 0..$thread_count {
+                let harness_ptr = harness as *const TestHarness as usize;
+                let tx = tx.clone();
+                let shared = std::sync::Arc::new(dotnet_vm::state::SharedGlobalState::new(harness.loader));
+                abort_flags.push(std::sync::Arc::clone(&shared.abort_requested));
+
+                thread::spawn(move || {
+                    let harness = unsafe { &*(harness_ptr as *const TestHarness) };
+                    let exit_code = harness.run_with_shared(resolution, shared);
+                    let _ = tx.send(exit_code);
+                });
+            }
+
+            let timeout = Duration::from_secs(60);
+            let start = std::time::Instant::now();
+            
+            for _ in 0..$thread_count {
+                let remaining = timeout.saturating_sub(start.elapsed());
+                match rx.recv_timeout(remaining) {
+                    Ok(exit_code) => {
                         assert_eq!(
                             exit_code,
                             $expected,
@@ -292,12 +318,15 @@ macro_rules! multi_arena_test {
                             $expected,
                             exit_code
                         );
-                    })
-                })
-                .collect();
-
-            for handle in handles {
-                handle.join().expect("Thread should complete without panic");
+                    }
+                    Err(_) => {
+                        // TIMEOUT!
+                        for flag in &abort_flags {
+                            flag.store(true, Ordering::Relaxed);
+                        }
+                        panic!("TIMEOUT in {}", stringify!($name));
+                    }
+                }
             }
         }
     };
@@ -404,28 +433,46 @@ multi_arena_test!(
 #[cfg(feature = "multithreading")]
 fn test_multiple_arenas_static_ref() {
     use std::thread;
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use std::sync::atomic::Ordering;
 
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/fields/static_ref_42.cs");
     let dll_path = harness.build(fixture_path).unwrap();
+    let dll_path_str = dll_path.to_str().unwrap().to_string();
+    let resolution = try_static_res_from_file(&dll_path_str).expect("Failed to load assembly");
 
     // Test that static reference fields work correctly across multiple arenas
     // One thread will initialize the static field, others will use it.
-    let handles: Vec<_> = (0..5)
-        .map(|_| {
-            let dll_path = dll_path.clone();
-            let harness_ptr = harness as *const TestHarness as usize;
-            thread::spawn(move || {
-                let harness = unsafe { &*(harness_ptr as *const TestHarness) };
-                let exit_code =
-                    harness.run_with_timeout(&dll_path, std::time::Duration::from_secs(60));
-                assert_eq!(exit_code, 42);
-            })
-        })
-        .collect();
+    let (tx, rx) = mpsc::channel();
+    let mut abort_flags = Vec::new();
 
-    for handle in handles {
-        handle.join().unwrap();
+    for _ in 0..5 {
+        let tx = tx.clone();
+        let harness_ptr = harness as *const TestHarness as usize;
+        let shared = std::sync::Arc::new(dotnet_vm::state::SharedGlobalState::new(harness.loader));
+        abort_flags.push(std::sync::Arc::clone(&shared.abort_requested));
+        thread::spawn(move || {
+            let harness = unsafe { &*(harness_ptr as *const TestHarness) };
+            let exit_code = harness.run_with_shared(resolution, shared);
+            let _ = tx.send(exit_code);
+        });
+    }
+
+    let timeout = Duration::from_secs(60);
+    let start = std::time::Instant::now();
+    for _ in 0..5 {
+        let remaining = timeout.saturating_sub(start.elapsed());
+        match rx.recv_timeout(remaining) {
+            Ok(exit_code) => assert_eq!(exit_code, 42),
+            Err(_) => {
+                for flag in &abort_flags {
+                    flag.store(true, Ordering::Relaxed);
+                }
+                panic!("TIMEOUT in test_multiple_arenas_static_ref");
+            }
+        }
     }
 }
 
@@ -433,30 +480,52 @@ fn test_multiple_arenas_static_ref() {
 #[cfg(feature = "multithreading")]
 fn test_multiple_arenas_allocation_stress() {
     use std::thread;
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use std::sync::atomic::Ordering;
 
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/arrays/array_0.cs");
     let dll_path = harness.build(fixture_path).unwrap();
+    let dll_path_str = dll_path.to_str().unwrap().to_string();
+    let resolution = try_static_res_from_file(&dll_path_str).expect("Failed to load assembly");
 
     // Stress test allocation across multiple arenas simultaneously
-    let handles: Vec<_> = (0..5)
-        .map(|_| {
-            let dll_path = dll_path.clone();
-            let harness_ptr = harness as *const TestHarness as usize;
-            thread::spawn(move || {
-                let harness = unsafe { &*(harness_ptr as *const TestHarness) };
-                // Run multiple times to increase allocation pressure
-                for _ in 0..3 {
-                    let exit_code =
-                        harness.run_with_timeout(&dll_path, std::time::Duration::from_secs(60));
-                    assert_eq!(exit_code, 0);
-                }
-            })
-        })
-        .collect();
+    let (tx, rx) = mpsc::channel();
+    let mut abort_flags = Vec::new();
 
-    for handle in handles {
-        handle.join().unwrap();
+    for _ in 0..5 {
+        let tx = tx.clone();
+        let harness_ptr = harness as *const TestHarness as usize;
+        let shared = std::sync::Arc::new(dotnet_vm::state::SharedGlobalState::new(harness.loader));
+        abort_flags.push(std::sync::Arc::clone(&shared.abort_requested));
+        thread::spawn(move || {
+            let harness = unsafe { &*(harness_ptr as *const TestHarness) };
+            // Run multiple times to increase allocation pressure
+            for _ in 0..3 {
+                let exit_code = harness.run_with_shared(resolution, shared.clone());
+                if exit_code != 0 {
+                    let _ = tx.send(exit_code);
+                    return;
+                }
+            }
+            let _ = tx.send(0);
+        });
+    }
+
+    let timeout = Duration::from_secs(120);
+    let start = std::time::Instant::now();
+    for _ in 0..5 {
+        let remaining = timeout.saturating_sub(start.elapsed());
+        match rx.recv_timeout(remaining) {
+            Ok(exit_code) => assert_eq!(exit_code, 0),
+            Err(_) => {
+                for flag in &abort_flags {
+                    flag.store(true, Ordering::Relaxed);
+                }
+                panic!("TIMEOUT in test_multiple_arenas_allocation_stress");
+            }
+        }
     }
 }
 
@@ -510,25 +579,29 @@ fn test_multiple_arenas_simple() {
     shared.loader.register_assembly(resolution);
 
     // Run 5 threads sharing the same global state
-    let handles: Vec<_> = (0..5)
-        .map(|_| {
-            let harness_ptr = harness as *const TestHarness as usize;
-            let shared = Arc::clone(&shared);
-            thread::spawn(move || {
-                let harness = unsafe { &*(harness_ptr as *const TestHarness) };
-                let exit_code = harness.run_with_shared_timeout(
-                    resolution,
-                    shared,
-                    std::time::Duration::from_secs(60),
-                );
-                assert_eq!(exit_code, 0);
-            })
-        })
-        .collect();
+    let (tx, rx) = std::sync::mpsc::channel();
+    for _ in 0..5 {
+        let harness_ptr = harness as *const TestHarness as usize;
+        let shared = Arc::clone(&shared);
+        let tx = tx.clone();
+        thread::spawn(move || {
+            let harness = unsafe { &*(harness_ptr as *const TestHarness) };
+            let exit_code = harness.run_with_shared(resolution, shared);
+            let _ = tx.send(exit_code);
+        });
+    }
 
-    // Join all threads to ensure cleanup
-    for handle in handles {
-        handle.join().expect("Thread should complete without panic");
+    let timeout = std::time::Duration::from_secs(60);
+    let start = std::time::Instant::now();
+    for _ in 0..5 {
+        let remaining = timeout.saturating_sub(start.elapsed());
+        match rx.recv_timeout(remaining) {
+            Ok(exit_code) => assert_eq!(exit_code, 0),
+            Err(_) => {
+                shared.abort_requested.store(true, std::sync::atomic::Ordering::Relaxed);
+                panic!("TIMEOUT in test_multiple_arenas_simple");
+            }
+        }
     }
 
     // Verify that the static field Counter was incremented by all threads
@@ -580,27 +653,38 @@ fn test_reflection_race_condition() {
     shared.loader.register_assembly(resolution);
 
     let num_threads = 20;
+    let iterations = 50;
 
-    let handles: Vec<_> = (0..num_threads)
-        .map(|_| {
-            let harness_ptr = harness as *const TestHarness as usize;
-            let shared = Arc::clone(&shared);
-            thread::spawn(move || {
-                let harness = unsafe { &*(harness_ptr as *const TestHarness) };
-                for _ in 0..50 {
-                    let exit_code = harness.run_with_shared_timeout(
-                        resolution,
-                        shared.clone(),
-                        std::time::Duration::from_secs(60),
-                    );
-                    assert_eq!(exit_code, 0);
+    let (tx, rx) = std::sync::mpsc::channel();
+    for _ in 0..num_threads {
+        let harness_ptr = harness as *const TestHarness as usize;
+        let shared = Arc::clone(&shared);
+        let tx = tx.clone();
+        thread::spawn(move || {
+            let harness = unsafe { &*(harness_ptr as *const TestHarness) };
+            for _ in 0..iterations {
+                let exit_code = harness.run_with_shared(resolution, shared.clone());
+                if exit_code != 0 {
+                    let _ = tx.send(Err(exit_code));
+                    return;
                 }
-            })
-        })
-        .collect();
+            }
+            let _ = tx.send(Ok(()));
+        });
+    }
 
-    for handle in handles {
-        handle.join().expect("Thread should complete without panic");
+    let timeout = std::time::Duration::from_secs(300); // 5 minutes for stress test
+    let start = std::time::Instant::now();
+    for _ in 0..num_threads {
+        let remaining = timeout.saturating_sub(start.elapsed());
+        match rx.recv_timeout(remaining) {
+            Ok(Ok(())) => {},
+            Ok(Err(exit_code)) => panic!("Test failed with exit code {}", exit_code),
+            Err(_) => {
+                shared.abort_requested.store(true, std::sync::atomic::Ordering::Relaxed);
+                panic!("TIMEOUT in test_reflection_race_condition");
+            }
+        }
     }
 }
 
@@ -644,33 +728,41 @@ fn test_gc_coordinator_multi_arena_tracking() {
 fn test_volatile_sharing() {
     use dotnet_vm::state;
     use std::thread;
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use std::sync::atomic::Ordering;
+
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/threading/volatile_sharing_42.cs");
     let dll_path = harness.build(fixture_path).unwrap();
 
     let shared = std::sync::Arc::new(state::SharedGlobalState::new(harness.loader));
+    let resolution = try_static_res_from_file(dll_path.to_str().unwrap())
+        .expect("Failed to load assembly");
 
-    let handles: Vec<_> = (0..2)
-        .map(|_| {
-            let dll_path = dll_path.clone();
-            let shared = shared.clone();
-            let harness_ptr = harness as *const TestHarness as usize;
-            thread::spawn(move || {
-                let harness = unsafe { &*(harness_ptr as *const TestHarness) };
-                let resolution = try_static_res_from_file(dll_path.to_str().unwrap())
-                    .expect("Failed to load assembly");
-                let exit_code = harness.run_with_shared_timeout(
-                    resolution,
-                    shared,
-                    std::time::Duration::from_secs(60),
-                );
-                assert_eq!(exit_code, 42);
-            })
-        })
-        .collect();
+    let (tx, rx) = mpsc::channel();
+    for _ in 0..2 {
+        let shared = shared.clone();
+        let tx = tx.clone();
+        let harness_ptr = harness as *const TestHarness as usize;
+        thread::spawn(move || {
+            let harness = unsafe { &*(harness_ptr as *const TestHarness) };
+            let exit_code = harness.run_with_shared(resolution, shared);
+            let _ = tx.send(exit_code);
+        });
+    }
 
-    for handle in handles {
-        handle.join().expect("Thread should complete");
+    let timeout = Duration::from_secs(60);
+    let start = std::time::Instant::now();
+    for _ in 0..2 {
+        let remaining = timeout.saturating_sub(start.elapsed());
+        match rx.recv_timeout(remaining) {
+            Ok(exit_code) => assert_eq!(exit_code, 42),
+            Err(_) => {
+                shared.abort_requested.store(true, Ordering::Relaxed);
+                panic!("TIMEOUT in test_volatile_sharing");
+            }
+        }
     }
 }
 
@@ -746,6 +838,9 @@ fn test_stw_stress() {
     use dotnet_vm::state;
     use std::sync::Arc;
     use std::thread;
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use std::sync::atomic::Ordering;
 
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/fixtures/span_comprehensive_0.cs");
@@ -759,25 +854,35 @@ fn test_stw_stress() {
     let num_threads = 8usize;
     let iters_per_thread = 10usize;
 
-    let handles: Vec<_> = (0..num_threads)
-        .map(|_| {
-            let harness_ptr = harness as *const TestHarness as usize;
-            let shared = Arc::clone(&shared);
-            thread::spawn(move || {
-                let harness = unsafe { &*(harness_ptr as *const TestHarness) };
-                for _ in 0..iters_per_thread {
-                    let code = harness.run_with_shared_timeout(
-                        resolution,
-                        shared.clone(),
-                        std::time::Duration::from_secs(60),
-                    );
-                    assert_eq!(code, 0, "Managed program must exit 0");
+    let (tx, rx) = mpsc::channel();
+    for _ in 0..num_threads {
+        let harness_ptr = harness as *const TestHarness as usize;
+        let shared = Arc::clone(&shared);
+        let tx = tx.clone();
+        thread::spawn(move || {
+            let harness = unsafe { &*(harness_ptr as *const TestHarness) };
+            for _ in 0..iters_per_thread {
+                let code = harness.run_with_shared(resolution, shared.clone());
+                if code != 0 {
+                    let _ = tx.send(Err(code));
+                    return;
                 }
-            })
-        })
-        .collect();
+            }
+            let _ = tx.send(Ok(()));
+        });
+    }
 
-    for h in handles {
-        h.join().expect("Thread should complete without panic");
+    let timeout = Duration::from_secs(300); // 5 minutes for stress test
+    let start = std::time::Instant::now();
+    for _ in 0..num_threads {
+        let remaining = timeout.saturating_sub(start.elapsed());
+        match rx.recv_timeout(remaining) {
+            Ok(Ok(())) => {},
+            Ok(Err(code)) => panic!("test_stw_stress failed with code {}", code),
+            Err(_) => {
+                shared.abort_requested.store(true, Ordering::Relaxed);
+                panic!("TIMEOUT in test_stw_stress");
+            }
+        }
     }
 }
