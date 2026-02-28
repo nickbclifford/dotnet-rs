@@ -756,6 +756,12 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
         }
         let thread_manager = &self.shared.thread_manager;
         if thread_manager.is_gc_stop_requested() {
+            // Actually enter the safe point instead of just returning a hint.
+            // This prevents callers from spinning without yielding.
+            #[cfg(feature = "multithreading")]
+            if let Some(managed_id) = thread_manager.current_thread_id() {
+                thread_manager.safe_point(managed_id, &self.shared.gc_coordinator);
+            }
             return true;
         }
         false

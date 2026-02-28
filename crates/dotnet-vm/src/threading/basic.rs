@@ -178,12 +178,12 @@ impl ThreadManagerOps for ThreadManager {
 
         #[cfg(feature = "multithreading")]
         {
-            // If we were at a safe point, decrement the counter
-            if self.threads_at_safepoint.load(Ordering::Acquire) > 0 {
-                // We don't decrement here because the thread is gone,
-                // but we MUST notify the coordinator because thread_count decreased.
-                self.all_threads_stopped.notify_all();
-            }
+            // ALWAYS notify the coordinator when a thread exits, regardless of
+            // safepoint count. The GC initiator in request_stop_the_world waits
+            // for threads_at_safepoint >= thread_count - 1. When a thread exits,
+            // thread_count decreases, potentially satisfying the condition. If we
+            // don't notify, the initiator stays blocked on the condvar forever.
+            self.all_threads_stopped.notify_all();
         }
     }
 
