@@ -102,22 +102,56 @@ impl TestHarness {
         Ok(dll_path)
     }
 
+    pub fn run_with_timeout(&self, dll_path: &Path, timeout: std::time::Duration) -> u8 {
+        let dll_path_str = dll_path.to_str().unwrap().to_string();
+        let resolution = try_static_res_from_file(&dll_path_str).expect("Failed to load assembly");
+        let shared = std::sync::Arc::new(state::SharedGlobalState::new(self.loader));
+
+        self.run_with_shared_timeout(resolution, shared, timeout)
+    }
+
+    pub fn run_with_shared_timeout(
+        &self,
+        resolution: ResolutionS,
+        shared: std::sync::Arc<state::SharedGlobalState<'static>>,
+        timeout: std::time::Duration,
+    ) -> u8 {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let shared_clone = std::sync::Arc::clone(&shared);
+        let harness_ptr = self as *const TestHarness as usize;
+
+        std::thread::spawn(move || {
+            let harness = unsafe { &*(harness_ptr as *const TestHarness) };
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                harness.run_with_shared(resolution, shared_clone)
+            }));
+            let _ = tx.send(result);
+        });
+
+        match rx.recv_timeout(timeout) {
+            Ok(Ok(i)) => i,
+            Ok(Err(panic_info)) => {
+                eprintln!("=== VM PANICKED ===");
+                eprintln!("=== LAST 10 INSTRUCTIONS ===");
+                eprintln!("{}", shared.last_instructions.lock().dump());
+                std::panic::resume_unwind(panic_info);
+            }
+            Err(_) => {
+                shared
+                    .abort_requested
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                eprintln!("=== TEST TIMEOUT (after {:?}) ===", timeout);
+                eprintln!("=== LAST 10 INSTRUCTIONS ===");
+                eprintln!("{}", shared.last_instructions.lock().dump());
+                panic!("TIMEOUT");
+            }
+        }
+    }
+
     pub fn run(&self, dll_path: &Path) -> u8 {
         let dll_path_str = dll_path.to_str().unwrap().to_string();
         let resolution = try_static_res_from_file(&dll_path_str).expect("Failed to load assembly");
         let shared = std::sync::Arc::new(state::SharedGlobalState::new(self.loader));
-        if dll_path_str.contains("nested_exceptions_42")
-            || dll_path_str.contains("static_field_42")
-            || dll_path_str.contains("generic_0")
-            || dll_path_str.contains("basic_42")
-            || dll_path_str.contains("gc_resurrection_0")
-            || dll_path_str.contains("hello_world")
-            || dll_path_str.contains("managed_ptr_unsafe_ops_0")
-        {
-            shared
-                .tracer_enabled
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-        }
         self.run_with_shared(resolution, shared)
     }
 
@@ -161,12 +195,6 @@ impl TestHarness {
     }
 }
 
-// NOTE: To run tests with a timeout (to catch infinite loops or deadlocks), use:
-//   cargo test -- --test-threads=1 --timeout 10
-// or set RUST_TEST_TIME_UNIT and RUST_TEST_TIME_INTEGRATION environment variables
-// or use an external timeout mechanism like GNU timeout:
-//   timeout 60s cargo test
-
 // used in generated tests from build.rs
 macro_rules! fixture_test {
     ($name:ident, $path:expr, $expected:expr) => {
@@ -174,7 +202,7 @@ macro_rules! fixture_test {
         fn $name() {
             let harness = TestHarness::get();
             let dll_path = harness.build(Path::new($path)).unwrap();
-            let exit_code = harness.run(&dll_path);
+            let exit_code = harness.run_with_timeout(&dll_path, std::time::Duration::from_secs(60));
             assert_eq!(
                 exit_code,
                 $expected,
@@ -191,7 +219,7 @@ macro_rules! fixture_test {
         fn $name() {
             let harness = TestHarness::get();
             let dll_path = harness.build(Path::new($path)).unwrap();
-            let exit_code = harness.run(&dll_path);
+            let exit_code = harness.run_with_timeout(&dll_path, std::time::Duration::from_secs(60));
             assert_eq!(
                 exit_code,
                 $expected,
@@ -254,7 +282,7 @@ macro_rules! multi_arena_test {
                     let harness_ptr = harness as *const TestHarness as usize;
                     thread::spawn(move || {
                         let harness = unsafe { &*(harness_ptr as *const TestHarness) };
-                        let exit_code = harness.run(&dll_path);
+                        let exit_code = harness.run_with_timeout(&dll_path, std::time::Duration::from_secs(60));
                         assert_eq!(
                             exit_code,
                             $expected,
@@ -340,7 +368,7 @@ fn hello_world() {
     let harness = TestHarness::get();
     let fixture_path = Path::new("tests/debug_fixtures/hello_world_0.cs");
     let dll_path = harness.build(fixture_path).unwrap();
-    let exit_code = harness.run(&dll_path);
+    let exit_code = harness.run_with_timeout(&dll_path, std::time::Duration::from_secs(60));
     assert_eq!(exit_code, 0);
 }
 
@@ -388,7 +416,7 @@ fn test_multiple_arenas_static_ref() {
             let harness_ptr = harness as *const TestHarness as usize;
             thread::spawn(move || {
                 let harness = unsafe { &*(harness_ptr as *const TestHarness) };
-                let exit_code = harness.run(&dll_path);
+                let exit_code = harness.run_with_timeout(&dll_path, std::time::Duration::from_secs(60));
                 assert_eq!(exit_code, 42);
             })
         })
@@ -417,7 +445,7 @@ fn test_multiple_arenas_allocation_stress() {
                 let harness = unsafe { &*(harness_ptr as *const TestHarness) };
                 // Run multiple times to increase allocation pressure
                 for _ in 0..3 {
-                    let exit_code = harness.run(&dll_path);
+                    let exit_code = harness.run_with_timeout(&dll_path, std::time::Duration::from_secs(60));
                     assert_eq!(exit_code, 0);
                 }
             })
@@ -478,53 +506,24 @@ fn test_multiple_arenas_simple() {
         try_static_res_from_file(dll_path.to_str().unwrap()).expect("Failed to load assembly");
     shared.loader.register_assembly(resolution);
 
-    let (tx, rx) = std::sync::mpsc::channel();
-
     // Run 5 threads sharing the same global state
     let handles: Vec<_> = (0..5)
-        .map(|i| {
+        .map(|_| {
             let harness_ptr = harness as *const TestHarness as usize;
             let shared = Arc::clone(&shared);
-            let tx = tx.clone();
             thread::spawn(move || {
                 let harness = unsafe { &*(harness_ptr as *const TestHarness) };
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let exit_code = harness.run_with_shared(resolution, shared);
-                    assert_eq!(exit_code, 0);
-                }));
-                tx.send((i, result)).ok();
+                let exit_code =
+                    harness.run_with_shared_timeout(resolution, shared, std::time::Duration::from_secs(60));
+                assert_eq!(exit_code, 0);
             })
         })
         .collect();
 
-    // Wait for all threads to complete
-    let mut results = Vec::new();
-    let timeout = std::time::Duration::from_secs(30);
-
-    for _ in 0..5 {
-        match rx.recv_timeout(timeout) {
-            Ok((i, result)) => {
-                if let Err(e) = result {
-                    panic!("Thread {} panicked: {:?}", i, e);
-                }
-                results.push(i);
-            }
-            Err(_) => {
-                panic!(
-                    "Test timed out waiting for threads. Completed {}/5 threads.",
-                    results.len()
-                );
-            }
-        }
-    }
-
     // Join all threads to ensure cleanup
     for handle in handles {
-        handle.join().expect("Thread should complete");
+        handle.join().expect("Thread should complete without panic");
     }
-
-    // Verify all 5 threads completed
-    assert_eq!(results.len(), 5);
 
     // Verify that the static field Counter was incremented by all threads
     let (index, type_def) = resolution
@@ -575,38 +574,24 @@ fn test_reflection_race_condition() {
     shared.loader.register_assembly(resolution);
 
     let num_threads = 20;
-    let (tx, rx) = std::sync::mpsc::channel();
 
     let handles: Vec<_> = (0..num_threads)
-        .map(|i| {
+        .map(|_| {
             let harness_ptr = harness as *const TestHarness as usize;
             let shared = Arc::clone(&shared);
-            let tx = tx.clone();
             thread::spawn(move || {
                 let harness = unsafe { &*(harness_ptr as *const TestHarness) };
                 for _ in 0..50 {
-                    let exit_code = harness.run_with_shared(resolution, shared.clone());
-                    if exit_code != 0 {
-                        tx.send((i, Err(format!("Exit code {}", exit_code)))).ok();
-                        return;
-                    }
+                    let exit_code =
+                        harness.run_with_shared_timeout(resolution, shared.clone(), std::time::Duration::from_secs(60));
+                    assert_eq!(exit_code, 0);
                 }
-                tx.send((i, Ok(()))).ok();
             })
         })
         .collect();
 
-    for _ in 0..num_threads {
-        let (_i, result) = rx
-            .recv_timeout(std::time::Duration::from_secs(60))
-            .expect("Test timed out");
-        if let Err(e) = result {
-            panic!("Thread failed: {:?}", e);
-        }
-    }
-
     for handle in handles {
-        handle.join().unwrap();
+        handle.join().expect("Thread should complete without panic");
     }
 }
 
@@ -665,7 +650,8 @@ fn test_volatile_sharing() {
                 let harness = unsafe { &*(harness_ptr as *const TestHarness) };
                 let resolution = try_static_res_from_file(dll_path.to_str().unwrap())
                     .expect("Failed to load assembly");
-                let exit_code = harness.run_with_shared(resolution, shared);
+                let exit_code =
+                    harness.run_with_shared_timeout(resolution, shared, std::time::Duration::from_secs(60));
                 assert_eq!(exit_code, 42);
             })
         })
@@ -760,40 +746,23 @@ fn test_stw_stress() {
 
     let num_threads = 8usize;
     let iters_per_thread = 10usize;
-    let (tx, rx) = std::sync::mpsc::channel();
 
     let handles: Vec<_> = (0..num_threads)
-        .map(|i| {
+        .map(|_| {
             let harness_ptr = harness as *const TestHarness as usize;
             let shared = Arc::clone(&shared);
-            let tx = tx.clone();
             thread::spawn(move || {
                 let harness = unsafe { &*(harness_ptr as *const TestHarness) };
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    for _ in 0..iters_per_thread {
-                        let code = harness.run_with_shared(resolution, shared.clone());
-                        assert_eq!(code, 0, "Managed program must exit 0");
-                    }
-                }));
-                tx.send((i, result)).ok();
+                for _ in 0..iters_per_thread {
+                    let code =
+                        harness.run_with_shared_timeout(resolution, shared.clone(), std::time::Duration::from_secs(60));
+                    assert_eq!(code, 0, "Managed program must exit 0");
+                }
             })
         })
         .collect();
 
-    // Wait for all threads to complete with a bounded timeout to avoid hangs
-    let timeout = std::time::Duration::from_secs(20);
-    for _ in 0..num_threads {
-        match rx.recv_timeout(timeout) {
-            Ok((_i, result)) => {
-                if let Err(e) = result {
-                    panic!("Thread panicked: {:?}", e);
-                }
-            }
-            Err(_) => panic!("test_stw_stress timed out"),
-        }
-    }
-
     for h in handles {
-        h.join().expect("Thread should complete");
+        h.join().expect("Thread should complete without panic");
     }
 }

@@ -16,6 +16,7 @@ use dotnetdll::prelude::*;
 use gc_arena::Collect;
 
 pub mod registry;
+pub mod ring_buffer;
 
 pub struct InstructionRegistry;
 
@@ -92,18 +93,19 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
         self.stack.execution.original_stack_height =
             self.stack.execution.evaluation_stack.top_of_stack();
 
-        vm_trace_instruction!(
-            self.stack,
-            ip,
-            &i.show(
-                self.stack
-                    .state()
-                    .info_handle
-                    .source
-                    .resolution()
-                    .definition()
-            )
+        let instr_text = i.show(
+            self.stack
+                .state()
+                .info_handle
+                .source
+                .resolution()
+                .definition(),
         );
+
+        vm_trace_instruction!(self.stack, ip, &instr_text);
+
+        // Record for ring buffer
+        self.stack.shared.last_instructions.lock().push(ip, instr_text);
 
         tracing::debug!(
             "step_normal: frame={}, ip={}, instr={:?}",

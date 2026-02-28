@@ -64,6 +64,9 @@ pub enum ExecutionError {
 
     #[error("Fuzzing instruction budget exceeded")]
     FuzzBudgetExceeded,
+
+    #[error("Execution aborted: {0}")]
+    Aborted(String),
 }
 
 #[derive(Debug, Error, Clone, PartialEq)]

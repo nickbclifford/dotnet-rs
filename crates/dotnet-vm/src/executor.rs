@@ -94,6 +94,10 @@ impl Executor {
         self.shared.get_cache_stats()
     }
 
+    pub fn dump_last_instructions(&self) -> String {
+        self.shared.last_instructions.lock().dump()
+    }
+
     pub fn new(shared: Arc<SharedGlobalState<'static>>) -> Self {
         let shared_clone = Arc::clone(&shared);
         let mut arena = Box::new(GCArena::new(|_| {
@@ -206,6 +210,12 @@ impl Executor {
         };
 
         let result = loop {
+            if self.shared.abort_requested.load(Ordering::Relaxed) {
+                break ExecutorResult::Error(crate::error::VmError::Execution(
+                    crate::error::ExecutionError::Aborted("Requested by user/timeout".to_string()),
+                ));
+            }
+
             #[cfg(feature = "fuzzing")]
             if let Some(budget) = self.instruction_budget.as_mut() {
                 if *budget == 0 {
