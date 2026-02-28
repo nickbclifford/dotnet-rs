@@ -207,18 +207,10 @@ impl Executor {
             #[cfg(not(feature = "multithreading"))]
             {
                 self.gc_tick_counter += 1;
-                // Only mark debt every 8 ticks to reduce overhead
+                // Only collect debt every 8 ticks to reduce overhead
                 if self.gc_tick_counter.is_multiple_of(8) {
                     self.with_arena(|arena| {
-                        if let Some(marked) = arena.mark_debt() {
-                            marked.finalize(|fc, c| {
-                                c.stack.local.heap.finalize_check(
-                                    fc,
-                                    &c.stack.shared,
-                                    c.stack.indent(),
-                                )
-                            });
-                        }
+                        arena.collect_debt();
                     });
                 }
             }

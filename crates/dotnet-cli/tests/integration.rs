@@ -154,9 +154,21 @@ impl TestHarness {
             let finished = lock.lock().unwrap();
             let (finished, wait_result) = cvar.wait_timeout(finished, timeout).unwrap();
             if !*finished && wait_result.timed_out() {
+                eprintln!("=== TEST TIMEOUT (after {:?}) ===", timeout);
                 shared_clone
                     .abort_requested
                     .store(true, std::sync::atomic::Ordering::Relaxed);
+
+                // Give the VM thread a grace period to notice the abort request.
+                // If it's in an infinite loop that doesn't check the flag, we must force kill.
+                let (finished_grace, _) = cvar
+                    .wait_timeout(finished, std::time::Duration::from_secs(10))
+                    .unwrap();
+
+                if !*finished_grace {
+                    eprintln!("=== VM DID NOT RESPOND TO ABORT — FORCE KILLING ===");
+                    std::process::abort();
+                }
             }
         });
 
