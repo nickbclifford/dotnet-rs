@@ -7,7 +7,6 @@ use std::{
     io,
     path::{Path, PathBuf},
     process::Command,
-    sync::Mutex,
     time::Duration,
 };
 
@@ -21,8 +20,6 @@ fn get_test_timeout(default_secs: u64) -> Duration {
         .unwrap_or(default_secs);
     Duration::from_secs(secs)
 }
-
-static BUILD_LOCK: Mutex<()> = Mutex::new(());
 
 pub struct TestHarness {
     pub loader: &'static assemblies::AssemblyLoader,
@@ -74,7 +71,6 @@ impl TestHarness {
     }
 
     pub fn build(&self, fixture_path: &Path) -> io::Result<PathBuf> {
-        let _lock = BUILD_LOCK.lock().unwrap();
         let file_name = fixture_path.file_stem().unwrap().to_str().unwrap();
         let output_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("target")
@@ -104,6 +100,8 @@ impl TestHarness {
                     "-p:BaseIntermediateOutputPath={}/",
                     output_dir.join("obj").display()
                 ),
+                "-v:q",
+                "--nologo",
             ])
             .status()?;
         assert!(
@@ -113,6 +111,24 @@ impl TestHarness {
         );
 
         Ok(dll_path)
+    }
+
+    pub fn prebuilt_dll_path(&self, fixture_path: &Path) -> PathBuf {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let fixtures_dir = manifest_dir.join("tests/fixtures");
+        let output_base = manifest_dir.join("target").join("dotnet-fixtures");
+
+        if let Ok(relative_path) = fixture_path.strip_prefix(&fixtures_dir) {
+            let file_name = fixture_path.file_stem().unwrap().to_str().unwrap();
+            output_base
+                .join(relative_path.parent().unwrap())
+                .join(file_name)
+                .join("SingleFile.dll")
+        } else {
+            // Fallback for debug fixtures or others outside the fixtures dir
+            let file_name = fixture_path.file_stem().unwrap().to_str().unwrap();
+            output_base.join(file_name).join("SingleFile.dll")
+        }
     }
 
     pub fn run_with_timeout(&self, dll_path: &Path, timeout: std::time::Duration) -> u8 {
@@ -237,36 +253,30 @@ impl TestHarness {
 
 // used in generated tests from build.rs
 macro_rules! fixture_test {
-    ($name:ident, $path:expr, $expected:expr) => {
+    ($name:ident, $dll_path:expr, $expected:expr) => {
         #[test]
         fn $name() {
             let harness = TestHarness::get();
-            let dll_path = harness.build(Path::new($path)).unwrap();
-            let exit_code = harness.run_with_timeout(&dll_path, get_test_timeout(60));
+            let dll_path = Path::new($dll_path);
+            let exit_code = harness.run_with_timeout(dll_path, get_test_timeout(60));
             assert_eq!(
-                exit_code,
-                $expected,
+                exit_code, $expected,
                 "Test {} failed: expected exit code {}, got {}",
-                stringify!($name),
-                $expected,
-                exit_code
+                stringify!($name), $expected, exit_code
             );
         }
     };
-    (#[ignore] $name:ident, $path:expr, $expected:expr) => {
+    (#[ignore] $name:ident, $dll_path:expr, $expected:expr) => {
         #[test]
         #[ignore]
         fn $name() {
             let harness = TestHarness::get();
-            let dll_path = harness.build(Path::new($path)).unwrap();
-            let exit_code = harness.run_with_timeout(&dll_path, get_test_timeout(60));
+            let dll_path = Path::new($dll_path);
+            let exit_code = harness.run_with_timeout(dll_path, get_test_timeout(60));
             assert_eq!(
-                exit_code,
-                $expected,
+                exit_code, $expected,
                 "Test {} failed: expected exit code {}, got {}",
-                stringify!($name),
-                $expected,
-                exit_code
+                stringify!($name), $expected, exit_code
             );
         }
     };
@@ -283,7 +293,13 @@ macro_rules! fixture_test {
 #[cfg(feature = "multithreading")]
 fn setup_multi_arena_fixture(fixture_path: &str) -> PathBuf {
     let harness = TestHarness::get();
-    harness.build(Path::new(fixture_path)).unwrap()
+    let path = Path::new(fixture_path);
+    let dll_path = harness.prebuilt_dll_path(path);
+    if dll_path.exists() {
+        dll_path
+    } else {
+        harness.build(path).unwrap()
+    }
 }
 
 /// Macro for multi-arena tests that run the same fixture across multiple threads.

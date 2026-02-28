@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <!-- This project doesn't compile anything itself -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <!-- Suppress normal build output - we only use custom targets -->
+    <NoBuild>false</NoBuild>
+  </PropertyGroup>
+
+  <!-- Discover all fixture .cs files -->
+  <ItemGroup>
+    <TestFixture Include="fixtures/**/*.cs" />
+  </ItemGroup>
+
+  <!--
+    BatchCompileFixtures: For each discovered .cs file, invoke SingleFile.csproj
+    with that file as input and a unique output directory.
+    MSBuild item batching (%(metadata)) fans this out automatically.
+    BuildInParallel="true" allows concurrent Roslyn compilations.
+  -->
+  <Target Name="BatchCompileFixtures" AfterTargets="Restore">
+    <MSBuild Projects="SingleFile.csproj"
+             Properties="
+               TestFile=%(TestFixture.FullPath);
+               AllowUnsafeBlocks=true;
+               OutputPath=$(FixtureOutputBase)%(TestFixture.RecursiveDir)%(TestFixture.Filename)/;
+               BaseIntermediateOutputPath=$(FixtureOutputBase)%(TestFixture.RecursiveDir)%(TestFixture.Filename)/obj/"
+             Targets="Restore;Build"
+             BuildInParallel="true" />
+  </Target>
+
+  <!-- Override the default Build target to do nothing except trigger our target -->
+  <Target Name="Build" />
+  <Target Name="Compile" />
+</Project>
