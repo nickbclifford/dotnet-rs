@@ -7,10 +7,7 @@ use dotnet_value::{StackValue, object::ObjectRef};
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(CastClass { param0 })]
-pub fn castclass<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
-    ctx: &mut T,
-    param0: &MethodType,
-) -> StepResult {
+pub fn castclass<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &MethodType) -> StepResult {
     let target_obj_val = ctx.pop();
     let StackValue::ObjectRef(target_obj) = target_obj_val else {
         return ctx
@@ -35,10 +32,7 @@ pub fn castclass<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 }
 
 #[dotnet_instruction(IsInstance(param0))]
-pub fn isinst<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
-    ctx: &mut T,
-    param0: &MethodType,
-) -> StepResult {
+pub fn isinst<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &MethodType) -> StepResult {
     let target_obj_val = ctx.pop();
     let StackValue::ObjectRef(target_obj) = target_obj_val else {
         return ctx

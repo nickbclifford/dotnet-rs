@@ -31,7 +31,10 @@ pub struct WriteBarrierRecorder<'gc> {
 
 impl<'gc> WriteBarrierRecorder<'gc> {
     pub fn new(arena_id: ArenaId) -> Self {
-        Self { arena_id, _gc: std::marker::PhantomData }
+        Self {
+            arena_id,
+            _gc: std::marker::PhantomData,
+        }
     }
 
     #[cfg(feature = "multithreading")]
@@ -549,7 +552,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         layout: &LayoutManager,
     ) -> Result<(), String> {
         let owner = target.0;
-        owner.as_heap_storage(|_storage| {}); 
+        owner.as_heap_storage(|_storage| {});
 
         let dest_layout = self.get_layout_from_owner(owner);
 
@@ -563,7 +566,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             self.check_integrity_internal_with_layout(ptr, dest_layout, base, layout)?;
 
             #[allow(deprecated)]
-            unsafe { self.perform_write(gc, ptr, Some(owner), value, layout) }
+            unsafe {
+                self.perform_write(gc, ptr, Some(owner), value, layout)
+            }
         })
     }
 
@@ -584,7 +589,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         }
         validate_atomic_access(ptr as *const u8, false);
         #[allow(deprecated)]
-        unsafe { self.perform_write(gc, ptr, None, value, layout) }
+        unsafe {
+            self.perform_write(gc, ptr, None, value, layout)
+        }
     }
 
     #[deprecated(note = "Use write_to_heap or write_to_unmanaged instead")]

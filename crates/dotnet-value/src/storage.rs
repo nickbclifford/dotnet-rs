@@ -1,5 +1,4 @@
 use crate::layout::{FieldLayoutManager, FieldType, HasLayout};
-use std::marker::PhantomData;
 use dotnet_types::TypeDescription;
 use dotnet_utils::{
     atomic::{self, Atomic},
@@ -13,6 +12,7 @@ use gc_arena::{Collect, Collection};
 use std::{
     collections::HashSet,
     fmt::{self, Debug, Formatter},
+    marker::PhantomData,
 };
 
 #[cfg(any(feature = "memory-validation", debug_assertions))]
@@ -27,10 +27,12 @@ pub struct FieldRef<'a, T: FieldType> {
 
 impl<T: FieldType> FieldRef<'_, T> {
     pub fn read(&self) -> T {
-        self.storage.with_data(|data| T::read_from(&data[self.offset..]))
+        self.storage
+            .with_data(|data| T::read_from(&data[self.offset..]))
     }
     pub fn write(&self, value: T) {
-        self.storage.with_data_mut(|data| value.write_to(&mut data[self.offset..]))
+        self.storage
+            .with_data_mut(|data| value.write_to(&mut data[self.offset..]))
     }
 }
 
@@ -106,7 +108,6 @@ impl FieldStorage {
             }
         }
     }
-
 
     /// Get a typed field reference — validates layout at construction time
     pub fn field<T: FieldType>(

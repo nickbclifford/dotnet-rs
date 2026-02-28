@@ -1,7 +1,7 @@
 use crate::{
+    StepResult,
     resolution::ValueResolution,
     stack::ops::{LoaderOps, MemoryOps, ResolutionOps, TypedStackOps},
-    StepResult,
 };
 use dotnet_macros::{dotnet_intrinsic, dotnet_intrinsic_field};
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
@@ -26,7 +26,11 @@ pub fn intrinsic_vector_is_hardware_accelerated<'gc, 'm: 'gc, T: TypedStackOps<'
 #[dotnet_intrinsic(
     "static System.Collections.Generic.EqualityComparer<T> System.Collections.Generic.EqualityComparer<T>::get_Default()"
 )]
-pub fn intrinsic_equality_comparer_get_default<'gc, 'm: 'gc, T: LoaderOps<'m> + ResolutionOps<'gc, 'm> + MemoryOps<'gc> + TypedStackOps<'gc>>(
+pub fn intrinsic_equality_comparer_get_default<
+    'gc,
+    'm: 'gc,
+    T: LoaderOps<'m> + ResolutionOps<'gc, 'm> + MemoryOps<'gc> + TypedStackOps<'gc>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     generics: &GenericLookup,

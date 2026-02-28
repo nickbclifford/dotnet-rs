@@ -64,10 +64,7 @@ pub(crate) fn get_ptr_context<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<
 }
 
 #[dotnet_instruction(NewObject(ctor))]
-pub fn new_object<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
-    ctx: &mut T,
-    ctor: &UserMethod,
-) -> StepResult {
+pub fn new_object<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, ctor: &UserMethod) -> StepResult {
     let (mut method, lookup) = vm_try!(
         ctx.resolver()
             .find_generic_method(&MethodSource::User(*ctor), &ctx.current_context())
@@ -122,7 +119,10 @@ pub fn new_object<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
                     vec![0; total_size_bytes.as_usize()],
                     dims,
                 );
-                let o = ObjectRef::new(ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()), HeapStorage::Vec(vec_obj));
+                let o = ObjectRef::new(
+                    ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+                    HeapStorage::Vec(vec_obj),
+                );
                 ctx.register_new_object(&o);
                 ctx.push(StackValue::ObjectRef(o));
                 return StepResult::Continue;
@@ -248,10 +248,7 @@ pub fn new_object<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 }
 
 #[dotnet_instruction(LoadObject { param0 })]
-pub fn ldobj<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
-    ctx: &mut T,
-    param0: &MethodType,
-) -> StepResult {
+pub fn ldobj<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &MethodType) -> StepResult {
     let addr = ctx.pop();
 
     if addr.is_null() {
@@ -273,17 +270,19 @@ pub fn ldobj<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
             .throw_by_name_with_message("System.AccessViolationException", ACCESS_VIOLATION_MSG);
     }
 
-    let value = vm_try!(res_ctx.read_cts_value(&load_type, &source_vec, ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()))).into_stack();
+    let value = vm_try!(res_ctx.read_cts_value(
+        &load_type,
+        &source_vec,
+        ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new())
+    ))
+    .into_stack();
 
     ctx.push(value);
     StepResult::Continue
 }
 
 #[dotnet_instruction(StoreObject { param0 })]
-pub fn stobj<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
-    ctx: &mut T,
-    param0: &MethodType,
-) -> StepResult {
+pub fn stobj<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &MethodType) -> StepResult {
     let value = ctx.pop();
     let addr = ctx.pop();
 
@@ -324,10 +323,7 @@ pub fn stobj<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 }
 
 #[dotnet_instruction(InitializeForObject(param0))]
-pub fn initobj<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
-    ctx: &mut T,
-    param0: &MethodType,
-) -> StepResult {
+pub fn initobj<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &MethodType) -> StepResult {
     let addr = ctx.pop();
 
     if addr.is_null() {
@@ -352,10 +348,7 @@ pub fn initobj<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 }
 
 #[dotnet_instruction(Sizeof(param0))]
-pub fn sizeof<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
-    ctx: &mut T,
-    param0: &MethodType,
-) -> StepResult {
+pub fn sizeof<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &MethodType) -> StepResult {
     let target = vm_try!(ctx.make_concrete(param0));
     let res_ctx = ctx.current_context();
     let layout = vm_try!(type_layout(target, &res_ctx));
@@ -364,11 +357,7 @@ pub fn sizeof<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 }
 
 #[dotnet_instruction(LoadString(chars))]
-pub fn ldstr<'gc, 'm: 'gc, T: StackOps<'gc, 'm>>(
-    ctx: &mut T,
-
-    chars: &[u16],
-) -> StepResult {
+pub fn ldstr<'gc, 'm: 'gc, T: StackOps<'gc, 'm>>(ctx: &mut T, chars: &[u16]) -> StepResult {
     ctx.push_string(CLRString::new(chars.to_owned()));
     StepResult::Continue
 }

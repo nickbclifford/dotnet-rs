@@ -1,10 +1,17 @@
-use crate::{StepResult, stack::ops::{EvalStackOps, MemoryOps, TypedStackOps}};
+use crate::{
+    StepResult,
+    stack::ops::{EvalStackOps, MemoryOps, TypedStackOps},
+};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_value::StackValue;
 
 #[dotnet_intrinsic("static bool System.Text.UnicodeUtility::IsAsciiCodePoint(uint)")]
-pub fn intrinsic_unicode_utility_is_ascii_code_point<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc>>(
+pub fn intrinsic_unicode_utility_is_ascii_code_point<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -22,7 +29,11 @@ pub fn intrinsic_unicode_utility_is_ascii_code_point<'gc, 'm: 'gc, T: EvalStackO
 }
 
 #[dotnet_intrinsic("static bool System.Text.UnicodeUtility::IsInRangeInclusive(uint, uint, uint)")]
-pub fn intrinsic_unicode_utility_is_in_range_inclusive<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc>>(
+pub fn intrinsic_unicode_utility_is_in_range_inclusive<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,

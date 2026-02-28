@@ -1,12 +1,19 @@
-use crate::{StepResult, stack::ops::{ExceptionOps, TypedStackOps}};
-use crate::memory::ops::MemoryOps;
+use crate::{
+    StepResult,
+    memory::ops::MemoryOps,
+    stack::ops::{ExceptionOps, TypedStackOps},
+};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 
 const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 
 #[dotnet_intrinsic("object System.Object::MemberwiseClone()")]
-pub fn object_memberwise_clone<'gc, 'm: 'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc>>(
+pub fn object_memberwise_clone<
+    'gc,
+    'm: 'gc,
+    T: TypedStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _lookup: &GenericLookup,

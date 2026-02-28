@@ -1,11 +1,16 @@
-use dotnet_macros_core::{InstructionMapping, ParsedFieldSignature, ParsedInstruction, ParsedSignature};
+use dotnet_macros_core::{
+    InstructionMapping, ParsedFieldSignature, ParsedInstruction, ParsedSignature,
+};
 use std::{
     collections::hash_map::DefaultHasher,
     env, fs,
     hash::{Hash, Hasher},
     path::Path,
 };
-use syn::{parse::{Parse, ParseStream}, Attribute, Ident, Item, ItemFn, LitStr};
+use syn::{
+    Attribute, Ident, Item, ItemFn, LitStr,
+    parse::{Parse, ParseStream},
+};
 use walkdir::WalkDir;
 
 struct InstructionEntry {
@@ -116,9 +121,7 @@ fn process_instruction_file(path: &Path, entries: &mut Vec<InstructionEntry>) {
                             for attr in &macro_instr.attrs {
                                 #[allow(clippy::collapsible_if)]
                                 if attr.path().is_ident("dotnet_instruction") {
-                                    if let Ok(mapping) =
-                                        attr.parse_args::<InstructionMapping>()
-                                    {
+                                    if let Ok(mapping) = attr.parse_args::<InstructionMapping>() {
                                         match mapping {
                                             InstructionMapping::Tuple(_, fields) => {
                                                 for field in fields {
@@ -183,16 +186,20 @@ fn generate_instruction_table(out_dir: &std::ffi::OsStr, entries: &[InstructionE
     let mut table_code = String::new();
 
     // New monomorphic dispatcher
-    table_code.push_str("pub fn dispatch_monomorphic<'gc, 'm: 'gc, T: crate::stack::ops::VesOps<'gc, 'm>>(\n");
+    table_code.push_str(
+        "pub fn dispatch_monomorphic<'gc, 'm: 'gc, T: crate::stack::ops::VesOps<'gc, 'm>>(\n",
+    );
     table_code.push_str("    ctx: &mut T,\n");
     table_code.push_str("    instr: &Instruction,\n");
     table_code.push_str(") -> crate::StepResult {\n");
     table_code.push_str("    match instr {\n");
 
     for entry in entries {
-        let handler_path: syn::Path =
-            syn::parse_str(&format!("{}::{}", entry.mod_path, entry.parsed.handler_name))
-                .expect("Failed to parse handler path");
+        let handler_path: syn::Path = syn::parse_str(&format!(
+            "{}::{}",
+            entry.mod_path, entry.parsed.handler_name
+        ))
+        .expect("Failed to parse handler path");
 
         let extra_arg_info: Vec<_> = entry
             .parsed
@@ -246,7 +253,8 @@ fn process_intrinsic_file(path: &Path, entries: &mut Vec<IntrinsicEntry>) {
 
                     let sanitized_class = parsed.class_name.replace(['.', '+', '`', '\''], "_");
                     let sanitized_method = parsed.method_name.replace(['.', '$'], "_");
-                    let variant_name = format!("{}_{}_{:x}", sanitized_class, sanitized_method, sig_hash);
+                    let variant_name =
+                        format!("{}_{}_{:x}", sanitized_class, sanitized_method, sig_hash);
                     entries.push(IntrinsicEntry {
                         type_name: parsed.class_name,
                         member_name: parsed.method_name,
@@ -270,7 +278,8 @@ fn process_intrinsic_file(path: &Path, entries: &mut Vec<IntrinsicEntry>) {
 
                     let sanitized_class = parsed.class_name.replace(['.', '+', '`', '\''], "_");
                     let sanitized_field = parsed.field_name.replace(['.', '$'], "_");
-                    let variant_name = format!("{}_{}_{:x}", sanitized_class, sanitized_field, sig_hash);
+                    let variant_name =
+                        format!("{}_{}_{:x}", sanitized_class, sanitized_field, sig_hash);
                     entries.push(IntrinsicEntry {
                         type_name: parsed.class_name,
                         member_name: parsed.field_name,
@@ -328,7 +337,11 @@ fn generate_intrinsic_phf(out_dir: &std::ffi::OsStr, entries: &[IntrinsicEntry])
     dispatch_code.push_str("#[allow(non_camel_case_types)]\n");
     dispatch_code.push_str("pub enum MethodIntrinsicId {\n");
     dispatch_code.push_str("    Missing,\n");
-    let mut method_variants: Vec<_> = sorted_entries.iter().filter(|e| !e.is_field).map(|e| &e.variant_name).collect();
+    let mut method_variants: Vec<_> = sorted_entries
+        .iter()
+        .filter(|e| !e.is_field)
+        .map(|e| &e.variant_name)
+        .collect();
     method_variants.sort();
     method_variants.dedup();
     for variant in method_variants {
@@ -340,7 +353,11 @@ fn generate_intrinsic_phf(out_dir: &std::ffi::OsStr, entries: &[IntrinsicEntry])
     dispatch_code.push_str("#[allow(non_camel_case_types)]\n");
     dispatch_code.push_str("pub enum FieldIntrinsicId {\n");
     dispatch_code.push_str("    Missing,\n");
-    let mut field_variants: Vec<_> = sorted_entries.iter().filter(|e| e.is_field).map(|e| &e.variant_name).collect();
+    let mut field_variants: Vec<_> = sorted_entries
+        .iter()
+        .filter(|e| e.is_field)
+        .map(|e| &e.variant_name)
+        .collect();
     field_variants.sort();
     field_variants.dedup();
     for variant in field_variants {
@@ -348,7 +365,9 @@ fn generate_intrinsic_phf(out_dir: &std::ffi::OsStr, entries: &[IntrinsicEntry])
     }
     dispatch_code.push_str("}\n\n");
 
-    dispatch_code.push_str("pub fn dispatch_method_intrinsic<'gc, 'm: 'gc, T: crate::stack::ops::VesOps<'gc, 'm>>(\n");
+    dispatch_code.push_str(
+        "pub fn dispatch_method_intrinsic<'gc, 'm: 'gc, T: crate::stack::ops::VesOps<'gc, 'm>>(\n",
+    );
     dispatch_code.push_str("    id: MethodIntrinsicId,\n");
     dispatch_code.push_str("    ctx: &mut T,\n");
     dispatch_code.push_str("    method: dotnet_types::members::MethodDescription,\n");
@@ -356,11 +375,18 @@ fn generate_intrinsic_phf(out_dir: &std::ffi::OsStr, entries: &[IntrinsicEntry])
     dispatch_code.push_str(") -> crate::StepResult {\n");
     dispatch_code.push_str("    match id {\n");
     dispatch_code.push_str("        MethodIntrinsicId::Missing => crate::intrinsics::missing_intrinsic_handler(ctx, method, generics),\n");
-    let mut method_variants: Vec<_> = sorted_entries.iter().filter(|e| !e.is_field).map(|e| &e.variant_name).collect();
+    let mut method_variants: Vec<_> = sorted_entries
+        .iter()
+        .filter(|e| !e.is_field)
+        .map(|e| &e.variant_name)
+        .collect();
     method_variants.sort();
     method_variants.dedup();
     for variant in method_variants {
-        let entry = sorted_entries.iter().find(|e| !e.is_field && e.variant_name == *variant).unwrap();
+        let entry = sorted_entries
+            .iter()
+            .find(|e| !e.is_field && e.variant_name == *variant)
+            .unwrap();
         dispatch_code.push_str(&format!(
             "        MethodIntrinsicId::{} => {}(ctx, method, generics),\n",
             variant, entry.original_handler_path
@@ -369,20 +395,30 @@ fn generate_intrinsic_phf(out_dir: &std::ffi::OsStr, entries: &[IntrinsicEntry])
     dispatch_code.push_str("    }\n");
     dispatch_code.push_str("}\n\n");
 
-    dispatch_code.push_str("pub fn dispatch_field_intrinsic<'gc, 'm: 'gc, T: crate::stack::ops::VesOps<'gc, 'm>>(\n");
+    dispatch_code.push_str(
+        "pub fn dispatch_field_intrinsic<'gc, 'm: 'gc, T: crate::stack::ops::VesOps<'gc, 'm>>(\n",
+    );
     dispatch_code.push_str("    id: FieldIntrinsicId,\n");
     dispatch_code.push_str("    ctx: &mut T,\n");
     dispatch_code.push_str("    field: dotnet_types::members::FieldDescription,\n");
-    dispatch_code.push_str("    type_generics: std::sync::Arc<[dotnet_types::generics::ConcreteType]>,\n");
+    dispatch_code
+        .push_str("    type_generics: std::sync::Arc<[dotnet_types::generics::ConcreteType]>,\n");
     dispatch_code.push_str("    is_address: bool,\n");
     dispatch_code.push_str(") -> crate::StepResult {\n");
     dispatch_code.push_str("    match id {\n");
     dispatch_code.push_str("        FieldIntrinsicId::Missing => crate::StepResult::Error(crate::error::VmError::Execution(crate::error::ExecutionError::NotImplemented(format!(\"Missing field intrinsic: {:?}\", field)))),\n");
-    let mut field_variants: Vec<_> = sorted_entries.iter().filter(|e| e.is_field).map(|e| &e.variant_name).collect();
+    let mut field_variants: Vec<_> = sorted_entries
+        .iter()
+        .filter(|e| e.is_field)
+        .map(|e| &e.variant_name)
+        .collect();
     field_variants.sort();
     field_variants.dedup();
     for variant in field_variants {
-        let entry = sorted_entries.iter().find(|e| e.is_field && e.variant_name == *variant).unwrap();
+        let entry = sorted_entries
+            .iter()
+            .find(|e| e.is_field && e.variant_name == *variant)
+            .unwrap();
         dispatch_code.push_str(&format!(
             "        FieldIntrinsicId::{} => {}(ctx, field, type_generics, is_address),\n",
             variant, entry.original_handler_path

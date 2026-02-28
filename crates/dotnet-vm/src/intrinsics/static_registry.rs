@@ -1,4 +1,4 @@
-use crate::intrinsics::{MethodIntrinsicId, FieldIntrinsicId};
+use crate::intrinsics::{FieldIntrinsicId, MethodIntrinsicId};
 use dotnet_types::members::MethodDescription;
 
 pub type SignatureFilter = fn(&MethodDescription) -> bool;

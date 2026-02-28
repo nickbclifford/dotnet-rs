@@ -39,7 +39,12 @@ pub fn box_value<'gc, 'm: 'gc, T: ResolutionOps<'gc, 'm> + EvalStackOps<'gc> + M
 pub fn unbox_any<
     'gc,
     'm: 'gc,
-    T: ResolutionOps<'gc, 'm> + LoaderOps<'m> + ExceptionOps<'gc> + EvalStackOps<'gc> + MemoryOps<'gc> + ReflectionOps<'gc, 'm>,
+    T: ResolutionOps<'gc, 'm>
+        + LoaderOps<'m>
+        + ExceptionOps<'gc>
+        + EvalStackOps<'gc>
+        + MemoryOps<'gc>
+        + ReflectionOps<'gc, 'm>,
 >(
     ctx: &mut T,
     param0: &MethodType,
@@ -78,7 +83,9 @@ pub fn unbox_any<
                     let td = o.description;
                     if let Some(e) = td.is_enum() {
                         let enum_type = res_ctx.make_concrete(e).map_err(|_| ())?;
-                        let cts = o.instance_storage.with_data(|d| ctx.read_cts_value(&enum_type, d))
+                        let cts = o
+                            .instance_storage
+                            .with_data(|d| ctx.read_cts_value(&enum_type, d))
                             .map_err(|_| ())?;
                         Ok(cts.into_stack())
                     } else if td.definition().namespace.as_deref() == Some("System") {
@@ -87,7 +94,9 @@ pub fn unbox_any<
                             "Boolean" | "Char" | "SByte" | "Byte" | "Int16" | "UInt16"
                             | "Int32" | "UInt32" | "Int64" | "UInt64" | "Single" | "Double"
                             | "IntPtr" | "UIntPtr" => {
-                                let cts = o.instance_storage.with_data(|d| ctx.read_cts_value(&target_ct, d))
+                                let cts = o
+                                    .instance_storage
+                                    .with_data(|d| ctx.read_cts_value(&target_ct, d))
                                     .map_err(|_| ())?;
                                 Ok(cts.into_stack())
                             }

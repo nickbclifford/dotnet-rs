@@ -295,17 +295,25 @@ impl PartialOrd for ManagedPtr<'_> {
 
 impl<'gc> ManagedPtr<'gc> {
     // Read-only accessors
-    pub fn origin(&self) -> &PointerOrigin<'gc> { &self.origin }
-    pub fn inner_type(&self) -> TypeDescription { self.inner_type }
-    pub fn is_pinned(&self) -> bool { self.pinned }
-    pub fn byte_offset(&self) -> crate::ByteOffset { self.offset }
+    pub fn origin(&self) -> &PointerOrigin<'gc> {
+        &self.origin
+    }
+    pub fn inner_type(&self) -> TypeDescription {
+        self.inner_type
+    }
+    pub fn is_pinned(&self) -> bool {
+        self.pinned
+    }
+    pub fn byte_offset(&self) -> crate::ByteOffset {
+        self.offset
+    }
 
     pub fn offset_by(&self, bytes: isize) -> Result<Self, dotnet_types::error::MemoryError> {
         Ok(Self {
             offset: crate::ByteOffset(self.offset.0.wrapping_add_signed(bytes)),
-            _value: self._value.map(|p| unsafe {
-                NonNull::new_unchecked(p.as_ptr().wrapping_offset(bytes))
-            }),
+            _value: self
+                ._value
+                .map(|p| unsafe { NonNull::new_unchecked(p.as_ptr().wrapping_offset(bytes)) }),
             ..self.clone()
         })
     }
@@ -319,15 +327,24 @@ impl<'gc> ManagedPtr<'gc> {
     }
 
     pub fn with_origin(&self, origin: PointerOrigin<'gc>) -> Self {
-        Self { origin, ..self.clone() }
+        Self {
+            origin,
+            ..self.clone()
+        }
     }
 
     pub fn with_inner_type(&self, inner_type: TypeDescription) -> Self {
-        Self { inner_type, ..self.clone() }
+        Self {
+            inner_type,
+            ..self.clone()
+        }
     }
 
     pub fn with_pinned(&self, pinned: bool) -> Self {
-        Self { pinned, ..self.clone() }
+        Self {
+            pinned,
+            ..self.clone()
+        }
     }
 
     pub fn owner(&self) -> Option<ObjectRef<'gc>> {

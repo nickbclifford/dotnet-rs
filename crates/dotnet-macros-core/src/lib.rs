@@ -4,9 +4,9 @@
 //! This crate contains the parsing and transformation logic for .NET signatures.
 use quote::quote;
 use syn::{
-    braced, parenthesized,
-    Ident, Result, Token,
+    Ident, Result, Token, braced,
     ext::IdentExt,
+    parenthesized,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
 };
@@ -223,8 +223,7 @@ impl ParsedInstruction {
                         variant_ident.span(),
                         format!(
                             "Instruction variant {} expects 0 parameters, but function has {}. Use explicit mapping syntax.",
-                            variant_name,
-                            extra_args_count
+                            variant_name, extra_args_count
                         ),
                     ));
                 }

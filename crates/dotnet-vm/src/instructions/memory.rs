@@ -19,11 +19,7 @@ const OUT_OF_MEMORY_MSG: &str = "Insufficient memory to continue the execution o
 const ACCESS_VIOLATION_MSG: &str = "Attempted to read or write protected memory.";
 
 #[dotnet_instruction(CopyMemoryBlock { })]
-pub fn cpblk<
-    'gc,
-    'm: 'gc,
-    T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc>,
->(
+pub fn cpblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
 ) -> StepResult {
     let size = vm_pop!(ctx).as_isize() as usize;
@@ -54,11 +50,7 @@ pub fn cpblk<
 }
 
 #[dotnet_instruction(InitializeMemoryBlock { })]
-pub fn initblk<
-    'gc,
-    'm: 'gc,
-    T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc>,
->(
+pub fn initblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
 ) -> StepResult {
     let size = vm_pop!(ctx).as_isize() as usize;
@@ -113,11 +105,7 @@ pub fn localloc<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + PoolOps + ExceptionOps<'gc>
 }
 
 #[dotnet_instruction(StoreIndirect { param0 })]
-pub fn stind<
-    'gc,
-    'm: 'gc,
-    T: StackOps<'gc, 'm> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
->(
+pub fn stind<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + RawMemoryOps<'gc>>(
     ctx: &mut T,
     param0: StoreType,
 ) -> StepResult {
@@ -181,11 +169,7 @@ pub fn stind<
 }
 
 #[dotnet_instruction(LoadIndirect { param0 })]
-pub fn ldind<
-    'gc,
-    'm: 'gc,
-    T: StackOps<'gc, 'm> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
->(
+pub fn ldind<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + RawMemoryOps<'gc>>(
     ctx: &mut T,
     param0: LoadType,
 ) -> StepResult {

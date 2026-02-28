@@ -11,10 +11,7 @@ use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
 };
-use syn::{
-    ItemFn, LitStr,
-    parse_macro_input,
-};
+use syn::{ItemFn, LitStr, parse_macro_input};
 
 fn match_primitive(type_name: &str) -> Option<proc_macro2::TokenStream> {
     match type_name {
@@ -112,7 +109,6 @@ pub fn dotnet_intrinsic_field(attr: TokenStream, item: TokenStream) -> TokenStre
     output.into()
 }
 
-
 #[proc_macro_attribute]
 pub fn dotnet_instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mapping = parse_macro_input!(attr as InstructionMapping);
@@ -133,8 +129,8 @@ pub fn dotnet_instruction(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use syn::{Ident, punctuated::Punctuated};
     use dotnet_macros_core::FieldMapping;
+    use syn::{Ident, punctuated::Punctuated};
 
     #[test]
     fn test_parse_instruction_mapping() {

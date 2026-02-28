@@ -11,7 +11,7 @@ use dotnet_types::{
 use dotnet_utils::{ByteOffset, gc::ThreadSafeReadGuard};
 use dotnet_value::{
     StackValue,
-    layout::{FieldLayoutManager, LayoutManager, Scalar, HasLayout},
+    layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
     object::ObjectRef,
     pointer::{ManagedPtr, PointerOrigin},
 };
@@ -675,7 +675,11 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
                     if let PointerOrigin::Heap(obj) = p.origin() {
                         if let Some(h) = obj.0 {
                             let guard = PinnedGuard::new(h);
-                            let ptr = guard.guard.storage.raw_data_ptr().add(p.byte_offset().as_usize());
+                            let ptr = guard
+                                .guard
+                                .storage
+                                .raw_data_ptr()
+                                .add(p.byte_offset().as_usize());
                             local_guards.push(guard);
                             ptr.expose_addr()
                         } else {
@@ -738,8 +742,11 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
                         if let PointerOrigin::Heap(obj) = p.origin() {
                             if let Some(h) = obj.0 {
                                 let guard = PinnedGuard::new(h);
-                                let ptr =
-                                    guard.guard.storage.raw_data_ptr().add(p.byte_offset().as_usize());
+                                let ptr = guard
+                                    .guard
+                                    .storage
+                                    .raw_data_ptr()
+                                    .add(p.byte_offset().as_usize());
                                 local_guards.push(guard);
                                 ptr
                             } else {
@@ -908,15 +915,13 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
                             guard.copy_from_slice(&temp_buffer[..allocated_size]);
                         });
                     } else {
-                        instance.instance_storage.with_data_mut(|guard| {
-                            unsafe {
-                                libffi::raw::ffi_call(
-                                    cif.as_raw_ptr(),
-                                    Some(target_fn),
-                                    guard.as_mut_ptr() as *mut c_void,
-                                    arg_ptrs.as_mut_ptr(),
-                                );
-                            }
+                        instance.instance_storage.with_data_mut(|guard| unsafe {
+                            libffi::raw::ffi_call(
+                                cif.as_raw_ptr(),
+                                Some(target_fn),
+                                guard.as_mut_ptr() as *mut c_void,
+                                arg_ptrs.as_mut_ptr(),
+                            );
                         });
                     }
                     do_write_back(ctx);

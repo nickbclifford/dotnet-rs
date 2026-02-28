@@ -1,6 +1,10 @@
-use crate::{StepResult, stack::ops::{EvalStackOps, TypedStackOps}};
+use crate::{
+    StepResult,
+    stack::ops::{EvalStackOps, TypedStackOps},
+};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+
 #[dotnet_intrinsic(
     "static bool System.Diagnostics.Tracing.XplatEventLogger::IsEventSourceLoggingEnabled()"
 )]
@@ -17,7 +21,11 @@ pub fn intrinsic_is_event_source_logging_enabled<'gc, 'm: 'gc, T: TypedStackOps<
 #[dotnet_intrinsic(
     "static nint System.Diagnostics.Tracing.EventPipeInternal::CreateProvider(string, void*, void*)"
 )]
-pub fn intrinsic_eventpipe_create_provider<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>(
+pub fn intrinsic_eventpipe_create_provider<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc> + TypedStackOps<'gc>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,

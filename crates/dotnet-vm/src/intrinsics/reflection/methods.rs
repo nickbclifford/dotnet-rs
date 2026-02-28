@@ -91,7 +91,11 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
                 .corlib_type("System.RuntimeMethodHandle")
                 .expect("System.RuntimeMethodHandle must exist");
             let instance = vm_try!(ctx.new_object(rmh));
-            instance.instance_storage.field::<ObjectRef<'gc>>(rmh, "_value").unwrap().write(obj);
+            instance
+                .instance_storage
+                .field::<ObjectRef<'gc>>(rmh, "_value")
+                .unwrap()
+                .write(obj);
 
             ctx.push(StackValue::ValueType(instance));
             Some(StepResult::Continue)
@@ -251,7 +255,8 @@ fn unmarshal_invoke_params<'gc, 'm, T: VesOps<'gc, 'm>>(
                                 .loader()
                                 .corlib_type("System.TypedReference")
                                 .expect("System.TypedReference must exist");
-                            o.instance_storage.with_data(|data| ctx.read_cts_value(&tr_type.into(), data))
+                            o.instance_storage
+                                .with_data(|data| ctx.read_cts_value(&tr_type.into(), data))
                         } else {
                             panic!("Expected boxed TypedReference for parameter {}", i)
                         }
@@ -284,7 +289,8 @@ fn unmarshal_invoke_params<'gc, 'm, T: VesOps<'gc, 'm>>(
                 } else {
                     let val = arg_obj.as_heap_storage(|s| {
                         if let dotnet_value::object::HeapStorage::Boxed(o) = s {
-                            o.instance_storage.with_data(|data| ctx.read_cts_value(&concrete_param_type, data))
+                            o.instance_storage
+                                .with_data(|data| ctx.read_cts_value(&concrete_param_type, data))
                         } else {
                             panic!("Expected boxed value for parameter {}", i)
                         }

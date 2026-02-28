@@ -15,10 +15,7 @@ use dotnet_value::{StackValue, object::ObjectRef};
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(Call { param0 })]
-pub fn call<'gc, 'm: 'gc, T: CallOps<'gc, 'm>>(
-    ctx: &mut T,
-    param0: &MethodSource,
-) -> StepResult {
+pub fn call<'gc, 'm: 'gc, T: CallOps<'gc, 'm>>(ctx: &mut T, param0: &MethodSource) -> StepResult {
     // Use unified dispatch pipeline for static calls
     ctx.unified_dispatch(param0, None, None)
 }
@@ -27,7 +24,12 @@ pub fn call<'gc, 'm: 'gc, T: CallOps<'gc, 'm>>(
 pub fn callvirt<
     'gc,
     'm: 'gc,
-    T: CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + ExceptionOps<'gc> + EvalStackOps<'gc> + LoaderOps<'m> + ReflectionOps<'gc, 'm>,
+    T: CallOps<'gc, 'm>
+        + ResolutionOps<'gc, 'm>
+        + ExceptionOps<'gc>
+        + EvalStackOps<'gc>
+        + LoaderOps<'m>
+        + ReflectionOps<'gc, 'm>,
 >(
     ctx: &mut T,
     param0: &MethodSource,
@@ -90,7 +92,8 @@ pub fn call_constrained<
             .find_generic_method(source, &ctx.current_context())
     );
 
-    let td: dotnet_types::TypeDescription = vm_try!(ctx.loader().find_concrete_type(constraint_type.clone()));
+    let td: dotnet_types::TypeDescription =
+        vm_try!(ctx.loader().find_concrete_type(constraint_type.clone()));
 
     for o in td.definition().overrides.iter() {
         let target = vm_try!(
@@ -121,7 +124,14 @@ pub fn call_constrained<
 pub fn callvirt_constrained<
     'gc,
     'm: 'gc,
-    T: CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + ExceptionOps<'gc> + StackOps<'gc, 'm> + MemoryOps<'gc> + RawMemoryOps<'gc> + LoaderOps<'m> + ReflectionOps<'gc, 'm>,
+    T: CallOps<'gc, 'm>
+        + ResolutionOps<'gc, 'm>
+        + ExceptionOps<'gc>
+        + StackOps<'gc, 'm>
+        + MemoryOps<'gc>
+        + RawMemoryOps<'gc>
+        + LoaderOps<'m>
+        + ReflectionOps<'gc, 'm>,
 >(
     ctx: &mut T,
     constraint: &MethodType,
@@ -169,7 +179,12 @@ pub fn callvirt_constrained<
             ));
 
             let value = match unsafe {
-                ctx.read_unaligned(m.origin().clone(), m.byte_offset(), &layout, Some(constraint_type))
+                ctx.read_unaligned(
+                    m.origin().clone(),
+                    m.byte_offset(),
+                    &layout,
+                    Some(constraint_type),
+                )
             } {
                 Ok(v) => v,
                 Err(_) => {
@@ -222,7 +237,10 @@ pub fn callvirt_constrained<
                     _ => unsafe {
                         // Heap/static/transient: the target stores a serialized ObjectRef
                         m.with_data(ObjectRef::SIZE, |data| {
-                            ObjectRef::read_branded(data, &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()))
+                            ObjectRef::read_branded(
+                                data,
+                                &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+                            )
                         })
                     },
                 }

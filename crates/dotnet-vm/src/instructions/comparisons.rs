@@ -27,9 +27,7 @@ comparison_op!(
 );
 
 #[dotnet_instruction(CheckFinite)]
-pub fn ckfinite<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
-    ctx: &mut T,
-) -> StepResult {
+pub fn ckfinite<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(ctx: &mut T) -> StepResult {
     let f = ctx.pop_f64();
     if f.is_infinite() || f.is_nan() {
         return ctx.throw_by_name_with_message(

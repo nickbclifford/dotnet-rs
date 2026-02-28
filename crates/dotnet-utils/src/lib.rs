@@ -90,7 +90,10 @@ impl<'ctx> Drop for BorrowGuardHandle<'ctx> {
 }
 
 impl<'ctx> BorrowGuardHandle<'ctx> {
-    pub fn new(ctx: &'ctx dyn BorrowScopeOps, _token: NoActiveBorrows<'ctx>) -> (ActiveBorrow<'ctx, 'ctx>, Self) {
+    pub fn new(
+        ctx: &'ctx dyn BorrowScopeOps,
+        _token: NoActiveBorrows<'ctx>,
+    ) -> (ActiveBorrow<'ctx, 'ctx>, Self) {
         ctx.enter_borrow_scope();
         (
             ActiveBorrow {

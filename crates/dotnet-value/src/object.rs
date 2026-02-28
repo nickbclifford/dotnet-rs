@@ -272,8 +272,7 @@ impl<'gc> ObjectRef<'gc> {
     }
 
     pub fn as_ptr(&self) -> Option<ObjectPtr> {
-        self.0
-            .map(|h| ObjectPtr::from_handle(h))
+        self.0.map(|h| ObjectPtr::from_handle(h))
     }
 
     #[cfg(feature = "multithreading")]

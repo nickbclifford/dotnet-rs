@@ -1,7 +1,9 @@
 use crate::{
     StepResult,
     resolution::ValueResolution,
-    stack::ops::{EvalStackOps, ExceptionOps, LoaderOps, ReflectionOps, ResolutionOps, TypedStackOps},
+    stack::ops::{
+        EvalStackOps, ExceptionOps, LoaderOps, ReflectionOps, ResolutionOps, TypedStackOps,
+    },
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::StackValue;
@@ -30,7 +32,11 @@ pub fn ldftn<
 pub fn ldvirtftn<
     'gc,
     'm: 'gc,
-    T: ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm> + LoaderOps<'m> + TypedStackOps<'gc> + ExceptionOps<'gc>,
+    T: ResolutionOps<'gc, 'm>
+        + ReflectionOps<'gc, 'm>
+        + LoaderOps<'m>
+        + TypedStackOps<'gc>
+        + ExceptionOps<'gc>,
 >(
     ctx: &mut T,
     param0: &MethodSource,

@@ -31,7 +31,20 @@ const NULL_REF_MSG: &str = "Object reference not set to an instance of an object
 #[dotnet_intrinsic("static bool System.String::Equals(string, string)")]
 #[dotnet_intrinsic("bool System.String::Equals(string)")]
 #[dotnet_intrinsic("bool System.String::Equals(object)")]
-pub fn intrinsic_string_equals<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ThreadOps + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_string_equals<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + MemoryOps<'gc>
+        + CallOps<'gc, 'm>
+        + ResolutionOps<'gc, 'm>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ThreadOps
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -118,7 +131,20 @@ pub fn intrinsic_string_equals<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOp
 /// System.String::FastAllocateString(int)
 #[dotnet_intrinsic("static string System.String::FastAllocateString(int)")]
 #[dotnet_intrinsic("static string System.String::FastAllocateString(int, IntPtr)")]
-pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ThreadOps + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_string_fast_allocate_string<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + MemoryOps<'gc>
+        + CallOps<'gc, 'm>
+        + ResolutionOps<'gc, 'm>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ThreadOps
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     method: MethodDescription,
     _generics: &GenericLookup,
@@ -166,7 +192,20 @@ pub fn intrinsic_string_fast_allocate_string<'gc, 'm: 'gc, T: EvalStackOps<'gc> 
 
 /// System.String::.ctor(char[])
 #[dotnet_intrinsic("void System.String::.ctor(char[])")]
-pub fn intrinsic_string_ctor_char_array<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ThreadOps + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_string_ctor_char_array<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + MemoryOps<'gc>
+        + CallOps<'gc, 'm>
+        + ResolutionOps<'gc, 'm>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ThreadOps
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -189,7 +228,10 @@ pub fn intrinsic_string_ctor_char_array<'gc, 'm: 'gc, T: EvalStackOps<'gc> + Typ
             while offset < len {
                 let chunk_len = std::cmp::min(CHUNK_SIZE, len - offset);
                 {
-                    let (_active, _guard) = dotnet_value::BorrowGuardHandle::new(ctx.as_borrow_scope(), dotnet_value::NoActiveBorrows::new());
+                    let (_active, _guard) = dotnet_value::BorrowGuardHandle::new(
+                        ctx.as_borrow_scope(),
+                        dotnet_value::NoActiveBorrows::new(),
+                    );
                     let obj = handle.borrow();
                     match &obj.storage {
                         HeapStorage::Vec(v) => {
@@ -222,7 +264,20 @@ pub fn intrinsic_string_ctor_char_array<'gc, 'm: 'gc, T: EvalStackOps<'gc> + Typ
 
 /// System.String::.ctor(char*)
 #[dotnet_intrinsic("void System.String::.ctor(char*)")]
-pub fn intrinsic_string_ctor_char_ptr<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ThreadOps + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_string_ctor_char_ptr<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + MemoryOps<'gc>
+        + CallOps<'gc, 'm>
+        + ResolutionOps<'gc, 'm>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ThreadOps
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -265,7 +320,20 @@ pub fn intrinsic_string_ctor_char_ptr<'gc, 'm: 'gc, T: EvalStackOps<'gc> + Typed
 
 /// System.String::get_Chars(int)
 #[dotnet_intrinsic("char System.String::get_Chars(int)")]
-pub fn intrinsic_string_get_chars<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ThreadOps + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_string_get_chars<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + MemoryOps<'gc>
+        + CallOps<'gc, 'm>
+        + ResolutionOps<'gc, 'm>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ThreadOps
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -293,7 +361,20 @@ pub fn intrinsic_string_get_chars<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStac
 
 /// System.String::get_Length()
 #[dotnet_intrinsic("int System.String::get_Length()")]
-pub fn intrinsic_string_get_length<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ThreadOps + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_string_get_length<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + MemoryOps<'gc>
+        + CallOps<'gc, 'm>
+        + ResolutionOps<'gc, 'm>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ThreadOps
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -308,7 +389,20 @@ pub fn intrinsic_string_get_length<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedSta
 #[dotnet_intrinsic(
     "static string System.String::Concat(System.ReadOnlySpan<char>, System.ReadOnlySpan<char>, System.ReadOnlySpan<char>)"
 )]
-pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ThreadOps + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_string_concat_three_spans<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + MemoryOps<'gc>
+        + CallOps<'gc, 'm>
+        + ResolutionOps<'gc, 'm>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ThreadOps
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -372,7 +466,20 @@ pub fn intrinsic_string_concat_three_spans<'gc, 'm: 'gc, T: EvalStackOps<'gc> + 
 
 /// System.String::GetHashCodeOrdinalIgnoreCase()
 #[dotnet_intrinsic("int System.String::GetHashCodeOrdinalIgnoreCase()")]
-pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ThreadOps + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + MemoryOps<'gc>
+        + CallOps<'gc, 'm>
+        + ResolutionOps<'gc, 'm>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ThreadOps
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -405,7 +512,10 @@ pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<'gc, 'm: 'gc, T: EvalS
             while offset < len {
                 let chunk_len = std::cmp::min(CHUNK_SIZE, len - offset);
                 {
-                    let (_active, _guard) = dotnet_value::BorrowGuardHandle::new(ctx.as_borrow_scope(), dotnet_value::NoActiveBorrows::new());
+                    let (_active, _guard) = dotnet_value::BorrowGuardHandle::new(
+                        ctx.as_borrow_scope(),
+                        dotnet_value::NoActiveBorrows::new(),
+                    );
                     let inner = handle.borrow();
                     match &inner.storage {
                         HeapStorage::Str(s) => {
@@ -436,7 +546,20 @@ pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<'gc, 'm: 'gc, T: EvalS
 /// System.String::GetRawStringData()
 #[dotnet_intrinsic("char& System.String::GetPinnableReference()")]
 #[dotnet_intrinsic("char& System.String::GetRawStringData()")]
-pub fn intrinsic_string_get_raw_data<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ThreadOps + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_string_get_raw_data<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + MemoryOps<'gc>
+        + CallOps<'gc, 'm>
+        + ResolutionOps<'gc, 'm>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ThreadOps
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -483,7 +606,20 @@ pub fn intrinsic_string_get_raw_data<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedS
 /// System.String::IndexOf(char, int)
 #[dotnet_intrinsic("int System.String::IndexOf(char)")]
 #[dotnet_intrinsic("int System.String::IndexOf(char, int)")]
-pub fn intrinsic_string_index_of<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ThreadOps + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_string_index_of<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + MemoryOps<'gc>
+        + CallOps<'gc, 'm>
+        + ResolutionOps<'gc, 'm>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ThreadOps
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     method: MethodDescription,
     _generics: &GenericLookup,
@@ -511,7 +647,20 @@ pub fn intrinsic_string_index_of<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStack
 /// System.String::Substring(int, int)
 #[dotnet_intrinsic("string System.String::Substring(int)")]
 #[dotnet_intrinsic("string System.String::Substring(int, int)")]
-pub fn intrinsic_string_substring<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ThreadOps + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_string_substring<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + MemoryOps<'gc>
+        + CallOps<'gc, 'm>
+        + ResolutionOps<'gc, 'm>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ThreadOps
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     method: MethodDescription,
     _generics: &GenericLookup,
@@ -568,7 +717,10 @@ pub fn intrinsic_string_substring<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStac
             while offset < l {
                 let current_chunk = std::cmp::min(l - offset, CHUNK_SIZE);
                 {
-                    let (_active, _guard) = dotnet_value::BorrowGuardHandle::new(ctx.as_borrow_scope(), dotnet_value::NoActiveBorrows::new());
+                    let (_active, _guard) = dotnet_value::BorrowGuardHandle::new(
+                        ctx.as_borrow_scope(),
+                        dotnet_value::NoActiveBorrows::new(),
+                    );
                     let inner = handle.borrow();
                     match &inner.storage {
                         HeapStorage::Str(s) => {
@@ -609,7 +761,20 @@ pub fn intrinsic_string_substring<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStac
 
 /// System.String::IsNullOrEmpty(string)
 #[dotnet_intrinsic("static bool System.String::IsNullOrEmpty(string)")]
-pub fn intrinsic_string_is_null_or_empty<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ThreadOps + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_string_is_null_or_empty<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + MemoryOps<'gc>
+        + CallOps<'gc, 'm>
+        + ResolutionOps<'gc, 'm>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ThreadOps
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -646,7 +811,20 @@ pub fn intrinsic_string_is_null_or_empty<'gc, 'm: 'gc, T: EvalStackOps<'gc> + Ty
 
 /// System.String::IsNullOrWhiteSpace(string)
 #[dotnet_intrinsic("static bool System.String::IsNullOrWhiteSpace(string)")]
-pub fn intrinsic_string_is_null_or_white_space<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ThreadOps + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_string_is_null_or_white_space<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + MemoryOps<'gc>
+        + CallOps<'gc, 'm>
+        + ResolutionOps<'gc, 'm>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ThreadOps
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -685,7 +863,10 @@ pub fn intrinsic_string_is_null_or_white_space<'gc, 'm: 'gc, T: EvalStackOps<'gc
             while offset < len {
                 let current_chunk_size = std::cmp::min(len - offset, CHUNK_SIZE);
                 {
-                    let (_active, _guard) = dotnet_value::BorrowGuardHandle::new(ctx.as_borrow_scope(), dotnet_value::NoActiveBorrows::new());
+                    let (_active, _guard) = dotnet_value::BorrowGuardHandle::new(
+                        ctx.as_borrow_scope(),
+                        dotnet_value::NoActiveBorrows::new(),
+                    );
                     let inner = handle.borrow();
                     match &inner.storage {
                         HeapStorage::Str(s) => {
@@ -722,7 +903,20 @@ pub fn intrinsic_string_is_null_or_white_space<'gc, 'm: 'gc, T: EvalStackOps<'gc
 }
 
 #[dotnet_intrinsic_field("static string System.String::Empty")]
-pub fn intrinsic_field_string_empty<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ThreadOps + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_field_string_empty<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + MemoryOps<'gc>
+        + CallOps<'gc, 'm>
+        + ResolutionOps<'gc, 'm>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ThreadOps
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _field: FieldDescription,
     _type_generics: Arc<[ConcreteType]>,
@@ -733,7 +927,20 @@ pub fn intrinsic_field_string_empty<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedSt
 }
 
 #[dotnet_intrinsic_field("int System.String::_stringLength")]
-pub fn intrinsic_field_string_length<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ThreadOps + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_field_string_length<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + MemoryOps<'gc>
+        + CallOps<'gc, 'm>
+        + ResolutionOps<'gc, 'm>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ThreadOps
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _field: FieldDescription,
     _type_generics: Arc<[ConcreteType]>,
@@ -756,7 +963,20 @@ pub fn intrinsic_field_string_length<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedS
 
 /// System.String::CopyStringContent(string, int, string)
 #[dotnet_intrinsic("static void System.String::CopyStringContent(string, int, string)")]
-pub fn intrinsic_string_copy_string_content<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ThreadOps + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_string_copy_string_content<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + MemoryOps<'gc>
+        + CallOps<'gc, 'm>
+        + ResolutionOps<'gc, 'm>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ThreadOps
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -792,7 +1012,10 @@ pub fn intrinsic_string_copy_string_content<'gc, 'm: 'gc, T: EvalStackOps<'gc> +
         let chunk_len = std::cmp::min(CHUNK_SIZE, src_len - offset);
         let mut chunk_buf = Vec::with_capacity(chunk_len);
         {
-            let (_active, _guard) = dotnet_value::BorrowGuardHandle::new(ctx.as_borrow_scope(), dotnet_value::NoActiveBorrows::new());
+            let (_active, _guard) = dotnet_value::BorrowGuardHandle::new(
+                ctx.as_borrow_scope(),
+                dotnet_value::NoActiveBorrows::new(),
+            );
             let src_heap = src_handle.borrow();
             match &src_heap.storage {
                 HeapStorage::Str(s) => {
@@ -804,8 +1027,14 @@ pub fn intrinsic_string_copy_string_content<'gc, 'm: 'gc, T: EvalStackOps<'gc> +
 
         let mut err = false;
         {
-            let (_active, _guard) = dotnet_value::BorrowGuardHandle::new(ctx.as_borrow_scope(), dotnet_value::NoActiveBorrows::new());
-            let mut dest_heap = dest_handle.borrow_mut(ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()).mutation());
+            let (_active, _guard) = dotnet_value::BorrowGuardHandle::new(
+                ctx.as_borrow_scope(),
+                dotnet_value::NoActiveBorrows::new(),
+            );
+            let mut dest_heap = dest_handle.borrow_mut(
+                ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new())
+                    .mutation(),
+            );
             match &mut dest_heap.storage {
                 HeapStorage::Str(dest) => {
                     let d_pos = dest_pos + offset;
@@ -834,7 +1063,19 @@ pub fn intrinsic_string_copy_string_content<'gc, 'm: 'gc, T: EvalStackOps<'gc> +
 }
 
 #[dotnet_intrinsic("static System.ReadOnlySpan<char> System.String::op_Implicit(string)")]
-pub fn intrinsic_string_implicit_to_span<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + MemoryOps<'gc> + CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ThreadOps + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_string_implicit_to_span<
+    'gc,
+    'm: 'gc,
+    T: StackOps<'gc, 'm>
+        + MemoryOps<'gc>
+        + CallOps<'gc, 'm>
+        + ResolutionOps<'gc, 'm>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ThreadOps
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,

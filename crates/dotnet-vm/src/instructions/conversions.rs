@@ -212,9 +212,7 @@ pub fn conv_r8<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(ctx: &mut T) -> St
 }
 
 #[dotnet_instruction(ConvertUnsignedToFloat)]
-pub fn conv_r_un<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
-    ctx: &mut T,
-) -> StepResult {
+pub fn conv_r_un<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(ctx: &mut T) -> StepResult {
     let value = ctx.pop();
     let f = match value {
         StackValue::Int32(i) => (i as u32) as f64,

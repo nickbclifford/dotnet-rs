@@ -207,7 +207,11 @@ pub fn ldsfld<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     let val_bytes = storage
         .storage
         .get_field_atomic(field.parent, name, ordering);
-    let value = vm_try!(res_ctx.read_cts_value(&t, &val_bytes, ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new())));
+    let value = vm_try!(res_ctx.read_cts_value(
+        &t,
+        &val_bytes,
+        ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new())
+    ));
 
     ctx.push(value.into_stack());
     StepResult::Continue
@@ -255,10 +259,7 @@ pub fn stsfld<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 }
 
 #[dotnet_instruction(LoadFieldAddress(param0))]
-pub fn ldflda<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
-    ctx: &mut T,
-    param0: &FieldSource,
-) -> StepResult {
+pub fn ldflda<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &FieldSource) -> StepResult {
     let (field, lookup) = vm_try!(ctx.locate_field(*param0));
 
     // Special fields check (intrinsic fields)
@@ -378,7 +379,12 @@ pub fn ldflda<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
         }
 
         // Deserialize to get the actual origin
-        let info = match unsafe { MP::read_branded(&ptr_bytes, &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new())) } {
+        let info = match unsafe {
+            MP::read_branded(
+                &ptr_bytes,
+                &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+            )
+        } {
             Ok(i) => i,
             Err(e) => {
                 return StepResult::Error(
@@ -412,10 +418,7 @@ pub fn ldflda<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 }
 
 #[dotnet_instruction(LoadStaticFieldAddress(param0))]
-pub fn ldsflda<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
-    ctx: &mut T,
-    param0: &FieldSource,
-) -> StepResult {
+pub fn ldsflda<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &FieldSource) -> StepResult {
     let (field, lookup): (_, dotnet_types::generics::GenericLookup) =
         vm_try!(ctx.locate_field(*param0));
 

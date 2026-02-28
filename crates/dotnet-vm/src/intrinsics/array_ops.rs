@@ -1,5 +1,9 @@
-use crate::{StepResult, resolution::ValueResolution, stack::ops::{EvalStackOps, ExceptionOps, ResolutionOps, TypedStackOps}};
-use crate::memory::ops::MemoryOps;
+use crate::{
+    StepResult,
+    memory::ops::MemoryOps,
+    resolution::ValueResolution,
+    stack::ops::{EvalStackOps, ExceptionOps, ResolutionOps, TypedStackOps},
+};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_value::{
@@ -56,7 +60,15 @@ pub fn intrinsic_array_get_rank<'gc, 'm: 'gc, T: TypedStackOps<'gc> + ExceptionO
 #[dotnet_intrinsic("object System.Array::GetValue(int)")]
 #[dotnet_intrinsic("object System.Array::GetValue(long)")]
 #[dotnet_intrinsic("object System.Array::GetValue(int[])")]
-pub fn intrinsic_array_get_value<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc> + ResolutionOps<'gc, 'm>>(
+pub fn intrinsic_array_get_value<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + ExceptionOps<'gc>
+        + MemoryOps<'gc>
+        + ResolutionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -111,7 +123,15 @@ pub fn intrinsic_array_get_value<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStack
 #[dotnet_intrinsic("void System.Array::SetValue(object, int)")]
 #[dotnet_intrinsic("void System.Array::SetValue(object, long)")]
 #[dotnet_intrinsic("void System.Array::SetValue(object, int[])")]
-pub fn intrinsic_array_set_value<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc> + ResolutionOps<'gc, 'm>>(
+pub fn intrinsic_array_set_value<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + ExceptionOps<'gc>
+        + MemoryOps<'gc>
+        + ResolutionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,

@@ -10,7 +10,10 @@ macro_rules! with_string {
         let value = $value;
         let obj = value.as_object_ref();
         if let Some(handle) = obj.0 {
-            let (_active, _guard) = $crate::BorrowGuardHandle::new($stack.as_borrow_scope(), $crate::NoActiveBorrows::new());
+            let (_active, _guard) = $crate::BorrowGuardHandle::new(
+                $stack.as_borrow_scope(),
+                $crate::NoActiveBorrows::new(),
+            );
             let heap = handle.borrow();
             if let $crate::object::HeapStorage::Str(ref $s) = heap.storage {
                 $code
@@ -35,8 +38,12 @@ macro_rules! with_string_mut {
         let value = $value;
         let obj = value.as_object_ref();
         if let Some(handle) = obj.0 {
-            let (_active, _guard) = $crate::BorrowGuardHandle::new($stack.as_borrow_scope(), $crate::NoActiveBorrows::new());
-            let mut heap = handle.borrow_mut(&$stack.gc_with_token(&$crate::NoActiveBorrows::new()));
+            let (_active, _guard) = $crate::BorrowGuardHandle::new(
+                $stack.as_borrow_scope(),
+                $crate::NoActiveBorrows::new(),
+            );
+            let mut heap =
+                handle.borrow_mut(&$stack.gc_with_token(&$crate::NoActiveBorrows::new()));
             if let $crate::object::HeapStorage::Str(ref mut $s) = heap.storage {
                 $code
             } else {

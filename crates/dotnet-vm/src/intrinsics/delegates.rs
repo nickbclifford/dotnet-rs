@@ -20,10 +20,7 @@ const NULL_REF_MSG: &str = "Object reference not set to an instance of an object
 const NOT_SUPPORTED_MSG: &str = "BeginInvoke and EndInvoke are not supported.";
 
 /// Check if a type is a delegate type (inherits from System.Delegate or System.MulticastDelegate)
-pub fn is_delegate_type<'gc, 'm, T: VesOps<'gc, 'm>>(
-    ctx: &T,
-    mut td: TypeDescription,
-) -> bool {
+pub fn is_delegate_type<'gc, 'm, T: VesOps<'gc, 'm>>(ctx: &T, mut td: TypeDescription) -> bool {
     loop {
         let definition = td.definition();
         let raw_type_name = definition.type_name();
@@ -109,7 +106,12 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm>>(
             // If len == 1, check if it's not 'this'
             let first_target = targets_ref.as_vector(|v| {
                 let offset = 0;
-                unsafe { ObjectRef::read_branded(&v.get()[offset..], &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new())) }
+                unsafe {
+                    ObjectRef::read_branded(
+                        &v.get()[offset..],
+                        &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+                    )
+                }
             });
             if first_target != *delegate_ref {
                 Some(targets_ref.0.unwrap())
@@ -304,10 +306,16 @@ pub fn delegate_equals<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
                 let mut equal = true;
                 for i in 0..this_len {
                     let t1 = this_ref.as_vector(|v| unsafe {
-                        ObjectRef::read_branded(&v.get()[i * ObjectRef::SIZE..], &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()))
+                        ObjectRef::read_branded(
+                            &v.get()[i * ObjectRef::SIZE..],
+                            &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+                        )
                     });
                     let t2 = other_ref.as_vector(|v| unsafe {
-                        ObjectRef::read_branded(&v.get()[i * ObjectRef::SIZE..], &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()))
+                        ObjectRef::read_branded(
+                            &v.get()[i * ObjectRef::SIZE..],
+                            &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+                        )
                     });
                     // We should probably call Equals recursively or compare info
                     // For now, let's just compare info of elements
@@ -467,8 +475,12 @@ fn get_invocation_list<'gc, 'm, T: VesOps<'gc, 'm>>(
             let len = v.layout.length;
             let mut result = Vec::with_capacity(len);
             for i in 0..len {
-                let entry =
-                    unsafe { ObjectRef::read_branded(&v.get()[i * ObjectRef::SIZE..], &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new())) };
+                let entry = unsafe {
+                    ObjectRef::read_branded(
+                        &v.get()[i * ObjectRef::SIZE..],
+                        &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+                    )
+                };
                 result.push(entry);
             }
             result
@@ -512,24 +524,33 @@ pub fn delegate_combine<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     let delegate_type = vm_try!(ctx.loader().corlib_type("System.Delegate"));
     let delegate_concrete = ConcreteType::from(delegate_type);
     let array_v = vm_try!(ctx.new_vector(delegate_concrete, combined.len()));
-    let array_obj = ObjectRef::new(ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()), dotnet_value::object::HeapStorage::Vec(array_v));
+    let array_obj = ObjectRef::new(
+        ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+        dotnet_value::object::HeapStorage::Vec(array_v),
+    );
     ctx.register_new_object(&array_obj);
 
-    array_obj.as_vector_mut(ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()), |v| {
-        for (i, &el) in combined.iter().enumerate() {
-            el.write(&mut v.get_mut()[i * ObjectRef::SIZE..]);
-        }
-    });
+    array_obj.as_vector_mut(
+        ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+        |v| {
+            for (i, &el) in combined.iter().enumerate() {
+                el.write(&mut v.get_mut()[i * ObjectRef::SIZE..]);
+            }
+        },
+    );
 
     // Set 'targets' field on new_delegate
     let multicast_type = vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
-    new_delegate.as_object_mut(ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()), |instance| {
-        array_obj.write(
-            &mut instance
-                .instance_storage
-                .get_field_mut_local(multicast_type, "targets"),
-        );
-    });
+    new_delegate.as_object_mut(
+        ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+        |instance| {
+            array_obj.write(
+                &mut instance
+                    .instance_storage
+                    .get_field_mut_local(multicast_type, "targets"),
+            );
+        },
+    );
 
     ctx.push_obj(new_delegate);
     StepResult::Continue
@@ -596,24 +617,32 @@ pub fn delegate_remove<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
             let delegate_type = vm_try!(ctx.loader().corlib_type("System.Delegate"));
             let delegate_concrete = ConcreteType::from(delegate_type);
             let array_v = vm_try!(ctx.new_vector(delegate_concrete, new_list.len()));
-            let array_obj =
-                ObjectRef::new(ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()), dotnet_value::object::HeapStorage::Vec(array_v));
+            let array_obj = ObjectRef::new(
+                ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+                dotnet_value::object::HeapStorage::Vec(array_v),
+            );
             ctx.register_new_object(&array_obj);
 
-            array_obj.as_vector_mut(ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()), |v| {
-                for (i, &el) in new_list.iter().enumerate() {
-                    el.write(&mut v.get_mut()[i * ObjectRef::SIZE..]);
-                }
-            });
+            array_obj.as_vector_mut(
+                ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+                |v| {
+                    for (i, &el) in new_list.iter().enumerate() {
+                        el.write(&mut v.get_mut()[i * ObjectRef::SIZE..]);
+                    }
+                },
+            );
 
             let multicast_type = vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
-            new_delegate.as_object_mut(ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()), |instance| {
-                array_obj.write(
-                    &mut instance
-                        .instance_storage
-                        .get_field_mut_local(multicast_type, "targets"),
-                );
-            });
+            new_delegate.as_object_mut(
+                ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+                |instance| {
+                    array_obj.write(
+                        &mut instance
+                            .instance_storage
+                            .get_field_mut_local(multicast_type, "targets"),
+                    );
+                },
+            );
 
             ctx.push_obj(new_delegate);
         }

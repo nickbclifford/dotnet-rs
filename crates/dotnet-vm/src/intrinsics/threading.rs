@@ -1,8 +1,8 @@
 use crate::{
     StepResult,
     stack::ops::{
-        ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps,
-        ResolutionOps, StackOps, ThreadOps,
+        ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps, ResolutionOps, StackOps,
+        ThreadOps,
     },
     sync::{Arc, Ordering, SyncBlockOps, SyncManagerOps},
 };
@@ -17,7 +17,18 @@ const NULL_REF_MSG: &str = "Object reference not set to an instance of an object
 
 /// System.Threading.Monitor::Exit(object) - Releases the lock on an object.
 #[dotnet_intrinsic("static void System.Threading.Monitor::Exit(object)")]
-pub fn intrinsic_monitor_exit<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + MemoryOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_monitor_exit<
+    'gc,
+    'm: 'gc,
+    T: StackOps<'gc, 'm>
+        + ThreadOps
+        + MemoryOps<'gc>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ResolutionOps<'gc, 'm>
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -68,7 +79,18 @@ pub fn intrinsic_monitor_exit<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + M
     "static object System.Threading.Interlocked::CompareExchange(object&, object, object)"
 )]
 #[dotnet_intrinsic("static T System.Threading.Interlocked::CompareExchange<T>(T&, T, T)")]
-pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + MemoryOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_interlocked_compare_exchange<
+    'gc,
+    'm: 'gc,
+    T: StackOps<'gc, 'm>
+        + ThreadOps
+        + MemoryOps<'gc>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ResolutionOps<'gc, 'm>
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
@@ -202,7 +224,18 @@ pub fn intrinsic_interlocked_compare_exchange<'gc, 'm: 'gc, T: StackOps<'gc, 'm>
 #[dotnet_intrinsic("static IntPtr System.Threading.Interlocked::Exchange(IntPtr&, IntPtr)")]
 #[dotnet_intrinsic("static object System.Threading.Interlocked::Exchange(object&, object)")]
 #[dotnet_intrinsic("static T System.Threading.Interlocked::Exchange<T>(T&, T)")]
-pub fn intrinsic_interlocked_exchange<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + MemoryOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_interlocked_exchange<
+    'gc,
+    'm: 'gc,
+    T: StackOps<'gc, 'm>
+        + ThreadOps
+        + MemoryOps<'gc>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ResolutionOps<'gc, 'm>
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
@@ -327,7 +360,10 @@ fn get_or_create_sync_block<'gc, T: SyncManagerOps>(
     result
 }
 
-fn find_success_flag_index<'gc, T: RawMemoryOps<'gc>>(_ctx: &T, success_ptr: &ManagedPtr) -> Option<usize> {
+fn find_success_flag_index<'gc, T: RawMemoryOps<'gc>>(
+    _ctx: &T,
+    success_ptr: &ManagedPtr,
+) -> Option<usize> {
     if let dotnet_value::pointer::PointerOrigin::Stack(idx) = &success_ptr.origin() {
         return Some(idx.0);
     }
@@ -336,7 +372,18 @@ fn find_success_flag_index<'gc, T: RawMemoryOps<'gc>>(_ctx: &T, success_ptr: &Ma
 
 /// System.Threading.Monitor::Enter(object)
 #[dotnet_intrinsic("static void System.Threading.Monitor::Enter(object)")]
-pub fn intrinsic_monitor_enter_obj<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + MemoryOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_monitor_enter_obj<
+    'gc,
+    'm: 'gc,
+    T: StackOps<'gc, 'm>
+        + ThreadOps
+        + MemoryOps<'gc>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ResolutionOps<'gc, 'm>
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -371,7 +418,18 @@ pub fn intrinsic_monitor_enter_obj<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOp
 /// System.Threading.Monitor::ReliableEnter(object, ref bool)
 #[dotnet_intrinsic("static void System.Threading.Monitor::ReliableEnter(object, bool&)")]
 #[dotnet_intrinsic("static void System.Threading.Monitor::Enter(object, bool&)")]
-pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + MemoryOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_monitor_reliable_enter<
+    'gc,
+    'm: 'gc,
+    T: StackOps<'gc, 'm>
+        + ThreadOps
+        + MemoryOps<'gc>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ResolutionOps<'gc, 'm>
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -404,8 +462,12 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + Thr
             ctx.set_slot(crate::StackSlotIndex(index), StackValue::Int32(1));
         } else {
             unsafe {
-                ctx.write_bytes(success_ptr.origin().clone(), success_ptr.byte_offset(), &[1u8])
-                    .expect("Failed to write success flag");
+                ctx.write_bytes(
+                    success_ptr.origin().clone(),
+                    success_ptr.byte_offset(),
+                    &[1u8],
+                )
+                .expect("Failed to write success flag");
             }
         };
 
@@ -423,7 +485,18 @@ pub fn intrinsic_monitor_reliable_enter<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + Thr
 
 /// System.Threading.Monitor::TryEnter_FastPath(object)
 #[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter_FastPath(object)")]
-pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + MemoryOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_monitor_try_enter_fast_path<
+    'gc,
+    'm: 'gc,
+    T: StackOps<'gc, 'm>
+        + ThreadOps
+        + MemoryOps<'gc>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ResolutionOps<'gc, 'm>
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -451,7 +524,18 @@ pub fn intrinsic_monitor_try_enter_fast_path<'gc, 'm: 'gc, T: StackOps<'gc, 'm> 
 
 /// System.Threading.Monitor::TryEnter(object, int, ref bool)
 #[dotnet_intrinsic("static void System.Threading.Monitor::TryEnter(object, int, bool&)")]
-pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + MemoryOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_monitor_try_enter_timeout_ref<
+    'gc,
+    'm: 'gc,
+    T: StackOps<'gc, 'm>
+        + ThreadOps
+        + MemoryOps<'gc>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ResolutionOps<'gc, 'm>
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -517,7 +601,18 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<'gc, 'm: 'gc, T: StackOps<'gc, 'm
 
 /// System.Threading.Monitor::TryEnter(object, int)
 #[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter(object, int)")]
-pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + MemoryOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_monitor_try_enter_timeout<
+    'gc,
+    'm: 'gc,
+    T: StackOps<'gc, 'm>
+        + ThreadOps
+        + MemoryOps<'gc>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ResolutionOps<'gc, 'm>
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -571,7 +666,18 @@ pub fn intrinsic_monitor_try_enter_timeout<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + 
 #[dotnet_intrinsic("static UIntPtr System.Threading.Volatile::Read(UIntPtr&)")]
 #[dotnet_intrinsic("static float System.Threading.Volatile::Read(float&)")]
 #[dotnet_intrinsic("static double System.Threading.Volatile::Read(double&)")]
-pub fn intrinsic_volatile_read<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + MemoryOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_volatile_read<
+    'gc,
+    'm: 'gc,
+    T: StackOps<'gc, 'm>
+        + ThreadOps
+        + MemoryOps<'gc>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ResolutionOps<'gc, 'm>
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
@@ -703,7 +809,18 @@ pub fn intrinsic_volatile_read<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + 
 #[dotnet_intrinsic("static void System.Threading.Volatile::Write(UIntPtr&, UIntPtr)")]
 #[dotnet_intrinsic("static void System.Threading.Volatile::Write(float&, float)")]
 #[dotnet_intrinsic("static void System.Threading.Volatile::Write(double&, double)")]
-pub fn intrinsic_volatile_write<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ThreadOps + MemoryOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm>>(
+pub fn intrinsic_volatile_write<
+    'gc,
+    'm: 'gc,
+    T: StackOps<'gc, 'm>
+        + ThreadOps
+        + MemoryOps<'gc>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps<'m>
+        + ResolutionOps<'gc, 'm>
+        + ReflectionOps<'gc, 'm>,
+>(
     ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,

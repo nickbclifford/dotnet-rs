@@ -278,7 +278,8 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                     if offset.as_usize() + data.len() > obj_data.len() {
                         return Err("Static storage access out of bounds".to_string());
                     }
-                    obj_data[offset.as_usize()..offset.as_usize() + data.len()].copy_from_slice(data);
+                    obj_data[offset.as_usize()..offset.as_usize() + data.len()]
+                        .copy_from_slice(data);
                     Ok(())
                 })
             }
@@ -307,15 +308,13 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                     )
                 }
             }
-            PointerOrigin::Transient(obj) => {
-                obj.instance_storage.with_data_mut(|obj_data| {
-                    if offset.as_usize() + data.len() > obj_data.len() {
-                        return Err("Transient object access out of bounds".to_string());
-                    }
-                    obj_data[offset.as_usize()..offset.as_usize() + data.len()].copy_from_slice(data);
-                    Ok(())
-                })
-            }
+            PointerOrigin::Transient(obj) => obj.instance_storage.with_data_mut(|obj_data| {
+                if offset.as_usize() + data.len() > obj_data.len() {
+                    return Err("Transient object access out of bounds".to_string());
+                }
+                obj_data[offset.as_usize()..offset.as_usize() + data.len()].copy_from_slice(data);
+                Ok(())
+            }),
         }
     }
 
@@ -345,7 +344,9 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                     if offset.as_usize() + dest.len() > obj_data.len() {
                         return Err("Static storage access out of bounds".to_string());
                     }
-                    dest.copy_from_slice(&obj_data[offset.as_usize()..offset.as_usize() + dest.len()]);
+                    dest.copy_from_slice(
+                        &obj_data[offset.as_usize()..offset.as_usize() + dest.len()],
+                    );
                     Ok(())
                 })
             }
@@ -365,15 +366,13 @@ impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
                 let memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe { memory.read_bytes(Some(MemoryOwner::CrossArena(ptr, tid)), offset, dest) }
             }
-            PointerOrigin::Transient(obj) => {
-                obj.instance_storage.with_data(|obj_data| {
-                    if offset.as_usize() + dest.len() > obj_data.len() {
-                        return Err("Transient object access out of bounds".to_string());
-                    }
-                    dest.copy_from_slice(&obj_data[offset.as_usize()..offset.as_usize() + dest.len()]);
-                    Ok(())
-                })
-            }
+            PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|obj_data| {
+                if offset.as_usize() + dest.len() > obj_data.len() {
+                    return Err("Transient object access out of bounds".to_string());
+                }
+                dest.copy_from_slice(&obj_data[offset.as_usize()..offset.as_usize() + dest.len()]);
+                Ok(())
+            }),
         }
     }
 

@@ -114,7 +114,9 @@
 //!   ├─→ external_call() [if P/Invoke]
 //!   └─→ call_frame() [managed CIL]
 //! ```
-use crate::stack::ops::{EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, ReflectionOps, TypedStackOps, VesOps};
+use crate::stack::ops::{
+    EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, ReflectionOps, TypedStackOps, VesOps,
+};
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{
@@ -412,7 +414,11 @@ pub fn intrinsic_field<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 }
 
 #[dotnet_intrinsic("string System.Object::ToString()")]
-fn object_to_string<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + ExceptionOps<'gc>>(
+fn object_to_string<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + ExceptionOps<'gc>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -436,13 +442,24 @@ fn object_to_string<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + Me
 
     let str_val = CLRString::from(type_name);
     let storage = HeapStorage::Str(str_val);
-    let obj_ref = ObjectRef::new(ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()), storage);
+    let obj_ref = ObjectRef::new(
+        ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+        storage,
+    );
     ctx.push_obj(obj_ref);
     StepResult::Continue
 }
 
 #[dotnet_intrinsic("System.Type System.Object::GetType()")]
-fn object_get_type<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + ReflectionOps<'gc, 'm> + LoaderOps<'m>>(
+fn object_get_type<
+    'gc,
+    'm: 'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + ExceptionOps<'gc>
+        + ReflectionOps<'gc, 'm>
+        + LoaderOps<'m>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,

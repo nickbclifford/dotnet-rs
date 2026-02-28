@@ -6,7 +6,10 @@ use crate::{
     },
 };
 use dotnet_types::{TypeDescription, error::TypeResolutionError, generics::ConcreteType};
-use dotnet_utils::{NoActiveBorrows, gc::{GCHandle, ThreadSafeLock}};
+use dotnet_utils::{
+    NoActiveBorrows,
+    gc::{GCHandle, ThreadSafeLock},
+};
 use dotnet_value::{
     StackValue,
     object::{
@@ -15,7 +18,6 @@ use dotnet_value::{
 };
 
 impl<'a, 'gc, 'm: 'gc> MemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
-
     #[inline]
     fn gc_with_token(&self, _token: &NoActiveBorrows<'_>) -> GCHandle<'gc> {
         self.gc

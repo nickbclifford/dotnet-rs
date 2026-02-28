@@ -244,13 +244,11 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
             let pfn_allocator = ctx.pop_managed_ptr();
 
             let rt_obj = match ctx.pop() {
-                StackValue::ValueType(rth_handle) => {
-                    rth_handle
-                        .instance_storage
-                        .field::<ObjectRef<'gc>>(rth_handle.description, "_value")
-                        .unwrap()
-                        .read()
-                },
+                StackValue::ValueType(rth_handle) => rth_handle
+                    .instance_storage
+                    .field::<ObjectRef<'gc>>(rth_handle.description, "_value")
+                    .unwrap()
+                    .read(),
                 StackValue::ObjectRef(rt_obj) => rt_obj,
                 v => panic!(
                     "invalid type on stack ({:?}), expected ValueType(RuntimeTypeHandle) or ObjectRef(RuntimeType)",
@@ -405,7 +403,11 @@ pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc, T: VesOps<'g
 #[dotnet_intrinsic(
     "static bool System.Runtime.CompilerServices.RuntimeHelpers::IsReferenceOrContainsReferences()"
 )]
-pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<
+    'gc,
+    'm: 'gc,
+    T: VesOps<'gc, 'm>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     generics: &GenericLookup,
@@ -654,7 +656,11 @@ pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
         Some(ctx.shared().clone()),
     );
     let instance = vm_try!(res_ctx.new_object(rth));
-    instance.instance_storage.field::<ObjectRef<'gc>>(rth, "_value").unwrap().write(obj);
+    instance
+        .instance_storage
+        .field::<ObjectRef<'gc>>(rth, "_value")
+        .unwrap()
+        .write(obj);
 
     ctx.push_value_type(instance);
     StepResult::Continue

@@ -372,10 +372,14 @@ impl<'m> ResolverService<'m> {
                                     field: field_info,
                                     index: 0,
                                 };
-                                let field_type =
-                                    self.get_field_type(td.resolution, new_ctx.generics, field_desc)?;
+                                let field_type = self.get_field_type(
+                                    td.resolution,
+                                    new_ctx.generics,
+                                    field_desc,
+                                )?;
 
-                                let val = self.read_cts_value(&field_type, field_data, gc, &new_ctx)?;
+                                let val =
+                                    self.read_cts_value(&field_type, field_data, gc, &new_ctx)?;
                                 val.write(&mut storage[pos..pos + size]);
                             } else {
                                 storage[pos..pos + size].copy_from_slice(field_data);
