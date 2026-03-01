@@ -241,9 +241,13 @@ impl AssemblyLoader {
                         ));
                     }
                     Some(a) => {
-                        self.external
-                            .write()
-                            .insert(a.name.to_string(), Some(resolution));
+                        let mut external = self.external.write();
+                        external.insert(a.name.to_string(), Some(resolution));
+                        // Also cache under the name it was requested as, to prevent redundant loads
+                        // when the filename doesn't match the assembly name (e.g. mscorlib -> System.Private.CoreLib)
+                        if a.name.as_ref() != name {
+                            external.insert(name.to_string(), Some(resolution));
+                        }
                     }
                 }
                 Ok(resolution)
@@ -259,9 +263,11 @@ impl AssemblyLoader {
                         ));
                     }
                     Some(a) => {
-                        self.external
-                            .write()
-                            .insert(a.name.to_string(), Some(resolution));
+                        let mut external = self.external.write();
+                        external.insert(a.name.to_string(), Some(resolution));
+                        if a.name.as_ref() != name {
+                            external.insert(name.to_string(), Some(resolution));
+                        }
                     }
                 }
                 Ok(resolution)

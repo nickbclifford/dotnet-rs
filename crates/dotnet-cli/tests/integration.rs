@@ -151,8 +151,12 @@ impl TestHarness {
 
         let watchdog = std::thread::spawn(move || {
             let (lock, cvar) = &*pair2;
-            let finished = lock.lock().unwrap();
-            let (finished, wait_result) = cvar.wait_timeout(finished, timeout).unwrap();
+            let mut finished = lock.lock().unwrap();
+            if *finished {
+                return;
+            }
+            let (f, wait_result) = cvar.wait_timeout(finished, timeout).unwrap();
+            finished = f;
             if !*finished && wait_result.timed_out() {
                 eprintln!("=== TEST TIMEOUT (after {:?}) ===", timeout);
                 shared_clone
