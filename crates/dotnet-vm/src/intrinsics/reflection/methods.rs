@@ -1,8 +1,8 @@
-use crate::{StepResult, resolution::TypeResolutionExt, stack::ops::VesOps};
+use crate::{StepResult, resolution::{TypeResolutionExt, ValueResolution}, stack::ops::VesOps};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription, runtime::RuntimeType};
 use dotnet_utils::gc::GCHandle;
-use dotnet_value::{StackValue, object::ObjectRef};
+use dotnet_value::{StackValue, object::{ObjectRef, HeapStorage, CTSValue}, layout::HasLayout};
 
 #[dotnet_intrinsic("string System.Reflection.MethodInfo::get_Name()")]
 #[dotnet_intrinsic("System.Type System.Reflection.MethodInfo::get_DeclaringType()")]
@@ -60,6 +60,9 @@ use dotnet_value::{StackValue, object::ObjectRef};
 #[dotnet_intrinsic(
     "object DotnetRs.ConstructorInfo::Invoke(System.Reflection.BindingFlags, System.Reflection.Binder, object[], System.Globalization.CultureInfo)"
 )]
+#[dotnet_intrinsic("System.Reflection.ParameterInfo[] System.Reflection.MethodBase::GetParameters()")]
+#[dotnet_intrinsic("System.Reflection.ParameterInfo[] DotnetRs.MethodInfo::GetParameters()")]
+#[dotnet_intrinsic("System.Reflection.ParameterInfo[] DotnetRs.ConstructorInfo::GetParameters()")]
 pub fn runtime_method_info_intrinsic_call<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     method: MethodDescription,
@@ -108,6 +111,61 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: VesOps<'gc>>(
             ctx.push_obj(rt_obj);
             Some(StepResult::Continue)
         }
+        ("GetParameters", 0) => {
+            let obj = ctx.pop_obj();
+            let (method, lookup) = ctx.resolve_runtime_method(obj);
+            let method_index = ctx.get_runtime_method_index(method, lookup.clone());
+
+            let param_count = method.method().signature.parameters.len();
+
+            let pi_type = ctx
+                .loader()
+                .corlib_type("DotnetRs.ParameterInfo")
+                .expect("DotnetRs.ParameterInfo not found");
+
+            let mut pi_objs = Vec::with_capacity(param_count);
+            for i in 0..param_count {
+                let pi_obj = vm_try!(ctx.new_object(pi_type));
+                let pi_ref = ObjectRef::new(gc, HeapStorage::Obj(pi_obj));
+                ctx.register_new_object(&pi_ref);
+                pi_ref.as_object_mut(gc, |instance| {
+                    instance
+                        .instance_storage
+                        .field::<usize>(pi_type, "method_index")
+                        .unwrap()
+                        .write(method_index);
+                    instance
+                        .instance_storage
+                        .field::<i32>(pi_type, "position")
+                        .unwrap()
+                        .write(i as i32);
+                });
+                pi_objs.push(pi_ref);
+            }
+
+            let array_element_type = ctx
+                .loader()
+                .corlib_type("System.Reflection.ParameterInfo")
+                .expect("System.Reflection.ParameterInfo not found");
+            let array_obj = vm_try!(ctx.new_vector(array_element_type.into(), param_count));
+            let array_ref = ObjectRef::new(gc, HeapStorage::Vec(array_obj));
+            ctx.register_new_object(&array_ref);
+            
+            for (i, pi_ref) in pi_objs.into_iter().enumerate() {
+                let res_ctx = ctx.current_context();
+                let elem_type = array_ref.as_vector(|v| v.element.clone());
+                let cts_val: CTSValue<'gc> = vm_try!(res_ctx.new_cts_value(&elem_type, StackValue::ObjectRef(pi_ref)));
+                array_ref.as_vector_mut(gc, |v| {
+                    let elem_size = v.layout.element_layout.size();
+                    let start = (elem_size * i).as_usize();
+                    let end = (elem_size * (i + 1)).as_usize();
+                    cts_val.write(&mut v.get_mut()[start..end]);
+                });
+            }
+
+            ctx.push_obj(array_ref);
+            Some(StepResult::Continue)
+        }
         ("Invoke", 5) => {
             let _culture = ctx.pop(); // CultureInfo
             let parameters_obj = ctx.pop_obj(); // object[]
@@ -117,6 +175,13 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: VesOps<'gc>>(
             let method_obj = ctx.pop_obj(); // MethodInfo/ConstructorInfo
 
             let (method, lookup) = ctx.resolve_runtime_method(method_obj);
+            let is_constructor = method.method().name == ".ctor";
+
+            if is_constructor {
+                // Return value is 'this_obj', so push it twice.
+                // One for the 'Invoke' return value, one for the constructor 'this'.
+                ctx.push(this_obj.clone());
+            }
 
             // Handle parameters
             let mut args = Vec::new();
@@ -131,7 +196,12 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: VesOps<'gc>>(
                 };
             args.append(&mut invoke_args);
 
-            let return_type = resolve_return_type(ctx, &method, &lookup);
+            let return_type = if is_constructor {
+                RuntimeType::Type(method.parent)
+            } else {
+                resolve_return_type(ctx, &method, &lookup)
+            };
+
             ctx.frame_stack_mut()
                 .current_frame_mut()
                 .awaiting_invoke_return = Some(return_type);
@@ -155,6 +225,9 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: VesOps<'gc>>(
             let instance = vm_try!(ctx.new_object(method.parent));
             let this_obj = ObjectRef::new(gc, dotnet_value::object::HeapStorage::Obj(instance));
             ctx.register_new_object(&this_obj);
+
+            // Push twice: one for 'Invoke' return value, one for constructor 'this'
+            ctx.push_obj(this_obj);
 
             let mut args = Vec::new();
             args.push(StackValue::ObjectRef(this_obj));

@@ -24,7 +24,7 @@ pub enum MemoryOwner<'gc> {
 pub struct HeapWriteTarget<'gc>(pub MemoryOwner<'gc>);
 
 pub struct WriteBarrierRecorder<'gc> {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Only used when multithreading is enabled, as it tracks cross-arena references
     arena_id: ArenaId,
     _gc: std::marker::PhantomData<&'gc ()>,
 }
@@ -119,8 +119,6 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     ///
     /// # Safety
     /// The caller must ensure that `offset` represents a valid memory location if `owner` is None.
-    #[deprecated(note = "Use write_to_heap or write_to_unmanaged instead")]
-    #[allow(deprecated)]
     pub unsafe fn write_unaligned(
         &mut self,
         gc: GCHandle<'gc>,
@@ -136,7 +134,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             let dest_layout = self.get_layout_from_owner(owner);
 
             // SAFETY: with_data_mut ensures the lock is held for the duration of the closure.
-            // perform_write will copy the data.
+            // write_value_internal will copy the data.
             owner.with_data_mut(gc, |data| {
                 let base = data.as_mut_ptr();
                 let len = data.len();
@@ -150,7 +148,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 self.check_integrity_internal_with_layout(ptr, dest_layout, base, layout)?;
 
                 // 3. Perform Write
-                unsafe { self.perform_write(gc, ptr, Some(owner), value, layout) }
+                unsafe { self.write_value_internal(gc, ptr, Some(owner), value, layout) }
             })
         } else {
             let ptr = sptr::from_exposed_addr_mut::<u8>(offset.0);
@@ -160,7 +158,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             validate_atomic_access(ptr as *const u8, false);
             // SAFETY: Caller ensures ptr is valid.
             unsafe {
-                self.perform_write(gc, ptr, None, value, layout)?;
+                self.write_value_internal(gc, ptr, None, value, layout)?;
             }
             Ok(())
         }
@@ -185,7 +183,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             let src_layout = self.get_layout_from_owner(owner);
 
             // SAFETY: with_data ensures the lock is held for the duration of the closure.
-            // perform_read will read the data.
+            // read_value_internal will read the data.
             owner.with_data(|data| {
                 let base = data.as_ptr();
                 let len = data.len();
@@ -201,7 +199,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 }
 
                 // 3. Perform Read
-                unsafe { self.perform_read(gc, ptr, Some(owner), layout, type_desc) }
+                unsafe { self.read_value_internal(gc, ptr, Some(owner), layout, type_desc) }
             })
         } else {
             let ptr = sptr::from_exposed_addr::<u8>(offset.0);
@@ -210,7 +208,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             }
             validate_atomic_access(ptr, false);
             // SAFETY: Caller ensures ptr is valid.
-            unsafe { self.perform_read(gc, ptr, None, layout, type_desc) }
+            unsafe { self.read_value_internal(gc, ptr, None, layout, type_desc) }
         }
     }
 
@@ -565,9 +563,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             self.check_bounds_internal(ptr, base, len, layout.size().as_usize())?;
             self.check_integrity_internal_with_layout(ptr, dest_layout, base, layout)?;
 
-            #[allow(deprecated)]
             unsafe {
-                self.perform_write(gc, ptr, Some(owner), value, layout)
+                self.write_value_internal(gc, ptr, Some(owner), value, layout)
             }
         })
     }
@@ -588,14 +585,12 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             return Err("NullReferenceException: writing to unmanaged null pointer".into());
         }
         validate_atomic_access(ptr as *const u8, false);
-        #[allow(deprecated)]
         unsafe {
-            self.perform_write(gc, ptr, None, value, layout)
+            self.write_value_internal(gc, ptr, None, value, layout)
         }
     }
 
-    #[deprecated(note = "Use write_to_heap or write_to_unmanaged instead")]
-    pub(crate) unsafe fn perform_write(
+    pub(crate) unsafe fn write_value_internal(
         &mut self,
         _gc: GCHandle<'gc>,
         ptr: *mut u8,
@@ -606,7 +601,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         // Safety: `write_unaligned` ensures `ptr` is valid.
         unsafe {
             if ptr.is_null() {
-                return Err("RawMemoryAccess::perform_write called with null pointer!".to_string());
+                return Err("RawMemoryAccess::write_value_internal called with null pointer!".to_string());
             }
 
             match layout {
@@ -650,7 +645,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     Scalar::ManagedPtr => {
                         if let StackValue::ManagedPtr(m) = value {
                             if ptr.is_null() {
-                                panic!("perform_write: ptr is null!");
+                                panic!("write_value_internal: ptr is null!");
                             }
                             m.write(std::slice::from_raw_parts_mut(ptr, ManagedPtr::SIZE));
 
@@ -810,7 +805,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         }
     }
 
-    pub(crate) unsafe fn perform_read(
+    pub(crate) unsafe fn read_value_internal(
         &self,
         gc: GCHandle<'gc>,
         ptr: *const u8,
@@ -822,7 +817,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         // This is verified by `read_unaligned` before calling this method.
         unsafe {
             if ptr.is_null() {
-                return Err("RawMemoryAccess::perform_read called with null pointer!".to_string());
+                return Err("RawMemoryAccess::read_value_internal called with null pointer!".to_string());
             }
 
             Ok(match layout {

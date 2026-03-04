@@ -1,6 +1,6 @@
 use crate::{
     StepResult,
-    ops::{ExceptionOps, PoolOps, RawMemoryOps, StackOps},
+    ops::{ExceptionOps, RawMemoryOps, StackOps},
 };
 use dotnet_macros::dotnet_instruction;
 use dotnet_utils::{ByteOffset, atomic::validate_atomic_access};
@@ -79,7 +79,7 @@ pub fn initblk<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
 }
 
 #[dotnet_instruction(LocalMemoryAllocate)]
-pub fn localloc<'gc, T: StackOps<'gc> + PoolOps + ExceptionOps<'gc>>(ctx: &mut T) -> StepResult {
+pub fn localloc<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(ctx: &mut T) -> StepResult {
     let size_isize = ctx.pop_isize();
     if size_isize < 0 {
         return ctx.throw_by_name_with_message("System.OverflowException", OVERFLOW_MSG);

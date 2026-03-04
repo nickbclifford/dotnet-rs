@@ -28,7 +28,7 @@ pub enum TraceLevel {
     Instruction = 4,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // Most variants are used by background flusher, but may appear dead in some configurations
 /// A log entry to be processed by the background flusher thread.
 enum LogEntry {
     Msg(TraceLevel, usize, String),
@@ -747,7 +747,7 @@ fn init_tracing() {
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // Integrated dump methods for comprehensive state capture during development
 impl<'gc: 'gc> CallStack<'gc> {
     // Tracer-integrated dump methods for comprehensive state capture
     pub fn trace_dump_stack(&self) {

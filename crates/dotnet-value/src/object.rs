@@ -259,10 +259,6 @@ impl<'gc> ObjectRef<'gc> {
     /// This is the size used for layout calculations and array element size.
     pub const SIZE: usize = size_of::<usize>();
 
-    /// Deprecated: Use SIZE instead. This constant was renamed for clarity.
-    #[deprecated(note = "Use SIZE instead (now correctly represents serialized size)")]
-    pub const SERIALIZED_SIZE: usize = size_of::<usize>();
-
     pub fn pointer(&self) -> Option<NonNull<u8>> {
         self.0.map(|h| {
             let inner = h.borrow();

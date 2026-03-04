@@ -50,7 +50,7 @@ impl ManagedThread {
         }
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Useful for debugging thread states
     pub(super) fn get_state(&self) -> ThreadState {
         match self.state.load(Ordering::Acquire) {
             0 => ThreadState::Running,

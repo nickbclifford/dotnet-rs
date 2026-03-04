@@ -1,0 +1,61 @@
+use crate::{StepResult, stack::ops::VesOps};
+use dotnet_macros::dotnet_intrinsic;
+use dotnet_types::members::MethodDescription;
+use dotnet_types::runtime::RuntimeType;
+use dotnet_value::object::ObjectRef;
+use super::common::make_runtime_type;
+use crate::context::ResolutionContext;
+
+#[dotnet_intrinsic("string DotnetRs.ParameterInfo::GetName()")]
+#[dotnet_intrinsic("System.Type DotnetRs.ParameterInfo::GetParameterType()")]
+pub fn runtime_parameter_info_intrinsic_call<'gc, T: VesOps<'gc>>(
+    ctx: &mut T,
+    method: MethodDescription,
+    _generics: &dotnet_types::generics::GenericLookup,
+) -> StepResult {
+    let method_name = &*method.method().name;
+    
+    match method_name {
+        "GetName" => {
+            let obj = ctx.pop_obj();
+            let (_m_desc, _lookup, position) = resolve_runtime_parameter(ctx, obj);
+            // Metadata may not have parameter names; use a generic name if missing
+            ctx.push_string(format!("p{}", position).into());
+            StepResult::Continue
+        }
+        "GetParameterType" => {
+            let obj = ctx.pop_obj();
+            let (m_desc, lookup, position) = resolve_runtime_parameter(ctx, obj);
+            let param_type = &m_desc.method().signature.parameters[position].1;
+            
+            let res_ctx = ResolutionContext::for_method(
+                m_desc,
+                ctx.loader_arc(),
+                &lookup,
+                ctx.shared().caches.clone(),
+                Some(ctx.shared().clone()),
+            );
+            let rt = match param_type {
+                dotnetdll::resolved::signature::ParameterType::Value(t) => make_runtime_type(&res_ctx, t),
+                dotnetdll::resolved::signature::ParameterType::Ref(t) => RuntimeType::ByRef(Box::new(make_runtime_type(&res_ctx, t))),
+                dotnetdll::resolved::signature::ParameterType::TypedReference => RuntimeType::TypedReference,
+            };
+            let rt_obj = ctx.get_runtime_type(rt);
+            ctx.push_obj(rt_obj);
+            StepResult::Continue
+        }
+        _ => unreachable!("unhandled ParameterInfo intrinsic: {}", method_name),
+    }
+}
+
+pub(crate) fn resolve_runtime_parameter<'gc>(
+    ctx: &(impl crate::stack::ops::ReflectionOps<'gc> + crate::stack::ops::LoaderOps),
+    obj: ObjectRef<'gc>,
+) -> (MethodDescription, dotnet_types::generics::GenericLookup, usize) {
+    obj.as_object(|instance| {
+        let method_index = instance.instance_storage.field::<usize>(instance.description, "method_index").unwrap().read();
+        let position = instance.instance_storage.field::<i32>(instance.description, "position").unwrap().read();
+        let (m_desc, lookup) = ctx.lookup_method_by_index(method_index);
+        (m_desc, lookup, position as usize)
+    })
+}

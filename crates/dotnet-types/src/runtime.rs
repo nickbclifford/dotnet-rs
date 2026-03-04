@@ -2,12 +2,37 @@ use crate::{
     TypeDescription, TypeResolver, generics::ConcreteType, members::MethodDescription,
     resolution::ResolutionS,
 };
-use dotnetdll::prelude::{BaseType, TypeSource, UserType, ValueKind};
+use dotnetdll::prelude::{BaseType, TypeSource, UserType, ValueKind, CallingConvention};
+use dotnetdll::binary::signature::kinds::StandAloneCallingConvention;
+use dotnetdll::resolved::signature::{MethodSignature, Parameter, ReturnType, ParameterType};
 use gc_arena::static_collect;
 use std::{fmt::Debug, hash::Hash};
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct RuntimeMethodSignature; // TODO
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RuntimeMethodSignature {
+    pub instance: bool,
+    pub explicit_this: bool,
+    pub calling_convention: CallingConvention,
+    pub return_type: Box<RuntimeType>,
+    pub parameters: Vec<RuntimeType>,
+}
+
+impl Hash for RuntimeMethodSignature {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.instance.hash(state);
+        self.explicit_this.hash(state);
+        match self.calling_convention {
+            CallingConvention::Default => 0u8.hash(state),
+            CallingConvention::Vararg => 1u8.hash(state),
+            CallingConvention::Generic(i) => {
+                2u8.hash(state);
+                i.hash(state);
+            }
+        }
+        self.return_type.hash(state);
+        self.parameters.hash(state);
+    }
+}
 
 runtime_type_impls! {
     simple_types: {
@@ -91,7 +116,19 @@ runtime_type_impls! {
             .map(|p| p.name.to_string())
             .unwrap_or_else(|| format!("!{}", index)),
         MethodParameter { index, .. } => format!("!!{}", index),
-        FunctionPointer(_) => "method*".to_string(),
+        FunctionPointer(sig) => {
+            let mut name = "method* ".to_string();
+            name.push_str(&sig.return_type.get_name());
+            name.push('(');
+            for (i, p) in sig.parameters.iter().enumerate() {
+                if i > 0 {
+                    name.push_str(", ");
+                }
+                name.push_str(&p.get_name());
+            }
+            name.push(')');
+            name
+        },
     },
     to_concrete: |loader, corlib_res| {
         Void => ConcreteType::from(
@@ -156,7 +193,29 @@ runtime_type_impls! {
         TypeParameter { .. } | MethodParameter { .. } => {
             ConcreteType::new(corlib_res, BaseType::Object)
         },
-        rest => todo!("convert {rest:?} to ConcreteType"),
+        FunctionPointer(sig) => {
+            let parameters = sig.parameters.iter().map(|p| {
+                Parameter(vec![], ParameterType::Value(p.to_concrete(loader)))
+            }).collect();
+            let return_type = match &*sig.return_type {
+                RuntimeType::Void => ReturnType(vec![], None),
+                t => ReturnType(vec![], Some(ParameterType::Value(t.to_concrete(loader)))),
+            };
+            let calling_convention = match sig.calling_convention {
+                CallingConvention::Default => StandAloneCallingConvention::DefaultManaged,
+                CallingConvention::Vararg => StandAloneCallingConvention::Vararg,
+                _ => StandAloneCallingConvention::DefaultManaged, // Default fallback
+            };
+            let managed_method = MethodSignature {
+                instance: sig.instance,
+                explicit_this: sig.explicit_this,
+                calling_convention,
+                parameters,
+                return_type,
+                varargs: None,
+            };
+            ConcreteType::new(corlib_res, BaseType::FunctionPointer(managed_method))
+        },
     }
 }
 

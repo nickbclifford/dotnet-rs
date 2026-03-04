@@ -310,7 +310,7 @@ fn param_to_type(
 
 enum WriteBackSource<'gc> {
     Managed(PointerOrigin<'gc>, ByteOffset),
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reserved for future support of raw pointers in P/Invoke
     Raw(NonNull<u8>),
 }
 

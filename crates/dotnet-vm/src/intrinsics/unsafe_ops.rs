@@ -219,7 +219,6 @@ pub fn intrinsic_marshal_offset_of<
 // System.Runtime.CompilerServices.Unsafe::AsPointer<T>(ref T source)
 #[dotnet_intrinsic("static void* System.Runtime.CompilerServices.Unsafe::AsPointer<T>(T&)")]
 #[allow(unused_variables)]
-#[allow(deprecated)]
 pub fn intrinsic_unsafe_as_pointer<
     'gc,
     T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc>,
@@ -485,7 +484,6 @@ pub fn intrinsic_unsafe_as_ref_any<
 // System.Runtime.CompilerServices.Unsafe::AsRef<T>(void* ptr)
 // Note: This is a helper, registration is on intrinsic_unsafe_as_ref_any or separate if needed.
 // But as_ref_any handles dispatch.
-#[allow(deprecated)]
 pub fn intrinsic_unsafe_as_ref_ptr<
     'gc,
     T: EvalStackOps<'gc>
@@ -608,7 +606,6 @@ pub fn intrinsic_unsafe_byte_offset<'gc, T: EvalStackOps<'gc> + TypedStackOps<'g
 // System.Runtime.CompilerServices.Unsafe::ReadUnaligned<T>(ref byte ptr)
 #[dotnet_intrinsic("static T System.Runtime.CompilerServices.Unsafe::ReadUnaligned<T>(void*)")]
 #[dotnet_intrinsic("static T System.Runtime.CompilerServices.Unsafe::ReadUnaligned<T>(byte&)")]
-#[allow(deprecated)]
 pub fn intrinsic_unsafe_read_unaligned<
     'gc,
     T: StackOps<'gc>

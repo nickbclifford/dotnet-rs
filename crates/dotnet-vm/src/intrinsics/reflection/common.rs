@@ -230,7 +230,36 @@ pub(crate) fn make_runtime_type(res_ctx: &ResolutionContext, t: &MethodType) -> 
                 }
                 None => RuntimeType::IntPtr,
             },
-            BaseType::FunctionPointer(_sig) => RuntimeType::FunctionPointer(RuntimeMethodSignature),
+            BaseType::FunctionPointer(sig) => {
+                let convert_param = |p: &dotnetdll::prelude::ParameterType<dotnetdll::prelude::MethodType>| match p {
+                    dotnetdll::prelude::ParameterType::Value(t)
+                    | dotnetdll::prelude::ParameterType::Ref(t) => make_runtime_type(res_ctx, t),
+                    dotnetdll::prelude::ParameterType::TypedReference => RuntimeType::TypedReference,
+                };
+
+                RuntimeType::FunctionPointer(RuntimeMethodSignature {
+                    instance: sig.instance,
+                    explicit_this: sig.explicit_this,
+                    calling_convention: match sig.calling_convention {
+                        dotnetdll::binary::signature::kinds::StandAloneCallingConvention::DefaultManaged => {
+                            dotnetdll::prelude::CallingConvention::Default
+                        }
+                        dotnetdll::binary::signature::kinds::StandAloneCallingConvention::Vararg => {
+                            dotnetdll::prelude::CallingConvention::Vararg
+                        }
+                        _ => dotnetdll::prelude::CallingConvention::Default, // Map others to default for now
+                    },
+                    return_type: Box::new(match &sig.return_type.1 {
+                        Some(t) => convert_param(t),
+                        None => RuntimeType::Void,
+                    }),
+                    parameters: sig
+                        .parameters
+                        .iter()
+                        .map(|p| convert_param(&p.1))
+                        .collect(),
+                })
+            }
         },
         MethodType::TypeGeneric(i) => RuntimeType::TypeParameter {
             owner: res_ctx.type_owner.expect("missing type owner"),

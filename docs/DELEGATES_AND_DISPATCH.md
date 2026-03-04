@@ -22,7 +22,7 @@ The main dispatch loop in `step` / `step_normal`:
 2. Check for pending multicast delegate steps in the current frame's `multicast_state`. If present, route to `handle_multicast_step`.
 3. Fetch the CIL instruction at the current Instruction Pointer (`IP`).
 4. Record the original IP and evaluation stack height to allow for safe yield/suspension retries.
-5. Trace the instruction if `vm_trace_instruction!` is enabled.
+5. Trace the instruction if `vm_trace_instruction!` is enabled and record it in the `InstructionRingBuffer` (in `dispatch/ring_buffer.rs`). This circular buffer maintains a history of the last N executed instructions to provide context during crashes or for performance analysis.
 6. Look up the handler in `InstructionRegistry::dispatch` (generated at build time via `dotnet-macros`).
 7. Execute the handler, which receives a `VesContext` and returns a `StepResult`.
 8. Process the `StepResult`:

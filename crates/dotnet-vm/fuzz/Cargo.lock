@@ -106,6 +106,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-channel"
+version = "0.5.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "crossbeam-utils"
 version = "0.8.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -144,7 +153,7 @@ dependencies = [
  "dotnet-types",
  "dotnet-utils",
  "dotnetdll",
- "gc-arena",
+ "gc-arena 0.5.3 (git+https://github.com/kyren/gc-arena.git?rev=75671ae03f53718357b741ed4027560f14e90836)",
  "thiserror 1.0.69",
  "tracing",
 ]
@@ -163,6 +172,8 @@ dependencies = [
 name = "dotnet-macros-core"
 version = "0.1.0"
 dependencies = [
+ "proc-macro2",
+ "quote",
  "syn 2.0.116",
 ]
 
@@ -172,7 +183,7 @@ version = "0.1.0"
 dependencies = [
  "arbitrary",
  "dotnetdll",
- "gc-arena",
+ "gc-arena 0.5.3 (git+https://github.com/kyren/gc-arena.git?rev=75671ae03f53718357b741ed4027560f14e90836)",
  "thiserror 1.0.69",
 ]
 
@@ -181,7 +192,7 @@ name = "dotnet-utils"
 version = "0.1.0"
 dependencies = [
  "arbitrary",
- "gc-arena",
+ "gc-arena 0.5.3 (git+https://github.com/kyren/gc-arena.git?rev=75671ae03f53718357b741ed4027560f14e90836)",
  "parking_lot",
  "tracing",
 ]
@@ -196,7 +207,7 @@ dependencies = [
  "dotnet-types",
  "dotnet-utils",
  "dotnetdll",
- "gc-arena",
+ "gc-arena 0.5.3 (git+https://github.com/kyren/gc-arena.git?rev=75671ae03f53718357b741ed4027560f14e90836)",
  "sptr",
 ]
 
@@ -205,6 +216,7 @@ name = "dotnet-vm"
 version = "0.1.0"
 dependencies = [
  "arbitrary",
+ "crossbeam-channel",
  "dashmap",
  "dotnet-assemblies",
  "dotnet-macros",
@@ -213,12 +225,14 @@ dependencies = [
  "dotnet-utils",
  "dotnet-value",
  "dotnetdll",
- "gc-arena",
+ "gc-arena 0.5.3 (git+https://github.com/kyren/gc-arena.git?rev=75671ae03f53718357b741ed4027560f14e90836)",
  "libffi",
  "libloading",
  "parking_lot",
  "phf",
  "phf_codegen",
+ "proc-macro2",
+ "quote",
  "serde",
  "sptr",
  "syn 2.0.116",
@@ -239,7 +253,7 @@ dependencies = [
  "dotnet-value",
  "dotnet-vm",
  "dotnetdll",
- "gc-arena",
+ "gc-arena 0.5.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "libfuzzer-sys",
 ]
 
@@ -318,8 +332,16 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3cd70cf88a32937834aae9614ff2569b5d9467fa0c42c5d7762fd94a8de88266"
 dependencies = [
- "gc-arena-derive",
+ "gc-arena-derive 0.5.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "sptr",
+]
+
+[[package]]
+name = "gc-arena"
+version = "0.5.3"
+source = "git+https://github.com/kyren/gc-arena.git?rev=75671ae03f53718357b741ed4027560f14e90836#75671ae03f53718357b741ed4027560f14e90836"
+dependencies = [
+ "gc-arena-derive 0.5.3 (git+https://github.com/kyren/gc-arena.git?rev=75671ae03f53718357b741ed4027560f14e90836)",
 ]
 
 [[package]]
@@ -327,6 +349,17 @@ name = "gc-arena-derive"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c612a69f5557a11046b77a7408d2836fe77077f842171cd211c5ef504bd3cddd"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.116",
+ "synstructure",
+]
+
+[[package]]
+name = "gc-arena-derive"
+version = "0.5.3"
+source = "git+https://github.com/kyren/gc-arena.git?rev=75671ae03f53718357b741ed4027560f14e90836#75671ae03f53718357b741ed4027560f14e90836"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -12,7 +12,6 @@
 //! - [`CallOps`]: Frame management and method dispatch operations.
 //! - [`ExceptionOps`]: Exception throwing and flow control (leave, endfinally).
 //! - [`ResolutionOps`]: Type and method resolution services.
-//! - [`PoolOps`]: Access to VM pools and local memory allocation.
 //! - [`RawMemoryOps`]: Low-level, unsafe memory access for unaligned reads/writes.
 //! - [`ReflectionOps`]: Reflection-specific operations and runtime type information.
 //!
@@ -180,13 +179,6 @@ pub trait ResolutionOps<'gc> {
     fn with_generics<'b>(&self, lookup: &'b GenericLookup) -> crate::ResolutionContext<'b>;
 }
 
-pub trait PoolOps {
-    /// # Safety
-    ///
-    /// The returned pointer is valid for the duration of the current method frame.
-    /// It must not be stored in a way that outlives the frame.
-    fn localloc(&mut self, size: usize) -> *mut u8;
-}
 
 pub trait RawMemoryOps<'gc>: BorrowScopeOps {
     fn as_borrow_scope(&self) -> &dyn BorrowScopeOps;
@@ -307,6 +299,12 @@ pub trait RawMemoryOps<'gc>: BorrowScopeOps {
 
     #[must_use]
     fn check_gc_safe_point(&self) -> bool;
+
+    /// # Safety
+    ///
+    /// The returned pointer is valid for the duration of the current method frame.
+    /// It must not be stored in a way that outlives the frame.
+    fn localloc(&mut self, size: usize) -> *mut u8;
 }
 
 pub trait ReflectionOps<'gc>: MemoryOps<'gc> {
@@ -425,7 +423,6 @@ pub trait VesOps<'gc>:
     + ThreadOps
     + CallOps<'gc>
     + MemoryOps<'gc>
-    + PoolOps
     + RawMemoryOps<'gc>
 {
     fn run(&mut self) -> crate::StepResult;

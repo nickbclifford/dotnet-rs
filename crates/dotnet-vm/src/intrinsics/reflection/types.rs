@@ -11,16 +11,18 @@ use dotnet_types::{
     TypeDescription,
     comparer::decompose_type_source,
     generics::{ConcreteType, GenericLookup},
-    members::MethodDescription,
+    members::{FieldDescription, MethodDescription},
     runtime::RuntimeType,
 };
+use std::collections::{HashSet, VecDeque};
 use dotnet_value::{
     StackValue,
     layout::{LayoutManager, Scalar},
     object::{HeapStorage, ObjectRef},
 };
 use dotnetdll::prelude::{
-    Accessibility, BaseType, Kind, MemberAccessibility, MemberType, TypeDefinition, TypeSource,
+    Accessibility, BaseType, Kind, MemberAccessibility, MemberType, MethodType, TypeDefinition,
+    TypeSource, Layout, StringFormatting,
 };
 
 const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
@@ -160,6 +162,14 @@ pub fn intrinsic_type_get_type<'gc, T: VesOps<'gc>>(
 #[dotnet_intrinsic(
     "System.Reflection.PropertyInfo System.RuntimeType::GetPropertyImpl(string, System.Reflection.BindingFlags, System.Reflection.Binder, System.Type, System.Type[], System.Reflection.ParameterModifier[])"
 )]
+#[dotnet_intrinsic("bool System.RuntimeType::IsPrimitiveImpl()")]
+#[dotnet_intrinsic("bool System.RuntimeType::IsArrayImpl()")]
+#[dotnet_intrinsic("bool System.RuntimeType::IsByRefImpl()")]
+#[dotnet_intrinsic("bool System.RuntimeType::IsPointerImpl()")]
+#[dotnet_intrinsic("System.Type[] System.RuntimeType::GetInterfaces()")]
+#[dotnet_intrinsic("System.Type System.RuntimeType::GetInterface(string, bool)")]
+#[dotnet_intrinsic("System.Type System.RuntimeType::GetElementType()")]
+#[dotnet_intrinsic("System.Reflection.TypeAttributes System.RuntimeType::GetAttributeFlagsImpl()")]
 pub fn runtime_type_intrinsic_call<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     method: MethodDescription,
@@ -175,6 +185,10 @@ pub fn runtime_type_intrinsic_call<'gc, T: VesOps<'gc>>(
         ("GetMethods", 1) => handle_get_methods(ctx, generics),
         ("GetMethodImpl", 6) => handle_get_method_impl(ctx, generics),
         ("GetConstructors", 1) => handle_get_constructors(ctx, generics),
+        ("GetConstructorImpl", 5) => handle_get_constructor_impl(ctx, generics),
+        ("GetMembers", 1) => handle_get_members(ctx, generics),
+        ("GetNestedTypes", 1) => handle_get_nested_types(ctx, generics),
+        ("InvokeMember", 8) => handle_invoke_member(ctx, generics),
         ("GetName" | "get_Name", 0) => handle_get_name(ctx, generics),
         ("GetBaseType" | "get_BaseType", 0) => handle_get_base_type(ctx, generics),
         ("GetIsGenericType" | "get_IsGenericType", 0) => handle_get_is_generic_type(ctx, generics),
@@ -187,6 +201,18 @@ pub fn runtime_type_intrinsic_call<'gc, T: VesOps<'gc>>(
         ("GetTypeHandle" | "get_TypeHandle", 0) => handle_get_type_handle(ctx, generics),
         ("MakeGenericType", 1) => handle_make_generic_type(ctx, generics),
         ("CreateInstanceDefaultCtor", 2) => handle_create_instance_default_ctor(ctx, generics),
+        ("GetFields", 1) => handle_get_fields(ctx, generics),
+        ("GetField", 2) => handle_get_field(ctx, generics),
+        ("GetProperties", 1) => handle_get_properties(ctx, generics),
+        ("GetPropertyImpl", 6) => handle_get_property_impl(ctx, generics),
+        ("IsPrimitiveImpl", 0) => handle_is_primitive_impl(ctx, generics),
+        ("IsArrayImpl", 0) => handle_is_array_impl(ctx, generics),
+        ("IsByRefImpl", 0) => handle_is_by_ref_impl(ctx, generics),
+        ("IsPointerImpl", 0) => handle_is_pointer_impl(ctx, generics),
+        ("GetInterfaces", 0) => handle_get_interfaces(ctx, generics),
+        ("GetInterface", 2) => handle_get_interface(ctx, generics),
+        ("GetElementType", 0) => handle_get_element_type(ctx, generics),
+        ("GetAttributeFlagsImpl", 0) => handle_get_attribute_flags_impl(ctx, generics),
         _ => panic!("unimplemented runtime type intrinsic: {:?}", method),
     }
 }
@@ -825,6 +851,463 @@ fn handle_get_method_impl<'gc, T: VesOps<'gc>>(
     } else {
         ctx.push(StackValue::null());
     }
+    StepResult::Continue
+}
+
+fn handle_get_constructor_impl<'gc, T: VesOps<'gc>>(
+    ctx: &mut T,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let _modifiers = ctx.pop();
+    let _types = ctx.pop(); // TODO: match by parameter types
+    let _call_convention = ctx.pop();
+    let _binder = ctx.pop();
+    let flags = ctx.pop_i32();
+    let obj = ctx.pop_obj();
+
+    let target_type = ctx.resolve_runtime_type(obj);
+
+    const BINDING_FLAGS_INSTANCE: i32 = 4;
+    const BINDING_FLAGS_STATIC: i32 = 8;
+    const BINDING_FLAGS_PUBLIC: i32 = 16;
+    const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
+
+    let mut found_constructor = None;
+    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
+        for m in td.definition().methods.iter() {
+            if m.name != ".ctor" {
+                continue;
+            }
+            let is_public = m.accessibility == MemberAccessibility::Access(Accessibility::Public);
+            let is_static = !m.signature.instance;
+
+            let match_public = if is_public {
+                (flags & BINDING_FLAGS_PUBLIC) != 0
+            } else {
+                (flags & BINDING_FLAGS_NON_PUBLIC) != 0
+            };
+            let match_static = if is_static {
+                (flags & BINDING_FLAGS_STATIC) != 0
+            } else {
+                (flags & BINDING_FLAGS_INSTANCE) != 0
+            };
+
+            if match_public && match_static {
+                let desc = MethodDescription::new(td, td.resolution, m);
+                let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
+                found_constructor = Some(ctx.get_runtime_method_obj(desc, lookup));
+                break;
+            }
+        }
+    }
+
+    if let Some(m) = found_constructor {
+        ctx.push_obj(m);
+    } else {
+        ctx.push(StackValue::null());
+    }
+    StepResult::Continue
+}
+
+fn handle_get_members<'gc, T: VesOps<'gc>>(ctx: &mut T, _generics: &GenericLookup) -> StepResult {
+    let _flags = ctx.pop_i32();
+    let _obj = ctx.pop_obj();
+    let member_info_type = vm_try!(ctx.loader().corlib_type("System.Reflection.MemberInfo"));
+    populate_reflection_array(ctx, vec![], ConcreteType::from(member_info_type))
+}
+
+fn handle_get_nested_types<'gc, T: VesOps<'gc>>(ctx: &mut T, _generics: &GenericLookup) -> StepResult {
+    let _flags = ctx.pop_i32();
+    let _obj = ctx.pop_obj();
+    let type_type = vm_try!(ctx.loader().corlib_type("System.Type"));
+    populate_reflection_array(ctx, vec![], type_type.into())
+}
+
+fn handle_invoke_member<'gc, T: VesOps<'gc>>(ctx: &mut T, _generics: &GenericLookup) -> StepResult {
+    let _named_params = ctx.pop();
+    let _culture = ctx.pop();
+    let _modifiers = ctx.pop();
+    let _args = ctx.pop();
+    let _target = ctx.pop();
+    let _binder = ctx.pop();
+    let _invoke_attr = ctx.pop();
+    let _name = ctx.pop();
+    let _obj = ctx.pop_obj();
+    
+    ctx.throw_by_name_with_message("System.NotSupportedException", "InvokeMember is not supported.")
+}
+
+fn handle_get_fields<'gc, T: VesOps<'gc>>(ctx: &mut T, _generics: &GenericLookup) -> StepResult {
+    let flags = ctx.pop_i32();
+    let obj = ctx.pop_obj();
+    let target_type = ctx.resolve_runtime_type(obj);
+
+    const BINDING_FLAGS_INSTANCE: i32 = 4;
+    const BINDING_FLAGS_STATIC: i32 = 8;
+    const BINDING_FLAGS_PUBLIC: i32 = 16;
+    const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
+
+    let mut fields_objs = Vec::new();
+    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
+        for (index, f) in td.definition().fields.iter().enumerate() {
+            let is_public = f.accessibility == MemberAccessibility::Access(Accessibility::Public);
+            let is_static = f.static_member;
+
+            let match_public = if is_public {
+                (flags & BINDING_FLAGS_PUBLIC) != 0
+            } else {
+                (flags & BINDING_FLAGS_NON_PUBLIC) != 0
+            };
+            let match_static = if is_static {
+                (flags & BINDING_FLAGS_STATIC) != 0
+            } else {
+                (flags & BINDING_FLAGS_INSTANCE) != 0
+            };
+
+            if match_public && match_static {
+                let desc = FieldDescription::new(td, td.resolution, f, index);
+                let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
+                fields_objs.push(ctx.get_runtime_field_obj(desc, lookup));
+            }
+        }
+    }
+
+    let field_info_type = vm_try!(ctx.loader().corlib_type("System.Reflection.FieldInfo"));
+    populate_reflection_array(ctx, fields_objs, ConcreteType::from(field_info_type))
+}
+
+fn handle_get_field<'gc, T: VesOps<'gc>>(ctx: &mut T, _generics: &GenericLookup) -> StepResult {
+    let flags = ctx.pop_i32();
+    let name_obj = ctx.pop_obj();
+    let obj = ctx.pop_obj();
+
+    let name = name_obj.as_heap_storage(|s| {
+        if let HeapStorage::Str(s) = s {
+            s.as_string()
+        } else {
+            panic!("name is not a string")
+        }
+    });
+    let target_type = ctx.resolve_runtime_type(obj);
+
+    const BINDING_FLAGS_INSTANCE: i32 = 4;
+    const BINDING_FLAGS_STATIC: i32 = 8;
+    const BINDING_FLAGS_PUBLIC: i32 = 16;
+    const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
+
+    let mut found_field = None;
+    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
+        for (index, f) in td.definition().fields.iter().enumerate() {
+            if f.name != name {
+                continue;
+            }
+            let is_public = f.accessibility == MemberAccessibility::Access(Accessibility::Public);
+            let is_static = f.static_member;
+
+            let match_public = if is_public {
+                (flags & BINDING_FLAGS_PUBLIC) != 0
+            } else {
+                (flags & BINDING_FLAGS_NON_PUBLIC) != 0
+            };
+            let match_static = if is_static {
+                (flags & BINDING_FLAGS_STATIC) != 0
+            } else {
+                (flags & BINDING_FLAGS_INSTANCE) != 0
+            };
+
+            if match_public && match_static {
+                let desc = FieldDescription::new(td, td.resolution, f, index);
+                let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
+                found_field = Some(ctx.get_runtime_field_obj(desc, lookup));
+                break;
+            }
+        }
+    }
+
+    if let Some(f) = found_field {
+        ctx.push_obj(f);
+    } else {
+        ctx.push(StackValue::null());
+    }
+    StepResult::Continue
+}
+
+fn handle_get_properties<'gc, T: VesOps<'gc>>(ctx: &mut T, _generics: &GenericLookup) -> StepResult {
+    let _flags = ctx.pop_i32();
+    let _obj = ctx.pop_obj();
+    let property_info_type = vm_try!(ctx.loader().corlib_type("System.Reflection.PropertyInfo"));
+    populate_reflection_array(ctx, vec![], ConcreteType::from(property_info_type))
+}
+
+fn handle_get_property_impl<'gc, T: VesOps<'gc>>(ctx: &mut T, _generics: &GenericLookup) -> StepResult {
+    let _modifiers = ctx.pop();
+    let _types = ctx.pop();
+    let _return_type = ctx.pop();
+    let _binder = ctx.pop();
+    let _flags = ctx.pop();
+    let _name = ctx.pop();
+    let _obj = ctx.pop_obj();
+    ctx.push(StackValue::null());
+    StepResult::Continue
+}
+
+fn handle_is_primitive_impl<'gc, T: VesOps<'gc>>(ctx: &mut T, _generics: &GenericLookup) -> StepResult {
+    let obj = ctx.pop_obj();
+    let rt = ctx.resolve_runtime_type(obj);
+    let is_primitive = matches!(rt, 
+        RuntimeType::Boolean | RuntimeType::Char | RuntimeType::Int8 | RuntimeType::UInt8 |
+        RuntimeType::Int16 | RuntimeType::UInt16 | RuntimeType::Int32 | RuntimeType::UInt32 |
+        RuntimeType::Int64 | RuntimeType::UInt64 | RuntimeType::Float32 | RuntimeType::Float64 |
+        RuntimeType::IntPtr | RuntimeType::UIntPtr
+    );
+    ctx.push_i32(if is_primitive { 1 } else { 0 });
+    StepResult::Continue
+}
+
+fn handle_is_array_impl<'gc, T: VesOps<'gc>>(ctx: &mut T, _generics: &GenericLookup) -> StepResult {
+    let obj = ctx.pop_obj();
+    let rt = ctx.resolve_runtime_type(obj);
+    let is_array = matches!(rt, RuntimeType::Vector(_) | RuntimeType::Array(_, _));
+    ctx.push_i32(if is_array { 1 } else { 0 });
+    StepResult::Continue
+}
+
+fn handle_is_by_ref_impl<'gc, T: VesOps<'gc>>(ctx: &mut T, _generics: &GenericLookup) -> StepResult {
+    let obj = ctx.pop_obj();
+    let rt = ctx.resolve_runtime_type(obj);
+    let is_by_ref = matches!(rt, RuntimeType::ByRef(_));
+    ctx.push_i32(if is_by_ref { 1 } else { 0 });
+    StepResult::Continue
+}
+
+fn handle_is_pointer_impl<'gc, T: VesOps<'gc>>(ctx: &mut T, _generics: &GenericLookup) -> StepResult {
+    let obj = ctx.pop_obj();
+    let rt = ctx.resolve_runtime_type(obj);
+    let is_pointer = matches!(rt, RuntimeType::Pointer(_) | RuntimeType::ValuePointer(_, _));
+    ctx.push_i32(if is_pointer { 1 } else { 0 });
+    StepResult::Continue
+}
+
+fn member_to_method_type(src: &TypeSource<MemberType>) -> MethodType {
+    match src {
+        TypeSource::User(h) => MethodType::Base(Box::new(BaseType::Type {
+            source: TypeSource::User(*h),
+            value_kind: None,
+        })),
+        TypeSource::Generic { base, parameters } => MethodType::Base(Box::new(BaseType::Type {
+            source: TypeSource::Generic {
+                base: *base,
+                parameters: parameters.iter().cloned().map(MethodType::from).collect(),
+            },
+            value_kind: None,
+        })),
+    }
+}
+
+fn handle_get_interfaces<'gc, T: VesOps<'gc>>(ctx: &mut T, _generics: &GenericLookup) -> StepResult {
+    let obj = ctx.pop_obj();
+    let rt = ctx.resolve_runtime_type(obj);
+    
+    let mut interfaces = vec![];
+    let mut seen = HashSet::new();
+    
+    let target_type = match rt {
+        RuntimeType::Type(_) | RuntimeType::Generic(_, _) => rt,
+        _ => {
+            let ct = rt.to_concrete(ctx.loader());
+            match ctx.loader().find_concrete_type(ct) {
+                Ok(td) => RuntimeType::Type(td),
+                Err(_) => {
+                    let type_type = vm_try!(ctx.loader().corlib_type("System.Type"));
+                    return populate_reflection_array(ctx, vec![], type_type.into());
+                }
+            }
+        }
+    };
+
+    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
+        let mut queue = VecDeque::new();
+        let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
+        queue.push_back((td, lookup));
+        
+        while let Some((curr_td, curr_lookup)) = queue.pop_front() {
+            // Check interfaces implemented by this type
+            for (_, interface_source) in &curr_td.definition().implements {
+                let method_type = member_to_method_type(interface_source);
+                let resolved_interface = ctx.make_runtime_type(&ctx.with_generics(&curr_lookup), &method_type);
+                if seen.insert(resolved_interface.clone()) {
+                    interfaces.push(ctx.get_runtime_type(resolved_interface));
+                }
+            }
+            
+            // Add base type to queue
+            if let Some(extends) = &curr_td.definition().extends {
+                 let method_type = member_to_method_type(extends);
+                 let base_type = ctx.make_runtime_type(&ctx.with_generics(&curr_lookup), &method_type);
+                 if let RuntimeType::Type(base_td) | RuntimeType::Generic(base_td, _) = base_type {
+                     let next_lookup = build_generic_lookup_from_runtime_type(ctx, &base_type);
+                     queue.push_back((base_td, next_lookup));
+                 }
+            }
+        }
+    }
+    
+    let type_type = vm_try!(ctx.loader().corlib_type("System.Type"));
+    populate_reflection_array(ctx, interfaces, type_type.into())
+}
+
+fn handle_get_interface<'gc, T: VesOps<'gc>>(ctx: &mut T, _generics: &GenericLookup) -> StepResult {
+    let _ignore_case = ctx.pop_i32() != 0;
+    let name_obj = ctx.pop_obj();
+    let obj = ctx.pop_obj();
+
+    let name = name_obj.as_heap_storage(|s| {
+        if let HeapStorage::Str(s) = s {
+            s.as_string()
+        } else {
+            panic!("name is not a string")
+        }
+    });
+
+    let rt = ctx.resolve_runtime_type(obj);
+    let mut found = None;
+    let mut seen = HashSet::new();
+
+    let target_type = match rt {
+        RuntimeType::Type(_) | RuntimeType::Generic(_, _) => rt,
+        _ => {
+            let ct = rt.to_concrete(ctx.loader());
+            match ctx.loader().find_concrete_type(ct) {
+                Ok(td) => RuntimeType::Type(td),
+                Err(_) => {
+                    ctx.push(StackValue::null());
+                    return StepResult::Continue;
+                }
+            }
+        }
+    };
+
+    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
+        let mut queue = VecDeque::new();
+        let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
+        queue.push_back((td, lookup));
+        
+        while let Some((curr_td, curr_lookup)) = queue.pop_front() {
+            for (_, interface_source) in &curr_td.definition().implements {
+                let method_type = member_to_method_type(interface_source);
+                let resolved_interface = ctx.make_runtime_type(&ctx.with_generics(&curr_lookup), &method_type);
+                if resolved_interface.get_name() == name {
+                    found = Some(resolved_interface);
+                    break;
+                }
+                if seen.insert(resolved_interface.clone()) {
+                    // Also need to check interfaces of interfaces?
+                    // Usually GetInterfaces() returns all.
+                }
+            }
+            if found.is_some() { break; }
+            
+            if let Some(extends) = &curr_td.definition().extends {
+                 let method_type = member_to_method_type(extends);
+                 let base_type = ctx.make_runtime_type(&ctx.with_generics(&curr_lookup), &method_type);
+                 if let RuntimeType::Type(base_td) | RuntimeType::Generic(base_td, _) = base_type {
+                     let next_lookup = build_generic_lookup_from_runtime_type(ctx, &base_type);
+                     queue.push_back((base_td, next_lookup));
+                 }
+            }
+        }
+    }
+
+    if let Some(itf) = found {
+        let rt_obj = ctx.get_runtime_type(itf);
+        ctx.push_obj(rt_obj);
+    } else {
+        ctx.push(StackValue::null());
+    }
+    StepResult::Continue
+}
+
+fn handle_get_element_type<'gc, T: VesOps<'gc>>(ctx: &mut T, _generics: &GenericLookup) -> StepResult {
+    let obj = ctx.pop_obj();
+    let rt = ctx.resolve_runtime_type(obj);
+    let element_type = match rt {
+        RuntimeType::Vector(t) | RuntimeType::Array(t, _) | RuntimeType::Pointer(t) | RuntimeType::ByRef(t) | RuntimeType::ValuePointer(t, _) => Some(*t),
+        _ => None,
+    };
+    if let Some(et) = element_type {
+        let rt_obj = ctx.get_runtime_type(et);
+        ctx.push_obj(rt_obj);
+    } else {
+        ctx.push(StackValue::null());
+    }
+    StepResult::Continue
+}
+
+fn handle_get_attribute_flags_impl<'gc, T: VesOps<'gc>>(ctx: &mut T, _generics: &GenericLookup) -> StepResult {
+    let obj = ctx.pop_obj();
+    let rt = ctx.resolve_runtime_type(obj);
+    
+    let target_type = match rt {
+        RuntimeType::Type(_) | RuntimeType::Generic(_, _) => rt,
+        _ => {
+            let ct = rt.to_concrete(ctx.loader());
+            match ctx.loader().find_concrete_type(ct) {
+                Ok(td) => RuntimeType::Type(td),
+                Err(_) => {
+                    ctx.push_i32(0);
+                    return StepResult::Continue;
+                }
+            }
+        }
+    };
+
+    let mut attrs = 0u32;
+    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
+        let flags = td.definition().flags;
+
+        attrs |= match flags.accessibility {
+            dotnetdll::resolved::types::Accessibility::NotPublic => 0,
+            dotnetdll::resolved::types::Accessibility::Public => 1,
+            dotnetdll::resolved::types::Accessibility::Nested(acc) => match acc {
+                dotnetdll::resolved::Accessibility::Public => 2,
+                dotnetdll::resolved::Accessibility::Private => 3,
+                dotnetdll::resolved::Accessibility::Family => 4,
+                dotnetdll::resolved::Accessibility::Assembly => 5,
+                dotnetdll::resolved::Accessibility::FamilyANDAssembly => 6,
+                dotnetdll::resolved::Accessibility::FamilyORAssembly => 7,
+            },
+        };
+
+        attrs |= match flags.layout {
+            Layout::Automatic => 0x00,
+            Layout::Sequential(_) => 0x08,
+            Layout::Explicit(_) => 0x10,
+        };
+
+        attrs |= match flags.kind {
+            Kind::Class => 0x00,
+            Kind::Interface => 0x20,
+        };
+
+        if flags.abstract_type { attrs |= 0x80; }
+        if flags.sealed { attrs |= 0x100; }
+        if flags.special_name { attrs |= 0x400; }
+        if flags.imported { attrs |= 0x1000; }
+        if flags.serializable { attrs |= 0x2000; }
+
+        attrs |= match flags.string_formatting {
+            StringFormatting::ANSI => 0x00000,
+            StringFormatting::Unicode => 0x10000,
+            StringFormatting::Automatic => 0x20000,
+            StringFormatting::Custom(_) => 0x30000,
+        };
+
+        if td.definition().security.is_some() { attrs |= 0x40000; }
+        if flags.before_field_init { attrs |= 0x100000; }
+        if flags.runtime_special_name { attrs |= 0x800; }
+    }
+
+    ctx.push_i32(attrs as i32);
     StepResult::Continue
 }
 

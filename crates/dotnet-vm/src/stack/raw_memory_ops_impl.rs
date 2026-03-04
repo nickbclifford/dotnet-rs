@@ -2,7 +2,7 @@ use crate::{
     memory::access::MemoryOwner,
     stack::{
         context::VesContext,
-        ops::{PoolOps, RawMemoryOps, StaticsOps, VesOps},
+        ops::{RawMemoryOps, StaticsOps, VesOps},
     },
     threading::ThreadManagerOps,
 };
@@ -11,7 +11,27 @@ use dotnet_utils::{BorrowGuardHandle, BorrowScopeOps, NoActiveBorrows};
 use dotnet_value::{StackValue, layout::HasLayout, pointer::PointerOrigin};
 use sptr::Strict;
 
-impl<'a, 'gc> PoolOps for VesContext<'a, 'gc> {
+impl<'a, 'gc> BorrowScopeOps for VesContext<'a, 'gc> {
+    fn enter_borrow_scope(&self) {
+        self.local
+            .active_borrows
+            .set(self.local.active_borrows.get() + 1);
+    }
+
+    fn exit_borrow_scope(&self) {
+        let current = self.local.active_borrows.get();
+        if current == 0 {
+            panic!("Exiting borrow scope when none are active");
+        }
+        self.local.active_borrows.set(current - 1);
+    }
+}
+
+impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
+    fn as_borrow_scope(&self) -> &dyn BorrowScopeOps {
+        self
+    }
+
     /// # Safety
     ///
     /// The returned pointer is valid for the duration of the current method frame.
@@ -31,28 +51,6 @@ impl<'a, 'gc> PoolOps for VesContext<'a, 'gc> {
         let loc = s.memory_pool.len();
         s.memory_pool.resize(loc + size, 0);
         s.memory_pool[loc..].as_mut_ptr()
-    }
-}
-
-impl<'a, 'gc> BorrowScopeOps for VesContext<'a, 'gc> {
-    fn enter_borrow_scope(&self) {
-        self.local
-            .active_borrows
-            .set(self.local.active_borrows.get() + 1);
-    }
-
-    fn exit_borrow_scope(&self) {
-        let current = self.local.active_borrows.get();
-        if current == 0 {
-            panic!("Borrow scope underflow");
-        }
-        self.local.active_borrows.set(current - 1);
-    }
-}
-
-impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
-    fn as_borrow_scope(&self) -> &dyn BorrowScopeOps {
-        self
     }
 
     fn resolve_address(
@@ -195,7 +193,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
                 let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                unsafe { memory.perform_read(self.gc, ptr.as_ptr(), None, layout, type_desc) }
+                unsafe { memory.read_value_internal(self.gc, ptr.as_ptr(), None, layout, type_desc) }
             }
             PointerOrigin::Static(static_type, lookup) => {
                 let storage = self.statics().get(static_type, &lookup);
@@ -205,7 +203,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     }
                     let ptr = unsafe { data.as_ptr().add(offset.as_usize()) };
                     let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                    unsafe { memory.perform_read(self.gc, ptr, None, layout, type_desc) }
+                    unsafe { memory.read_value_internal(self.gc, ptr, None, layout, type_desc) }
                 })
             }
             PointerOrigin::Heap(owner) => {
@@ -246,7 +244,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 }
                 let ptr = unsafe { data.as_ptr().add(offset.as_usize()) };
                 let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                unsafe { memory.perform_read(self.gc, ptr, None, layout, type_desc) }
+                unsafe { memory.read_value_internal(self.gc, ptr, None, layout, type_desc) }
             }),
         }
     }

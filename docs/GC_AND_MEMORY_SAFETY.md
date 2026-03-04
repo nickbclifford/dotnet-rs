@@ -103,7 +103,7 @@ When an object in arena A stores a reference to an object in arena B, this must 
 
 ### How References Are Recorded
 - Memory mutations occur through `RawMemoryAccess` (`memory/access.rs`).
-- `RawMemoryAccess::perform_write` (and unaligned/atomic equivalents) checks the `ArenaId` of the written `ObjectRef` or `ManagedPtr` against the destination `MemoryOwner`.
+- `RawMemoryAccess::write_value_internal` (and unaligned/atomic equivalents) checks the `ArenaId` of the written `ObjectRef` or `ManagedPtr` against the destination `MemoryOwner`.
 - If a cross-arena scenario is detected, it calls `record_objref_cross_arena` or `record_managedptr_cross_arena`.
 - Bulk operations like block copying (`initblk`, `cpblk`) use `record_refs_recursive` and `record_refs_in_range` to scan the layout's GC descriptor and record any contained references.
 
@@ -139,7 +139,7 @@ The `HeapManager` tracks object lifetimes, registration, and finalization:
 
 ## RawMemoryAccess (`memory/access.rs`)
 
-A critical abstraction (~1038 lines) providing memory safety over unsafe heap storage. Operations include:
+A critical abstraction (~1038 lines) providing memory safety over unsafe heap storage. The core implementations are `read_value_internal` and `write_value_internal`, which handle the actual data transfer and reference tracking. Higher-level APIs like `write_to_heap` and `write_to_unmanaged` provide additional safety checks and bounds validation. Operations include:
 - **Unaligned reads/writes**: Validates reads/writes matching the `unaligned.` CIL prefix against `LayoutManager` invariants.
 - **Atomic operations**: Compare-exchange, exchange, load, store. Respects .NET memory models (`Ordering` abstractions).
 - **Bounds checking**: `check_bounds_internal` validates pointer arithmetic against `base` and `len`.
@@ -166,5 +166,6 @@ Heap objects are represented via several layers of abstraction (~1180 lines):
 ## GC Collect Trait Implementations
 
 All types stored in the GC heap or referenced by the VES stack must implement `gc_arena::Collect`:
+- **`#[derive(Collect)]`**: Used for types where automatic tracing of all fields is sufficient (e.g., `ObjectInner`). The `#[collect(no_drop)]` attribute is often used to ensure safety.
 - **`static_collect!`**: Used for leaf types that contain no further GC references (e.g. primitive wrappers, basic configs).
-- **Manual Implementations**: Complex types like `ObjectRef`, `HeapStorage`, and `ValueType` manually implement the `trace<Tr: Trace<'gc>>(&self, cc: &mut Tr)` method. The `Collect` implementations iterate through all child elements, calling `.trace(cc)` recursively to maintain the GC reachability graph.
+- **Manual Implementations**: Complex types with specialized tracing logic (like cross-arena reference tracking in `ObjectRef`) or those requiring custom validation manually implement the `trace<Tr: Trace<'gc>>(&self, cc: &mut Tr)` method. The `Collect` implementations iterate through all child elements, calling `.trace(cc)` recursively to maintain the GC reachability graph.
