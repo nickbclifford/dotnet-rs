@@ -87,7 +87,7 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
                 let rank = shape.rank;
                 let mut dims: Vec<usize> = Vec::with_capacity(rank);
                 for _ in 0..rank {
-                    let v = ctx.pop();
+                    let v = vm_pop!(ctx);
                     match v {
                         StackValue::Int32(i) => dims.push(i as usize),
                         StackValue::NativeInt(i) => dims.push(i as usize),
@@ -161,7 +161,7 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
         && method_name == ".ctor"
         && method.method().signature.parameters.len() == 1
     {
-        let val = ctx.pop();
+        let val = vm_pop!(ctx);
         let native_val = match val {
             StackValue::Int32(i) => i as isize,
             StackValue::Int64(i) => i as isize,
@@ -248,7 +248,7 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
 
 #[dotnet_instruction(LoadObject { param0 })]
 pub fn ldobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResult {
-    let addr = ctx.pop();
+    let addr = vm_pop!(ctx);
 
     if addr.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
@@ -282,8 +282,8 @@ pub fn ldobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
 
 #[dotnet_instruction(StoreObject { param0 })]
 pub fn stobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResult {
-    let value = ctx.pop();
-    let addr = ctx.pop();
+    let value = vm_pop!(ctx);
+    let addr = vm_pop!(ctx);
 
     if addr.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
@@ -323,7 +323,7 @@ pub fn stobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
 
 #[dotnet_instruction(InitializeForObject(param0))]
 pub fn initobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResult {
-    let addr = ctx.pop();
+    let addr = vm_pop!(ctx);
 
     if addr.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);

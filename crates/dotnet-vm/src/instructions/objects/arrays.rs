@@ -37,7 +37,7 @@ pub fn ldelem<
     ctx: &mut T,
     param0: &MethodType,
 ) -> StepResult {
-    let index = match ctx.pop() {
+    let index = match vm_pop!(ctx) {
         StackValue::Int32(i) => i as usize,
         StackValue::NativeInt(i) => i as usize,
         _ => {
@@ -45,7 +45,7 @@ pub fn ldelem<
                 .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
         }
     };
-    let val = ctx.pop();
+    let val = vm_pop!(ctx);
     let StackValue::ObjectRef(obj) = val else {
         return ctx
             .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
@@ -91,7 +91,7 @@ pub fn ldelem_primitive<
     ctx: &mut T,
     param0: LoadType,
 ) -> StepResult {
-    let index = match ctx.pop() {
+    let index = match vm_pop!(ctx) {
         StackValue::Int32(i) => i as usize,
         StackValue::NativeInt(i) => i as usize,
         _ => {
@@ -99,7 +99,7 @@ pub fn ldelem_primitive<
                 .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
         }
     };
-    let array = ctx.pop();
+    let array = vm_pop!(ctx);
 
     let StackValue::ObjectRef(obj) = array else {
         return ctx
@@ -189,7 +189,7 @@ fn ldelema_internal<
     param0: &MethodType,
     readonly: bool,
 ) -> StepResult {
-    let index = match ctx.pop() {
+    let index = match vm_pop!(ctx) {
         StackValue::Int32(i) => i as usize,
         StackValue::NativeInt(i) => i as usize,
         _ => {
@@ -197,7 +197,7 @@ fn ldelema_internal<
                 .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
         }
     };
-    let array = ctx.pop();
+    let array = vm_pop!(ctx);
     if array.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
@@ -258,8 +258,8 @@ pub fn stelem<
     ctx: &mut T,
     param0: &MethodType,
 ) -> StepResult {
-    let value = ctx.pop();
-    let index = match ctx.pop() {
+    let value = vm_pop!(ctx);
+    let index = match vm_pop!(ctx) {
         StackValue::Int32(i) => i as usize,
         StackValue::NativeInt(i) => i as usize,
         _ => {
@@ -267,7 +267,7 @@ pub fn stelem<
                 .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
         }
     };
-    let array = ctx.pop();
+    let array = vm_pop!(ctx);
     if array.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
@@ -303,8 +303,8 @@ pub fn stelem_primitive<
     ctx: &mut T,
     param0: StoreType,
 ) -> StepResult {
-    let value = ctx.pop();
-    let index = match ctx.pop() {
+    let value = vm_pop!(ctx);
+    let index = match vm_pop!(ctx) {
         StackValue::Int32(i) => i as usize,
         StackValue::NativeInt(i) => i as usize,
         _ => {
@@ -312,7 +312,7 @@ pub fn stelem_primitive<
                 .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
         }
     };
-    let array = ctx.pop();
+    let array = vm_pop!(ctx);
     if array.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
@@ -360,7 +360,7 @@ pub fn newarr<
     // Threshold: arrays with > 1024 elements
     const LARGE_ARRAY_THRESHOLD: usize = 1024;
 
-    let length = match ctx.pop() {
+    let length = match vm_pop!(ctx) {
         StackValue::Int32(i) => {
             if i < 0 {
                 return ctx.throw_by_name_with_message("System.OverflowException", OVERFLOW_MSG);
@@ -409,7 +409,7 @@ pub fn ldlen<
 >(
     ctx: &mut T,
 ) -> StepResult {
-    let array = ctx.pop();
+    let array = vm_pop!(ctx);
     if array.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }

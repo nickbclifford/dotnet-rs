@@ -683,7 +683,7 @@ pub fn execute_cil_program_with_loader(program: FuzzProgram, loader: Arc<Assembl
         varargs: None,
     };
 
-    let instructions: Vec<_> = program
+    let mut instructions: Vec<_> = program
         .instructions
         .iter()
         .enumerate()
@@ -698,6 +698,10 @@ pub fn execute_cil_program_with_loader(program: FuzzProgram, loader: Arc<Assembl
             )
         })
         .collect();
+
+    if instructions.is_empty() {
+        instructions.push(Instruction::Return);
+    }
 
     let local_variables = (0..program.num_locals)
         .map(|i| LocalVariable::Variable {
@@ -902,7 +906,13 @@ mod tests {
     /// Empty program — just return.
     #[test]
     fn miri_empty_program() {
-        run_program(vec![FuzzInstruction::Ret], 0, 1);
+        run_program(vec![], 0, 1);
+    }
+
+    /// Program without return — should handle falling off the end.
+    #[test]
+    fn miri_no_return_error() {
+        run_program(vec![FuzzInstruction::LdcI4(42)], 0, 1);
     }
 
     /// Bitwise operations should not trigger UB.

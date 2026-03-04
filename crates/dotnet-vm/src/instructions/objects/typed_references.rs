@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 #[dotnet_instruction(MakeTypedReference(class))]
 pub fn mkrefany<'gc, T: VesOps<'gc>>(ctx: &mut T, class: &MethodType) -> StepResult {
-    let ptr = ctx.pop();
+    let ptr = vm_pop!(ctx);
     let StackValue::ManagedPtr(m) = ptr else {
         return ctx
             .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
@@ -22,7 +22,7 @@ pub fn mkrefany<'gc, T: VesOps<'gc>>(ctx: &mut T, class: &MethodType) -> StepRes
 
 #[dotnet_instruction(ReadTypedReferenceType)]
 pub fn refanytype<'gc, T: VesOps<'gc>>(ctx: &mut T) -> StepResult {
-    let tr = ctx.pop();
+    let tr = vm_pop!(ctx);
     let StackValue::TypedRef(_, td) = tr else {
         return ctx
             .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
@@ -34,7 +34,7 @@ pub fn refanytype<'gc, T: VesOps<'gc>>(ctx: &mut T) -> StepResult {
 
 #[dotnet_instruction(ReadTypedReferenceValue(class))]
 pub fn refanyval<'gc, T: VesOps<'gc>>(ctx: &mut T, class: &MethodType) -> StepResult {
-    let tr = ctx.pop();
+    let tr = vm_pop!(ctx);
     let StackValue::TypedRef(m, td) = tr else {
         return ctx
             .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);

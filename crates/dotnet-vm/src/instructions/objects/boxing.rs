@@ -23,7 +23,7 @@ pub fn box_value<'gc, T: ResolutionOps<'gc> + EvalStackOps<'gc> + MemoryOps<'gc>
 ) -> StepResult {
     let res_ctx = ctx.current_context();
     let t = vm_try!(res_ctx.make_concrete(param0));
-    let value = ctx.pop();
+    let value = vm_pop!(ctx);
 
     if let StackValue::ObjectRef(_) = value {
         // boxing is a noop for all reference types
@@ -141,7 +141,7 @@ pub fn unbox<'gc, T: ResolutionOps<'gc> + ExceptionOps<'gc> + EvalStackOps<'gc> 
     ctx: &mut T,
     param0: &MethodType,
 ) -> StepResult {
-    let value = ctx.pop();
+    let value = vm_pop!(ctx);
     let res_ctx = ctx.current_context();
     let target_ct = vm_try!(res_ctx.make_concrete(param0));
 

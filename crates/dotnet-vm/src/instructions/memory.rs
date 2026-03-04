@@ -82,7 +82,7 @@ pub fn initblk<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
 pub fn localloc<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
 ) -> StepResult {
-    let size_isize = ctx.pop_isize();
+    let size_isize = vm_pop!(ctx).as_isize();
     if size_isize < 0 {
         return ctx.throw_by_name_with_message("System.OverflowException", OVERFLOW_MSG);
     }
@@ -109,8 +109,8 @@ pub fn stind<'gc, T: StackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>>(
     ctx: &mut T,
     param0: StoreType,
 ) -> StepResult {
-    let val = ctx.pop();
-    let addr_val = ctx.pop();
+    let val = vm_pop!(ctx);
+    let addr_val = vm_pop!(ctx);
 
     if let StackValue::ManagedPtr(m) = &addr_val
         && let Some((slot_idx, off)) = m.stack_slot_origin()
@@ -173,7 +173,7 @@ pub fn ldind<'gc, T: StackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>>(
     ctx: &mut T,
     param0: LoadType,
 ) -> StepResult {
-    let addr_val = ctx.pop();
+    let addr_val = vm_pop!(ctx);
 
     if let StackValue::ManagedPtr(m) = &addr_val
         && let Some((slot_idx, off)) = m.stack_slot_origin()

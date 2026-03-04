@@ -14,7 +14,7 @@ pub fn conv<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
     t: ConversionType,
 ) -> StepResult {
-    let value = ctx.pop();
+    let value = vm_pop!(ctx);
 
     macro_rules! simple_cast {
         ($t:ty) => {
@@ -116,7 +116,7 @@ pub fn conv_ovf<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
     t: ConversionType,
     sgn: NumberSign,
 ) -> StepResult {
-    let value = ctx.pop();
+    let value = vm_pop!(ctx);
 
     macro_rules! do_conv {
         ($target:ty, $stack_variant:ident) => {{
@@ -181,7 +181,7 @@ pub fn conv_ovf<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
 
 #[dotnet_instruction(ConvertFloat32)]
 pub fn conv_r4<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(ctx: &mut T) -> StepResult {
-    let v = match ctx.pop() {
+    let v = match vm_pop!(ctx) {
         StackValue::Int32(i) => i as f32,
         StackValue::Int64(i) => i as f32,
         StackValue::NativeInt(i) => i as f32,
@@ -197,7 +197,7 @@ pub fn conv_r4<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(ctx: &mut T) -> St
 
 #[dotnet_instruction(ConvertFloat64)]
 pub fn conv_r8<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(ctx: &mut T) -> StepResult {
-    let v = match ctx.pop() {
+    let v = match vm_pop!(ctx) {
         StackValue::Int32(i) => i as f64,
         StackValue::Int64(i) => i as f64,
         StackValue::NativeInt(i) => i as f64,
@@ -213,7 +213,7 @@ pub fn conv_r8<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(ctx: &mut T) -> St
 
 #[dotnet_instruction(ConvertUnsignedToFloat)]
 pub fn conv_r_un<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(ctx: &mut T) -> StepResult {
-    let value = ctx.pop();
+    let value = vm_pop!(ctx);
     let f = match value {
         StackValue::Int32(i) => (i as u32) as f64,
         StackValue::Int64(i) => (i as u64) as f64,

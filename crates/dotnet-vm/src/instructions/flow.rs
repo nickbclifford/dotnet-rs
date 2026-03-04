@@ -15,8 +15,8 @@ pub fn br<T: ?Sized>(_ctx: &mut T, target: usize) -> StepResult {
 
 #[dotnet_instruction(BranchEqual(target))]
 pub fn beq<'gc, T: EvalStackOps<'gc>>(ctx: &mut T, target: usize) -> StepResult {
-    let v2 = ctx.pop();
-    let v1 = ctx.pop();
+    let v2 = vm_pop!(ctx);
+    let v1 = vm_pop!(ctx);
     if v1 == v2 {
         StepResult::Jump(target)
     } else {
@@ -26,8 +26,8 @@ pub fn beq<'gc, T: EvalStackOps<'gc>>(ctx: &mut T, target: usize) -> StepResult 
 
 #[dotnet_instruction(BranchGreaterOrEqual(sgn, target))]
 pub fn bge<'gc, T: EvalStackOps<'gc>>(ctx: &mut T, sgn: NumberSign, target: usize) -> StepResult {
-    let v2 = ctx.pop();
-    let v1 = ctx.pop();
+    let v2 = vm_pop!(ctx);
+    let v1 = vm_pop!(ctx);
     let cond = matches!(
         v1.compare(&v2, sgn),
         Some(std::cmp::Ordering::Greater) | Some(std::cmp::Ordering::Equal)
@@ -41,8 +41,8 @@ pub fn bge<'gc, T: EvalStackOps<'gc>>(ctx: &mut T, sgn: NumberSign, target: usiz
 
 #[dotnet_instruction(BranchGreater(sgn, target))]
 pub fn bgt<'gc, T: EvalStackOps<'gc>>(ctx: &mut T, sgn: NumberSign, target: usize) -> StepResult {
-    let v2 = ctx.pop();
-    let v1 = ctx.pop();
+    let v2 = vm_pop!(ctx);
+    let v1 = vm_pop!(ctx);
     let cond = matches!(v1.compare(&v2, sgn), Some(std::cmp::Ordering::Greater));
     if cond {
         StepResult::Jump(target)
@@ -53,8 +53,8 @@ pub fn bgt<'gc, T: EvalStackOps<'gc>>(ctx: &mut T, sgn: NumberSign, target: usiz
 
 #[dotnet_instruction(BranchLessOrEqual(sgn, target))]
 pub fn ble<'gc, T: EvalStackOps<'gc>>(ctx: &mut T, sgn: NumberSign, target: usize) -> StepResult {
-    let v2 = ctx.pop();
-    let v1 = ctx.pop();
+    let v2 = vm_pop!(ctx);
+    let v1 = vm_pop!(ctx);
     let cond = matches!(
         v1.compare(&v2, sgn),
         Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Equal)
@@ -68,8 +68,8 @@ pub fn ble<'gc, T: EvalStackOps<'gc>>(ctx: &mut T, sgn: NumberSign, target: usiz
 
 #[dotnet_instruction(BranchLess(sgn, target))]
 pub fn blt<'gc, T: EvalStackOps<'gc>>(ctx: &mut T, sgn: NumberSign, target: usize) -> StepResult {
-    let v2 = ctx.pop();
-    let v1 = ctx.pop();
+    let v2 = vm_pop!(ctx);
+    let v1 = vm_pop!(ctx);
     let cond = matches!(v1.compare(&v2, sgn), Some(std::cmp::Ordering::Less));
     if cond {
         StepResult::Jump(target)
@@ -80,8 +80,8 @@ pub fn blt<'gc, T: EvalStackOps<'gc>>(ctx: &mut T, sgn: NumberSign, target: usiz
 
 #[dotnet_instruction(BranchNotEqual(target))]
 pub fn bne<'gc, T: EvalStackOps<'gc>>(ctx: &mut T, target: usize) -> StepResult {
-    let v2 = ctx.pop();
-    let v1 = ctx.pop();
+    let v2 = vm_pop!(ctx);
+    let v1 = vm_pop!(ctx);
     if v1 != v2 {
         StepResult::Jump(target)
     } else {
@@ -94,7 +94,7 @@ pub fn brtrue<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
     target: usize,
 ) -> StepResult {
-    let v = ctx.pop();
+    let v = vm_pop!(ctx);
     let cond = match v {
         StackValue::Int32(i) => i != 0,
         StackValue::Int64(i) => i != 0,
@@ -118,7 +118,7 @@ pub fn brfalse<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
     target: usize,
 ) -> StepResult {
-    let v = ctx.pop();
+    let v = vm_pop!(ctx);
     let cond = match v {
         StackValue::Int32(i) => i == 0,
         StackValue::Int64(i) => i == 0,
@@ -142,7 +142,7 @@ pub fn switch<'gc, T: EvalStackOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
     targets: &[usize],
 ) -> StepResult {
-    let index = match ctx.pop() {
+    let index = match vm_pop!(ctx) {
         StackValue::Int32(i) => i as u32 as usize,
         StackValue::NativeInt(i) => i as usize,
         _ => {

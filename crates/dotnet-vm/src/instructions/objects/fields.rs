@@ -31,12 +31,7 @@ pub fn ldfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
     let (field, lookup) = vm_try!(ctx.locate_field(*param0));
 
     // Special fields check (intrinsic fields)
-    if ctx.is_intrinsic_field_cached(field) {
-        let type_generics = ctx.current_context().generics.type_generics.clone();
-        return ctx.execute_intrinsic_field(field, type_generics, false);
-    }
-
-    let parent = ctx.pop();
+    let parent = vm_pop!(ctx);
 
     if parent.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
@@ -121,8 +116,8 @@ pub fn ldfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
 pub fn stfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: bool) -> StepResult {
     let (field, lookup) = vm_try!(ctx.locate_field(*param0));
 
-    let value = ctx.pop();
-    let parent = ctx.pop();
+    let value = vm_pop!(ctx);
+    let parent = vm_pop!(ctx);
 
     if parent.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
@@ -224,14 +219,14 @@ pub fn stsfld<'gc, T: VesOps<'gc>>(
     volatile: bool,
 ) -> StepResult {
     let (field, lookup): (_, GenericLookup) = vm_try!(ctx.locate_field(*param0));
-    let name = &field.field().name;
 
     let res = ctx.initialize_static_storage(field.parent, lookup.clone());
     if res != StepResult::Continue {
         return res;
     }
 
-    let value = ctx.pop();
+    let value = vm_pop!(ctx);
+    let name = &field.field().name;
     let res_ctx = ctx
         .current_context()
         .for_type_with_generics(field.parent, &lookup);
@@ -262,12 +257,7 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
     let (field, lookup) = vm_try!(ctx.locate_field(*param0));
 
     // Special fields check (intrinsic fields)
-    if ctx.is_intrinsic_field_cached(field) {
-        let type_generics = ctx.current_context().generics.type_generics.clone();
-        return ctx.execute_intrinsic_field(field, type_generics, true);
-    }
-
-    let parent = ctx.pop();
+    let parent = vm_pop!(ctx);
 
     if let StackValue::ObjectRef(ObjectRef(Some(h))) = &parent {
         if field.parent.type_name() == "System.Runtime.CompilerServices.RawData" {

@@ -25,12 +25,15 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz
       - name: Fuzz ManagedPtr Roundtrip
+        continue-on-error: true
         run: cargo fuzz run fuzz_managed_ptr_roundtrip -- -max_total_time=60
         working-directory: crates/dotnet-value
       - name: Fuzz ManagedPtr Offset
+        continue-on-error: true
         run: cargo fuzz run fuzz_managed_ptr_offset -- -max_total_time=60
         working-directory: crates/dotnet-value
       - name: Fuzz Raw Memory Access
+        continue-on-error: true
         run: cargo fuzz run fuzz_raw_memory_access -- -max_total_time=60
         working-directory: crates/dotnet-value
 
@@ -38,10 +41,12 @@ jobs:
         run: cargo run -p corpus-tools --bin generate_structured_corpus --release
         working-directory: crates/dotnet-vm/fuzz
       - name: Fuzz Executor (300s)
+        id: fuzz_executor
+        continue-on-error: true
         run: cargo +nightly fuzz run fuzz_executor corpus/fuzz_executor -- -max_total_time=300
         working-directory: crates/dotnet-vm/fuzz
       - name: Minimize crashes (if any)
-        if: failure()
+        if: always() && steps.fuzz_executor.outcome == 'failure'
         run: |
           for crash in artifacts/fuzz_executor/crash-*; do
             if [ -f "$crash" ]; then

@@ -8,7 +8,7 @@ use dotnetdll::prelude::*;
 
 #[dotnet_instruction(CastClass { param0 })]
 pub fn castclass<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResult {
-    let target_obj_val = ctx.pop();
+    let target_obj_val = vm_pop!(ctx);
     let StackValue::ObjectRef(target_obj) = target_obj_val else {
         return ctx
             .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);
@@ -33,7 +33,7 @@ pub fn castclass<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepR
 
 #[dotnet_instruction(IsInstance(param0))]
 pub fn isinst<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResult {
-    let target_obj_val = ctx.pop();
+    let target_obj_val = vm_pop!(ctx);
     let StackValue::ObjectRef(target_obj) = target_obj_val else {
         return ctx
             .throw_by_name_with_message("System.InvalidProgramException", INVALID_PROGRAM_MSG);

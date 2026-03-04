@@ -86,7 +86,13 @@ impl<'gc> ExecutionEngine<'gc> {
         }
 
         let ip = self.stack.state().ip;
-        let i = &self.stack.state().info_handle.instructions[ip];
+        let instructions = self.stack.state().info_handle.instructions;
+        if ip >= instructions.len() {
+            return StepResult::Error(crate::error::VmError::Execution(
+                crate::error::ExecutionError::InvalidIP(ip),
+            ));
+        }
+        let i = &instructions[ip];
 
         // Synchronize original IP and stack height for suspension/retry logic (e.g. Yield)
         self.stack.execution.original_ip = ip;

@@ -33,7 +33,7 @@ pub fn ldvirtftn<
     param0: &MethodSource,
     skip_null_check: bool,
 ) -> StepResult {
-    let obj = ctx.pop_obj();
+    let obj = vm_pop!(ctx).as_object_ref();
     if !skip_null_check && obj.0.is_none() {
         return ctx.throw_by_name_with_message(
             "System.NullReferenceException",
