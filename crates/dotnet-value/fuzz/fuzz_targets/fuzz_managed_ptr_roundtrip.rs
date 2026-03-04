@@ -6,16 +6,7 @@ fuzz_target!(|info: ManagedPtrInfo<'static>| {
     let mut buf = [0u8; ManagedPtr::SIZE];
     
     // Create a ManagedPtr from info to use its write method
-    let ptr = ManagedPtr {
-        #[cfg(debug_assertions)]
-        magic: 0x504F_494E,
-        _value: info.address,
-        origin: info.origin.clone(),
-        offset: info.offset,
-        inner_type: dotnet_types::TypeDescription::NULL,
-        pinned: false,
-        _marker: std::marker::PhantomData,
-    };
+    let ptr = ManagedPtr::from_info_full(info.clone(), dotnet_types::TypeDescription::NULL, false);
     
     ptr.write(&mut buf);
     
