@@ -13,7 +13,7 @@ use dotnet_types::{
 };
 use dotnet_utils::sync::{AtomicU64, Ordering, RwLock};
 use dotnetdll::prelude::*;
-use gc_arena::{Collect, unsafe_empty_collect};
+use gc_arena::static_collect;
 use std::{
     collections::HashMap,
     error::Error,
@@ -26,6 +26,67 @@ use std::{
 pub mod error;
 
 use error::AssemblyLoadError;
+
+/// Owns leaked metadata and byte slices to allow recapture on drop.
+pub struct MetadataOwner {
+    resolutions: Vec<*mut Resolution<'static>>,
+    u64_slices: Vec<*mut [u64]>,
+}
+
+impl MetadataOwner {
+    pub fn new() -> Self {
+        Self {
+            resolutions: Vec::new(),
+            u64_slices: Vec::new(),
+        }
+    }
+}
+
+impl Default for MetadataOwner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MetadataOwner {
+    /// # Safety
+    ///
+    /// The pointer must have been obtained from `Box::into_raw(Box::new(res))`.
+    pub unsafe fn add_resolution(&mut self, res: *const Resolution<'static>) {
+        self.resolutions.push(res as *mut _);
+    }
+
+    /// # Safety
+    ///
+    /// The pointer must have been obtained from `Box::into_raw(vec.into_boxed_slice())`.
+    pub unsafe fn add_u64_slice(&mut self, slice: *mut [u64]) {
+        self.u64_slices.push(slice);
+    }
+}
+
+impl Drop for MetadataOwner {
+    fn drop(&mut self) {
+        // Drop resolutions first as they may contain references to the slices
+        for res in self.resolutions.drain(..) {
+            // SAFETY: The pointer was added via add_resolution, which requires it to be from Box::into_raw.
+            unsafe {
+                drop(Box::from_raw(res));
+            }
+        }
+        for slice in self.u64_slices.drain(..) {
+            // SAFETY: The pointer was added via add_u64_slice, which requires it to be from Box::into_raw.
+            unsafe {
+                drop(Box::from_raw(slice));
+            }
+        }
+    }
+}
+
+// SAFETY: MetadataOwner only contains raw pointers to metadata that is not being
+// mutated and is owned by this type. Reclaiming it on drop is safe if no references
+// exist.
+unsafe impl Send for MetadataOwner {}
+unsafe impl Sync for MetadataOwner {}
 
 pub struct AssemblyLoader {
     assembly_root: String,
@@ -45,8 +106,9 @@ pub struct AssemblyLoader {
     pub type_cache_misses: AtomicU64,
     pub method_cache_hits: AtomicU64,
     pub method_cache_misses: AtomicU64,
+    metadata: RwLock<MetadataOwner>,
 }
-unsafe_empty_collect!(AssemblyLoader);
+static_collect!(AssemblyLoader);
 
 impl TypeResolver for AssemblyLoader {
     fn corlib_type(&self, name: &str) -> Result<TypeDescription, TypeResolutionError> {
@@ -113,6 +175,7 @@ impl AssemblyLoader {
             type_cache_misses: AtomicU64::new(0),
             method_cache_hits: AtomicU64::new(0),
             method_cache_misses: AtomicU64::new(0),
+            metadata: RwLock::new(MetadataOwner::new()),
         };
 
         this.add_support_library()?;
@@ -134,7 +197,16 @@ impl AssemblyLoader {
                 len,
             );
         }
-        let aligned_slice = Box::leak(aligned.into_boxed_slice());
+        let aligned_boxed = aligned.into_boxed_slice();
+        let aligned_ptr = Box::into_raw(aligned_boxed);
+        // SAFETY: We manually track this leaked box in MetadataOwner to reclaim it on drop.
+        // It's safe to treat as 'static because AssemblyLoader owns MetadataOwner and
+        // ensures it lives long enough.
+        let aligned_slice: &'static mut [u64] = unsafe { &mut *aligned_ptr };
+        unsafe {
+            self.metadata.get_mut().add_u64_slice(aligned_ptr);
+        }
+
         let byte_slice =
             // SAFETY: 'aligned_slice' is a leaked Box<[u64]> which is valid for its entire length.
             // Converting it to a *const u8 slice of length 'len' is safe because it was initialized
@@ -145,7 +217,14 @@ impl AssemblyLoader {
             Resolution::parse(byte_slice, ReadOptions::default()).map_err(|e| {
                 AssemblyLoadError::InvalidFormat(format!("failed to parse support library: {}", e))
             })?;
-        let support_res = Box::leak(Box::new(support_res_raw));
+        let support_res_box = Box::new(support_res_raw);
+        let support_res_ptr = Box::into_raw(support_res_box);
+        // SAFETY: We manually track this leaked box in MetadataOwner to reclaim it on drop.
+        let support_res: &'static mut Resolution<'static> = unsafe { &mut *support_res_ptr };
+        unsafe {
+            self.metadata.get_mut().add_resolution(support_res_ptr);
+        }
+
         {
             let mut external = self.external.write();
             external.insert(
@@ -216,6 +295,19 @@ impl AssemblyLoader {
             .unwrap_or(name)
     }
 
+    pub fn load_resolution_from_file(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<ResolutionS, AssemblyLoadError> {
+        let (res, res_ptr, slice_ptr) = load_resolution_core(path)?;
+        let mut metadata = self.metadata.write();
+        unsafe {
+            metadata.add_resolution(res_ptr);
+            metadata.add_u64_slice(slice_ptr);
+        }
+        Ok(res)
+    }
+
     /// Returns true if the given name is an alias for a stubbed type.
     pub fn is_stub_alias(&self, name: &str) -> bool {
         self.reverse_stubs.contains_key(name)
@@ -233,7 +325,7 @@ impl AssemblyLoader {
                         self.assembly_root
                     )));
                 }
-                let resolution = try_static_res_from_file(file)?;
+                let resolution = self.load_resolution_from_file(file)?;
                 match &resolution.assembly {
                     None => {
                         return Err(AssemblyLoadError::InvalidFormat(
@@ -255,7 +347,7 @@ impl AssemblyLoader {
             Some(None) => {
                 let mut file = PathBuf::from(&self.assembly_root);
                 file.push(format!("{name}.dll"));
-                let resolution = try_static_res_from_file(file)?;
+                let resolution = self.load_resolution_from_file(file)?;
                 match &resolution.assembly {
                     None => {
                         return Err(AssemblyLoadError::InvalidFormat(
@@ -294,6 +386,24 @@ impl AssemblyLoader {
                 .write()
                 .insert(a.name.to_string(), Some(resolution));
         }
+    }
+
+    /// Takes ownership of a manually constructed `Resolution` and registers it.
+    /// The memory will be reclaimed when this `AssemblyLoader` is dropped.
+    pub fn register_owned_assembly(&self, res: Resolution<'static>) -> ResolutionS {
+        let res_box = Box::new(res);
+        let res_ptr = Box::into_raw(res_box);
+        let res_s = ResolutionS::new(res_ptr);
+
+        {
+            let mut metadata = self.metadata.write();
+            unsafe {
+                metadata.add_resolution(res_ptr);
+            }
+        }
+
+        self.register_assembly(res_s);
+        res_s
     }
 
     fn find_exported_type(
@@ -661,11 +771,11 @@ impl AssemblyLoader {
 
         self.method_cache_misses.fetch_add(1, Ordering::Relaxed);
         let result = match handle {
-            UserMethod::Definition(d) => Ok(MethodDescription {
-                parent: self.locate_type(resolution, d.parent_type().into())?,
-                method_resolution: resolution,
-                method: &resolution.definition()[d],
-            }),
+            UserMethod::Definition(d) => Ok(MethodDescription::new(
+                self.locate_type(resolution, d.parent_type().into())?,
+                resolution,
+                &resolution.definition()[d],
+            )),
             UserMethod::Reference(r) => {
                 let method_ref = &resolution.definition()[r];
 
@@ -684,11 +794,11 @@ impl AssemblyLoader {
                             let array_type = self.corlib_type("System.Array")?;
                             for method in &array_type.definition().methods {
                                 if method.name == "CtorArraySentinel" {
-                                    return Ok(MethodDescription {
-                                        parent: array_type,
-                                        method_resolution: array_type.resolution,
+                                    return Ok(MethodDescription::new(
+                                        array_type,
+                                        array_type.resolution,
                                         method,
-                                    });
+                                    ));
                                 }
                             }
                             return Err(TypeResolutionError::MethodNotFound(
@@ -757,12 +867,7 @@ impl AssemblyLoader {
                     .position(|f| ptr::eq(f, field))
                     .ok_or_else(|| TypeResolutionError::FieldNotFound(field.name.to_string()))?;
                 Ok((
-                    FieldDescription {
-                        parent,
-                        field_resolution: resolution,
-                        field,
-                        index,
-                    },
+                    FieldDescription::new(parent, resolution, field, index),
                     generic_inst.clone(),
                 ))
             }
@@ -788,12 +893,12 @@ impl AssemblyLoader {
                                 };
 
                                 return Ok((
-                                    FieldDescription {
-                                        parent: parent_type,
-                                        field_resolution: parent_type.resolution,
+                                    FieldDescription::new(
+                                        parent_type,
+                                        parent_type.resolution,
                                         field,
-                                        index: i,
-                                    },
+                                        i,
+                                    ),
                                     GenericLookup::new(type_generics),
                                 ));
                             }
@@ -811,7 +916,10 @@ impl AssemblyLoader {
         }
     }
 
-    pub fn ancestors(&self, child: TypeDescription) -> impl Iterator<Item = Ancestor<'_>> + '_ {
+    pub fn ancestors(
+        &self,
+        child: TypeDescription,
+    ) -> impl Iterator<Item = Ancestor<'static>> + '_ {
         AncestorsImpl {
             assemblies: self,
             child: Some(child),
@@ -826,7 +934,7 @@ struct AncestorsImpl<'a> {
     child: Option<TypeDescription>,
 }
 impl<'a> Iterator for AncestorsImpl<'a> {
-    type Item = Ancestor<'a>;
+    type Item = Ancestor<'static>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let child = self.child?;
@@ -840,7 +948,7 @@ impl<'a> Iterator for AncestorsImpl<'a> {
             ),
         };
 
-        let generics = match &child.definition().extends {
+        let generics: Vec<&'static MemberType> = match &child.definition().extends {
             Some(TypeSource::Generic { parameters, .. }) => parameters.iter().collect(),
             _ => vec![],
         };
@@ -881,6 +989,13 @@ pub fn static_res_from_file(path: impl AsRef<Path>) -> ResolutionS {
 }
 
 pub fn try_static_res_from_file(path: impl AsRef<Path>) -> Result<ResolutionS, AssemblyLoadError> {
+    let (res, _, _) = load_resolution_core(path)?;
+    Ok(res)
+}
+
+fn load_resolution_core(
+    path: impl AsRef<Path>,
+) -> Result<(ResolutionS, *const Resolution<'static>, *mut [u64]), AssemblyLoadError> {
     let path_ref = path.as_ref();
     let mut file = fs::File::open(path_ref).map_err(|e| {
         AssemblyLoadError::Io(format!(
@@ -903,8 +1018,11 @@ pub fn try_static_res_from_file(path: impl AsRef<Path>) -> Result<ResolutionS, A
         ptr::copy_nonoverlapping(buf.as_ptr(), aligned.as_mut_ptr() as *mut u8, len);
     }
 
-    // Leak the aligned buffer
-    let aligned_slice = Box::leak(aligned.into_boxed_slice());
+    let aligned_boxed = aligned.into_boxed_slice();
+    let aligned_ptr = Box::into_raw(aligned_boxed);
+    // SAFETY: We manually track this leaked box to reclaim it later.
+    let aligned_slice: &'static mut [u64] = unsafe { &mut *aligned_ptr };
+
     // Create the byte slice view
     let byte_slice =
         // SAFETY: 'aligned_slice' is valid for its entire length.
@@ -913,7 +1031,12 @@ pub fn try_static_res_from_file(path: impl AsRef<Path>) -> Result<ResolutionS, A
 
     let resolution = Resolution::parse(byte_slice, ReadOptions::default())
         .map_err(|e| AssemblyLoadError::InvalidFormat(format!("failed to parse file: {}", e)))?;
-    Ok(ResolutionS::new(Box::leak(Box::new(resolution)) as *const _))
+    let res_box = Box::new(resolution);
+    let res_ptr = Box::into_raw(res_box);
+    // SAFETY: We manually track this leaked box to reclaim it later.
+    let res: &'static Resolution<'static> = unsafe { &*res_ptr };
+
+    Ok((ResolutionS::new(res), res_ptr, aligned_ptr))
 }
 
 pub fn find_dotnet_sdk_path() -> Option<PathBuf> {

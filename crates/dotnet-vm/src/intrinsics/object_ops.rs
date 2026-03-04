@@ -9,11 +9,7 @@ use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 
 #[dotnet_intrinsic("object System.Object::MemberwiseClone()")]
-pub fn object_memberwise_clone<
-    'gc,
-    'm: 'gc,
-    T: TypedStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc>,
->(
+pub fn object_memberwise_clone<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _lookup: &GenericLookup,

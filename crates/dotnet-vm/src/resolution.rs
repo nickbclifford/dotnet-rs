@@ -45,7 +45,7 @@ pub trait ValueResolution {
     ) -> Result<Vector<'gc>, TypeResolutionError>;
 }
 
-impl<'a, 'm> ValueResolution for ResolutionContext<'a, 'm> {
+impl<'a> ValueResolution for ResolutionContext<'a> {
     fn stack_value_type(&self, val: &StackValue) -> Result<TypeDescription, TypeResolutionError> {
         self.resolver().stack_value_type(val)
     }

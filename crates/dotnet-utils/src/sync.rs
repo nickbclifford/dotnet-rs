@@ -16,6 +16,9 @@ pub mod compat {
         pub fn lock(&self) -> MutexGuard<'_, T> {
             MutexGuard(self.0.borrow_mut())
         }
+        pub fn get_mut(&mut self) -> &mut T {
+            self.0.get_mut()
+        }
     }
     pub struct MutexGuard<'a, T>(RefMut<'a, T>);
     impl<T> Deref for MutexGuard<'_, T> {
@@ -40,6 +43,9 @@ pub mod compat {
         }
         pub fn write(&self) -> RwLockWriteGuard<'_, T> {
             RwLockWriteGuard(self.0.borrow_mut())
+        }
+        pub fn get_mut(&mut self) -> &mut T {
+            self.0.get_mut()
         }
         /// Get a pointer to the inner data.
         ///

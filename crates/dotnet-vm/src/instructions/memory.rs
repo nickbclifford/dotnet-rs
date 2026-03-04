@@ -19,7 +19,7 @@ const OUT_OF_MEMORY_MSG: &str = "Insufficient memory to continue the execution o
 const ACCESS_VIOLATION_MSG: &str = "Attempted to read or write protected memory.";
 
 #[dotnet_instruction(CopyMemoryBlock { })]
-pub fn cpblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
+pub fn cpblk<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
 ) -> StepResult {
     let size = vm_pop!(ctx).as_isize() as usize;
@@ -50,7 +50,7 @@ pub fn cpblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionO
 }
 
 #[dotnet_instruction(InitializeMemoryBlock { })]
-pub fn initblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
+pub fn initblk<'gc, T: StackOps<'gc> + RawMemoryOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
 ) -> StepResult {
     let size = vm_pop!(ctx).as_isize() as usize;
@@ -79,9 +79,7 @@ pub fn initblk<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + RawMemoryOps<'gc> + Exceptio
 }
 
 #[dotnet_instruction(LocalMemoryAllocate)]
-pub fn localloc<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + PoolOps + ExceptionOps<'gc>>(
-    ctx: &mut T,
-) -> StepResult {
+pub fn localloc<'gc, T: StackOps<'gc> + PoolOps + ExceptionOps<'gc>>(ctx: &mut T) -> StepResult {
     let size_isize = ctx.pop_isize();
     if size_isize < 0 {
         return ctx.throw_by_name_with_message("System.OverflowException", OVERFLOW_MSG);
@@ -105,7 +103,7 @@ pub fn localloc<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + PoolOps + ExceptionOps<'gc>
 }
 
 #[dotnet_instruction(StoreIndirect { param0 })]
-pub fn stind<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + RawMemoryOps<'gc>>(
+pub fn stind<'gc, T: StackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>>(
     ctx: &mut T,
     param0: StoreType,
 ) -> StepResult {
@@ -169,7 +167,7 @@ pub fn stind<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + RawMemoryO
 }
 
 #[dotnet_instruction(LoadIndirect { param0 })]
-pub fn ldind<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc> + RawMemoryOps<'gc>>(
+pub fn ldind<'gc, T: StackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>>(
     ctx: &mut T,
     param0: LoadType,
 ) -> StepResult {

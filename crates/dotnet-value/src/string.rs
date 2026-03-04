@@ -1,4 +1,4 @@
-use gc_arena::{Collect, unsafe_empty_collect};
+use gc_arena::static_collect;
 use std::{
     fmt::{Debug, Formatter},
     ops::Deref,
@@ -63,7 +63,7 @@ macro_rules! with_string_mut {
 
 #[derive(Clone, PartialEq)]
 pub struct CLRString(Vec<u16>);
-unsafe_empty_collect!(CLRString);
+static_collect!(CLRString);
 
 impl CLRString {
     pub fn new(chars: Vec<u16>) -> Self {

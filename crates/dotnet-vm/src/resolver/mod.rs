@@ -90,10 +90,10 @@ use dotnet_assemblies::AssemblyLoader;
 use std::sync::Arc;
 
 /// Service for resolving types, methods, and fields with caching.
-pub struct ResolverService<'m> {
-    pub loader: &'m AssemblyLoader,
+pub struct ResolverService {
+    pub loader: Arc<AssemblyLoader>,
     pub caches: Arc<GlobalCaches>,
-    pub shared: Option<Arc<SharedGlobalState<'m>>>,
+    pub shared: Option<Arc<SharedGlobalState>>,
 }
 
 mod factory;
@@ -101,16 +101,16 @@ mod layout;
 mod methods;
 mod types;
 
-impl<'m> ResolverService<'m> {
-    pub fn new(shared: Arc<SharedGlobalState<'m>>) -> Self {
+impl ResolverService {
+    pub fn new(shared: Arc<SharedGlobalState>) -> Self {
         Self {
-            loader: shared.loader,
+            loader: shared.loader.clone(),
             caches: shared.caches.clone(),
             shared: Some(shared),
         }
     }
 
-    pub fn from_parts(loader: &'m AssemblyLoader, caches: Arc<GlobalCaches>) -> Self {
+    pub fn from_parts(loader: Arc<AssemblyLoader>, caches: Arc<GlobalCaches>) -> Self {
         Self {
             loader,
             caches,
@@ -122,7 +122,7 @@ impl<'m> ResolverService<'m> {
         self.shared.as_ref().map(|s| &s.metrics)
     }
 
-    pub fn loader(&self) -> &'m AssemblyLoader {
-        self.loader
+    pub fn loader(&self) -> &AssemblyLoader {
+        &self.loader
     }
 }

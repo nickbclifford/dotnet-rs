@@ -17,7 +17,7 @@ use dotnet_value::{
     },
 };
 
-impl<'a, 'gc, 'm: 'gc> MemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
+impl<'a, 'gc> MemoryOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn gc_with_token(&self, _token: &NoActiveBorrows<'_>) -> GCHandle<'gc> {
         self.gc

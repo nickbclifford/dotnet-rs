@@ -134,7 +134,7 @@ pub fn classify_intrinsic(
     }
 
     // 2. Check internal_call flag - fall back to generic static if registry didn't have it
-    if method.method.internal_call {
+    if method.method().internal_call {
         // We still check registry.get(&method) in case it's registered without full metadata
         if let Some(registry) = registry
             && let Some(handler) = registry.get(&method, loader)
@@ -148,7 +148,7 @@ pub fn classify_intrinsic(
     }
 
     // 3. Check for IntrinsicAttribute
-    for a in &method.method.attributes {
+    for a in &method.method().attributes {
         if let Ok(ctor) = loader.locate_attribute(method.resolution(), a)
             && ctor.parent.type_name() == INTRINSIC_ATTR
         {

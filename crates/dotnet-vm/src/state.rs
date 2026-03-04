@@ -27,7 +27,7 @@ use dotnet_value::{
     layout::{FieldLayoutManager, LayoutManager},
     object::ObjectRef,
 };
-use gc_arena::{Collect, Collection};
+use gc_arena::{Collect, collect::Trace};
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     collections::{BTreeMap, HashMap, HashSet},
@@ -90,8 +90,8 @@ impl GlobalCaches {
 
 /// Thread-safe shared state that does not contain any GC-managed pointers.
 /// This state is shared across all execution threads and arenas.
-pub struct SharedGlobalState<'m> {
-    pub loader: &'m AssemblyLoader,
+pub struct SharedGlobalState {
+    pub loader: Arc<AssemblyLoader>,
     pub pinvoke: NativeLibraries,
     pub sync_blocks: SyncBlockManager,
     pub thread_manager: Arc<ThreadManager>,
@@ -146,23 +146,23 @@ impl GlobalCaches {
     }
 }
 
-impl<'m> SharedGlobalState<'m> {
-    pub fn new(loader: &'m AssemblyLoader) -> Self {
+impl SharedGlobalState {
+    pub fn new(loader: Arc<AssemblyLoader>) -> Self {
         let tracer = Tracer::new();
-        let caches = Arc::new(GlobalCaches::new(loader, &tracer));
+        let caches = Arc::new(GlobalCaches::new(&loader, &tracer));
 
         let tracer_enabled = Arc::new(AtomicBool::new(tracer.is_enabled()));
 
         let stw_in_progress = Arc::new(AtomicBool::new(false));
 
         let state = Self {
-            loader,
             pinvoke: {
                 let p = NativeLibraries::new(loader.get_root());
                 #[cfg(feature = "fuzzing")]
                 let p = p.with_sandbox(Arc::new(crate::pinvoke::DenySandbox));
                 p
             },
+            loader,
             sync_blocks: SyncBlockManager::new(),
             thread_manager: ThreadManager::new(stw_in_progress.clone()),
             metrics: RuntimeMetrics::new(),
@@ -247,8 +247,8 @@ pub struct ArenaLocalState<'gc> {
 // SAFETY: `ArenaLocalState` correctly traces all GC-managed fields in its `trace` implementation.
 // This includes the `heap`, the global `statics`, and all `ObjectRef<'gc>` values stored in the
 // various RefCell-wrapped collections.
-unsafe impl<'gc> Collect for ArenaLocalState<'gc> {
-    fn trace(&self, cc: &Collection) {
+unsafe impl<'gc> Collect<'gc> for ArenaLocalState<'gc> {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         self.heap.trace(cc);
         self.statics.trace(cc);
         for o in self.runtime_asms.borrow().values() {

@@ -15,7 +15,7 @@ use dotnet_value::{StackValue, object::ObjectRef};
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(Call { param0 })]
-pub fn call<'gc, 'm: 'gc, T: CallOps<'gc, 'm>>(ctx: &mut T, param0: &MethodSource) -> StepResult {
+pub fn call<'gc, T: CallOps<'gc>>(ctx: &mut T, param0: &MethodSource) -> StepResult {
     // Use unified dispatch pipeline for static calls
     ctx.unified_dispatch(param0, None, None)
 }
@@ -23,13 +23,12 @@ pub fn call<'gc, 'm: 'gc, T: CallOps<'gc, 'm>>(ctx: &mut T, param0: &MethodSourc
 #[dotnet_instruction(CallVirtual { param0 })]
 pub fn callvirt<
     'gc,
-    'm: 'gc,
-    T: CallOps<'gc, 'm>
-        + ResolutionOps<'gc, 'm>
+    T: CallOps<'gc>
+        + ResolutionOps<'gc>
         + ExceptionOps<'gc>
         + EvalStackOps<'gc>
-        + LoaderOps<'m>
-        + ReflectionOps<'gc, 'm>,
+        + LoaderOps
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     param0: &MethodSource,
@@ -42,7 +41,7 @@ pub fn callvirt<
         ctx.resolver()
             .find_generic_method(param0, &ctx.current_context())
     );
-    let num_args = 1 + base_method.method.signature.parameters.len();
+    let num_args = 1 + base_method.method().signature.parameters.len();
     let args = ctx.pop_multiple(num_args);
 
     // Extract runtime type from this argument (value types are passed as managed pointers - I.8.9.7)
@@ -73,11 +72,7 @@ pub fn callvirt<
 }
 
 #[dotnet_instruction(CallConstrained(constraint, source))]
-pub fn call_constrained<
-    'gc,
-    'm: 'gc,
-    T: CallOps<'gc, 'm> + ResolutionOps<'gc, 'm> + LoaderOps<'m>,
->(
+pub fn call_constrained<'gc, T: CallOps<'gc> + ResolutionOps<'gc> + LoaderOps>(
     ctx: &mut T,
     constraint: &MethodType,
     source: &MethodSource,
@@ -123,15 +118,14 @@ pub fn call_constrained<
 #[dotnet_instruction(CallVirtualConstrained(constraint, source))]
 pub fn callvirt_constrained<
     'gc,
-    'm: 'gc,
-    T: CallOps<'gc, 'm>
-        + ResolutionOps<'gc, 'm>
+    T: CallOps<'gc>
+        + ResolutionOps<'gc>
         + ExceptionOps<'gc>
-        + StackOps<'gc, 'm>
+        + StackOps<'gc>
         + MemoryOps<'gc>
         + RawMemoryOps<'gc>
-        + LoaderOps<'m>
-        + ReflectionOps<'gc, 'm>,
+        + LoaderOps
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     constraint: &MethodType,
@@ -143,7 +137,7 @@ pub fn callvirt_constrained<
     );
 
     // Pop all arguments (this + parameters)
-    let num_args = 1 + base_method.method.signature.parameters.len();
+    let num_args = 1 + base_method.method().signature.parameters.len();
     let mut args = ctx.pop_multiple(num_args);
 
     let constraint_type_source = vm_try!(ctx.make_concrete(constraint));
@@ -157,8 +151,8 @@ pub fn callvirt_constrained<
         // Value type: check for direct override first
         if let Some(overriding_method) = ctx.loader().find_method_in_type_with_substitution(
             constraint_type,
-            &base_method.method.name,
-            &base_method.method.signature,
+            &base_method.method().name,
+            &base_method.method().signature,
             base_method.resolution(),
             &lookup,
         ) {
@@ -265,8 +259,8 @@ pub fn callvirt_constrained<
         // implementation directly in the constraint type first
         if let Some(impl_method) = ctx.loader().find_method_in_type_with_substitution(
             constraint_type,
-            &base_method.method.name,
-            &base_method.method.signature,
+            &base_method.method().name,
+            &base_method.method().signature,
             base_method.resolution(),
             &lookup,
         ) {

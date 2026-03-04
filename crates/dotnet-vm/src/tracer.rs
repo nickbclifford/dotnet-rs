@@ -4,7 +4,7 @@
 use crate::{metrics::RuntimeMetrics, stack::CallStack};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use dotnet_value::object::HeapStorage;
-use gc_arena::{Collect, Gc, unsafe_empty_collect};
+use gc_arena::{Gc, static_collect};
 use std::{
     env,
     fmt::Arguments,
@@ -77,7 +77,7 @@ pub struct Tracer {
     sender: Option<Sender<LogEntry>>,
 }
 
-unsafe_empty_collect!(Tracer);
+static_collect!(Tracer);
 
 impl Tracer {
     pub fn new() -> Self {
@@ -748,7 +748,7 @@ fn init_tracing() {
 }
 
 #[allow(dead_code)]
-impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
+impl<'gc: 'gc> CallStack<'gc> {
     // Tracer-integrated dump methods for comprehensive state capture
     pub fn trace_dump_stack(&self) {
         if !self.tracer_enabled() {

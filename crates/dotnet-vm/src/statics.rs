@@ -11,7 +11,7 @@ use dotnet_value::{
     layout::{FieldLayoutManager, HasLayout},
     storage::FieldStorage,
 };
-use gc_arena::{Collect, Collection};
+use gc_arena::{Collect, collect::Trace};
 use std::{
     collections::HashMap,
     fmt::{Debug, Formatter},
@@ -63,8 +63,8 @@ impl Clone for StaticStorage {
 // synchronization primitives (`init_cond`, `init_mutex`) are not GC-managed and do not need
 // tracing. FieldStorage::trace uses atomic reads for ObjectRefs, ensuring thread-safe tracing
 // during stop-the-world GC pauses.
-unsafe impl Collect for StaticStorage {
-    fn trace(&self, cc: &Collection) {
+unsafe impl<'gc> Collect<'gc> for StaticStorage {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         // Tracing is safe because FieldStorage::trace uses atomic reads for ObjectRefs
         // and we are during a stop-the-world pause or at least in a state where
         // the GC has control.
@@ -97,8 +97,8 @@ const NUM_SHARDS: usize = 16;
 // The map keys are non-GC metadata and do not need tracing. Each `StaticStorage` value is traced,
 // which in turn traces all GC-managed references in static fields.
 // During tracing, we use data_ptr() to bypass locks, which is safe during stop-the-world GC pauses.
-unsafe impl Collect for StaticStorageManager {
-    fn trace(&self, cc: &Collection) {
+unsafe impl<'gc> Collect<'gc> for StaticStorageManager {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         for shard in &self.shards {
             // SAFETY: Tracing happens during a stop-the-world pause, so no other
             // threads are running. We can safely access the inner value without

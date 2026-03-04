@@ -56,7 +56,7 @@
 //!     Create a function with the following signature and apply the `#[dotnet_intrinsic]` attribute:
 //!     ```rust,ignore
 //!     #[dotnet_intrinsic("static double System.Math::Min(double, double)")]
-//!     pub fn math_min_double<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+//!     pub fn math_min_double<'gc, T: VesOps<'gc>>(
 //!         ctx: &mut T,
 //!         method: MethodDescription,
 //!         generics: &GenericLookup,
@@ -178,7 +178,7 @@ pub type IntrinsicHandler = MethodIntrinsicId;
 
 pub type IntrinsicFieldHandler = FieldIntrinsicId;
 
-pub fn missing_intrinsic_handler<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn missing_intrinsic_handler<'gc, T: VesOps<'gc>>(
     _ctx: &mut T,
     method: MethodDescription,
     _generics: &GenericLookup,
@@ -275,10 +275,10 @@ impl IntrinsicRegistry {
     ) -> Option<&'a str> {
         use std::fmt::Write;
         let mut w = StackWrite { buf, pos: 0 };
-        let arity = if method.method.signature.instance {
-            method.method.signature.parameters.len() + 1
+        let arity = if method.method().signature.instance {
+            method.method().signature.parameters.len() + 1
         } else {
-            method.method.signature.parameters.len()
+            method.method().signature.parameters.len()
         };
         let raw_type_name = method.parent.type_name();
         let canonical_name = loader.canonical_type_name(&raw_type_name);
@@ -286,7 +286,9 @@ impl IntrinsicRegistry {
         write!(
             w,
             "M:{}::{}#{}",
-            normalized_name, &*method.method.name, arity
+            normalized_name,
+            &*method.method().name,
+            arity
         )
         .ok()?;
         let pos = w.pos;
@@ -304,7 +306,7 @@ impl IntrinsicRegistry {
         let raw_type_name = field.parent.type_name();
         let canonical_name = loader.canonical_type_name(&raw_type_name);
         let normalized_name = canonical_name.replace('/', "+");
-        write!(w, "F:{}::{}", normalized_name, &*field.field.name).ok()?;
+        write!(w, "F:{}::{}", normalized_name, &*field.field().name).ok()?;
         let pos = w.pos;
         std::str::from_utf8(&buf[..pos]).ok()
     }
@@ -347,7 +349,7 @@ pub fn is_intrinsic_field(
     }
 
     // Check for IntrinsicAttribute
-    for a in &field.field.attributes {
+    for a in &field.field().attributes {
         if let Ok(ctor) = loader.locate_attribute(field.parent.resolution, a)
             && ctor.parent.type_name() == INTRINSIC_ATTR
         {
@@ -358,14 +360,14 @@ pub fn is_intrinsic_field(
     false
 }
 
-pub fn intrinsic_call<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_call<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let _res_ctx = ResolutionContext::for_method(
         method,
-        ctx.loader(),
+        ctx.loader_arc(),
         generics,
         ctx.shared().caches.clone(),
         Some(ctx.shared().clone()),
@@ -374,7 +376,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     vm_trace_intrinsic!(
         ctx,
         "CALL",
-        &format!("{}.{}", method.parent.type_name(), method.method.name)
+        &format!("{}.{}", method.parent.type_name(), method.method().name)
     );
 
     if let Some(metadata) = classify_intrinsic(
@@ -391,7 +393,7 @@ pub fn intrinsic_call<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     panic!("unsupported intrinsic {:?}", method);
 }
 
-pub fn intrinsic_field<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_field<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     field: FieldDescription,
     type_generics: Arc<[ConcreteType]>,
@@ -400,7 +402,7 @@ pub fn intrinsic_field<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     vm_trace_intrinsic!(
         ctx,
         "FIELD-LOAD",
-        &format!("{}.{}", field.parent.type_name(), field.field.name)
+        &format!("{}.{}", field.parent.type_name(), field.field().name)
     );
     if let Some(handler) = ctx
         .shared()
@@ -417,7 +419,6 @@ pub fn intrinsic_field<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 #[dotnet_intrinsic("string System.Object::ToString()")]
 fn object_to_string<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + ExceptionOps<'gc>,
 >(
     ctx: &mut T,
@@ -454,12 +455,7 @@ fn object_to_string<
 #[dotnet_intrinsic("System.Type System.Object::GetType()")]
 fn object_get_type<
     'gc,
-    'm: 'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + ExceptionOps<'gc>
-        + ReflectionOps<'gc, 'm>
-        + LoaderOps<'m>,
+    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + ReflectionOps<'gc> + LoaderOps,
 >(
     ctx: &mut T,
     _method: MethodDescription,

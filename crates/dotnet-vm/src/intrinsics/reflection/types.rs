@@ -26,14 +26,14 @@ use dotnetdll::prelude::{
 const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 
 #[dotnet_intrinsic("object[] System.Reflection.Assembly::GetCustomAttributes(System.Type, bool)")]
-pub fn intrinsic_assembly_get_custom_attributes<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_assembly_get_custom_attributes<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
     let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
-    let num_args = _method.method.signature.parameters.len()
-        + if _method.method.signature.instance {
+    let num_args = _method.method().signature.parameters.len()
+        + if _method.method().signature.instance {
             1
         } else {
             0
@@ -55,14 +55,14 @@ pub fn intrinsic_assembly_get_custom_attributes<'gc, 'm: 'gc, T: VesOps<'gc, 'm>
 #[dotnet_intrinsic(
     "static System.Attribute[] System.Attribute::GetCustomAttributes(System.Reflection.MemberInfo, System.Type, bool)"
 )]
-pub fn intrinsic_attribute_get_custom_attributes<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_attribute_get_custom_attributes<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
     let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
-    let num_args = _method.method.signature.parameters.len()
-        + if _method.method.signature.instance {
+    let num_args = _method.method().signature.parameters.len()
+        + if _method.method().signature.instance {
             1
         } else {
             0
@@ -82,7 +82,7 @@ pub fn intrinsic_attribute_get_custom_attributes<'gc, 'm: 'gc, T: VesOps<'gc, 'm
 }
 
 #[dotnet_intrinsic("static System.Type System.Type::GetType(string)")]
-pub fn intrinsic_type_get_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_type_get_type<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -160,13 +160,13 @@ pub fn intrinsic_type_get_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 #[dotnet_intrinsic(
     "System.Reflection.PropertyInfo System.RuntimeType::GetPropertyImpl(string, System.Reflection.BindingFlags, System.Reflection.Binder, System.Type, System.Type[], System.Reflection.ParameterModifier[])"
 )]
-pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn runtime_type_intrinsic_call<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let method_name = &*method.method.name;
-    let param_count = method.method.signature.parameters.len();
+    let method_name = &*method.method().name;
+    let param_count = method.method().signature.parameters.len();
 
     match (method_name, param_count) {
         ("CreateInstanceCheckThis", 0) => handle_create_instance_check_this(ctx, generics),
@@ -191,7 +191,7 @@ pub fn runtime_type_intrinsic_call<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     }
 }
 
-fn build_generic_lookup_from_runtime_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+fn build_generic_lookup_from_runtime_type<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     target_type: &RuntimeType,
 ) -> GenericLookup {
@@ -206,7 +206,7 @@ fn build_generic_lookup_from_runtime_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     lookup
 }
 
-fn populate_reflection_array<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+fn populate_reflection_array<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     items: Vec<ObjectRef<'gc>>,
     item_type: ConcreteType,
@@ -226,14 +226,14 @@ fn populate_reflection_array<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 #[dotnet_intrinsic(
     "static void System.RuntimeTypeHandle::GetActivationInfo(System.RuntimeTypeHandle, System.IntPtr&, System.IntPtr&, System.IntPtr&, bool&)"
 )]
-pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn runtime_type_handle_intrinsic_call<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
     let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
-    let method_name = &*method.method.name;
-    let param_count = method.method.signature.parameters.len();
+    let method_name = &*method.method().name;
+    let param_count = method.method().signature.parameters.len();
 
     match (method_name, param_count) {
         ("GetActivationInfo", 5) => {
@@ -293,11 +293,7 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
             for m in td.definition().methods.iter() {
                 if m.name == ".ctor" && m.signature.instance && m.signature.parameters.is_empty() {
                     let method_idx = ctx.get_runtime_method_index(
-                        MethodDescription {
-                            parent: td,
-                            method_resolution: td.resolution,
-                            method: m,
-                        },
+                        MethodDescription::new(td, td.resolution, m),
                         if let RuntimeType::Generic(_, type_generics) = rt {
                             GenericLookup::new(
                                 type_generics
@@ -355,14 +351,14 @@ pub fn runtime_type_handle_intrinsic_call<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 #[dotnet_intrinsic(
     "static System.RuntimeTypeHandle System.Runtime.CompilerServices.RuntimeHelpers::GetMethodTable(System.RuntimeTypeHandle)"
 )]
-pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_runtime_helpers_get_method_table<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let res_ctx = ResolutionContext::for_method(
         method,
-        ctx.loader(),
+        ctx.loader_arc(),
         generics,
         ctx.shared().caches.clone(),
         Some(ctx.shared().clone()),
@@ -384,7 +380,7 @@ pub fn intrinsic_runtime_helpers_get_method_table<'gc, 'm: 'gc, T: VesOps<'gc, '
 #[dotnet_intrinsic(
     "static bool System.Runtime.CompilerServices.RuntimeHelpers::IsBitwiseEquatable<T>()"
 )]
-pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     generics: &GenericLookup,
@@ -403,11 +399,7 @@ pub fn intrinsic_runtime_helpers_is_bitwise_equatable<'gc, 'm: 'gc, T: VesOps<'g
 #[dotnet_intrinsic(
     "static bool System.Runtime.CompilerServices.RuntimeHelpers::IsReferenceOrContainsReferences()"
 )]
-pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<
-    'gc,
-    'm: 'gc,
-    T: VesOps<'gc, 'm>,
->(
+pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     generics: &GenericLookup,
@@ -423,7 +415,7 @@ pub fn intrinsic_runtime_helpers_is_reference_or_contains_references<
 #[dotnet_intrinsic(
     "static void System.Runtime.CompilerServices.RuntimeHelpers::RunClassConstructor(System.RuntimeTypeHandle)"
 )]
-pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     generics: &GenericLookup,
@@ -460,7 +452,7 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<'gc, 'm: 'gc, T: VesOps<'
 }
 
 #[dotnet_intrinsic("static object System.Activator::CreateInstance()")]
-pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_activator_create_instance<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
@@ -472,7 +464,7 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
         .expect("Type must exist for Activator.CreateInstance");
     let res_ctx = ResolutionContext::for_method(
         method,
-        ctx.loader(),
+        ctx.loader_arc(),
         generics,
         ctx.shared().caches.clone(),
         Some(ctx.shared().clone()),
@@ -495,11 +487,7 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 
         for m in target_td.definition().methods.iter() {
             if m.name == ".ctor" && m.signature.instance && m.signature.parameters.is_empty() {
-                let desc = MethodDescription {
-                    parent: target_td,
-                    method_resolution: target_td.resolution,
-                    method: m,
-                };
+                let desc = MethodDescription::new(target_td, target_td.resolution, m);
 
                 vm_try!(ctx.constructor_frame(
                     instance,
@@ -522,7 +510,7 @@ pub fn intrinsic_activator_create_instance<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 }
 
 #[dotnet_intrinsic("static System.Type System.Type::GetTypeFromHandle(System.RuntimeTypeHandle)")]
-pub fn intrinsic_get_from_handle<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_get_from_handle<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -541,7 +529,7 @@ pub fn intrinsic_get_from_handle<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 #[dotnet_intrinsic(
     "static System.IntPtr System.RuntimeTypeHandle::ToIntPtr(System.RuntimeTypeHandle)"
 )]
-pub fn intrinsic_type_handle_to_int_ptr<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_type_handle_to_int_ptr<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -560,7 +548,7 @@ pub fn intrinsic_type_handle_to_int_ptr<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 #[dotnet_intrinsic("bool System.Type::get_IsValueType()")]
 #[dotnet_intrinsic("bool System.RuntimeType::get_IsValueType()")]
 #[dotnet_intrinsic("bool System.RuntimeType::GetIsValueType()")]
-pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_type_get_is_value_type<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -580,7 +568,7 @@ pub fn intrinsic_type_get_is_value_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 #[dotnet_intrinsic("bool System.Type::get_IsEnum()")]
 #[dotnet_intrinsic("bool System.RuntimeType::get_IsEnum()")]
 #[dotnet_intrinsic("bool System.RuntimeType::GetIsEnum()")]
-pub fn intrinsic_type_get_is_enum<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_type_get_is_enum<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -598,7 +586,7 @@ pub fn intrinsic_type_get_is_enum<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 #[dotnet_intrinsic("bool System.Type::get_IsInterface()")]
 #[dotnet_intrinsic("bool System.RuntimeType::get_IsInterface()")]
 #[dotnet_intrinsic("bool System.RuntimeType::GetIsInterface()")]
-pub fn intrinsic_type_get_is_interface<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_type_get_is_interface<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -616,7 +604,7 @@ pub fn intrinsic_type_get_is_interface<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 }
 
 #[dotnet_intrinsic("static bool System.Type::op_Equality(System.Type, System.Type)")]
-pub fn intrinsic_type_op_equality<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_type_op_equality<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -628,7 +616,7 @@ pub fn intrinsic_type_op_equality<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 }
 
 #[dotnet_intrinsic("static bool System.Type::op_Inequality(System.Type, System.Type)")]
-pub fn intrinsic_type_op_inequality<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_type_op_inequality<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -640,7 +628,7 @@ pub fn intrinsic_type_op_inequality<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 }
 
 #[dotnet_intrinsic("static System.RuntimeTypeHandle System.Type::GetTypeHandle(object)")]
-pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_type_get_type_handle<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     generics: &GenericLookup,
@@ -650,7 +638,7 @@ pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     let rth = vm_try!(ctx.loader().corlib_type("System.RuntimeTypeHandle"));
     let res_ctx = ResolutionContext::for_method(
         _method,
-        ctx.loader(),
+        ctx.loader_arc(),
         generics,
         ctx.shared().caches.clone(),
         Some(ctx.shared().clone()),
@@ -666,7 +654,7 @@ pub fn intrinsic_type_get_type_handle<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     StepResult::Continue
 }
 
-fn handle_create_instance_check_this<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+fn handle_create_instance_check_this<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -676,10 +664,7 @@ fn handle_create_instance_check_this<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     StepResult::Continue
 }
 
-fn handle_get_assembly<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
-    ctx: &mut T,
-    generics: &GenericLookup,
-) -> StepResult {
+fn handle_get_assembly<'gc, T: VesOps<'gc>>(ctx: &mut T, generics: &GenericLookup) -> StepResult {
     let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let obj = ctx.pop_obj();
 
@@ -706,7 +691,7 @@ fn handle_get_assembly<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     let type_index = support_res.type_definition_index(index).unwrap();
     let res_ctx = ResolutionContext::new(
         generics,
-        ctx.loader(),
+        ctx.loader_arc(),
         support_res,
         ctx.shared().caches.clone(),
         Some(ctx.shared().clone()),
@@ -726,10 +711,7 @@ fn handle_get_assembly<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     StepResult::Continue
 }
 
-fn handle_get_namespace<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
-    ctx: &mut T,
-    _generics: &GenericLookup,
-) -> StepResult {
+fn handle_get_namespace<'gc, T: VesOps<'gc>>(ctx: &mut T, _generics: &GenericLookup) -> StepResult {
     let obj = ctx.pop_obj();
     let target_type = ctx.resolve_runtime_type(obj);
     match target_type {
@@ -744,10 +726,7 @@ fn handle_get_namespace<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     StepResult::Continue
 }
 
-fn handle_get_methods<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
-    ctx: &mut T,
-    _generics: &GenericLookup,
-) -> StepResult {
+fn handle_get_methods<'gc, T: VesOps<'gc>>(ctx: &mut T, _generics: &GenericLookup) -> StepResult {
     let flags = ctx.pop_i32();
     let obj = ctx.pop_obj();
     let target_type = ctx.resolve_runtime_type(obj);
@@ -775,11 +754,7 @@ fn handle_get_methods<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
             };
 
             if match_public && match_static && m.name != ".ctor" && m.name != ".cctor" {
-                let desc = MethodDescription {
-                    parent: td,
-                    method: m,
-                    method_resolution: td.resolution,
-                };
+                let desc = MethodDescription::new(td, td.resolution, m);
                 let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
                 methods_objs.push(ctx.get_runtime_method_obj(desc, lookup));
             }
@@ -790,7 +765,7 @@ fn handle_get_methods<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     populate_reflection_array(ctx, methods_objs, ConcreteType::from(method_info_type))
 }
 
-fn handle_get_method_impl<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+fn handle_get_method_impl<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -837,11 +812,7 @@ fn handle_get_method_impl<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
             };
 
             if match_public && match_static {
-                let desc = MethodDescription {
-                    parent: td,
-                    method: m,
-                    method_resolution: td.resolution,
-                };
+                let desc = MethodDescription::new(td, td.resolution, m);
                 let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
                 found_method = Some(ctx.get_runtime_method_obj(desc, lookup));
                 break;
@@ -857,7 +828,7 @@ fn handle_get_method_impl<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     StepResult::Continue
 }
 
-fn handle_get_constructors<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+fn handle_get_constructors<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -888,11 +859,7 @@ fn handle_get_constructors<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
             };
 
             if match_public && match_static && m.name == ".ctor" {
-                let desc = MethodDescription {
-                    parent: td,
-                    method: m,
-                    method_resolution: td.resolution,
-                };
+                let desc = MethodDescription::new(td, td.resolution, m);
                 let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
                 methods_objs.push(ctx.get_runtime_method_obj(desc, lookup));
             }
@@ -906,20 +873,14 @@ fn handle_get_constructors<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     populate_reflection_array(ctx, methods_objs, ConcreteType::from(constructor_info_type))
 }
 
-fn handle_get_name<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
-    ctx: &mut T,
-    _generics: &GenericLookup,
-) -> StepResult {
+fn handle_get_name<'gc, T: VesOps<'gc>>(ctx: &mut T, _generics: &GenericLookup) -> StepResult {
     let obj = ctx.pop_obj();
     let target_type = ctx.resolve_runtime_type(obj);
     ctx.push_string(target_type.get_name().into());
     StepResult::Continue
 }
 
-fn handle_get_base_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
-    ctx: &mut T,
-    _generics: &GenericLookup,
-) -> StepResult {
+fn handle_get_base_type<'gc, T: VesOps<'gc>>(ctx: &mut T, _generics: &GenericLookup) -> StepResult {
     let obj = ctx.pop_obj();
     let target_type = ctx.resolve_runtime_type(obj);
     match target_type {
@@ -927,7 +888,8 @@ fn handle_get_base_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
             if td.definition().extends.is_some() =>
         {
             // Get the first ancestor (the direct parent)
-            let mut ancestors = ctx.loader().ancestors(td);
+            let loader = ctx.loader_arc();
+            let mut ancestors = loader.ancestors(td);
             ancestors.next(); // skip self
             if let Some((base_td, base_generics)) = ancestors.next() {
                 let base_rt: RuntimeType = if base_td.definition().extends.is_none()
@@ -993,7 +955,7 @@ fn handle_get_base_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     StepResult::Continue
 }
 
-fn handle_get_is_generic_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+fn handle_get_is_generic_type<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -1004,7 +966,7 @@ fn handle_get_is_generic_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     StepResult::Continue
 }
 
-fn handle_get_generic_type_definition<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+fn handle_get_generic_type_definition<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -1028,7 +990,7 @@ fn handle_get_generic_type_definition<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     }
 }
 
-fn handle_get_generic_arguments<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+fn handle_get_generic_arguments<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -1067,7 +1029,7 @@ fn handle_get_generic_arguments<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     StepResult::Continue
 }
 
-fn handle_get_type_handle<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+fn handle_get_type_handle<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -1081,7 +1043,7 @@ fn handle_get_type_handle<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     StepResult::Continue
 }
 
-fn handle_make_generic_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+fn handle_make_generic_type<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -1120,7 +1082,7 @@ fn handle_make_generic_type<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     }
 }
 
-fn handle_create_instance_default_ctor<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+fn handle_create_instance_default_ctor<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
@@ -1156,11 +1118,7 @@ fn handle_create_instance_default_ctor<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
             && m.signature.instance
             && m.signature.parameters.is_empty()
         {
-            let desc = MethodDescription {
-                parent: td,
-                method_resolution: td.resolution,
-                method: m,
-            };
+            let desc = MethodDescription::new(td, td.resolution, m);
 
             vm_try!(ctx.constructor_frame(
                 instance,

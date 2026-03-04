@@ -5,7 +5,7 @@ use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 #[dotnet_intrinsic(
     "static bool System.Runtime.CompilerServices.RuntimeHelpers::IsKnownConstant(string)"
 )]
-pub fn is_known_constant<'gc, 'm: 'gc, T: TypedStackOps<'gc>>(
+pub fn is_known_constant<'gc, T: TypedStackOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,

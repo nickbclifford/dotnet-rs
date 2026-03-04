@@ -427,7 +427,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                         c.stack.local.heap.cross_arena_roots.borrow_mut().clear();
                     });
 
-                    let _ = arena.mark_all();
+                    let _ = arena.finish_marking();
                     // Do not finalize or sweep yet.
 
                     set_currently_tracing(None);
@@ -452,7 +452,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                         }
                     });
 
-                    let _ = arena.mark_all();
+                    let _ = arena.finish_marking();
                     // Do not finalize or sweep yet.
 
                     set_currently_tracing(None);
@@ -466,7 +466,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                 let mut arena_opt = cell.borrow_mut();
                 if let Some(arena) = arena_opt.as_mut() {
                     // Ensure we are in Marked phase
-                    let marked = arena.mark_all();
+                    let marked = arena.finish_marking();
 
                     if let Some(marked) = marked {
                         crate::gc::finalize_arena(marked);
@@ -479,7 +479,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                 let mut arena_opt = cell.borrow_mut();
                 if let Some(arena) = arena_opt.as_mut() {
                     // Finish the collection (finalize and sweep)
-                    arena.collect_all();
+                    arena.finish_cycle();
                 }
             });
         }

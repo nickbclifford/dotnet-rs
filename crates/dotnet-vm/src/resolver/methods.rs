@@ -9,7 +9,7 @@ use dotnet_types::{
 use dotnetdll::prelude::*;
 use std::sync::Arc;
 
-impl<'m> ResolverService<'m> {
+impl ResolverService {
     pub fn is_intrinsic_cached(&self, method: MethodDescription) -> bool {
         if let Some(cached) = self.caches.intrinsic_cache.get(&method) {
             if let Some(metrics) = self.metrics() {
@@ -50,7 +50,7 @@ impl<'m> ResolverService<'m> {
     pub fn find_generic_method(
         &self,
         source: &MethodSource,
-        ctx: &ResolutionContext<'_, 'm>,
+        ctx: &ResolutionContext<'_>,
     ) -> Result<(MethodDescription, GenericLookup), TypeResolutionError> {
         let mut new_lookup = ctx.generics.clone();
 
@@ -93,13 +93,13 @@ impl<'m> ResolverService<'m> {
         base_method: MethodDescription,
         this_type: TypeDescription,
         generics: &GenericLookup,
-        ctx: &ResolutionContext<'_, 'm>,
+        ctx: &ResolutionContext<'_>,
     ) -> Result<MethodDescription, TypeResolutionError> {
         let mut normalized_generics = generics.clone();
         if this_type.definition().generic_parameters.is_empty() {
             normalized_generics.type_generics = Arc::new([]);
         }
-        if base_method.method.generic_parameters.is_empty() {
+        if base_method.method().generic_parameters.is_empty() {
             normalized_generics.method_generics = Arc::new([]);
         }
 
@@ -155,7 +155,7 @@ impl<'m> ResolverService<'m> {
                         generics,
                         Some(this_type.into()),
                     )?;
-                    map.insert(decl.method as *const _ as usize, impl_m);
+                    map.insert(decl.method() as *const _ as usize, impl_m);
                 }
                 let arc_map = Arc::new(map);
                 self.caches
@@ -164,7 +164,7 @@ impl<'m> ResolverService<'m> {
                 arc_map
             };
 
-            if let Some(impl_m) = overrides.get(&(method.method as *const _ as usize)) {
+            if let Some(impl_m) = overrides.get(&(method.method() as *const _ as usize)) {
                 self.caches
                     .vmt_cache
                     .insert((method, this_type, generics.clone()), *impl_m);
@@ -174,8 +174,8 @@ impl<'m> ResolverService<'m> {
 
         if let Some(this_method) = self.loader.find_method_in_type_with_substitution(
             this_type,
-            &method.method.name,
-            &method.method.signature,
+            &method.method().name,
+            &method.method().signature,
             method.resolution(),
             generics,
         ) {

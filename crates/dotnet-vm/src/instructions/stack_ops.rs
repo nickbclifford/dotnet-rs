@@ -67,11 +67,7 @@ load_var!(
 );
 
 #[dotnet_instruction(LoadArgumentAddress(index))]
-pub fn ldarga<
-    'gc,
-    'm: 'gc,
-    T: StackOps<'gc, 'm> + ArgumentOps<'gc> + ResolutionOps<'gc, 'm> + EvalStackOps<'gc>,
->(
+pub fn ldarga<'gc, T: StackOps<'gc> + ArgumentOps<'gc> + ResolutionOps<'gc> + EvalStackOps<'gc>>(
     ctx: &mut T,
     index: u16,
 ) -> StepResult {
@@ -104,11 +100,7 @@ load_var!(
 );
 
 #[dotnet_instruction(LoadLocalAddress(index))]
-pub fn ldloca<
-    'gc,
-    'm: 'gc,
-    T: StackOps<'gc, 'm> + LocalOps<'gc> + ResolutionOps<'gc, 'm> + EvalStackOps<'gc>,
->(
+pub fn ldloca<'gc, T: StackOps<'gc> + LocalOps<'gc> + ResolutionOps<'gc> + EvalStackOps<'gc>>(
     ctx: &mut T,
     index: u16,
 ) -> StepResult {

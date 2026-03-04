@@ -118,16 +118,16 @@ fn test_basic_functionality_exists() {
 // Helper Functions
 // ============================================================================
 
-fn create_test_loader() -> &'static dotnet_assemblies::AssemblyLoader {
+fn create_test_loader() -> Arc<dotnet_assemblies::AssemblyLoader> {
     thread_local! {
-        static LOADER: &'static dotnet_assemblies::AssemblyLoader = {
+        static LOADER: Arc<dotnet_assemblies::AssemblyLoader> = {
             let assemblies_path = find_dotnet_app_path().to_str().unwrap().to_string();
             let loader = dotnet_assemblies::AssemblyLoader::new(assemblies_path).expect("failed to create AssemblyLoader");
-            Box::leak(Box::new(loader))
+            Arc::new(loader)
         };
     }
 
-    LOADER.with(|&l| l)
+    LOADER.with(|l| l.clone())
 }
 
 fn find_dotnet_app_path() -> PathBuf {

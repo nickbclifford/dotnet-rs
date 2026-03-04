@@ -18,11 +18,11 @@ use dotnetdll::prelude::*;
 use sptr::Strict;
 use std::{any, error::Error, ptr::NonNull, sync::Arc};
 
-impl<'m> ResolverService<'m> {
+impl ResolverService {
     pub fn new_object<'gc>(
         &self,
         td: TypeDescription,
-        ctx: &ResolutionContext<'_, 'm>,
+        ctx: &ResolutionContext<'_>,
     ) -> Result<Object<'gc>, TypeResolutionError> {
         Ok(Object::new(
             td,
@@ -36,7 +36,7 @@ impl<'m> ResolverService<'m> {
         t: &ConcreteType,
         data: StackValue<'gc>,
         gc: GCHandle<'gc>,
-        ctx: &ResolutionContext<'_, 'm>,
+        ctx: &ResolutionContext<'_>,
     ) -> Result<ObjectRef<'gc>, TypeResolutionError> {
         let t = self.normalize_type(t.clone())?;
         match self.new_cts_value(&t, data, ctx)? {
@@ -56,7 +56,7 @@ impl<'m> ResolverService<'m> {
     pub fn new_instance_fields(
         &self,
         td: TypeDescription,
-        ctx: &ResolutionContext<'_, 'm>,
+        ctx: &ResolutionContext<'_>,
     ) -> Result<FieldStorage, TypeResolutionError> {
         let layout =
             crate::layout::LayoutFactory::instance_field_layout_cached(td, ctx, self.metrics())?;
@@ -67,7 +67,7 @@ impl<'m> ResolverService<'m> {
     pub fn new_static_fields(
         &self,
         td: TypeDescription,
-        ctx: &ResolutionContext<'_, 'm>,
+        ctx: &ResolutionContext<'_>,
     ) -> Result<FieldStorage, TypeResolutionError> {
         let layout = Arc::new(crate::layout::LayoutFactory::static_fields_with_metrics(
             td,
@@ -82,7 +82,7 @@ impl<'m> ResolverService<'m> {
         &self,
         t: &ConcreteType,
         data: StackValue<'gc>,
-        ctx: &ResolutionContext<'_, 'm>,
+        ctx: &ResolutionContext<'_>,
     ) -> Result<ValueType<'gc>, TypeResolutionError> {
         match self.new_cts_value(t, data, ctx)? {
             CTSValue::Value(v) => Ok(v),
@@ -99,7 +99,7 @@ impl<'m> ResolverService<'m> {
         &self,
         t: &ConcreteType,
         data: StackValue<'gc>,
-        ctx: &ResolutionContext<'_, 'm>,
+        ctx: &ResolutionContext<'_>,
     ) -> Result<CTSValue<'gc>, TypeResolutionError> {
         use ValueType::*;
         let t = self.normalize_type(t.clone())?;
@@ -222,7 +222,7 @@ impl<'m> ResolverService<'m> {
         t: &ConcreteType,
         data: &[u8],
         gc: GCHandle<'gc>,
-        ctx: &ResolutionContext<'_, 'm>,
+        ctx: &ResolutionContext<'_>,
     ) -> Result<CTSValue<'gc>, TypeResolutionError> {
         use ValueType::*;
         let t = self.normalize_type(t.clone())?;
@@ -366,12 +366,8 @@ impl<'m> ResolverService<'m> {
                                     .find(|f| f.name == key.name)
                                     .expect("field not found during read_cts_value patching");
 
-                                let field_desc = FieldDescription {
-                                    parent: td,
-                                    field_resolution: td.resolution,
-                                    field: field_info,
-                                    index: 0,
-                                };
+                                let field_desc =
+                                    FieldDescription::new(td, td.resolution, field_info, 0);
                                 let field_type = self.get_field_type(
                                     td.resolution,
                                     new_ctx.generics,
@@ -400,7 +396,7 @@ impl<'m> ResolverService<'m> {
         &self,
         element: ConcreteType,
         size: usize,
-        ctx: &ResolutionContext<'_, 'm>,
+        ctx: &ResolutionContext<'_>,
     ) -> Result<Vector<'gc>, TypeResolutionError> {
         let layout = crate::layout::LayoutFactory::create_array_layout_with_metrics(
             element.clone(),

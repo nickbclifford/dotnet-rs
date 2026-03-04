@@ -10,7 +10,7 @@ use crate::{
 use dotnet_types::{
     TypeDescription,
     generics::{ConcreteType, GenericLookup},
-    members::{FieldDescription, MethodDescription},
+    members::MethodDescription,
 };
 use dotnet_utils::{BorrowGuardHandle, NoActiveBorrows};
 use dotnet_value::{
@@ -44,15 +44,14 @@ pub fn read_span_length(span: &Object) -> Result<i32, String> {
 /// Read the _reference ManagedPtr from a ManagedPtr that points to a Span.
 pub fn read_span_reference_from_ptr<
     'gc,
-    'm,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
-        + ResolutionOps<'gc, 'm>
-        + LoaderOps<'m>
+        + ResolutionOps<'gc>
+        + LoaderOps
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     span_ptr: &ManagedPtr<'gc>,
     layout: &FieldLayoutManager,
@@ -93,15 +92,14 @@ pub fn read_span_reference_from_ptr<
 /// Read the _length from a ManagedPtr that points to a Span.
 pub fn read_span_length_from_ptr<
     'gc,
-    'm,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
-        + ResolutionOps<'gc, 'm>
-        + LoaderOps<'m>
+        + ResolutionOps<'gc>
+        + LoaderOps
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     span_ptr: &ManagedPtr<'gc>,
     layout: &FieldLayoutManager,
@@ -125,15 +123,14 @@ pub fn read_span_length_from_ptr<
 /// Write a ManagedPtr + length into a Span/ReadOnlySpan value type.
 pub fn write_span_fields<
     'gc,
-    'm,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
-        + ResolutionOps<'gc, 'm>
-        + LoaderOps<'m>
+        + ResolutionOps<'gc>
+        + LoaderOps
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     span_ptr: &ManagedPtr<'gc>,
     managed: &ManagedPtr<'gc>,
@@ -175,16 +172,15 @@ pub fn write_span_fields<
 
 pub fn with_span_data<
     'gc,
-    'm,
     R,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
-        + ResolutionOps<'gc, 'm>
-        + LoaderOps<'m>
+        + ResolutionOps<'gc>
+        + LoaderOps
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &T,
     span: Object,
@@ -267,15 +263,14 @@ pub fn with_span_data<
 
 fn chunked_sequence_equal<
     'gc,
-    'm,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
-        + ResolutionOps<'gc, 'm>
-        + LoaderOps<'m>
+        + ResolutionOps<'gc>
+        + LoaderOps
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     a: &ManagedPtr<'gc>,
@@ -316,15 +311,14 @@ use dotnet_macros::dotnet_intrinsic;
 #[dotnet_intrinsic("void System.ReadOnlySpan<T>::.ctor(void*, int)")]
 pub fn intrinsic_span_ctor_from_pointer<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
-        + ResolutionOps<'gc, 'm>
-        + LoaderOps<'m>
+        + ResolutionOps<'gc>
+        + LoaderOps
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -421,16 +415,15 @@ pub fn intrinsic_span_ctor_from_pointer<
 )]
 pub fn intrinsic_memory_extensions_sequence_equal<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
-        + ResolutionOps<'gc, 'm>
-        + LoaderOps<'m>
+        + ResolutionOps<'gc>
+        + LoaderOps
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
-        + ReflectionOps<'gc, 'm>
-        + CallOps<'gc, 'm>,
+        + ReflectionOps<'gc>
+        + CallOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -526,11 +519,11 @@ pub fn intrinsic_memory_extensions_sequence_equal<
             }
         };
 
-        let slow_path_method = MethodDescription {
-            parent: memory_extensions_type,
-            method_resolution: memory_extensions_type.resolution,
-            method: method_def,
-        };
+        let slow_path_method = MethodDescription::new(
+            memory_extensions_type,
+            memory_extensions_type.resolution,
+            method_def,
+        );
 
         ctx.dispatch_method(slow_path_method, generics.clone())
     }
@@ -541,15 +534,14 @@ pub fn intrinsic_memory_extensions_sequence_equal<
 )]
 pub fn intrinsic_memory_extensions_equals_span_char<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
-        + ResolutionOps<'gc, 'm>
-        + LoaderOps<'m>
+        + ResolutionOps<'gc>
+        + LoaderOps
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -606,15 +598,14 @@ pub fn intrinsic_memory_extensions_equals_span_char<
 #[dotnet_intrinsic("static bool System.SpanHelpers::SequenceEqual(ref byte, ref byte, nuint)")]
 pub fn intrinsic_span_helpers_sequence_equal<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
-        + ResolutionOps<'gc, 'm>
-        + LoaderOps<'m>
+        + ResolutionOps<'gc>
+        + LoaderOps
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -643,15 +634,14 @@ pub fn intrinsic_span_helpers_sequence_equal<
 }
 fn pop_nonneg_usize<
     'gc,
-    'm,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
-        + ResolutionOps<'gc, 'm>
-        + LoaderOps<'m>
+        + ResolutionOps<'gc>
+        + LoaderOps
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
 ) -> Result<usize, StepResult> {
@@ -687,21 +677,20 @@ fn pop_nonneg_usize<
 )]
 pub fn intrinsic_as_span<
     'gc,
-    'm: 'gc,
-    T: StackOps<'gc, 'm>
-        + ResolutionOps<'gc, 'm>
-        + LoaderOps<'m>
+    T: StackOps<'gc>
+        + ResolutionOps<'gc>
+        + LoaderOps
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let _gc = ctx.gc_with_token(&NoActiveBorrows::new());
-    let param_count = method.method.signature.parameters.len();
+    let param_count = method.method().signature.parameters.len();
 
     // AsSpan can have 1, 2, or 3 parameters:
     // - AsSpan(string) - whole string
@@ -819,7 +808,7 @@ pub fn intrinsic_as_span<
     offset += dotnet_utils::ByteOffset(start * element_size);
     let len = actual_length;
 
-    let span_type_concrete = match &method.method.signature.return_type.1 {
+    let span_type_concrete = match &method.method().signature.return_type.1 {
         Some(ParameterType::Value(t)) => {
             vm_try!(generics.make_concrete(method.resolution(), t.clone()))
         }
@@ -901,15 +890,14 @@ pub fn intrinsic_as_span<
 )]
 pub fn intrinsic_runtime_helpers_create_span<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
-        + ResolutionOps<'gc, 'm>
-        + LoaderOps<'m>
+        + ResolutionOps<'gc>
+        + LoaderOps
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -945,14 +933,7 @@ pub fn intrinsic_runtime_helpers_create_span<
         }
     };
 
-    let (
-        FieldDescription {
-            field,
-            field_resolution,
-            ..
-        },
-        lookup,
-    ) = {
+    let (field_desc, lookup) = {
         let obj_ref = field_handle
             .instance_storage
             .field::<ObjectRef<'gc>>(field_handle.description, "_value")
@@ -960,6 +941,8 @@ pub fn intrinsic_runtime_helpers_create_span<
             .read();
         ctx.resolve_runtime_field(obj_ref)
     };
+    let field = field_desc.field();
+    let field_resolution = field_desc.field_resolution;
     let field_type = vm_try!(lookup.make_concrete(field_resolution, field.return_type.clone()));
     let field_desc = vm_try!(ctx.loader().find_concrete_type(field_type.clone()));
 
@@ -1051,15 +1034,14 @@ pub fn intrinsic_runtime_helpers_create_span<
 )]
 pub fn intrinsic_runtime_helpers_get_span_data_from<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
-        + ResolutionOps<'gc, 'm>
-        + LoaderOps<'m>
+        + ResolutionOps<'gc>
+        + LoaderOps
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -1094,7 +1076,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<
         }
     };
 
-    let (FieldDescription { field, .. }, _) = {
+    let (field_desc, _) = {
         let obj_ref = field_handle
             .instance_storage
             .field::<ObjectRef<'gc>>(field_handle.description, "_value")
@@ -1102,6 +1084,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<
             .read();
         ctx.resolve_runtime_field(obj_ref)
     };
+    let field = field_desc.field();
 
     // Resolve type
     let res_ctx_type = ctx.current_context();
@@ -1190,15 +1173,14 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<
 #[dotnet_intrinsic("static byte& DotnetRs.Internal::GetArrayData(System.Array)")]
 pub fn intrinsic_internal_get_array_data<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
-        + ResolutionOps<'gc, 'm>
-        + LoaderOps<'m>
+        + ResolutionOps<'gc>
+        + LoaderOps
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -1257,15 +1239,14 @@ pub fn intrinsic_internal_get_array_data<
 #[dotnet_intrinsic("T& System.ReadOnlySpan<T>::GetPinnableReference()")]
 pub fn intrinsic_span_get_pinnable_reference<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
-        + ResolutionOps<'gc, 'm>
-        + LoaderOps<'m>
+        + ResolutionOps<'gc>
+        + LoaderOps
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,

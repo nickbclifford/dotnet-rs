@@ -25,7 +25,7 @@ pub mod casting;
 pub mod fields;
 pub mod typed_references;
 
-pub(crate) fn get_ptr_info<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc>>(
+pub(crate) fn get_ptr_info<'gc, T: StackOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
     val: &StackValue<'gc>,
 ) -> Result<(PointerOrigin<'gc>, dotnet_utils::ByteOffset), StepResult> {
@@ -56,7 +56,7 @@ pub(crate) fn get_ptr_info<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc
     }
 }
 
-pub(crate) fn get_ptr_context<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<'gc>>(
+pub(crate) fn get_ptr_context<'gc, T: StackOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
     val: &StackValue<'gc>,
 ) -> Result<(PointerOrigin<'gc>, dotnet_utils::ByteOffset), StepResult> {
@@ -64,13 +64,13 @@ pub(crate) fn get_ptr_context<'gc, 'm: 'gc, T: StackOps<'gc, 'm> + ExceptionOps<
 }
 
 #[dotnet_instruction(NewObject(ctor))]
-pub fn new_object<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, ctor: &UserMethod) -> StepResult {
+pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepResult {
     let (mut method, lookup) = vm_try!(
         ctx.resolver()
             .find_generic_method(&MethodSource::User(*ctor), &ctx.current_context())
     );
 
-    if method.method.name == "CtorArraySentinel"
+    if method.method().name == "CtorArraySentinel"
         && let UserMethod::Reference(r) = *ctor
     {
         let resolution = ctx.current_frame().source_resolution;
@@ -131,7 +131,7 @@ pub fn new_object<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, ctor: &UserMeth
     }
 
     let parent = method.parent;
-    if let (None, Some(ts)) = (&method.method.body, &parent.definition().extends) {
+    if let (None, Some(ts)) = (&method.method().body, &parent.definition().extends) {
         let (ut, _) = decompose_type_source::<MemberType>(ts);
         let type_name = ut.type_name(parent.resolution.definition());
         // delegate types are only allowed to have these base types
@@ -143,24 +143,23 @@ pub fn new_object<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, ctor: &UserMeth
                 .loader()
                 .corlib_type(&type_name)
                 .expect("Failed to locate corlib base for delegate");
-            method = MethodDescription {
-                parent: base,
-                method_resolution: base.resolution,
-                method: base
-                    .definition()
+            method = MethodDescription::new(
+                base,
+                base.resolution,
+                base.definition()
                     .methods
                     .iter()
                     .find(|m| m.name == ".ctor")
                     .unwrap(),
-            };
+            );
         }
     }
 
-    let method_name = &*method.method.name;
+    let method_name = &*method.method().name;
     let parent_name = method.parent.definition().type_name();
     if parent_name == "System.IntPtr"
         && method_name == ".ctor"
-        && method.method.signature.parameters.len() == 1
+        && method.method().signature.parameters.len() == 1
     {
         let val = ctx.pop();
         let native_val = match val {
@@ -180,7 +179,7 @@ pub fn new_object<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, ctor: &UserMeth
         if ctx.is_intrinsic_cached(method) {
             let is_value_type = vm_try!(ctx.resolver().is_value_type(parent));
             if is_value_type && method_name == ".ctor" && parent_name != "System.String" {
-                let arg_count = method.method.signature.parameters.len();
+                let arg_count = method.method().signature.parameters.len();
                 let args = ctx.pop_multiple(arg_count);
 
                 let res_ctx = ctx
@@ -248,7 +247,7 @@ pub fn new_object<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, ctor: &UserMeth
 }
 
 #[dotnet_instruction(LoadObject { param0 })]
-pub fn ldobj<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &MethodType) -> StepResult {
+pub fn ldobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResult {
     let addr = ctx.pop();
 
     if addr.is_null() {
@@ -282,7 +281,7 @@ pub fn ldobj<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &MethodType)
 }
 
 #[dotnet_instruction(StoreObject { param0 })]
-pub fn stobj<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &MethodType) -> StepResult {
+pub fn stobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResult {
     let value = ctx.pop();
     let addr = ctx.pop();
 
@@ -323,7 +322,7 @@ pub fn stobj<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &MethodType)
 }
 
 #[dotnet_instruction(InitializeForObject(param0))]
-pub fn initobj<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &MethodType) -> StepResult {
+pub fn initobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResult {
     let addr = ctx.pop();
 
     if addr.is_null() {
@@ -348,7 +347,7 @@ pub fn initobj<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &MethodTyp
 }
 
 #[dotnet_instruction(Sizeof(param0))]
-pub fn sizeof<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &MethodType) -> StepResult {
+pub fn sizeof<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResult {
     let target = vm_try!(ctx.make_concrete(param0));
     let res_ctx = ctx.current_context();
     let layout = vm_try!(type_layout(target, &res_ctx));
@@ -357,7 +356,7 @@ pub fn sizeof<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &MethodType
 }
 
 #[dotnet_instruction(LoadString(chars))]
-pub fn ldstr<'gc, 'm: 'gc, T: StackOps<'gc, 'm>>(ctx: &mut T, chars: &[u16]) -> StepResult {
+pub fn ldstr<'gc, T: StackOps<'gc>>(ctx: &mut T, chars: &[u16]) -> StepResult {
     ctx.push_string(CLRString::new(chars.to_owned()));
     StepResult::Continue
 }

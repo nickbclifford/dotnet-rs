@@ -1,7 +1,7 @@
 use crate::{Executor, state::SharedGlobalState, sync::Arc};
 use arbitrary::Arbitrary;
 use dotnet_assemblies::AssemblyLoader;
-use dotnet_types::{TypeDescription, members::MethodDescription, resolution::ResolutionS};
+use dotnet_types::{TypeDescription, members::MethodDescription};
 use dotnetdll::{
     binary::signature::kinds::CallingConvention,
     prelude::*,
@@ -19,81 +19,85 @@ use dotnetdll::{
 };
 use std::{path::PathBuf, sync::OnceLock};
 
-static LOADER: OnceLock<&'static AssemblyLoader> = OnceLock::new();
+static LOADER: OnceLock<Arc<AssemblyLoader>> = OnceLock::new();
 #[cfg(test)]
-static MOCK_LOADER: OnceLock<&'static AssemblyLoader> = OnceLock::new();
+static MOCK_LOADER: OnceLock<Arc<AssemblyLoader>> = OnceLock::new();
 
-fn get_loader() -> &'static AssemblyLoader {
-    LOADER.get_or_init(|| {
-        let base = std::env::var("DOTNET_ROOT")
-            .map(|p| PathBuf::from(p).join("shared/Microsoft.NETCore.App"))
-            .unwrap_or_else(|_| PathBuf::from("/usr/share/dotnet/shared/Microsoft.NETCore.App"));
+fn get_loader() -> Arc<AssemblyLoader> {
+    LOADER
+        .get_or_init(|| {
+            let base = std::env::var("DOTNET_ROOT")
+                .map(|p| PathBuf::from(p).join("shared/Microsoft.NETCore.App"))
+                .unwrap_or_else(|_| {
+                    PathBuf::from("/usr/share/dotnet/shared/Microsoft.NETCore.App")
+                });
 
-        let base = if !base.exists() {
-            let alt_base = PathBuf::from("/usr/lib/dotnet/shared/Microsoft.NETCore.App");
-            if alt_base.exists() { alt_base } else { base }
-        } else {
-            base
-        };
+            let base = if !base.exists() {
+                let alt_base = PathBuf::from("/usr/lib/dotnet/shared/Microsoft.NETCore.App");
+                if alt_base.exists() { alt_base } else { base }
+            } else {
+                base
+            };
 
-        let mut entries: Vec<_> = std::fs::read_dir(base)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-            .collect();
+            let mut entries: Vec<_> = std::fs::read_dir(base)
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                .collect();
 
-        entries.sort_by_key(|e| e.file_name());
-        let path = entries
-            .last()
-            .expect("no versions found in .NET shared path")
-            .path();
+            entries.sort_by_key(|e| e.file_name());
+            let path = entries
+                .last()
+                .expect("no versions found in .NET shared path")
+                .path();
 
-        let loader = AssemblyLoader::new(path.to_str().unwrap().to_string())
-            .expect("Failed to create AssemblyLoader");
-        Box::leak(Box::new(loader))
-    })
+            let loader = AssemblyLoader::new(path.to_str().unwrap().to_string())
+                .expect("Failed to create AssemblyLoader");
+            Arc::new(loader)
+        })
+        .clone()
 }
 
 #[cfg(test)]
-fn get_mock_loader() -> &'static AssemblyLoader {
-    MOCK_LOADER.get_or_init(|| {
-        let loader = AssemblyLoader::new_bare("mock_root".to_string())
-            .expect("Failed to create mock AssemblyLoader");
+fn get_mock_loader() -> Arc<AssemblyLoader> {
+    MOCK_LOADER
+        .get_or_init(|| {
+            let loader = AssemblyLoader::new_bare("mock_root".to_string())
+                .expect("Failed to create mock AssemblyLoader");
 
-        // Register mock assemblies so that System.Object can be resolved
-        let mut mscorlib = Resolution::new(Module::new("mscorlib.dll"));
-        mscorlib.assembly = Some(Assembly::new("mscorlib"));
-        let mut obj = TypeDefinition::new(None, "Object");
-        obj.namespace = Some("System".into());
-        mscorlib.push_type_definition(obj);
+            // Register mock assemblies so that System.Object can be resolved
+            let mut mscorlib = Resolution::new(Module::new("mscorlib.dll"));
+            mscorlib.assembly = Some(Assembly::new("mscorlib"));
+            let mut obj = TypeDefinition::new(None, "Object");
+            obj.namespace = Some("System".into());
+            mscorlib.push_type_definition(obj);
 
-        let mscorlib_res = ResolutionS::new(Box::leak(Box::new(mscorlib)));
-        loader.register_assembly(mscorlib_res);
+            loader.register_owned_assembly(mscorlib);
 
-        let mut system_runtime = Resolution::new(Module::new("System.Runtime.dll"));
-        system_runtime.assembly = Some(Assembly::new("System.Runtime"));
+            let mut system_runtime = Resolution::new(Module::new("System.Runtime.dll"));
+            system_runtime.assembly = Some(Assembly::new("System.Runtime"));
 
-        let mut obj2 = TypeDefinition::new(None, "Object");
-        obj2.namespace = Some("System".into());
-        system_runtime.push_type_definition(obj2);
+            let mut obj2 = TypeDefinition::new(None, "Object");
+            obj2.namespace = Some("System".into());
+            system_runtime.push_type_definition(obj2);
 
-        let mut type_type = TypeDefinition::new(None, "Type");
-        type_type.namespace = Some("System".into());
-        system_runtime.push_type_definition(type_type);
+            let mut type_type = TypeDefinition::new(None, "Type");
+            type_type.namespace = Some("System".into());
+            system_runtime.push_type_definition(type_type);
 
-        let mut array_type = TypeDefinition::new(None, "Array");
-        array_type.namespace = Some("System".into());
-        system_runtime.push_type_definition(array_type);
+            let mut array_type = TypeDefinition::new(None, "Array");
+            array_type.namespace = Some("System".into());
+            system_runtime.push_type_definition(array_type);
 
-        let mut string_type = TypeDefinition::new(None, "String");
-        string_type.namespace = Some("System".into());
-        system_runtime.push_type_definition(string_type);
+            let mut string_type = TypeDefinition::new(None, "String");
+            string_type.namespace = Some("System".into());
+            system_runtime.push_type_definition(string_type);
 
-        let system_runtime_res = ResolutionS::new(Box::leak(Box::new(system_runtime)));
-        loader.register_assembly(system_runtime_res);
+            loader.register_owned_assembly(system_runtime);
 
-        Box::leak(Box::new(loader))
-    })
+            Arc::new(loader)
+        })
+        .clone()
 }
 
 #[derive(Debug, Arbitrary, Clone)]
@@ -549,8 +553,8 @@ pub fn execute_cil_program(program: FuzzProgram) {
     execute_cil_program_with_loader(program, get_loader());
 }
 
-pub fn execute_cil_program_with_loader(program: FuzzProgram, loader: &'static AssemblyLoader) {
-    let shared = Arc::new(SharedGlobalState::new(loader));
+pub fn execute_cil_program_with_loader(program: FuzzProgram, loader: Arc<AssemblyLoader>) {
+    let shared = Arc::new(SharedGlobalState::new(loader.clone()));
 
     // Build a minimal Resolution with one type and one static void method
     let mut res = Resolution::new(Module::new("Fuzz.dll"));
@@ -753,19 +757,17 @@ pub fn execute_cil_program_with_loader(program: FuzzProgram, loader: &'static As
         ))));
     }
 
-    // Leak the resolution to 'static as required by ResolutionS wrapper
-    let resolution = Box::leak(Box::new(res));
-    let res_s = ResolutionS::new(resolution);
+    let res_s = loader.register_owned_assembly(res);
 
     // Construct MethodDescription and TypeDescription for executor
-    let typedef = &resolution[type_idx];
-    let method_def = &resolution[method_idx];
+    let typedef = &res_s.definition()[type_idx];
+    let method_def = &res_s.definition()[method_idx];
 
-    let entrypoint = MethodDescription {
-        parent: TypeDescription::new(res_s, typedef, type_idx),
-        method_resolution: res_s,
-        method: method_def,
-    };
+    let entrypoint = MethodDescription::new(
+        TypeDescription::new(res_s, typedef, type_idx),
+        res_s,
+        method_def,
+    );
 
     let mut executor = Executor::new(shared);
     executor.instruction_budget = Some(10000); // Prevent infinite loops

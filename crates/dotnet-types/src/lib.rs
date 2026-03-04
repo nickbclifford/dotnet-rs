@@ -13,7 +13,7 @@ use crate::{members::MethodDescription, resolution::ResolutionS};
 use dotnetdll::prelude::{
     MemberType, ResolvedDebug, TypeDefinition, TypeIndex, TypeSource, UserType,
 };
-use gc_arena::{Collect, unsafe_empty_collect};
+use gc_arena::static_collect;
 use std::{
     fmt::{Debug, Formatter},
     hash::{Hash, Hasher},
@@ -71,7 +71,7 @@ impl<'a> Arbitrary<'a> for TypeDescription {
     }
 }
 
-unsafe_empty_collect!(TypeDescription);
+static_collect!(TypeDescription);
 
 // SAFETY: TypeDescription only contains a ResolutionS (which is a raw pointer wrapper)
 // and a NonNull pointer to a TypeDefinition. Both point to data with 'static lifetime
@@ -178,11 +178,7 @@ impl TypeDescription {
                 && !m.signature.instance
                 && m.signature.parameters.is_empty()
             {
-                Some(MethodDescription {
-                    parent: *self,
-                    method_resolution: self.resolution,
-                    method: m,
-                })
+                Some(MethodDescription::new(*self, self.resolution, m))
             } else {
                 None
             }

@@ -144,7 +144,7 @@ fn process_instruction_file(path: &Path, entries: &mut Vec<InstructionEntry>) {
                             let attrs = &macro_instr.attrs;
                             let dummy_fn: ItemFn = syn::parse_quote! {
                                 #(#attrs)*
-                                pub fn #name<'gc, 'm: 'gc, T: crate::stack::ops::VesOps<'gc, 'm> + ?Sized>(ctx: &mut T, #params) -> crate::StepResult {
+                                pub fn #name<'gc, T: crate::stack::ops::VesOps<'gc> + ?Sized>(ctx: &mut T, #params) -> crate::StepResult {
                                     unimplemented!()
                                 }
                             };
@@ -186,9 +186,7 @@ fn generate_instruction_table(out_dir: &std::ffi::OsStr, entries: &[InstructionE
     let mut table_code = String::new();
 
     // New monomorphic dispatcher
-    table_code.push_str(
-        "pub fn dispatch_monomorphic<'gc, 'm: 'gc, T: crate::stack::ops::VesOps<'gc, 'm>>(\n",
-    );
+    table_code.push_str("pub fn dispatch_monomorphic<'gc, T: crate::stack::ops::VesOps<'gc>>(\n");
     table_code.push_str("    ctx: &mut T,\n");
     table_code.push_str("    instr: &Instruction,\n");
     table_code.push_str(") -> crate::StepResult {\n");
@@ -365,9 +363,8 @@ fn generate_intrinsic_phf(out_dir: &std::ffi::OsStr, entries: &[IntrinsicEntry])
     }
     dispatch_code.push_str("}\n\n");
 
-    dispatch_code.push_str(
-        "pub fn dispatch_method_intrinsic<'gc, 'm: 'gc, T: crate::stack::ops::VesOps<'gc, 'm>>(\n",
-    );
+    dispatch_code
+        .push_str("pub fn dispatch_method_intrinsic<'gc, T: crate::stack::ops::VesOps<'gc>>(\n");
     dispatch_code.push_str("    id: MethodIntrinsicId,\n");
     dispatch_code.push_str("    ctx: &mut T,\n");
     dispatch_code.push_str("    method: dotnet_types::members::MethodDescription,\n");
@@ -395,9 +392,8 @@ fn generate_intrinsic_phf(out_dir: &std::ffi::OsStr, entries: &[IntrinsicEntry])
     dispatch_code.push_str("    }\n");
     dispatch_code.push_str("}\n\n");
 
-    dispatch_code.push_str(
-        "pub fn dispatch_field_intrinsic<'gc, 'm: 'gc, T: crate::stack::ops::VesOps<'gc, 'm>>(\n",
-    );
+    dispatch_code
+        .push_str("pub fn dispatch_field_intrinsic<'gc, T: crate::stack::ops::VesOps<'gc>>(\n");
     dispatch_code.push_str("    id: FieldIntrinsicId,\n");
     dispatch_code.push_str("    ctx: &mut T,\n");
     dispatch_code.push_str("    field: dotnet_types::members::FieldDescription,\n");

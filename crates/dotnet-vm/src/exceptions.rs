@@ -101,7 +101,7 @@ impl ManagedException {
     pub fn extract<'gc>(
         gc: &GCHandle<'gc>,
         exception: ObjectRef<'gc>,
-        ctx: &dyn VesOps<'gc, '_>,
+        ctx: &dyn VesOps<'gc>,
     ) -> Self {
         let mut message = None;
         let mut stack_trace = None;
@@ -271,9 +271,9 @@ pub fn parse<'a>(
 pub struct ExceptionHandlingSystem;
 
 impl ExceptionHandlingSystem {
-    pub fn handle_exception<'gc, 'm: 'gc>(
+    pub fn handle_exception<'gc: 'gc>(
         &self,
-        ctx: &mut dyn VesOps<'gc, 'm>,
+        ctx: &mut dyn VesOps<'gc>,
         gc: GCHandle<'gc>,
     ) -> StepResult {
         match *ctx.exception_mode() {
@@ -297,9 +297,9 @@ impl ExceptionHandlingSystem {
         }
     }
 
-    fn begin_throwing<'gc, 'm: 'gc>(
+    fn begin_throwing<'gc: 'gc>(
         &self,
-        ctx: &mut dyn VesOps<'gc, 'm>,
+        ctx: &mut dyn VesOps<'gc>,
         exception: ObjectRef<'gc>,
         gc: GCHandle<'gc>,
         preserve_stack_trace: bool,
@@ -346,12 +346,12 @@ impl ExceptionHandlingSystem {
 
             let format_params = |method: &MethodDescription| {
                 let mut params_str = String::new();
-                for (i, param) in method.method.signature.parameters.iter().enumerate() {
+                for (i, param) in method.method().signature.parameters.iter().enumerate() {
                     if i > 0 {
                         params_str.push_str(", ");
                     }
                     params_str.push_str(&param.1.show(method.resolution().definition()));
-                    let Some(meta) = method.method.parameter_metadata.get(i) else {
+                    let Some(meta) = method.method().parameter_metadata.get(i) else {
                         continue;
                     };
                     if let Some(name) = meta.as_ref().and_then(|m| m.name.as_ref()) {
@@ -365,7 +365,7 @@ impl ExceptionHandlingSystem {
             // If we're in an intrinsic, record it first
             if let Some(intrinsic) = ctx.current_intrinsic() {
                 let type_name = intrinsic.parent.type_name();
-                let method_name = intrinsic.method.name.to_string();
+                let method_name = intrinsic.method().name.to_string();
                 let params = format_params(&intrinsic);
                 trace.push_str(&format!(
                     "   at {}.{}({}) [Intrinsic]\n",
@@ -376,7 +376,7 @@ impl ExceptionHandlingSystem {
             for frame in ctx.frame_stack().frames.iter().rev() {
                 let method = &frame.state.info_handle.source;
                 let type_name = method.parent.type_name();
-                let method_name = method.method.name.to_string();
+                let method_name = method.method().name.to_string();
                 let params = format_params(method);
                 let ip = frame.state.ip;
                 trace.push_str(&format!(
@@ -429,9 +429,9 @@ impl ExceptionHandlingSystem {
         self.handle_exception(ctx, gc)
     }
 
-    fn search_for_handler<'gc, 'm: 'gc>(
+    fn search_for_handler<'gc: 'gc>(
         &self,
-        ctx: &mut dyn VesOps<'gc, 'm>,
+        ctx: &mut dyn VesOps<'gc>,
         gc: GCHandle<'gc>,
         exception: ObjectRef<'gc>,
         cursor: HandlerAddress,
@@ -571,9 +571,9 @@ impl ExceptionHandlingSystem {
         StepResult::MethodThrew(managed_exc)
     }
 
-    fn unwind<'gc, 'm: 'gc>(
+    fn unwind<'gc: 'gc>(
         &self,
-        ctx: &mut dyn VesOps<'gc, 'm>,
+        ctx: &mut dyn VesOps<'gc>,
         _gc: GCHandle<'gc>,
         exception: Option<ObjectRef<'gc>>,
         target: UnwindTarget,

@@ -15,7 +15,7 @@ use dotnet_value::{
     string::CLRString,
 };
 
-impl<'a, 'gc, 'm: 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc, 'm> {
+impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn throw_by_name(&mut self, name: &str) -> StepResult {
         self.throw_by_name_with_message(name, "")

@@ -38,11 +38,17 @@ mod tests {
         let arena = Arena::<TestRoot>::new(|_mc| ());
         let arena_id = ArenaId(100);
         let stw_flag = dotnet_utils::sync::Arc::new(dotnet_utils::sync::AtomicBool::new(false));
-        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(arena_id)));
+        let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(arena_id);
+        let arena_handle = unsafe {
+            std::mem::transmute::<
+                &dotnet_utils::gc::ArenaHandleInner,
+                &'static dotnet_utils::gc::ArenaHandleInner,
+            >(_arena_handle_owner.as_inner())
+        };
         dotnet_utils::gc::register_arena(arena_id, stw_flag.clone());
         arena.mutate(|gc, _root| {
             dotnet_utils::sync::MANAGED_THREAD_ID.set(Some(arena_id));
-            let gc_handle = dotnet_utils::gc::GCHandle::new(gc, arena_handle.as_inner(), arena_id);
+            let gc_handle = dotnet_utils::gc::GCHandle::new(gc, arena_handle, arena_id);
             let obj = ObjectRef::new(
                 gc_handle,
                 HeapStorage::Str(crate::string::CLRString::from("test")),
@@ -67,12 +73,18 @@ mod tests {
         let owner_id = ArenaId(101);
         let current_id = ArenaId(102);
         let stw_flag = dotnet_utils::sync::Arc::new(dotnet_utils::sync::AtomicBool::new(false));
-        let owner_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(owner_id)));
+        let _owner_handle_owner = dotnet_utils::gc::ArenaHandle::new(owner_id);
+        let owner_handle = unsafe {
+            std::mem::transmute::<
+                &dotnet_utils::gc::ArenaHandleInner,
+                &'static dotnet_utils::gc::ArenaHandleInner,
+            >(_owner_handle_owner.as_inner())
+        };
         dotnet_utils::gc::register_arena(owner_id, stw_flag.clone());
         dotnet_utils::gc::register_arena(current_id, stw_flag.clone());
         arena.mutate(|gc, _root| {
             dotnet_utils::sync::MANAGED_THREAD_ID.set(Some(owner_id));
-            let gc_handle = dotnet_utils::gc::GCHandle::new(gc, owner_handle.as_inner(), owner_id);
+            let gc_handle = dotnet_utils::gc::GCHandle::new(gc, owner_handle, owner_id);
             let obj = ObjectRef::new(
                 gc_handle,
                 HeapStorage::Str(crate::string::CLRString::from("test")),

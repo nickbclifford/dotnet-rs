@@ -33,17 +33,16 @@ const NULL_REF_MSG: &str = "Object reference not set to an instance of an object
 #[dotnet_intrinsic("bool System.String::Equals(object)")]
 pub fn intrinsic_string_equals<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
         + MemoryOps<'gc>
-        + CallOps<'gc, 'm>
-        + ResolutionOps<'gc, 'm>
+        + CallOps<'gc>
+        + ResolutionOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
+        + LoaderOps
         + ThreadOps
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -133,23 +132,22 @@ pub fn intrinsic_string_equals<
 #[dotnet_intrinsic("static string System.String::FastAllocateString(int, IntPtr)")]
 pub fn intrinsic_string_fast_allocate_string<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
         + MemoryOps<'gc>
-        + CallOps<'gc, 'm>
-        + ResolutionOps<'gc, 'm>
+        + CallOps<'gc>
+        + ResolutionOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
+        + LoaderOps
         + ThreadOps
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let len = if method.method.signature.parameters.len() == 1 {
+    let len = if method.method().signature.parameters.len() == 1 {
         let i = ctx.pop_i32();
         if i < 0 {
             return ctx.throw_by_name_with_message(
@@ -194,17 +192,16 @@ pub fn intrinsic_string_fast_allocate_string<
 #[dotnet_intrinsic("void System.String::.ctor(char[])")]
 pub fn intrinsic_string_ctor_char_array<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
         + MemoryOps<'gc>
-        + CallOps<'gc, 'm>
-        + ResolutionOps<'gc, 'm>
+        + CallOps<'gc>
+        + ResolutionOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
+        + LoaderOps
         + ThreadOps
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -266,17 +263,16 @@ pub fn intrinsic_string_ctor_char_array<
 #[dotnet_intrinsic("void System.String::.ctor(char*)")]
 pub fn intrinsic_string_ctor_char_ptr<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
         + MemoryOps<'gc>
-        + CallOps<'gc, 'm>
-        + ResolutionOps<'gc, 'm>
+        + CallOps<'gc>
+        + ResolutionOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
+        + LoaderOps
         + ThreadOps
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -322,17 +318,16 @@ pub fn intrinsic_string_ctor_char_ptr<
 #[dotnet_intrinsic("char System.String::get_Chars(int)")]
 pub fn intrinsic_string_get_chars<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
         + MemoryOps<'gc>
-        + CallOps<'gc, 'm>
-        + ResolutionOps<'gc, 'm>
+        + CallOps<'gc>
+        + ResolutionOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
+        + LoaderOps
         + ThreadOps
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -363,17 +358,16 @@ pub fn intrinsic_string_get_chars<
 #[dotnet_intrinsic("int System.String::get_Length()")]
 pub fn intrinsic_string_get_length<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
         + MemoryOps<'gc>
-        + CallOps<'gc, 'm>
-        + ResolutionOps<'gc, 'm>
+        + CallOps<'gc>
+        + ResolutionOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
+        + LoaderOps
         + ThreadOps
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -391,17 +385,16 @@ pub fn intrinsic_string_get_length<
 )]
 pub fn intrinsic_string_concat_three_spans<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
         + MemoryOps<'gc>
-        + CallOps<'gc, 'm>
-        + ResolutionOps<'gc, 'm>
+        + CallOps<'gc>
+        + ResolutionOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
+        + LoaderOps
         + ThreadOps
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -468,17 +461,16 @@ pub fn intrinsic_string_concat_three_spans<
 #[dotnet_intrinsic("int System.String::GetHashCodeOrdinalIgnoreCase()")]
 pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
         + MemoryOps<'gc>
-        + CallOps<'gc, 'm>
-        + ResolutionOps<'gc, 'm>
+        + CallOps<'gc>
+        + ResolutionOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
+        + LoaderOps
         + ThreadOps
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -548,17 +540,16 @@ pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<
 #[dotnet_intrinsic("char& System.String::GetRawStringData()")]
 pub fn intrinsic_string_get_raw_data<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
         + MemoryOps<'gc>
-        + CallOps<'gc, 'm>
-        + ResolutionOps<'gc, 'm>
+        + CallOps<'gc>
+        + ResolutionOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
+        + LoaderOps
         + ThreadOps
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -608,23 +599,22 @@ pub fn intrinsic_string_get_raw_data<
 #[dotnet_intrinsic("int System.String::IndexOf(char, int)")]
 pub fn intrinsic_string_index_of<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
         + MemoryOps<'gc>
-        + CallOps<'gc, 'm>
-        + ResolutionOps<'gc, 'm>
+        + CallOps<'gc>
+        + ResolutionOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
+        + LoaderOps
         + ThreadOps
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let (c, start_at) = if method.method.signature.parameters.len() == 1 {
+    let (c, start_at) = if method.method().signature.parameters.len() == 1 {
         let c = ctx.pop_i32();
         (c as u16, 0usize)
     } else {
@@ -649,23 +639,22 @@ pub fn intrinsic_string_index_of<
 #[dotnet_intrinsic("string System.String::Substring(int, int)")]
 pub fn intrinsic_string_substring<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
         + MemoryOps<'gc>
-        + CallOps<'gc, 'm>
-        + ResolutionOps<'gc, 'm>
+        + CallOps<'gc>
+        + ResolutionOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
+        + LoaderOps
         + ThreadOps
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let (start_at, length) = if method.method.signature.parameters.len() == 1 {
+    let (start_at, length) = if method.method().signature.parameters.len() == 1 {
         let start_at = ctx.peek_stack().as_i32();
         (start_at as usize, None)
     } else {
@@ -763,17 +752,16 @@ pub fn intrinsic_string_substring<
 #[dotnet_intrinsic("static bool System.String::IsNullOrEmpty(string)")]
 pub fn intrinsic_string_is_null_or_empty<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
         + MemoryOps<'gc>
-        + CallOps<'gc, 'm>
-        + ResolutionOps<'gc, 'm>
+        + CallOps<'gc>
+        + ResolutionOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
+        + LoaderOps
         + ThreadOps
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -813,17 +801,16 @@ pub fn intrinsic_string_is_null_or_empty<
 #[dotnet_intrinsic("static bool System.String::IsNullOrWhiteSpace(string)")]
 pub fn intrinsic_string_is_null_or_white_space<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
         + MemoryOps<'gc>
-        + CallOps<'gc, 'm>
-        + ResolutionOps<'gc, 'm>
+        + CallOps<'gc>
+        + ResolutionOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
+        + LoaderOps
         + ThreadOps
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -905,17 +892,16 @@ pub fn intrinsic_string_is_null_or_white_space<
 #[dotnet_intrinsic_field("static string System.String::Empty")]
 pub fn intrinsic_field_string_empty<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
         + MemoryOps<'gc>
-        + CallOps<'gc, 'm>
-        + ResolutionOps<'gc, 'm>
+        + CallOps<'gc>
+        + ResolutionOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
+        + LoaderOps
         + ThreadOps
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _field: FieldDescription,
@@ -929,17 +915,16 @@ pub fn intrinsic_field_string_empty<
 #[dotnet_intrinsic_field("int System.String::_stringLength")]
 pub fn intrinsic_field_string_length<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
         + MemoryOps<'gc>
-        + CallOps<'gc, 'm>
-        + ResolutionOps<'gc, 'm>
+        + CallOps<'gc>
+        + ResolutionOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
+        + LoaderOps
         + ThreadOps
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _field: FieldDescription,
@@ -965,17 +950,16 @@ pub fn intrinsic_field_string_length<
 #[dotnet_intrinsic("static void System.String::CopyStringContent(string, int, string)")]
 pub fn intrinsic_string_copy_string_content<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
         + MemoryOps<'gc>
-        + CallOps<'gc, 'm>
-        + ResolutionOps<'gc, 'm>
+        + CallOps<'gc>
+        + ResolutionOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
+        + LoaderOps
         + ThreadOps
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -1065,16 +1049,15 @@ pub fn intrinsic_string_copy_string_content<
 #[dotnet_intrinsic("static System.ReadOnlySpan<char> System.String::op_Implicit(string)")]
 pub fn intrinsic_string_implicit_to_span<
     'gc,
-    'm: 'gc,
-    T: StackOps<'gc, 'm>
+    T: StackOps<'gc>
         + MemoryOps<'gc>
-        + CallOps<'gc, 'm>
-        + ResolutionOps<'gc, 'm>
+        + CallOps<'gc>
+        + ResolutionOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
+        + LoaderOps
         + ThreadOps
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     method: MethodDescription,

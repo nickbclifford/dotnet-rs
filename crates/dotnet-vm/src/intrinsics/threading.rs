@@ -19,15 +19,14 @@ const NULL_REF_MSG: &str = "Object reference not set to an instance of an object
 #[dotnet_intrinsic("static void System.Threading.Monitor::Exit(object)")]
 pub fn intrinsic_monitor_exit<
     'gc,
-    'm: 'gc,
-    T: StackOps<'gc, 'm>
+    T: StackOps<'gc>
         + ThreadOps
         + MemoryOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
-        + ResolutionOps<'gc, 'm>
-        + ReflectionOps<'gc, 'm>,
+        + LoaderOps
+        + ResolutionOps<'gc>
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -81,22 +80,21 @@ pub fn intrinsic_monitor_exit<
 #[dotnet_intrinsic("static T System.Threading.Interlocked::CompareExchange<T>(T&, T, T)")]
 pub fn intrinsic_interlocked_compare_exchange<
     'gc,
-    'm: 'gc,
-    T: StackOps<'gc, 'm>
+    T: StackOps<'gc>
         + ThreadOps
         + MemoryOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
-        + ResolutionOps<'gc, 'm>
-        + ReflectionOps<'gc, 'm>,
+        + LoaderOps
+        + ResolutionOps<'gc>
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
-    let params = &method.method.signature.parameters;
+    let params = &method.method().signature.parameters;
     // CompareExchange(ref T, T, T) -> T
     // params[0] is 'ref T'.
     let Parameter(_, first_param_type) = &params[0];
@@ -226,22 +224,21 @@ pub fn intrinsic_interlocked_compare_exchange<
 #[dotnet_intrinsic("static T System.Threading.Interlocked::Exchange<T>(T&, T)")]
 pub fn intrinsic_interlocked_exchange<
     'gc,
-    'm: 'gc,
-    T: StackOps<'gc, 'm>
+    T: StackOps<'gc>
         + ThreadOps
         + MemoryOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
-        + ResolutionOps<'gc, 'm>
-        + ReflectionOps<'gc, 'm>,
+        + LoaderOps
+        + ResolutionOps<'gc>
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
-    let params = &method.method.signature.parameters;
+    let params = &method.method().signature.parameters;
     // Exchange(ref T, T) -> T
     // params[0] is 'ref T'.
     let Parameter(_, first_param_type) = &params[0];
@@ -374,15 +371,14 @@ fn find_success_flag_index<'gc, T: RawMemoryOps<'gc>>(
 #[dotnet_intrinsic("static void System.Threading.Monitor::Enter(object)")]
 pub fn intrinsic_monitor_enter_obj<
     'gc,
-    'm: 'gc,
-    T: StackOps<'gc, 'm>
+    T: StackOps<'gc>
         + ThreadOps
         + MemoryOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
-        + ResolutionOps<'gc, 'm>
-        + ReflectionOps<'gc, 'm>,
+        + LoaderOps
+        + ResolutionOps<'gc>
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -420,15 +416,14 @@ pub fn intrinsic_monitor_enter_obj<
 #[dotnet_intrinsic("static void System.Threading.Monitor::Enter(object, bool&)")]
 pub fn intrinsic_monitor_reliable_enter<
     'gc,
-    'm: 'gc,
-    T: StackOps<'gc, 'm>
+    T: StackOps<'gc>
         + ThreadOps
         + MemoryOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
-        + ResolutionOps<'gc, 'm>
-        + ReflectionOps<'gc, 'm>,
+        + LoaderOps
+        + ResolutionOps<'gc>
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -487,15 +482,14 @@ pub fn intrinsic_monitor_reliable_enter<
 #[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter_FastPath(object)")]
 pub fn intrinsic_monitor_try_enter_fast_path<
     'gc,
-    'm: 'gc,
-    T: StackOps<'gc, 'm>
+    T: StackOps<'gc>
         + ThreadOps
         + MemoryOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
-        + ResolutionOps<'gc, 'm>
-        + ReflectionOps<'gc, 'm>,
+        + LoaderOps
+        + ResolutionOps<'gc>
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -526,15 +520,14 @@ pub fn intrinsic_monitor_try_enter_fast_path<
 #[dotnet_intrinsic("static void System.Threading.Monitor::TryEnter(object, int, bool&)")]
 pub fn intrinsic_monitor_try_enter_timeout_ref<
     'gc,
-    'm: 'gc,
-    T: StackOps<'gc, 'm>
+    T: StackOps<'gc>
         + ThreadOps
         + MemoryOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
-        + ResolutionOps<'gc, 'm>
-        + ReflectionOps<'gc, 'm>,
+        + LoaderOps
+        + ResolutionOps<'gc>
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -603,15 +596,14 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<
 #[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter(object, int)")]
 pub fn intrinsic_monitor_try_enter_timeout<
     'gc,
-    'm: 'gc,
-    T: StackOps<'gc, 'm>
+    T: StackOps<'gc>
         + ThreadOps
         + MemoryOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
-        + ResolutionOps<'gc, 'm>
-        + ReflectionOps<'gc, 'm>,
+        + LoaderOps
+        + ResolutionOps<'gc>
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -668,22 +660,21 @@ pub fn intrinsic_monitor_try_enter_timeout<
 #[dotnet_intrinsic("static double System.Threading.Volatile::Read(double&)")]
 pub fn intrinsic_volatile_read<
     'gc,
-    'm: 'gc,
-    T: StackOps<'gc, 'm>
+    T: StackOps<'gc>
         + ThreadOps
         + MemoryOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
-        + ResolutionOps<'gc, 'm>
-        + ReflectionOps<'gc, 'm>,
+        + LoaderOps
+        + ResolutionOps<'gc>
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
     let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
-    let params = &method.method.signature.parameters;
+    let params = &method.method().signature.parameters;
     let Parameter(_, first_param_type) = &params[0];
 
     let target_type = if let ParameterType::Ref(inner) = first_param_type {
@@ -811,15 +802,14 @@ pub fn intrinsic_volatile_read<
 #[dotnet_intrinsic("static void System.Threading.Volatile::Write(double&, double)")]
 pub fn intrinsic_volatile_write<
     'gc,
-    'm: 'gc,
-    T: StackOps<'gc, 'm>
+    T: StackOps<'gc>
         + ThreadOps
         + MemoryOps<'gc>
         + RawMemoryOps<'gc>
         + ExceptionOps<'gc>
-        + LoaderOps<'m>
-        + ResolutionOps<'gc, 'm>
-        + ReflectionOps<'gc, 'm>,
+        + LoaderOps
+        + ResolutionOps<'gc>
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     method: MethodDescription,
@@ -829,7 +819,7 @@ pub fn intrinsic_volatile_write<
     let value = ctx.pop();
     let target_ptr = ctx.pop_managed_ptr();
 
-    let params = &method.method.signature.parameters;
+    let params = &method.method().signature.parameters;
     let Parameter(_, target_ref_type) = &params[0];
 
     let target_type = if let ParameterType::Ref(inner) = target_ref_type {

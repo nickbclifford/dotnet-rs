@@ -68,7 +68,7 @@ pub fn dotnet_intrinsic(attr: TokenStream, item: TokenStream) -> TokenStream {
                 // Check if parameter matches Expected Type.
                 {
                     use dotnetdll::prelude::*;
-                    let Some(Parameter(_, ParameterType::Value(MethodType::Base(b)))) = method.method.signature.parameters.get(#i) else { return false; };
+                    let Some(Parameter(_, ParameterType::Value(MethodType::Base(b)))) = method.method().signature.parameters.get(#i) else { return false; };
                     if !matches!(**b, #base_type) { return false; }
                 }
             }

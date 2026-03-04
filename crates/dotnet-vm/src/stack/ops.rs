@@ -18,7 +18,7 @@
 //!
 //! # Usage
 //!
-//! Handlers should typically take a generic parameter `T: VesOps<'gc, 'm> + ?Sized`.
+//! Handlers should typically take a generic parameter `T: VesOps<'gc> + ?Sized`.
 //! This allows them to work with both `VesContext` and potentially other implementations
 //! for testing or specialized execution.
 use crate::{state::SharedGlobalState, sync::Arc, tracer::Tracer};
@@ -149,9 +149,9 @@ impl<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + VariableOps<'gc> + ?Sized>
 {
 }
 
-pub trait StackOps<'gc, 'm>: AllStackOps<'gc> {
-    fn current_frame(&self) -> &crate::stack::StackFrame<'gc, 'm>;
-    fn current_frame_mut(&mut self) -> &mut crate::stack::StackFrame<'gc, 'm>;
+pub trait StackOps<'gc>: AllStackOps<'gc> {
+    fn current_frame(&self) -> &crate::stack::StackFrame<'gc>;
+    fn current_frame_mut(&mut self) -> &mut crate::stack::StackFrame<'gc>;
 
     fn get_slot(&self, index: crate::StackSlotIndex) -> StackValue<'gc>;
     fn get_slot_ref(&self, index: crate::StackSlotIndex) -> &StackValue<'gc>;
@@ -170,14 +170,14 @@ pub trait ExceptionOps<'gc> {
     fn ret(&mut self) -> crate::StepResult;
 }
 
-pub trait ResolutionOps<'gc, 'm> {
+pub trait ResolutionOps<'gc> {
     fn stack_value_type(
         &self,
         val: &StackValue<'gc>,
     ) -> Result<TypeDescription, TypeResolutionError>;
     fn make_concrete(&self, t: &MethodType) -> Result<ConcreteType, TypeResolutionError>;
-    fn current_context(&self) -> crate::ResolutionContext<'_, 'm>;
-    fn with_generics<'b>(&self, lookup: &'b GenericLookup) -> crate::ResolutionContext<'b, 'm>;
+    fn current_context(&self) -> crate::ResolutionContext<'_>;
+    fn with_generics<'b>(&self, lookup: &'b GenericLookup) -> crate::ResolutionContext<'b>;
 }
 
 pub trait PoolOps {
@@ -309,7 +309,7 @@ pub trait RawMemoryOps<'gc>: BorrowScopeOps {
     fn check_gc_safe_point(&self) -> bool;
 }
 
-pub trait ReflectionOps<'gc, 'm>: MemoryOps<'gc> {
+pub trait ReflectionOps<'gc>: MemoryOps<'gc> {
     fn pre_initialize_reflection(&mut self);
     fn get_runtime_method_index(
         &mut self,
@@ -329,7 +329,7 @@ pub trait ReflectionOps<'gc, 'm>: MemoryOps<'gc> {
     ) -> ObjectRef<'gc>;
     fn make_runtime_type(
         &self,
-        ctx: &crate::ResolutionContext<'_, 'm>,
+        ctx: &crate::ResolutionContext<'_>,
         source: &MethodType,
     ) -> RuntimeType;
     fn get_heap_description(
@@ -360,10 +360,11 @@ pub trait ReflectionOps<'gc, 'm>: MemoryOps<'gc> {
     ) -> crate::StepResult;
 }
 
-pub trait LoaderOps<'m> {
-    fn loader(&self) -> &'m dotnet_assemblies::AssemblyLoader;
-    fn resolver(&self) -> crate::resolver::ResolverService<'m>;
-    fn shared(&self) -> &Arc<SharedGlobalState<'m>>;
+pub trait LoaderOps {
+    fn loader(&self) -> &dotnet_assemblies::AssemblyLoader;
+    fn loader_arc(&self) -> Arc<dotnet_assemblies::AssemblyLoader>;
+    fn resolver(&self) -> crate::resolver::ResolverService;
+    fn shared(&self) -> &Arc<SharedGlobalState>;
 }
 
 pub trait StaticsOps<'gc> {
@@ -379,23 +380,23 @@ pub trait ThreadOps {
     fn thread_id(&self) -> dotnet_utils::ArenaId;
 }
 
-pub trait CallOps<'gc, 'm> {
+pub trait CallOps<'gc> {
     fn constructor_frame(
         &mut self,
         instance: ObjectInstance<'gc>,
-        method: crate::MethodInfo<'m>,
+        method: crate::MethodInfo<'static>,
         generic_inst: GenericLookup,
     ) -> Result<(), TypeResolutionError>;
 
     fn call_frame(
         &mut self,
-        method: crate::MethodInfo<'m>,
+        method: crate::MethodInfo<'static>,
         generic_inst: GenericLookup,
     ) -> Result<(), TypeResolutionError>;
 
     fn entrypoint_frame(
         &mut self,
-        method: crate::MethodInfo<'m>,
+        method: crate::MethodInfo<'static>,
         generic_inst: GenericLookup,
         args: Vec<StackValue<'gc>>,
     ) -> Result<(), TypeResolutionError>;
@@ -410,19 +411,19 @@ pub trait CallOps<'gc, 'm> {
         &mut self,
         source: &dotnetdll::prelude::MethodSource,
         this_type: Option<TypeDescription>,
-        ctx: Option<&crate::ResolutionContext<'_, 'm>>,
+        ctx: Option<&crate::ResolutionContext<'_>>,
     ) -> crate::StepResult;
 }
 
-pub trait VesOps<'gc, 'm>:
-    StackOps<'gc, 'm>
+pub trait VesOps<'gc>:
+    StackOps<'gc>
     + ExceptionOps<'gc>
-    + ResolutionOps<'gc, 'm>
-    + ReflectionOps<'gc, 'm>
-    + LoaderOps<'m>
+    + ResolutionOps<'gc>
+    + ReflectionOps<'gc>
+    + LoaderOps
     + StaticsOps<'gc>
     + ThreadOps
-    + CallOps<'gc, 'm>
+    + CallOps<'gc>
     + MemoryOps<'gc>
     + PoolOps
     + RawMemoryOps<'gc>
@@ -438,8 +439,8 @@ pub trait VesOps<'gc, 'm>:
     fn branch(&mut self, target: usize);
     fn conditional_branch(&mut self, condition: bool, target: usize) -> bool;
     fn increment_ip(&mut self);
-    fn state(&self) -> &crate::MethodState<'m>;
-    fn state_mut(&mut self) -> &mut crate::MethodState<'m>;
+    fn state(&self) -> &crate::MethodState;
+    fn state_mut(&mut self) -> &mut crate::MethodState;
 
     fn exception_mode(&self) -> &crate::exceptions::ExceptionState<'gc>;
     fn exception_mode_mut(&mut self) -> &mut crate::exceptions::ExceptionState<'gc>;
@@ -450,8 +451,8 @@ pub trait VesOps<'gc, 'm>:
     fn evaluation_stack(&self) -> &crate::stack::evaluation_stack::EvaluationStack<'gc>;
     fn evaluation_stack_mut(&mut self)
     -> &mut crate::stack::evaluation_stack::EvaluationStack<'gc>;
-    fn frame_stack(&self) -> &crate::stack::frames::FrameStack<'gc, 'm>;
-    fn frame_stack_mut(&mut self) -> &mut crate::stack::frames::FrameStack<'gc, 'm>;
+    fn frame_stack(&self) -> &crate::stack::frames::FrameStack<'gc>;
+    fn frame_stack_mut(&mut self) -> &mut crate::stack::frames::FrameStack<'gc>;
     fn original_ip(&self) -> usize;
     fn original_ip_mut(&mut self) -> &mut usize;
     fn original_stack_height(&self) -> crate::StackSlotIndex;

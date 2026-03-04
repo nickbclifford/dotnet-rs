@@ -8,7 +8,7 @@ use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 #[dotnet_intrinsic(
     "static bool System.Diagnostics.Tracing.XplatEventLogger::IsEventSourceLoggingEnabled()"
 )]
-pub fn intrinsic_is_event_source_logging_enabled<'gc, 'm: 'gc, T: TypedStackOps<'gc>>(
+pub fn intrinsic_is_event_source_logging_enabled<'gc, T: TypedStackOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -21,11 +21,7 @@ pub fn intrinsic_is_event_source_logging_enabled<'gc, 'm: 'gc, T: TypedStackOps<
 #[dotnet_intrinsic(
     "static nint System.Diagnostics.Tracing.EventPipeInternal::CreateProvider(string, void*, void*)"
 )]
-pub fn intrinsic_eventpipe_create_provider<
-    'gc,
-    'm: 'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc>,
->(
+pub fn intrinsic_eventpipe_create_provider<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,

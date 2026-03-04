@@ -10,11 +10,7 @@ use dotnet_value::StackValue;
 use dotnetdll::prelude::*;
 
 #[dotnet_instruction(LoadMethodPointer(param0))]
-pub fn ldftn<
-    'gc,
-    'm: 'gc,
-    T: ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm> + LoaderOps<'m> + TypedStackOps<'gc>,
->(
+pub fn ldftn<'gc, T: ResolutionOps<'gc> + ReflectionOps<'gc> + LoaderOps + TypedStackOps<'gc>>(
     ctx: &mut T,
     param0: &MethodSource,
 ) -> StepResult {
@@ -31,12 +27,7 @@ pub fn ldftn<
 #[dotnet_instruction(LoadVirtualMethodPointer { param0, skip_null_check })]
 pub fn ldvirtftn<
     'gc,
-    'm: 'gc,
-    T: ResolutionOps<'gc, 'm>
-        + ReflectionOps<'gc, 'm>
-        + LoaderOps<'m>
-        + TypedStackOps<'gc>
-        + ExceptionOps<'gc>,
+    T: ResolutionOps<'gc> + ReflectionOps<'gc> + LoaderOps + TypedStackOps<'gc> + ExceptionOps<'gc>,
 >(
     ctx: &mut T,
     param0: &MethodSource,
@@ -73,8 +64,7 @@ pub fn ldvirtftn<
 #[dotnet_instruction(LoadTokenType(param0))]
 pub fn ldtoken_type<
     'gc,
-    'm: 'gc,
-    T: ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm> + LoaderOps<'m> + EvalStackOps<'gc>,
+    T: ResolutionOps<'gc> + ReflectionOps<'gc> + LoaderOps + EvalStackOps<'gc>,
 >(
     ctx: &mut T,
     param0: &MethodType,
@@ -98,8 +88,7 @@ pub fn ldtoken_type<
 #[dotnet_instruction(LoadTokenMethod(param0))]
 pub fn ldtoken_method<
     'gc,
-    'm: 'gc,
-    T: ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm> + LoaderOps<'m> + EvalStackOps<'gc>,
+    T: ResolutionOps<'gc> + ReflectionOps<'gc> + LoaderOps + EvalStackOps<'gc>,
 >(
     ctx: &mut T,
     param0: &MethodSource,
@@ -123,8 +112,7 @@ pub fn ldtoken_method<
 #[dotnet_instruction(LoadTokenField(param0))]
 pub fn ldtoken_field<
     'gc,
-    'm: 'gc,
-    T: ResolutionOps<'gc, 'm> + ReflectionOps<'gc, 'm> + LoaderOps<'m> + EvalStackOps<'gc>,
+    T: ResolutionOps<'gc> + ReflectionOps<'gc> + LoaderOps + EvalStackOps<'gc>,
 >(
     ctx: &mut T,
     param0: &FieldSource,

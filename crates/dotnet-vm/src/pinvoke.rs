@@ -16,7 +16,7 @@ use dotnet_value::{
     pointer::{ManagedPtr, PointerOrigin},
 };
 use dotnetdll::prelude::*;
-use gc_arena::{Collect, Gc, unsafe_empty_collect};
+use gc_arena::{Gc, static_collect};
 use libffi::middle::*;
 use libloading::{Library, Symbol};
 use sptr::Strict;
@@ -58,7 +58,7 @@ pub struct NativeLibraries {
     libraries: DashMap<String, Library>,
     sandbox: Arc<dyn PInvokeSandbox>,
 }
-unsafe_empty_collect!(NativeLibraries);
+static_collect!(NativeLibraries);
 impl NativeLibraries {
     pub fn new(root: impl AsRef<str>) -> Self {
         Self {
@@ -390,8 +390,8 @@ impl<'gc> PinnedGuard<'gc> {
     }
 }
 
-pub fn external_call<'ctx, 'gc, 'm: 'gc>(
-    ctx: &'ctx mut dyn VesOps<'gc, 'm>,
+pub fn external_call<'ctx, 'gc: 'gc>(
+    ctx: &'ctx mut dyn VesOps<'gc>,
     method: MethodDescription,
 ) -> StepResult {
     ctx.set_current_intrinsic(Some(method));
@@ -412,11 +412,11 @@ fn resolve_parameter_base_type(
     }
 }
 
-fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
-    ctx: &'ctx mut dyn VesOps<'gc, 'm>,
+fn external_call_impl<'ctx, 'gc: 'gc>(
+    ctx: &'ctx mut dyn VesOps<'gc>,
     method: MethodDescription,
 ) -> StepResult {
-    let Some(p) = &method.method.pinvoke else {
+    let Some(p) = &method.method().pinvoke else {
         unreachable!()
     };
 
@@ -425,7 +425,7 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
     #[cfg(feature = "multithreading")]
     let mut cross_arena_guards = Vec::new();
 
-    let arg_count = method.method.signature.parameters.len();
+    let arg_count = method.method().signature.parameters.len();
     let stack_values = ctx.peek_multiple(arg_count);
 
     let res = method.resolution();
@@ -446,7 +446,7 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
         type_name
     );
     let arg_types: Vec<String> = method
-        .method
+        .method()
         .signature
         .parameters
         .iter()
@@ -496,7 +496,7 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
     let mut args: Vec<Type> = vec![];
     {
         let res_ctx = ctx.current_context();
-        for Parameter(_, p) in &method.method.signature.parameters {
+        for Parameter(_, p) in &method.method().signature.parameters {
             args.push(match param_to_type(p, &res_ctx) {
                 Ok(v) => v,
                 Err(e) => return StepResult::Error(e.into()),
@@ -505,7 +505,7 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
     }
 
     vm_trace!(ctx, "  Preparing return type...");
-    let return_type = match &method.method.signature.return_type.1 {
+    let return_type = match &method.method().signature.return_type.1 {
         None => Type::void(),
         Some(s) => {
             vm_trace!(ctx, "  Resolving return type: {:?}", s);
@@ -545,7 +545,7 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
     // Pass 1: Prepare buffers
     for (i, (v, Parameter(_, p_type))) in stack_values
         .iter()
-        .zip(&method.method.signature.parameters)
+        .zip(&method.method().signature.parameters)
         .enumerate()
     {
         let ffi_size = unsafe { (*args[i].as_raw_ptr()).size };
@@ -781,7 +781,7 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
 
     let cif = Cif::new(args, return_type.clone());
 
-    let do_write_back = |ctx: &mut dyn VesOps<'gc, 'm>| {
+    let do_write_back = |ctx: &mut dyn VesOps<'gc>| {
         for (source, buf_idx, len) in &write_backs {
             let buf = temp_buffers[*buf_idx].as_bytes();
             match source {
@@ -824,7 +824,7 @@ fn external_call_impl<'ctx, 'gc, 'm: 'gc>(
         }};
     }
 
-    match &method.method.signature.return_type.1 {
+    match &method.method().signature.return_type.1 {
         None => {
             vm_trace_interop!(ctx, "PRE-CALL", "(void) {}::{}", module, function);
             unsafe {

@@ -21,7 +21,7 @@ use dotnet_utils::{
     validate_alignment,
 };
 use dotnetdll::prelude::*;
-use gc_arena::{Collect, Collection, Gc};
+use gc_arena::{Collect, Gc, collect::Trace};
 use sptr::Strict;
 use std::{
     cmp::Ordering,
@@ -112,8 +112,8 @@ impl<'a, 'gc> Arbitrary<'a> for StackValue<'gc> {
 // SAFETY: StackValue contains several variants that hold GC-managed references.
 // We manually implement trace to ensure all such references (ObjectRef, ManagedPtr, ValueType)
 // are correctly visited by the GC. Cross-arena references are recorded for coordinated GC.
-unsafe impl<'gc> Collect for StackValue<'gc> {
-    fn trace(&self, cc: &Collection) {
+unsafe impl<'gc> Collect<'gc> for StackValue<'gc> {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         match self {
             Self::ObjectRef(o) => o.trace(cc),
             Self::ManagedPtr(m) => m.trace(cc),

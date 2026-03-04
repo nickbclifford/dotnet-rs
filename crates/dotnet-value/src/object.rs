@@ -14,7 +14,7 @@ use dotnet_utils::{
     gc::{GCHandle, ThreadSafeLock},
     sync::get_current_thread_id,
 };
-use gc_arena::{Collect, Collection, Gc, Mutation};
+use gc_arena::{Collect, Gc, Mutation, collect::Trace};
 use std::{
     cmp::Ordering,
     collections::HashSet,
@@ -190,8 +190,8 @@ impl<'a, 'gc> Arbitrary<'a> for ObjectRef<'gc> {
     }
 }
 
-unsafe impl<'gc> Collect for ObjectRef<'gc> {
-    fn trace(&self, cc: &Collection) {
+unsafe impl<'gc> Collect<'gc> for ObjectRef<'gc> {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         if let Some(h) = self.0 {
             #[cfg(feature = "multithreading")]
             {
@@ -637,8 +637,8 @@ pub enum HeapStorage<'gc> {
 
 // SAFETY: HeapStorage is an enum where each variant either implements Collect or
 // contains no GC references (like CLRString). We manually trace each variant.
-unsafe impl<'gc> Collect for HeapStorage<'gc> {
-    fn trace(&self, cc: &Collection) {
+unsafe impl<'gc> Collect<'gc> for HeapStorage<'gc> {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         match self {
             Self::Vec(v) => v.trace(cc),
             Self::Obj(o) => o.trace(cc),
@@ -752,8 +752,8 @@ pub enum ValueType<'gc> {
 
 // SAFETY: ValueType is an enum where only Pointer and Struct variants contain
 // potential GC references. We manually trace these variants.
-unsafe impl<'gc> Collect for ValueType<'gc> {
-    fn trace(&self, cc: &Collection) {
+unsafe impl<'gc> Collect<'gc> for ValueType<'gc> {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         match self {
             Self::Pointer(p) => p.trace(cc),
             Self::TypedRef(p, _) => p.trace(cc),
@@ -914,9 +914,9 @@ impl<'gc> PartialEq for Vector<'gc> {
 
 // SAFETY: Vector contains raw byte storage that may hold GC pointers (ObjectRef).
 // We use the layout manager to identify and trace any such pointers.
-unsafe impl Collect for Vector<'_> {
+unsafe impl<'gc> Collect<'gc> for Vector<'gc> {
     #[inline]
-    fn trace(&self, cc: &Collection) {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         self.validate_magic();
         let element = &self.layout.element_layout;
         match element.as_ref() {
@@ -1115,8 +1115,8 @@ impl<'gc> Eq for Object<'gc> {}
 
 // SAFETY: Object contains field storage that may hold GC pointers.
 // We use the layout manager associated with the type description to trace fields.
-unsafe impl<'gc> Collect for Object<'gc> {
-    fn trace(&self, cc: &Collection) {
+unsafe impl<'gc> Collect<'gc> for Object<'gc> {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         self.instance_storage.trace(cc);
         // ManagedPtr fields are self-contained and traced via their layout.
     }

@@ -40,11 +40,7 @@ fn offset_ptr<'gc>(val: StackValue<'gc>, byte_offset: isize) -> StackValue<'gc> 
 
 #[dotnet_intrinsic("static int System.Runtime.InteropServices.Marshal::GetLastPInvokeError()")]
 #[allow(unused_variables)]
-pub fn intrinsic_marshal_get_last_pinvoke_error<
-    'gc,
-    'm: 'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc>,
->(
+pub fn intrinsic_marshal_get_last_pinvoke_error<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>(
     ctx: &mut T,
     method: MethodDescription,
     _generics: &GenericLookup,
@@ -56,11 +52,7 @@ pub fn intrinsic_marshal_get_last_pinvoke_error<
 
 #[dotnet_intrinsic("static void System.Runtime.InteropServices.Marshal::SetLastPInvokeError(int)")]
 #[allow(unused_variables)]
-pub fn intrinsic_marshal_set_last_pinvoke_error<
-    'gc,
-    'm: 'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc>,
->(
+pub fn intrinsic_marshal_set_last_pinvoke_error<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>(
     ctx: &mut T,
     method: MethodDescription,
     _generics: &GenericLookup,
@@ -78,8 +70,7 @@ pub fn intrinsic_marshal_set_last_pinvoke_error<
 #[allow(unused_variables)]
 pub fn intrinsic_buffer_memmove<
     'gc,
-    'm: 'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ResolutionOps<'gc, 'm> + RawMemoryOps<'gc>,
+    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ResolutionOps<'gc> + RawMemoryOps<'gc>,
 >(
     ctx: &mut T,
     method: MethodDescription,
@@ -122,8 +113,7 @@ pub fn intrinsic_buffer_memmove<
 #[allow(unused_variables)]
 pub fn intrinsic_memory_marshal_get_array_data_reference<
     'gc,
-    'm: 'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc> + LoaderOps<'m> + ExceptionOps<'gc>,
+    T: EvalStackOps<'gc> + TypedStackOps<'gc> + LoaderOps + ExceptionOps<'gc>,
 >(
     ctx: &mut T,
     method: MethodDescription,
@@ -164,18 +154,13 @@ pub fn intrinsic_memory_marshal_get_array_data_reference<
 #[dotnet_intrinsic("static int System.Runtime.InteropServices.Marshal::SizeOf<T>()")]
 pub fn intrinsic_marshal_size_of<
     'gc,
-    'm: 'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + LoaderOps<'m>
-        + ResolutionOps<'gc, 'm>
-        + ReflectionOps<'gc, 'm>,
+    T: EvalStackOps<'gc> + TypedStackOps<'gc> + LoaderOps + ResolutionOps<'gc> + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let concrete_type = if method.method.signature.parameters.is_empty() {
+    let concrete_type = if method.method().signature.parameters.is_empty() {
         generics.method_generics[0].clone()
     } else {
         let type_obj = ctx.pop_obj();
@@ -192,12 +177,11 @@ pub fn intrinsic_marshal_size_of<
 #[dotnet_intrinsic("static IntPtr System.Runtime.InteropServices.Marshal::OffsetOf<T>(string)")]
 pub fn intrinsic_marshal_offset_of<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
-        + LoaderOps<'m>
-        + ResolutionOps<'gc, 'm>
-        + ReflectionOps<'gc, 'm>
+        + LoaderOps
+        + ResolutionOps<'gc>
+        + ReflectionOps<'gc>
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>,
 >(
@@ -208,7 +192,7 @@ pub fn intrinsic_marshal_offset_of<
     use dotnet_value::with_string;
     let field_name_val = ctx.pop();
     let field_name = with_string!(ctx, field_name_val, |s| s.as_string());
-    let concrete_type = if method.method.signature.parameters.len() == 1 {
+    let concrete_type = if method.method().signature.parameters.len() == 1 {
         generics.method_generics[0].clone()
     } else {
         let type_obj = ctx.pop_obj();
@@ -238,7 +222,6 @@ pub fn intrinsic_marshal_offset_of<
 #[allow(deprecated)]
 pub fn intrinsic_unsafe_as_pointer<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc>,
 >(
     ctx: &mut T,
@@ -268,8 +251,7 @@ pub fn intrinsic_unsafe_as_pointer<
 #[dotnet_intrinsic("static void* System.Runtime.CompilerServices.Unsafe::Add<T>(void*, int)")]
 pub fn intrinsic_unsafe_add<
     'gc,
-    'm: 'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + ResolutionOps<'gc, 'm>,
+    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + ResolutionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -304,7 +286,6 @@ pub fn intrinsic_unsafe_add<
 )]
 pub fn intrinsic_unsafe_add_byte_offset<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc>,
 >(
     ctx: &mut T,
@@ -336,8 +317,7 @@ pub fn intrinsic_unsafe_add_byte_offset<
 #[dotnet_intrinsic("static void* System.Runtime.CompilerServices.Unsafe::Subtract<T>(void*, int)")]
 pub fn intrinsic_unsafe_subtract<
     'gc,
-    'm: 'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + ResolutionOps<'gc, 'm>,
+    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + ResolutionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -372,7 +352,6 @@ pub fn intrinsic_unsafe_subtract<
 )]
 pub fn intrinsic_unsafe_subtract_byte_offset<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc>,
 >(
     ctx: &mut T,
@@ -398,7 +377,7 @@ pub fn intrinsic_unsafe_subtract_byte_offset<
 
 // System.Runtime.CompilerServices.Unsafe::AreSame<T>(ref T left, ref T right)
 #[dotnet_intrinsic("static bool System.Runtime.CompilerServices.Unsafe::AreSame<T>(T&, T&)")]
-pub fn intrinsic_unsafe_are_same<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>(
+pub fn intrinsic_unsafe_are_same<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -414,7 +393,7 @@ pub fn intrinsic_unsafe_are_same<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStack
 #[dotnet_intrinsic("static T System.Runtime.CompilerServices.Unsafe::As<T>(object)")]
 #[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::AsRef<T>(T&)")]
 #[allow(unused_variables)]
-pub fn intrinsic_unsafe_as<'gc, 'm: 'gc, T: ?Sized>(
+pub fn intrinsic_unsafe_as<T: ?Sized>(
     ctx: &mut T,
     method: MethodDescription,
     _generics: &GenericLookup,
@@ -427,8 +406,7 @@ pub fn intrinsic_unsafe_as<'gc, 'm: 'gc, T: ?Sized>(
 #[dotnet_intrinsic("static TTo& System.Runtime.CompilerServices.Unsafe::As<TFrom, TTo>(TFrom&)")]
 pub fn intrinsic_unsafe_as_generic<
     'gc,
-    'm: 'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc> + LoaderOps<'m> + ResolutionOps<'gc, 'm>,
+    T: EvalStackOps<'gc> + TypedStackOps<'gc> + LoaderOps + ResolutionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -482,11 +460,10 @@ pub fn intrinsic_unsafe_as_generic<
 #[dotnet_intrinsic("static T& System.Runtime.CompilerServices.Unsafe::AsRef<T>(void*)")]
 pub fn intrinsic_unsafe_as_ref_any<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
-        + LoaderOps<'m>
-        + ResolutionOps<'gc, 'm>
+        + LoaderOps
+        + ResolutionOps<'gc>
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>,
@@ -495,7 +472,7 @@ pub fn intrinsic_unsafe_as_ref_any<
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let param_type = &method.method.signature.parameters[0].1;
+    let param_type = &method.method().signature.parameters[0].1;
     if let ParameterType::Value(MethodType::Base(b)) = param_type
         && matches!(**b, BaseType::ValuePointer(_, _))
     {
@@ -511,11 +488,10 @@ pub fn intrinsic_unsafe_as_ref_any<
 #[allow(deprecated)]
 pub fn intrinsic_unsafe_as_ref_ptr<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
-        + LoaderOps<'m>
-        + ResolutionOps<'gc, 'm>
+        + LoaderOps
+        + ResolutionOps<'gc>
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>,
@@ -588,7 +564,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<
 }
 
 #[dotnet_intrinsic("static void System.Runtime.CompilerServices.Unsafe::SkipInit<T>(T&)")]
-pub fn intrinsic_unsafe_skip_init<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>(
+pub fn intrinsic_unsafe_skip_init<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -601,8 +577,7 @@ pub fn intrinsic_unsafe_skip_init<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStac
 #[allow(unused_variables)]
 pub fn intrinsic_unsafe_size_of<
     'gc,
-    'm: 'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ResolutionOps<'gc, 'm>,
+    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ResolutionOps<'gc>,
 >(
     ctx: &mut T,
     method: MethodDescription,
@@ -617,7 +592,7 @@ pub fn intrinsic_unsafe_size_of<
 
 // System.Runtime.CompilerServices.Unsafe::ByteOffset<T>(ref T origin, ref T target)
 #[dotnet_intrinsic("static IntPtr System.Runtime.CompilerServices.Unsafe::ByteOffset<T>(T&, T&)")]
-pub fn intrinsic_unsafe_byte_offset<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>(
+pub fn intrinsic_unsafe_byte_offset<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -636,10 +611,9 @@ pub fn intrinsic_unsafe_byte_offset<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedSt
 #[allow(deprecated)]
 pub fn intrinsic_unsafe_read_unaligned<
     'gc,
-    'm: 'gc,
-    T: StackOps<'gc, 'm>
-        + LoaderOps<'m>
-        + ResolutionOps<'gc, 'm>
+    T: StackOps<'gc>
+        + LoaderOps
+        + ResolutionOps<'gc>
         + ExceptionOps<'gc>
         + RawMemoryOps<'gc>
         + MemoryOps<'gc>,
@@ -699,8 +673,7 @@ pub fn intrinsic_unsafe_read_unaligned<
 )]
 pub fn intrinsic_unsafe_write_unaligned<
     'gc,
-    'm: 'gc,
-    T: StackOps<'gc, 'm> + ResolutionOps<'gc, 'm> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
+    T: StackOps<'gc> + ResolutionOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -744,7 +717,6 @@ pub fn intrinsic_unsafe_write_unaligned<
 )]
 pub fn intrinsic_unsafe_copy_block<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
 >(
     ctx: &mut T,
@@ -785,7 +757,6 @@ pub fn intrinsic_unsafe_copy_block<
 )]
 pub fn intrinsic_unsafe_init_block<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
 >(
     ctx: &mut T,
@@ -818,7 +789,7 @@ pub fn intrinsic_unsafe_init_block<
 }
 
 #[dotnet_intrinsic_field("static IntPtr System.IntPtr::Zero")]
-pub fn intrinsic_field_intptr_zero<'gc, 'm: 'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>(
+pub fn intrinsic_field_intptr_zero<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>(
     ctx: &mut T,
     _field: FieldDescription,
     _type_generics: Arc<[ConcreteType]>,

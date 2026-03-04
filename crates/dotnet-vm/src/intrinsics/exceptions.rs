@@ -9,7 +9,7 @@ use dotnet_value::{
 #[dotnet_intrinsic(
     "static void System.Exception::GetStackTracesDeepCopy(System.Exception, byte[]&, object[]&)"
 )]
-pub fn intrinsic_get_stack_traces_deep_copy<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_get_stack_traces_deep_copy<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -47,7 +47,7 @@ pub fn intrinsic_get_stack_traces_deep_copy<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 #[dotnet_intrinsic(
     "static void System.Exception::SaveStackTracesFromDeepCopy(System.Exception, byte[], object[])"
 )]
-pub fn intrinsic_save_stack_traces_from_deep_copy<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_save_stack_traces_from_deep_copy<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,

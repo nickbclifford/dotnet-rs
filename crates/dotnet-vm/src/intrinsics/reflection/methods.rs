@@ -60,20 +60,20 @@ use dotnet_value::{StackValue, object::ObjectRef};
 #[dotnet_intrinsic(
     "object DotnetRs.ConstructorInfo::Invoke(System.Reflection.BindingFlags, System.Reflection.Binder, object[], System.Globalization.CultureInfo)"
 )]
-pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn runtime_method_info_intrinsic_call<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
     let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
-    let method_name = &*method.method.name;
-    let param_count = method.method.signature.parameters.len();
+    let method_name = &*method.method().name;
+    let param_count = method.method().signature.parameters.len();
 
     let result = match (method_name, param_count) {
         ("GetName" | "get_Name", 0) => {
             let obj = ctx.pop_obj();
             let (method, _) = ctx.resolve_runtime_method(obj);
-            ctx.push_string(method.method.name.clone().into());
+            ctx.push_string(method.method().name.clone().into());
             Some(StepResult::Continue)
         }
         ("GetDeclaringType" | "get_DeclaringType", 0) => {
@@ -120,7 +120,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 
             // Handle parameters
             let mut args = Vec::new();
-            if method.method.signature.instance {
+            if method.method().signature.instance {
                 args.push(this_obj);
             }
 
@@ -186,7 +186,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 #[dotnet_intrinsic(
     "static System.IntPtr System.RuntimeMethodHandle::GetFunctionPointer(System.RuntimeMethodHandle)"
 )]
-pub fn intrinsic_method_handle_get_function_pointer<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn intrinsic_method_handle_get_function_pointer<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -204,13 +204,13 @@ pub fn intrinsic_method_handle_get_function_pointer<'gc, 'm: 'gc, T: VesOps<'gc,
     StepResult::Continue
 }
 
-fn resolve_return_type<'gc, 'm, T: VesOps<'gc, 'm>>(
+fn resolve_return_type<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     method: &MethodDescription,
     lookup: &GenericLookup,
 ) -> RuntimeType {
     let res_ctx = ctx.with_generics(lookup);
-    match &method.method.signature.return_type.1 {
+    match &method.method().signature.return_type.1 {
         Some(dotnetdll::prelude::ParameterType::Value(t))
         | Some(dotnetdll::prelude::ParameterType::Ref(t)) => ctx.make_runtime_type(&res_ctx, t),
         Some(dotnetdll::prelude::ParameterType::TypedReference) => RuntimeType::TypedReference,
@@ -218,7 +218,7 @@ fn resolve_return_type<'gc, 'm, T: VesOps<'gc, 'm>>(
     }
 }
 
-fn unmarshal_invoke_params<'gc, 'm, T: VesOps<'gc, 'm>>(
+fn unmarshal_invoke_params<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     gc: &GCHandle<'gc>,
     method: &MethodDescription,
@@ -242,7 +242,7 @@ fn unmarshal_invoke_params<'gc, 'm, T: VesOps<'gc, 'm>>(
                 .copy_from_slice(&vector.get()[i * ObjectRef::SIZE..(i + 1) * ObjectRef::SIZE]);
             let arg_obj = unsafe { ObjectRef::read_branded(&element_bytes, gc) };
 
-            let param_type = match &method.method.signature.parameters[i].1 {
+            let param_type = match &method.method().signature.parameters[i].1 {
                 dotnetdll::prelude::ParameterType::Value(t)
                 | dotnetdll::prelude::ParameterType::Ref(t) => t,
                 dotnetdll::prelude::ParameterType::TypedReference => {

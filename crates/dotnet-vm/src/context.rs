@@ -15,23 +15,23 @@ use dotnet_value::object::ObjectHandle;
 use dotnetdll::prelude::{FieldSource, UserMethod, UserType};
 
 #[derive(Clone)]
-pub struct ResolutionContext<'a, 'm> {
+pub struct ResolutionContext<'a> {
     pub generics: &'a GenericLookup,
-    pub loader: &'m AssemblyLoader,
+    pub loader: Arc<AssemblyLoader>,
     pub resolution: ResolutionS,
     pub type_owner: Option<TypeDescription>,
     pub method_owner: Option<MethodDescription>,
     pub caches: Arc<GlobalCaches>,
-    pub shared: Option<Arc<SharedGlobalState<'m>>>,
+    pub shared: Option<Arc<SharedGlobalState>>,
 }
 
-impl<'a, 'm> ResolutionContext<'a, 'm> {
+impl<'a> ResolutionContext<'a> {
     pub fn new(
         generics: &'a GenericLookup,
-        loader: &'m AssemblyLoader,
+        loader: Arc<AssemblyLoader>,
         resolution: ResolutionS,
         caches: Arc<GlobalCaches>,
-        shared: Option<Arc<SharedGlobalState<'m>>>,
+        shared: Option<Arc<SharedGlobalState>>,
     ) -> Self {
         Self {
             generics,
@@ -46,10 +46,10 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
 
     pub fn for_method(
         method: MethodDescription,
-        loader: &'m AssemblyLoader,
+        loader: Arc<AssemblyLoader>,
         generics: &'a GenericLookup,
         caches: Arc<GlobalCaches>,
-        shared: Option<Arc<SharedGlobalState<'m>>>,
+        shared: Option<Arc<SharedGlobalState>>,
     ) -> Self {
         Self {
             generics,
@@ -62,18 +62,18 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
         }
     }
 
-    pub fn resolver(&self) -> ResolverService<'m> {
+    pub fn resolver(&self) -> ResolverService {
         if let Some(shared) = &self.shared {
             ResolverService::new(shared.clone())
         } else {
-            ResolverService::from_parts(self.loader, self.caches.clone())
+            ResolverService::from_parts(self.loader.clone(), self.caches.clone())
         }
     }
 
-    pub fn with_generics(&self, generics: &'a GenericLookup) -> ResolutionContext<'a, 'm> {
+    pub fn with_generics(&self, generics: &'a GenericLookup) -> ResolutionContext<'a> {
         ResolutionContext {
             generics,
-            loader: self.loader,
+            loader: self.loader.clone(),
             resolution: self.resolution,
             type_owner: self.type_owner,
             method_owner: self.method_owner,
@@ -82,7 +82,7 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
         }
     }
 
-    pub fn for_type(&self, td: TypeDescription) -> ResolutionContext<'a, 'm> {
+    pub fn for_type(&self, td: TypeDescription) -> ResolutionContext<'a> {
         self.for_type_with_generics(td, self.generics)
     }
 
@@ -90,11 +90,11 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
         &self,
         td: TypeDescription,
         generics: &'a GenericLookup,
-    ) -> ResolutionContext<'a, 'm> {
+    ) -> ResolutionContext<'a> {
         ResolutionContext {
             resolution: td.resolution,
             generics,
-            loader: self.loader,
+            loader: self.loader.clone(),
             type_owner: Some(td),
             method_owner: None,
             caches: self.caches.clone(),
@@ -130,7 +130,7 @@ impl<'a, 'm> ResolutionContext<'a, 'm> {
     pub fn get_ancestors(
         &self,
         child_type: TypeDescription,
-    ) -> impl Iterator<Item = Ancestor<'m>> + 'm {
+    ) -> impl Iterator<Item = Ancestor<'static>> + '_ {
         self.loader.ancestors(child_type)
     }
 

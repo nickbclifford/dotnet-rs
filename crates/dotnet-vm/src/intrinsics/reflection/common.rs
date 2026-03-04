@@ -29,9 +29,7 @@ pub(crate) fn get_runtime_member_index<T: PartialEq>(
         })
 }
 
-pub(crate) fn pre_initialize_reflection<'gc, 'm: 'gc>(
-    ctx: &mut (impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
-) {
+pub(crate) fn pre_initialize_reflection<'gc>(ctx: &mut (impl ReflectionOps<'gc> + LoaderOps)) {
     let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
     let blessed = [
         RuntimeType::Void,
@@ -58,8 +56,8 @@ pub(crate) fn pre_initialize_reflection<'gc, 'm: 'gc>(
     }
 }
 
-pub(crate) fn get_runtime_type<'gc, 'm: 'gc>(
-    ctx: &mut (impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
+pub(crate) fn get_runtime_type<'gc>(
+    ctx: &mut (impl ReflectionOps<'gc> + LoaderOps),
     target: RuntimeType,
 ) -> ObjectRef<'gc> {
     let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
@@ -114,8 +112,8 @@ pub(crate) fn get_runtime_type<'gc, 'm: 'gc>(
     obj_ref
 }
 
-pub(crate) fn resolve_runtime_type<'gc, 'm: 'gc>(
-    ctx: &(impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
+pub(crate) fn resolve_runtime_type<'gc>(
+    ctx: &(impl ReflectionOps<'gc> + LoaderOps),
     obj: ObjectRef<'gc>,
 ) -> RuntimeType {
     obj.as_object(|instance| {
@@ -137,8 +135,8 @@ pub(crate) fn resolve_runtime_type<'gc, 'm: 'gc>(
     })
 }
 
-pub(crate) fn resolve_runtime_method<'gc, 'm: 'gc>(
-    ctx: &(impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
+pub(crate) fn resolve_runtime_method<'gc>(
+    ctx: &(impl ReflectionOps<'gc> + LoaderOps),
     obj: ObjectRef<'gc>,
 ) -> (MethodDescription, GenericLookup) {
     obj.as_object(|instance| {
@@ -162,8 +160,8 @@ pub(crate) fn resolve_runtime_method<'gc, 'm: 'gc>(
     })
 }
 
-pub(crate) fn resolve_runtime_field<'gc, 'm: 'gc>(
-    ctx: &(impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
+pub(crate) fn resolve_runtime_field<'gc>(
+    ctx: &(impl ReflectionOps<'gc> + LoaderOps),
     obj: ObjectRef<'gc>,
 ) -> (FieldDescription, GenericLookup) {
     obj.as_object(|instance| {
@@ -245,8 +243,8 @@ pub(crate) fn make_runtime_type(res_ctx: &ResolutionContext, t: &MethodType) -> 
     }
 }
 
-pub(crate) fn get_runtime_method_index<'gc, 'm: 'gc>(
-    ctx: &mut (impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
+pub(crate) fn get_runtime_method_index<'gc>(
+    ctx: &mut (impl ReflectionOps<'gc> + LoaderOps),
     method: MethodDescription,
     lookup: GenericLookup,
 ) -> u16 {
@@ -277,8 +275,8 @@ pub(crate) fn get_runtime_method_index<'gc, 'm: 'gc>(
     }
 }
 
-pub(crate) fn get_runtime_field_index<'gc, 'm: 'gc>(
-    ctx: &mut (impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
+pub(crate) fn get_runtime_field_index<'gc>(
+    ctx: &mut (impl ReflectionOps<'gc> + LoaderOps),
     field: FieldDescription,
     lookup: GenericLookup,
 ) -> u16 {
@@ -309,8 +307,8 @@ pub(crate) fn get_runtime_field_index<'gc, 'm: 'gc>(
     }
 }
 
-pub(crate) fn get_runtime_method_obj<'gc, 'm: 'gc>(
-    ctx: &mut (impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
+pub(crate) fn get_runtime_method_obj<'gc>(
+    ctx: &mut (impl ReflectionOps<'gc> + LoaderOps),
     method: MethodDescription,
     lookup: GenericLookup,
 ) -> ObjectRef<'gc> {
@@ -325,7 +323,7 @@ pub(crate) fn get_runtime_method_obj<'gc, 'm: 'gc>(
 
     let index = get_runtime_method_index(ctx, method, lookup.clone()) as usize;
 
-    let is_ctor = method.method.name == ".ctor" || method.method.name == ".cctor";
+    let is_ctor = method.method().name == ".ctor" || method.method().name == ".cctor";
     let class_name = if is_ctor {
         "DotnetRs.ConstructorInfo"
     } else {
@@ -357,8 +355,8 @@ pub(crate) fn get_runtime_method_obj<'gc, 'm: 'gc>(
     obj_ref
 }
 
-pub(crate) fn get_runtime_field_obj<'gc, 'm: 'gc>(
-    ctx: &mut (impl ReflectionOps<'gc, 'm> + LoaderOps<'m>),
+pub(crate) fn get_runtime_field_obj<'gc>(
+    ctx: &mut (impl ReflectionOps<'gc> + LoaderOps),
     field: FieldDescription,
     lookup: GenericLookup,
 ) -> ObjectRef<'gc> {

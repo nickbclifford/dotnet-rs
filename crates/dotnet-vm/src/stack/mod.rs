@@ -72,7 +72,7 @@ use crate::{
 };
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::StackValue;
-use gc_arena::{Arena, Collect, Rootable};
+use gc_arena::{Arena, Collect, Mutation, Rootable, collect::Trace, metrics::Metrics};
 use std::cell::Cell;
 
 mod call_ops_impl;
@@ -92,9 +92,9 @@ pub use evaluation_stack::*;
 pub use frames::*;
 pub use ops::*;
 
-pub struct CallStack<'gc, 'm> {
-    pub execution: ThreadContext<'gc, 'm>,
-    pub shared: Arc<SharedGlobalState<'m>>,
+pub struct CallStack<'gc> {
+    pub execution: ThreadContext<'gc>,
+    pub shared: Arc<SharedGlobalState>,
     pub local: ArenaLocalState<'gc>,
     pub thread_id: Cell<dotnet_utils::ArenaId>,
     #[cfg(feature = "multithreading")]
@@ -105,8 +105,8 @@ pub struct CallStack<'gc, 'm> {
 // `shared.statics`) in its `trace` implementation. The `thread_id` and `arena` fields are not GC-managed
 // and do not need tracing. This implementation is safe because it delegates to the
 // `Collect` implementations of its components, which are themselves safe.
-unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
-    fn trace(&self, cc: &gc_arena::Collection) {
+unsafe impl<'gc> Collect<'gc> for CallStack<'gc> {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         // NOTE: tracing_id is managed by execute_gc_command_for_current_thread,
         // NOT here. Setting/clearing it here would interfere with gc-arena's
         // deferred work list processing (StackValue traces happen AFTER this returns).
@@ -116,10 +116,58 @@ unsafe impl<'gc, 'm: 'gc> Collect for CallStack<'gc, 'm> {
     }
 }
 
-pub type GCArena = Arena<Rootable!['gc => ExecutionEngine<'gc, 'static>]>;
+pub struct GCArenaRoot;
+impl<'gc> Rootable<'gc> for GCArenaRoot {
+    type Root = ExecutionEngine<'gc>;
+}
 
-impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
-    pub fn new(shared: Arc<SharedGlobalState<'m>>, local: ArenaLocalState<'gc>) -> Self {
+pub struct GCArena {
+    arena: Arena<GCArenaRoot>,
+}
+
+impl GCArena {
+    pub fn new<F>(f: F) -> Self
+    where
+        F: for<'gc> FnOnce(&'gc Mutation<'gc>) -> <GCArenaRoot as Rootable<'gc>>::Root,
+    {
+        Self {
+            arena: Arena::<GCArenaRoot>::new(f),
+        }
+    }
+
+    pub fn mutate<R>(
+        &self,
+        f: impl for<'gc> FnOnce(&'gc Mutation<'gc>, &<GCArenaRoot as Rootable<'gc>>::Root) -> R,
+    ) -> R {
+        self.arena.mutate(f)
+    }
+
+    pub fn mutate_root<R>(
+        &mut self,
+        f: impl for<'gc> FnOnce(&'gc Mutation<'gc>, &mut <GCArenaRoot as Rootable<'gc>>::Root) -> R,
+    ) -> R {
+        self.arena.mutate_root(f)
+    }
+
+    pub fn finish_marking(&mut self) -> Option<gc_arena::arena::MarkedArena<'_, GCArenaRoot>> {
+        self.arena.finish_marking()
+    }
+
+    pub fn finish_cycle(&mut self) {
+        self.arena.finish_cycle()
+    }
+
+    pub fn collect_debt(&mut self) {
+        self.arena.collect_debt()
+    }
+
+    pub fn metrics(&self) -> &Metrics {
+        self.arena.metrics()
+    }
+}
+
+impl<'gc> CallStack<'gc> {
+    pub fn new(shared: Arc<SharedGlobalState>, local: ArenaLocalState<'gc>) -> Self {
         Self {
             execution: ThreadContext {
                 evaluation_stack: EvaluationStack::new(),
@@ -148,7 +196,7 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         unsafe { &*(self.arena.as_inner() as *const _) }
     }
 
-    pub fn ves_context(&mut self, gc: GCHandle<'gc>) -> VesContext<'_, 'gc, 'm> {
+    pub fn ves_context(&mut self, gc: GCHandle<'gc>) -> VesContext<'_, 'gc> {
         VesContext {
             gc,
             evaluation_stack: &mut self.execution.evaluation_stack,
@@ -189,19 +237,19 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
         );
     }
 
-    pub fn current_frame(&self) -> &StackFrame<'gc, 'm> {
+    pub fn current_frame(&self) -> &StackFrame<'gc> {
         self.execution.frame_stack.current_frame()
     }
 
-    pub fn current_frame_mut(&mut self) -> &mut StackFrame<'gc, 'm> {
+    pub fn current_frame_mut(&mut self) -> &mut StackFrame<'gc> {
         self.execution.frame_stack.current_frame_mut()
     }
 
-    pub fn state(&self) -> &MethodState<'m> {
+    pub fn state(&self) -> &MethodState {
         self.execution.frame_stack.state()
     }
 
-    pub fn state_mut(&mut self) -> &mut MethodState<'m> {
+    pub fn state_mut(&mut self) -> &mut MethodState {
         self.execution.frame_stack.state_mut()
     }
 

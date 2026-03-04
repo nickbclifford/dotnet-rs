@@ -7,15 +7,20 @@ mod tests {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
         #[cfg(feature = "multithreading")]
-        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(
-            dotnet_utils::ArenaId(0),
-        )));
+        let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(dotnet_utils::ArenaId(0));
+        #[cfg(feature = "multithreading")]
+        let arena_handle = unsafe {
+            std::mem::transmute::<
+                &dotnet_utils::gc::ArenaHandleInner,
+                &'static dotnet_utils::gc::ArenaHandleInner,
+            >(_arena_handle_owner.as_inner())
+        };
         arena.mutate(|gc, _root| {
             let null_bytes = 0usize.to_ne_bytes();
             let gc_handle = dotnet_utils::gc::GCHandle::new(
                 gc,
                 #[cfg(feature = "multithreading")]
-                arena_handle.as_inner(),
+                arena_handle,
                 #[cfg(feature = "memory-validation")]
                 dotnet_utils::ArenaId(0),
             );
@@ -30,15 +35,20 @@ mod tests {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
         #[cfg(feature = "multithreading")]
-        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(
-            dotnet_utils::ArenaId(0),
-        )));
+        let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(dotnet_utils::ArenaId(0));
+        #[cfg(feature = "multithreading")]
+        let arena_handle = unsafe {
+            std::mem::transmute::<
+                &dotnet_utils::gc::ArenaHandleInner,
+                &'static dotnet_utils::gc::ArenaHandleInner,
+            >(_arena_handle_owner.as_inner())
+        };
         arena.mutate(|gc, _root| {
             let storage = HeapStorage::Str(crate::string::CLRString::from("test"));
             let gc_handle = dotnet_utils::gc::GCHandle::new(
                 gc,
                 #[cfg(feature = "multithreading")]
-                arena_handle.as_inner(),
+                arena_handle,
                 #[cfg(feature = "memory-validation")]
                 dotnet_utils::ArenaId(0),
             );

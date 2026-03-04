@@ -9,7 +9,6 @@ use dotnet_value::StackValue;
 #[dotnet_intrinsic("static bool System.Text.UnicodeUtility::IsAsciiCodePoint(uint)")]
 pub fn intrinsic_unicode_utility_is_ascii_code_point<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc>,
 >(
     ctx: &mut T,
@@ -31,7 +30,6 @@ pub fn intrinsic_unicode_utility_is_ascii_code_point<
 #[dotnet_intrinsic("static bool System.Text.UnicodeUtility::IsInRangeInclusive(uint, uint, uint)")]
 pub fn intrinsic_unicode_utility_is_in_range_inclusive<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc>,
 >(
     ctx: &mut T,

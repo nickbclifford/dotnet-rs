@@ -8,7 +8,7 @@ use dotnet_utils::{
     },
     validate_alignment,
 };
-use gc_arena::{Collect, Collection};
+use gc_arena::{Collect, collect::Trace};
 use std::{
     collections::HashSet,
     fmt::{self, Debug, Formatter},
@@ -271,8 +271,8 @@ impl FieldStorage {
     }
 }
 
-unsafe impl Collect for FieldStorage {
-    fn trace(&self, cc: &Collection) {
+unsafe impl<'gc> Collect<'gc> for FieldStorage {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         // SAFETY: Tracing also happens during a stop-the-world pause, same reasoning as above
         let data = unsafe { self.raw_data_unsynchronized() };
 

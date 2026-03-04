@@ -1,6 +1,6 @@
 use crate::{TypeDescription, error::TypeResolutionError, resolution::ResolutionS};
 use dotnetdll::prelude::{BaseType, MethodType, Resolution, ResolvedDebug, TypeSource, UserType};
-use gc_arena::{Collect, Collection};
+use gc_arena::{Collect, collect::Trace};
 use std::{
     fmt::{Debug, Formatter},
     sync::Arc,
@@ -24,8 +24,8 @@ impl<'a> Arbitrary<'a> for ConcreteType {
     }
 }
 
-unsafe impl Collect for ConcreteType {
-    fn trace(&self, _cc: &Collection) {}
+unsafe impl<'gc> Collect<'gc> for ConcreteType {
+    fn trace<Tr: Trace<'gc>>(&self, _cc: &mut Tr) {}
 }
 
 impl From<TypeDescription> for ConcreteType {
@@ -95,8 +95,8 @@ impl<'a> Arbitrary<'a> for GenericLookup {
     }
 }
 
-unsafe impl Collect for GenericLookup {
-    fn trace(&self, _cc: &Collection) {}
+unsafe impl<'gc> Collect<'gc> for GenericLookup {
+    fn trace<Tr: Trace<'gc>>(&self, _cc: &mut Tr) {}
 }
 
 impl GenericLookup {

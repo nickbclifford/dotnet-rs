@@ -248,7 +248,7 @@ impl LayoutFactory {
             let base_ctx = ResolutionContext {
                 generics: &new_lookup,
                 resolution: base_res,
-                loader: context.loader,
+                loader: context.loader.clone(),
                 type_owner: Some(*base_td),
                 method_owner: None,
                 caches: context.caches.clone(),
@@ -283,12 +283,7 @@ impl LayoutFactory {
             let layout = if f.by_ref {
                 Arc::new(Scalar::ManagedPtr.into())
             } else {
-                let t = context.get_field_type(FieldDescription {
-                    parent: td,
-                    field_resolution: td.resolution,
-                    field: f,
-                    index: i,
-                })?;
+                let t = context.get_field_type(FieldDescription::new(td, td.resolution, f, i))?;
                 type_layout_with_metrics(t, context, metrics)?
             };
 

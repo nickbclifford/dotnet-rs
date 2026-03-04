@@ -21,7 +21,7 @@ use dotnet_value::StackValue;
 use crate::gc::{arena::THREAD_ARENA, coordinator::*};
 
 pub struct Executor {
-    shared: Arc<SharedGlobalState<'static>>,
+    shared: Arc<SharedGlobalState>,
     /// Thread ID for this executor
     thread_id: dotnet_utils::ArenaId,
     #[cfg(not(feature = "multithreading"))]
@@ -100,7 +100,7 @@ impl Executor {
         self.shared.last_instructions.lock().unwrap().dump()
     }
 
-    pub fn new(shared: Arc<SharedGlobalState<'static>>) -> Self {
+    pub fn new(shared: Arc<SharedGlobalState>) -> Self {
         let shared_clone = Arc::clone(&shared);
         let mut arena = Box::new(GCArena::new(|_| {
             let local = ArenaLocalState::new(shared_clone.statics.clone());
@@ -439,17 +439,17 @@ impl Executor {
             if !self.shared.abort_requested.load(Ordering::Relaxed) {
                 // Perform full collection with finalization (mimics multithreading behavior)
                 self.with_arena(|arena| {
-                    // Try to mark all remaining objects. If mark_all() returns None,
+                    // Try to mark all remaining objects. If finish_marking() returns None,
                     // the arena is not in a markable phase (e.g., already in Collecting
-                    // or Sleep phase). In that case, fall through to collect_all() which
+                    // or Sleep phase). In that case, fall through to finish_cycle() which
                     // handles all phases correctly by performing a full collection cycle.
-                    if let Some(marked) = arena.mark_all() {
+                    if let Some(marked) = arena.finish_marking() {
                         crate::gc::finalize_arena(marked);
                     }
-                    // collect_all() performs a full collection regardless of current phase.
+                    // finish_cycle() performs a full collection regardless of current phase.
                     // It internally calls do_collection with no early stop, which handles
                     // Mark, Collecting, and Sleep phases correctly.
-                    arena.collect_all();
+                    arena.finish_cycle();
                 });
             }
 

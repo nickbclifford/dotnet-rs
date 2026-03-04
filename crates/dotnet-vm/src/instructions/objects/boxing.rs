@@ -17,7 +17,7 @@ use dotnetdll::prelude::*;
 use std::ptr::NonNull;
 
 #[dotnet_instruction(BoxValue(param0))]
-pub fn box_value<'gc, 'm: 'gc, T: ResolutionOps<'gc, 'm> + EvalStackOps<'gc> + MemoryOps<'gc>>(
+pub fn box_value<'gc, T: ResolutionOps<'gc> + EvalStackOps<'gc> + MemoryOps<'gc>>(
     ctx: &mut T,
     param0: &MethodType,
 ) -> StepResult {
@@ -38,13 +38,12 @@ pub fn box_value<'gc, 'm: 'gc, T: ResolutionOps<'gc, 'm> + EvalStackOps<'gc> + M
 #[dotnet_instruction(UnboxIntoValue(param0))]
 pub fn unbox_any<
     'gc,
-    'm: 'gc,
-    T: ResolutionOps<'gc, 'm>
-        + LoaderOps<'m>
+    T: ResolutionOps<'gc>
+        + LoaderOps
         + ExceptionOps<'gc>
         + EvalStackOps<'gc>
         + MemoryOps<'gc>
-        + ReflectionOps<'gc, 'm>,
+        + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     param0: &MethodType,
@@ -138,11 +137,7 @@ pub fn unbox_any<
 }
 
 #[dotnet_instruction(UnboxIntoAddress { param0 })]
-pub fn unbox<
-    'gc,
-    'm: 'gc,
-    T: ResolutionOps<'gc, 'm> + ExceptionOps<'gc> + EvalStackOps<'gc> + LoaderOps<'m>,
->(
+pub fn unbox<'gc, T: ResolutionOps<'gc> + ExceptionOps<'gc> + EvalStackOps<'gc> + LoaderOps>(
     ctx: &mut T,
     param0: &MethodType,
 ) -> StepResult {

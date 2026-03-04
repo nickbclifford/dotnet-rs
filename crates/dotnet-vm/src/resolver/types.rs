@@ -14,7 +14,7 @@ use dotnet_value::{
 use dotnetdll::prelude::*;
 use std::collections::{HashSet, VecDeque};
 
-impl<'m> ResolverService<'m> {
+impl ResolverService {
     pub fn normalize_type(&self, mut t: ConcreteType) -> Result<ConcreteType, TypeResolutionError> {
         let (ut, res) = match t.get() {
             BaseType::Type { source, .. } => (
@@ -205,8 +205,8 @@ impl<'m> ResolverService<'m> {
         generics: &GenericLookup,
         field: FieldDescription,
     ) -> Result<ConcreteType, TypeResolutionError> {
-        let return_type = &field.field.return_type;
-        if field.field.by_ref {
+        let return_type = &field.field().return_type;
+        if field.field().by_ref {
             let by_ref_t: MemberType = BaseType::pointer(return_type.clone()).into();
             self.make_concrete(resolution, generics, &by_ref_t)
         } else {

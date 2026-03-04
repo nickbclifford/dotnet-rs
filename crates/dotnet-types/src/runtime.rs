@@ -3,7 +3,7 @@ use crate::{
     resolution::ResolutionS,
 };
 use dotnetdll::prelude::{BaseType, TypeSource, UserType, ValueKind};
-use gc_arena::{Collect, unsafe_empty_collect};
+use gc_arena::static_collect;
 use std::{fmt::Debug, hash::Hash};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -160,4 +160,4 @@ runtime_type_impls! {
     }
 }
 
-unsafe_empty_collect!(RuntimeType);
+static_collect!(RuntimeType);

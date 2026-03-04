@@ -11,7 +11,7 @@ use dotnet_utils::{BorrowGuardHandle, BorrowScopeOps, NoActiveBorrows};
 use dotnet_value::{StackValue, layout::HasLayout, pointer::PointerOrigin};
 use sptr::Strict;
 
-impl<'a, 'gc, 'm: 'gc> PoolOps for VesContext<'a, 'gc, 'm> {
+impl<'a, 'gc> PoolOps for VesContext<'a, 'gc> {
     /// # Safety
     ///
     /// The returned pointer is valid for the duration of the current method frame.
@@ -34,7 +34,7 @@ impl<'a, 'gc, 'm: 'gc> PoolOps for VesContext<'a, 'gc, 'm> {
     }
 }
 
-impl<'a, 'gc, 'm: 'gc> BorrowScopeOps for VesContext<'a, 'gc, 'm> {
+impl<'a, 'gc> BorrowScopeOps for VesContext<'a, 'gc> {
     fn enter_borrow_scope(&self) {
         self.local
             .active_borrows
@@ -50,7 +50,7 @@ impl<'a, 'gc, 'm: 'gc> BorrowScopeOps for VesContext<'a, 'gc, 'm> {
     }
 }
 
-impl<'a, 'gc, 'm: 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc, 'm> {
+impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
     fn as_borrow_scope(&self) -> &dyn BorrowScopeOps {
         self
     }

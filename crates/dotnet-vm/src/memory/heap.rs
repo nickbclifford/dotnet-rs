@@ -1,7 +1,7 @@
 use crate::{state::SharedGlobalState, sync::Ordering};
 use dotnet_utils::gc::GCHandleType;
 use dotnet_value::object::{HeapStorage, ObjectRef};
-use gc_arena::{Collect, Collection, Gc};
+use gc_arena::{Collect, Gc, collect::Trace};
 use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, HashSet},
@@ -52,7 +52,7 @@ impl<'gc> HeapManager<'gc> {
     pub fn finalize_check(
         &self,
         fc: &'gc gc_arena::Finalization<'gc>,
-        shared: &SharedGlobalState<'_>,
+        shared: &SharedGlobalState,
         indent: usize,
     ) {
         let mut queue = self.finalization_queue.borrow_mut();
@@ -181,8 +181,8 @@ impl<'gc> HeapManager<'gc> {
 // handle type. Normal and Pinned handles trace their objects to keep them alive. Weak handles
 // do not trace to allow collection. The finalization queues and cross-arena roots are also
 // traced. All other fields are non-GC metadata or control state that does not need tracing.
-unsafe impl<'gc> Collect for HeapManager<'gc> {
-    fn trace(&self, cc: &Collection) {
+unsafe impl<'gc> Collect<'gc> for HeapManager<'gc> {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         // Normal and Pinned handles keep objects alive.
         // Weak handles DO NOT trace.
         for entry in self.gchandles.borrow().iter().flatten() {

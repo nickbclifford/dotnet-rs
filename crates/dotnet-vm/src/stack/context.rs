@@ -24,14 +24,14 @@ use dotnet_value::{
     storage::FieldStorage,
 };
 use dotnetdll::prelude::*;
-use gc_arena::Collect;
+use gc_arena::{Collect, collect::Trace};
 use std::ptr::NonNull;
 
-pub struct VesContext<'a, 'gc, 'm> {
+pub struct VesContext<'a, 'gc> {
     pub(crate) gc: GCHandle<'gc>,
     pub(crate) evaluation_stack: &'a mut EvaluationStack<'gc>,
-    pub(crate) frame_stack: &'a mut FrameStack<'gc, 'm>,
-    pub(crate) shared: &'a Arc<SharedGlobalState<'m>>,
+    pub(crate) frame_stack: &'a mut FrameStack<'gc>,
+    pub(crate) shared: &'a Arc<SharedGlobalState>,
     pub(crate) local: &'a mut ArenaLocalState<'gc>,
     pub(crate) exception_mode: &'a mut ExceptionState<'gc>,
     pub(crate) current_intrinsic: &'a mut Option<crate::CollectableMethodDescription>,
@@ -40,7 +40,7 @@ pub struct VesContext<'a, 'gc, 'm> {
     pub(crate) original_stack_height: &'a mut crate::StackSlotIndex,
 }
 
-impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
+impl<'a, 'gc> VesContext<'a, 'gc> {
     #[inline]
     pub(crate) fn on_push(&mut self) {
         if let Some(frame) = self.frame_stack.current_frame_opt_mut() {
@@ -99,7 +99,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
     pub(crate) fn init_locals(
         &mut self,
         method: MethodDescription,
-        locals: &'m [LocalVariable],
+        locals: &[LocalVariable],
         generics: &GenericLookup,
     ) -> Result<(Vec<StackValue<'gc>>, Vec<bool>), TypeResolutionError> {
         let mut values = vec![];
@@ -122,7 +122,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
                     pinned_locals.push(*pinned);
                     let ctx = ResolutionContext {
                         generics,
-                        loader: self.shared.loader,
+                        loader: self.shared.loader.clone(),
                         resolution: method.resolution(),
                         type_owner: Some(method.parent),
                         method_owner: Some(method),
@@ -278,7 +278,7 @@ impl<'a, 'gc, 'm: 'gc> VesContext<'a, 'gc, 'm> {
     }
 }
 
-impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
+impl<'a, 'gc> VesOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn run(&mut self) -> StepResult {
         let _gc = self.gc;
@@ -363,12 +363,12 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn state(&self) -> &MethodState<'m> {
+    fn state(&self) -> &MethodState {
         self.frame_stack.state()
     }
 
     #[inline]
-    fn state_mut(&mut self) -> &mut MethodState<'m> {
+    fn state_mut(&mut self) -> &mut MethodState {
         self.frame_stack.state_mut()
     }
 
@@ -401,12 +401,12 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn frame_stack(&self) -> &FrameStack<'gc, 'm> {
+    fn frame_stack(&self) -> &FrameStack<'gc> {
         self.frame_stack
     }
 
     #[inline]
-    fn frame_stack_mut(&mut self) -> &mut FrameStack<'gc, 'm> {
+    fn frame_stack_mut(&mut self) -> &mut FrameStack<'gc> {
         self.frame_stack
     }
 
@@ -498,11 +498,11 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
                             })
                             .expect("System.Object::Finalize not found");
 
-                        let method_desc = MethodDescription {
-                            parent: object_type,
-                            method: base_finalize,
-                            method_resolution: object_type.resolution,
-                        };
+                        let method_desc = MethodDescription::new(
+                            object_type,
+                            object_type.resolution,
+                            base_finalize,
+                        );
 
                         Some((
                             self.resolver()
@@ -560,10 +560,10 @@ impl<'a, 'gc, 'm: 'gc> VesOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
 }
 
 #[derive(Collect)]
-#[collect(no_drop)]
-pub struct ThreadContext<'gc, 'm> {
+#[collect(no_drop, gc_lifetime = 'gc)]
+pub struct ThreadContext<'gc> {
     pub evaluation_stack: EvaluationStack<'gc>,
-    pub frame_stack: FrameStack<'gc, 'm>,
+    pub frame_stack: FrameStack<'gc>,
     pub exception_mode: ExceptionState<'gc>,
     pub current_intrinsic: Option<crate::CollectableMethodDescription>,
     pub original_ip: usize,
@@ -578,10 +578,10 @@ pub struct MulticastState<'gc> {
     pub args: Vec<StackValue<'gc>>,
 }
 
-pub struct StackFrame<'gc, 'm> {
+pub struct StackFrame<'gc> {
     pub stack_height: crate::StackSlotIndex,
     pub base: BasePointer,
-    pub state: MethodState<'m>,
+    pub state: MethodState,
     pub generic_inst: GenericLookup,
     pub source_resolution: ResolutionS,
     /// The exceptions currently being handled by catch blocks in this frame (required for rethrow).
@@ -596,8 +596,8 @@ pub struct StackFrame<'gc, 'm> {
 // in its `trace` implementation. All other fields are either primitives or non-GC references
 // and do not need tracing. This implementation is safe because it delegates to the `Collect`
 // implementations of its components.
-unsafe impl<'gc, 'm> Collect for StackFrame<'gc, 'm> {
-    fn trace(&self, cc: &gc_arena::Collection) {
+unsafe impl<'gc> Collect<'gc> for StackFrame<'gc> {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         self.exception_stack.trace(cc);
         self.state.trace(cc);
         self.generic_inst.trace(cc);
@@ -606,10 +606,10 @@ unsafe impl<'gc, 'm> Collect for StackFrame<'gc, 'm> {
     }
 }
 
-impl<'gc, 'm> StackFrame<'gc, 'm> {
+impl<'gc> StackFrame<'gc> {
     pub fn new(
         base_pointer: BasePointer,
-        method: MethodInfo<'m>,
+        method: MethodInfo<'static>,
         generic_inst: GenericLookup,
         pinned_locals: Vec<bool>,
     ) -> Self {

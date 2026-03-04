@@ -2,7 +2,7 @@ use crate::{object::ObjectRef, pointer::ManagedPtr};
 use bitvec::prelude::*;
 use dotnet_types::TypeDescription;
 use dotnet_utils::sync::Arc;
-use gc_arena::{Collect, Collection};
+use gc_arena::{Collect, collect::Trace};
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
@@ -125,7 +125,7 @@ impl LayoutManager {
         }
     }
 
-    pub fn trace(&self, storage: &[u8], cc: &Collection) {
+    pub fn trace<'gc, Tr: Trace<'gc>>(&self, storage: &[u8], cc: &mut Tr) {
         match self {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
                 unsafe { ObjectRef::read_unchecked(storage) }.trace(cc);
@@ -244,7 +244,7 @@ impl GcDesc {
         self.bitmap |= &other.bitmap;
     }
 
-    pub fn trace(&self, storage: &[u8], cc: &Collection) {
+    pub fn trace<'gc, Tr: Trace<'gc>>(&self, storage: &[u8], cc: &mut Tr) {
         let ptr_size = ObjectRef::SIZE;
         for word_index in self.bitmap.iter_ones() {
             let offset = word_index * ptr_size;
@@ -288,7 +288,7 @@ impl FieldLayoutManager {
         }
     }
 
-    pub fn trace(&self, storage: &[u8], cc: &Collection) {
+    pub fn trace<'gc, Tr: Trace<'gc>>(&self, storage: &[u8], cc: &mut Tr) {
         self.gc_desc.trace(storage, cc);
 
         if self.has_ref_fields {

@@ -12,7 +12,7 @@ use dotnet_types::{
 };
 use dotnet_value::StackValue;
 
-impl<'a, 'gc, 'm: 'gc> ResolutionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
+impl<'a, 'gc> ResolutionOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn stack_value_type(
         &self,
@@ -29,12 +29,12 @@ impl<'a, 'gc, 'm: 'gc> ResolutionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn current_context(&self) -> ResolutionContext<'_, 'm> {
+    fn current_context(&self) -> ResolutionContext<'_> {
         if !self.frame_stack.is_empty() {
             let f = self.frame_stack.current_frame();
             ResolutionContext {
                 generics: &f.generic_inst,
-                loader: self.shared.loader,
+                loader: self.shared.loader.clone(),
                 resolution: f.source_resolution,
                 type_owner: Some(f.state.info_handle.source.parent),
                 method_owner: Some(f.state.info_handle.source),
@@ -44,7 +44,7 @@ impl<'a, 'gc, 'm: 'gc> ResolutionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         } else {
             ResolutionContext {
                 generics: &self.shared.empty_generics,
-                loader: self.shared.loader,
+                loader: self.shared.loader.clone(),
                 resolution: self
                     .shared
                     .loader
@@ -60,10 +60,10 @@ impl<'a, 'gc, 'm: 'gc> ResolutionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn with_generics<'b>(&self, lookup: &'b GenericLookup) -> ResolutionContext<'b, 'm> {
+    fn with_generics<'b>(&self, lookup: &'b GenericLookup) -> ResolutionContext<'b> {
         let frame = self.frame_stack.current_frame();
         ResolutionContext {
-            loader: self.shared.loader,
+            loader: self.shared.loader.clone(),
             resolution: frame.source_resolution,
             generics: lookup,
             caches: self.shared.caches.clone(),

@@ -16,12 +16,11 @@ use dotnet_value::{
 };
 use dotnetdll::prelude::MethodSource;
 
-impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
-    #[inline]
+impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
     fn constructor_frame(
         &mut self,
         instance: ObjectInstance<'gc>,
-        method: MethodInfo<'m>,
+        method: MethodInfo<'static>,
         generic_inst: GenericLookup,
     ) -> Result<(), TypeResolutionError> {
         let gc = self.gc;
@@ -63,7 +62,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn call_frame(
         &mut self,
-        method: MethodInfo<'m>,
+        method: MethodInfo<'static>,
         generic_inst: GenericLookup,
     ) -> Result<(), TypeResolutionError> {
         let _ = self.check_gc_safe_point();
@@ -145,7 +144,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     #[inline]
     fn entrypoint_frame(
         &mut self,
-        method: MethodInfo<'m>,
+        method: MethodInfo<'static>,
         generic_inst: GenericLookup,
         args: Vec<StackValue<'gc>>,
     ) -> Result<(), TypeResolutionError> {
@@ -185,10 +184,10 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
             Some(&self.shared.caches.intrinsic_registry),
         ) {
             crate::intrinsics::dispatch_method_intrinsic(metadata.handler, self, method, &lookup)
-        } else if method.method.pinvoke.is_some() {
+        } else if method.method().pinvoke.is_some() {
             crate::pinvoke::external_call(self, method)
         } else {
-            if method.method.body.is_none() {
+            if method.method().body.is_none() {
                 if let Some(result) =
                     crate::intrinsics::delegates::try_delegate_dispatch(self, method, &lookup)
                 {
@@ -198,7 +197,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
                 panic!(
                     "no body in executing method: {}.{}",
                     method.parent.type_name(),
-                    method.method.name
+                    method.method().name
                 );
             }
 
@@ -221,7 +220,7 @@ impl<'a, 'gc, 'm: 'gc> CallOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
         &mut self,
         source: &MethodSource,
         this_type: Option<TypeDescription>,
-        ctx: Option<&ResolutionContext<'_, 'm>>,
+        ctx: Option<&ResolutionContext<'_>>,
     ) -> StepResult {
         let context = ctx.cloned().unwrap_or_else(|| self.current_context());
         let (resolved, lookup) = match self.resolver().find_generic_method(source, &context) {

@@ -1,4 +1,4 @@
-use gc_arena::{Collect, unsafe_empty_collect};
+use gc_arena::static_collect;
 
 #[derive(Default, Clone)]
 pub struct InstructionRingBuffer {
@@ -7,7 +7,7 @@ pub struct InstructionRingBuffer {
     index: usize,
 }
 
-unsafe_empty_collect!(InstructionRingBuffer);
+static_collect!(InstructionRingBuffer);
 
 impl InstructionRingBuffer {
     pub fn new() -> Self {

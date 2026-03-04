@@ -1,5 +1,5 @@
 use clap::Parser;
-use dotnet_assemblies::{find_dotnet_sdk_path, try_static_res_from_file};
+use dotnet_assemblies::{AssemblyLoader, find_dotnet_sdk_path};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -52,12 +52,16 @@ fn resolve_assembly_path(name: &str) -> PathBuf {
 fn main() {
     let args = Args::parse();
 
+    let sdk_path = find_dotnet_sdk_path().expect("could not find .NET SDK path");
+    let loader = AssemblyLoader::new(sdk_path.to_str().unwrap().to_string())
+        .expect("failed to create AssemblyLoader");
+
     let mut current_assembly = args.assembly.clone();
     let mut resolution;
 
     loop {
         let assembly_path = resolve_assembly_path(&current_assembly);
-        resolution = match try_static_res_from_file(&assembly_path) {
+        resolution = match loader.load_resolution_from_file(&assembly_path) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!(

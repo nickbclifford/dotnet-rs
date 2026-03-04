@@ -1,7 +1,7 @@
 use crate::{ArenaId, object::ObjectRef};
 use dashmap::DashMap;
 use dotnet_types::{TypeDescription, generics::GenericLookup};
-use gc_arena::{Collect, Collection, Mutation, unsafe_empty_collect};
+use gc_arena::{Collect, Mutation, collect::Trace, static_collect};
 use sptr::Strict;
 use std::{
     cmp::Ordering as CmpOrdering,
@@ -62,7 +62,7 @@ impl<'a> Arbitrary<'a> for UnmanagedPtr {
         ))
     }
 }
-unsafe_empty_collect!(UnmanagedPtr);
+static_collect!(UnmanagedPtr);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PointerOrigin<'gc> {
@@ -98,8 +98,8 @@ impl<'a, 'gc> Arbitrary<'a> for PointerOrigin<'gc> {
 // SAFETY: PointerOrigin contains several variants that hold GC-managed references.
 // We manually implement trace and resurrect to ensure all such references (ObjectRef, Object)
 // are correctly visited by the GC. Cross-arena references are recorded for coordinated GC.
-unsafe impl<'gc> Collect for PointerOrigin<'gc> {
-    fn trace(&self, cc: &Collection) {
+unsafe impl<'gc> Collect<'gc> for PointerOrigin<'gc> {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         match self {
             Self::Heap(r) => r.trace(cc),
             #[cfg(feature = "multithreading")]
@@ -1013,9 +1013,8 @@ impl<'gc> ManagedPtr<'gc> {
     }
 }
 
-unsafe impl<'gc> Collect for ManagedPtr<'gc> {
-    fn trace(&self, cc: &Collection) {
-        self.validate_magic();
+unsafe impl<'gc> Collect<'gc> for ManagedPtr<'gc> {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         self.origin.trace(cc);
     }
 }
@@ -1073,13 +1072,20 @@ mod tests {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
         #[cfg(feature = "multithreading")]
-        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(ArenaId(0))));
+        let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(ArenaId(0));
+        #[cfg(feature = "multithreading")]
+        let arena_handle = unsafe {
+            std::mem::transmute::<
+                &dotnet_utils::gc::ArenaHandleInner,
+                &'static dotnet_utils::gc::ArenaHandleInner,
+            >(_arena_handle_owner.as_inner())
+        };
 
         arena.mutate(|gc, _root| {
             let gc_handle = dotnet_utils::gc::GCHandle::new(
                 gc,
                 #[cfg(feature = "multithreading")]
-                arena_handle.as_inner(),
+                arena_handle,
                 #[cfg(feature = "memory-validation")]
                 ArenaId(0),
             );
@@ -1108,13 +1114,20 @@ mod tests {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
         #[cfg(feature = "multithreading")]
-        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(ArenaId(0))));
+        let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(ArenaId(0));
+        #[cfg(feature = "multithreading")]
+        let arena_handle = unsafe {
+            std::mem::transmute::<
+                &dotnet_utils::gc::ArenaHandleInner,
+                &'static dotnet_utils::gc::ArenaHandleInner,
+            >(_arena_handle_owner.as_inner())
+        };
 
         arena.mutate(|gc, _root| {
             let gc_handle = dotnet_utils::gc::GCHandle::new(
                 gc,
                 #[cfg(feature = "multithreading")]
-                arena_handle.as_inner(),
+                arena_handle,
                 #[cfg(feature = "memory-validation")]
                 ArenaId(0),
             );
@@ -1143,13 +1156,20 @@ mod tests {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
         #[cfg(feature = "multithreading")]
-        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(ArenaId(0))));
+        let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(ArenaId(0));
+        #[cfg(feature = "multithreading")]
+        let arena_handle = unsafe {
+            std::mem::transmute::<
+                &dotnet_utils::gc::ArenaHandleInner,
+                &'static dotnet_utils::gc::ArenaHandleInner,
+            >(_arena_handle_owner.as_inner())
+        };
 
         arena.mutate(|gc, _root| {
             let gc_handle = dotnet_utils::gc::GCHandle::new(
                 gc,
                 #[cfg(feature = "multithreading")]
-                arena_handle.as_inner(),
+                arena_handle,
                 #[cfg(feature = "memory-validation")]
                 ArenaId(0),
             );
@@ -1290,13 +1310,20 @@ mod tests {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
         #[cfg(feature = "multithreading")]
-        let arena_handle = Box::leak(Box::new(dotnet_utils::gc::ArenaHandle::new(ArenaId(0))));
+        let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(ArenaId(0));
+        #[cfg(feature = "multithreading")]
+        let arena_handle = unsafe {
+            std::mem::transmute::<
+                &dotnet_utils::gc::ArenaHandleInner,
+                &'static dotnet_utils::gc::ArenaHandleInner,
+            >(_arena_handle_owner.as_inner())
+        };
 
         arena.mutate(|gc, _root| {
             let _gc_handle = &dotnet_utils::gc::GCHandle::new(
                 gc,
                 #[cfg(feature = "multithreading")]
-                arena_handle.as_inner(),
+                arena_handle,
                 #[cfg(feature = "memory-validation")]
                 ArenaId(0),
             );

@@ -13,7 +13,7 @@
 //! - **Threading** (`threading/`): Support for multi-threaded execution.
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnetdll::prelude::*;
-use gc_arena::{Collect, unsafe_empty_collect};
+use gc_arena::Collect;
 
 #[macro_use]
 mod macros;
@@ -54,13 +54,13 @@ use sync::Arc;
 
 // I.12.3.2
 #[derive(Clone)]
-pub struct MethodState<'m> {
+pub struct MethodState {
     pub ip: usize,
-    pub info_handle: MethodInfo<'m>,
+    pub info_handle: MethodInfo<'static>,
     pub memory_pool: Vec<u8>,
 }
-impl<'m> MethodState<'m> {
-    pub fn new(info_handle: MethodInfo<'m>) -> Self {
+impl MethodState {
+    pub fn new(info_handle: MethodInfo<'static>) -> Self {
         Self {
             ip: 0,
             info_handle,
@@ -68,7 +68,7 @@ impl<'m> MethodState<'m> {
         }
     }
 }
-unsafe_empty_collect!(MethodState<'_>);
+unsafe impl<'gc> Collect<'gc> for MethodState {}
 
 #[derive(Clone, Debug)]
 pub struct MethodInfo<'a> {
@@ -79,7 +79,7 @@ pub struct MethodInfo<'a> {
     pub source: MethodDescription,
     pub is_cctor: bool,
 }
-unsafe_empty_collect!(MethodInfo<'_>);
+unsafe impl<'gc, 'a> Collect<'gc> for MethodInfo<'a> {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Collect)]
 #[collect(require_static)]
 pub struct CollectableMethodDescription(pub MethodDescription);
@@ -89,16 +89,16 @@ impl MethodInfo<'static> {
         generics: &GenericLookup,
         shared: Arc<SharedGlobalState>,
     ) -> Result<Self, error::TypeResolutionError> {
-        let loader = shared.loader;
+        let loader = shared.loader.clone();
         let ctx = ResolutionContext::for_method(
             method,
-            loader,
+            loader.clone(),
             generics,
             shared.caches.clone(),
             Some(shared),
         );
 
-        if let Some(body) = &method.method.body {
+        if let Some(body) = &method.method().body {
             let mut exceptions: &[body::Exception] = &[];
             for sec in &body.data_sections {
                 use body::DataSection::*;
@@ -111,11 +111,11 @@ impl MethodInfo<'static> {
             }
 
             Ok(Self {
-                is_cctor: method.method.runtime_special_name
-                    && method.method.name == ".cctor"
-                    && !method.method.signature.instance
-                    && method.method.signature.parameters.is_empty(),
-                signature: &method.method.signature,
+                is_cctor: method.method().runtime_special_name
+                    && method.method().name == ".cctor"
+                    && !method.method().signature.instance
+                    && method.method().signature.parameters.is_empty(),
+                signature: &method.method().signature,
                 locals: &body.header.local_variables,
                 exceptions: exceptions::parse(exceptions, &ctx)?
                     .into_iter()
@@ -127,7 +127,7 @@ impl MethodInfo<'static> {
         } else {
             Ok(Self {
                 is_cctor: false,
-                signature: &method.method.signature,
+                signature: &method.method().signature,
                 locals: &[],
                 exceptions: vec![],
                 instructions: &[],

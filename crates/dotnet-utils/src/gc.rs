@@ -1,5 +1,5 @@
 //! Garbage collection utility types.
-use gc_arena::{Collect, Collection, Mutation, barrier::Unlock};
+use gc_arena::{Collect, Mutation, barrier::Unlock, collect::Trace};
 use std::ops::{Deref, DerefMut};
 
 #[cfg(feature = "multithreading")]
@@ -240,8 +240,8 @@ impl<T: ?Sized> ThreadSafeLock<T> {
     }
 }
 
-unsafe impl<T: Collect> Collect for ThreadSafeLock<T> {
-    fn trace(&self, cc: &Collection) {
+unsafe impl<'gc, T: Collect<'gc> + 'gc> Collect<'gc> for ThreadSafeLock<T> {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         #[cfg(feature = "multithreading")]
         {
             // SAFETY: Tracing happens during a stop-the-world pause, so no other

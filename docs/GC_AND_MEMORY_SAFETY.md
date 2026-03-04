@@ -166,5 +166,5 @@ Heap objects are represented via several layers of abstraction (~1180 lines):
 ## GC Collect Trait Implementations
 
 All types stored in the GC heap or referenced by the VES stack must implement `gc_arena::Collect`:
-- **`unsafe_empty_collect!`**: Used for leaf types that contain no further GC references (e.g. primitive wrappers, basic configs).
-- **Manual Implementations**: Complex types like `ObjectRef`, `HeapStorage`, and `ValueType` manually implement the `trace(&self, cc: &Collection)` method. The `Collect` implementations iterate through all child elements, calling `.trace(cc)` recursively to maintain the GC reachability graph.
+- **`static_collect!`**: Used for leaf types that contain no further GC references (e.g. primitive wrappers, basic configs).
+- **Manual Implementations**: Complex types like `ObjectRef`, `HeapStorage`, and `ValueType` manually implement the `trace<Tr: Trace<'gc>>(&self, cc: &mut Tr)` method. The `Collect` implementations iterate through all child elements, calling `.trace(cc)` recursively to maintain the GC reachability graph.

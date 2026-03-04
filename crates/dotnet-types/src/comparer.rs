@@ -383,11 +383,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                         type_generics,
                     )
                 {
-                    return Some(MethodDescription {
-                        parent: desc,
-                        method_resolution: desc.resolution,
-                        method: m,
-                    });
+                    return Some(MethodDescription::new(desc, desc.resolution, m));
                 }
             };
         }

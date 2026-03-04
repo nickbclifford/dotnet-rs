@@ -8,7 +8,7 @@ use dotnetdll::prelude::*;
 use std::sync::Arc;
 
 #[dotnet_instruction(MakeTypedReference(class))]
-pub fn mkrefany<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, class: &MethodType) -> StepResult {
+pub fn mkrefany<'gc, T: VesOps<'gc>>(ctx: &mut T, class: &MethodType) -> StepResult {
     let ptr = ctx.pop();
     let StackValue::ManagedPtr(m) = ptr else {
         return ctx
@@ -21,7 +21,7 @@ pub fn mkrefany<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, class: &MethodTyp
 }
 
 #[dotnet_instruction(ReadTypedReferenceType)]
-pub fn refanytype<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T) -> StepResult {
+pub fn refanytype<'gc, T: VesOps<'gc>>(ctx: &mut T) -> StepResult {
     let tr = ctx.pop();
     let StackValue::TypedRef(_, td) = tr else {
         return ctx
@@ -33,7 +33,7 @@ pub fn refanytype<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T) -> StepResult {
 }
 
 #[dotnet_instruction(ReadTypedReferenceValue(class))]
-pub fn refanyval<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, class: &MethodType) -> StepResult {
+pub fn refanyval<'gc, T: VesOps<'gc>>(ctx: &mut T, class: &MethodType) -> StepResult {
     let tr = ctx.pop();
     let StackValue::TypedRef(m, td) = tr else {
         return ctx

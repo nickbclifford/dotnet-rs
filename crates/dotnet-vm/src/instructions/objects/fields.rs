@@ -16,11 +16,7 @@ use dotnetdll::prelude::*;
 use std::ptr::{self, NonNull};
 
 #[dotnet_instruction(LoadField { param0, volatile })]
-pub fn ldfld<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
-    ctx: &mut T,
-    param0: &FieldSource,
-    volatile: bool,
-) -> StepResult {
+pub fn ldfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: bool) -> StepResult {
     let (field, lookup) = vm_try!(ctx.locate_field(*param0));
 
     // Special fields check (intrinsic fields)
@@ -42,7 +38,7 @@ pub fn ldfld<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     let res_ctx = ctx
         .current_context()
         .for_type_with_generics(field.parent, &lookup);
-    let name = &field.field.name;
+    let name = &field.field().name;
     let t = vm_try!(res_ctx.get_field_type(field));
 
     let _ordering = if volatile {
@@ -113,11 +109,7 @@ pub fn ldfld<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 }
 
 #[dotnet_instruction(StoreField { param0, volatile })]
-pub fn stfld<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
-    ctx: &mut T,
-    param0: &FieldSource,
-    volatile: bool,
-) -> StepResult {
+pub fn stfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: bool) -> StepResult {
     let (field, lookup) = vm_try!(ctx.locate_field(*param0));
 
     let value = ctx.pop();
@@ -134,7 +126,7 @@ pub fn stfld<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     let res_ctx = ctx
         .current_context()
         .for_type_with_generics(field.parent, &lookup);
-    let name = &field.field.name;
+    let name = &field.field().name;
     let _t = vm_try!(res_ctx.get_field_type(field));
 
     let _ordering = if volatile {
@@ -171,7 +163,7 @@ pub fn stfld<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 }
 
 #[dotnet_instruction(LoadStaticField { param0, volatile })]
-pub fn ldsfld<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn ldsfld<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     param0: &FieldSource,
     volatile: bool,
@@ -193,7 +185,7 @@ pub fn ldsfld<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     let res_ctx = ctx
         .current_context()
         .for_type_with_generics(field.parent, &lookup);
-    let name = &field.field.name;
+    let name = &field.field().name;
 
     let ordering = if volatile {
         AtomicOrdering::SeqCst
@@ -203,7 +195,7 @@ pub fn ldsfld<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 
     // Thread-safe path: use GlobalState
     let storage = ctx.statics().get(field.parent, &lookup);
-    let t = vm_try!(res_ctx.make_concrete(&field.field.return_type));
+    let t = vm_try!(res_ctx.make_concrete(&field.field().return_type));
     let val_bytes = storage
         .storage
         .get_field_atomic(field.parent, name, ordering);
@@ -218,14 +210,14 @@ pub fn ldsfld<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 }
 
 #[dotnet_instruction(StoreStaticField { param0, volatile })]
-pub fn stsfld<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn stsfld<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     param0: &FieldSource,
     volatile: bool,
 ) -> StepResult {
     let (field, lookup): (_, dotnet_types::generics::GenericLookup) =
         vm_try!(ctx.locate_field(*param0));
-    let name = &field.field.name;
+    let name = &field.field().name;
 
     let res = ctx.initialize_static_storage(field.parent, lookup.clone());
     if res != StepResult::Continue {
@@ -245,7 +237,7 @@ pub fn stsfld<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 
     // Thread-safe path: use GlobalState
     let storage = ctx.statics().get(field.parent, &lookup);
-    let t = vm_try!(res_ctx.make_concrete(&field.field.return_type));
+    let t = vm_try!(res_ctx.make_concrete(&field.field().return_type));
 
     let layout = storage.layout();
     let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
@@ -259,7 +251,7 @@ pub fn stsfld<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 }
 
 #[dotnet_instruction(LoadFieldAddress(param0))]
-pub fn ldflda<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &FieldSource) -> StepResult {
+pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepResult {
     let (field, lookup) = vm_try!(ctx.locate_field(*param0));
 
     // Special fields check (intrinsic fields)
@@ -298,9 +290,9 @@ pub fn ldflda<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &FieldSourc
         if field.parent.type_name() == "System.Runtime.CompilerServices.RawArrayData" {
             let data = h.borrow();
             if let HeapStorage::Vec(ref vector) = data.storage {
-                let ptr = if field.field.name == "Data" {
+                let ptr = if field.field().name == "Data" {
                     unsafe { vector.raw_data_ptr() }
-                } else if field.field.name == "Length" {
+                } else if field.field().name == "Length" {
                     (&vector.layout.length as *const usize) as *mut u8
                 } else {
                     ptr::null_mut()
@@ -308,7 +300,7 @@ pub fn ldflda<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &FieldSourc
 
                 if !ptr.is_null() {
                     let target_type = vm_try!(ctx.current_context().get_field_desc(field));
-                    let offset = if field.field.name == "Data" {
+                    let offset = if field.field().name == "Data" {
                         dotnet_value::ByteOffset(0)
                     } else {
                         // Length is at the beginning of the ObjectInner? No, Vector struct.
@@ -345,7 +337,7 @@ pub fn ldflda<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &FieldSourc
     let res_ctx = ctx
         .current_context()
         .for_type_with_generics(field.parent, &lookup);
-    let name = &field.field.name;
+    let name = &field.field().name;
 
     let layout = vm_try!(LayoutFactory::instance_field_layout_cached(
         field.parent,
@@ -418,7 +410,7 @@ pub fn ldflda<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &FieldSourc
 }
 
 #[dotnet_instruction(LoadStaticFieldAddress(param0))]
-pub fn ldsflda<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &FieldSource) -> StepResult {
+pub fn ldsflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepResult {
     let (field, lookup): (_, dotnet_types::generics::GenericLookup) =
         vm_try!(ctx.locate_field(*param0));
 
@@ -430,7 +422,7 @@ pub fn ldsflda<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(ctx: &mut T, param0: &FieldSour
     let res_ctx = ctx
         .current_context()
         .for_type_with_generics(field.parent, &lookup);
-    let name = &field.field.name;
+    let name = &field.field().name;
 
     let storage = ctx.statics().get(field.parent, &lookup);
     let base_ptr = unsafe { storage.storage.raw_data_ptr() };

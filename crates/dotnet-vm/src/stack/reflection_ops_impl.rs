@@ -21,24 +21,29 @@ use dotnet_types::{
 use dotnet_value::object::{ObjectHandle, ObjectRef};
 use dotnetdll::prelude::FieldSource;
 
-impl<'a, 'gc, 'm: 'gc> LoaderOps<'m> for VesContext<'a, 'gc, 'm> {
+impl<'a, 'gc> LoaderOps for VesContext<'a, 'gc> {
     #[inline]
-    fn loader(&self) -> &'m AssemblyLoader {
-        self.shared.loader
+    fn loader(&self) -> &AssemblyLoader {
+        &self.shared.loader
     }
 
     #[inline]
-    fn resolver(&self) -> ResolverService<'m> {
+    fn loader_arc(&self) -> Arc<AssemblyLoader> {
+        self.shared.loader.clone()
+    }
+
+    #[inline]
+    fn resolver(&self) -> ResolverService {
         ResolverService::new(self.shared.clone())
     }
 
     #[inline]
-    fn shared(&self) -> &Arc<SharedGlobalState<'m>> {
+    fn shared(&self) -> &Arc<SharedGlobalState> {
         self.shared
     }
 }
 
-impl<'a, 'gc, 'm: 'gc> StaticsOps<'gc> for VesContext<'a, 'gc, 'm> {
+impl<'a, 'gc> StaticsOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn statics(&self) -> &StaticStorageManager {
         &self.shared.statics
@@ -58,7 +63,7 @@ impl<'a, 'gc, 'm: 'gc> StaticsOps<'gc> for VesContext<'a, 'gc, 'm> {
         let ctx = ResolutionContext {
             resolution: description.resolution,
             generics: &generics,
-            loader: self.loader(),
+            loader: self.shared.loader.clone(),
             type_owner: Some(description),
             method_owner: None,
             caches: self.shared.caches.clone(),
@@ -105,13 +110,13 @@ impl<'a, 'gc, 'm: 'gc> StaticsOps<'gc> for VesContext<'a, 'gc, 'm> {
     }
 }
 
-impl<'a, 'gc, 'm: 'gc> ThreadOps for VesContext<'a, 'gc, 'm> {
+impl<'a, 'gc> ThreadOps for VesContext<'a, 'gc> {
     fn thread_id(&self) -> dotnet_utils::ArenaId {
         self.thread_id.get()
     }
 }
 
-impl<'a, 'gc, 'm: 'gc> ReflectionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
+impl<'a, 'gc> ReflectionOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn pre_initialize_reflection(&mut self) {
         crate::intrinsics::reflection::common::pre_initialize_reflection(self)
@@ -151,11 +156,7 @@ impl<'a, 'gc, 'm: 'gc> ReflectionOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
     }
 
     #[inline]
-    fn make_runtime_type(
-        &self,
-        ctx: &ResolutionContext<'_, 'm>,
-        source: &MethodType,
-    ) -> RuntimeType {
+    fn make_runtime_type(&self, ctx: &ResolutionContext<'_>, source: &MethodType) -> RuntimeType {
         crate::intrinsics::reflection::common::make_runtime_type(ctx, source)
     }
 

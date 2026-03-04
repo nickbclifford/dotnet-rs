@@ -13,7 +13,7 @@ use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDesc
 use dotnet_utils::{gc::GCHandle, sync::Ordering};
 use dotnet_value::{StackValue, layout::HasLayout, object::ObjectRef};
 use dotnetdll::prelude::*;
-use gc_arena::Collect;
+use gc_arena::{Collect, collect::Trace};
 
 pub mod registry;
 pub mod ring_buffer;
@@ -21,15 +21,12 @@ pub mod ring_buffer;
 pub struct InstructionRegistry;
 
 impl InstructionRegistry {
-    pub fn dispatch<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
-        ctx: &mut T,
-        instr: &Instruction,
-    ) -> StepResult {
+    pub fn dispatch<'gc, T: VesOps<'gc>>(ctx: &mut T, instr: &Instruction) -> StepResult {
         registry::dispatch_monomorphic(ctx, instr)
     }
 }
 
-impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
+impl<'gc> CallStack<'gc> {
     #[inline]
     pub fn check_gc_safe_point(&self) -> bool {
         let thread_manager = &self.shared.thread_manager;
@@ -37,28 +34,28 @@ impl<'gc, 'm: 'gc> CallStack<'gc, 'm> {
     }
 }
 
-pub struct ExecutionEngine<'gc, 'm: 'gc> {
-    pub stack: CallStack<'gc, 'm>,
+pub struct ExecutionEngine<'gc> {
+    pub stack: CallStack<'gc>,
     pub ring_buffer: ring_buffer::InstructionRingBuffer,
 }
 
 // SAFETY: `ExecutionEngine` correctly traces its GC-managed fields (`stack`) in its
 // `trace` implementation. `ring_buffer` does not contain GC pointers.
-unsafe impl<'gc, 'm: 'gc> Collect for ExecutionEngine<'gc, 'm> {
-    fn trace(&self, cc: &gc_arena::Collection) {
+unsafe impl<'gc> Collect<'gc> for ExecutionEngine<'gc> {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         self.stack.trace(cc);
     }
 }
 
-impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
-    pub fn new(stack: CallStack<'gc, 'm>) -> Self {
+impl<'gc> ExecutionEngine<'gc> {
+    pub fn new(stack: CallStack<'gc>) -> Self {
         Self {
             stack,
             ring_buffer: ring_buffer::InstructionRingBuffer::new(),
         }
     }
 
-    pub fn ves_context(&mut self, gc: GCHandle<'gc>) -> crate::stack::VesContext<'_, 'gc, 'm> {
+    pub fn ves_context(&mut self, gc: GCHandle<'gc>) -> crate::stack::VesContext<'_, 'gc> {
         self.stack.ves_context(gc)
     }
 
@@ -222,7 +219,7 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
         gc: GCHandle<'gc>,
         source: &MethodSource,
         this_type: Option<TypeDescription>,
-        ctx: Option<&ResolutionContext<'_, 'm>>,
+        ctx: Option<&ResolutionContext<'_>>,
     ) -> StepResult {
         self.ves_context(gc)
             .unified_dispatch(source, this_type, ctx)
@@ -238,19 +235,19 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
         tracing::debug!(
             "dispatch_method: method={:?}, pinvoke={:?}, internal_call={}",
             method,
-            method.method.pinvoke,
-            method.method.internal_call
+            method.method().pinvoke,
+            method.method().internal_call
         );
         if ctx.is_intrinsic_cached(method) {
             crate::intrinsics::intrinsic_call(&mut ctx, method, &lookup)
-        } else if method.method.pinvoke.is_some() {
+        } else if method.method().pinvoke.is_some() {
             crate::pinvoke::external_call(&mut ctx, method)
         } else {
-            if method.method.internal_call {
+            if method.method().internal_call {
                 panic!("intrinsic not found: {:?}", method);
             }
 
-            if method.method.body.is_none() {
+            if method.method().body.is_none() {
                 if let Some(result) =
                     crate::intrinsics::delegates::try_delegate_dispatch(&mut ctx, method, &lookup)
                 {
@@ -260,7 +257,7 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
                 panic!(
                     "no body in executing method: {}.{}",
                     method.parent.type_name(),
-                    method.method.name
+                    method.method().name
                 );
             }
 
@@ -285,7 +282,7 @@ impl<'gc, 'm: 'gc> ExecutionEngine<'gc, 'm> {
         if ctx.frame_stack.current_frame().stack_height > crate::StackSlotIndex(0) {
             let frame = ctx.frame_stack.current_frame();
             let invoke_method = frame.state.info_handle.source;
-            let has_return_value = invoke_method.method.signature.return_type.1.is_some();
+            let has_return_value = invoke_method.method().signature.return_type.1.is_some();
 
             let next_index = frame.multicast_state.as_ref().unwrap().next_index;
             if next_index < targets_len && has_return_value {

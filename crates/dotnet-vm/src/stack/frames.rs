@@ -6,49 +6,59 @@ use crate::{
 };
 use dotnet_value::StackValue;
 use dotnetdll::prelude::ReturnType;
-use gc_arena::Collect;
+use gc_arena::{Collect, collect::Trace};
 
-#[derive(Collect, Default)]
-#[collect(no_drop)]
-pub struct FrameStack<'gc, 'm> {
-    pub(crate) frames: Vec<StackFrame<'gc, 'm>>,
-    pub(crate) suspended_frames: Vec<StackFrame<'gc, 'm>>,
+#[derive(Default)]
+pub struct FrameStack<'gc> {
+    pub(crate) frames: Vec<StackFrame<'gc>>,
+    pub(crate) suspended_frames: Vec<StackFrame<'gc>>,
 }
 
-impl<'gc, 'm> FrameStack<'gc, 'm> {
+unsafe impl<'gc> Collect<'gc> for FrameStack<'gc> {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
+        for f in &self.frames {
+            f.trace(cc);
+        }
+        for f in &self.suspended_frames {
+            f.trace(cc);
+        }
+    }
+}
+
+impl<'gc> FrameStack<'gc> {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn push(&mut self, frame: StackFrame<'gc, 'm>) {
+    pub fn push(&mut self, frame: StackFrame<'gc>) {
         self.frames.push(frame);
     }
 
-    pub fn pop(&mut self) -> Option<StackFrame<'gc, 'm>> {
+    pub fn pop(&mut self) -> Option<StackFrame<'gc>> {
         self.frames.pop()
     }
 
-    pub fn current_frame(&self) -> &StackFrame<'gc, 'm> {
+    pub fn current_frame(&self) -> &StackFrame<'gc> {
         self.frames.last().expect("Frame stack underflow")
     }
 
-    pub fn current_frame_opt(&self) -> Option<&StackFrame<'gc, 'm>> {
+    pub fn current_frame_opt(&self) -> Option<&StackFrame<'gc>> {
         self.frames.last()
     }
 
-    pub fn current_frame_opt_mut(&mut self) -> Option<&mut StackFrame<'gc, 'm>> {
+    pub fn current_frame_opt_mut(&mut self) -> Option<&mut StackFrame<'gc>> {
         self.frames.last_mut()
     }
 
-    pub fn current_frame_mut(&mut self) -> &mut StackFrame<'gc, 'm> {
+    pub fn current_frame_mut(&mut self) -> &mut StackFrame<'gc> {
         self.frames.last_mut().expect("Frame stack underflow")
     }
 
-    pub fn state(&self) -> &MethodState<'m> {
+    pub fn state(&self) -> &MethodState {
         &self.current_frame().state
     }
 
-    pub fn state_mut(&mut self) -> &mut MethodState<'m> {
+    pub fn state_mut(&mut self) -> &mut MethodState {
         &mut self.current_frame_mut().state
     }
 
@@ -97,7 +107,7 @@ impl<'gc, 'm> FrameStack<'gc, 'm> {
     pub fn unwind_frame(
         &mut self,
         evaluation_stack: &mut EvaluationStack<'gc>,
-        shared: &SharedGlobalState<'m>,
+        shared: &SharedGlobalState,
         heap: &HeapManager<'gc>,
     ) {
         let frame = self.pop().expect("unwind_frame called with empty stack");
@@ -119,7 +129,7 @@ impl<'gc, 'm> FrameStack<'gc, 'm> {
     pub fn return_frame(
         &mut self,
         evaluation_stack: &mut EvaluationStack<'gc>,
-        shared: &SharedGlobalState<'m>,
+        shared: &SharedGlobalState,
         heap: &HeapManager<'gc>,
         tracer_enabled: bool,
     ) {
@@ -170,7 +180,7 @@ impl<'gc, 'm> FrameStack<'gc, 'm> {
     pub fn handle_return(
         &mut self,
         evaluation_stack: &mut EvaluationStack<'gc>,
-        shared: &SharedGlobalState<'m>,
+        shared: &SharedGlobalState,
         heap: &HeapManager<'gc>,
         tracer_enabled: bool,
     ) -> StepResult {

@@ -20,7 +20,7 @@ const NULL_REF_MSG: &str = "Object reference not set to an instance of an object
 const NOT_SUPPORTED_MSG: &str = "BeginInvoke and EndInvoke are not supported.";
 
 /// Check if a type is a delegate type (inherits from System.Delegate or System.MulticastDelegate)
-pub fn is_delegate_type<'gc, 'm, T: VesOps<'gc, 'm>>(ctx: &T, mut td: TypeDescription) -> bool {
+pub fn is_delegate_type<'gc, T: VesOps<'gc>>(ctx: &T, mut td: TypeDescription) -> bool {
     loop {
         let definition = td.definition();
         let raw_type_name = definition.type_name();
@@ -47,13 +47,13 @@ pub fn is_delegate_type<'gc, 'm, T: VesOps<'gc, 'm>>(ctx: &T, mut td: TypeDescri
 }
 
 /// Try to dispatch a delegate runtime method. Returns Some(result) if handled.
-pub fn try_delegate_dispatch<'gc, 'm, T: VesOps<'gc, 'm>>(
+pub fn try_delegate_dispatch<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     method: MethodDescription,
     lookup: &GenericLookup,
 ) -> Option<StepResult> {
     // Quick check: only handle methods without bodies
-    if method.method.body.is_some() {
+    if method.method().body.is_some() {
         return None;
     }
 
@@ -62,7 +62,7 @@ pub fn try_delegate_dispatch<'gc, 'm, T: VesOps<'gc, 'm>>(
         return None;
     }
 
-    let method_name = &*method.method.name;
+    let method_name = &*method.method().name;
     match method_name {
         "Invoke" => Some(invoke_delegate(ctx, method, lookup)),
         ".ctor" => None, // Constructor is handled by support library stub
@@ -76,12 +76,12 @@ pub fn try_delegate_dispatch<'gc, 'm, T: VesOps<'gc, 'm>>(
     }
 }
 
-fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm>>(
+fn invoke_delegate<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     invoke_method: MethodDescription,
     _lookup: &GenericLookup,
 ) -> StepResult {
-    let num_invoke_args = invoke_method.method.signature.parameters.len();
+    let num_invoke_args = invoke_method.method().signature.parameters.len();
 
     // Stack order: [delegate_instance, arg0, arg1, ..., argN]
     // pop_multiple returns them in order they were on stack.
@@ -175,7 +175,7 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm>>(
     let (target_method, target_lookup) = ctx.lookup_method_by_index(method_index);
 
     // Push arguments back onto stack
-    if target_method.method.signature.instance {
+    if target_method.method().signature.instance {
         ctx.push(StackValue::ObjectRef(target));
     }
 
@@ -188,7 +188,7 @@ fn invoke_delegate<'gc, 'm, T: VesOps<'gc, 'm>>(
 }
 
 #[dotnet_intrinsic("object System.Delegate::get_Target()")]
-pub fn delegate_get_target<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn delegate_get_target<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -215,7 +215,7 @@ pub fn delegate_get_target<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 }
 
 #[dotnet_intrinsic("System.Reflection.MethodInfo System.Delegate::get_Method()")]
-pub fn delegate_get_method<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn delegate_get_method<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -245,7 +245,7 @@ pub fn delegate_get_method<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 
 #[dotnet_intrinsic("bool System.Delegate::Equals(object)")]
 #[dotnet_intrinsic("bool System.MulticastDelegate::Equals(object)")]
-pub fn delegate_equals<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn delegate_equals<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -338,7 +338,7 @@ pub fn delegate_equals<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 
 #[dotnet_intrinsic("int System.Delegate::GetHashCode()")]
 #[dotnet_intrinsic("int System.MulticastDelegate::GetHashCode()")]
-pub fn delegate_get_hash_code<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn delegate_get_hash_code<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -363,10 +363,7 @@ pub fn delegate_get_hash_code<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     StepResult::Continue
 }
 
-fn get_delegate_info<'gc, 'm, T: VesOps<'gc, 'm>>(
-    ctx: &T,
-    obj: ObjectRef<'gc>,
-) -> (ObjectRef<'gc>, usize) {
+fn get_delegate_info<'gc, T: VesOps<'gc>>(ctx: &T, obj: ObjectRef<'gc>) -> (ObjectRef<'gc>, usize) {
     obj.as_object(|instance| {
         let delegate_type = ctx
             .loader()
@@ -386,7 +383,7 @@ fn get_delegate_info<'gc, 'm, T: VesOps<'gc, 'm>>(
     })
 }
 
-fn get_multicast_targets_ref<'gc, 'm, T: VesOps<'gc, 'm>>(
+fn get_multicast_targets_ref<'gc, T: VesOps<'gc>>(
     ctx: &T,
     obj: ObjectRef<'gc>,
 ) -> Option<ObjectRef<'gc>> {
@@ -436,7 +433,7 @@ fn get_multicast_targets_ref<'gc, 'm, T: VesOps<'gc, 'm>>(
 }
 
 #[dotnet_intrinsic("object System.Delegate::DynamicInvoke(object[])")]
-pub fn delegate_dynamic_invoke<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn delegate_dynamic_invoke<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -448,11 +445,7 @@ pub fn delegate_dynamic_invoke<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
     )
 }
 
-fn delegates_equal<'gc, 'm, T: VesOps<'gc, 'm>>(
-    ctx: &T,
-    a: ObjectRef<'gc>,
-    b: ObjectRef<'gc>,
-) -> bool {
+fn delegates_equal<'gc, T: VesOps<'gc>>(ctx: &T, a: ObjectRef<'gc>, b: ObjectRef<'gc>) -> bool {
     if a == b {
         return true;
     }
@@ -466,10 +459,7 @@ fn delegates_equal<'gc, 'm, T: VesOps<'gc, 'm>>(
     target_a == target_b && index_a == index_b
 }
 
-fn get_invocation_list<'gc, 'm, T: VesOps<'gc, 'm>>(
-    ctx: &T,
-    obj: ObjectRef<'gc>,
-) -> Vec<ObjectRef<'gc>> {
+fn get_invocation_list<'gc, T: VesOps<'gc>>(ctx: &T, obj: ObjectRef<'gc>) -> Vec<ObjectRef<'gc>> {
     if let Some(targets_ref) = get_multicast_targets_ref(ctx, obj) {
         targets_ref.as_vector(|v| {
             let len = v.layout.length;
@@ -493,7 +483,7 @@ fn get_invocation_list<'gc, 'm, T: VesOps<'gc, 'm>>(
 #[dotnet_intrinsic(
     "static System.Delegate System.Delegate::Combine(System.Delegate, System.Delegate)"
 )]
-pub fn delegate_combine<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn delegate_combine<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -559,7 +549,7 @@ pub fn delegate_combine<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 #[dotnet_intrinsic(
     "static System.Delegate System.Delegate::Remove(System.Delegate, System.Delegate)"
 )]
-pub fn delegate_remove<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn delegate_remove<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -654,8 +644,8 @@ pub fn delegate_remove<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
 }
 
 /*
-fn get_runtime_return_type<'gc, 'm, T: VesOps<'gc, 'm>>(ctx: &T, res_ctx: &crate::ResolutionContext<'_, 'm>, method: &MethodDescription) -> RuntimeType {
-    match &method.method.signature.return_type.1 {
+fn get_runtime_return_type<'gc, T: VesOps<'gc>>(ctx: &T, res_ctx: &crate::ResolutionContext<'_>, method: &MethodDescription) -> RuntimeType {
+    match &method.method().signature.return_type.1 {
         Some(dotnetdll::prelude::ParameterType::Value(t))
         | Some(dotnetdll::prelude::ParameterType::Ref(t)) => {
             ctx.make_runtime_type(res_ctx, t)

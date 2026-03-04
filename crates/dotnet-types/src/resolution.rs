@@ -1,5 +1,5 @@
 use dotnetdll::prelude::*;
-use gc_arena::{Collect, unsafe_empty_collect};
+use gc_arena::static_collect;
 use std::{
     fmt::{Debug, Formatter},
     hash::Hash,
@@ -22,7 +22,7 @@ impl<'a> Arbitrary<'a> for ResolutionS {
         Ok(Self::new(ptr_val as *const _))
     }
 }
-unsafe_empty_collect!(ResolutionS);
+static_collect!(ResolutionS);
 // SAFETY: ResolutionS is a transparent wrapper around a NonNull pointer to Resolution.
 // Resolution data is managed by the VM and persists for the program lifetime.
 // Thread-safety is guaranteed by the read-only nature of metadata once loaded.

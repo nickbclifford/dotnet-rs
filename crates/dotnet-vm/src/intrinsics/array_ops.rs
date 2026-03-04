@@ -16,7 +16,7 @@ const NULL_REF_MSG: &str = "Object reference not set to an instance of an object
 const INDEX_OUT_OF_RANGE_MSG: &str = "Index was outside the bounds of the array.";
 
 #[dotnet_intrinsic("int System.Array::get_Length()")]
-pub fn intrinsic_array_get_length<'gc, 'm: 'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
+pub fn intrinsic_array_get_length<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -37,7 +37,7 @@ pub fn intrinsic_array_get_length<'gc, 'm: 'gc, T: TypedStackOps<'gc> + Exceptio
 }
 
 #[dotnet_intrinsic("int System.Array::get_Rank()")]
-pub fn intrinsic_array_get_rank<'gc, 'm: 'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
+pub fn intrinsic_array_get_rank<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -62,12 +62,11 @@ pub fn intrinsic_array_get_rank<'gc, 'm: 'gc, T: TypedStackOps<'gc> + ExceptionO
 #[dotnet_intrinsic("object System.Array::GetValue(int[])")]
 pub fn intrinsic_array_get_value<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
         + ExceptionOps<'gc>
         + MemoryOps<'gc>
-        + ResolutionOps<'gc, 'm>,
+        + ResolutionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -125,12 +124,11 @@ pub fn intrinsic_array_get_value<
 #[dotnet_intrinsic("void System.Array::SetValue(object, int[])")]
 pub fn intrinsic_array_set_value<
     'gc,
-    'm: 'gc,
     T: EvalStackOps<'gc>
         + TypedStackOps<'gc>
         + ExceptionOps<'gc>
         + MemoryOps<'gc>
-        + ResolutionOps<'gc, 'm>,
+        + ResolutionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,

@@ -33,8 +33,8 @@
 //!
 //! ```ignore
 //! #[dotnet_instruction]
-//! pub fn instruction_name<'gc, 'm>(
-//!     ctx: &mut dyn VesOps<'gc, 'm>,
+//! pub fn instruction_name<'gc>(
+//!     ctx: &mut dyn VesOps<'gc>,
 //!     operand: OperandType,
 //! ) -> Result<StepResult> {
 //!     // 1. Pop operands from evaluation stack
@@ -74,7 +74,7 @@
 //! use crate::{StepResult, stack::ops::VesOps};
 //!
 //! #[dotnet_instruction]
-//! pub fn add<'gc, 'm>(ctx: &mut dyn VesOps<'gc, 'm>) -> Result<StepResult> {
+//! pub fn add<'gc>(ctx: &mut dyn VesOps<'gc>) -> Result<StepResult> {
 //!     let b = ctx.pop_i32()?;
 //!     let a = ctx.pop_i32()?;
 //!     ctx.push_i32(a.wrapping_add(b));

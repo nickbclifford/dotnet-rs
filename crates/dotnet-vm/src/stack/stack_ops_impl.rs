@@ -7,7 +7,7 @@ use dotnet_value::{
     object::{HeapStorage, ObjectRef},
 };
 
-impl<'a, 'gc, 'm: 'gc> EvalStackOps<'gc> for VesContext<'a, 'gc, 'm> {
+impl<'a, 'gc> EvalStackOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn push(&mut self, value: StackValue<'gc>) {
         #[cfg(feature = "multithreading")]
@@ -76,7 +76,7 @@ impl<'a, 'gc, 'm: 'gc> EvalStackOps<'gc> for VesContext<'a, 'gc, 'm> {
     }
 }
 
-impl<'a, 'gc, 'm: 'gc> TypedStackOps<'gc> for VesContext<'a, 'gc, 'm> {
+impl<'a, 'gc> TypedStackOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn push_string(&mut self, value: CLRString) {
         let gc = self.gc;
@@ -86,7 +86,7 @@ impl<'a, 'gc, 'm: 'gc> TypedStackOps<'gc> for VesContext<'a, 'gc, 'm> {
     }
 }
 
-impl<'a, 'gc, 'm: 'gc> LocalOps<'gc> for VesContext<'a, 'gc, 'm> {
+impl<'a, 'gc> LocalOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn get_local(&self, index: crate::LocalIndex) -> StackValue<'gc> {
         let frame = self.frame_stack.current_frame();
@@ -128,7 +128,7 @@ impl<'a, 'gc, 'm: 'gc> LocalOps<'gc> for VesContext<'a, 'gc, 'm> {
     }
 }
 
-impl<'a, 'gc, 'm: 'gc> ArgumentOps<'gc> for VesContext<'a, 'gc, 'm> {
+impl<'a, 'gc> ArgumentOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn get_argument(&self, index: crate::ArgumentIndex) -> StackValue<'gc> {
         let frame = self.frame_stack.current_frame();
@@ -153,14 +153,14 @@ impl<'a, 'gc, 'm: 'gc> ArgumentOps<'gc> for VesContext<'a, 'gc, 'm> {
     }
 }
 
-impl<'a, 'gc, 'm: 'gc> StackOps<'gc, 'm> for VesContext<'a, 'gc, 'm> {
+impl<'a, 'gc> StackOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
-    fn current_frame(&self) -> &crate::stack::StackFrame<'gc, 'm> {
+    fn current_frame(&self) -> &crate::stack::StackFrame<'gc> {
         self.frame_stack.current_frame()
     }
 
     #[inline]
-    fn current_frame_mut(&mut self) -> &mut crate::stack::StackFrame<'gc, 'm> {
+    fn current_frame_mut(&mut self) -> &mut crate::stack::StackFrame<'gc> {
         self.frame_stack.current_frame_mut()
     }
 
