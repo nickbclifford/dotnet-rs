@@ -1,5 +1,5 @@
 use crate::memory::heap::HeapManager;
-use dotnet_types::{TypeDescription, generics::GenericLookup};
+use dotnet_types::{TypeDescription, generics::GenericLookup, resolution::ResolutionS};
 use dotnet_utils::{ArenaId, ByteOffset, atomic::validate_atomic_access, gc::GCHandle};
 use dotnet_value::{
     StackValue,
@@ -24,7 +24,8 @@ pub enum MemoryOwner<'gc> {
 pub struct HeapWriteTarget<'gc>(pub MemoryOwner<'gc>);
 
 pub struct WriteBarrierRecorder<'gc> {
-    #[allow(dead_code)] // Only used when multithreading is enabled, as it tracks cross-arena references
+    #[allow(dead_code)]
+    // Only used when multithreading is enabled, as it tracks cross-arena references
     arena_id: ArenaId,
     _gc: std::marker::PhantomData<&'gc ()>,
 }
@@ -563,9 +564,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             self.check_bounds_internal(ptr, base, len, layout.size().as_usize())?;
             self.check_integrity_internal_with_layout(ptr, dest_layout, base, layout)?;
 
-            unsafe {
-                self.write_value_internal(gc, ptr, Some(owner), value, layout)
-            }
+            unsafe { self.write_value_internal(gc, ptr, Some(owner), value, layout) }
         })
     }
 
@@ -585,9 +584,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             return Err("NullReferenceException: writing to unmanaged null pointer".into());
         }
         validate_atomic_access(ptr as *const u8, false);
-        unsafe {
-            self.write_value_internal(gc, ptr, None, value, layout)
-        }
+        unsafe { self.write_value_internal(gc, ptr, None, value, layout) }
     }
 
     pub(crate) unsafe fn write_value_internal(
@@ -601,7 +598,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         // Safety: `write_unaligned` ensures `ptr` is valid.
         unsafe {
             if ptr.is_null() {
-                return Err("RawMemoryAccess::write_value_internal called with null pointer!".to_string());
+                return Err(
+                    "RawMemoryAccess::write_value_internal called with null pointer!".to_string(),
+                );
             }
 
             match layout {
@@ -817,7 +816,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         // This is verified by `read_unaligned` before calling this method.
         unsafe {
             if ptr.is_null() {
-                return Err("RawMemoryAccess::read_value_internal called with null pointer!".to_string());
+                return Err(
+                    "RawMemoryAccess::read_value_internal called with null pointer!".to_string(),
+                );
             }
 
             Ok(match layout {
@@ -854,7 +855,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         .map_err(|e| format!("ManagedPtr read failed: {:?}", e))?;
 
                         let actual_desc = type_desc.unwrap_or(TypeDescription::from_raw(
-                            dotnet_types::resolution::ResolutionS::new(ptr::null()),
+                            ResolutionS::new(ptr::null()),
                             None,
                             std::mem::zeroed(),
                         ));

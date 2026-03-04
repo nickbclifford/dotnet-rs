@@ -114,8 +114,11 @@
 //!   ├─→ external_call() [if P/Invoke]
 //!   └─→ call_frame() [managed CIL]
 //! ```
-use crate::stack::ops::{
-    EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, ReflectionOps, TypedStackOps, VesOps,
+use crate::{
+    error::ExecutionError,
+    stack::ops::{
+        EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, ReflectionOps, TypedStackOps, VesOps,
+    },
 };
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_macros::dotnet_intrinsic;
@@ -184,7 +187,7 @@ pub fn missing_intrinsic_handler<'gc, T: VesOps<'gc>>(
     _generics: &GenericLookup,
 ) -> StepResult {
     StepResult::Error(
-        crate::error::ExecutionError::NotImplemented(format!(
+        ExecutionError::NotImplemented(format!(
             "Missing intrinsic implementation for method: {:?}",
             method
         ))

@@ -8,16 +8,18 @@ use crate::{
             StaticsOps, ThreadOps,
         },
     },
-    state::{SharedGlobalState, StaticStorageManager},
+    state::{ReflectionRegistry, SharedGlobalState, StaticStorageManager},
     sync::Arc,
 };
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{
     TypeDescription,
-    generics::GenericLookup,
+    error::TypeResolutionError,
+    generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     runtime::RuntimeType,
 };
+use dotnet_utils::ArenaId;
 use dotnet_value::object::{ObjectHandle, ObjectRef};
 use dotnetdll::prelude::FieldSource;
 
@@ -111,7 +113,7 @@ impl<'a, 'gc> StaticsOps<'gc> for VesContext<'a, 'gc> {
 }
 
 impl<'a, 'gc> ThreadOps for VesContext<'a, 'gc> {
-    fn thread_id(&self) -> dotnet_utils::ArenaId {
+    fn thread_id(&self) -> ArenaId {
         self.thread_id.get()
     }
 }
@@ -164,7 +166,7 @@ impl<'a, 'gc> ReflectionOps<'gc> for VesContext<'a, 'gc> {
     fn get_heap_description(
         &self,
         object: ObjectHandle<'gc>,
-    ) -> Result<TypeDescription, dotnet_types::error::TypeResolutionError> {
+    ) -> Result<TypeDescription, TypeResolutionError> {
         self.resolver().get_heap_description(object)
     }
 
@@ -172,7 +174,7 @@ impl<'a, 'gc> ReflectionOps<'gc> for VesContext<'a, 'gc> {
     fn locate_field(
         &self,
         handle: FieldSource,
-    ) -> Result<(FieldDescription, GenericLookup), dotnet_types::error::TypeResolutionError> {
+    ) -> Result<(FieldDescription, GenericLookup), TypeResolutionError> {
         let context = self.current_context();
         self.resolver()
             .locate_field(context.resolution, handle, context.generics)
@@ -218,17 +220,17 @@ impl<'a, 'gc> ReflectionOps<'gc> for VesContext<'a, 'gc> {
     }
 
     #[inline]
-    fn reflection(&self) -> crate::state::ReflectionRegistry<'_, 'gc> {
-        crate::state::ReflectionRegistry::new(self.local)
+    fn reflection(&self) -> ReflectionRegistry<'_, 'gc> {
+        ReflectionRegistry::new(self.local)
     }
 
     #[inline]
     fn execute_intrinsic_field(
         &mut self,
         field: FieldDescription,
-        type_generics: Arc<[dotnet_types::generics::ConcreteType]>,
+        type_generics: Arc<[ConcreteType]>,
         is_address: bool,
-    ) -> crate::StepResult {
+    ) -> StepResult {
         crate::intrinsics::intrinsic_field(self, field, type_generics, is_address)
     }
 
@@ -237,7 +239,7 @@ impl<'a, 'gc> ReflectionOps<'gc> for VesContext<'a, 'gc> {
         &mut self,
         method: MethodDescription,
         lookup: &GenericLookup,
-    ) -> crate::StepResult {
+    ) -> StepResult {
         crate::intrinsics::intrinsic_call(self, method, lookup)
     }
 }

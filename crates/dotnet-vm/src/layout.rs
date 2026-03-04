@@ -1,13 +1,16 @@
-use crate::{context::ResolutionContext, metrics::RuntimeMetrics, sync::Arc};
+use crate::{ByteOffset, context::ResolutionContext, metrics::RuntimeMetrics, sync::Arc};
 use dotnet_types::{
     TypeDescription,
     error::TypeResolutionError,
     generics::{ConcreteType, GenericLookup},
     members::FieldDescription,
 };
-use dotnet_value::layout::{
-    ArrayLayoutManager, FieldKey, FieldLayout, FieldLayoutManager, GcDesc, HasLayout,
-    LayoutManager, Scalar, align_up,
+use dotnet_value::{
+    layout::{
+        ArrayLayoutManager, FieldKey, FieldLayout, FieldLayoutManager, GcDesc, HasLayout,
+        LayoutManager, Scalar, align_up,
+    },
+    object::ObjectRef,
 };
 use dotnetdll::prelude::*;
 use tracing::trace;
@@ -16,7 +19,7 @@ pub struct LayoutFactory;
 
 impl LayoutFactory {
     fn populate_gc_desc(layout: &LayoutManager, base_offset: usize, desc: &mut GcDesc) {
-        let ptr_size = dotnet_value::object::ObjectRef::SIZE;
+        let ptr_size = ObjectRef::SIZE;
         match layout {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
                 desc.set(base_offset / ptr_size);
@@ -86,7 +89,7 @@ impl LayoutFactory {
                             name: name.to_string(),
                         },
                         FieldLayout {
-                            position: dotnet_utils::ByteOffset(aligned_offset),
+                            position: ByteOffset(aligned_offset),
                             layout: layout.clone(),
                         },
                     );
@@ -124,7 +127,7 @@ impl LayoutFactory {
                             name: name.to_string(),
                         },
                         FieldLayout {
-                            position: dotnet_utils::ByteOffset(aligned_offset),
+                            position: ByteOffset(aligned_offset),
                             layout: layout.clone(),
                         },
                     );

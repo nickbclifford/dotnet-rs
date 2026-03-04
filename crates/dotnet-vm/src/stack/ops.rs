@@ -20,7 +20,17 @@
 //! Handlers should typically take a generic parameter `T: VesOps<'gc> + ?Sized`.
 //! This allows them to work with both `VesContext` and potentially other implementations
 //! for testing or specialized execution.
-use crate::{state::SharedGlobalState, sync::Arc, tracer::Tracer};
+use crate::{
+    ArgumentIndex, LocalIndex, MethodInfo, MethodState, ResolutionContext, StackSlotIndex,
+    StepResult,
+    error::VmError,
+    exceptions::ExceptionState,
+    resolver::ResolverService,
+    stack::{StackFrame, evaluation_stack::EvaluationStack, frames::FrameStack},
+    state::{ReflectionRegistry, SharedGlobalState, StaticStorageManager},
+    sync::Arc,
+    tracer::Tracer,
+};
 use dotnet_types::{
     TypeDescription,
     error::TypeResolutionError,
@@ -28,27 +38,28 @@ use dotnet_types::{
     members::{FieldDescription, MethodDescription},
     runtime::RuntimeType,
 };
-use dotnet_utils::{BorrowScopeOps, ByteOffset};
+use dotnet_utils::{ArenaId, BorrowScopeOps, ByteOffset};
 use dotnet_value::{
     CLRString, StackValue,
+    layout::LayoutManager,
     object::{Object as ObjectInstance, ObjectHandle, ObjectRef},
     pointer::{ManagedPtr, PointerOrigin},
 };
-use dotnetdll::prelude::{FieldSource, MethodType};
+use dotnetdll::prelude::{FieldSource, MethodSource, MethodType};
 
 pub use crate::memory::ops::MemoryOps;
 
 pub trait EvalStackOps<'gc> {
     fn push(&mut self, value: StackValue<'gc>);
     fn pop(&mut self) -> StackValue<'gc>;
-    fn pop_safe(&mut self) -> Result<StackValue<'gc>, crate::error::VmError>;
+    fn pop_safe(&mut self) -> Result<StackValue<'gc>, VmError>;
     fn pop_multiple(&mut self, count: usize) -> Vec<StackValue<'gc>>;
     fn peek_multiple(&self, count: usize) -> Vec<StackValue<'gc>>;
     fn dup(&mut self);
     fn peek(&self) -> Option<StackValue<'gc>>;
     fn peek_stack(&self) -> StackValue<'gc>;
     fn peek_stack_at(&self, offset: usize) -> StackValue<'gc>;
-    fn top_of_stack(&self) -> crate::StackSlotIndex;
+    fn top_of_stack(&self) -> StackSlotIndex;
 }
 
 pub trait TypedStackOps<'gc>: EvalStackOps<'gc> {
@@ -122,19 +133,16 @@ pub trait TypedStackOps<'gc>: EvalStackOps<'gc> {
 }
 
 pub trait LocalOps<'gc> {
-    fn get_local(&self, index: crate::LocalIndex) -> StackValue<'gc>;
-    fn set_local(&mut self, index: crate::LocalIndex, value: StackValue<'gc>);
-    fn get_local_address(&self, index: crate::LocalIndex) -> std::ptr::NonNull<u8>;
-    fn get_local_info_for_managed_ptr(
-        &self,
-        index: crate::LocalIndex,
-    ) -> (std::ptr::NonNull<u8>, bool);
+    fn get_local(&self, index: LocalIndex) -> StackValue<'gc>;
+    fn set_local(&mut self, index: LocalIndex, value: StackValue<'gc>);
+    fn get_local_address(&self, index: LocalIndex) -> std::ptr::NonNull<u8>;
+    fn get_local_info_for_managed_ptr(&self, index: LocalIndex) -> (std::ptr::NonNull<u8>, bool);
 }
 
 pub trait ArgumentOps<'gc> {
-    fn get_argument(&self, index: crate::ArgumentIndex) -> StackValue<'gc>;
-    fn set_argument(&mut self, index: crate::ArgumentIndex, value: StackValue<'gc>);
-    fn get_argument_address(&self, index: crate::ArgumentIndex) -> std::ptr::NonNull<u8>;
+    fn get_argument(&self, index: ArgumentIndex) -> StackValue<'gc>;
+    fn set_argument(&mut self, index: ArgumentIndex, value: StackValue<'gc>);
+    fn get_argument_address(&self, index: ArgumentIndex) -> std::ptr::NonNull<u8>;
 }
 
 /// A combination trait for operations on local variables and arguments.
@@ -149,24 +157,24 @@ impl<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + VariableOps<'gc> + ?Sized>
 }
 
 pub trait StackOps<'gc>: AllStackOps<'gc> {
-    fn current_frame(&self) -> &crate::stack::StackFrame<'gc>;
-    fn current_frame_mut(&mut self) -> &mut crate::stack::StackFrame<'gc>;
+    fn current_frame(&self) -> &StackFrame<'gc>;
+    fn current_frame_mut(&mut self) -> &mut StackFrame<'gc>;
 
-    fn get_slot(&self, index: crate::StackSlotIndex) -> StackValue<'gc>;
-    fn get_slot_ref(&self, index: crate::StackSlotIndex) -> &StackValue<'gc>;
-    fn set_slot(&mut self, index: crate::StackSlotIndex, value: StackValue<'gc>);
-    fn get_slot_address(&self, index: crate::StackSlotIndex) -> std::ptr::NonNull<u8>;
+    fn get_slot(&self, index: StackSlotIndex) -> StackValue<'gc>;
+    fn get_slot_ref(&self, index: StackSlotIndex) -> &StackValue<'gc>;
+    fn set_slot(&mut self, index: StackSlotIndex, value: StackValue<'gc>);
+    fn get_slot_address(&self, index: StackSlotIndex) -> std::ptr::NonNull<u8>;
 }
 
 pub trait ExceptionOps<'gc> {
-    fn throw_by_name(&mut self, name: &str) -> crate::StepResult;
-    fn throw_by_name_with_message(&mut self, name: &str, message: &str) -> crate::StepResult;
-    fn throw(&mut self, exception: ObjectRef<'gc>) -> crate::StepResult;
-    fn rethrow(&mut self) -> crate::StepResult;
-    fn leave(&mut self, target_ip: usize) -> crate::StepResult;
-    fn endfinally(&mut self) -> crate::StepResult;
-    fn endfilter(&mut self, result: i32) -> crate::StepResult;
-    fn ret(&mut self) -> crate::StepResult;
+    fn throw_by_name(&mut self, name: &str) -> StepResult;
+    fn throw_by_name_with_message(&mut self, name: &str, message: &str) -> StepResult;
+    fn throw(&mut self, exception: ObjectRef<'gc>) -> StepResult;
+    fn rethrow(&mut self) -> StepResult;
+    fn leave(&mut self, target_ip: usize) -> StepResult;
+    fn endfinally(&mut self) -> StepResult;
+    fn endfilter(&mut self, result: i32) -> StepResult;
+    fn ret(&mut self) -> StepResult;
 }
 
 pub trait ResolutionOps<'gc> {
@@ -175,10 +183,9 @@ pub trait ResolutionOps<'gc> {
         val: &StackValue<'gc>,
     ) -> Result<TypeDescription, TypeResolutionError>;
     fn make_concrete(&self, t: &MethodType) -> Result<ConcreteType, TypeResolutionError>;
-    fn current_context(&self) -> crate::ResolutionContext<'_>;
-    fn with_generics<'b>(&self, lookup: &'b GenericLookup) -> crate::ResolutionContext<'b>;
+    fn current_context(&self) -> ResolutionContext<'_>;
+    fn with_generics<'b>(&self, lookup: &'b GenericLookup) -> ResolutionContext<'b>;
 }
-
 
 pub trait RawMemoryOps<'gc>: BorrowScopeOps {
     fn as_borrow_scope(&self) -> &dyn BorrowScopeOps;
@@ -200,7 +207,7 @@ pub trait RawMemoryOps<'gc>: BorrowScopeOps {
         origin: PointerOrigin<'gc>,
         offset: ByteOffset,
         value: StackValue<'gc>,
-        layout: &dotnet_value::layout::LayoutManager,
+        layout: &LayoutManager,
     ) -> Result<(), String>;
 
     /// # Safety
@@ -211,7 +218,7 @@ pub trait RawMemoryOps<'gc>: BorrowScopeOps {
         &self,
         origin: PointerOrigin<'gc>,
         offset: ByteOffset,
-        layout: &dotnet_value::layout::LayoutManager,
+        layout: &LayoutManager,
         type_desc: Option<TypeDescription>,
     ) -> Result<StackValue<'gc>, String>;
 
@@ -325,11 +332,7 @@ pub trait ReflectionOps<'gc>: MemoryOps<'gc> {
         field: FieldDescription,
         lookup: GenericLookup,
     ) -> ObjectRef<'gc>;
-    fn make_runtime_type(
-        &self,
-        ctx: &crate::ResolutionContext<'_>,
-        source: &MethodType,
-    ) -> RuntimeType;
+    fn make_runtime_type(&self, ctx: &ResolutionContext<'_>, source: &MethodType) -> RuntimeType;
     fn get_heap_description(
         &self,
         object: ObjectHandle<'gc>,
@@ -344,73 +347,69 @@ pub trait ReflectionOps<'gc>: MemoryOps<'gc> {
     fn resolve_runtime_method(&self, obj: ObjectRef<'gc>) -> (MethodDescription, GenericLookup);
     fn resolve_runtime_field(&self, obj: ObjectRef<'gc>) -> (FieldDescription, GenericLookup);
     fn lookup_method_by_index(&self, index: usize) -> (MethodDescription, GenericLookup);
-    fn reflection(&self) -> crate::state::ReflectionRegistry<'_, 'gc>;
+    fn reflection(&self) -> ReflectionRegistry<'_, 'gc>;
     fn execute_intrinsic_field(
         &mut self,
         field: FieldDescription,
         type_generics: Arc<[ConcreteType]>,
         is_address: bool,
-    ) -> crate::StepResult;
+    ) -> StepResult;
     fn execute_intrinsic_call(
         &mut self,
         method: MethodDescription,
         lookup: &GenericLookup,
-    ) -> crate::StepResult;
+    ) -> StepResult;
 }
 
 pub trait LoaderOps {
     fn loader(&self) -> &dotnet_assemblies::AssemblyLoader;
     fn loader_arc(&self) -> Arc<dotnet_assemblies::AssemblyLoader>;
-    fn resolver(&self) -> crate::resolver::ResolverService;
+    fn resolver(&self) -> ResolverService;
     fn shared(&self) -> &Arc<SharedGlobalState>;
 }
 
 pub trait StaticsOps<'gc> {
-    fn statics(&self) -> &crate::state::StaticStorageManager;
+    fn statics(&self) -> &StaticStorageManager;
     fn initialize_static_storage(
         &mut self,
         description: TypeDescription,
         generics: GenericLookup,
-    ) -> crate::StepResult;
+    ) -> StepResult;
 }
 
 pub trait ThreadOps {
-    fn thread_id(&self) -> dotnet_utils::ArenaId;
+    fn thread_id(&self) -> ArenaId;
 }
 
 pub trait CallOps<'gc> {
     fn constructor_frame(
         &mut self,
         instance: ObjectInstance<'gc>,
-        method: crate::MethodInfo<'static>,
+        method: MethodInfo<'static>,
         generic_inst: GenericLookup,
     ) -> Result<(), TypeResolutionError>;
 
     fn call_frame(
         &mut self,
-        method: crate::MethodInfo<'static>,
+        method: MethodInfo<'static>,
         generic_inst: GenericLookup,
     ) -> Result<(), TypeResolutionError>;
 
     fn entrypoint_frame(
         &mut self,
-        method: crate::MethodInfo<'static>,
+        method: MethodInfo<'static>,
         generic_inst: GenericLookup,
         args: Vec<StackValue<'gc>>,
     ) -> Result<(), TypeResolutionError>;
 
-    fn dispatch_method(
-        &mut self,
-        method: MethodDescription,
-        lookup: GenericLookup,
-    ) -> crate::StepResult;
+    fn dispatch_method(&mut self, method: MethodDescription, lookup: GenericLookup) -> StepResult;
 
     fn unified_dispatch(
         &mut self,
-        source: &dotnetdll::prelude::MethodSource,
+        source: &MethodSource,
         this_type: Option<TypeDescription>,
-        ctx: Option<&crate::ResolutionContext<'_>>,
-    ) -> crate::StepResult;
+        ctx: Option<&ResolutionContext<'_>>,
+    ) -> StepResult;
 }
 
 pub trait VesOps<'gc>:
@@ -425,35 +424,34 @@ pub trait VesOps<'gc>:
     + MemoryOps<'gc>
     + RawMemoryOps<'gc>
 {
-    fn run(&mut self) -> crate::StepResult;
-    fn handle_return(&mut self) -> crate::StepResult;
-    fn handle_exception(&mut self) -> crate::StepResult;
+    fn run(&mut self) -> StepResult;
+    fn handle_return(&mut self) -> StepResult;
+    fn handle_exception(&mut self) -> StepResult;
     fn tracer_enabled(&self) -> bool;
     fn tracer(&self) -> &Tracer;
     fn indent(&self) -> usize;
-    fn process_pending_finalizers(&mut self) -> crate::StepResult;
+    fn process_pending_finalizers(&mut self) -> StepResult;
     fn back_up_ip(&mut self);
     fn branch(&mut self, target: usize);
     fn conditional_branch(&mut self, condition: bool, target: usize) -> bool;
     fn increment_ip(&mut self);
-    fn state(&self) -> &crate::MethodState;
-    fn state_mut(&mut self) -> &mut crate::MethodState;
+    fn state(&self) -> &MethodState;
+    fn state_mut(&mut self) -> &mut MethodState;
 
-    fn exception_mode(&self) -> &crate::exceptions::ExceptionState<'gc>;
-    fn exception_mode_mut(&mut self) -> &mut crate::exceptions::ExceptionState<'gc>;
+    fn exception_mode(&self) -> &ExceptionState<'gc>;
+    fn exception_mode_mut(&mut self) -> &mut ExceptionState<'gc>;
 
     fn current_intrinsic(&self) -> Option<MethodDescription>;
     fn set_current_intrinsic(&mut self, method: Option<MethodDescription>);
 
-    fn evaluation_stack(&self) -> &crate::stack::evaluation_stack::EvaluationStack<'gc>;
-    fn evaluation_stack_mut(&mut self)
-    -> &mut crate::stack::evaluation_stack::EvaluationStack<'gc>;
-    fn frame_stack(&self) -> &crate::stack::frames::FrameStack<'gc>;
-    fn frame_stack_mut(&mut self) -> &mut crate::stack::frames::FrameStack<'gc>;
+    fn evaluation_stack(&self) -> &EvaluationStack<'gc>;
+    fn evaluation_stack_mut(&mut self) -> &mut EvaluationStack<'gc>;
+    fn frame_stack(&self) -> &FrameStack<'gc>;
+    fn frame_stack_mut(&mut self) -> &mut FrameStack<'gc>;
     fn original_ip(&self) -> usize;
     fn original_ip_mut(&mut self) -> &mut usize;
-    fn original_stack_height(&self) -> crate::StackSlotIndex;
-    fn original_stack_height_mut(&mut self) -> &mut crate::StackSlotIndex;
+    fn original_stack_height(&self) -> StackSlotIndex;
+    fn original_stack_height_mut(&mut self) -> &mut StackSlotIndex;
 
     fn unwind_frame(&mut self);
 

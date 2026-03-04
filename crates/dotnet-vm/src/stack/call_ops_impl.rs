@@ -1,5 +1,5 @@
 use crate::{
-    MethodInfo, ResolutionContext, StepResult,
+    ByteOffset, MethodInfo, ResolutionContext, StepResult,
     resolution::TypeResolutionExt,
     stack::{
         context::{BasePointer, StackFrame, VesContext},
@@ -13,6 +13,7 @@ use dotnet_types::{
 use dotnet_value::{
     StackValue,
     object::{HeapStorage, Object as ObjectInstance, ObjectRef},
+    pointer::ManagedPtr,
 };
 use dotnetdll::prelude::MethodSource;
 
@@ -43,7 +44,7 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
             let ptr = self.evaluation_stack.get_slot_address(index).as_ptr() as *mut _;
             self.push(StackValue::managed_stack_ptr(
                 index,
-                crate::ByteOffset(0),
+                ByteOffset(0),
                 ptr,
                 desc,
                 false,
@@ -105,12 +106,12 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
                         },
                         _ => panic!("Expected boxed value type in unbox canonicalization"),
                     });
-                    let managed_ptr = dotnet_value::pointer::ManagedPtr::new(
+                    let managed_ptr = ManagedPtr::new(
                         std::ptr::NonNull::new(ptr),
                         td,
                         Some(obj),
                         false,
-                        Some(dotnet_value::ByteOffset(0)),
+                        Some(ByteOffset(0)),
                     );
                     self.evaluation_stack
                         .set_slot_at(argument_base, StackValue::ManagedPtr(managed_ptr));

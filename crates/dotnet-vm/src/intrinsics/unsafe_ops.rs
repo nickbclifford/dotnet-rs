@@ -1,5 +1,6 @@
 use crate::{
     StepResult,
+    error::ExecutionError,
     layout::type_layout,
     memory::{MemoryOwner, RawMemoryAccess, check_read_safety},
     stack::ops::{
@@ -648,11 +649,8 @@ pub fn intrinsic_unsafe_read_unaligned<
         }
         Err(e) => {
             return StepResult::Error(
-                crate::error::ExecutionError::NotImplemented(format!(
-                    "Unsafe.ReadUnaligned failed: {}",
-                    e
-                ))
-                .into(),
+                ExecutionError::NotImplemented(format!("Unsafe.ReadUnaligned failed: {}", e))
+                    .into(),
             );
         }
     }
@@ -694,11 +692,8 @@ pub fn intrinsic_unsafe_write_unaligned<
         Ok(_) => {}
         Err(e) => {
             return StepResult::Error(
-                crate::error::ExecutionError::NotImplemented(format!(
-                    "Unsafe.WriteUnaligned failed: {}",
-                    e
-                ))
-                .into(),
+                ExecutionError::NotImplemented(format!("Unsafe.WriteUnaligned failed: {}", e))
+                    .into(),
             );
         }
     }

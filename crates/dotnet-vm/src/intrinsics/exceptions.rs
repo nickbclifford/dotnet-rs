@@ -1,4 +1,6 @@
-use crate::{StepResult, error::ExecutionError, stack::ops::VesOps};
+use crate::{
+    StepResult, error::ExecutionError, instructions::objects::get_ptr_info, stack::ops::VesOps,
+};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_value::{
@@ -21,21 +23,19 @@ pub fn intrinsic_get_stack_traces_deep_copy<'gc, T: VesOps<'gc>>(
 
     let layout = LayoutManager::Scalar(Scalar::ObjectRef);
 
-    let (origin, offset) =
-        match crate::instructions::objects::get_ptr_info(ctx, &current_stack_trace_ptr) {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
+    let (origin, offset) = match get_ptr_info(ctx, &current_stack_trace_ptr) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
     vm_try!(unsafe {
         ctx.write_unaligned(origin, offset, StackValue::null(), &layout)
             .map_err(ExecutionError::NotImplemented)
     });
 
-    let (origin, offset) =
-        match crate::instructions::objects::get_ptr_info(ctx, &dynamic_method_array_ptr) {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
+    let (origin, offset) = match get_ptr_info(ctx, &dynamic_method_array_ptr) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
     vm_try!(unsafe {
         ctx.write_unaligned(origin, offset, StackValue::null(), &layout)
             .map_err(ExecutionError::NotImplemented)

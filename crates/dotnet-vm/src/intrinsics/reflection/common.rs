@@ -9,7 +9,10 @@ use dotnet_types::{
     runtime::{RuntimeMethodSignature, RuntimeType},
 };
 use dotnet_value::object::{HeapStorage, ObjectRef};
-use dotnetdll::prelude::{BaseType, MethodType};
+use dotnetdll::{
+    binary::signature::kinds::StandAloneCallingConvention,
+    prelude::{BaseType, CallingConvention, MethodType, ParameterType},
+};
 
 #[cfg(feature = "multithreading")]
 use dotnet_utils::sync::Ordering;
@@ -231,33 +234,26 @@ pub(crate) fn make_runtime_type(res_ctx: &ResolutionContext, t: &MethodType) -> 
                 None => RuntimeType::IntPtr,
             },
             BaseType::FunctionPointer(sig) => {
-                let convert_param = |p: &dotnetdll::prelude::ParameterType<dotnetdll::prelude::MethodType>| match p {
-                    dotnetdll::prelude::ParameterType::Value(t)
-                    | dotnetdll::prelude::ParameterType::Ref(t) => make_runtime_type(res_ctx, t),
-                    dotnetdll::prelude::ParameterType::TypedReference => RuntimeType::TypedReference,
+                let convert_param = |p: &ParameterType<MethodType>| match p {
+                    ParameterType::Value(t) | ParameterType::Ref(t) => {
+                        make_runtime_type(res_ctx, t)
+                    }
+                    ParameterType::TypedReference => RuntimeType::TypedReference,
                 };
 
                 RuntimeType::FunctionPointer(RuntimeMethodSignature {
                     instance: sig.instance,
                     explicit_this: sig.explicit_this,
                     calling_convention: match sig.calling_convention {
-                        dotnetdll::binary::signature::kinds::StandAloneCallingConvention::DefaultManaged => {
-                            dotnetdll::prelude::CallingConvention::Default
-                        }
-                        dotnetdll::binary::signature::kinds::StandAloneCallingConvention::Vararg => {
-                            dotnetdll::prelude::CallingConvention::Vararg
-                        }
-                        _ => dotnetdll::prelude::CallingConvention::Default, // Map others to default for now
+                        StandAloneCallingConvention::DefaultManaged => CallingConvention::Default,
+                        StandAloneCallingConvention::Vararg => CallingConvention::Vararg,
+                        _ => CallingConvention::Default, // Map others to default for now
                     },
                     return_type: Box::new(match &sig.return_type.1 {
                         Some(t) => convert_param(t),
                         None => RuntimeType::Void,
                     }),
-                    parameters: sig
-                        .parameters
-                        .iter()
-                        .map(|p| convert_param(&p.1))
-                        .collect(),
+                    parameters: sig.parameters.iter().map(|p| convert_param(&p.1)).collect(),
                 })
             }
         },

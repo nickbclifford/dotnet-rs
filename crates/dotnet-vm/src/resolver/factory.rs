@@ -1,4 +1,7 @@
-use crate::{context::ResolutionContext, resolution::TypeResolutionExt, resolver::ResolverService};
+use crate::{
+    context::ResolutionContext, layout::LayoutFactory, resolution::TypeResolutionExt,
+    resolver::ResolverService,
+};
 use dotnet_types::{
     TypeDescription,
     comparer::decompose_type_source,
@@ -8,7 +11,7 @@ use dotnet_types::{
 };
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{
-    StackValue,
+    ByteOffset, StackValue,
     layout::HasLayout,
     object::{CTSValue, HeapStorage, Object, ObjectRef, ValueType, Vector},
     pointer::ManagedPtr,
@@ -58,8 +61,7 @@ impl ResolverService {
         td: TypeDescription,
         ctx: &ResolutionContext<'_>,
     ) -> Result<FieldStorage, TypeResolutionError> {
-        let layout =
-            crate::layout::LayoutFactory::instance_field_layout_cached(td, ctx, self.metrics())?;
+        let layout = LayoutFactory::instance_field_layout_cached(td, ctx, self.metrics())?;
         let size = layout.size();
         Ok(FieldStorage::new(layout, vec![0; size.as_usize()]))
     }
@@ -69,7 +71,7 @@ impl ResolverService {
         td: TypeDescription,
         ctx: &ResolutionContext<'_>,
     ) -> Result<FieldStorage, TypeResolutionError> {
-        let layout = Arc::new(crate::layout::LayoutFactory::static_fields_with_metrics(
+        let layout = Arc::new(LayoutFactory::static_fields_with_metrics(
             td,
             ctx,
             self.metrics(),
@@ -140,7 +142,7 @@ impl ResolverService {
                         inner_type,
                         None,
                         false,
-                        Some(dotnet_value::ByteOffset(ptr)),
+                        Some(ByteOffset(ptr)),
                     ))))
                 }
             },
@@ -284,7 +286,7 @@ impl ResolverService {
                         inner_type,
                         None,
                         false,
-                        Some(dotnet_value::ByteOffset(ptr)),
+                        Some(ByteOffset(ptr)),
                     ))))
                 }
             }
@@ -398,7 +400,7 @@ impl ResolverService {
         size: usize,
         ctx: &ResolutionContext<'_>,
     ) -> Result<Vector<'gc>, TypeResolutionError> {
-        let layout = crate::layout::LayoutFactory::create_array_layout_with_metrics(
+        let layout = LayoutFactory::create_array_layout_with_metrics(
             element.clone(),
             size,
             ctx,

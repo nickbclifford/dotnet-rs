@@ -1,8 +1,17 @@
-use crate::{StepResult, resolution::{TypeResolutionExt, ValueResolution}, stack::ops::VesOps};
+use crate::{
+    StepResult,
+    resolution::{TypeResolutionExt, ValueResolution},
+    stack::ops::VesOps,
+};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription, runtime::RuntimeType};
 use dotnet_utils::gc::GCHandle;
-use dotnet_value::{StackValue, object::{ObjectRef, HeapStorage, CTSValue}, layout::HasLayout};
+use dotnet_value::{
+    StackValue,
+    layout::HasLayout,
+    object::{CTSValue, HeapStorage, ObjectRef},
+};
+use dotnetdll::prelude::ParameterType;
 
 #[dotnet_intrinsic("string System.Reflection.MethodInfo::get_Name()")]
 #[dotnet_intrinsic("System.Type System.Reflection.MethodInfo::get_DeclaringType()")]
@@ -60,7 +69,9 @@ use dotnet_value::{StackValue, object::{ObjectRef, HeapStorage, CTSValue}, layou
 #[dotnet_intrinsic(
     "object DotnetRs.ConstructorInfo::Invoke(System.Reflection.BindingFlags, System.Reflection.Binder, object[], System.Globalization.CultureInfo)"
 )]
-#[dotnet_intrinsic("System.Reflection.ParameterInfo[] System.Reflection.MethodBase::GetParameters()")]
+#[dotnet_intrinsic(
+    "System.Reflection.ParameterInfo[] System.Reflection.MethodBase::GetParameters()"
+)]
 #[dotnet_intrinsic("System.Reflection.ParameterInfo[] DotnetRs.MethodInfo::GetParameters()")]
 #[dotnet_intrinsic("System.Reflection.ParameterInfo[] DotnetRs.ConstructorInfo::GetParameters()")]
 pub fn runtime_method_info_intrinsic_call<'gc, T: VesOps<'gc>>(
@@ -150,11 +161,12 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: VesOps<'gc>>(
             let array_obj = vm_try!(ctx.new_vector(array_element_type.into(), param_count));
             let array_ref = ObjectRef::new(gc, HeapStorage::Vec(array_obj));
             ctx.register_new_object(&array_ref);
-            
+
             for (i, pi_ref) in pi_objs.into_iter().enumerate() {
                 let res_ctx = ctx.current_context();
                 let elem_type = array_ref.as_vector(|v| v.element.clone());
-                let cts_val: CTSValue<'gc> = vm_try!(res_ctx.new_cts_value(&elem_type, StackValue::ObjectRef(pi_ref)));
+                let cts_val: CTSValue<'gc> =
+                    vm_try!(res_ctx.new_cts_value(&elem_type, StackValue::ObjectRef(pi_ref)));
                 array_ref.as_vector_mut(gc, |v| {
                     let elem_size = v.layout.element_layout.size();
                     let start = (elem_size * i).as_usize();
@@ -223,7 +235,7 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: VesOps<'gc>>(
 
             // For ConstructorInfo.Invoke(parameters), we need to create the instance
             let instance = vm_try!(ctx.new_object(method.parent));
-            let this_obj = ObjectRef::new(gc, dotnet_value::object::HeapStorage::Obj(instance));
+            let this_obj = ObjectRef::new(gc, HeapStorage::Obj(instance));
             ctx.register_new_object(&this_obj);
 
             // Push twice: one for 'Invoke' return value, one for constructor 'this'
@@ -284,9 +296,10 @@ fn resolve_return_type<'gc, T: VesOps<'gc>>(
 ) -> RuntimeType {
     let res_ctx = ctx.with_generics(lookup);
     match &method.method().signature.return_type.1 {
-        Some(dotnetdll::prelude::ParameterType::Value(t))
-        | Some(dotnetdll::prelude::ParameterType::Ref(t)) => ctx.make_runtime_type(&res_ctx, t),
-        Some(dotnetdll::prelude::ParameterType::TypedReference) => RuntimeType::TypedReference,
+        Some(ParameterType::Value(t)) | Some(ParameterType::Ref(t)) => {
+            ctx.make_runtime_type(&res_ctx, t)
+        }
+        Some(ParameterType::TypedReference) => RuntimeType::TypedReference,
         None => RuntimeType::Void,
     }
 }
@@ -302,7 +315,7 @@ fn unmarshal_invoke_params<'gc, T: VesOps<'gc>>(
 
     if parameters_obj.0.is_some() {
         let vector = parameters_obj.as_heap_storage(|s| {
-            if let dotnet_value::object::HeapStorage::Vec(v) = s {
+            if let HeapStorage::Vec(v) = s {
                 v.clone()
             } else {
                 panic!("parameters is not an array")
@@ -316,14 +329,13 @@ fn unmarshal_invoke_params<'gc, T: VesOps<'gc>>(
             let arg_obj = unsafe { ObjectRef::read_branded(&element_bytes, gc) };
 
             let param_type = match &method.method().signature.parameters[i].1 {
-                dotnetdll::prelude::ParameterType::Value(t)
-                | dotnetdll::prelude::ParameterType::Ref(t) => t,
-                dotnetdll::prelude::ParameterType::TypedReference => {
+                ParameterType::Value(t) | ParameterType::Ref(t) => t,
+                ParameterType::TypedReference => {
                     if arg_obj.0.is_none() {
                         panic!("TypedReference parameter cannot be null");
                     }
                     let val = arg_obj.as_heap_storage(|s| {
-                        if let dotnet_value::object::HeapStorage::Boxed(o) = s {
+                        if let HeapStorage::Boxed(o) = s {
                             let tr_type = ctx
                                 .loader()
                                 .corlib_type("System.TypedReference")
@@ -361,7 +373,7 @@ fn unmarshal_invoke_params<'gc, T: VesOps<'gc>>(
                     args.push(StackValue::null());
                 } else {
                     let val = arg_obj.as_heap_storage(|s| {
-                        if let dotnet_value::object::HeapStorage::Boxed(o) = s {
+                        if let HeapStorage::Boxed(o) = s {
                             o.instance_storage
                                 .with_data(|data| ctx.read_cts_value(&concrete_param_type, data))
                         } else {

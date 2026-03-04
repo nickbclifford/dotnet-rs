@@ -4,7 +4,7 @@
 //! which orchestrates the fetch-decode-execute cycle. It also provides
 //! the [`InstructionRegistry`] for looking up instruction handlers.
 use crate::{
-    ResolutionContext, StepResult,
+    ResolutionContext, StackSlotIndex, StepResult,
     exceptions::ExceptionState,
     stack::{CallStack, ops::*},
     threading::ThreadManagerOps,
@@ -279,7 +279,7 @@ impl<'gc> ExecutionEngine<'gc> {
         let mut ctx = self.stack.ves_context(gc);
 
         // 1. Handle return from previous target
-        if ctx.frame_stack.current_frame().stack_height > crate::StackSlotIndex(0) {
+        if ctx.frame_stack.current_frame().stack_height > StackSlotIndex(0) {
             let frame = ctx.frame_stack.current_frame();
             let invoke_method = frame.state.info_handle.source;
             let has_return_value = invoke_method.method().signature.return_type.1.is_some();

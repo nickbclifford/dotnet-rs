@@ -2,9 +2,11 @@ use crate::{
     TypeDescription, TypeResolver, generics::ConcreteType, members::MethodDescription,
     resolution::ResolutionS,
 };
-use dotnetdll::prelude::{BaseType, TypeSource, UserType, ValueKind, CallingConvention};
-use dotnetdll::binary::signature::kinds::StandAloneCallingConvention;
-use dotnetdll::resolved::signature::{MethodSignature, Parameter, ReturnType, ParameterType};
+use dotnetdll::{
+    binary::signature::kinds::StandAloneCallingConvention,
+    prelude::{BaseType, CallingConvention, TypeSource, UserType, ValueKind},
+    resolved::signature::{MethodSignature, Parameter, ParameterType, ReturnType},
+};
 use gc_arena::static_collect;
 use std::{fmt::Debug, hash::Hash};
 

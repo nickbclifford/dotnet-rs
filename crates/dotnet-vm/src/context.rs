@@ -7,6 +7,7 @@ use crate::{
 use dotnet_assemblies::{Ancestor, AssemblyLoader};
 use dotnet_types::{
     TypeDescription,
+    error::TypeResolutionError,
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     resolution::ResolutionS,
@@ -102,10 +103,7 @@ impl<'a> ResolutionContext<'a> {
         }
     }
 
-    pub fn locate_type(
-        &self,
-        handle: UserType,
-    ) -> Result<TypeDescription, dotnet_types::error::TypeResolutionError> {
+    pub fn locate_type(&self, handle: UserType) -> Result<TypeDescription, TypeResolutionError> {
         self.resolver().locate_type(self.resolution, handle)
     }
 
@@ -114,7 +112,7 @@ impl<'a> ResolutionContext<'a> {
         handle: UserMethod,
         generic_inst: &GenericLookup,
         pre_resolved_parent: Option<ConcreteType>,
-    ) -> Result<MethodDescription, dotnet_types::error::TypeResolutionError> {
+    ) -> Result<MethodDescription, TypeResolutionError> {
         self.resolver()
             .locate_method(self.resolution, handle, generic_inst, pre_resolved_parent)
     }
@@ -122,7 +120,7 @@ impl<'a> ResolutionContext<'a> {
     pub fn locate_field(
         &self,
         field: FieldSource,
-    ) -> Result<(FieldDescription, GenericLookup), dotnet_types::error::TypeResolutionError> {
+    ) -> Result<(FieldDescription, GenericLookup), TypeResolutionError> {
         self.resolver()
             .locate_field(self.resolution, field, self.generics)
     }
@@ -138,21 +136,21 @@ impl<'a> ResolutionContext<'a> {
         &self,
         value: ConcreteType,
         ancestor: ConcreteType,
-    ) -> Result<bool, dotnet_types::error::TypeResolutionError> {
+    ) -> Result<bool, TypeResolutionError> {
         self.resolver().is_a(value, ancestor)
     }
 
     pub fn get_heap_description(
         &self,
         object: ObjectHandle,
-    ) -> Result<TypeDescription, dotnet_types::error::TypeResolutionError> {
+    ) -> Result<TypeDescription, TypeResolutionError> {
         self.resolver().get_heap_description(object)
     }
 
     pub fn make_concrete<T: Clone + Into<MethodType>>(
         &self,
         t: &T,
-    ) -> Result<ConcreteType, dotnet_types::error::TypeResolutionError> {
+    ) -> Result<ConcreteType, TypeResolutionError> {
         self.resolver()
             .make_concrete(self.resolution, self.generics, t)
     }
@@ -160,7 +158,7 @@ impl<'a> ResolutionContext<'a> {
     pub fn get_field_type(
         &self,
         field: FieldDescription,
-    ) -> Result<ConcreteType, dotnet_types::error::TypeResolutionError> {
+    ) -> Result<ConcreteType, TypeResolutionError> {
         self.resolver()
             .get_field_type(self.resolution, self.generics, field)
     }
@@ -168,15 +166,12 @@ impl<'a> ResolutionContext<'a> {
     pub fn get_field_desc(
         &self,
         field: FieldDescription,
-    ) -> Result<TypeDescription, dotnet_types::error::TypeResolutionError> {
+    ) -> Result<TypeDescription, TypeResolutionError> {
         self.resolver()
             .get_field_desc(self.resolution, self.generics, field)
     }
 
-    pub fn normalize_type(
-        &self,
-        t: ConcreteType,
-    ) -> Result<ConcreteType, dotnet_types::error::TypeResolutionError> {
+    pub fn normalize_type(&self, t: ConcreteType) -> Result<ConcreteType, TypeResolutionError> {
         self.resolver().normalize_type(t)
     }
 }

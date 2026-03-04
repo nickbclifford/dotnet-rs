@@ -1,6 +1,8 @@
 use crate::{
     StepResult,
     dispatch::ExecutionEngine,
+    error::{ExecutionError, VmError},
+    exceptions::ManagedException,
     metrics::CacheStats,
     stack::{
         CallStack, GCArena,
@@ -12,6 +14,7 @@ use crate::{
 };
 use dotnet_types::members::MethodDescription;
 use dotnet_utils::{
+    ArenaId,
     gc::GCHandle,
     sync::{Arc, Ordering},
 };
@@ -23,7 +26,7 @@ use crate::gc::{arena::THREAD_ARENA, coordinator::*};
 pub struct Executor {
     shared: Arc<SharedGlobalState>,
     /// Thread ID for this executor
-    thread_id: dotnet_utils::ArenaId,
+    thread_id: ArenaId,
     #[cfg(not(feature = "multithreading"))]
     arena: Box<GCArena>,
     #[cfg(feature = "fuzzing")]
@@ -35,8 +38,8 @@ pub struct Executor {
 #[derive(Clone, Debug)]
 pub enum ExecutorResult {
     Exited(u8),
-    Threw(crate::exceptions::ManagedException),
-    Error(crate::error::VmError),
+    Threw(ManagedException),
+    Error(VmError),
 }
 
 impl std::fmt::Display for ExecutorResult {
@@ -187,16 +190,16 @@ impl Executor {
     pub fn run(&mut self) -> ExecutorResult {
         let result = loop {
             if self.shared.abort_requested.load(Ordering::Relaxed) {
-                break ExecutorResult::Error(crate::error::VmError::Execution(
-                    crate::error::ExecutionError::Aborted("Requested by user/timeout".to_string()),
-                ));
+                break ExecutorResult::Error(VmError::Execution(ExecutionError::Aborted(
+                    "Requested by user/timeout".to_string(),
+                )));
             }
 
             #[cfg(feature = "fuzzing")]
             if let Some(budget) = self.instruction_budget.as_mut() {
                 if *budget == 0 {
-                    return ExecutorResult::Error(crate::error::VmError::Execution(
-                        crate::error::ExecutionError::FuzzBudgetExceeded,
+                    return ExecutorResult::Error(VmError::Execution(
+                        ExecutionError::FuzzBudgetExceeded,
                     ));
                 }
                 *budget -= 1;

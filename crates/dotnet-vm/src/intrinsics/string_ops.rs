@@ -1,5 +1,6 @@
 use crate::{
     StepResult,
+    error::ExecutionError,
     intrinsics::span::{intrinsic_as_span, with_span_data},
     stack::ops::{
         CallOps, EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps,
@@ -12,8 +13,9 @@ use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
 };
+use dotnet_utils::{BorrowGuardHandle, NoActiveBorrows};
 use dotnet_value::{
-    StackValue,
+    ByteOffset, StackValue,
     object::{HeapStorage, Object, ObjectRef},
     string::CLRString,
     with_string,
@@ -225,10 +227,8 @@ pub fn intrinsic_string_ctor_char_array<
             while offset < len {
                 let chunk_len = std::cmp::min(CHUNK_SIZE, len - offset);
                 {
-                    let (_active, _guard) = dotnet_value::BorrowGuardHandle::new(
-                        ctx.as_borrow_scope(),
-                        dotnet_value::NoActiveBorrows::new(),
-                    );
+                    let (_active, _guard) =
+                        BorrowGuardHandle::new(ctx.as_borrow_scope(), NoActiveBorrows::new());
                     let obj = handle.borrow();
                     match &obj.storage {
                         HeapStorage::Vec(v) => {
@@ -432,18 +432,9 @@ pub fn intrinsic_string_concat_three_spans<
             Ok(())
         };
 
-    vm_try!(
-        copy_span_chunked(ctx, span0, &mut data0)
-            .map_err(crate::error::ExecutionError::NotImplemented)
-    );
-    vm_try!(
-        copy_span_chunked(ctx, span1, &mut data1)
-            .map_err(crate::error::ExecutionError::NotImplemented)
-    );
-    vm_try!(
-        copy_span_chunked(ctx, span2, &mut data2)
-            .map_err(crate::error::ExecutionError::NotImplemented)
-    );
+    vm_try!(copy_span_chunked(ctx, span0, &mut data0).map_err(ExecutionError::NotImplemented));
+    vm_try!(copy_span_chunked(ctx, span1, &mut data1).map_err(ExecutionError::NotImplemented));
+    vm_try!(copy_span_chunked(ctx, span2, &mut data2).map_err(ExecutionError::NotImplemented));
 
     let total_length = data0.len() + data1.len() + data2.len();
     const LARGE_STRING_CONCAT_THRESHOLD: usize = 1024;
@@ -487,7 +478,7 @@ pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<
                     HeapStorage::Str(s) => s.len(),
                     _ => {
                         return StepResult::Error(
-                            crate::error::ExecutionError::InternalError(
+                            ExecutionError::InternalError(
                                 "System.String::GetHashCodeOrdinalIgnoreCase called on non-string object"
                                     .to_string(),
                             )
@@ -504,10 +495,8 @@ pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<
             while offset < len {
                 let chunk_len = std::cmp::min(CHUNK_SIZE, len - offset);
                 {
-                    let (_active, _guard) = dotnet_value::BorrowGuardHandle::new(
-                        ctx.as_borrow_scope(),
-                        dotnet_value::NoActiveBorrows::new(),
-                    );
+                    let (_active, _guard) =
+                        BorrowGuardHandle::new(ctx.as_borrow_scope(), NoActiveBorrows::new());
                     let inner = handle.borrow();
                     match &inner.storage {
                         HeapStorage::Str(s) => {
@@ -570,18 +559,12 @@ pub fn intrinsic_string_get_raw_data<
         };
 
         if is_str {
-            ctx.push_ptr(
-                ptr,
-                char_type,
-                false,
-                Some(obj),
-                Some(dotnet_value::ByteOffset(0)),
-            );
+            ctx.push_ptr(ptr, char_type, false, Some(obj), Some(ByteOffset(0)));
             StepResult::Continue
         } else {
             let heap = handle.borrow();
             StepResult::Error(
-                crate::error::ExecutionError::InternalError(format!(
+                ExecutionError::InternalError(format!(
                     "invalid type on stack, expected string, received {:?}",
                     heap.storage
                 ))
@@ -706,10 +689,8 @@ pub fn intrinsic_string_substring<
             while offset < l {
                 let current_chunk = std::cmp::min(l - offset, CHUNK_SIZE);
                 {
-                    let (_active, _guard) = dotnet_value::BorrowGuardHandle::new(
-                        ctx.as_borrow_scope(),
-                        dotnet_value::NoActiveBorrows::new(),
-                    );
+                    let (_active, _guard) =
+                        BorrowGuardHandle::new(ctx.as_borrow_scope(), NoActiveBorrows::new());
                     let inner = handle.borrow();
                     match &inner.storage {
                         HeapStorage::Str(s) => {
@@ -740,7 +721,7 @@ pub fn intrinsic_string_substring<
 
     let value = match result_vec {
         Ok(v) => v,
-        Err(e) => return StepResult::Error(crate::error::ExecutionError::InternalError(e).into()),
+        Err(e) => return StepResult::Error(ExecutionError::InternalError(e).into()),
     };
 
     ctx.pop_multiple(if length.is_some() { 3 } else { 2 });
@@ -776,7 +757,7 @@ pub fn intrinsic_string_is_null_or_empty<
                 HeapStorage::Str(s) => s.is_empty(),
                 _ => {
                     return StepResult::Error(
-                        crate::error::ExecutionError::InternalError(
+                        ExecutionError::InternalError(
                             "System.String::IsNullOrEmpty called on non-string object".to_string(),
                         )
                         .into(),
@@ -786,7 +767,7 @@ pub fn intrinsic_string_is_null_or_empty<
         }
         _ => {
             return StepResult::Error(
-                crate::error::ExecutionError::InternalError(
+                ExecutionError::InternalError(
                     "System.String::IsNullOrEmpty called on invalid stack value".to_string(),
                 )
                 .into(),
@@ -834,7 +815,7 @@ pub fn intrinsic_string_is_null_or_white_space<
                     HeapStorage::Str(s) => s.len(),
                     _ => {
                         return StepResult::Error(
-                            crate::error::ExecutionError::InternalError(
+                            ExecutionError::InternalError(
                                 "System.String::IsNullOrWhiteSpace called on non-string object"
                                     .to_string(),
                             )
@@ -850,10 +831,8 @@ pub fn intrinsic_string_is_null_or_white_space<
             while offset < len {
                 let current_chunk_size = std::cmp::min(len - offset, CHUNK_SIZE);
                 {
-                    let (_active, _guard) = dotnet_value::BorrowGuardHandle::new(
-                        ctx.as_borrow_scope(),
-                        dotnet_value::NoActiveBorrows::new(),
-                    );
+                    let (_active, _guard) =
+                        BorrowGuardHandle::new(ctx.as_borrow_scope(), NoActiveBorrows::new());
                     let inner = handle.borrow();
                     match &inner.storage {
                         HeapStorage::Str(s) => {
@@ -933,7 +912,7 @@ pub fn intrinsic_field_string_length<
 ) -> StepResult {
     if is_address {
         return StepResult::Error(
-            crate::error::ExecutionError::NotImplemented(
+            ExecutionError::NotImplemented(
                 "taking address of _stringLength is not supported".to_string(),
             )
             .into(),
@@ -996,10 +975,8 @@ pub fn intrinsic_string_copy_string_content<
         let chunk_len = std::cmp::min(CHUNK_SIZE, src_len - offset);
         let mut chunk_buf = Vec::with_capacity(chunk_len);
         {
-            let (_active, _guard) = dotnet_value::BorrowGuardHandle::new(
-                ctx.as_borrow_scope(),
-                dotnet_value::NoActiveBorrows::new(),
-            );
+            let (_active, _guard) =
+                BorrowGuardHandle::new(ctx.as_borrow_scope(), NoActiveBorrows::new());
             let src_heap = src_handle.borrow();
             match &src_heap.storage {
                 HeapStorage::Str(s) => {
@@ -1011,14 +988,10 @@ pub fn intrinsic_string_copy_string_content<
 
         let mut err = false;
         {
-            let (_active, _guard) = dotnet_value::BorrowGuardHandle::new(
-                ctx.as_borrow_scope(),
-                dotnet_value::NoActiveBorrows::new(),
-            );
-            let mut dest_heap = dest_handle.borrow_mut(
-                ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new())
-                    .mutation(),
-            );
+            let (_active, _guard) =
+                BorrowGuardHandle::new(ctx.as_borrow_scope(), NoActiveBorrows::new());
+            let mut dest_heap =
+                dest_handle.borrow_mut(ctx.gc_with_token(&NoActiveBorrows::new()).mutation());
             match &mut dest_heap.storage {
                 HeapStorage::Str(dest) => {
                     let d_pos = dest_pos + offset;

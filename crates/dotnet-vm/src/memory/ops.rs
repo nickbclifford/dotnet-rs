@@ -2,6 +2,7 @@
 //!
 //! This module defines the [`MemoryOps`] trait which provides an abstraction over
 //! object allocation and heap management.
+use crate::memory::heap::HeapManager;
 use dotnet_types::{TypeDescription, error::TypeResolutionError, generics::ConcreteType};
 use dotnet_utils::{NoActiveBorrows, gc::GCHandle};
 use dotnet_value::{
@@ -40,5 +41,5 @@ pub trait MemoryOps<'gc> {
     #[must_use]
     fn clone_object(&self, obj: ObjectRef<'gc>) -> ObjectRef<'gc>;
     fn register_new_object(&self, instance: &ObjectRef<'gc>);
-    fn heap(&self) -> &crate::memory::heap::HeapManager<'gc>;
+    fn heap(&self) -> &HeapManager<'gc>;
 }

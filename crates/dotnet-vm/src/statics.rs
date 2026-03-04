@@ -2,7 +2,10 @@ use crate::{
     context::ResolutionContext, gc::coordinator::GCCoordinator, layout::LayoutFactory,
     metrics::RuntimeMetrics, threading::ThreadManagerOps,
 };
-use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
+use dotnet_types::{
+    TypeDescription, error::TypeResolutionError, generics::GenericLookup,
+    members::MethodDescription,
+};
 use dotnet_utils::{
     DebugStr,
     sync::{Arc, AtomicU8, AtomicU64, Condvar, Mutex, Ordering, RwLock},
@@ -157,7 +160,7 @@ impl StaticStorageManager {
         description: TypeDescription,
         context: &ResolutionContext,
         metrics: Option<&RuntimeMetrics>,
-    ) -> Result<Arc<FieldLayoutManager>, dotnet_types::error::TypeResolutionError> {
+    ) -> Result<Arc<FieldLayoutManager>, TypeResolutionError> {
         let key = (description, context.generics.clone());
 
         if let Some(cached) = context.caches.static_field_layout_cache.get(&key) {
@@ -241,7 +244,7 @@ impl StaticStorageManager {
         context: &ResolutionContext,
         thread_id: dotnet_utils::ArenaId,
         metrics: Option<&RuntimeMetrics>,
-    ) -> Result<StaticInitResult, dotnet_types::error::TypeResolutionError> {
+    ) -> Result<StaticInitResult, TypeResolutionError> {
         let key = (description, context.generics.clone());
         let shard_idx = self.get_shard_idx(&key);
 

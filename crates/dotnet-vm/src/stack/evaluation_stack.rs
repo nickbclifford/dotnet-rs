@@ -1,3 +1,7 @@
+use crate::{
+    ByteOffset, StackSlotIndex,
+    error::{ExecutionError, VmError},
+};
 use dotnet_types::TypeDescription;
 use dotnet_value::{
     StackValue,
@@ -99,10 +103,10 @@ impl<'gc> EvaluationStack<'gc> {
         self.stack.pop().expect("Evaluation stack underflow")
     }
 
-    pub fn pop_safe(&mut self) -> Result<StackValue<'gc>, crate::error::VmError> {
-        self.stack.pop().ok_or(crate::error::VmError::Execution(
-            crate::error::ExecutionError::StackUnderflow,
-        ))
+    pub fn pop_safe(&mut self) -> Result<StackValue<'gc>, VmError> {
+        self.stack
+            .pop()
+            .ok_or(VmError::Execution(ExecutionError::StackUnderflow))
     }
 
     pub fn pop_i32(&mut self) -> i32 {
@@ -171,7 +175,7 @@ impl<'gc> EvaluationStack<'gc> {
         t: TypeDescription,
         is_pinned: bool,
         owner: Option<ObjectRef<'gc>>,
-        offset: Option<crate::ByteOffset>,
+        offset: Option<ByteOffset>,
     ) {
         self.push(StackValue::managed_ptr_with_owner(
             ptr, t, owner, is_pinned, offset,
@@ -214,37 +218,37 @@ impl<'gc> EvaluationStack<'gc> {
             .data_location()
     }
 
-    pub fn top_of_stack(&self) -> crate::StackSlotIndex {
-        crate::StackSlotIndex(self.stack.len())
+    pub fn top_of_stack(&self) -> StackSlotIndex {
+        StackSlotIndex(self.stack.len())
     }
 
     #[inline]
-    pub fn get_slot(&self, index: crate::StackSlotIndex) -> StackValue<'gc> {
+    pub fn get_slot(&self, index: StackSlotIndex) -> StackValue<'gc> {
         self.stack[index.as_usize()].clone()
     }
 
     #[inline]
-    pub fn get_slot_ref(&self, index: crate::StackSlotIndex) -> &StackValue<'gc> {
+    pub fn get_slot_ref(&self, index: StackSlotIndex) -> &StackValue<'gc> {
         &self.stack[index.as_usize()]
     }
 
     #[inline]
-    pub fn get_slot_address(&self, index: crate::StackSlotIndex) -> NonNull<u8> {
+    pub fn get_slot_address(&self, index: StackSlotIndex) -> NonNull<u8> {
         self.stack[index.as_usize()].data_location()
     }
 
     #[inline]
-    pub fn set_slot(&mut self, index: crate::StackSlotIndex, value: StackValue<'gc>) {
+    pub fn set_slot(&mut self, index: StackSlotIndex, value: StackValue<'gc>) {
         self.stack[index.as_usize()] = value;
     }
 
     #[inline]
-    pub fn truncate(&mut self, len: crate::StackSlotIndex) {
+    pub fn truncate(&mut self, len: StackSlotIndex) {
         self.stack.truncate(len.as_usize());
     }
 
     #[inline]
-    pub fn set_slot_at(&mut self, index: crate::StackSlotIndex, value: StackValue<'gc>) {
+    pub fn set_slot_at(&mut self, index: StackSlotIndex, value: StackValue<'gc>) {
         let idx = index.as_usize();
         if idx < self.stack.len() {
             self.set_slot(index, value);
@@ -268,7 +272,7 @@ impl<'gc> EvaluationStack<'gc> {
     }
 
     #[inline]
-    pub fn suspend_above(&mut self, index: crate::StackSlotIndex) {
+    pub fn suspend_above(&mut self, index: StackSlotIndex) {
         self.suspended_stack = self.stack.split_off(index.as_usize());
         self.update_stack_pointers();
     }

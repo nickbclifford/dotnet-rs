@@ -1,6 +1,10 @@
-use crate::{ArenaId, object::ObjectRef};
+use crate::{
+    ArenaId, ByteOffset, StackSlotIndex,
+    object::{Object, ObjectRef},
+    ptr_common::PointerLike,
+};
 use dashmap::DashMap;
-use dotnet_types::{TypeDescription, generics::GenericLookup};
+use dotnet_types::{TypeDescription, error::MemoryError, generics::GenericLookup};
 use gc_arena::{Collect, Mutation, collect::Trace, static_collect};
 use sptr::Strict;
 use std::{
@@ -14,11 +18,14 @@ use std::{
     },
 };
 
-#[inline]
-fn nonnull_from_exposed_addr(addr: usize) -> Option<NonNull<u8>> {
-    NonNull::new(sptr::from_exposed_addr_mut::<u8>(addr))
-}
+#[cfg(all(
+    feature = "multithreading",
+    any(feature = "memory-validation", debug_assertions)
+))]
+use crate::object::OBJECT_MAGIC;
 
+#[cfg(feature = "fuzzing")]
+use crate::object::is_valid_object_ptr;
 #[cfg(feature = "fuzzing")]
 use arbitrary::Arbitrary;
 
@@ -26,6 +33,11 @@ use arbitrary::Arbitrary;
 use crate::object::ObjectPtr;
 #[cfg(feature = "multithreading")]
 use dotnet_utils::gc::ThreadSafeLock;
+
+#[inline]
+fn nonnull_from_exposed_addr(addr: usize) -> Option<NonNull<u8>> {
+    NonNull::new(sptr::from_exposed_addr_mut::<u8>(addr))
+}
 
 pub struct StaticMetadata {
     pub type_desc: TypeDescription,
@@ -67,13 +79,13 @@ static_collect!(UnmanagedPtr);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PointerOrigin<'gc> {
     Heap(ObjectRef<'gc>),
-    Stack(crate::StackSlotIndex),
+    Stack(StackSlotIndex),
     Static(TypeDescription, GenericLookup),
     Unmanaged,
     #[cfg(feature = "multithreading")]
     CrossArenaObjectRef(ObjectPtr, ArenaId),
     /// A value type resident on the evaluation stack (transient).
-    Transient(crate::object::Object<'gc>),
+    Transient(Object<'gc>),
 }
 
 #[cfg(feature = "fuzzing")]
@@ -179,7 +191,7 @@ pub struct ManagedPtrStackInfo {
     /// The actual memory address being pointed to.
     pub address: Option<NonNull<u8>>,
     /// The offset from the base of the owner (either an object on the heap or a stack slot).
-    pub offset: crate::ByteOffset,
+    pub offset: ByteOffset,
     pub origin: PointerOrigin<'static>,
 }
 
@@ -204,7 +216,7 @@ pub struct ManagedPtrInfo<'gc> {
     pub address: Option<NonNull<u8>>,
     pub origin: PointerOrigin<'gc>,
     /// The offset from the base of the owner (either an object on the heap or a stack slot).
-    pub offset: crate::ByteOffset,
+    pub offset: ByteOffset,
 }
 
 #[cfg(feature = "fuzzing")]
@@ -236,7 +248,7 @@ pub struct ManagedPtr<'gc> {
     pub(crate) _value: Option<NonNull<u8>>,
     pub(crate) origin: PointerOrigin<'gc>,
     /// The offset from the owner's base pointer.
-    pub(crate) offset: crate::ByteOffset,
+    pub(crate) offset: ByteOffset,
     pub(crate) inner_type: TypeDescription,
     pub(crate) pinned: bool,
     pub(crate) _marker: std::marker::PhantomData<&'gc ()>,
@@ -304,13 +316,13 @@ impl<'gc> ManagedPtr<'gc> {
     pub fn is_pinned(&self) -> bool {
         self.pinned
     }
-    pub fn byte_offset(&self) -> crate::ByteOffset {
+    pub fn byte_offset(&self) -> ByteOffset {
         self.offset
     }
 
-    pub fn offset_by(&self, bytes: isize) -> Result<Self, dotnet_types::error::MemoryError> {
+    pub fn offset_by(&self, bytes: isize) -> Result<Self, MemoryError> {
         Ok(Self {
-            offset: crate::ByteOffset(self.offset.0.wrapping_add_signed(bytes)),
+            offset: ByteOffset(self.offset.0.wrapping_add_signed(bytes)),
             _value: self
                 ._value
                 .map(|p| unsafe { NonNull::new_unchecked(p.as_ptr().wrapping_offset(bytes)) }),
@@ -355,7 +367,7 @@ impl<'gc> ManagedPtr<'gc> {
         }
     }
 
-    pub fn stack_slot_origin(&self) -> Option<(crate::StackSlotIndex, crate::ByteOffset)> {
+    pub fn stack_slot_origin(&self) -> Option<(StackSlotIndex, ByteOffset)> {
         if let PointerOrigin::Stack(idx) = self.origin {
             Some((idx, self.offset))
         } else {
@@ -375,7 +387,7 @@ impl<'gc> ManagedPtr<'gc> {
         inner_type: TypeDescription,
         ptr: ObjectPtr,
         tid: ArenaId,
-        offset: crate::ByteOffset,
+        offset: ByteOffset,
     ) -> Self {
         Self {
             #[cfg(any(feature = "memory-validation", debug_assertions))]
@@ -392,8 +404,8 @@ impl<'gc> ManagedPtr<'gc> {
     pub fn new_transient(
         value: Option<NonNull<u8>>,
         inner_type: TypeDescription,
-        obj: crate::object::Object<'gc>,
-        offset: crate::ByteOffset,
+        obj: Object<'gc>,
+        offset: ByteOffset,
     ) -> Self {
         Self {
             #[cfg(any(feature = "memory-validation", debug_assertions))]
@@ -412,7 +424,7 @@ impl<'gc> ManagedPtr<'gc> {
         inner_type: TypeDescription,
         owner: Option<ObjectRef<'gc>>,
         pinned: bool,
-        offset: Option<crate::ByteOffset>,
+        offset: Option<ByteOffset>,
     ) -> Self {
         let owner = owner.and_then(|o| if o.0.is_some() { Some(o) } else { None });
         let origin = if let Some(o) = owner {
@@ -422,9 +434,9 @@ impl<'gc> ManagedPtr<'gc> {
         };
         let offset = offset.unwrap_or_else(|| {
             if let PointerOrigin::Unmanaged = origin {
-                crate::ByteOffset(value.map_or(0, |p| p.as_ptr() as usize))
+                ByteOffset(value.map_or(0, |p| p.as_ptr() as usize))
             } else {
-                crate::ByteOffset(0)
+                ByteOffset(0)
             }
         });
 
@@ -447,7 +459,7 @@ impl<'gc> ManagedPtr<'gc> {
             _value: None,
             inner_type: TypeDescription::NULL,
             origin: PointerOrigin::Unmanaged,
-            offset: crate::ByteOffset::ZERO,
+            offset: ByteOffset::ZERO,
             pinned: false,
             _marker: std::marker::PhantomData,
         }
@@ -462,7 +474,7 @@ impl<'gc> ManagedPtr<'gc> {
         let offset = info.offset;
         let value = info.address;
 
-        if origin.is_null() && offset == crate::ByteOffset::ZERO && value.is_none() {
+        if origin.is_null() && offset == ByteOffset::ZERO && value.is_none() {
             origin = PointerOrigin::Unmanaged;
         }
 
@@ -516,8 +528,8 @@ impl<'gc> ManagedPtr<'gc> {
                     let off = word0 >> 33;
                     return ManagedPtrStackInfo {
                         address: nonnull_from_exposed_addr(word1),
-                        offset: crate::ByteOffset(off),
-                        origin: PointerOrigin::Stack(crate::StackSlotIndex(idx)),
+                        offset: ByteOffset(off),
+                        origin: PointerOrigin::Stack(StackSlotIndex(idx)),
                     };
                 }
                 7 if ((word0 >> 3) & 7) == 2 => {
@@ -525,7 +537,7 @@ impl<'gc> ManagedPtr<'gc> {
                     let off = word0 >> 6;
                     return ManagedPtrStackInfo {
                         address: nonnull_from_exposed_addr(word1),
-                        offset: crate::ByteOffset(off),
+                        offset: ByteOffset(off),
                         origin: PointerOrigin::Unmanaged, // Can't recover Object without GCHandle
                     };
                 }
@@ -538,7 +550,7 @@ impl<'gc> ManagedPtr<'gc> {
         // for stack info purposes.
         ManagedPtrStackInfo {
             address: nonnull_from_exposed_addr(word1),
-            offset: crate::ByteOffset(word1),
+            offset: ByteOffset(word1),
             origin: PointerOrigin::Unmanaged,
         }
     }
@@ -596,8 +608,8 @@ impl<'gc> ManagedPtr<'gc> {
                     let raw_ptr = nonnull_from_exposed_addr(word1);
                     Ok(ManagedPtrInfo {
                         address: raw_ptr,
-                        origin: PointerOrigin::Stack(crate::StackSlotIndex(slot_idx)),
-                        offset: crate::ByteOffset(slot_offset),
+                        origin: PointerOrigin::Stack(StackSlotIndex(slot_idx)),
+                        offset: ByteOffset(slot_offset),
                     })
                 }
                 5 => {
@@ -611,7 +623,7 @@ impl<'gc> ManagedPtr<'gc> {
                         // SAFETY: During GC or stable execution, cross-arena pointers are valid.
                         // We need the owner_id from the object itself.
                         #[cfg(feature = "fuzzing")]
-                        if !crate::object::is_valid_object_ptr(lock_ptr.expose_addr()) {
+                        if !is_valid_object_ptr(lock_ptr.expose_addr()) {
                             return Err(PointerDeserializationError::UnknownTag(tag));
                         }
 
@@ -623,7 +635,7 @@ impl<'gc> ManagedPtr<'gc> {
                         #[cfg(any(feature = "memory-validation", debug_assertions))]
                         {
                             let inner_ptr = unsafe { (*lock_ptr).as_ptr() };
-                            if unsafe { (*inner_ptr).magic } != crate::object::OBJECT_MAGIC {
+                            if unsafe { (*inner_ptr).magic } != OBJECT_MAGIC {
                                 panic!(
                                     "ManagedPtr::read: CrossArena pointer {:#x} points to invalid object (bad magic)",
                                     lock_ptr.expose_addr()
@@ -641,7 +653,7 @@ impl<'gc> ManagedPtr<'gc> {
                         Ok(ManagedPtrInfo {
                             address: nonnull_from_exposed_addr(base_addr + word1),
                             origin: PointerOrigin::CrossArenaObjectRef(ptr, owner_id),
-                            offset: crate::ByteOffset(word1),
+                            offset: ByteOffset(word1),
                         })
                     }
                     #[cfg(not(feature = "multithreading"))]
@@ -669,7 +681,7 @@ impl<'gc> ManagedPtr<'gc> {
                                         meta.type_desc,
                                         meta.generics.clone(),
                                     ),
-                                    offset: crate::ByteOffset(slot_offset),
+                                    offset: ByteOffset(slot_offset),
                                 })
                             } else {
                                 Err(PointerDeserializationError::InvalidStaticId(id))
@@ -698,7 +710,7 @@ impl<'gc> ManagedPtr<'gc> {
             let owner = unsafe { ObjectRef::read_unchecked(&source[0..ptr_size]) };
 
             // Read Offset (Offset 8)
-            let offset = crate::ByteOffset(word1);
+            let offset = ByteOffset(word1);
 
             // Compute pointer from owner's data + offset
             let ptr = if let Some(handle) = owner.0 {
@@ -708,7 +720,7 @@ impl<'gc> ManagedPtr<'gc> {
                 } else {
                     NonNull::new(base_ptr.wrapping_add(offset.as_usize()))
                 }
-            } else if offset == crate::ByteOffset::ZERO {
+            } else if offset == ByteOffset::ZERO {
                 // Null owner with zero offset means null pointer
                 None
             } else {
@@ -878,7 +890,7 @@ impl<'gc> ManagedPtr<'gc> {
         self._value = Some(ptr);
         if let PointerOrigin::Unmanaged = self.origin {
             // If it's a static pointer, also update the offset
-            self.offset = crate::ByteOffset(ptr.as_ptr() as usize);
+            self.offset = ByteOffset(ptr.as_ptr() as usize);
         }
     }
 
@@ -888,7 +900,7 @@ impl<'gc> ManagedPtr<'gc> {
         type_desc: TypeDescription,
         generics: GenericLookup,
         pinned: bool,
-        offset: crate::ByteOffset,
+        offset: ByteOffset,
     ) -> Self {
         Self {
             #[cfg(any(feature = "memory-validation", debug_assertions))]
@@ -928,7 +940,7 @@ impl<'gc> ManagedPtr<'gc> {
             } else {
                 0
             };
-            m.offset = crate::ByteOffset((m.offset.as_usize() as isize + diff) as usize);
+            m.offset = ByteOffset((m.offset.as_usize() as isize + diff) as usize);
         }
         m
     }
@@ -975,18 +987,14 @@ impl<'gc> ManagedPtr<'gc> {
             );
         }
 
-        m.offset = crate::ByteOffset(new_offset_isize as usize);
+        m.offset = ByteOffset(new_offset_isize as usize);
         m._value = m
             ._value
             .map(|p| unsafe { NonNull::new_unchecked(p.as_ptr().offset(bytes)) });
         m
     }
 
-    pub fn with_stack_origin(
-        mut self,
-        slot_index: crate::StackSlotIndex,
-        _offset: crate::ByteOffset,
-    ) -> Self {
+    pub fn with_stack_origin(mut self, slot_index: StackSlotIndex, _offset: ByteOffset) -> Self {
         self.validate_magic();
         self.origin = PointerOrigin::Stack(slot_index);
         self
@@ -1004,9 +1012,7 @@ impl<'gc> ManagedPtr<'gc> {
         // A canonical null ManagedPtr MUST have origin Unmanaged, offset 0, AND no cached address.
         // We also check for non-canonical nulls (like Heap(None)) for robustness.
         match &self.origin {
-            PointerOrigin::Unmanaged => {
-                self.offset == crate::ByteOffset::ZERO && self._value.is_none()
-            }
+            PointerOrigin::Unmanaged => self.offset == ByteOffset::ZERO && self._value.is_none(),
             PointerOrigin::Heap(o) => o.0.is_none(),
             _ => false,
         }
@@ -1031,7 +1037,7 @@ impl<'gc> ManagedPtr<'gc> {
     }
 }
 
-impl<'gc> crate::ptr_common::PointerLike for ManagedPtr<'gc> {
+impl<'gc> PointerLike for ManagedPtr<'gc> {
     #[inline]
     fn pointer(&self) -> Option<NonNull<u8>> {
         self.validate_magic();
@@ -1099,7 +1105,7 @@ mod tests {
                 TypeDescription::NULL,
                 Some(obj),
                 false,
-                Some(crate::ByteOffset(0)),
+                Some(ByteOffset(0)),
             );
 
             // Offset by much more than size of ValueType should panic
@@ -1140,7 +1146,7 @@ mod tests {
                 TypeDescription::NULL,
                 Some(obj),
                 false,
-                Some(crate::ByteOffset(0)),
+                Some(ByteOffset(0)),
             );
 
             // Offset by 4 bytes (end of object) should be valid
@@ -1193,16 +1199,16 @@ mod tests {
             assert_eq!(info.offset.as_usize(), unmanaged_addr);
 
             // 2. Stack
-            let stack_slot = crate::StackSlotIndex(123);
+            let stack_slot = StackSlotIndex(123);
             let stack_addr = 0x1000usize;
             let ptr_stack = ManagedPtr::new(
                 nonnull_from_exposed_addr(stack_addr),
                 TypeDescription::NULL,
                 None,
                 false,
-                Some(crate::ByteOffset(456)),
+                Some(ByteOffset(456)),
             )
-            .with_stack_origin(stack_slot, crate::ByteOffset(0));
+            .with_stack_origin(stack_slot, ByteOffset(0));
 
             ptr_stack.write(&mut buf);
             let info = unsafe { ManagedPtr::read_unchecked(&buf) }.unwrap();
@@ -1220,7 +1226,7 @@ mod tests {
                 TypeDescription::NULL,
                 Some(obj),
                 false,
-                Some(crate::ByteOffset(offset)),
+                Some(ByteOffset(offset)),
             );
 
             ptr_heap.write(&mut buf);
@@ -1240,7 +1246,7 @@ mod tests {
                 type_desc,
                 generics.clone(),
                 false,
-                crate::ByteOffset(static_offset),
+                ByteOffset(static_offset),
             );
 
             ptr_static.write(&mut buf);
@@ -1270,7 +1276,7 @@ mod tests {
                     TypeDescription::NULL,
                     ptr,
                     arena_id,
-                    crate::ByteOffset(cross_offset),
+                    ByteOffset(cross_offset),
                 );
 
                 ptr_cross.write(&mut buf);
@@ -1338,17 +1344,13 @@ mod tests {
                 has_ref_fields: false,
             });
             let storage = crate::storage::FieldStorage::new(layout, vec![]);
-            let obj = crate::object::Object::new(
-                TypeDescription::NULL,
-                GenericLookup::default(),
-                storage,
-            );
+            let obj = Object::new(TypeDescription::NULL, GenericLookup::default(), storage);
             let transient_addr = 0x5000usize;
             let ptr_transient = ManagedPtr::new_transient(
                 nonnull_from_exposed_addr(transient_addr),
                 TypeDescription::NULL,
                 obj.clone(),
-                crate::ByteOffset(123), // Use a non-zero offset
+                ByteOffset(123), // Use a non-zero offset
             );
 
             ptr_transient.write(&mut buf);
@@ -1382,7 +1384,7 @@ mod tests {
             type_desc,
             generics.clone(),
             false,
-            crate::ByteOffset(0),
+            ByteOffset(0),
         );
 
         let ptr2 = ManagedPtr::new_static(
@@ -1391,7 +1393,7 @@ mod tests {
             type_desc,
             generics.clone(),
             false,
-            crate::ByteOffset(0),
+            ByteOffset(0),
         );
 
         ptr1.write(&mut buf1);
@@ -1413,7 +1415,7 @@ mod tests {
     #[test]
     fn test_read_stack_info_miri() {
         let mut buf = [0u8; ManagedPtr::SIZE];
-        let slot_idx = crate::StackSlotIndex(42);
+        let slot_idx = StackSlotIndex(42);
         let offset = 8;
         let addr = 0x12345678usize;
 

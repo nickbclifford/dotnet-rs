@@ -1,6 +1,17 @@
 use crate::{
-    StepResult, instructions::objects::get_ptr_context, layout::LayoutFactory,
-    resolution::ValueResolution, stack::ops::VesOps, sync::Ordering as AtomicOrdering,
+    StepResult,
+    error::ExecutionError,
+    instructions::objects::{get_ptr_context, get_ptr_info},
+    layout::LayoutFactory,
+    resolution::ValueResolution,
+    stack::ops::VesOps,
+    sync::Ordering as AtomicOrdering,
+};
+use dotnet_types::generics::GenericLookup;
+use dotnet_value::{
+    ByteOffset,
+    object::{CTSValue, ValueType},
+    pointer::ManagedPtrInfo,
 };
 
 const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
@@ -30,7 +41,7 @@ pub fn ldfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
     if parent.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
-    let (origin, base_offset) = match crate::instructions::objects::get_ptr_info(ctx, &parent) {
+    let (origin, base_offset) = match get_ptr_info(ctx, &parent) {
         Ok(v) => v,
         Err(e) => return e,
     };
@@ -53,18 +64,16 @@ pub fn ldfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
         let data = h.borrow();
         if let HeapStorage::Vec(ref vector) = data.storage {
             let intercepted = if name == "Length" {
-                Some(dotnet_value::object::CTSValue::Value(
-                    dotnet_value::object::ValueType::UInt32(vector.layout.length as u32),
-                ))
+                Some(CTSValue::Value(ValueType::UInt32(
+                    vector.layout.length as u32,
+                )))
             } else if name == "Data" {
                 let b = if vector.layout.length > 0 {
                     vector.get()[0]
                 } else {
                     0
                 };
-                Some(dotnet_value::object::CTSValue::Value(
-                    dotnet_value::object::ValueType::UInt8(b),
-                ))
+                Some(CTSValue::Value(ValueType::UInt8(b)))
             } else {
                 None
             };
@@ -118,7 +127,7 @@ pub fn stfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
     if parent.is_null() {
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
-    let (origin, base_offset) = match crate::instructions::objects::get_ptr_info(ctx, &parent) {
+    let (origin, base_offset) = match get_ptr_info(ctx, &parent) {
         Ok(v) => v,
         Err(e) => return e,
     };
@@ -168,8 +177,7 @@ pub fn ldsfld<'gc, T: VesOps<'gc>>(
     param0: &FieldSource,
     volatile: bool,
 ) -> StepResult {
-    let (field, lookup): (_, dotnet_types::generics::GenericLookup) =
-        vm_try!(ctx.locate_field(*param0));
+    let (field, lookup): (_, GenericLookup) = vm_try!(ctx.locate_field(*param0));
 
     // Special fields check (intrinsic fields)
     if ctx.is_intrinsic_field_cached(field) {
@@ -215,8 +223,7 @@ pub fn stsfld<'gc, T: VesOps<'gc>>(
     param0: &FieldSource,
     volatile: bool,
 ) -> StepResult {
-    let (field, lookup): (_, dotnet_types::generics::GenericLookup) =
-        vm_try!(ctx.locate_field(*param0));
+    let (field, lookup): (_, GenericLookup) = vm_try!(ctx.locate_field(*param0));
     let name = &field.field().name;
 
     let res = ctx.initialize_static_storage(field.parent, lookup.clone());
@@ -281,7 +288,7 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
                     target_type,
                     Some(ObjectRef(Some(*h))),
                     false,
-                    Some(dotnet_value::ByteOffset(0)),
+                    Some(ByteOffset(0)),
                 )));
                 return StepResult::Continue;
             }
@@ -301,13 +308,13 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
                 if !ptr.is_null() {
                     let target_type = vm_try!(ctx.current_context().get_field_desc(field));
                     let offset = if field.field().name == "Data" {
-                        dotnet_value::ByteOffset(0)
+                        ByteOffset(0)
                     } else {
                         // Length is at the beginning of the ObjectInner? No, Vector struct.
                         // Actually, Length field in RawArrayData is special.
                         // If it's not the data, we should probably still calculate offset correctly if we want it to be stable.
                         // But RawArrayData is a hack anyway.
-                        dotnet_value::ByteOffset(
+                        ByteOffset(
                             (ptr as usize)
                                 .wrapping_sub(unsafe { data.storage.raw_data_ptr() } as usize),
                         )
@@ -367,7 +374,7 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
 
         let mut ptr_bytes = MP::serialization_buffer();
         if let Err(e) = unsafe { ctx.read_bytes(origin.clone(), field_offset, &mut ptr_bytes) } {
-            return StepResult::Error(crate::error::ExecutionError::InternalError(e).into());
+            return StepResult::Error(ExecutionError::InternalError(e).into());
         }
 
         // Deserialize to get the actual origin
@@ -380,7 +387,7 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
             Ok(i) => i,
             Err(e) => {
                 return StepResult::Error(
-                    crate::error::ExecutionError::InternalError(format!(
+                    ExecutionError::InternalError(format!(
                         "ManagedPtr deserialization failed: {:?}",
                         e
                     ))
@@ -394,7 +401,7 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
     } else {
         // Regular field - use parent's origin + field offset
         let field_ptr = ctx.resolve_address(origin.clone(), field_offset);
-        let info = dotnet_value::pointer::ManagedPtrInfo {
+        let info = ManagedPtrInfo {
             address: Some(field_ptr),
             origin,
             offset: field_offset,
@@ -411,8 +418,7 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
 
 #[dotnet_instruction(LoadStaticFieldAddress(param0))]
 pub fn ldsflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepResult {
-    let (field, lookup): (_, dotnet_types::generics::GenericLookup) =
-        vm_try!(ctx.locate_field(*param0));
+    let (field, lookup): (_, GenericLookup) = vm_try!(ctx.locate_field(*param0));
 
     let res = ctx.initialize_static_storage(field.parent, lookup.clone());
     if res != StepResult::Continue {

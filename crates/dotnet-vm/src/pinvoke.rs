@@ -5,6 +5,7 @@ use crate::{
 use dashmap::DashMap;
 use dotnet_types::{
     comparer::decompose_type_source,
+    error::{PInvokeError, TypeResolutionError},
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
 };
@@ -23,8 +24,6 @@ use sptr::Strict;
 use std::{ffi::c_void, marker::PhantomPinned, path::PathBuf, ptr::NonNull, sync::Arc};
 
 pub static mut LAST_ERROR: i32 = 0;
-
-pub use dotnet_types::error::PInvokeError;
 
 pub trait PInvokeSandbox: Send + Sync {
     fn allow_library(&self, name: &str) -> bool;
@@ -298,7 +297,7 @@ fn type_to_ffi(t: &ConcreteType, ctx: &ResolutionContext) -> Type {
 fn param_to_type(
     p: &ParameterType<MethodType>,
     ctx: &ResolutionContext,
-) -> Result<Type, dotnet_types::error::TypeResolutionError> {
+) -> Result<Type, TypeResolutionError> {
     match p {
         ParameterType::Value(t) => Ok(type_to_ffi(&ctx.make_concrete(t)?, ctx)),
         ParameterType::Ref(_) => Ok(Type::pointer()),
@@ -404,7 +403,7 @@ fn resolve_parameter_base_type(
     p_type: &ParameterType<MethodType>,
     res_ctx: &ResolutionContext,
     default: BaseType<ConcreteType>,
-) -> Result<BaseType<ConcreteType>, dotnet_types::error::TypeResolutionError> {
+) -> Result<BaseType<ConcreteType>, TypeResolutionError> {
     if let ParameterType::Value(t) = p_type {
         Ok(res_ctx.make_concrete(t)?.get().clone())
     } else {

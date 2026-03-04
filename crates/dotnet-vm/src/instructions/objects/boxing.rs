@@ -9,7 +9,7 @@ const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid p
 const INVALID_CAST_MSG: &str = "Specified cast is not valid.";
 use dotnet_macros::dotnet_instruction;
 use dotnet_value::{
-    StackValue,
+    ByteOffset, StackValue,
     object::{HeapStorage, ObjectRef},
     pointer::ManagedPtr,
 };
@@ -167,7 +167,7 @@ pub fn unbox<'gc, T: ResolutionOps<'gc> + ExceptionOps<'gc> + EvalStackOps<'gc> 
         target_type,
         Some(obj),
         false,
-        Some(dotnet_value::ByteOffset(0)),
+        Some(ByteOffset(0)),
     )));
 
     StepResult::Continue

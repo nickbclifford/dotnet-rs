@@ -1,5 +1,7 @@
 use crate::{
     StepResult,
+    error::ExecutionError,
+    instructions::objects::get_ptr_info,
     layout::type_layout,
     resolution::ValueResolution,
     stack::ops::{
@@ -14,12 +16,12 @@ use dotnet_types::{
 };
 use dotnet_utils::{BorrowGuardHandle, NoActiveBorrows};
 use dotnet_value::{
-    StackValue,
+    ByteOffset, StackValue,
     layout::{FieldLayoutManager, HasLayout, LayoutManager, Scalar},
     object::{HeapStorage, Object, ObjectRef},
-    pointer::{ManagedPtr, ManagedPtrInfo},
+    pointer::{ManagedPtr, ManagedPtrInfo, PointerOrigin, UnmanagedPtr},
 };
-use dotnetdll::prelude::ParameterType;
+use dotnetdll::prelude::{BaseType, ParameterType};
 use std::ptr::NonNull;
 
 /// Read the _reference ManagedPtr from a Span/ReadOnlySpan value type.
@@ -241,7 +243,7 @@ pub fn with_span_data<
                 }
             }
         }
-    } else if let dotnet_value::pointer::PointerOrigin::Transient(obj) = &m_ptr.origin() {
+    } else if let PointerOrigin::Transient(obj) = &m_ptr.origin() {
         let mut bounds_error = None;
         obj.with_data(|data| {
             if m_ptr.byte_offset().as_usize() + total_size > data.len() {
@@ -361,7 +363,7 @@ pub fn intrinsic_span_ctor_from_pointer<
                 None,
             )
         }
-        StackValue::UnmanagedPtr(dotnet_value::pointer::UnmanagedPtr(ptr)) => {
+        StackValue::UnmanagedPtr(UnmanagedPtr(ptr)) => {
             // Create a ManagedPtr from the unmanaged pointer
             ManagedPtr::new(
                 Some(ptr),
@@ -396,15 +398,12 @@ pub fn intrinsic_span_ctor_from_pointer<
 
     let LayoutManager::Field(f) = &*layout else {
         return StepResult::Error(
-            crate::error::ExecutionError::NotImplemented(
-                "Expected Field layout for Span".to_string(),
-            )
-            .into(),
+            ExecutionError::NotImplemented("Expected Field layout for Span".to_string()).into(),
         );
     };
 
     if let Err(e) = write_span_fields(&this_ptr, &managed, length, f, ctx) {
-        return StepResult::Error(crate::error::ExecutionError::NotImplemented(e).into());
+        return StepResult::Error(ExecutionError::NotImplemented(e).into());
     }
 
     StepResult::Continue
@@ -439,11 +438,11 @@ pub fn intrinsic_memory_extensions_sequence_equal<
     // Check length
     let a_len = match read_span_length(&a) {
         Ok(l) => l,
-        Err(e) => return StepResult::Error(crate::error::ExecutionError::InternalError(e).into()),
+        Err(e) => return StepResult::Error(ExecutionError::InternalError(e).into()),
     };
     let b_len = match read_span_length(&b) {
         Ok(l) => l,
-        Err(e) => return StepResult::Error(crate::error::ExecutionError::InternalError(e).into()),
+        Err(e) => return StepResult::Error(ExecutionError::InternalError(e).into()),
     };
 
     if a_len != b_len {
@@ -476,13 +475,13 @@ pub fn intrinsic_memory_extensions_sequence_equal<
         let a_ptr_info = match read_span_reference(&a) {
             Ok(info) => info,
             Err(e) => {
-                return StepResult::Error(crate::error::ExecutionError::InternalError(e).into());
+                return StepResult::Error(ExecutionError::InternalError(e).into());
             }
         };
         let b_ptr_info = match read_span_reference(&b) {
             Ok(info) => info,
             Err(e) => {
-                return StepResult::Error(crate::error::ExecutionError::InternalError(e).into());
+                return StepResult::Error(ExecutionError::InternalError(e).into());
             }
         };
 
@@ -511,10 +510,8 @@ pub fn intrinsic_memory_extensions_sequence_equal<
             Some(m) => m,
             None => {
                 return StepResult::Error(
-                    crate::error::ExecutionError::InternalError(
-                        "SequenceEqualSlowPath not found".to_string(),
-                    )
-                    .into(),
+                    ExecutionError::InternalError("SequenceEqualSlowPath not found".to_string())
+                        .into(),
                 );
             }
         };
@@ -559,11 +556,11 @@ pub fn intrinsic_memory_extensions_equals_span_char<
 
     let a_len = match read_span_length(&a) {
         Ok(l) => l,
-        Err(e) => return StepResult::Error(crate::error::ExecutionError::InternalError(e).into()),
+        Err(e) => return StepResult::Error(ExecutionError::InternalError(e).into()),
     };
     let b_len = match read_span_length(&b) {
         Ok(l) => l,
-        Err(e) => return StepResult::Error(crate::error::ExecutionError::InternalError(e).into()),
+        Err(e) => return StepResult::Error(ExecutionError::InternalError(e).into()),
     };
 
     if a_len != b_len {
@@ -578,11 +575,11 @@ pub fn intrinsic_memory_extensions_equals_span_char<
 
     let a_ptr_info = match read_span_reference(&a) {
         Ok(info) => info,
-        Err(e) => return StepResult::Error(crate::error::ExecutionError::InternalError(e).into()),
+        Err(e) => return StepResult::Error(ExecutionError::InternalError(e).into()),
     };
     let b_ptr_info = match read_span_reference(&b) {
         Ok(info) => info,
-        Err(e) => return StepResult::Error(crate::error::ExecutionError::InternalError(e).into()),
+        Err(e) => return StepResult::Error(ExecutionError::InternalError(e).into()),
     };
 
     let a_mptr = ManagedPtr::from_info_full(a_ptr_info, TypeDescription::NULL, false);
@@ -731,12 +728,12 @@ pub fn intrinsic_as_span<
 
     let res_ctx = ctx.with_generics(generics);
 
-    let (origin, mut offset) = match crate::instructions::objects::get_ptr_info(ctx, &source) {
+    let (origin, mut offset) = match get_ptr_info(ctx, &source) {
         Ok(v) => v,
         Err(e) => return e,
     };
     let h_opt = match origin {
-        dotnet_value::pointer::PointerOrigin::Heap(ObjectRef(Some(h))) => Some(h),
+        PointerOrigin::Heap(ObjectRef(Some(h))) => Some(h),
         _ => None,
     };
 
@@ -747,7 +744,7 @@ pub fn intrinsic_as_span<
                 HeapStorage::Str(s) => (
                     unsafe { heap.storage.raw_data_ptr() },
                     s.len(),
-                    vm_try!(res_ctx.make_concrete(&dotnetdll::prelude::BaseType::Char)),
+                    vm_try!(res_ctx.make_concrete(&BaseType::Char)),
                     2, // char is 2 bytes in .NET
                 ),
                 HeapStorage::Vec(a) => {
@@ -762,7 +759,7 @@ pub fn intrinsic_as_span<
                 }
                 _ => {
                     return StepResult::Error(
-                        crate::error::ExecutionError::NotImplemented(format!(
+                        ExecutionError::NotImplemented(format!(
                             "AsSpan called on non-string/non-array object: {:?}",
                             heap.storage
                         ))
@@ -775,7 +772,7 @@ pub fn intrinsic_as_span<
             let element_type = if !generics.method_generics.is_empty() {
                 generics.method_generics[0].clone()
             } else {
-                vm_try!(res_ctx.make_concrete(&dotnetdll::prelude::BaseType::Char))
+                vm_try!(res_ctx.make_concrete(&BaseType::Char))
             };
             (std::ptr::null_mut(), 0, element_type, 2)
         }
@@ -814,7 +811,7 @@ pub fn intrinsic_as_span<
         }
         Some(_) => {
             return StepResult::Error(
-                crate::error::ExecutionError::InternalError(
+                ExecutionError::InternalError(
                     "AsSpan called on method with ref/typedref return".to_string(),
                 )
                 .into(),
@@ -822,10 +819,8 @@ pub fn intrinsic_as_span<
         }
         None => {
             return StepResult::Error(
-                crate::error::ExecutionError::InternalError(
-                    "AsSpan called on method returning void".to_string(),
-                )
-                .into(),
+                ExecutionError::InternalError("AsSpan called on method returning void".to_string())
+                    .into(),
             );
         }
     };
@@ -836,25 +831,18 @@ pub fn intrinsic_as_span<
     let (_ref_offset_rel, _length_offset_rel) = match &*layout {
         LayoutManager::Field(f) => {
             let ref_off = vm_try!(f.get_field_by_name("_reference").ok_or_else(|| {
-                crate::error::ExecutionError::InternalError(
-                    "Span must have _reference field".to_string(),
-                )
+                ExecutionError::InternalError("Span must have _reference field".to_string())
             }))
             .position;
             let len_off = vm_try!(f.get_field_by_name("_length").ok_or_else(|| {
-                crate::error::ExecutionError::InternalError(
-                    "Span must have _length field".to_string(),
-                )
+                ExecutionError::InternalError("Span must have _length field".to_string())
             }))
             .position;
             (ref_off, len_off)
         }
         _ => {
             return StepResult::Error(
-                crate::error::ExecutionError::InternalError(
-                    "Expected Field layout for Span".to_string(),
-                )
-                .into(),
+                ExecutionError::InternalError("Expected Field layout for Span".to_string()).into(),
             );
         }
     };
@@ -917,15 +905,13 @@ pub fn intrinsic_runtime_helpers_create_span<
     ));
     let _value_offset = match &*handle_layout {
         LayoutManager::Field(f) => vm_try!(f.get_field_by_name("_value").ok_or_else(|| {
-            crate::error::ExecutionError::InternalError(
-                "RuntimeFieldHandle must have _value field".to_string(),
-            )
+            ExecutionError::InternalError("RuntimeFieldHandle must have _value field".to_string())
         }))
         .position
         .as_usize(),
         _ => {
             return StepResult::Error(
-                crate::error::ExecutionError::InternalError(
+                ExecutionError::InternalError(
                     "Expected Field layout for RuntimeFieldHandle".to_string(),
                 )
                 .into(),
@@ -962,10 +948,7 @@ pub fn intrinsic_runtime_helpers_create_span<
         let size_str = &field_desc.definition().name[prefix.len()..];
         let size_end = size_str.find('_').unwrap_or(size_str.len());
         let array_size = vm_try!(size_str[..size_end].parse::<usize>().map_err(|e| {
-            crate::error::ExecutionError::InternalError(format!(
-                "Failed to parse array size: {}",
-                e
-            ))
+            ExecutionError::InternalError(format!("Failed to parse array size: {}", e))
         }));
         let data_slice = &initial_data[..array_size];
 
@@ -978,25 +961,19 @@ pub fn intrinsic_runtime_helpers_create_span<
         let (_ref_offset, _length_offset) = match &*layout {
             LayoutManager::Field(f) => {
                 let ref_off = vm_try!(f.get_field_by_name("_reference").ok_or_else(|| {
-                    crate::error::ExecutionError::NotImplemented(
-                        "Span must have _reference field".to_string(),
-                    )
+                    ExecutionError::NotImplemented("Span must have _reference field".to_string())
                 }))
                 .position;
                 let len_off = vm_try!(f.get_field_by_name("_length").ok_or_else(|| {
-                    crate::error::ExecutionError::NotImplemented(
-                        "Span must have _length field".to_string(),
-                    )
+                    ExecutionError::NotImplemented("Span must have _length field".to_string())
                 }))
                 .position;
                 (ref_off, len_off)
             }
             _ => {
                 return StepResult::Error(
-                    crate::error::ExecutionError::NotImplemented(
-                        "Expected Field layout for Span".to_string(),
-                    )
-                    .into(),
+                    ExecutionError::NotImplemented("Expected Field layout for Span".to_string())
+                        .into(),
                 );
             }
         };
@@ -1060,15 +1037,13 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<
     ));
     let _field_value_offset = match &*field_layout {
         LayoutManager::Field(f) => vm_try!(f.get_field_by_name("_value").ok_or_else(|| {
-            crate::error::ExecutionError::NotImplemented(
-                "RuntimeFieldHandle must have _value field".to_string(),
-            )
+            ExecutionError::NotImplemented("RuntimeFieldHandle must have _value field".to_string())
         }))
         .position
         .as_usize(),
         _ => {
             return StepResult::Error(
-                crate::error::ExecutionError::NotImplemented(
+                ExecutionError::NotImplemented(
                     "Expected Field layout for RuntimeFieldHandle".to_string(),
                 )
                 .into(),
@@ -1094,15 +1069,13 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<
     ));
     let _type_value_offset = match &*runtime_type_layout {
         LayoutManager::Field(f) => vm_try!(f.get_field_by_name("_value").ok_or_else(|| {
-            crate::error::ExecutionError::NotImplemented(
-                "RuntimeTypeHandle must have _value field".to_string(),
-            )
+            ExecutionError::NotImplemented("RuntimeTypeHandle must have _value field".to_string())
         }))
         .position
         .as_usize(),
         _ => {
             return StepResult::Error(
-                crate::error::ExecutionError::NotImplemented(
+                ExecutionError::NotImplemented(
                     "Expected Field layout for RuntimeTypeHandle".to_string(),
                 )
                 .into(),
@@ -1134,10 +1107,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<
         let size_str = &field.name[prefix.len()..];
         let size_end = size_str.find('_').unwrap_or(size_str.len());
         let array_size = vm_try!(size_str[..size_end].parse::<usize>().map_err(|e| {
-            crate::error::ExecutionError::InternalError(format!(
-                "Failed to parse array size: {}",
-                e
-            ))
+            ExecutionError::InternalError(format!("Failed to parse array size: {}", e))
         }));
 
         let element_count = (array_size / element_size.as_usize()) as i32;
@@ -1149,7 +1119,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<
                     &element_count.to_ne_bytes(),
                 )
             }
-            .map_err(|e| crate::error::ExecutionError::InternalError(e.to_string()))
+            .map_err(|e| ExecutionError::InternalError(e.to_string()))
         );
 
         let element_desc = vm_try!(ctx.loader().find_concrete_type(element_type.clone()));
@@ -1193,10 +1163,8 @@ pub fn intrinsic_internal_get_array_data<
         generics.method_generics[0].clone()
     } else {
         return StepResult::Error(
-            crate::error::ExecutionError::NotImplemented(
-                "GetArrayData expected generic argument".to_string(),
-            )
-            .into(),
+            ExecutionError::NotImplemented("GetArrayData expected generic argument".to_string())
+                .into(),
         );
     };
 
@@ -1217,12 +1185,12 @@ pub fn intrinsic_internal_get_array_data<
                 element_type_desc,
                 Some(array_ref),
                 false,
-                Some(dotnet_value::ByteOffset(offset)),
+                Some(ByteOffset(offset)),
             );
             ctx.push_managed_ptr(managed);
         } else {
             return StepResult::Error(
-                crate::error::ExecutionError::NotImplemented(
+                ExecutionError::NotImplemented(
                     "GetArrayData called on non-vector object".to_string(),
                 )
                 .into(),
@@ -1263,21 +1231,18 @@ pub fn intrinsic_span_get_pinnable_reference<
 
     let LayoutManager::Field(f) = &*layout else {
         return StepResult::Error(
-            crate::error::ExecutionError::NotImplemented(
-                "Expected Field layout for Span".to_string(),
-            )
-            .into(),
+            ExecutionError::NotImplemented("Expected Field layout for Span".to_string()).into(),
         );
     };
 
     // Read fields using helpers
     let managed_ref = match read_span_reference_from_ptr(&span, f, ctx) {
         Ok(m) => m,
-        Err(e) => return StepResult::Error(crate::error::ExecutionError::InternalError(e).into()),
+        Err(e) => return StepResult::Error(ExecutionError::InternalError(e).into()),
     };
     let length = match read_span_length_from_ptr(&span, f, ctx) {
         Ok(l) => l,
-        Err(e) => return StepResult::Error(crate::error::ExecutionError::InternalError(e).into()),
+        Err(e) => return StepResult::Error(ExecutionError::InternalError(e).into()),
     };
 
     // If the span is empty, return a null reference

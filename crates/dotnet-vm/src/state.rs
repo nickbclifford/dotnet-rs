@@ -1,10 +1,7 @@
-#[cfg(feature = "multithreading")]
-use crate::gc::GCCoordinator;
-#[cfg(feature = "multithreading")]
-use dotnet_utils::sync::AtomicUsize;
-
 use crate::{
+    MethodInfo,
     dispatch::ring_buffer::InstructionRingBuffer,
+    error::TypeResolutionError,
     intrinsics::IntrinsicRegistry,
     memory::HeapManager,
     metrics::{CacheSizes, CacheStats, RuntimeMetrics},
@@ -32,6 +29,11 @@ use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     collections::{BTreeMap, HashMap, HashSet},
 };
+
+#[cfg(feature = "multithreading")]
+use crate::gc::GCCoordinator;
+#[cfg(feature = "multithreading")]
+use dotnet_utils::sync::AtomicUsize;
 
 pub use crate::statics::StaticStorageManager;
 
@@ -62,8 +64,7 @@ pub struct GlobalCaches {
     pub overrides_cache:
         DashMap<(TypeDescription, GenericLookup), Arc<HashMap<usize, MethodDescription>>>,
     /// Cache for method info: (Method, Lookup) -> MethodInfo
-    pub method_info_cache:
-        DashMap<(MethodDescription, GenericLookup), Arc<crate::MethodInfo<'static>>>,
+    pub method_info_cache: DashMap<(MethodDescription, GenericLookup), Arc<MethodInfo<'static>>>,
     /// Registry of intrinsic methods
     pub intrinsic_registry: IntrinsicRegistry,
 }
@@ -135,12 +136,12 @@ impl GlobalCaches {
         method: MethodDescription,
         generics: &GenericLookup,
         shared: Arc<SharedGlobalState>,
-    ) -> Result<crate::MethodInfo<'static>, crate::error::TypeResolutionError> {
+    ) -> Result<MethodInfo<'static>, TypeResolutionError> {
         let key = (method, generics.clone());
         if let Some(entry) = self.method_info_cache.get(&key) {
             return Ok((**entry).clone());
         }
-        let built = crate::MethodInfo::new(method, generics, shared)?;
+        let built = MethodInfo::new(method, generics, shared)?;
         self.method_info_cache.insert(key, Arc::new(built.clone()));
         Ok(built)
     }

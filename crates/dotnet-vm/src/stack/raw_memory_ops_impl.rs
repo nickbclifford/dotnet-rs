@@ -1,4 +1,5 @@
 use crate::{
+    ByteOffset,
     memory::access::MemoryOwner,
     stack::{
         context::VesContext,
@@ -10,6 +11,7 @@ use dotnet_types::TypeDescription;
 use dotnet_utils::{BorrowGuardHandle, BorrowScopeOps, NoActiveBorrows};
 use dotnet_value::{StackValue, layout::HasLayout, pointer::PointerOrigin};
 use sptr::Strict;
+use std::ptr::NonNull;
 
 impl<'a, 'gc> BorrowScopeOps for VesContext<'a, 'gc> {
     fn enter_borrow_scope(&self) {
@@ -53,11 +55,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         s.memory_pool[loc..].as_mut_ptr()
     }
 
-    fn resolve_address(
-        &self,
-        origin: PointerOrigin<'gc>,
-        offset: dotnet_utils::ByteOffset,
-    ) -> std::ptr::NonNull<u8> {
+    fn resolve_address(&self, origin: PointerOrigin<'gc>, offset: ByteOffset) -> NonNull<u8> {
         let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
         match origin {
             PointerOrigin::Stack(idx) => {
@@ -193,7 +191,9 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
                 let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                unsafe { memory.read_value_internal(self.gc, ptr.as_ptr(), None, layout, type_desc) }
+                unsafe {
+                    memory.read_value_internal(self.gc, ptr.as_ptr(), None, layout, type_desc)
+                }
             }
             PointerOrigin::Static(static_type, lookup) => {
                 let storage = self.statics().get(static_type, &lookup);

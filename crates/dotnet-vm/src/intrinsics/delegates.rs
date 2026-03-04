@@ -13,7 +13,10 @@ use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
 };
-use dotnet_value::{StackValue, object::ObjectRef};
+use dotnet_value::{
+    StackValue,
+    object::{HeapStorage, ObjectRef},
+};
 use dotnetdll::prelude::*;
 
 const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
@@ -516,7 +519,7 @@ pub fn delegate_combine<'gc, T: VesOps<'gc>>(
     let array_v = vm_try!(ctx.new_vector(delegate_concrete, combined.len()));
     let array_obj = ObjectRef::new(
         ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
-        dotnet_value::object::HeapStorage::Vec(array_v),
+        HeapStorage::Vec(array_v),
     );
     ctx.register_new_object(&array_obj);
 
@@ -644,7 +647,7 @@ pub fn delegate_remove<'gc, T: VesOps<'gc>>(
 }
 
 /*
-fn get_runtime_return_type<'gc, T: VesOps<'gc>>(ctx: &T, res_ctx: &crate::ResolutionContext<'_>, method: &MethodDescription) -> RuntimeType {
+fn get_runtime_return_type<'gc, T: VesOps<'gc>>(ctx: &T, res_ctx: &ResolutionContext<'_>, method: &MethodDescription) -> RuntimeType {
     match &method.method().signature.return_type.1 {
         Some(dotnetdll::prelude::ParameterType::Value(t))
         | Some(dotnetdll::prelude::ParameterType::Ref(t)) => {

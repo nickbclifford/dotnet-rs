@@ -16,7 +16,8 @@ pub enum StaticIntrinsicHandler {
 }
 
 pub struct StaticIntrinsicEntry {
-    #[allow(dead_code)] // type_name, member_name, and arity are for metadata and debugging, not used in runtime dispatch
+    #[allow(dead_code)]
+    // type_name, member_name, and arity are for metadata and debugging, not used in runtime dispatch
     pub type_name: &'static str,
     #[allow(dead_code)]
     pub member_name: &'static str,

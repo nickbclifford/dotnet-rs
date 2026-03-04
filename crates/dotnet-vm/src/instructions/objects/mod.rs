@@ -13,7 +13,7 @@ use dotnet_types::{comparer::decompose_type_source, members::MethodDescription};
 use dotnet_value::{
     CLRString, StackValue,
     layout::HasLayout,
-    object::{HeapStorage, ObjectRef},
+    object::{HeapStorage, ObjectRef, Vector},
     pointer::{ManagedPtr, PointerOrigin, UnmanagedPtr},
 };
 use dotnetdll::prelude::*;
@@ -113,7 +113,7 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
                 ));
                 let total_size_bytes = layout.element_layout.size() * total_len;
 
-                let vec_obj = dotnet_value::object::Vector::new(
+                let vec_obj = Vector::new(
                     elem_type,
                     layout,
                     vec![0; total_size_bytes.as_usize()],

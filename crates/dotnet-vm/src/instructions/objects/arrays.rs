@@ -6,21 +6,22 @@ use crate::{
         TypedStackOps,
     },
 };
-
-const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
-const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
-const INDEX_OUT_OF_RANGE_MSG: &str = "Index was outside the bounds of the array.";
-const OVERFLOW_MSG: &str = "Arithmetic operation resulted in an overflow.";
-const INVALID_CAST_MSG: &str = "Specified cast is not valid.";
 use dotnet_macros::dotnet_instruction;
+use dotnet_types::TypeDescription;
 use dotnet_value::{
-    StackValue,
+    ByteOffset, StackValue,
     layout::{HasLayout, LayoutManager, Scalar},
     object::{HeapStorage, ObjectRef},
     pointer::{ManagedPtr, PointerOrigin},
 };
 use dotnetdll::prelude::*;
 use std::ptr::NonNull;
+
+const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
+const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
+const INDEX_OUT_OF_RANGE_MSG: &str = "Index was outside the bounds of the array.";
+const OVERFLOW_MSG: &str = "Arithmetic operation resulted in an overflow.";
+const INVALID_CAST_MSG: &str = "Specified cast is not valid.";
 
 #[dotnet_instruction(LoadElement { param0 })]
 pub fn ldelem<
@@ -58,7 +59,7 @@ pub fn ldelem<
     let load_type = vm_try!(res_ctx.make_concrete(param0));
     let layout = vm_try!(type_layout(load_type.clone(), &res_ctx));
     let target_type = vm_try!(ctx.loader().find_concrete_type(load_type));
-    let offset = dotnet_utils::ByteOffset(layout.size().as_usize() * index);
+    let offset = ByteOffset(layout.size().as_usize() * index);
 
     // SAFETY: read_unaligned handles GC-safe reading from the heap with bounds checking.
     let value = match unsafe {
@@ -122,7 +123,7 @@ pub fn ldelem_primitive<
         LoadType::Object => Scalar::ObjectRef,
     };
     let layout = LayoutManager::Scalar(layout);
-    let offset = dotnet_utils::ByteOffset(layout.size().as_usize() * index);
+    let offset = ByteOffset(layout.size().as_usize() * index);
 
     // SAFETY: read_unaligned handles GC-safe reading from the heap with bounds checking.
     let value = match unsafe { ctx.read_unaligned(PointerOrigin::Heap(obj), offset, &layout, None) }
@@ -228,7 +229,7 @@ fn ldelema_internal<
         }
     };
 
-    let target_type: dotnet_types::TypeDescription = ctx
+    let target_type: TypeDescription = ctx
         .loader()
         .find_concrete_type(concrete_t)
         .expect("Array element type must exist for ldelema");
@@ -237,7 +238,7 @@ fn ldelema_internal<
         target_type,
         Some(obj),
         readonly,
-        Some(dotnet_value::ByteOffset(element_offset)),
+        Some(ByteOffset(element_offset)),
     )));
 
     StepResult::Continue
@@ -278,7 +279,7 @@ pub fn stelem<
     let res_ctx = ctx.current_context();
     let store_type = vm_try!(res_ctx.make_concrete(param0));
     let layout = vm_try!(type_layout(store_type, &res_ctx));
-    let offset = dotnet_utils::ByteOffset(layout.size().as_usize() * index);
+    let offset = ByteOffset(layout.size().as_usize() * index);
 
     // SAFETY: write_unaligned handles GC-safe writing to the heap with bounds checking and write barriers.
     match unsafe { ctx.write_unaligned(PointerOrigin::Heap(obj), offset, value, &layout) } {
@@ -331,7 +332,7 @@ pub fn stelem_primitive<
         StoreType::Object => Scalar::ObjectRef,
     };
     let layout = LayoutManager::Scalar(layout);
-    let offset = dotnet_utils::ByteOffset(layout.size().as_usize() * index);
+    let offset = ByteOffset(layout.size().as_usize() * index);
 
     // SAFETY: write_unaligned handles GC-safe writing to the heap with bounds checking and write barriers.
     match unsafe { ctx.write_unaligned(PointerOrigin::Heap(obj), offset, value, &layout) } {

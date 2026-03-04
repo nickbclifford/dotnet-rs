@@ -1,5 +1,5 @@
 use crate::{
-    StepResult,
+    StackSlotIndex, StepResult,
     stack::ops::{
         ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps, ResolutionOps, StackOps,
         ThreadOps,
@@ -9,7 +9,7 @@ use crate::{
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
-use dotnet_value::{ManagedPtr, StackValue, object::ObjectRef};
+use dotnet_value::{ManagedPtr, StackValue, object::ObjectRef, pointer::PointerOrigin};
 use dotnetdll::prelude::{BaseType, Parameter, ParameterType};
 use gc_arena::Gc;
 
@@ -361,7 +361,7 @@ fn find_success_flag_index<'gc, T: RawMemoryOps<'gc>>(
     _ctx: &T,
     success_ptr: &ManagedPtr,
 ) -> Option<usize> {
-    if let dotnet_value::pointer::PointerOrigin::Stack(idx) = &success_ptr.origin() {
+    if let PointerOrigin::Stack(idx) = &success_ptr.origin() {
         return Some(idx.0);
     }
     None
@@ -454,7 +454,7 @@ pub fn intrinsic_monitor_reliable_enter<
         }
 
         if let Some(index) = success_flag_index {
-            ctx.set_slot(crate::StackSlotIndex(index), StackValue::Int32(1));
+            ctx.set_slot(StackSlotIndex(index), StackValue::Int32(1));
         } else {
             unsafe {
                 ctx.write_bytes(
@@ -564,7 +564,7 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<
 
         if let Some(index) = success_flag_index {
             ctx.set_slot(
-                crate::StackSlotIndex(index),
+                StackSlotIndex(index),
                 StackValue::Int32(if success { 1 } else { 0 }),
             );
         } else {

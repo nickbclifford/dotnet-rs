@@ -1,5 +1,6 @@
 use crate::{
     StepResult,
+    error::{ExecutionError, VmError},
     layout::type_layout,
     resolution::TypeResolutionExt,
     stack::ops::{
@@ -7,6 +8,8 @@ use crate::{
         ResolutionOps, StackOps,
     },
 };
+use dotnet_types::TypeDescription;
+use dotnet_value::pointer::PointerOrigin;
 
 const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 const ACCESS_VIOLATION_MSG: &str = "Attempted to read or write protected memory.";
@@ -55,12 +58,10 @@ pub fn callvirt<
         }
         StackValue::ManagedPtr(m) => m.inner_type(),
         rest => {
-            return StepResult::Error(crate::error::VmError::Execution(
-                crate::error::ExecutionError::TypeMismatch {
-                    expected: "ObjectRef or ManagedPtr".to_string(),
-                    actual: format!("{:?}", rest),
-                },
-            ));
+            return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                expected: "ObjectRef or ManagedPtr".to_string(),
+                actual: format!("{:?}", rest),
+            }));
         }
     };
 
@@ -87,8 +88,7 @@ pub fn call_constrained<'gc, T: CallOps<'gc> + ResolutionOps<'gc> + LoaderOps>(
             .find_generic_method(source, &ctx.current_context())
     );
 
-    let td: dotnet_types::TypeDescription =
-        vm_try!(ctx.loader().find_concrete_type(constraint_type.clone()));
+    let td: TypeDescription = vm_try!(ctx.loader().find_concrete_type(constraint_type.clone()));
 
     for o in td.definition().overrides.iter() {
         let target = vm_try!(
@@ -107,12 +107,10 @@ pub fn call_constrained<'gc, T: CallOps<'gc> + ResolutionOps<'gc> + LoaderOps>(
         }
     }
 
-    StepResult::Error(crate::error::VmError::Execution(
-        crate::error::ExecutionError::NotImplemented(format!(
-            "could not find method to dispatch to for constrained call({:?}, {:?})",
-            constraint_type, method
-        )),
-    ))
+    StepResult::Error(VmError::Execution(ExecutionError::NotImplemented(format!(
+        "could not find method to dispatch to for constrained call({:?}, {:?})",
+        constraint_type, method
+    ))))
 }
 
 #[dotnet_instruction(CallVirtualConstrained(constraint, source))]
@@ -141,7 +139,7 @@ pub fn callvirt_constrained<
     let mut args = ctx.pop_multiple(num_args);
 
     let constraint_type_source = vm_try!(ctx.make_concrete(constraint));
-    let constraint_type: dotnet_types::TypeDescription = vm_try!(
+    let constraint_type: TypeDescription = vm_try!(
         ctx.loader()
             .find_concrete_type(constraint_type_source.clone())
     );
@@ -213,14 +211,12 @@ pub fn callvirt_constrained<
                 // and targets a reference type with zero offset, the pointed memory holds a
                 // StackValue::ObjectRef, not a serialized ObjectRef. Read it via the slot.
                 match (m.origin(), m.byte_offset()) {
-                    (dotnet_value::pointer::PointerOrigin::Stack(idx), off)
-                        if off.as_usize() == 0 =>
-                    {
+                    (PointerOrigin::Stack(idx), off) if off.as_usize() == 0 => {
                         match ctx.get_slot_ref(*idx).clone() {
                             StackValue::ObjectRef(o) => o,
                             rest => {
-                                return StepResult::Error(crate::error::VmError::Execution(
-                                    crate::error::ExecutionError::TypeMismatch {
+                                return StepResult::Error(VmError::Execution(
+                                    ExecutionError::TypeMismatch {
                                         expected: "ObjectRef at argument/local slot".to_string(),
                                         actual: format!("{:?}", rest),
                                     },
@@ -240,12 +236,10 @@ pub fn callvirt_constrained<
                 }
             }
             rest => {
-                return StepResult::Error(crate::error::VmError::Execution(
-                    crate::error::ExecutionError::TypeMismatch {
-                        expected: "ObjectRef or ManagedPtr".to_string(),
-                        actual: format!("{:?}", rest),
-                    },
-                ));
+                return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
+                    expected: "ObjectRef or ManagedPtr".to_string(),
+                    actual: format!("{:?}", rest),
+                }));
             }
         };
 
