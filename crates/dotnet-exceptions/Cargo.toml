@@ -1,0 +1,21 @@
+[package]
+name = "dotnet-exceptions"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dotnet-assemblies = { workspace = true }
+dotnet-tracer = { workspace = true }
+dotnet-types = { workspace = true }
+dotnet-utils = { workspace = true, default-features = false }
+dotnet-value = { workspace = true, default-features = false }
+dotnet-vm-ops = { path = "../dotnet-vm-ops", default-features = false }
+dotnetdll = { workspace = true }
+gc-arena = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+default = ["multithreading"]
+multithreading = ["dotnet-utils/multithreading", "dotnet-value/multithreading", "dotnet-vm-ops/multithreading"]
+memory-validation = ["dotnet-value/memory-validation", "dotnet-vm-ops/memory-validation"]
+fuzzing = ["dotnet-value/fuzzing", "dotnet-types/fuzzing", "dotnet-utils/fuzzing", "dotnet-vm-ops/fuzzing"]

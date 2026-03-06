@@ -1,6 +1,5 @@
 use crate::{
     StepResult,
-    error::{ExecutionError, VmError},
     layout::type_layout,
     resolution::TypeResolutionExt,
     stack::ops::{
@@ -58,10 +57,7 @@ pub fn callvirt<
         }
         StackValue::ManagedPtr(m) => m.inner_type(),
         rest => {
-            return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
-                expected: "ObjectRef or ManagedPtr".to_string(),
-                actual: format!("{:?}", rest),
-            }));
+            return StepResult::type_error("ObjectRef or ManagedPtr", format!("{:?}", rest));
         }
     };
 
@@ -107,10 +103,10 @@ pub fn call_constrained<'gc, T: CallOps<'gc> + ResolutionOps<'gc> + LoaderOps>(
         }
     }
 
-    StepResult::Error(VmError::Execution(ExecutionError::NotImplemented(format!(
+    StepResult::not_implemented(format!(
         "could not find method to dispatch to for constrained call({:?}, {:?})",
         constraint_type, method
-    ))))
+    ))
 }
 
 #[dotnet_instruction(CallVirtualConstrained(constraint, source))]
@@ -189,7 +185,7 @@ pub fn callvirt_constrained<
 
             let boxed = vm_try!(ctx.box_value(&constraint_type_source, value));
             args[0] = StackValue::ObjectRef(boxed);
-            let this_type = vm_try!(ctx.get_heap_description(boxed.0.unwrap()));
+            let this_type = vm_try!(ctx.get_heap_description(boxed));
             ctx.resolver().resolve_virtual_method(
                 base_method,
                 this_type,
@@ -215,12 +211,10 @@ pub fn callvirt_constrained<
                         match ctx.get_slot_ref(*idx).clone() {
                             StackValue::ObjectRef(o) => o,
                             rest => {
-                                return StepResult::Error(VmError::Execution(
-                                    ExecutionError::TypeMismatch {
-                                        expected: "ObjectRef at argument/local slot".to_string(),
-                                        actual: format!("{:?}", rest),
-                                    },
-                                ));
+                                return StepResult::type_error(
+                                    "ObjectRef at argument/local slot",
+                                    format!("{:?}", rest),
+                                );
                             }
                         }
                     }
@@ -236,10 +230,7 @@ pub fn callvirt_constrained<
                 }
             }
             rest => {
-                return StepResult::Error(VmError::Execution(ExecutionError::TypeMismatch {
-                    expected: "ObjectRef or ManagedPtr".to_string(),
-                    actual: format!("{:?}", rest),
-                }));
+                return StepResult::type_error("ObjectRef or ManagedPtr", format!("{:?}", rest));
             }
         };
 
@@ -261,7 +252,7 @@ pub fn callvirt_constrained<
             Ok(impl_method)
         } else {
             // Fall back to normal virtual dispatch
-            let this_type = vm_try!(ctx.get_heap_description(obj_ref.0.unwrap()));
+            let this_type = vm_try!(ctx.get_heap_description(obj_ref));
             ctx.resolver().resolve_virtual_method(
                 base_method,
                 this_type,

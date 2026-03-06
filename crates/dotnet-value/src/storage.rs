@@ -1,4 +1,7 @@
-use crate::layout::{FieldLayoutManager, FieldType, HasLayout};
+use crate::{
+    ValidationTag,
+    layout::{FieldLayoutManager, FieldType, HasLayout},
+};
 use dotnet_types::TypeDescription;
 use dotnet_utils::{
     atomic::{self, Atomic},
@@ -60,8 +63,7 @@ impl BoundedPtr {
 }
 
 pub struct FieldStorage {
-    #[cfg(any(feature = "memory-validation", debug_assertions))]
-    magic: u64,
+    magic: ValidationTag,
     layout: Arc<FieldLayoutManager>,
     data: RwLock<Vec<u8>>,
 }
@@ -71,8 +73,7 @@ impl Clone for FieldStorage {
         self.validate_magic();
         let data = self.data.read();
         Self {
-            #[cfg(any(feature = "memory-validation", debug_assertions))]
-            magic: FIELD_STORAGE_MAGIC,
+            magic: ValidationTag::new(FIELD_STORAGE_MAGIC),
             layout: self.layout.clone(),
             data: RwLock::new(data.clone()),
         }
@@ -93,20 +94,14 @@ impl PartialEq for FieldStorage {
 impl FieldStorage {
     pub fn new(layout: Arc<FieldLayoutManager>, data: Vec<u8>) -> Self {
         Self {
-            #[cfg(any(feature = "memory-validation", debug_assertions))]
-            magic: FIELD_STORAGE_MAGIC,
+            magic: ValidationTag::new(FIELD_STORAGE_MAGIC),
             layout,
             data: RwLock::new(data),
         }
     }
 
     fn validate_magic(&self) {
-        #[cfg(any(feature = "memory-validation", debug_assertions))]
-        {
-            if self.magic != FIELD_STORAGE_MAGIC {
-                panic!("FieldStorage magic number corrupted: {:#x}", self.magic);
-            }
-        }
+        self.magic.validate(FIELD_STORAGE_MAGIC, "FieldStorage");
     }
 
     /// Get a typed field reference — validates layout at construction time

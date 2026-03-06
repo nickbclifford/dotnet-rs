@@ -3,7 +3,7 @@ use crate::{
     resolution::TypeResolutionExt,
     stack::{
         context::{BasePointer, StackFrame, VesContext},
-        ops::{CallOps, EvalStackOps, LoaderOps, RawMemoryOps, ResolutionOps},
+        ops::{BaseLoaderOps, CallOps, EvalStackOps, LoaderOps, RawMemoryOps, ResolutionOps},
     },
 };
 use dotnet_types::{
@@ -186,7 +186,8 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
         ) {
             crate::intrinsics::dispatch_method_intrinsic(metadata.handler, self, method, &lookup)
         } else if method.method().pinvoke.is_some() {
-            crate::pinvoke::external_call(self, method)
+            let shared = self.shared.clone();
+            crate::pinvoke::external_call(self, method, &shared.pinvoke)
         } else {
             if method.method().body.is_none() {
                 if let Some(result) =
@@ -224,6 +225,14 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
         ctx: Option<&ResolutionContext<'_>>,
     ) -> StepResult {
         let context = ctx.cloned().unwrap_or_else(|| self.current_context());
+
+        // TEMP: Trace what we are trying to resolve
+        tracing::debug!(
+            "unified_dispatch: source={:?}, this_type={:?}",
+            source,
+            this_type
+        );
+
         let (resolved, lookup) = match self.resolver().find_generic_method(source, &context) {
             Ok(v) => v,
             Err(e) => return StepResult::Error(e.into()),

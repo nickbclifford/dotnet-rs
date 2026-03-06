@@ -1,0 +1,16 @@
+[package]
+name = "dotnet-tracer"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["multithreading"]
+multithreading = []
+
+[dependencies]
+dotnet-metrics = { workspace = true }
+dotnet-utils = { workspace = true, default-features = false }
+gc-arena = { workspace = true }
+crossbeam-channel = "0.5"
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }

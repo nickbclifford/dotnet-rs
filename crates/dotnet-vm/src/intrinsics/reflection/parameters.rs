@@ -2,7 +2,7 @@ use crate::{
     StepResult,
     context::ResolutionContext,
     intrinsics::reflection::common::make_runtime_type,
-    stack::ops::{LoaderOps, ReflectionOps, VesOps},
+    stack::ops::{LoaderOps, ReflectionOps, TypedStackOps},
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription, runtime::RuntimeType};
@@ -11,7 +11,10 @@ use dotnetdll::resolved::signature::ParameterType;
 
 #[dotnet_intrinsic("string DotnetRs.ParameterInfo::GetName()")]
 #[dotnet_intrinsic("System.Type DotnetRs.ParameterInfo::GetParameterType()")]
-pub fn runtime_parameter_info_intrinsic_call<'gc, T: VesOps<'gc>>(
+pub fn runtime_parameter_info_intrinsic_call<
+    'gc,
+    T: TypedStackOps<'gc> + ReflectionOps<'gc> + LoaderOps,
+>(
     ctx: &mut T,
     method: MethodDescription,
     _generics: &GenericLookup,

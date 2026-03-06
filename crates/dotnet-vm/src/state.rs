@@ -28,6 +28,7 @@ use gc_arena::{Collect, collect::Trace};
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     collections::{BTreeMap, HashMap, HashSet},
+    sync::OnceLock,
 };
 
 #[cfg(feature = "multithreading")]
@@ -128,6 +129,7 @@ pub struct SharedGlobalState {
     pub shared_runtime_fields_rev: DashMap<usize, (FieldDescription, GenericLookup)>,
     #[cfg(feature = "multithreading")]
     pub next_runtime_field_index: AtomicUsize,
+    pub resolution_shared_cache: OnceLock<Arc<crate::context::ResolutionShared>>,
 }
 
 impl GlobalCaches {
@@ -141,7 +143,7 @@ impl GlobalCaches {
         if let Some(entry) = self.method_info_cache.get(&key) {
             return Ok((**entry).clone());
         }
-        let built = MethodInfo::new(method, generics, shared)?;
+        let built = crate::build_method_info(method, generics, shared)?;
         self.method_info_cache.insert(key, Arc::new(built.clone()));
         Ok(built)
     }
@@ -196,6 +198,7 @@ impl SharedGlobalState {
             shared_runtime_fields_rev: DashMap::new(),
             #[cfg(feature = "multithreading")]
             next_runtime_field_index: AtomicUsize::new(0),
+            resolution_shared_cache: OnceLock::new(),
         };
 
         #[cfg(feature = "multithreading")]
@@ -228,6 +231,18 @@ impl SharedGlobalState {
                 self.loader.method_cache_size(),
             ),
         })
+    }
+
+    pub fn resolution_shared(self: &Arc<Self>) -> Arc<crate::context::ResolutionShared> {
+        self.resolution_shared_cache
+            .get_or_init(|| {
+                Arc::new(crate::context::ResolutionShared::new(
+                    self.loader.clone(),
+                    self.caches.clone(),
+                    Some(self.clone()),
+                ))
+            })
+            .clone()
     }
 }
 

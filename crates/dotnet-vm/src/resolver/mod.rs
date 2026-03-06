@@ -90,10 +90,19 @@ use dotnet_assemblies::AssemblyLoader;
 use std::sync::Arc;
 
 /// Service for resolving types, methods, and fields with caching.
+#[derive(Clone)]
 pub struct ResolverService {
     pub loader: Arc<AssemblyLoader>,
     pub caches: Arc<GlobalCaches>,
     pub shared: Option<Arc<SharedGlobalState>>,
+}
+
+impl std::fmt::Debug for ResolverService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolverService")
+            .field("shared", &self.shared.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 mod factory;

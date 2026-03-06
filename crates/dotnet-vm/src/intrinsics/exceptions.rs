@@ -1,5 +1,7 @@
 use crate::{
-    StepResult, error::ExecutionError, instructions::objects::get_ptr_info, stack::ops::VesOps,
+    StepResult,
+    instructions::objects::get_ptr_info,
+    stack::ops::{ExceptionOps, RawMemoryOps, StackOps, TypedStackOps},
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
@@ -11,7 +13,10 @@ use dotnet_value::{
 #[dotnet_intrinsic(
     "static void System.Exception::GetStackTracesDeepCopy(System.Exception, byte[]&, object[]&)"
 )]
-pub fn intrinsic_get_stack_traces_deep_copy<'gc, T: VesOps<'gc>>(
+pub fn intrinsic_get_stack_traces_deep_copy<
+    'gc,
+    T: StackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -27,19 +32,13 @@ pub fn intrinsic_get_stack_traces_deep_copy<'gc, T: VesOps<'gc>>(
         Ok(v) => v,
         Err(e) => return e,
     };
-    vm_try!(unsafe {
-        ctx.write_unaligned(origin, offset, StackValue::null(), &layout)
-            .map_err(ExecutionError::NotImplemented)
-    });
+    vm_try!(unsafe { ctx.write_unaligned(origin, offset, StackValue::null(), &layout) });
 
     let (origin, offset) = match get_ptr_info(ctx, &dynamic_method_array_ptr) {
         Ok(v) => v,
         Err(e) => return e,
     };
-    vm_try!(unsafe {
-        ctx.write_unaligned(origin, offset, StackValue::null(), &layout)
-            .map_err(ExecutionError::NotImplemented)
-    });
+    vm_try!(unsafe { ctx.write_unaligned(origin, offset, StackValue::null(), &layout) });
 
     StepResult::Continue
 }
@@ -47,7 +46,7 @@ pub fn intrinsic_get_stack_traces_deep_copy<'gc, T: VesOps<'gc>>(
 #[dotnet_intrinsic(
     "static void System.Exception::SaveStackTracesFromDeepCopy(System.Exception, byte[], object[])"
 )]
-pub fn intrinsic_save_stack_traces_from_deep_copy<'gc, T: VesOps<'gc>>(
+pub fn intrinsic_save_stack_traces_from_deep_copy<'gc, T: TypedStackOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,

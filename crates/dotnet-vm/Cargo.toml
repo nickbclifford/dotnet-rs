@@ -6,17 +6,20 @@ edition = "2024"
 [dependencies]
 dashmap = { workspace = true }
 dotnet-assemblies = { workspace = true }
+dotnet-exceptions = { path = "../dotnet-exceptions", default-features = false }
+dotnet-metrics = { workspace = true }
+dotnet-pinvoke = { path = "../dotnet-pinvoke", default-features = false }
+dotnet-vm-ops = { workspace = true, default-features = false }
+dotnet-tracer = { workspace = true }
 dotnet-macros = { path = "../dotnet-macros" }
 dotnet-types = { workspace = true }
 dotnet-utils = { workspace = true, default-features = false }
 dotnet-value = { workspace = true, default-features = false }
 dotnetdll = { workspace = true }
 gc-arena = { workspace = true }
-libffi = "5.0.0"
-libloading = "0.9.0"
-sptr = "0.3"
 parking_lot = { workspace = true }
 phf = "0.13"
+sptr = { workspace = true }
 thiserror = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 tracing = { workspace = true }
@@ -26,9 +29,29 @@ arbitrary = { version = "1.3", features = ["derive"], optional = true }
 
 [features]
 default = ["multithreading"]
-multithreading = ["dotnet-utils/multithreading", "dotnet-value/multithreading"]
-memory-validation = ["dotnet-value/memory-validation"]
-fuzzing = ["dep:arbitrary", "dotnet-value/fuzzing", "dotnet-types/fuzzing", "dotnet-utils/fuzzing"]
+multithreading = [
+    "dotnet-utils/multithreading",
+    "dotnet-value/multithreading",
+    "dotnet-tracer/multithreading",
+    "dotnet-vm-ops/multithreading",
+    "dotnet-exceptions/multithreading",
+    "dotnet-pinvoke/multithreading",
+]
+memory-validation = [
+    "dotnet-value/memory-validation",
+    "dotnet-vm-ops/memory-validation",
+    "dotnet-exceptions/memory-validation",
+    "dotnet-pinvoke/memory-validation",
+]
+fuzzing = [
+    "dep:arbitrary",
+    "dotnet-value/fuzzing",
+    "dotnet-types/fuzzing",
+    "dotnet-utils/fuzzing",
+    "dotnet-vm-ops/fuzzing",
+    "dotnet-exceptions/fuzzing",
+    "dotnet-pinvoke/fuzzing",
+]
 
 [build-dependencies]
 dotnet-macros-core = { workspace = true }

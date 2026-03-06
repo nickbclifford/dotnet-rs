@@ -4,6 +4,9 @@ members = [
     "crates/dotnet-utils",
     "crates/dotnet-value",
     "crates/dotnet-assemblies",
+    "crates/dotnet-metrics",
+    "crates/dotnet-tracer",
+    "crates/dotnet-vm-ops",
     "crates/dotnet-vm",
     "crates/dotnet-cli",
     "crates/dotnet-macros",
@@ -17,6 +20,9 @@ dotnet-utils = { path = "crates/dotnet-utils", default-features = false }
 dotnet-value = { path = "crates/dotnet-value", default-features = false }
 dotnet-assemblies = { path = "crates/dotnet-assemblies" }
 dotnet-macros-core = { path = "crates/dotnet-macros-core" }
+dotnet-metrics = { path = "crates/dotnet-metrics" }
+dotnet-tracer = { path = "crates/dotnet-tracer", default-features = false }
+dotnet-vm-ops = { path = "crates/dotnet-vm-ops", default-features = false }
 dotnet-vm = { path = "crates/dotnet-vm", default-features = false }
 dotnetdll = { git = "https://github.com/nickbclifford/dotnetdll" }
 gc-arena = { git = "https://github.com/kyren/gc-arena.git", rev = "75671ae03f53718357b741ed4027560f14e90836" }
@@ -24,3 +30,4 @@ parking_lot = "0.12"
 dashmap = "6.1"
 tracing = "0.1"
 thiserror = "1.0"
+sptr = "0.3"

@@ -1,5 +1,5 @@
 pub(crate) mod common;
-pub(crate) mod fields;
-pub(crate) mod methods;
-pub(crate) mod parameters;
-pub(crate) mod types;
+pub mod fields;
+pub mod methods;
+pub mod parameters;
+pub mod types;

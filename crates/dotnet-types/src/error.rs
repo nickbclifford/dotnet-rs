@@ -116,6 +116,36 @@ impl Arbitrary<'_> for PointerDeserializationError {
 
 #[derive(Debug, Error, Clone, PartialEq)]
 #[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
+pub enum MemoryAccessError {
+    #[error("Access out of bounds: offset={offset}, size={size}, len={len}")]
+    BoundsCheck {
+        offset: usize,
+        size: usize,
+        len: usize,
+    },
+    #[error("Null pointer access: {0}")]
+    NullPointer(String),
+    #[error("Unaligned access at address {0:x}")]
+    UnalignedAccess(usize),
+    #[error("Type mismatch: {0}")]
+    TypeMismatch(String),
+    #[error("Invalid pointer origin")]
+    InvalidOrigin,
+    #[error("Cross-arena violation")]
+    CrossArenaViolation,
+}
+
+#[derive(Debug, Error, Clone, PartialEq)]
+#[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
+pub enum IntrinsicError {
+    #[error("Intrinsic error: {0}")]
+    Message(String),
+    #[error("Memory error: {0}")]
+    Memory(#[from] MemoryAccessError),
+}
+
+#[derive(Debug, Error, Clone, PartialEq)]
+#[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
 pub enum VmError {
     #[error("Assembly loading failed: {0}")]
     AssemblyLoad(#[from] AssemblyLoadError),
@@ -129,9 +159,38 @@ pub enum VmError {
     #[error("Memory access violation: {0}")]
     Memory(#[from] MemoryError),
 
+    #[error("Memory access error: {0}")]
+    MemoryAccess(#[from] MemoryAccessError),
+
+    #[error("Intrinsic error: {0}")]
+    Intrinsic(#[from] IntrinsicError),
+
     #[error("PInvoke error: {0}")]
     PInvoke(#[from] PInvokeError),
 
     #[error("Pointer deserialization failed: {0}")]
     PointerDeserialization(#[from] PointerDeserializationError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_conversions() {
+        let err = MemoryAccessError::BoundsCheck {
+            offset: 10,
+            size: 4,
+            len: 8,
+        };
+        let vm_err: VmError = err.into();
+        match vm_err {
+            VmError::MemoryAccess(MemoryAccessError::BoundsCheck {
+                offset: 10,
+                size: 4,
+                len: 8,
+            }) => {}
+            _ => panic!("Expected MemoryAccessError::BoundsCheck"),
+        }
+    }
 }

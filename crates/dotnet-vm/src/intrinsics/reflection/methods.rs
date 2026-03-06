@@ -1,7 +1,10 @@
 use crate::{
     StepResult,
     resolution::{TypeResolutionExt, ValueResolution},
-    stack::ops::VesOps,
+    stack::ops::{
+        CallOps, EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, ReflectionOps, ResolutionOps,
+        TypedStackOps, VesInternals,
+    },
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription, runtime::RuntimeType};
@@ -74,7 +77,18 @@ use dotnetdll::prelude::ParameterType;
 )]
 #[dotnet_intrinsic("System.Reflection.ParameterInfo[] DotnetRs.MethodInfo::GetParameters()")]
 #[dotnet_intrinsic("System.Reflection.ParameterInfo[] DotnetRs.ConstructorInfo::GetParameters()")]
-pub fn runtime_method_info_intrinsic_call<'gc, T: VesOps<'gc>>(
+pub fn runtime_method_info_intrinsic_call<
+    'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps
+        + MemoryOps<'gc>
+        + ReflectionOps<'gc>
+        + ResolutionOps<'gc>
+        + VesInternals<'gc>
+        + CallOps<'gc>,
+>(
     ctx: &mut T,
     method: MethodDescription,
     _generics: &GenericLookup,
@@ -271,7 +285,10 @@ pub fn runtime_method_info_intrinsic_call<'gc, T: VesOps<'gc>>(
 #[dotnet_intrinsic(
     "static System.IntPtr System.RuntimeMethodHandle::GetFunctionPointer(System.RuntimeMethodHandle)"
 )]
-pub fn intrinsic_method_handle_get_function_pointer<'gc, T: VesOps<'gc>>(
+pub fn intrinsic_method_handle_get_function_pointer<
+    'gc,
+    T: TypedStackOps<'gc> + ReflectionOps<'gc>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -289,7 +306,7 @@ pub fn intrinsic_method_handle_get_function_pointer<'gc, T: VesOps<'gc>>(
     StepResult::Continue
 }
 
-fn resolve_return_type<'gc, T: VesOps<'gc>>(
+fn resolve_return_type<'gc, T: ResolutionOps<'gc> + ReflectionOps<'gc>>(
     ctx: &mut T,
     method: &MethodDescription,
     lookup: &GenericLookup,
@@ -304,7 +321,10 @@ fn resolve_return_type<'gc, T: VesOps<'gc>>(
     }
 }
 
-fn unmarshal_invoke_params<'gc, T: VesOps<'gc>>(
+fn unmarshal_invoke_params<
+    'gc,
+    T: TypedStackOps<'gc> + LoaderOps + MemoryOps<'gc> + ResolutionOps<'gc>,
+>(
     ctx: &mut T,
     gc: &GCHandle<'gc>,
     method: &MethodDescription,

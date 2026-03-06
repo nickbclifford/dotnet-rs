@@ -251,11 +251,9 @@ impl LayoutFactory {
             let base_ctx = ResolutionContext {
                 generics: &new_lookup,
                 resolution: base_res,
-                loader: context.loader.clone(),
+                state: context.state.clone(),
                 type_owner: Some(*base_td),
                 method_owner: None,
-                caches: context.caches.clone(),
-                shared: context.shared.clone(),
             };
 
             // Recursively compute base layout
@@ -328,7 +326,7 @@ impl LayoutFactory {
     ) -> Result<Arc<FieldLayoutManager>, TypeResolutionError> {
         let key = (td, context.generics.clone());
 
-        if let Some(cached) = context.caches.instance_field_layout_cache.get(&key) {
+        if let Some(cached) = context.caches().instance_field_layout_cache.get(&key) {
             if let Some(m) = metrics {
                 m.record_instance_field_layout_cache_hit();
             }
@@ -340,7 +338,7 @@ impl LayoutFactory {
         }
         let result = Arc::new(Self::instance_fields_with_metrics(td, context, metrics)?);
         context
-            .caches
+            .caches()
             .instance_field_layout_cache
             .insert(key, Arc::clone(&result));
         Ok(result)
@@ -417,7 +415,7 @@ pub fn type_layout_with_metrics(
 ) -> Result<Arc<LayoutManager>, TypeResolutionError> {
     let t = context.normalize_type(t)?;
 
-    if let Some(cached) = context.caches.layout_cache.get(&t) {
+    if let Some(cached) = context.caches().layout_cache.get(&t) {
         if let Some(m) = metrics {
             m.record_layout_cache_hit();
         }
@@ -428,7 +426,7 @@ pub fn type_layout_with_metrics(
         m.record_layout_cache_miss();
     }
     let result = Arc::new(type_layout_internal(t.clone(), context, metrics)?);
-    context.caches.layout_cache.insert(t, Arc::clone(&result));
+    context.caches().layout_cache.insert(t, Arc::clone(&result));
     Ok(result)
 }
 

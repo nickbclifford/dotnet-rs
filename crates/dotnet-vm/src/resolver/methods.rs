@@ -52,10 +52,19 @@ impl ResolverService {
         source: &MethodSource,
         ctx: &ResolutionContext<'_>,
     ) -> Result<(MethodDescription, GenericLookup), TypeResolutionError> {
+        tracing::debug!(
+            "find_generic_method: source={:?}, ctx.generics={:?}",
+            source,
+            ctx.generics
+        );
         let mut new_lookup = ctx.generics.clone();
 
         let method = match source {
-            MethodSource::User(u) => *u,
+            MethodSource::User(u) => {
+                let m = *u;
+                tracing::debug!("find_generic_method: User method={:?}", m);
+                m
+            }
             MethodSource::Generic(g) => {
                 let params: Vec<_> = g
                     .parameters
@@ -71,7 +80,9 @@ impl ResolverService {
         if let UserMethod::Reference(r) = method
             && let MethodReferenceParent::Type(t) = &ctx.resolution[r].parent
         {
+            tracing::debug!("find_generic_method: parent_type={:?}", t);
             let parent = ctx.make_concrete(t)?;
+            tracing::debug!("find_generic_method: parent_type concrete={:?}", parent);
             if let BaseType::Type {
                 source: TypeSource::Generic { parameters, .. },
                 ..

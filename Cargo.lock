@@ -258,6 +258,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "dotnet-exceptions"
+version = "0.1.0"
+dependencies = [
+ "dotnet-assemblies",
+ "dotnet-tracer",
+ "dotnet-types",
+ "dotnet-utils",
+ "dotnet-value",
+ "dotnet-vm-ops",
+ "dotnetdll",
+ "gc-arena",
+ "tracing",
+]
+
+[[package]]
 name = "dotnet-macros"
 version = "0.1.0"
 dependencies = [
@@ -274,6 +289,44 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.101",
+]
+
+[[package]]
+name = "dotnet-metrics"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "dotnet-pinvoke"
+version = "0.1.0"
+dependencies = [
+ "dashmap",
+ "dotnet-assemblies",
+ "dotnet-tracer",
+ "dotnet-types",
+ "dotnet-utils",
+ "dotnet-value",
+ "dotnet-vm-ops",
+ "dotnetdll",
+ "gc-arena",
+ "libffi",
+ "libloading",
+ "sptr",
+ "tracing",
+]
+
+[[package]]
+name = "dotnet-tracer"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "dotnet-metrics",
+ "dotnet-utils",
+ "gc-arena",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -318,15 +371,18 @@ dependencies = [
  "crossbeam-channel",
  "dashmap",
  "dotnet-assemblies",
+ "dotnet-exceptions",
  "dotnet-macros",
  "dotnet-macros-core",
+ "dotnet-metrics",
+ "dotnet-pinvoke",
+ "dotnet-tracer",
  "dotnet-types",
  "dotnet-utils",
  "dotnet-value",
+ "dotnet-vm-ops",
  "dotnetdll",
  "gc-arena",
- "libffi",
- "libloading",
  "parking_lot",
  "phf",
  "phf_codegen",
@@ -339,6 +395,20 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "walkdir",
+]
+
+[[package]]
+name = "dotnet-vm-ops"
+version = "0.1.0"
+dependencies = [
+ "dotnet-assemblies",
+ "dotnet-metrics",
+ "dotnet-tracer",
+ "dotnet-types",
+ "dotnet-utils",
+ "dotnet-value",
+ "dotnetdll",
+ "gc-arena",
 ]
 
 [[package]]

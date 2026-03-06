@@ -46,7 +46,7 @@ pub fn ldvirtftn<
             .find_generic_method(param0, &ctx.current_context())
     );
 
-    let this_type = vm_try!(ctx.get_heap_description(obj.0.unwrap()));
+    let this_type = vm_try!(ctx.get_heap_description(obj));
 
     // Virtual dispatch
     let resolved_method = vm_try!(ctx.resolver().resolve_virtual_method(

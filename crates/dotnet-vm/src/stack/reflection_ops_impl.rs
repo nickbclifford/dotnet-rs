@@ -4,7 +4,7 @@ use crate::{
     stack::{
         context::VesContext,
         ops::{
-            CallOps, ExceptionOps, LoaderOps, RawMemoryOps, ReflectionOps, ResolutionOps, StackOps,
+            IntrinsicDispatchOps, LoaderOps, ReflectionLookupOps, ReflectionOps, ResolutionOps,
             StaticsOps, ThreadOps,
         },
     },
@@ -13,22 +13,16 @@ use crate::{
 };
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{
-    TypeDescription,
     error::TypeResolutionError,
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
     runtime::RuntimeType,
 };
 use dotnet_utils::ArenaId;
-use dotnet_value::object::{ObjectHandle, ObjectRef};
+use dotnet_value::object::ObjectRef;
 use dotnetdll::prelude::FieldSource;
 
 impl<'a, 'gc> LoaderOps for VesContext<'a, 'gc> {
-    #[inline]
-    fn loader(&self) -> &AssemblyLoader {
-        &self.shared.loader
-    }
-
     #[inline]
     fn loader_arc(&self) -> Arc<AssemblyLoader> {
         self.shared.loader.clone()
@@ -50,66 +44,6 @@ impl<'a, 'gc> StaticsOps<'gc> for VesContext<'a, 'gc> {
     fn statics(&self) -> &StaticStorageManager {
         &self.shared.statics
     }
-
-    #[inline]
-    fn initialize_static_storage(
-        &mut self,
-        description: TypeDescription,
-        generics: GenericLookup,
-    ) -> StepResult {
-        let _gc = self.gc;
-        if self.check_gc_safe_point() {
-            return StepResult::Yield;
-        }
-
-        let ctx = ResolutionContext {
-            resolution: description.resolution,
-            generics: &generics,
-            loader: self.shared.loader.clone(),
-            type_owner: Some(description),
-            method_owner: None,
-            caches: self.shared.caches.clone(),
-            shared: Some(self.shared.clone()),
-        };
-
-        let tid = self.thread_id.get();
-        let init_result = vm_try!(self.shared.statics.init(
-            description,
-            &ctx,
-            tid,
-            Some(&self.shared.metrics)
-        ));
-
-        use crate::statics::StaticInitResult::*;
-        match init_result {
-            Execute(m) => {
-                crate::vm_trace!(
-                    self,
-                    "-- calling static constructor (will return to ip {}) --",
-                    self.current_frame().state.ip
-                );
-                vm_try!(self.call_frame(
-                    vm_try!(self.shared.caches.get_method_info(m, &generics, self.shared.clone())),
-                    generics.clone(),
-                ));
-                StepResult::FramePushed
-            }
-            Initialized | Recursive => StepResult::Continue,
-            Waiting => {
-                if self.check_gc_safe_point() {
-                    return StepResult::Yield;
-                }
-                StepResult::Yield
-            }
-            Failed => self.throw_by_name_with_message(
-                "System.TypeInitializationException",
-                &format!(
-                    "The type initializer for '{}' threw an exception.",
-                    description.type_name()
-                ),
-            ),
-        }
-    }
 }
 
 impl<'a, 'gc> ThreadOps for VesContext<'a, 'gc> {
@@ -118,12 +52,38 @@ impl<'a, 'gc> ThreadOps for VesContext<'a, 'gc> {
     }
 }
 
-impl<'a, 'gc> ReflectionOps<'gc> for VesContext<'a, 'gc> {
+impl<'a, 'gc> IntrinsicDispatchOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
-    fn pre_initialize_reflection(&mut self) {
-        crate::intrinsics::reflection::common::pre_initialize_reflection(self)
+    fn is_intrinsic_field_cached(&self, field: FieldDescription) -> bool {
+        self.resolver().is_intrinsic_field_cached(field)
     }
 
+    #[inline]
+    fn is_intrinsic_cached(&self, method: MethodDescription) -> bool {
+        self.resolver().is_intrinsic_cached(method)
+    }
+
+    #[inline]
+    fn execute_intrinsic_field(
+        &mut self,
+        field: FieldDescription,
+        type_generics: Arc<[ConcreteType]>,
+        is_address: bool,
+    ) -> StepResult {
+        crate::intrinsics::intrinsic_field(self, field, type_generics, is_address)
+    }
+
+    #[inline]
+    fn execute_intrinsic_call(
+        &mut self,
+        method: MethodDescription,
+        lookup: &GenericLookup,
+    ) -> StepResult {
+        crate::intrinsics::intrinsic_call(self, method, lookup)
+    }
+}
+
+impl<'a, 'gc> ReflectionLookupOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn get_runtime_method_index(
         &mut self,
@@ -156,18 +116,17 @@ impl<'a, 'gc> ReflectionOps<'gc> for VesContext<'a, 'gc> {
     ) -> ObjectRef<'gc> {
         crate::intrinsics::reflection::common::get_runtime_field_obj(self, field, lookup)
     }
+}
+
+impl<'a, 'gc> ReflectionOps<'gc> for VesContext<'a, 'gc> {
+    #[inline]
+    fn pre_initialize_reflection(&mut self) {
+        crate::intrinsics::reflection::common::pre_initialize_reflection(self)
+    }
 
     #[inline]
     fn make_runtime_type(&self, ctx: &ResolutionContext<'_>, source: &MethodType) -> RuntimeType {
         crate::intrinsics::reflection::common::make_runtime_type(ctx, source)
-    }
-
-    #[inline]
-    fn get_heap_description(
-        &self,
-        object: ObjectHandle<'gc>,
-    ) -> Result<TypeDescription, TypeResolutionError> {
-        self.resolver().get_heap_description(object)
     }
 
     #[inline]
@@ -178,16 +137,6 @@ impl<'a, 'gc> ReflectionOps<'gc> for VesContext<'a, 'gc> {
         let context = self.current_context();
         self.resolver()
             .locate_field(context.resolution, handle, context.generics)
-    }
-
-    #[inline]
-    fn is_intrinsic_field_cached(&self, field: FieldDescription) -> bool {
-        self.resolver().is_intrinsic_field_cached(field)
-    }
-
-    #[inline]
-    fn is_intrinsic_cached(&self, method: MethodDescription) -> bool {
-        self.resolver().is_intrinsic_cached(method)
     }
 
     #[inline]
@@ -222,24 +171,5 @@ impl<'a, 'gc> ReflectionOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
     fn reflection(&self) -> ReflectionRegistry<'_, 'gc> {
         ReflectionRegistry::new(self.local)
-    }
-
-    #[inline]
-    fn execute_intrinsic_field(
-        &mut self,
-        field: FieldDescription,
-        type_generics: Arc<[ConcreteType]>,
-        is_address: bool,
-    ) -> StepResult {
-        crate::intrinsics::intrinsic_field(self, field, type_generics, is_address)
-    }
-
-    #[inline]
-    fn execute_intrinsic_call(
-        &mut self,
-        method: MethodDescription,
-        lookup: &GenericLookup,
-    ) -> StepResult {
-        crate::intrinsics::intrinsic_call(self, method, lookup)
     }
 }

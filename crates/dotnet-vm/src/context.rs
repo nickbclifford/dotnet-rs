@@ -12,18 +12,58 @@ use dotnet_types::{
     members::{FieldDescription, MethodDescription},
     resolution::ResolutionS,
 };
-use dotnet_value::object::ObjectHandle;
+use dotnet_value::{StackValue, object::ObjectHandle};
+use dotnet_vm_ops::ops::ResolutionOps;
 use dotnetdll::prelude::{FieldSource, UserMethod, UserType};
+use std::sync::OnceLock;
+
+pub struct ResolutionShared {
+    pub loader: Arc<AssemblyLoader>,
+    pub caches: Arc<GlobalCaches>,
+    pub shared: Option<Arc<SharedGlobalState>>,
+    pub(crate) resolver_cache: OnceLock<ResolverService>,
+}
+
+impl std::fmt::Debug for ResolutionShared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolutionShared")
+            .field("shared", &self.shared.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl ResolutionShared {
+    pub fn new(
+        loader: Arc<AssemblyLoader>,
+        caches: Arc<GlobalCaches>,
+        shared: Option<Arc<SharedGlobalState>>,
+    ) -> Self {
+        Self {
+            loader,
+            caches,
+            shared,
+            resolver_cache: OnceLock::new(),
+        }
+    }
+
+    pub fn resolver(&self) -> &ResolverService {
+        self.resolver_cache.get_or_init(|| {
+            if let Some(shared) = &self.shared {
+                ResolverService::new(shared.clone())
+            } else {
+                ResolverService::from_parts(self.loader.clone(), self.caches.clone())
+            }
+        })
+    }
+}
 
 #[derive(Clone)]
 pub struct ResolutionContext<'a> {
     pub generics: &'a GenericLookup,
-    pub loader: Arc<AssemblyLoader>,
+    pub state: Arc<ResolutionShared>,
     pub resolution: ResolutionS,
     pub type_owner: Option<TypeDescription>,
     pub method_owner: Option<MethodDescription>,
-    pub caches: Arc<GlobalCaches>,
-    pub shared: Option<Arc<SharedGlobalState>>,
 }
 
 impl<'a> ResolutionContext<'a> {
@@ -36,12 +76,10 @@ impl<'a> ResolutionContext<'a> {
     ) -> Self {
         Self {
             generics,
-            loader,
+            state: Arc::new(ResolutionShared::new(loader, caches, shared)),
             resolution,
             type_owner: None,
             method_owner: None,
-            caches,
-            shared,
         }
     }
 
@@ -54,32 +92,36 @@ impl<'a> ResolutionContext<'a> {
     ) -> Self {
         Self {
             generics,
-            loader,
+            state: Arc::new(ResolutionShared::new(loader, caches, shared)),
             resolution: method.resolution(),
             type_owner: Some(method.parent),
             method_owner: Some(method),
-            caches,
-            shared,
         }
     }
 
-    pub fn resolver(&self) -> ResolverService {
-        if let Some(shared) = &self.shared {
-            ResolverService::new(shared.clone())
-        } else {
-            ResolverService::from_parts(self.loader.clone(), self.caches.clone())
-        }
+    pub fn loader(&self) -> &Arc<AssemblyLoader> {
+        &self.state.loader
+    }
+
+    pub fn caches(&self) -> &Arc<GlobalCaches> {
+        &self.state.caches
+    }
+
+    pub fn shared_state(&self) -> Option<&Arc<SharedGlobalState>> {
+        self.state.shared.as_ref()
+    }
+
+    pub fn resolver(&self) -> &ResolverService {
+        self.state.resolver()
     }
 
     pub fn with_generics(&self, generics: &'a GenericLookup) -> ResolutionContext<'a> {
         ResolutionContext {
             generics,
-            loader: self.loader.clone(),
+            state: self.state.clone(),
             resolution: self.resolution,
             type_owner: self.type_owner,
             method_owner: self.method_owner,
-            caches: self.caches.clone(),
-            shared: self.shared.clone(),
         }
     }
 
@@ -95,11 +137,9 @@ impl<'a> ResolutionContext<'a> {
         ResolutionContext {
             resolution: td.resolution,
             generics,
-            loader: self.loader.clone(),
+            state: self.state.clone(),
             type_owner: Some(td),
             method_owner: None,
-            caches: self.caches.clone(),
-            shared: self.shared.clone(),
         }
     }
 
@@ -129,7 +169,7 @@ impl<'a> ResolutionContext<'a> {
         &self,
         child_type: TypeDescription,
     ) -> impl Iterator<Item = Ancestor<'static>> + '_ {
-        self.loader.ancestors(child_type)
+        self.state.loader.ancestors(child_type)
     }
 
     pub fn is_a(
@@ -173,5 +213,36 @@ impl<'a> ResolutionContext<'a> {
 
     pub fn normalize_type(&self, t: ConcreteType) -> Result<ConcreteType, TypeResolutionError> {
         self.resolver().normalize_type(t)
+    }
+}
+
+impl<'a> ResolutionOps<'_> for ResolutionContext<'a> {
+    fn stack_value_type(
+        &self,
+        val: &StackValue<'_>,
+    ) -> Result<TypeDescription, TypeResolutionError> {
+        self.resolver().stack_value_type(val)
+    }
+
+    fn make_concrete(
+        &self,
+        t: &dotnetdll::prelude::MethodType,
+    ) -> Result<ConcreteType, TypeResolutionError> {
+        self.make_concrete(t)
+    }
+
+    fn is_a(
+        &self,
+        value: ConcreteType,
+        ancestor: ConcreteType,
+    ) -> Result<bool, TypeResolutionError> {
+        self.is_a(value, ancestor)
+    }
+
+    fn instance_field_layout(
+        &self,
+        td: TypeDescription,
+    ) -> Result<dotnet_value::layout::FieldLayoutManager, TypeResolutionError> {
+        self.resolver().instance_fields(td, self)
     }
 }

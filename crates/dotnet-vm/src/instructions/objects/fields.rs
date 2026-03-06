@@ -1,6 +1,5 @@
 use crate::{
     StepResult,
-    error::ExecutionError,
     instructions::objects::{get_ptr_context, get_ptr_info},
     layout::LayoutFactory,
     resolution::ValueResolution,
@@ -363,9 +362,7 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
         use dotnet_value::pointer::ManagedPtr as MP;
 
         let mut ptr_bytes = MP::serialization_buffer();
-        if let Err(e) = unsafe { ctx.read_bytes(origin.clone(), field_offset, &mut ptr_bytes) } {
-            return StepResult::Error(ExecutionError::InternalError(e).into());
-        }
+        vm_try!(unsafe { ctx.read_bytes(origin.clone(), field_offset, &mut ptr_bytes) });
 
         // Deserialize to get the actual origin
         let info = match unsafe {
@@ -376,13 +373,10 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
         } {
             Ok(i) => i,
             Err(e) => {
-                return StepResult::Error(
-                    ExecutionError::InternalError(format!(
-                        "ManagedPtr deserialization failed: {:?}",
-                        e
-                    ))
-                    .into(),
-                );
+                return StepResult::internal_error(format!(
+                    "ManagedPtr deserialization failed: {:?}",
+                    e
+                ));
             }
         };
         let managed_ptr = MP::from_info_full(info, target_type, false);

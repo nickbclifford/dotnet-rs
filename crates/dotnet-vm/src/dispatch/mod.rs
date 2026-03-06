@@ -247,7 +247,8 @@ impl<'gc> ExecutionEngine<'gc> {
         if ctx.is_intrinsic_cached(method) {
             crate::intrinsics::intrinsic_call(&mut ctx, method, &lookup)
         } else if method.method().pinvoke.is_some() {
-            crate::pinvoke::external_call(&mut ctx, method)
+            let shared = ctx.shared().clone();
+            crate::pinvoke::external_call(&mut ctx, method, &shared.pinvoke)
         } else {
             if method.method().internal_call {
                 panic!("intrinsic not found: {:?}", method);
@@ -268,7 +269,7 @@ impl<'gc> ExecutionEngine<'gc> {
             }
 
             vm_try!(ctx.call_frame(
-                vm_try!(ctx.shared.caches.get_method_info(method, &lookup, ctx.shared.clone())),
+                vm_try!(ctx.shared().caches.get_method_info(method, &lookup, ctx.shared().clone())),
                 lookup,
             ));
             StepResult::FramePushed

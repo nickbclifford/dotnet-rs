@@ -1,3 +1,4 @@
 pub use dotnet_types::error::{
-    AssemblyLoadError, ExecutionError, MemoryError, TypeResolutionError, VmError,
+    AssemblyLoadError, ExecutionError, IntrinsicError, MemoryAccessError, MemoryError,
+    TypeResolutionError, VmError,
 };

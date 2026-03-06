@@ -21,15 +21,11 @@
 //! This allows them to work with both `VesContext` and potentially other implementations
 //! for testing or specialized execution.
 use crate::{
-    ArgumentIndex, LocalIndex, MethodInfo, MethodState, ResolutionContext, StackSlotIndex,
-    StepResult,
-    error::VmError,
-    exceptions::ExceptionState,
+    MethodInfo, ResolutionContext, StackSlotIndex, StepResult,
     resolver::ResolverService,
-    stack::{StackFrame, evaluation_stack::EvaluationStack, frames::FrameStack},
+    stack::StackFrame,
     state::{ReflectionRegistry, SharedGlobalState, StaticStorageManager},
     sync::Arc,
-    tracer::Tracer,
 };
 use dotnet_types::{
     TypeDescription,
@@ -38,125 +34,23 @@ use dotnet_types::{
     members::{FieldDescription, MethodDescription},
     runtime::RuntimeType,
 };
-use dotnet_utils::{ArenaId, BorrowScopeOps, ByteOffset};
 use dotnet_value::{
-    CLRString, StackValue,
-    layout::LayoutManager,
-    object::{Object as ObjectInstance, ObjectHandle, ObjectRef},
-    pointer::{ManagedPtr, PointerOrigin},
+    StackValue,
+    object::{Object as ObjectInstance, ObjectRef},
 };
 use dotnetdll::prelude::{FieldSource, MethodSource, MethodType};
 
 pub use crate::memory::ops::MemoryOps;
+pub use dotnet_vm_ops::ops::{
+    AllStackOps, ArgumentOps, CallOps as BaseCallOps, EvalStackOps,
+    ExceptionContext as BaseExceptionContext, ExceptionOps, LoaderOps as BaseLoaderOps, LocalOps,
+    MemoryOps as BaseMemoryOps, PInvokeContext as BasePInvokeContext, RawMemoryOps,
+    ReflectionOps as BaseReflectionOps, ResolutionOps as BaseResolutionOps,
+    StackOps as BaseStackOps, StaticsOps as BaseStaticsOps, ThreadOps, TypedStackOps, VariableOps,
+    VesBaseOps as BaseVesBaseOps, VesInternals as BaseVesInternals,
+};
 
-pub trait EvalStackOps<'gc> {
-    fn push(&mut self, value: StackValue<'gc>);
-    fn pop(&mut self) -> StackValue<'gc>;
-    fn pop_safe(&mut self) -> Result<StackValue<'gc>, VmError>;
-    fn pop_multiple(&mut self, count: usize) -> Vec<StackValue<'gc>>;
-    fn peek_multiple(&self, count: usize) -> Vec<StackValue<'gc>>;
-    fn dup(&mut self);
-    fn peek(&self) -> Option<StackValue<'gc>>;
-    fn peek_stack(&self) -> StackValue<'gc>;
-    fn peek_stack_at(&self, offset: usize) -> StackValue<'gc>;
-    fn top_of_stack(&self) -> StackSlotIndex;
-}
-
-pub trait TypedStackOps<'gc>: EvalStackOps<'gc> {
-    fn push_i32(&mut self, value: i32) {
-        self.push(StackValue::Int32(value));
-    }
-    fn push_i64(&mut self, value: i64) {
-        self.push(StackValue::Int64(value));
-    }
-    fn push_f64(&mut self, value: f64) {
-        self.push(StackValue::NativeFloat(value));
-    }
-    fn push_obj(&mut self, value: ObjectRef<'gc>) {
-        self.push(StackValue::ObjectRef(value));
-    }
-    fn push_ptr(
-        &mut self,
-        ptr: *mut u8,
-        t: TypeDescription,
-        is_pinned: bool,
-        owner: Option<ObjectRef<'gc>>,
-        offset: Option<ByteOffset>,
-    ) {
-        self.push(StackValue::managed_ptr_with_owner(
-            ptr, t, owner, is_pinned, offset,
-        ));
-    }
-    fn push_isize(&mut self, value: isize) {
-        self.push(StackValue::NativeInt(value));
-    }
-    fn push_value_type(&mut self, value: ObjectInstance<'gc>) {
-        self.push(StackValue::ValueType(value));
-    }
-    fn push_managed_ptr(&mut self, value: ManagedPtr<'gc>) {
-        self.push(StackValue::ManagedPtr(value));
-    }
-    fn push_string(&mut self, value: CLRString);
-
-    #[must_use]
-    fn pop_i32(&mut self) -> i32 {
-        self.pop().as_i32()
-    }
-    #[must_use]
-    fn pop_i64(&mut self) -> i64 {
-        self.pop().as_i64()
-    }
-    #[must_use]
-    fn pop_f64(&mut self) -> f64 {
-        self.pop().as_f64()
-    }
-    #[must_use]
-    fn pop_isize(&mut self) -> isize {
-        self.pop().as_isize()
-    }
-    #[must_use]
-    fn pop_obj(&mut self) -> ObjectRef<'gc> {
-        self.pop().as_object_ref()
-    }
-    #[must_use]
-    fn pop_ptr(&mut self) -> *mut u8 {
-        self.pop().as_ptr()
-    }
-    #[must_use]
-    fn pop_value_type(&mut self) -> ObjectInstance<'gc> {
-        self.pop().as_value_type()
-    }
-    #[must_use]
-    fn pop_managed_ptr(&mut self) -> ManagedPtr<'gc> {
-        self.pop().as_managed_ptr()
-    }
-}
-
-pub trait LocalOps<'gc> {
-    fn get_local(&self, index: LocalIndex) -> StackValue<'gc>;
-    fn set_local(&mut self, index: LocalIndex, value: StackValue<'gc>);
-    fn get_local_address(&self, index: LocalIndex) -> std::ptr::NonNull<u8>;
-    fn get_local_info_for_managed_ptr(&self, index: LocalIndex) -> (std::ptr::NonNull<u8>, bool);
-}
-
-pub trait ArgumentOps<'gc> {
-    fn get_argument(&self, index: ArgumentIndex) -> StackValue<'gc>;
-    fn set_argument(&mut self, index: ArgumentIndex, value: StackValue<'gc>);
-    fn get_argument_address(&self, index: ArgumentIndex) -> std::ptr::NonNull<u8>;
-}
-
-/// A combination trait for operations on local variables and arguments.
-pub trait VariableOps<'gc>: LocalOps<'gc> + ArgumentOps<'gc> {}
-impl<'gc, T: LocalOps<'gc> + ArgumentOps<'gc> + ?Sized> VariableOps<'gc> for T {}
-
-/// A combination trait for all stack-related operations (evaluation stack, typed ops, and variables).
-pub trait AllStackOps<'gc>: EvalStackOps<'gc> + TypedStackOps<'gc> + VariableOps<'gc> {}
-impl<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + VariableOps<'gc> + ?Sized> AllStackOps<'gc>
-    for T
-{
-}
-
-pub trait StackOps<'gc>: AllStackOps<'gc> {
+pub trait StackOps<'gc>: BaseStackOps<'gc> + AllStackOps<'gc> {
     fn current_frame(&self) -> &StackFrame<'gc>;
     fn current_frame_mut(&mut self) -> &mut StackFrame<'gc>;
 
@@ -166,156 +60,28 @@ pub trait StackOps<'gc>: AllStackOps<'gc> {
     fn get_slot_address(&self, index: StackSlotIndex) -> std::ptr::NonNull<u8>;
 }
 
-pub trait ExceptionOps<'gc> {
-    fn throw_by_name(&mut self, name: &str) -> StepResult;
-    fn throw_by_name_with_message(&mut self, name: &str, message: &str) -> StepResult;
-    fn throw(&mut self, exception: ObjectRef<'gc>) -> StepResult;
-    fn rethrow(&mut self) -> StepResult;
-    fn leave(&mut self, target_ip: usize) -> StepResult;
-    fn endfinally(&mut self) -> StepResult;
-    fn endfilter(&mut self, result: i32) -> StepResult;
-    fn ret(&mut self) -> StepResult;
-}
-
-pub trait ResolutionOps<'gc> {
-    fn stack_value_type(
-        &self,
-        val: &StackValue<'gc>,
-    ) -> Result<TypeDescription, TypeResolutionError>;
-    fn make_concrete(&self, t: &MethodType) -> Result<ConcreteType, TypeResolutionError>;
+pub trait ResolutionOps<'gc>: BaseResolutionOps<'gc> {
     fn current_context(&self) -> ResolutionContext<'_>;
     fn with_generics<'b>(&self, lookup: &'b GenericLookup) -> ResolutionContext<'b>;
 }
 
-pub trait RawMemoryOps<'gc>: BorrowScopeOps {
-    fn as_borrow_scope(&self) -> &dyn BorrowScopeOps;
-
-    /// Resolves a `PointerOrigin` and `ByteOffset` to a concrete memory address.
-    /// This is the central point for address calculation in the VM.
-    fn resolve_address(
-        &self,
-        origin: PointerOrigin<'gc>,
-        offset: ByteOffset,
-    ) -> std::ptr::NonNull<u8>;
-
-    /// # Safety
-    ///
-    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
-    /// The `layout` must match the expected type of `value`.
-    unsafe fn write_unaligned(
+pub trait IntrinsicDispatchOps<'gc> {
+    fn is_intrinsic_field_cached(&self, field: FieldDescription) -> bool;
+    fn is_intrinsic_cached(&self, method: MethodDescription) -> bool;
+    fn execute_intrinsic_field(
         &mut self,
-        origin: PointerOrigin<'gc>,
-        offset: ByteOffset,
-        value: StackValue<'gc>,
-        layout: &LayoutManager,
-    ) -> Result<(), String>;
-
-    /// # Safety
-    ///
-    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
-    /// The `layout` must match the expected type stored at the location.
-    unsafe fn read_unaligned(
-        &self,
-        origin: PointerOrigin<'gc>,
-        offset: ByteOffset,
-        layout: &LayoutManager,
-        type_desc: Option<TypeDescription>,
-    ) -> Result<StackValue<'gc>, String>;
-
-    /// Safely writes raw bytes to a memory location.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
-    unsafe fn write_bytes(
+        field: FieldDescription,
+        type_generics: Arc<[ConcreteType]>,
+        is_address: bool,
+    ) -> StepResult;
+    fn execute_intrinsic_call(
         &mut self,
-        origin: PointerOrigin<'gc>,
-        offset: ByteOffset,
-        data: &[u8],
-    ) -> Result<(), String>;
-
-    /// Safely reads raw bytes from a memory location.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
-    unsafe fn read_bytes(
-        &self,
-        origin: PointerOrigin<'gc>,
-        offset: ByteOffset,
-        dest: &mut [u8],
-    ) -> Result<(), String>;
-
-    /// Atomically compares and exchanges a value in memory.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
-    #[allow(clippy::too_many_arguments)]
-    unsafe fn compare_exchange_atomic(
-        &mut self,
-        origin: PointerOrigin<'gc>,
-        offset: ByteOffset,
-        expected: u64,
-        new: u64,
-        size: usize,
-        success: dotnet_utils::sync::Ordering,
-        failure: dotnet_utils::sync::Ordering,
-    ) -> Result<u64, u64>;
-
-    /// Atomically exchanges a value in memory.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
-    unsafe fn exchange_atomic(
-        &mut self,
-        origin: PointerOrigin<'gc>,
-        offset: ByteOffset,
-        value: u64,
-        size: usize,
-        ordering: dotnet_utils::sync::Ordering,
-    ) -> Result<u64, String>;
-
-    /// Atomically loads a value from memory.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
-    unsafe fn load_atomic(
-        &self,
-        origin: PointerOrigin<'gc>,
-        offset: ByteOffset,
-        size: usize,
-        ordering: dotnet_utils::sync::Ordering,
-    ) -> Result<u64, String>;
-
-    /// Atomically stores a value to memory.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
-    unsafe fn store_atomic(
-        &mut self,
-        origin: PointerOrigin<'gc>,
-        offset: ByteOffset,
-        value: u64,
-        size: usize,
-        ordering: dotnet_utils::sync::Ordering,
-    ) -> Result<(), String>;
-
-    #[must_use]
-    fn check_gc_safe_point(&self) -> bool;
-
-    /// # Safety
-    ///
-    /// The returned pointer is valid for the duration of the current method frame.
-    /// It must not be stored in a way that outlives the frame.
-    fn localloc(&mut self, size: usize) -> *mut u8;
+        method: MethodDescription,
+        lookup: &GenericLookup,
+    ) -> StepResult;
 }
 
-pub trait ReflectionOps<'gc>: MemoryOps<'gc> {
-    fn pre_initialize_reflection(&mut self);
+pub trait ReflectionLookupOps<'gc> {
     fn get_runtime_method_index(
         &mut self,
         method: MethodDescription,
@@ -332,56 +98,35 @@ pub trait ReflectionOps<'gc>: MemoryOps<'gc> {
         field: FieldDescription,
         lookup: GenericLookup,
     ) -> ObjectRef<'gc>;
+}
+
+pub trait ReflectionOps<'gc>:
+    BaseReflectionOps<'gc> + IntrinsicDispatchOps<'gc> + ReflectionLookupOps<'gc> + MemoryOps<'gc>
+{
+    fn pre_initialize_reflection(&mut self);
     fn make_runtime_type(&self, ctx: &ResolutionContext<'_>, source: &MethodType) -> RuntimeType;
-    fn get_heap_description(
-        &self,
-        object: ObjectHandle<'gc>,
-    ) -> Result<TypeDescription, TypeResolutionError>;
     fn locate_field(
         &self,
         handle: FieldSource,
     ) -> Result<(FieldDescription, GenericLookup), TypeResolutionError>;
-    fn is_intrinsic_field_cached(&self, field: FieldDescription) -> bool;
-    fn is_intrinsic_cached(&self, method: MethodDescription) -> bool;
     fn resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> RuntimeType;
     fn resolve_runtime_method(&self, obj: ObjectRef<'gc>) -> (MethodDescription, GenericLookup);
     fn resolve_runtime_field(&self, obj: ObjectRef<'gc>) -> (FieldDescription, GenericLookup);
     fn lookup_method_by_index(&self, index: usize) -> (MethodDescription, GenericLookup);
     fn reflection(&self) -> ReflectionRegistry<'_, 'gc>;
-    fn execute_intrinsic_field(
-        &mut self,
-        field: FieldDescription,
-        type_generics: Arc<[ConcreteType]>,
-        is_address: bool,
-    ) -> StepResult;
-    fn execute_intrinsic_call(
-        &mut self,
-        method: MethodDescription,
-        lookup: &GenericLookup,
-    ) -> StepResult;
 }
 
-pub trait LoaderOps {
-    fn loader(&self) -> &dotnet_assemblies::AssemblyLoader;
+pub trait LoaderOps: BaseLoaderOps {
     fn loader_arc(&self) -> Arc<dotnet_assemblies::AssemblyLoader>;
     fn resolver(&self) -> ResolverService;
     fn shared(&self) -> &Arc<SharedGlobalState>;
 }
 
-pub trait StaticsOps<'gc> {
+pub trait StaticsOps<'gc>: BaseStaticsOps<'gc> {
     fn statics(&self) -> &StaticStorageManager;
-    fn initialize_static_storage(
-        &mut self,
-        description: TypeDescription,
-        generics: GenericLookup,
-    ) -> StepResult;
 }
 
-pub trait ThreadOps {
-    fn thread_id(&self) -> ArenaId;
-}
-
-pub trait CallOps<'gc> {
+pub trait CallOps<'gc>: BaseCallOps<'gc> {
     fn constructor_frame(
         &mut self,
         instance: ObjectInstance<'gc>,
@@ -412,49 +157,40 @@ pub trait CallOps<'gc> {
     ) -> StepResult;
 }
 
-pub trait VesOps<'gc>:
-    StackOps<'gc>
-    + ExceptionOps<'gc>
+pub trait VesInternals<'gc>: BaseVesInternals<'gc> {}
+
+pub trait VesBaseOps: BaseVesBaseOps {}
+
+pub trait ExceptionContext<'gc>:
+    BaseExceptionContext<'gc>
+    + TypedStackOps<'gc>
     + ResolutionOps<'gc>
     + ReflectionOps<'gc>
     + LoaderOps
-    + StaticsOps<'gc>
-    + ThreadOps
-    + CallOps<'gc>
     + MemoryOps<'gc>
+    + VesInternals<'gc>
+    + VesBaseOps
+{
+}
+
+pub trait PInvokeContext<'gc>:
+    BasePInvokeContext<'gc>
+    + StackOps<'gc>
     + RawMemoryOps<'gc>
+    + ExceptionOps<'gc>
+    + ResolutionOps<'gc>
+    + VesInternals<'gc>
+    + LoaderOps
+    + MemoryOps<'gc>
+    + VesBaseOps
+{
+}
+
+pub trait VesOps<'gc>:
+    ExceptionContext<'gc> + PInvokeContext<'gc> + StaticsOps<'gc> + ThreadOps + CallOps<'gc>
 {
     fn run(&mut self) -> StepResult;
     fn handle_return(&mut self) -> StepResult;
     fn handle_exception(&mut self) -> StepResult;
-    fn tracer_enabled(&self) -> bool;
-    fn tracer(&self) -> &Tracer;
-    fn indent(&self) -> usize;
     fn process_pending_finalizers(&mut self) -> StepResult;
-    fn back_up_ip(&mut self);
-    fn branch(&mut self, target: usize);
-    fn conditional_branch(&mut self, condition: bool, target: usize) -> bool;
-    fn increment_ip(&mut self);
-    fn state(&self) -> &MethodState;
-    fn state_mut(&mut self) -> &mut MethodState;
-
-    fn exception_mode(&self) -> &ExceptionState<'gc>;
-    fn exception_mode_mut(&mut self) -> &mut ExceptionState<'gc>;
-
-    fn current_intrinsic(&self) -> Option<MethodDescription>;
-    fn set_current_intrinsic(&mut self, method: Option<MethodDescription>);
-
-    fn evaluation_stack(&self) -> &EvaluationStack<'gc>;
-    fn evaluation_stack_mut(&mut self) -> &mut EvaluationStack<'gc>;
-    fn frame_stack(&self) -> &FrameStack<'gc>;
-    fn frame_stack_mut(&mut self) -> &mut FrameStack<'gc>;
-    fn original_ip(&self) -> usize;
-    fn original_ip_mut(&mut self) -> &mut usize;
-    fn original_stack_height(&self) -> StackSlotIndex;
-    fn original_stack_height_mut(&mut self) -> &mut StackSlotIndex;
-
-    fn unwind_frame(&mut self);
-
-    fn pin_object(&mut self, object: ObjectRef<'gc>);
-    fn unpin_object(&mut self, object: ObjectRef<'gc>);
 }

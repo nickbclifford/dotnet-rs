@@ -1,4 +1,7 @@
-use crate::memory::heap::HeapManager;
+use crate::{
+    error::MemoryAccessError,
+    memory::{heap::HeapManager, validation::*},
+};
 use dotnet_types::{TypeDescription, generics::GenericLookup, resolution::ResolutionS};
 use dotnet_utils::{ArenaId, ByteOffset, atomic::validate_atomic_access, gc::GCHandle};
 use dotnet_value::{
@@ -8,7 +11,7 @@ use dotnet_value::{
     pointer::ManagedPtr,
     storage::FieldStorage,
 };
-use std::{ptr, sync::Arc};
+use std::{cell::RefCell, marker::PhantomData, ptr, sync::Arc};
 
 #[cfg(feature = "multithreading")]
 use dotnet_value::{object::ObjectPtr, pointer::PointerOrigin};
@@ -23,47 +26,58 @@ pub enum MemoryOwner<'gc> {
 #[derive(Copy, Clone)]
 pub struct HeapWriteTarget<'gc>(pub MemoryOwner<'gc>);
 
-pub struct WriteBarrierRecorder<'gc> {
-    #[allow(dead_code)]
-    // Only used when multithreading is enabled, as it tracks cross-arena references
-    arena_id: ArenaId,
-    _gc: std::marker::PhantomData<&'gc ()>,
+thread_local! {
+    static WB_LOCAL_BUF: RefCell<Vec<(ArenaId, usize)>> = RefCell::new(Vec::with_capacity(128));
 }
 
-impl<'gc> WriteBarrierRecorder<'gc> {
-    pub fn new(arena_id: ArenaId) -> Self {
+pub struct WriteBarrierRecorder<'a, 'gc> {
+    #[cfg_attr(not(feature = "multithreading"), allow(dead_code))]
+    arena_id: ArenaId,
+    #[cfg_attr(not(feature = "multithreading"), allow(dead_code))]
+    buffer: &'a mut Vec<(ArenaId, usize)>,
+    _gc: PhantomData<&'gc ()>,
+}
+
+impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
+    pub fn new(arena_id: ArenaId, buffer: &'a mut Vec<(ArenaId, usize)>) -> Self {
         Self {
             arena_id,
-            _gc: std::marker::PhantomData,
+            buffer,
+            _gc: PhantomData,
         }
     }
 
     #[cfg(feature = "multithreading")]
-    pub fn record_ref(&self, target: ObjectRef<'gc>) {
+    pub fn record_ref(&mut self, target: ObjectRef<'gc>) {
         if let Some(h) = target.0 {
             let ref_tid = unsafe { (*h.as_ptr()).owner_id };
             if ref_tid != self.arena_id {
-                dotnet_utils::gc::record_cross_arena_ref(ref_tid, gc_arena::Gc::as_ptr(h) as usize);
+                self.buffer
+                    .push((ref_tid, gc_arena::Gc::as_ptr(h) as usize));
             }
         }
     }
 
     #[cfg(feature = "multithreading")]
-    pub fn record_managed_ptr(&self, target: &ManagedPtr<'gc>) {
-        if let PointerOrigin::CrossArenaObjectRef(p, ref_tid) = target.origin() {
-            if *ref_tid != self.arena_id {
-                dotnet_utils::gc::record_cross_arena_ref(*ref_tid, p.as_ptr() as usize);
+    pub fn record_managed_ptr(&mut self, target: &ManagedPtr<'gc>) {
+        match target.origin() {
+            PointerOrigin::CrossArenaObjectRef(p, ref_tid) => {
+                if *ref_tid != self.arena_id {
+                    self.buffer.push((*ref_tid, p.as_ptr() as usize));
+                }
             }
-        } else if let PointerOrigin::Heap(r) = target.origin() {
-            self.record_ref(*r);
+            PointerOrigin::Heap(r) => {
+                self.record_ref(*r);
+            }
+            _ => {}
         }
     }
 
     #[cfg(not(feature = "multithreading"))]
-    pub fn record_ref(&self, _target: ObjectRef<'gc>) {}
+    pub fn record_ref(&mut self, _target: ObjectRef<'gc>) {}
 
     #[cfg(not(feature = "multithreading"))]
-    pub fn record_managed_ptr(&self, _target: &ManagedPtr<'gc>) {}
+    pub fn record_managed_ptr(&mut self, _target: &ManagedPtr<'gc>) {}
 }
 
 impl<'gc> MemoryOwner<'gc> {
@@ -127,7 +141,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         offset: ByteOffset,
         value: StackValue<'gc>,
         layout: &LayoutManager,
-    ) -> Result<(), String> {
+    ) -> Result<(), MemoryAccessError> {
         if let Some(owner) = owner {
             owner.as_heap_storage(|_storage| {}); // Ensure object is valid and magic matches
 
@@ -136,25 +150,47 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
             // SAFETY: with_data_mut ensures the lock is held for the duration of the closure.
             // write_value_internal will copy the data.
-            owner.with_data_mut(gc, |data| {
-                let base = data.as_mut_ptr();
-                let len = data.len();
-                let ptr = base.wrapping_add(offset.0);
-                validate_atomic_access(ptr as *const u8, false);
+            WB_LOCAL_BUF.with(|buf| {
+                let mut b = buf.borrow_mut();
+                let mut recorder = WriteBarrierRecorder::new(owner.owner_id(), &mut b);
+                let result = owner.with_data_mut(gc, |data| {
+                    let base = data.as_mut_ptr();
+                    let len = data.len();
+                    let ptr = base.wrapping_add(offset.0);
+                    validate_atomic_access(ptr as *const u8, false);
 
-                // 1. Bounds Check
-                self.check_bounds_internal(ptr, base, len, layout.size().as_usize())?;
+                    // 1. Bounds Check
+                    self.check_bounds_internal(ptr, base, len, layout.size().as_usize())?;
 
-                // 2. Integrity Check
-                self.check_integrity_internal_with_layout(ptr, dest_layout, base, layout)?;
+                    // 2. Integrity Check
+                    self.check_integrity_internal_with_layout(ptr, dest_layout, base, layout)?;
 
-                // 3. Perform Write
-                unsafe { self.write_value_internal(gc, ptr, Some(owner), value, layout) }
+                    // 3. Perform Write
+                    unsafe {
+                        self.write_value_internal_with_recorder(
+                            gc,
+                            ptr,
+                            Some(owner),
+                            value,
+                            layout,
+                            &mut recorder,
+                        )
+                    }
+                });
+
+                #[cfg(feature = "multithreading")]
+                for (tid, ptr) in b.drain(..) {
+                    dotnet_utils::gc::record_cross_arena_ref(tid, ptr);
+                }
+
+                result
             })
         } else {
             let ptr = sptr::from_exposed_addr_mut::<u8>(offset.0);
             if ptr.is_null() {
-                return Err("NullReferenceException: writing to unmanaged null pointer".into());
+                return Err(MemoryAccessError::NullPointer(
+                    "NullReferenceException: writing to unmanaged null pointer".into(),
+                ));
             }
             validate_atomic_access(ptr as *const u8, false);
             // SAFETY: Caller ensures ptr is valid.
@@ -176,7 +212,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         offset: ByteOffset,
         layout: &LayoutManager,
         type_desc: Option<TypeDescription>,
-    ) -> Result<StackValue<'gc>, String> {
+    ) -> Result<StackValue<'gc>, MemoryAccessError> {
         if let Some(owner) = owner {
             owner.as_heap_storage(|_storage| {}); // Ensure object is valid and magic matches
 
@@ -196,7 +232,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
                 // 2. Read Safety Check
                 if offset.0 != 0 || src_layout.is_some() {
-                    check_read_safety(layout, src_layout.as_ref(), offset.0);
+                    check_read_safety(layout, src_layout.as_ref(), offset.0)?;
                 }
 
                 // 3. Perform Read
@@ -205,7 +241,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         } else {
             let ptr = sptr::from_exposed_addr::<u8>(offset.0);
             if ptr.is_null() {
-                return Err("NullReferenceException: reading from unmanaged null pointer".into());
+                return Err(MemoryAccessError::NullPointer(
+                    "NullReferenceException: reading from unmanaged null pointer".into(),
+                ));
             }
             validate_atomic_access(ptr, false);
             // SAFETY: Caller ensures ptr is valid.
@@ -225,53 +263,63 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         owner: Option<MemoryOwner<'gc>>,
         offset: ByteOffset,
         data: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), MemoryAccessError> {
         if let Some(owner) = owner {
             owner.as_heap_storage(|_storage| {});
 
             // Get layout before locking to avoid deadlock
             #[cfg(feature = "multithreading")]
             let layout = self.get_layout_from_owner(owner);
-            #[cfg(feature = "multithreading")]
-            let owner_tid = owner.owner_id();
 
-            owner.with_data_mut(gc, |obj_data| {
-                let base = obj_data.as_mut_ptr();
-                let len = obj_data.len();
-                let ptr = base.wrapping_add(offset.0);
-                validate_atomic_access(ptr as *const u8, false);
+            WB_LOCAL_BUF.with(|buf| {
+                let mut b = buf.borrow_mut();
+                let mut _recorder = WriteBarrierRecorder::new(owner.owner_id(), &mut b);
 
-                // Bounds Check
-                self.check_bounds_internal(ptr, base, len, data.len())?;
+                let result = owner.with_data_mut(gc, |obj_data| {
+                    let base = obj_data.as_mut_ptr();
+                    let len = obj_data.len();
+                    let ptr = base.wrapping_add(offset.0);
+                    validate_atomic_access(ptr as *const u8, false);
 
-                // Perform Write
-                unsafe {
-                    ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
-                }
+                    // Bounds Check
+                    self.check_bounds_internal(ptr, base, len, data.len())?;
 
-                #[cfg(feature = "multithreading")]
-                {
-                    if let Some(layout) = layout {
-                        unsafe {
-                            self.record_refs_in_range(
-                                gc,
-                                base,
-                                &layout,
-                                owner_tid,
-                                offset.as_usize(),
-                                offset.as_usize() + data.len(),
-                            );
+                    // Perform Write
+                    unsafe {
+                        ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
+                    }
+
+                    #[cfg(feature = "multithreading")]
+                    {
+                        if let Some(layout) = layout {
+                            unsafe {
+                                self.record_refs_in_range_with_recorder(
+                                    gc,
+                                    base,
+                                    &layout,
+                                    offset.as_usize(),
+                                    offset.as_usize() + data.len(),
+                                    &mut _recorder,
+                                );
+                            }
                         }
                     }
+                    Ok(())
+                });
+
+                #[cfg(feature = "multithreading")]
+                for (tid, ptr) in b.drain(..) {
+                    dotnet_utils::gc::record_cross_arena_ref(tid, ptr);
                 }
-                Ok(())
+
+                result
             })
         } else {
             let ptr = sptr::from_exposed_addr_mut::<u8>(offset.0);
             if ptr.is_null() {
-                return Err(
+                return Err(MemoryAccessError::NullPointer(
                     "NullReferenceException: writing bytes to unmanaged null pointer".into(),
-                );
+                ));
             }
             validate_atomic_access(ptr as *const u8, false);
             unsafe {
@@ -292,24 +340,28 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         owner: Option<MemoryOwner<'gc>>,
         offset: ByteOffset,
         dest: &mut [u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), MemoryAccessError> {
         if let Some(owner) = owner {
             owner.with_data(|data| {
                 let start = offset.0;
                 let end = start + dest.len();
                 if end > data.len() {
-                    return Err(format!(
-                        "Read out of bounds: range [{}, {}) in object of size {}",
-                        start,
-                        end,
-                        data.len()
-                    ));
+                    return Err(MemoryAccessError::BoundsCheck {
+                        offset: start,
+                        size: dest.len(),
+                        len: data.len(),
+                    });
                 }
                 dest.copy_from_slice(&data[start..end]);
                 Ok(())
             })
         } else {
             let ptr = sptr::from_exposed_addr::<u8>(offset.0);
+            if ptr.is_null() {
+                return Err(MemoryAccessError::NullPointer(
+                    "NullReferenceException: reading bytes from unmanaged null pointer".into(),
+                ));
+            }
             validate_atomic_access(ptr, false);
             // SAFETY: Caller ensures ptr is valid.
             unsafe {
@@ -375,7 +427,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         value: u64,
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
-    ) -> Result<u64, String> {
+    ) -> Result<u64, MemoryAccessError> {
         use dotnet_utils::atomic::{AtomicAccess, StandardAtomicAccess};
 
         if let Some(owner) = owner {
@@ -390,6 +442,11 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             })
         } else {
             let ptr = sptr::from_exposed_addr_mut::<u8>(offset.as_usize());
+            if ptr.is_null() {
+                return Err(MemoryAccessError::NullPointer(
+                    "NullReferenceException: exchange_atomic to unmanaged null pointer".into(),
+                ));
+            }
             Ok(unsafe { StandardAtomicAccess::exchange_atomic(ptr, size, value, ordering) })
         }
     }
@@ -404,7 +461,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         offset: ByteOffset,
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
-    ) -> Result<u64, String> {
+    ) -> Result<u64, MemoryAccessError> {
         use dotnet_utils::atomic::{AtomicAccess, StandardAtomicAccess};
         if let Some(owner) = owner {
             owner.with_data(|data| {
@@ -416,6 +473,11 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             })
         } else {
             let ptr = sptr::from_exposed_addr::<u8>(offset.as_usize());
+            if ptr.is_null() {
+                return Err(MemoryAccessError::NullPointer(
+                    "NullReferenceException: load_atomic from unmanaged null pointer".into(),
+                ));
+            }
             Ok(unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) })
         }
     }
@@ -432,7 +494,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         value: u64,
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
-    ) -> Result<(), String> {
+    ) -> Result<(), MemoryAccessError> {
         use dotnet_utils::atomic::{AtomicAccess, StandardAtomicAccess};
         if let Some(owner) = owner {
             owner.with_data_mut(gc, |data| {
@@ -447,6 +509,11 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             })
         } else {
             let ptr = sptr::from_exposed_addr_mut::<u8>(offset.as_usize());
+            if ptr.is_null() {
+                return Err(MemoryAccessError::NullPointer(
+                    "NullReferenceException: store_atomic to unmanaged null pointer".into(),
+                ));
+            }
             unsafe {
                 StandardAtomicAccess::store_atomic(ptr, size, value, ordering);
             }
@@ -476,7 +543,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         base: *const u8,
         len: usize,
         size: usize,
-    ) -> Result<(), String> {
+    ) -> Result<(), MemoryAccessError> {
         if !base.is_null() {
             let base_addr = base.addr();
             let ptr_addr = ptr.addr();
@@ -486,14 +553,11 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     .checked_add(size)
                     .is_none_or(|end| end > len)
             {
-                return Err(format!(
-                    "Access out of bounds. ptr={:p}, base={:p}, offset={}, size={}, len={}",
-                    ptr,
-                    base,
-                    ptr_addr.wrapping_sub(base_addr),
+                return Err(MemoryAccessError::BoundsCheck {
+                    offset: ptr_addr.wrapping_sub(base_addr),
                     size,
-                    len
-                ));
+                    len,
+                });
             }
         }
         Ok(())
@@ -505,7 +569,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         dest_layout: Option<LayoutManager>,
         base: *const u8,
         src_layout: &LayoutManager,
-    ) -> Result<(), String> {
+    ) -> Result<(), MemoryAccessError> {
         if !base.is_null() {
             let base_addr = base.addr();
             let ptr_addr = ptr.addr();
@@ -518,7 +582,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     offset,
                     offset + src_layout.size().as_usize(),
                     src_layout,
-                );
+                )?;
             }
         }
         Ok(())
@@ -549,22 +613,41 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         offset: ByteOffset,
         value: StackValue<'gc>,
         layout: &LayoutManager,
-    ) -> Result<(), String> {
+    ) -> Result<(), MemoryAccessError> {
         let owner = target.0;
         owner.as_heap_storage(|_storage| {});
 
         let dest_layout = self.get_layout_from_owner(owner);
 
-        owner.with_data_mut(gc, |data| {
-            let base = data.as_mut_ptr();
-            let len = data.len();
-            let ptr = base.wrapping_add(offset.0);
-            validate_atomic_access(ptr as *const u8, false);
+        WB_LOCAL_BUF.with(|buf| {
+            let mut b = buf.borrow_mut();
+            let mut recorder = WriteBarrierRecorder::new(owner.owner_id(), &mut b);
+            let result = owner.with_data_mut(gc, |data| {
+                let base = data.as_mut_ptr();
+                let len = data.len();
+                let ptr = base.wrapping_add(offset.0);
+                validate_atomic_access(ptr as *const u8, false);
 
-            self.check_bounds_internal(ptr, base, len, layout.size().as_usize())?;
-            self.check_integrity_internal_with_layout(ptr, dest_layout, base, layout)?;
+                self.check_bounds_internal(ptr, base, len, layout.size().as_usize())?;
+                self.check_integrity_internal_with_layout(ptr, dest_layout, base, layout)?;
 
-            unsafe { self.write_value_internal(gc, ptr, Some(owner), value, layout) }
+                unsafe {
+                    self.write_value_internal_with_recorder(
+                        gc,
+                        ptr,
+                        Some(owner),
+                        value,
+                        layout,
+                        &mut recorder,
+                    )
+                }
+            });
+
+            #[cfg(feature = "multithreading")]
+            for (tid, ptr) in b.drain(..) {
+                dotnet_utils::gc::record_cross_arena_ref(tid, ptr);
+            }
+            result
         })
     }
 
@@ -579,28 +662,124 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         ptr: *mut u8,
         value: StackValue<'gc>,
         layout: &LayoutManager,
-    ) -> Result<(), String> {
+    ) -> Result<(), MemoryAccessError> {
         if ptr.is_null() {
-            return Err("NullReferenceException: writing to unmanaged null pointer".into());
+            return Err(MemoryAccessError::NullPointer(
+                "NullReferenceException: writing to unmanaged null pointer".into(),
+            ));
         }
         validate_atomic_access(ptr as *const u8, false);
         unsafe { self.write_value_internal(gc, ptr, None, value, layout) }
     }
 
+    #[cfg(feature = "multithreading")]
+    pub(crate) fn record_objref_cross_arena_with_recorder(
+        &self,
+        r: ObjectRef<'gc>,
+        _owner_tid: ArenaId,
+        recorder: &mut WriteBarrierRecorder<'_, 'gc>,
+    ) {
+        recorder.record_ref(r);
+    }
+
+    #[cfg(feature = "multithreading")]
+    pub(crate) unsafe fn record_objref_at_ptr_with_recorder(
+        &self,
+        gc: GCHandle<'gc>,
+        ptr: *const u8,
+        owner_tid: ArenaId,
+        recorder: &mut WriteBarrierRecorder<'_, 'gc>,
+    ) {
+        let mut buf = [0u8; ObjectRef::SIZE];
+        unsafe {
+            ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), ObjectRef::SIZE);
+            let r = ObjectRef::read_branded(&buf, &gc);
+            self.record_objref_cross_arena_with_recorder(r, owner_tid, recorder);
+        }
+    }
+
+    #[cfg(feature = "multithreading")]
+    pub(crate) fn record_managedptr_cross_arena_with_recorder(
+        &self,
+        m: &ManagedPtr<'gc>,
+        _owner_tid: ArenaId,
+        recorder: &mut WriteBarrierRecorder<'_, 'gc>,
+    ) {
+        recorder.record_managed_ptr(m);
+    }
+
+    #[cfg(feature = "multithreading")]
+    pub(crate) unsafe fn record_managedptr_at_ptr_with_recorder(
+        &self,
+        gc: GCHandle<'gc>,
+        ptr: *const u8,
+        owner_tid: ArenaId,
+        recorder: &mut WriteBarrierRecorder<'_, 'gc>,
+    ) {
+        let info = unsafe {
+            ManagedPtr::read_branded(std::slice::from_raw_parts(ptr, ManagedPtr::SIZE), &gc)
+                .expect("record_managedptr_at_ptr: failed to read ManagedPtr")
+        };
+        match &info.origin {
+            PointerOrigin::Heap(r) => {
+                self.record_objref_cross_arena_with_recorder(*r, owner_tid, recorder)
+            }
+            PointerOrigin::CrossArenaObjectRef(p, target_tid) => {
+                if *target_tid != owner_tid {
+                    recorder.buffer.push((*target_tid, p.as_ptr() as usize));
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub(crate) unsafe fn write_value_internal(
+        &mut self,
+        gc: GCHandle<'gc>,
+        ptr: *mut u8,
+        owner: Option<MemoryOwner<'gc>>,
+        value: StackValue<'gc>,
+        layout: &LayoutManager,
+    ) -> Result<(), MemoryAccessError> {
+        WB_LOCAL_BUF.with(|buf| {
+            let mut b = buf.borrow_mut();
+            let mut _recorder = WriteBarrierRecorder::new(
+                owner.map(|o| o.owner_id()).unwrap_or(ArenaId(0)),
+                &mut b,
+            );
+            let res = unsafe {
+                self.write_value_internal_with_recorder(
+                    gc,
+                    ptr,
+                    owner,
+                    value,
+                    layout,
+                    &mut _recorder,
+                )
+            };
+            #[cfg(feature = "multithreading")]
+            for (tid, ptr) in b.drain(..) {
+                dotnet_utils::gc::record_cross_arena_ref(tid, ptr);
+            }
+            res
+        })
+    }
+
+    pub(crate) unsafe fn write_value_internal_with_recorder(
         &mut self,
         _gc: GCHandle<'gc>,
         ptr: *mut u8,
         _owner: Option<MemoryOwner<'gc>>,
         value: StackValue<'gc>,
         layout: &LayoutManager,
-    ) -> Result<(), String> {
+        _recorder: &mut WriteBarrierRecorder<'_, 'gc>,
+    ) -> Result<(), MemoryAccessError> {
         // Safety: `write_unaligned` ensures `ptr` is valid.
         unsafe {
             if ptr.is_null() {
-                return Err(
+                return Err(MemoryAccessError::NullPointer(
                     "RawMemoryAccess::write_value_internal called with null pointer!".to_string(),
-                );
+                ));
             }
 
             match layout {
@@ -643,17 +822,20 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     }
                     Scalar::ManagedPtr => {
                         if let StackValue::ManagedPtr(m) = value {
-                            if ptr.is_null() {
-                                panic!("write_value_internal: ptr is null!");
-                            }
                             m.write(std::slice::from_raw_parts_mut(ptr, ManagedPtr::SIZE));
 
                             #[cfg(feature = "multithreading")]
                             if let Some(owner) = _owner {
-                                self.record_managedptr_cross_arena(&m, owner.owner_id());
+                                self.record_managedptr_cross_arena_with_recorder(
+                                    &m,
+                                    owner.owner_id(),
+                                    _recorder,
+                                );
                             }
                         } else {
-                            return Err("Expected ManagedPtr".into());
+                            return Err(MemoryAccessError::TypeMismatch(
+                                "Expected ManagedPtr".into(),
+                            ));
                         }
                     }
                     Scalar::ObjectRef => {
@@ -664,10 +846,16 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
                             #[cfg(feature = "multithreading")]
                             if let Some(owner) = _owner {
-                                self.record_objref_cross_arena(r, owner.owner_id());
+                                self.record_objref_cross_arena_with_recorder(
+                                    r,
+                                    owner.owner_id(),
+                                    _recorder,
+                                );
                             }
                         } else {
-                            return Err("Expected ObjectRef".into());
+                            return Err(MemoryAccessError::TypeMismatch(
+                                "Expected ObjectRef".into(),
+                            ));
                         }
                     }
                 },
@@ -677,44 +865,50 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         ptr::copy_nonoverlapping(src_ptr, ptr, flm.size().as_usize());
 
                         #[cfg(feature = "multithreading")]
-                        if let Some(owner) = _owner {
-                            let owner_tid = owner.owner_id();
-                            self.record_refs_recursive(_gc, ptr, layout, owner_tid);
+                        if _owner.is_some() {
+                            self.record_refs_recursive_with_recorder(_gc, ptr, layout, _recorder);
                         }
                     } else {
-                        return Err("Expected ValueType for Struct write".into());
+                        return Err(MemoryAccessError::TypeMismatch(
+                            "Expected ValueType for Struct write".into(),
+                        ));
                     }
                 }
-                LayoutManager::Array(_) => return Err("Cannot write entire array unaligned".into()),
+                LayoutManager::Array(_) => {
+                    return Err(MemoryAccessError::TypeMismatch(
+                        "Cannot write entire array unaligned".into(),
+                    ));
+                }
             }
             Ok(())
         }
     }
 
     #[cfg(feature = "multithreading")]
-    unsafe fn record_refs_recursive(
+    unsafe fn record_refs_recursive_with_recorder(
         &self,
         gc: GCHandle<'gc>,
         ptr: *const u8,
         layout: &LayoutManager,
-        owner_tid: ArenaId,
+        recorder: &mut WriteBarrierRecorder<'_, 'gc>,
     ) {
+        let owner_tid = recorder.arena_id;
         match layout {
             LayoutManager::Scalar(Scalar::ObjectRef) => unsafe {
-                self.record_objref_at_ptr(gc, ptr, owner_tid);
+                self.record_objref_at_ptr_with_recorder(gc, ptr, owner_tid, recorder);
             },
             LayoutManager::Scalar(Scalar::ManagedPtr) => unsafe {
-                self.record_managedptr_at_ptr(gc, ptr, owner_tid);
+                self.record_managedptr_at_ptr_with_recorder(gc, ptr, owner_tid, recorder);
             },
             LayoutManager::Field(flm) => {
                 for field in flm.fields.values() {
                     if field.layout.is_or_contains_refs() {
                         unsafe {
-                            self.record_refs_recursive(
+                            self.record_refs_recursive_with_recorder(
                                 gc,
                                 ptr.add(field.position.as_usize()),
                                 &field.layout,
-                                owner_tid,
+                                recorder,
                             );
                         }
                     }
@@ -725,11 +919,11 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     let elem_size = arr.element_layout.size().as_usize();
                     for i in 0..arr.length {
                         unsafe {
-                            self.record_refs_recursive(
+                            self.record_refs_recursive_with_recorder(
                                 gc,
                                 ptr.add(i * elem_size),
                                 &arr.element_layout,
-                                owner_tid,
+                                recorder,
                             );
                         }
                     }
@@ -740,14 +934,14 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
     }
 
     #[cfg(feature = "multithreading")]
-    unsafe fn record_refs_in_range(
+    unsafe fn record_refs_in_range_with_recorder(
         &self,
         gc: GCHandle<'gc>,
         ptr: *const u8, // Base of the layout
         layout: &LayoutManager,
-        owner_tid: ArenaId,
         range_start: usize,
         range_end: usize,
+        recorder: &mut WriteBarrierRecorder<'_, 'gc>,
     ) {
         if !layout.is_or_contains_refs() {
             return;
@@ -757,7 +951,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             | LayoutManager::Scalar(Scalar::ManagedPtr) => {
                 // If the scalar overlaps at all with the written range, we should re-record it
                 // because it might have been partially or fully overwritten.
-                unsafe { self.record_refs_recursive(gc, ptr, layout, owner_tid) };
+                unsafe { self.record_refs_recursive_with_recorder(gc, ptr, layout, recorder) };
             }
             LayoutManager::Field(flm) => {
                 for field in flm.fields.values() {
@@ -765,13 +959,13 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     let f_end = f_start + field.layout.size().as_usize();
                     if f_start < range_end && f_end > range_start {
                         unsafe {
-                            self.record_refs_in_range(
+                            self.record_refs_in_range_with_recorder(
                                 gc,
                                 ptr.add(f_start),
                                 &field.layout,
-                                owner_tid,
                                 range_start.saturating_sub(f_start),
                                 range_end.saturating_sub(f_start),
+                                recorder,
                             );
                         }
                     }
@@ -788,13 +982,13 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     for i in start_idx..end_idx {
                         let f_start = i * elem_size;
                         unsafe {
-                            self.record_refs_in_range(
+                            self.record_refs_in_range_with_recorder(
                                 gc,
                                 ptr.add(f_start),
                                 &alm.element_layout,
-                                owner_tid,
                                 range_start.saturating_sub(f_start),
                                 range_end.saturating_sub(f_start),
+                                recorder,
                             );
                         }
                     }
@@ -811,14 +1005,14 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         _owner: Option<MemoryOwner<'gc>>,
         layout: &LayoutManager,
         type_desc: Option<TypeDescription>,
-    ) -> Result<StackValue<'gc>, String> {
+    ) -> Result<StackValue<'gc>, MemoryAccessError> {
         // SAFETY: The caller must ensure `ptr` is valid for reads and within bounds.
         // This is verified by `read_unaligned` before calling this method.
         unsafe {
             if ptr.is_null() {
-                return Err(
+                return Err(MemoryAccessError::NullPointer(
                     "RawMemoryAccess::read_value_internal called with null pointer!".to_string(),
-                );
+                ));
             }
 
             Ok(match layout {
@@ -852,7 +1046,12 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             std::slice::from_raw_parts(ptr, ManagedPtr::SIZE),
                             &gc,
                         )
-                        .map_err(|e| format!("ManagedPtr read failed: {:?}", e))?;
+                        .map_err(|e| {
+                            MemoryAccessError::TypeMismatch(format!(
+                                "ManagedPtr read failed: {:?}",
+                                e
+                            ))
+                        })?;
 
                         let actual_desc = type_desc.unwrap_or(TypeDescription::from_raw(
                             ResolutionS::new(ptr::null()),
@@ -875,252 +1074,17 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
                         StackValue::ValueType(obj)
                     } else {
-                        return Err("Struct read requires TypeDescription, which is not passed to read_unaligned".into());
+                        return Err(MemoryAccessError::TypeMismatch(
+                            "Struct read requires TypeDescription, which is not passed to read_unaligned".into(),
+                        ));
                     }
                 }
-                _ => return Err("Array read not supported".to_string()),
+                _ => {
+                    return Err(MemoryAccessError::TypeMismatch(
+                        "Array read not supported".to_string(),
+                    ));
+                }
             })
-        }
-    }
-
-    #[cfg(feature = "multithreading")]
-    fn record_objref_cross_arena(&self, r: ObjectRef<'gc>, owner_tid: ArenaId) {
-        let recorder = WriteBarrierRecorder::new(owner_tid);
-        recorder.record_ref(r);
-    }
-
-    #[cfg(feature = "multithreading")]
-    unsafe fn record_objref_at_ptr(&self, gc: GCHandle<'gc>, ptr: *const u8, owner_tid: ArenaId) {
-        let mut buf = [0u8; ObjectRef::SIZE];
-        unsafe {
-            ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), ObjectRef::SIZE);
-            let r = ObjectRef::read_branded(&buf, &gc);
-            self.record_objref_cross_arena(r, owner_tid);
-        }
-    }
-
-    #[cfg(feature = "multithreading")]
-    fn record_managedptr_cross_arena(&self, m: &ManagedPtr<'gc>, owner_tid: ArenaId) {
-        let recorder = WriteBarrierRecorder::new(owner_tid);
-        recorder.record_managed_ptr(m);
-    }
-
-    #[cfg(feature = "multithreading")]
-    unsafe fn record_managedptr_at_ptr(
-        &self,
-        gc: GCHandle<'gc>,
-        ptr: *const u8,
-        owner_tid: ArenaId,
-    ) {
-        let info = unsafe {
-            ManagedPtr::read_branded(std::slice::from_raw_parts(ptr, ManagedPtr::SIZE), &gc)
-                .expect("record_managedptr_at_ptr: failed to read ManagedPtr")
-        };
-        match &info.origin {
-            PointerOrigin::Heap(r) => self.record_objref_cross_arena(*r, owner_tid),
-            PointerOrigin::CrossArenaObjectRef(p, target_tid) => {
-                if *target_tid != owner_tid {
-                    dotnet_utils::gc::record_cross_arena_ref(*target_tid, p.as_ptr() as usize);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-fn extract_int(val: StackValue) -> Result<i32, String> {
-    match val {
-        StackValue::Int32(v) => Ok(v),
-        _ => Err(format!("Expected Int32, got {:?}", val)),
-    }
-}
-
-fn extract_long(val: StackValue) -> Result<i64, String> {
-    match val {
-        StackValue::Int64(v) => Ok(v),
-        _ => Err(format!("Expected Int64, got {:?}", val)),
-    }
-}
-
-fn extract_native_int(val: StackValue) -> Result<isize, String> {
-    match val {
-        StackValue::NativeInt(v) => Ok(v),
-        _ => Err(format!("Expected NativeInt, got {:?}", val)),
-    }
-}
-
-fn extract_float(val: StackValue) -> Result<f64, String> {
-    match val {
-        StackValue::NativeFloat(v) => Ok(v),
-        _ => Err(format!("Expected NativeFloat, got {:?}", val)),
-    }
-}
-
-// Integrity Checks
-
-pub fn check_read_safety(
-    result_layout: &LayoutManager,
-    src_layout: Option<&LayoutManager>,
-    src_ptr_offset: usize,
-) {
-    check_refs_in_layout(result_layout, 0, &mut |ref_offset| {
-        let target_src = src_ptr_offset + ref_offset;
-
-        if let Some(sl) = src_layout {
-            if !has_ref_at(sl, target_src) {
-                panic!(
-                    "Heap Corruption: Reading ObjectRef from non-ref memory at offset {}",
-                    target_src
-                );
-            }
-            if !target_src.is_multiple_of(8) {
-                panic!(
-                    "Heap Corruption: Reading misaligned ObjectRef at {}",
-                    target_src
-                );
-            }
-        } else {
-            // Reading Ref from unmanaged memory (src_layout is None)
-            // Relaxed for Stack Scanning compatibility (Unsafe Code) and Unsafe.ReadUnaligned
-        }
-    });
-}
-
-pub fn has_ref_at(layout: &LayoutManager, offset: usize) -> bool {
-    match layout {
-        LayoutManager::Scalar(s) => match s {
-            Scalar::ObjectRef | Scalar::ManagedPtr => offset == 0,
-            _ => false,
-        },
-        LayoutManager::Field(fm) => {
-            for f in fm.fields.values() {
-                if offset >= f.position.as_usize()
-                    && offset < (f.position + f.layout.size()).as_usize()
-                {
-                    return has_ref_at(&f.layout, offset - f.position.as_usize());
-                }
-            }
-            false
-        }
-        LayoutManager::Array(am) => {
-            let elem_size = am.element_layout.size();
-            if elem_size.as_usize() == 0 {
-                return false;
-            }
-            let idx = offset / elem_size.as_usize();
-            if idx >= am.length {
-                return false;
-            }
-            let rel = offset % elem_size.as_usize();
-            has_ref_at(&am.element_layout, rel)
-        }
-    }
-}
-
-fn check_refs_in_layout<F>(layout: &LayoutManager, base: usize, callback: &mut F)
-where
-    F: FnMut(usize) + ?Sized,
-{
-    match layout {
-        LayoutManager::Scalar(s) => match s {
-            Scalar::ObjectRef | Scalar::ManagedPtr => callback(base),
-            _ => {}
-        },
-        LayoutManager::Field(fm) => {
-            for f in fm.fields.values() {
-                check_refs_in_layout(&f.layout, base + f.position.as_usize(), callback);
-            }
-        }
-        LayoutManager::Array(am) => {
-            if am.element_layout.is_or_contains_refs() {
-                let sz = am.element_layout.size();
-                for i in 0..am.length {
-                    check_refs_in_layout(&am.element_layout, base + (sz * i).as_usize(), callback);
-                }
-            }
-        }
-    }
-}
-
-fn validate_ref_integrity(
-    dest_layout: &LayoutManager,
-    base_offset: usize,
-    range_start: usize,
-    range_end: usize,
-    src_layout: &LayoutManager,
-) {
-    match dest_layout {
-        LayoutManager::Scalar(s) => match s {
-            Scalar::ObjectRef | Scalar::ManagedPtr => {
-                let ref_start = base_offset;
-                let ref_end = base_offset + 8;
-
-                if ref_start < range_end && ref_end > range_start {
-                    if ref_start < range_start {
-                        panic!(
-                            "Heap Corruption: Write starts in the middle of an ObjectRef at {}",
-                            ref_start
-                        );
-                    }
-
-                    if ref_end > range_end {
-                        panic!(
-                            "Heap Corruption: Write ends in the middle of an ObjectRef at {}",
-                            ref_start
-                        );
-                    }
-
-                    let src_offset = ref_start - range_start;
-                    if !has_ref_at(src_layout, src_offset) {
-                        panic!(
-                            "Heap Corruption: Writing non-ref data over ObjectRef at offset {}",
-                            ref_start
-                        );
-                    }
-
-                    if !ref_start.is_multiple_of(8) {
-                        panic!(
-                            "Heap Corruption: Misaligned ObjectRef in destination at {}",
-                            ref_start
-                        );
-                    }
-                }
-            }
-            _ => {}
-        },
-        LayoutManager::Field(fm) => {
-            for f in fm.fields.values() {
-                let f_start = base_offset + f.position.as_usize();
-                let f_end = f_start + f.layout.size().as_usize();
-                if f_start < range_end && f_end > range_start {
-                    validate_ref_integrity(&f.layout, f_start, range_start, range_end, src_layout);
-                }
-            }
-        }
-        LayoutManager::Array(am) => {
-            if am.element_layout.is_or_contains_refs() {
-                let elem_size = am.element_layout.size();
-                if elem_size.as_usize() == 0 {
-                    return;
-                }
-
-                let rel_start = range_start.saturating_sub(base_offset);
-                let rel_end = range_end.saturating_sub(base_offset);
-
-                let start_idx = rel_start / elem_size.as_usize();
-                let end_idx = rel_end.div_ceil(elem_size.as_usize());
-                let end_idx = end_idx.min(am.length);
-
-                for i in start_idx..end_idx {
-                    validate_ref_integrity(
-                        &am.element_layout,
-                        base_offset + (elem_size * i).as_usize(),
-                        range_start,
-                        range_end,
-                        src_layout,
-                    );
-                }
-            }
         }
     }
 }

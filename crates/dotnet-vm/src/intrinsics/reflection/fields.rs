@@ -1,10 +1,13 @@
-use crate::{StepResult, stack::ops::VesOps};
+use crate::{
+    StepResult,
+    stack::ops::{ExceptionOps, LoaderOps, MemoryOps, ReflectionOps, TypedStackOps},
+};
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription, runtime::RuntimeType};
 use dotnet_value::StackValue;
 
 #[dotnet_intrinsic("string DotnetRs.FieldInfo::GetName()")]
-pub fn intrinsic_field_info_get_name<'gc, T: VesOps<'gc>>(
+pub fn intrinsic_field_info_get_name<'gc, T: TypedStackOps<'gc> + ReflectionOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -16,7 +19,7 @@ pub fn intrinsic_field_info_get_name<'gc, T: VesOps<'gc>>(
 }
 
 #[dotnet_intrinsic("System.Type DotnetRs.FieldInfo::GetDeclaringType()")]
-pub fn intrinsic_field_info_get_declaring_type<'gc, T: VesOps<'gc>>(
+pub fn intrinsic_field_info_get_declaring_type<'gc, T: TypedStackOps<'gc> + ReflectionOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -29,7 +32,10 @@ pub fn intrinsic_field_info_get_declaring_type<'gc, T: VesOps<'gc>>(
 }
 
 #[dotnet_intrinsic("System.RuntimeFieldHandle DotnetRs.FieldInfo::GetFieldHandle()")]
-pub fn intrinsic_field_info_get_field_handle<'gc, T: VesOps<'gc>>(
+pub fn intrinsic_field_info_get_field_handle<
+    'gc,
+    T: TypedStackOps<'gc> + LoaderOps + MemoryOps<'gc> + ExceptionOps<'gc>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,

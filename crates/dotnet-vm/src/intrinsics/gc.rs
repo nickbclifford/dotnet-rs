@@ -1,8 +1,8 @@
 use crate::{
     StepResult,
     stack::ops::{
-        CallOps, EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ResolutionOps,
-        ThreadOps, TypedStackOps, VesOps,
+        EvalStackOps, ExceptionOps, MemoryOps, RawMemoryOps, TypedStackOps, VesBaseOps,
+        VesInternals,
     },
 };
 use dotnet_macros::dotnet_intrinsic;
@@ -34,7 +34,10 @@ pub fn intrinsic_argument_null_exception_throw_if_null<
 
 /// System.Environment::GetEnvironmentVariableCore(string)
 #[dotnet_intrinsic("static string System.Environment::GetEnvironmentVariableCore(string)")]
-pub fn intrinsic_environment_get_variable_core<'gc, T: VesOps<'gc>>(
+pub fn intrinsic_environment_get_variable_core<
+    'gc,
+    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -108,7 +111,7 @@ pub fn intrinsic_gc_reregister_for_finalize<
 
 /// System.GC::Collect()
 #[dotnet_intrinsic("static void System.GC::Collect()")]
-pub fn intrinsic_gc_collect_0<'gc, T: VesOps<'gc>>(
+pub fn intrinsic_gc_collect_0<'gc, T: MemoryOps<'gc> + VesInternals<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -120,7 +123,7 @@ pub fn intrinsic_gc_collect_0<'gc, T: VesOps<'gc>>(
 
 /// System.GC::Collect(int)
 #[dotnet_intrinsic("static void System.GC::Collect(int)")]
-pub fn intrinsic_gc_collect_1<'gc, T: VesOps<'gc>>(
+pub fn intrinsic_gc_collect_1<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc> + VesInternals<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -133,7 +136,7 @@ pub fn intrinsic_gc_collect_1<'gc, T: VesOps<'gc>>(
 
 /// System.GC::Collect(int, GCCollectionMode)
 #[dotnet_intrinsic("static void System.GC::Collect(int, System.GCCollectionMode)")]
-pub fn intrinsic_gc_collect_2<'gc, T: VesOps<'gc>>(
+pub fn intrinsic_gc_collect_2<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc> + VesInternals<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -146,18 +149,7 @@ pub fn intrinsic_gc_collect_2<'gc, T: VesOps<'gc>>(
 }
 
 #[dotnet_intrinsic("static void System.GC::WaitForPendingFinalizers()")]
-pub fn intrinsic_gc_wait_for_pending_finalizers<
-    'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + MemoryOps<'gc>
-        + CallOps<'gc>
-        + ResolutionOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ThreadOps,
->(
+pub fn intrinsic_gc_wait_for_pending_finalizers<'gc, T: MemoryOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -174,7 +166,10 @@ pub fn intrinsic_gc_wait_for_pending_finalizers<
 #[dotnet_intrinsic(
     "static IntPtr System.Runtime.InteropServices.GCHandle::InternalAlloc(object, System.Runtime.InteropServices.GCHandleType)"
 )]
-pub fn intrinsic_gchandle_internal_alloc<'gc, T: VesOps<'gc>>(
+pub fn intrinsic_gchandle_internal_alloc<
+    'gc,
+    T: TypedStackOps<'gc> + MemoryOps<'gc> + VesBaseOps,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -215,7 +210,10 @@ pub fn intrinsic_gchandle_internal_alloc<'gc, T: VesOps<'gc>>(
 }
 
 #[dotnet_intrinsic("static void System.Runtime.InteropServices.GCHandle::InternalFree(IntPtr)")]
-pub fn intrinsic_gchandle_internal_free<'gc, T: VesOps<'gc>>(
+pub fn intrinsic_gchandle_internal_free<
+    'gc,
+    T: TypedStackOps<'gc> + MemoryOps<'gc> + VesBaseOps,
+>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -309,15 +307,7 @@ pub fn intrinsic_gchandle_internal_set<
 )]
 pub fn intrinsic_gchandle_internal_addr_of_pinned_object<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + MemoryOps<'gc>
-        + CallOps<'gc>
-        + ResolutionOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ThreadOps,
+    T: TypedStackOps<'gc> + MemoryOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,

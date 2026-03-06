@@ -15,23 +15,26 @@ use syn::{ItemFn, LitStr, parse_macro_input};
 
 fn match_primitive(type_name: &str) -> Option<proc_macro2::TokenStream> {
     match type_name {
-        "void" | "Void" | "System.Void" => Some(quote! { BaseType::Void }),
-        "bool" | "Boolean" | "System.Boolean" => Some(quote! { BaseType::Boolean }),
-        "char" | "Char" | "System.Char" => Some(quote! { BaseType::Char }),
-        "sbyte" | "SByte" | "System.SByte" => Some(quote! { BaseType::Int8 }),
-        "byte" | "Byte" | "System.Byte" => Some(quote! { BaseType::UInt8 }),
-        "short" | "Int16" | "System.Int16" => Some(quote! { BaseType::Int16 }),
-        "ushort" | "UInt16" | "System.UInt16" => Some(quote! { BaseType::UInt16 }),
-        "int" | "Int32" | "System.Int32" => Some(quote! { BaseType::Int32 }),
-        "uint" | "UInt32" | "System.UInt32" => Some(quote! { BaseType::UInt32 }),
-        "long" | "Int64" | "System.Int64" => Some(quote! { BaseType::Int64 }),
-        "ulong" | "UInt64" | "System.UInt64" => Some(quote! { BaseType::UInt64 }),
-        "float" | "Single" | "System.Single" | "Float32" => Some(quote! { BaseType::Float32 }),
-        "double" | "Double" | "System.Double" | "Float64" => Some(quote! { BaseType::Float64 }),
-        "string" | "String" | "System.String" => Some(quote! { BaseType::String }),
-        "object" | "Object" | "System.Object" => Some(quote! { BaseType::Object }),
-        "IntPtr" | "System.IntPtr" => Some(quote! { BaseType::IntPtr }),
-        "UIntPtr" | "System.UIntPtr" => Some(quote! { BaseType::UIntPtr }),
+        "bool" | "Boolean" | "System.Boolean" => Some(quote! { BaseType::<MethodType>::Boolean }),
+        "char" | "Char" | "System.Char" => Some(quote! { BaseType::<MethodType>::Char }),
+        "sbyte" | "SByte" | "System.SByte" => Some(quote! { BaseType::<MethodType>::Int8 }),
+        "byte" | "Byte" | "System.Byte" => Some(quote! { BaseType::<MethodType>::UInt8 }),
+        "short" | "Int16" | "System.Int16" => Some(quote! { BaseType::<MethodType>::Int16 }),
+        "ushort" | "UInt16" | "System.UInt16" => Some(quote! { BaseType::<MethodType>::UInt16 }),
+        "int" | "Int32" | "System.Int32" => Some(quote! { BaseType::<MethodType>::Int32 }),
+        "uint" | "UInt32" | "System.UInt32" => Some(quote! { BaseType::<MethodType>::UInt32 }),
+        "long" | "Int64" | "System.Int64" => Some(quote! { BaseType::<MethodType>::Int64 }),
+        "ulong" | "UInt64" | "System.UInt64" => Some(quote! { BaseType::<MethodType>::UInt64 }),
+        "float" | "Single" | "System.Single" | "Float32" => {
+            Some(quote! { BaseType::<MethodType>::Float32 })
+        }
+        "double" | "Double" | "System.Double" | "Float64" => {
+            Some(quote! { BaseType::<MethodType>::Float64 })
+        }
+        "string" | "String" | "System.String" => Some(quote! { BaseType::<MethodType>::String }),
+        "object" | "Object" | "System.Object" => Some(quote! { BaseType::<MethodType>::Object }),
+        "IntPtr" | "System.IntPtr" => Some(quote! { BaseType::<MethodType>::IntPtr }),
+        "UIntPtr" | "System.UIntPtr" => Some(quote! { BaseType::<MethodType>::UIntPtr }),
         _ => None,
     }
 }
@@ -68,8 +71,25 @@ pub fn dotnet_intrinsic(attr: TokenStream, item: TokenStream) -> TokenStream {
                 // Check if parameter matches Expected Type.
                 {
                     use dotnetdll::prelude::*;
-                    let Some(Parameter(_, ParameterType::Value(MethodType::Base(b)))) = method.method().signature.parameters.get(#i) else { return false; };
-                    if !matches!(**b, #base_type) { return false; }
+                    let Some(param) = method.method().signature.parameters.get(#i) else { return false; };
+                    match &param.1 {
+                        ParameterType::Value(MethodType::Base(b)) => {
+                            match b.as_ref() {
+                                BaseType::ValuePointer(_, _) => {
+                                    if !matches!(#base_type, BaseType::IntPtr | BaseType::UIntPtr) { return false; }
+                                }
+                                BaseType::Type { .. } => {
+                                    // IntPtr is a struct in .NET Core
+                                    if !matches!(#base_type, BaseType::IntPtr | BaseType::UIntPtr) { return false; }
+                                }
+                                b_val => if !matches!(b_val, #base_type) { return false; }
+                            }
+                        }
+                        ParameterType::Ref(MethodType::Base(b)) => {
+                            if !matches!(b.as_ref(), #base_type) { return false; }
+                        }
+                        _ => return false,
+                    }
                 }
             }
         } else {

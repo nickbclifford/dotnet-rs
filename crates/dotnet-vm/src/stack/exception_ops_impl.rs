@@ -3,10 +3,9 @@ use crate::{
     exceptions::{
         ExceptionState, HandlerAddress, HandlerKind, SearchState, UnwindState, UnwindTarget,
     },
-    memory::ops::MemoryOps,
     stack::{
         context::VesContext,
-        ops::{ExceptionOps, StackOps},
+        ops::{BaseMemoryOps, ExceptionOps, StackOps},
     },
 };
 use dotnet_value::{
@@ -108,7 +107,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
         // Restore state of the frame where filter ran
         let frame = &mut self.frame_stack.frames[handler.frame_index];
         frame.state.ip = *self.original_ip;
-        frame.stack_height = *self.original_stack_height;
+        frame.stack_height = (*self.original_stack_height).saturating_sub_idx(frame.base.stack);
         frame.exception_stack.pop();
 
         // Restore suspended evaluation and frame stacks

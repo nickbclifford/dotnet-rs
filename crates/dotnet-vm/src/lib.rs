@@ -13,7 +13,7 @@
 //! - **Threading** (`threading/`): Support for multi-threaded execution.
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnetdll::prelude::*;
-use gc_arena::Collect;
+use std::sync::Arc;
 
 #[macro_use]
 mod macros;
@@ -21,7 +21,9 @@ mod macros;
 pub mod context;
 pub mod dispatch;
 pub mod error;
-mod exceptions;
+pub mod exceptions {
+    pub use dotnet_exceptions::*;
+}
 mod executor;
 #[cfg(feature = "fuzzing")]
 pub mod fuzzing;
@@ -31,7 +33,9 @@ pub(crate) mod intrinsics;
 pub mod layout;
 pub mod memory;
 pub mod metrics;
-mod pinvoke;
+pub mod pinvoke {
+    pub use dotnet_pinvoke::*;
+}
 pub mod resolution;
 pub mod resolver;
 mod stack;
@@ -44,108 +48,67 @@ pub mod tracer;
 pub use dotnet_utils::{
     ArenaId, ArgumentIndex, ByteOffset, FieldIndex, LocalIndex, StackSlotIndex,
 };
+pub use dotnet_vm_ops::{CollectableMethodDescription, MethodInfo, MethodState, StepResult};
 pub use executor::*;
 pub use stack::*;
 pub use state::ReflectionRegistry;
 
 use context::ResolutionContext;
 use state::SharedGlobalState;
-use sync::Arc;
 
-// I.12.3.2
-#[derive(Clone)]
-pub struct MethodState {
-    pub ip: usize,
-    pub info_handle: MethodInfo<'static>,
-    pub memory_pool: Vec<u8>,
-}
-impl MethodState {
-    pub fn new(info_handle: MethodInfo<'static>) -> Self {
-        Self {
-            ip: 0,
-            info_handle,
-            memory_pool: vec![],
-        }
-    }
-}
-unsafe impl<'gc> Collect<'gc> for MethodState {}
+/// Constructs a [`MethodInfo`] from a resolved method descriptor.
+///
+/// This factory function lives in `dotnet-vm` rather than `dotnet-vm-ops` because it
+/// requires access to [`ResolutionContext`], [`SharedGlobalState`], and
+/// [`exceptions::parse`] — all of which are internal to this crate.
+pub fn build_method_info(
+    method: MethodDescription,
+    generics: &GenericLookup,
+    shared: Arc<SharedGlobalState>,
+) -> Result<MethodInfo<'static>, error::TypeResolutionError> {
+    let loader = shared.loader.clone();
+    let ctx = ResolutionContext::for_method(
+        method,
+        loader.clone(),
+        generics,
+        shared.caches.clone(),
+        Some(shared),
+    );
 
-#[derive(Clone, Debug)]
-pub struct MethodInfo<'a> {
-    signature: &'a ManagedMethod<MethodType>,
-    locals: &'a [LocalVariable],
-    exceptions: Vec<Arc<exceptions::ProtectedSection>>,
-    pub instructions: &'a [Instruction],
-    pub source: MethodDescription,
-    pub is_cctor: bool,
-}
-unsafe impl<'gc, 'a> Collect<'gc> for MethodInfo<'a> {}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Collect)]
-#[collect(require_static)]
-pub struct CollectableMethodDescription(pub MethodDescription);
-impl MethodInfo<'static> {
-    pub fn new(
-        method: MethodDescription,
-        generics: &GenericLookup,
-        shared: Arc<SharedGlobalState>,
-    ) -> Result<Self, error::TypeResolutionError> {
-        let loader = shared.loader.clone();
-        let ctx = ResolutionContext::for_method(
-            method,
-            loader.clone(),
-            generics,
-            shared.caches.clone(),
-            Some(shared),
-        );
-
-        if let Some(body) = &method.method().body {
-            let mut exceptions: &[body::Exception] = &[];
-            for sec in &body.data_sections {
-                use body::DataSection::*;
-                match sec {
-                    Unrecognized { .. } => {}
-                    ExceptionHandlers(e) => {
-                        exceptions = e;
-                    }
+    if let Some(body) = &method.method().body {
+        let mut exceptions: &[body::Exception] = &[];
+        for sec in &body.data_sections {
+            use body::DataSection::*;
+            match sec {
+                Unrecognized { .. } => {}
+                ExceptionHandlers(e) => {
+                    exceptions = e;
                 }
             }
-
-            Ok(Self {
-                is_cctor: method.method().runtime_special_name
-                    && method.method().name == ".cctor"
-                    && !method.method().signature.instance
-                    && method.method().signature.parameters.is_empty(),
-                signature: &method.method().signature,
-                locals: &body.header.local_variables,
-                exceptions: exceptions::parse(exceptions, &ctx)?
-                    .into_iter()
-                    .map(Arc::new)
-                    .collect(),
-                instructions: body.instructions.as_slice(),
-                source: method,
-            })
-        } else {
-            Ok(Self {
-                is_cctor: false,
-                signature: &method.method().signature,
-                locals: &[],
-                exceptions: vec![],
-                instructions: &[],
-                source: method,
-            })
         }
-    }
-}
 
-#[must_use]
-#[derive(Clone, Debug, PartialEq)]
-pub enum StepResult {
-    Continue,                                  // Advance IP
-    Jump(usize),                               // Set IP to X
-    FramePushed,                               // Do not advance IP (new frame active)
-    Return,                                    // Pop frame
-    MethodThrew(exceptions::ManagedException), // Exception unhandled in frame
-    Exception,                                 // Exception thrown, need to call handle_exception
-    Yield,                                     // GC/Thread yield
-    Error(error::VmError),                     // Internal VM error
+        Ok(MethodInfo {
+            is_cctor: method.method().runtime_special_name
+                && method.method().name == ".cctor"
+                && !method.method().signature.instance
+                && method.method().signature.parameters.is_empty(),
+            signature: &method.method().signature,
+            locals: &body.header.local_variables,
+            exceptions: exceptions::parse(exceptions, &ctx)?
+                .into_iter()
+                .map(Arc::new)
+                .collect(),
+            instructions: body.instructions.as_slice(),
+            source: method,
+        })
+    } else {
+        Ok(MethodInfo {
+            is_cctor: false,
+            signature: &method.method().signature,
+            locals: &[],
+            exceptions: vec![],
+            instructions: &[],
+            source: method,
+        })
+    }
 }
