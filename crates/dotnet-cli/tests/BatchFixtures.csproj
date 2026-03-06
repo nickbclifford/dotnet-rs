@@ -18,18 +18,18 @@
     MSBuild item batching (%(metadata)) fans this out automatically.
     BuildInParallel="true" allows concurrent Roslyn compilations.
   -->
-  <Target Name="BatchCompileFixtures" AfterTargets="Restore">
+  <Target Name="BatchCompileFixtures">
     <MSBuild Projects="SingleFile.csproj"
              Properties="
                TestFile=%(TestFixture.FullPath);
                AllowUnsafeBlocks=true;
                OutputPath=$(FixtureOutputBase)%(TestFixture.RecursiveDir)%(TestFixture.Filename)/;
                BaseIntermediateOutputPath=$(FixtureOutputBase)%(TestFixture.RecursiveDir)%(TestFixture.Filename)/obj/"
-             Targets="Restore;Build"
+             Targets="Build"
              BuildInParallel="true" />
   </Target>
 
   <!-- Override the default Build target to do nothing except trigger our target -->
-  <Target Name="Build" />
-  <Target Name="Compile" />
+  <Target Name="Build" DependsOnTargets="BatchCompileFixtures" />
+  <Target Name="Compile" DependsOnTargets="BatchCompileFixtures" />
 </Project>

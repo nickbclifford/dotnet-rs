@@ -46,6 +46,9 @@ jobs:
         with:
           components: clippy
 
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2.8.2
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -84,10 +87,22 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2.8.2
+
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+          cache: true
+
+      - name: Cache .NET fixtures
+        uses: actions/cache@v4
+        with:
+          path: crates/dotnet-cli/target/dotnet-fixtures
+          key: ${{ runner.os }}-dotnet-fixtures-${{ hashFiles('crates/dotnet-cli/tests/fixtures/**/*.cs', 'crates/dotnet-cli/tests/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-dotnet-fixtures-
 
       - name: Install dependencies
         run: |

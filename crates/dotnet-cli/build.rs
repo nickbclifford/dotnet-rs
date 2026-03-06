@@ -1,4 +1,11 @@
-use std::{fs::File, io::Write, path::Path, process::Command};
+use std::{
+    collections::hash_map::DefaultHasher,
+    fs::File,
+    hash::{Hash, Hasher},
+    io::Write,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 /// Returns true when we should skip expensive dotnet build steps.
 /// This is the case during `cargo clippy` (detected via CARGO_CFG_CLIPPY) or
@@ -9,7 +16,6 @@ fn should_skip_dotnet_build() -> bool {
 }
 
 fn main() {
-    println!("cargo:rerun-if-changed=tests/fixtures");
     println!("cargo:rerun-if-changed=tests/SingleFile.csproj");
     println!("cargo:rerun-if-changed=tests/BatchFixtures.csproj");
 
@@ -22,8 +28,32 @@ fn main() {
     let fixtures_dir = tests_dir.join("fixtures");
     let output_base = manifest_dir.join("target").join("dotnet-fixtures");
 
-    if !should_skip_dotnet_build() {
-        // Phase 1: Batch compile all fixtures
+    let mut fixtures = Vec::new();
+    find_fixtures(&fixtures_dir, &mut fixtures);
+    fixtures.sort_by_key(|p| p.to_string_lossy().to_string());
+
+    let hash = compute_fixtures_hash(&fixtures, &tests_dir);
+    let hash_file = output_base.join(".fixtures_hash");
+    let previous_hash: Option<u64> = std::fs::read_to_string(&hash_file)
+        .ok()
+        .and_then(|s| s.trim().parse().ok());
+
+    let needs_dotnet_build = previous_hash != Some(hash);
+
+    if !should_skip_dotnet_build() && needs_dotnet_build {
+        // Ensure output_base exists before we save the hash later
+        std::fs::create_dir_all(&output_base).unwrap();
+
+        // Phase 0: Restore packages once for SingleFile.csproj
+        let restore_status = Command::new("dotnet")
+            .args(["restore", "SingleFile.csproj", "-v:q", "--nologo"])
+            .current_dir(&tests_dir)
+            .status()
+            .expect("Failed to run dotnet restore");
+
+        assert!(restore_status.success(), "dotnet restore failed");
+
+        // Phase 1: Batch compile all fixtures (restore already done)
         let status = Command::new("dotnet")
             .args([
                 "build",
@@ -32,6 +62,7 @@ fn main() {
                 "-v:q",            // quiet verbosity
                 "--nologo",        // suppress banner
                 "-clp:ErrorsOnly", // only show errors
+                "--no-restore",
             ])
             .arg(format!("-p:FixtureOutputBase={}/", output_base.display()))
             .current_dir(&tests_dir)
@@ -42,11 +73,10 @@ fn main() {
             status.success(),
             "dotnet build BatchFixtures.csproj failed. Check that the .NET 10 SDK is installed."
         );
-    }
 
-    let mut fixtures = Vec::new();
-    find_fixtures(&fixtures_dir, &mut fixtures);
-    fixtures.sort_by_key(|p| p.to_string_lossy().to_string());
+        // Save hash on success
+        std::fs::write(&hash_file, hash.to_string()).unwrap();
+    }
 
     for path in fixtures {
         let file_name = path.file_stem().unwrap().to_str().unwrap();
@@ -57,22 +87,29 @@ fn main() {
             .parse()
             .expect("fixture file name must end with _<exit_code>.cs");
 
-        let mut ignore_prefix = "".to_string();
-        if file_name == "bench_loop_42" {
-            ignore_prefix = "#[ignore] ".to_string();
-        }
-
         let relative_path = path.strip_prefix(&fixtures_dir).unwrap();
+        let test_name = relative_path
+            .with_extension("")
+            .to_str()
+            .unwrap()
+            .replace("/", "_")
+            .replace("\\", "_");
+
         let dll_path = output_base
             .join(relative_path.parent().unwrap())
             .join(file_name)
             .join("SingleFile.dll");
 
+        let mut ignore_prefix = "".to_string();
+        if file_name == "bench_loop_42" || !dll_path.exists() {
+            ignore_prefix = "#[ignore] ".to_string();
+        }
+
         writeln!(
             f,
             "fixture_test!({}{}, {:?}, {});",
             ignore_prefix,
-            file_name,
+            test_name,
             dll_path.to_str().unwrap(),
             expected_exit_code
         )
@@ -81,7 +118,7 @@ fn main() {
     }
 }
 
-fn find_fixtures(dir: &Path, fixtures: &mut Vec<std::path::PathBuf>) {
+fn find_fixtures(dir: &Path, fixtures: &mut Vec<PathBuf>) {
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .unwrap()
         .filter_map(|e| e.ok())
@@ -96,4 +133,27 @@ fn find_fixtures(dir: &Path, fixtures: &mut Vec<std::path::PathBuf>) {
             fixtures.push(path);
         }
     }
+}
+
+fn compute_fixtures_hash(fixtures: &[PathBuf], tests_dir: &Path) -> u64 {
+    let mut hasher = DefaultHasher::new();
+
+    // Hash .csproj files
+    for csproj in &["SingleFile.csproj", "BatchFixtures.csproj"] {
+        let path = tests_dir.join(csproj);
+        if let Ok(content) = std::fs::read(&path) {
+            path.to_string_lossy().hash(&mut hasher);
+            content.hash(&mut hasher);
+        }
+    }
+
+    // Hash all fixture .cs files (sorted for determinism)
+    for fixture in fixtures {
+        if let Ok(content) = std::fs::read(fixture) {
+            fixture.to_string_lossy().hash(&mut hasher);
+            content.hash(&mut hasher);
+        }
+    }
+
+    hasher.finish()
 }
