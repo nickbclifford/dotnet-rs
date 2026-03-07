@@ -9,8 +9,8 @@ Resolution converts metadata tokens (from parsed .NET assemblies) into runtime d
 - **`dotnet-vm/src/resolver/`**: `ResolverService` facade with sub-modules for types, methods, layout, and factory
 - **`dotnet-vm/src/context.rs`**: `ResolutionContext` for scoped resolution with generic parameters
 - **`dotnet-vm/src/resolution.rs`**: Resolution traits and helpers
-- **`dotnet-vm/src/layout.rs`**: `LayoutFactory` for computing object memory layouts (~497 lines)
-- **`dotnet-value/src/layout.rs`**: `LayoutManager`, `FieldLayoutManager`, `ArrayLayoutManager` (~438 lines)
+- **`dotnet-vm/src/layout.rs`**: `LayoutFactory` for computing object memory layouts (~493 lines)
+- **`dotnet-value/src/layout.rs`**: `LayoutManager`, `FieldLayoutManager`, `ArrayLayoutManager` (~497 lines)
 - **`dotnet-vm/src/state.rs`**: `GlobalCaches` and `SharedGlobalState`
 - **`dotnet-types/src/`**: Type descriptors, generics, comparer
 

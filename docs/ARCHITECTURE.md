@@ -7,12 +7,35 @@
 The project is divided into several crates, each with a focused responsibility:
 
 - **dotnet-cli**: The entry point. It provides the command-line interface, test harness, and integration tests.
-- **dotnet-vm**: The core of the virtual machine. It includes the execution engine (executor), instruction handlers, native intrinsics (BCL), memory management (heap and GC), and threading support.
+- **dotnet-vm**: The core of the virtual machine. It includes the execution engine (executor), instruction handlers, native intrinsics (BCL), memory management (heap and GC), and threading support. Re-exports several extracted sub-crates for backward compatibility.
+- **dotnet-vm-ops**: Foundational VES operation traits (`EvalStackOps`, `TypedStackOps`, `ExceptionOps`, `RawMemoryOps`, etc.), execution data types (`StepResult`, `MethodInfo`, `MethodState`), exception data types (`ExceptionState`, `ProtectedSection`, `Handler`, etc.), and stack types (`EvaluationStack`, `FrameStack`, `StackFrame`). Depends only on `dotnet-value`, `dotnet-types`, `dotnet-utils`, and `dotnetdll` — no circular dependency on `dotnet-vm`.
+- **dotnet-exceptions**: Exception handling logic extracted from `dotnet-vm`. Contains the `ExceptionHandlingSystem` with the two-pass search/unwind state machine. Depends on `dotnet-vm-ops` for base traits and types.
+- **dotnet-pinvoke**: P/Invoke marshalling extracted from `dotnet-vm`. Uses `libffi` and `libloading` for native interop. Depends on `dotnet-vm-ops` for base traits.
+- **dotnet-metrics**: Standalone crate for `RuntimeMetrics` with per-cache hit/miss tracking (`CacheStats`, `CacheStat`), serializable via `serde`.
+- **dotnet-tracer**: Standalone crate for the `Tracer` subsystem. Provides structured logging via the `tracing` crate with configurable levels (`DOTNET_LOG` env), a `LogEntry` enum for structured trace events, and an async flusher thread via `crossbeam-channel`.
 - **dotnet-assemblies**: Handles loading and resolving .NET assemblies. It also includes a support library of C# stubs for core types.
 - **dotnet-value**: Defines the representation of all .NET values at runtime, including stack values, managed/unmanaged pointers, heap objects, and field storage layouts.
 - **dotnet-types**: Implements the .NET type system, including type descriptors, method/field info, generics, and type comparison logic.
-- **dotnet-utils**: Contains shared utilities like synchronization primitives, atomic access, and GC-related helper types.
+- **dotnet-utils**: Contains shared utilities like synchronization primitives, atomic access, GC-related helper types, and strongly-typed newtypes.
 - **dotnet-macros** & **dotnet-macros-core**: Procedural macros used to define instructions and intrinsics concisely.
+
+### Crate Dependency Hierarchy
+
+```
+dotnet-cli               # CLI entry point, TestHarness, integration tests, feature config tests
+    └── dotnet-vm            # Core VM: Executor, Instruction Set, Intrinsics, GC, Threading
+        ├── dotnet-exceptions    # Exception handling system (ExceptionHandlingSystem, two-pass SEH)
+        ├── dotnet-pinvoke       # P/Invoke marshalling (libffi, libloading)
+        ├── dotnet-vm-ops        # Base VES traits, StepResult, MethodInfo, EvaluationStack, ExceptionState
+        │   ├── dotnet-assemblies    # Assembly loading, resolution, bundled support library (.cs stubs)
+        │   ├── dotnet-value         # StackValue, Managed/Unmanaged Pointers, Heap Objects, FieldStorage, Layout
+        │   ├── dotnet-types         # Type/Method/Field descriptors, Generics, TypeComparer, RuntimeType, Error types
+        │   ├── dotnet-utils         # GC utilities, ThreadSafeLock, AtomicAccess, Sync primitives, Newtypes, BorrowGuard
+        │   ├── dotnet-metrics       # RuntimeMetrics, CacheStats (standalone, serde)
+        │   └── dotnet-tracer        # Tracer, LogEntry, structured logging (standalone)
+        ├── dotnet-macros        # Proc-macros: #[dotnet_intrinsic], #[dotnet_instruction], #[dotnet_intrinsic_field]
+        └── dotnet-macros-core   # Shared logic for macro expansion
+```
 
 ## Data Flow
 
@@ -56,6 +79,7 @@ The VM supports multi-threading (feature-gated via `multithreading`). For detail
 - **State Machine**: Exception processing is modeled as a state machine (`Throwing` → `Searching` → `Unwinding` → `ExecutingHandler`).
 - **Filter Clauses**: Support for dynamic `filter` blocks that run user CIL code during the search phase.
 - **Unwinding**: The `leave` instruction and exception unwinding properly execute `finally` and `fault` blocks.
+- **Extracted Crate**: The exception handling system (`ExceptionHandlingSystem`) lives in `dotnet-exceptions`, while the exception data types (`ExceptionState`, `ProtectedSection`, `Handler`, etc.) live in `dotnet-vm-ops/src/exceptions.rs`.
 
 See [Exception Handling](EXCEPTION_HANDLING.md) for full details on the state machine and unwinding process.
 
@@ -66,3 +90,36 @@ For more details on caching and resolution pipelines, see [Type Resolution and C
 - **Type Resolution**: Types are resolved lazily. `ResolutionContext` manages the scope of resolution, including generic parameters.
 - **Layout Calculation**: `LayoutFactory` computes the physical memory layout of objects and value types, including field offsets and GC descriptors (which fields are references).
 - **Generics**: Generic types and methods are instantiated on-demand, with metadata specialized for the specific type arguments.
+
+## Trait Architecture
+
+The VES trait system is split across two crates to avoid circular dependencies:
+
+### Base Traits (`dotnet-vm-ops/src/ops.rs`)
+Foundational traits that instruction handlers and intrinsics can target without depending on `dotnet-vm`:
+- `EvalStackOps`, `TypedStackOps`, `LocalOps`, `ArgumentOps`, `VariableOps`, `AllStackOps`
+- `ExceptionOps`, `RawMemoryOps`, `ThreadOps`, `CallOps`, `LoaderOps`
+- `MemoryOps`, `ResolutionOps`, `ReflectionOps`, `StaticsOps`
+- `VesBaseOps`, `VesInternals`, `ExceptionContext`, `PInvokeContext`
+
+### Extended Traits (`dotnet-vm/src/stack/ops.rs`)
+VM-specific extensions that add resolver, shared state, and reflection capabilities:
+- `StackOps` (extends `BaseStackOps` with frame access and slot operations)
+- `ResolutionOps` (extends `BaseResolutionOps` with `ResolutionContext`)
+- `ReflectionOps` (extends `BaseReflectionOps` + `IntrinsicDispatchOps` + `ReflectionLookupOps`)
+- `LoaderOps` (extends `BaseLoaderOps` with `ResolverService` and `SharedGlobalState`)
+- `CallOps` (extends `BaseCallOps` with frame construction and method dispatch)
+- `StaticsOps` (extends `BaseStaticsOps` with `StaticStorageManager` access)
+- `VesOps`: The unified trait combining `ExceptionContext + PInvokeContext + StaticsOps + ThreadOps + CallOps`. Primary generic bound for instruction handlers.
+
+### Usage Pattern
+```rust
+pub fn handle_instruction<'gc, T: VesOps<'gc> + ?Sized>(
+    ctx: &mut T,
+    instr: &Instruction,
+) -> StepResult {
+    let value = ctx.pop_i32();
+    ctx.push_i32(value * 2);
+    StepResult::Continue
+}
+```

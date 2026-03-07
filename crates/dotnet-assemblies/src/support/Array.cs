@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Runtime.CompilerServices;
+using JetBrains.Annotations;
 
 namespace DotnetRs;
 
@@ -7,7 +8,7 @@ namespace DotnetRs;
 public class Array : ICloneable, IList, IStructuralComparable, IStructuralEquatable
 {
     // Sentinel for array constructors used by runtime
-    internal void CtorArraySentinel() { }
+    [UsedImplicitly] internal void CtorArraySentinel() { }
 
     public extern int Length { [MethodImpl(MethodImplOptions.InternalCall)] get; }
 

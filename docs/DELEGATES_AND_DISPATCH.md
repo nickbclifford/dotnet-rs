@@ -34,7 +34,7 @@ The main dispatch loop in `step` / `step_normal`:
 
 ### `StepResult` Enum
 
-The `StepResult` enum (defined in `crates/dotnet-vm/src/lib.rs`) dictates how the dispatch loop proceeds after executing an instruction or intrinsic:
+The `StepResult` enum (defined in `crates/dotnet-vm-ops/src/lib.rs`, re-exported by `dotnet-vm`) dictates how the dispatch loop proceeds after executing an instruction or intrinsic:
 
 - `Continue`: Instruction executed successfully; advance IP to the next instruction.
 - `Jump(usize)`: Branch to the specified IP (used by `br`, `brtrue`, `brfalse`, etc.).
@@ -45,14 +45,14 @@ The `StepResult` enum (defined in `crates/dotnet-vm/src/lib.rs`) dictates how th
 - `Yield`: A GC stop was requested or thread suspension is needed. The execution engine pauses and returns to the caller.
 - `Error(VmError)`: A fatal internal VM error occurred (e.g., type mismatch, invalid memory access).
 
-## Delegate System (`intrinsics/delegates.rs`)
+## Delegate System (`intrinsics/delegates/`)
 
 ### How Delegates Work in .NET
 A delegate is an object that wraps a method reference (and optionally a target object). `MulticastDelegate` chains multiple delegates together.
 
 ### Delegate Object Layout
 
-Delegate objects in `dotnet-rs` mirror the standard .NET `System.Delegate` layout. The fields are accessed via `instance_storage.get_field_local` (see `crates/dotnet-vm/src/intrinsics/delegates.rs`):
+Delegate objects in `dotnet-rs` mirror the standard .NET `System.Delegate` layout. The fields are accessed via `instance_storage.get_field_local` (see `crates/dotnet-vm/src/intrinsics/delegates/`):
 - `_target` (ObjectRef): The `this` reference for instance methods. For static methods, this is typically null.
 - `_method` (RuntimeMethodHandle/usize): A method index encoded as an `isize` (8 bytes). This index points to a `MethodDescription` cached in the runtime's global lookup.
 - `_invocationList` (ObjectRef): For multicast delegates, an array of individual delegate objects.
@@ -78,7 +78,7 @@ Single delegate invocation:
 
 Multicast delegates (created by `Delegate.Combine`) contain multiple targets that must be invoked sequentially. This is complex because each target is a full method call that goes through the normal dispatch loop.
 
-**`MulticastState` struct** (in `crates/dotnet-vm/src/stack/context.rs`):
+**`MulticastState` struct** (in `crates/dotnet-vm-ops/src/stack.rs`, re-exported by `dotnet-vm`):
 ```rust
 pub struct MulticastState<'gc> {
     pub targets: ObjectHandle<'gc>, // Array of delegate objects

@@ -1,9 +1,11 @@
+using JetBrains.Annotations;
+
 namespace DotnetRs;
 
 [Stub(InPlaceOf = "System.MulticastDelegate")]
 public abstract class MulticastDelegate : Delegate
 {
-    private Delegate[] targets;
+    [UsedImplicitly] private Delegate[] targets;
 
     public MulticastDelegate(object target, nint method) : base(target, method)
     {

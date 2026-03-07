@@ -1,12 +1,13 @@
 using System.Globalization;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using JetBrains.Annotations;
 
 namespace DotnetRs;
 
 public class MethodInfo : System.Reflection.MethodInfo
 {
-    [JetBrains.Annotations.UsedImplicitly] private nint index;
+    [UsedImplicitly] private nint index;
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     public override extern object[] GetCustomAttributes(bool inherit);

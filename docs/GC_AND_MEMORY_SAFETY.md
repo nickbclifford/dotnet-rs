@@ -8,10 +8,10 @@ This document describes the garbage collection subsystem, memory safety invarian
 
 - **`dotnet-vm/src/gc/`**: Coordinator and arena management
 - **`dotnet-vm/src/memory/`**: Heap manager, raw memory access, memory ops
-- **`dotnet-value/src/object.rs`**: Heap object representation
+- **`dotnet-value/src/object/`**: Heap object representation (`mod.rs`, `heap_storage.rs`, `types.rs`)
 - **`dotnet-value/src/storage.rs`**: Field storage with atomic capabilities
 - **`dotnet-utils/src/lib.rs`**: `BorrowGuard` and `BorrowScopeOps`
-- **`dotnet-utils/src/gc.rs`**: GC utility types and `GCCommand`
+- **`dotnet-utils/src/gc/`**: GC utility types (`mod.rs`), `GCCommand`, `ThreadSafeLock` (`thread_safe_lock.rs`), arena helpers (`arena.rs`), and cross-arena refs (`cross_arena.rs`)
 
 ## Arena Architecture
 
@@ -128,7 +128,7 @@ When an object in arena A stores a reference to an object in arena B, this must 
 1. Never call `check_gc_safe_point()` while holding a heap borrow.
 2. Never allocate while holding a heap borrow (allocation may trigger GC).
 3. Always use `BorrowGuard` when borrowing heap objects in instruction handlers/intrinsics.
-4. Chunk large operations — e.g., in `string_ops.rs`, `span.rs`, or `unsafe_ops.rs`, long loops check `ctx.check_gc_safe_point()` periodically (e.g. every 1024 iterations or similar block size), dropping and re-acquiring `BorrowGuard` between iterations.
+4. Chunk large operations — e.g., in `string_ops/`, `span/`, or `unsafe_ops/`, long loops check `ctx.check_gc_safe_point()` periodically (e.g. every 1024 iterations or similar block size), dropping and re-acquiring `BorrowGuard` between iterations.
 
 ## HeapManager (`memory/heap.rs` & `memory/ops.rs`)
 
@@ -139,7 +139,7 @@ The `HeapManager` tracks object lifetimes, registration, and finalization:
 
 ## RawMemoryAccess (`memory/access.rs`)
 
-A critical abstraction (~1038 lines) providing memory safety over unsafe heap storage. The core implementations are `read_value_internal` and `write_value_internal`, which handle the actual data transfer and reference tracking. Higher-level APIs like `write_to_heap` and `write_to_unmanaged` provide additional safety checks and bounds validation. Operations include:
+A critical abstraction (~1090 lines) providing memory safety over unsafe heap storage. The core implementations are `read_value_internal` and `write_value_internal`, which handle the actual data transfer and reference tracking. Higher-level APIs like `write_to_heap` and `write_to_unmanaged` provide additional safety checks and bounds validation. Operations include:
 - **Unaligned reads/writes**: Validates reads/writes matching the `unaligned.` CIL prefix against `LayoutManager` invariants.
 - **Atomic operations**: Compare-exchange, exchange, load, store. Respects .NET memory models (`Ordering` abstractions).
 - **Bounds checking**: `check_bounds_internal` validates pointer arithmetic against `base` and `len`.
@@ -154,9 +154,9 @@ Provides atomic-capable raw byte storage for object fields:
 - Supports synchronised/atomic field access (`get_field_atomic`, `set_field_atomic`) under various memory ordering models.
 - Provides `raw_data_ptr()` returning `*mut u8` for low-level or STW-GC tracing access.
 
-## Object Representation (`dotnet-value/src/object.rs`)
+## Object Representation (`dotnet-value/src/object/`)
 
-Heap objects are represented via several layers of abstraction (~1180 lines):
+Heap objects are represented via several layers of abstraction, split across `mod.rs` (~600 lines), `heap_storage.rs`, and `types.rs`:
 - **`HeapStorage`**: Enum holding distinct memory models: `Vec(Vector)`, `Obj(Object)`, `Str(CLRString)`, `Boxed(Object)`.
 - **`ObjectInner`**: Wraps `HeapStorage` alongside the `owner_id: ArenaId`. When `feature = "memory-validation"` is enabled, embeds a `magic` number (`0x5AFE_0B1E_C700_0000`).
 - **`ObjectPtr`**: A transparent, Send/Sync wrapper over a raw pointer to a `ThreadSafeLock<ObjectInner>`. Used primarily for cross-arena references.

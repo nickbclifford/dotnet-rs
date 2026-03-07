@@ -1,6 +1,8 @@
+using JetBrains.Annotations;
+
 namespace DotnetRs;
 
 public class Module : System.Reflection.Module
 {
-    private IntPtr resolution;
+    [UsedImplicitly] private IntPtr resolution;
 }

@@ -1,12 +1,13 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using JetBrains.Annotations;
 
 namespace DotnetRs;
 
 public class ParameterInfo : System.Reflection.ParameterInfo
 {
-    private nint method_index;
-    private int position;
+    [UsedImplicitly] private nint method_index;
+    [UsedImplicitly] private int position;
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     private extern string GetName();

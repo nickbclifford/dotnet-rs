@@ -1,13 +1,14 @@
 using System.Runtime.Serialization;
 using System.Runtime.CompilerServices;
+using JetBrains.Annotations;
 
 namespace DotnetRs;
 
 [Stub(InPlaceOf = "System.Delegate")]
 public abstract class Delegate : ICloneable, ISerializable
 {
-    internal object? _target;
-    internal RuntimeMethodHandle _method;
+    [UsedImplicitly] internal object? _target;
+    [UsedImplicitly] internal RuntimeMethodHandle _method;
 
     protected Delegate(object target, nint method)
     {

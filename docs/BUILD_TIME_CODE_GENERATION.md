@@ -19,7 +19,7 @@ Instruction handlers are annotated in `src/instructions/**/*.rs`:
 
 ```rust
 #[dotnet_instruction(Add)]
-pub fn handle_add<'gc, 'm, T: VesOps<'gc, 'm>>(
+pub fn handle_add<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     _instr: &Instruction,
 ) -> StepResult { ... }
@@ -37,7 +37,7 @@ pub fn handle_add<'gc, 'm, T: VesOps<'gc, 'm>>(
 ```rust
 include!(concat!(env!("OUT_DIR"), "/instruction_dispatch.rs"));
 
-pub fn dispatch<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn dispatch<'gc, T: VesOps<'gc>>(
     ctx: &mut T,
     instr: &Instruction,
 ) -> StepResult {
@@ -55,7 +55,7 @@ Intrinsic implementations are annotated in `src/intrinsics/**/*.rs`:
 
 ```rust
 #[dotnet_intrinsic("System.Math::Abs(System.Int32)")]
-fn math_abs_i32<T: VesOps<'gc, 'm>>(ctx: &mut T, ...) -> StepResult { ... }
+fn math_abs_i32<T: VesOps<'gc>>(ctx: &mut T, ...) -> StepResult { ... }
 ```
 
 ### Build Process
@@ -140,7 +140,7 @@ The build process emits two main files into the `OUT_DIR`.
 
 **1. `instruction_dispatch.rs`**
 ```rust
-pub fn dispatch_monomorphic<'gc, 'm: 'gc, T: crate::stack::ops::VesOps<'gc, 'm>>(
+pub fn dispatch_monomorphic<'gc, T: crate::stack::ops::VesOps<'gc>>(
     ctx: &mut T,
     instr: &Instruction,
 ) -> crate::StepResult {
@@ -160,7 +160,7 @@ pub enum MethodIntrinsicId {
     // ...
 }
 
-pub fn dispatch_method_intrinsic<'gc, 'm: 'gc, T: VesOps<'gc, 'm>>(
+pub fn dispatch_method_intrinsic<'gc, T: VesOps<'gc>>(
     id: MethodIntrinsicId,
     ctx: &mut T,
     // ...

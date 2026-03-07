@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using DotnetRs;
+using JetBrains.Annotations;
 
 namespace DotnetRs
 {
@@ -18,8 +19,8 @@ namespace System
     [Stub(InPlaceOf = "System.Span`1")]
     public readonly ref struct Span<T>
     {
-        internal readonly ref T _reference;
-        internal readonly int _length;
+        [UsedImplicitly] internal readonly ref T _reference;
+        [UsedImplicitly] internal readonly int _length;
 
         public Span(T[] array)
         {
@@ -122,8 +123,8 @@ namespace System
     [Stub(InPlaceOf = "System.ReadOnlySpan`1")]
     public readonly ref struct ReadOnlySpan<T>
     {
-        internal readonly ref T _reference;
-        internal readonly int _length;
+        [UsedImplicitly] internal readonly ref T _reference;
+        [UsedImplicitly] internal readonly int _length;
 
         public ReadOnlySpan(T[] array)
         {

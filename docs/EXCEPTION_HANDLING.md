@@ -4,7 +4,13 @@ This document describes the structured exception handling (SEH) system in `dotne
 
 ## Overview
 
-Exception handling is implemented as a **state machine** in `crates/dotnet-vm/src/exceptions.rs` (~760 lines). The system handles `try`/`catch`/`finally`/`fault`/`filter` blocks and coordinates with the call stack for two-pass exception processing (search phase, then unwind phase).
+Exception handling is split across three crates:
+
+- **`dotnet-vm-ops`** (`crates/dotnet-vm-ops/src/exceptions.rs`): Exception data types — `ExceptionState`, `ProtectedSection`, `Handler`, `HandlerKind`, `HandlerAddress`, `ManagedException`, `SearchState`, `FilterState`, `UnwindState`, `UnwindTarget`. Also contains the `parse` function that converts `dotnetdll` metadata to `ProtectedSection`/`Handler`.
+- **`dotnet-exceptions`** (`crates/dotnet-exceptions/src/lib.rs`, ~584 lines): The `ExceptionHandlingSystem` with the two-pass search/unwind state machine. Depends on `dotnet-vm-ops` for base traits and types.
+- **`dotnet-vm`** (`crates/dotnet-vm/src/exceptions.rs`): Re-exports from `dotnet-exceptions` for backward compatibility.
+
+The system handles `try`/`catch`/`finally`/`fault`/`filter` blocks and coordinates with the call stack for two-pass exception processing (search phase, then unwind phase).
 
 ## State Machine
 
@@ -49,8 +55,8 @@ None → Throwing → Searching → Filtering (optional) → Unwinding → Execu
 - `ExecutionEngine::step` checks `ExceptionState` before normal instruction dispatch. If an exception is active, it calls `handle_exception` instead of fetching the next instruction.
 - The `step_normal` method catches `StepResult::Throw` from instruction handlers and transitions to `Throwing` state.
 
-### Integration with Call Stack (`stack/frames.rs`, `stack/context.rs`)
-- `ProtectedSection` data is stored per-frame (parsed from method metadata during frame setup).
+### Integration with Call Stack
+- `ProtectedSection` data is stored per-frame (parsed from method metadata during frame setup). `StackFrame` and `FrameStack` are defined in `dotnet-vm-ops/src/stack.rs`.
 - Frame unwinding during exception handling must properly clean up the evaluation stack — `BasePointer` tracks where each frame's stack values begin.
 - `VesContext::unwind_frame` is called during the unwind phase to pop frames.
 

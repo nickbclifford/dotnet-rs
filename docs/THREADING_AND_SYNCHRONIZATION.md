@@ -186,4 +186,4 @@ In a multi-arena GC, objects in one thread's arena might reference objects in an
 The codebase uses a conditional aliasing pattern in `dotnet-utils/src/sync.rs` to abstract locking:
 - **With `multithreading`**: Aliases point to `parking_lot::Mutex` and `parking_lot::RwLock`.
 - **Without `multithreading`**: Aliases point to `compat::Mutex` and `compat::RwLock`, which are lightweight wrappers around `std::cell::RefCell` (bypassing OS locking overhead entirely).
-*(Note: `ThreadSafeLock` was an earlier conceptual name for this pattern, now directly exposed as `RwLock`/`Mutex` aliases).*
+*(Note: `ThreadSafeLock` still exists in `dotnet-utils/src/gc/thread_safe_lock.rs` as a GC-specific lock wrapper that switches between `parking_lot::RwLock` (multi-threaded) and `gc_arena::RefLock` (single-threaded). The general-purpose `Mutex`/`RwLock` aliases in `dotnet-utils/src/sync.rs` are separate.)*
