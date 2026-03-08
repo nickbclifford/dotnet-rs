@@ -243,4 +243,31 @@ impl TestHarness {
             }
         }
     }
+
+    /// Runs the CLI binary as a subprocess and captures its output.
+    pub fn run_cli(&self, dll_path: &Path) -> (u8, String) {
+        let assemblies_path = Self::find_dotnet_app_path();
+        let mut command = Command::new("cargo");
+        command.args(["run", "--quiet", "--bin", "dotnet-rs", "--no-default-features"]);
+
+        #[cfg(feature = "multithreading")]
+        command.args(["--features", "multithreading"]);
+
+        #[cfg(feature = "memory-validation")]
+        command.args(["--features", "memory-validation"]);
+
+        command.args([
+            "--",
+            "-a",
+            assemblies_path.to_str().unwrap(),
+            dll_path.to_str().unwrap(),
+        ]);
+
+        let output = command.output().expect("failed to run cargo run");
+
+        let exit_code = output.status.code().unwrap_or(255) as u8;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+        (exit_code, stdout)
+    }
 }

@@ -38,8 +38,9 @@ fn hello_world() {
     let dll_path = harness
         .build(Path::new("tests/debug_fixtures/hello_world_0.cs"))
         .unwrap();
-    let exit_code = harness.run(&dll_path);
+    let (exit_code, stdout) = harness.run_cli(&dll_path);
     assert_eq!(exit_code, 0);
+    assert_eq!(stdout.trim(), "Hello, World!");
 }
 
 #[cfg(feature = "multithreading")]
