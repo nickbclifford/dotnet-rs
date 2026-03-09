@@ -289,18 +289,23 @@ impl FieldLayoutManager {
     }
 
     pub fn trace<'gc, Tr: Trace<'gc>>(&self, storage: &[u8], cc: &mut Tr) {
+        // Trace regular ObjectRefs via the optimized GcDesc bitmap
         self.gc_desc.trace(storage, cc);
 
+        // Trace ManagedPtrs (byrefs) if present.
+        // We use visit_managed_ptrs to correctly find all ManagedPtrs, even in nested structs,
+        // which avoids the previous bug where only top-level ManagedPtrs were traced.
         if self.has_ref_fields {
-            for (_, offset, size) in self.ref_field_offsets() {
-                if offset + size <= storage.len() {
-                    // SAFETY: layout creation ensures this offset is valid and contains a ManagedPtr.
+            self.visit_managed_ptrs(crate::ByteOffset(0), &mut |offset| {
+                let off = offset.as_usize();
+                if off + ManagedPtr::SIZE <= storage.len() {
+                    // SAFETY: layout creation ensures these offsets contain valid ManagedPtrs.
                     // ManagedPtr::read_unchecked is tag-aware and safe to use during GC tracing.
-                    let info = unsafe { ManagedPtr::read_unchecked(&storage[offset..]) }
+                    let info = unsafe { ManagedPtr::read_unchecked(&storage[off..]) }
                         .expect("FieldLayoutManager::trace: failed to read ManagedPtr");
                     info.origin.trace(cc);
                 }
-            }
+            });
         }
     }
 
@@ -320,20 +325,6 @@ impl FieldLayoutManager {
 
     pub fn has_ref_fields(&self) -> bool {
         self.has_ref_fields
-    }
-
-    pub fn ref_field_offsets(&self) -> Vec<(String, usize, usize)> {
-        let mut result = Vec::new();
-        for (key, field) in &self.fields {
-            if field.layout.has_managed_ptrs() {
-                result.push((
-                    key.name.clone(),
-                    field.position.as_usize(),
-                    field.layout.size().as_usize(),
-                ));
-            }
-        }
-        result
     }
 
     /// Get a field's layout by owner and name
@@ -493,5 +484,78 @@ impl<'gc> FieldType for ManagedPtr<'gc> {
     }
     fn write_to(&self, bytes: &mut [u8]) {
         self.write(bytes);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_field_layout_manager_recursion() {
+        // Inner struct: { int i; ref int r; }
+        // ManagedPtr is 24 bytes, Int32 is 4 bytes.
+        // On 64-bit, alignment will be 8.
+        let inner_layout = Arc::new(FieldLayoutManager {
+            fields: {
+                let mut m = HashMap::new();
+                m.insert(
+                    FieldKey {
+                        owner: TypeDescription::NULL,
+                        name: "i".to_string(),
+                    },
+                    FieldLayout {
+                        position: crate::ByteOffset(0),
+                        layout: Arc::new(LayoutManager::Scalar(Scalar::Int32)),
+                    },
+                );
+                m.insert(
+                    FieldKey {
+                        owner: TypeDescription::NULL,
+                        name: "r".to_string(),
+                    },
+                    FieldLayout {
+                        position: crate::ByteOffset(8),
+                        layout: Arc::new(LayoutManager::Scalar(Scalar::ManagedPtr)),
+                    },
+                );
+                m
+            },
+            total_size: 8 + ManagedPtr::SIZE,
+            alignment: 8,
+            gc_desc: GcDesc::default(),
+            has_ref_fields: true,
+        });
+
+        // Outer struct: { Inner inner; } at offset 8
+        let outer_layout = FieldLayoutManager {
+            fields: {
+                let mut m = HashMap::new();
+                m.insert(
+                    FieldKey {
+                        owner: TypeDescription::NULL,
+                        name: "inner".to_string(),
+                    },
+                    FieldLayout {
+                        position: crate::ByteOffset(8),
+                        layout: Arc::new(LayoutManager::Field((*inner_layout).clone())),
+                    },
+                );
+                m
+            },
+            total_size: 8 + 8 + ManagedPtr::SIZE,
+            alignment: 8,
+            gc_desc: GcDesc::default(),
+            has_ref_fields: true,
+        };
+
+        // 1. Verify visit_managed_ptrs() finds the correct recursive logic
+        let mut found_offsets = Vec::new();
+        outer_layout.visit_managed_ptrs(crate::ByteOffset(0), &mut |off| {
+            found_offsets.push(off.as_usize())
+        });
+
+        assert_eq!(found_offsets.len(), 1);
+        assert_eq!(found_offsets[0], 16); // Correctly found 'r' at offset 16
     }
 }

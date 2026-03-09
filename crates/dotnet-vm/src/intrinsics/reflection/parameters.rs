@@ -39,7 +39,7 @@ pub fn runtime_parameter_info_intrinsic_call<
                 ctx.loader_arc(),
                 &lookup,
                 ctx.shared().caches.clone(),
-                Some(ctx.shared().clone()),
+                Some(dotnet_utils::sync::Arc::downgrade(ctx.shared())),
             );
             let rt = match param_type {
                 ParameterType::Value(t) => make_runtime_type(&res_ctx, t),

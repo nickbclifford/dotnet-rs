@@ -579,18 +579,6 @@ impl Resolver<'static> for AssemblyLoader {
     }
 }
 
-pub fn static_res_from_file(path: impl AsRef<Path>) -> ResolutionS {
-    match try_static_res_from_file(path) {
-        Ok(r) => r,
-        Err(e) => panic!("{}", e),
-    }
-}
-
-pub fn try_static_res_from_file(path: impl AsRef<Path>) -> Result<ResolutionS, AssemblyLoadError> {
-    let (res, _, _) = load_resolution_core(path)?;
-    Ok(res)
-}
-
 pub(crate) fn load_resolution_core(
     path: impl AsRef<Path>,
 ) -> Result<(ResolutionS, *const Resolution<'static>, *mut [u64]), AssemblyLoadError> {

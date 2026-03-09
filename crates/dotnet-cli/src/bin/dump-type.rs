@@ -45,7 +45,7 @@ fn resolve_assembly_path(name: &str) -> PathBuf {
         }
     }
 
-    // 4. Just return what we have and let static_res_from_file handle the error
+    // 4. Just return what we have and let load_resolution_from_file handle the error
     PathBuf::from(name)
 }
 

@@ -47,7 +47,6 @@ pub fn clear_object_registry() {
     OBJECT_REGISTRY.clear();
 }
 
-#[cfg(any(feature = "memory-validation", debug_assertions))]
 pub const OBJECT_MAGIC: u64 = 0x5AFE_0B1E_C700_0000;
 
 #[derive(Collect, Debug)]
@@ -331,9 +330,15 @@ impl<'gc> ObjectRef<'gc> {
                 let tag = ptr_val & 7;
                 if tag == 5 {
                     // This is a CrossArenaObjectRef (Tag 5).
-                    // Remove the tag to get the real pointer, then record it for coordinated GC.
-                    let real_ptr = (ptr_val & !7) as *const ThreadSafeLock<ObjectInner<'static>>;
-                    let owner_id = (*(*real_ptr).as_ptr()).owner_id;
+                    // Recover the 16-bit ArenaId from the upper bits and the pointer from the lower 48 bits.
+                    // This avoids dereferencing the pointer during deserialization/GC,
+                    // which is critical for robustness against race conditions.
+                    let owner_id_u16 = (ptr_val >> 48) as u16;
+                    // Sign-extend from 16-bit to correctly handle ArenaId::INVALID (u64::MAX)
+                    let owner_id = ArenaId::new(owner_id_u16 as i16 as i64 as u64);
+                    let real_ptr_val = ptr_val & 0x0000FFFFFFFFFFF8;
+                    let real_ptr = real_ptr_val as *const ThreadSafeLock<ObjectInner<'static>>;
+
                     record_cross_arena_ref(owner_id, real_ptr as usize);
 
                     // Continue with the untagged pointer to construct the ObjectRef
@@ -420,9 +425,15 @@ impl<'gc> ObjectRef<'gc> {
                     let owner_id = unsafe { (*(*Gc::as_ptr(s)).as_ptr()).owner_id };
                     if owner_id != current_id && owner_id != ArenaId::INVALID {
                         // This is a cross-arena reference - tag it with Tag 5
-                        // The pointer must have low bits clear (it's allocated by gc-arena)
+                        // Store the 16-bit ArenaId in the upper bits of the pointer.
+                        // We assume 48-bit addressing (standard on current 64-bit OSs).
+                        debug_assert_eq!(
+                            ptr & 0xFFFF000000000000,
+                            0,
+                            "Pointer upper bits should be clear"
+                        );
                         debug_assert_eq!(ptr & 7, 0, "Pointer low bits should be clear");
-                        ptr | 5
+                        (ptr & 0x0000FFFFFFFFFFFF) | 5 | ((owner_id.as_u64() as usize) << 48)
                     } else {
                         ptr
                     }

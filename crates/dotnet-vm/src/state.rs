@@ -8,7 +8,7 @@ use crate::{
     pinvoke::NativeLibraries,
     sync::SyncBlockManager,
     threading::ThreadManager,
-    tracer::Tracer,
+    tracer::{TraceLevel, Tracer},
 };
 use dashmap::DashMap;
 use dotnet_assemblies::AssemblyLoader;
@@ -141,8 +141,10 @@ impl GlobalCaches {
     ) -> Result<MethodInfo<'static>, TypeResolutionError> {
         let key = (method, generics.clone());
         if let Some(entry) = self.method_info_cache.get(&key) {
+            shared.metrics.record_method_info_cache_hit();
             return Ok((**entry).clone());
         }
+        shared.metrics.record_method_info_cache_miss();
         let built = crate::build_method_info(method, generics, shared)?;
         self.method_info_cache.insert(key, Arc::new(built.clone()));
         Ok(built)
@@ -220,6 +222,8 @@ impl SharedGlobalState {
             instance_field_layout_size: self.caches.instance_field_layout_cache.len(),
             value_type_size: self.caches.value_type_cache.len(),
             has_finalizer_size: self.caches.has_finalizer_cache.len(),
+            overrides_size: self.caches.overrides_cache.len(),
+            method_info_size: self.caches.method_info_cache.len(),
             assembly_type_info: (
                 self.loader.type_cache_hits.load(Ordering::Relaxed),
                 self.loader.type_cache_misses.load(Ordering::Relaxed),
@@ -230,6 +234,18 @@ impl SharedGlobalState {
                 self.loader.method_cache_misses.load(Ordering::Relaxed),
                 self.loader.method_cache_size(),
             ),
+            #[cfg(feature = "multithreading")]
+            shared_runtime_types_size: self.shared_runtime_types.len(),
+            #[cfg(not(feature = "multithreading"))]
+            shared_runtime_types_size: 0,
+            #[cfg(feature = "multithreading")]
+            shared_runtime_methods_size: self.shared_runtime_methods.len(),
+            #[cfg(not(feature = "multithreading"))]
+            shared_runtime_methods_size: 0,
+            #[cfg(feature = "multithreading")]
+            shared_runtime_fields_size: self.shared_runtime_fields.len(),
+            #[cfg(not(feature = "multithreading"))]
+            shared_runtime_fields_size: 0,
         })
     }
 
@@ -239,10 +255,20 @@ impl SharedGlobalState {
                 Arc::new(crate::context::ResolutionShared::new(
                     self.loader.clone(),
                     self.caches.clone(),
-                    Some(self.clone()),
+                    Some(Arc::downgrade(self)),
                 ))
             })
             .clone()
+    }
+}
+
+impl Drop for SharedGlobalState {
+    fn drop(&mut self) {
+        let stats = self.get_cache_stats();
+        if self.tracer_enabled.load(Ordering::Relaxed) {
+            self.tracer
+                .msg(TraceLevel::Info, 0, format_args!("{}", stats));
+        }
     }
 }
 

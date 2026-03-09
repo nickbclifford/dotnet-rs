@@ -13,7 +13,8 @@ impl ResolverService {
         t: ConcreteType,
         ctx: &ResolutionContext<'_>,
     ) -> Result<Arc<LayoutManager>, TypeResolutionError> {
-        type_layout_with_metrics(t, ctx, self.metrics())
+        let shared = self.shared_state();
+        type_layout_with_metrics(t, ctx, shared.as_ref().map(|s| &s.metrics))
     }
 
     pub fn instance_fields(
@@ -21,6 +22,7 @@ impl ResolverService {
         td: TypeDescription,
         ctx: &ResolutionContext<'_>,
     ) -> Result<dotnet_value::layout::FieldLayoutManager, TypeResolutionError> {
-        LayoutFactory::instance_fields_with_metrics(td, ctx, self.metrics())
+        let shared = self.shared_state();
+        LayoutFactory::instance_fields_with_metrics(td, ctx, shared.as_ref().map(|s| &s.metrics))
     }
 }

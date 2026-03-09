@@ -119,7 +119,6 @@ impl<'gc> ManagedPtrInfo<'gc> {
     }
 }
 
-#[cfg(any(feature = "memory-validation", debug_assertions))]
 pub(crate) const MANAGED_PTR_MAGIC: u32 = 0x504F_494E;
 
 #[derive(Clone)]

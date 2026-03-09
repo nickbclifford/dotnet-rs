@@ -165,7 +165,6 @@ impl<'gc> CTSValue<'gc> {
     }
 }
 
-#[cfg(any(feature = "memory-validation", debug_assertions))]
 pub(crate) const VECTOR_MAGIC: u64 = 0x5AFE_7EC7_0B00_0000;
 
 // Manual implementation of Clone and PartialEq to handle ThreadSafeLock

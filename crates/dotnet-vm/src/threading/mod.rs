@@ -70,6 +70,11 @@ mod basic;
 #[cfg(not(feature = "multithreading"))]
 mod stub;
 
+thread_local! {
+    /// Flag indicating if this thread is currently performing GC
+    pub(crate) static IS_PERFORMING_GC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 #[cfg(feature = "multithreading")]
 pub use basic::*;
 

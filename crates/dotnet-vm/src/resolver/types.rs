@@ -75,14 +75,14 @@ impl ResolverService {
 
         let cache_key = (value.clone(), ancestor.clone());
         if let Some(cached) = self.caches.hierarchy_cache.get(&cache_key) {
-            if let Some(metrics) = self.metrics() {
-                metrics.record_hierarchy_cache_hit();
+            if let Some(shared) = self.shared_state() {
+                shared.metrics.record_hierarchy_cache_hit();
             }
             return Ok(*cached);
         }
 
-        if let Some(metrics) = self.metrics() {
-            metrics.record_hierarchy_cache_miss();
+        if let Some(shared) = self.shared_state() {
+            shared.metrics.record_hierarchy_cache_miss();
         }
 
         let value_td = self.loader.find_concrete_type(value)?;
@@ -137,13 +137,13 @@ impl ResolverService {
 
     pub fn is_value_type(&self, td: TypeDescription) -> Result<bool, TypeResolutionError> {
         if let Some(cached) = self.caches.value_type_cache.get(&td) {
-            if let Some(m) = self.metrics() {
-                m.record_value_type_cache_hit();
+            if let Some(shared) = self.shared_state() {
+                shared.metrics.record_value_type_cache_hit();
             }
             return Ok(*cached);
         }
-        if let Some(m) = self.metrics() {
-            m.record_value_type_cache_miss();
+        if let Some(shared) = self.shared_state() {
+            shared.metrics.record_value_type_cache_miss();
         }
 
         let enum_type = self.loader.corlib_type("System.Enum")?;
@@ -161,13 +161,13 @@ impl ResolverService {
 
     pub fn has_finalizer(&self, td: TypeDescription) -> Result<bool, TypeResolutionError> {
         if let Some(cached) = self.caches.has_finalizer_cache.get(&td) {
-            if let Some(m) = self.metrics() {
-                m.record_has_finalizer_cache_hit();
+            if let Some(shared) = self.shared_state() {
+                shared.metrics.record_has_finalizer_cache_hit();
             }
             return Ok(*cached);
         }
-        if let Some(m) = self.metrics() {
-            m.record_has_finalizer_cache_miss();
+        if let Some(shared) = self.shared_state() {
+            shared.metrics.record_has_finalizer_cache_miss();
         }
 
         let check_type = |td: TypeDescription| {

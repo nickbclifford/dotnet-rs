@@ -2,14 +2,10 @@
 use crate::{
     ArenaId, ByteOffset, ValidationTag,
     object::ObjectPtr,
-    pointer::{ManagedPtr, PointerOrigin},
+    pointer::{MANAGED_PTR_MAGIC, ManagedPtr, PointerOrigin},
 };
 #[cfg(feature = "multithreading")]
 use std::ptr::NonNull;
-
-#[cfg(feature = "multithreading")]
-#[cfg(any(feature = "memory-validation", debug_assertions))]
-use crate::pointer::MANAGED_PTR_MAGIC;
 
 #[cfg(feature = "multithreading")]
 impl<'gc> ManagedPtr<'gc> {

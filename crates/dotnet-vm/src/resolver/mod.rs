@@ -82,19 +82,16 @@
 //! // Compute type layout for value type
 //! let layout = resolver.compute_layout(value_type_desc)?;
 //! ```
-use crate::{
-    metrics::RuntimeMetrics,
-    state::{GlobalCaches, SharedGlobalState},
-};
+use crate::state::{GlobalCaches, SharedGlobalState};
 use dotnet_assemblies::AssemblyLoader;
-use std::sync::Arc;
+use dotnet_utils::sync::{Arc, Weak};
 
 /// Service for resolving types, methods, and fields with caching.
 #[derive(Clone)]
 pub struct ResolverService {
     pub loader: Arc<AssemblyLoader>,
     pub caches: Arc<GlobalCaches>,
-    pub shared: Option<Arc<SharedGlobalState>>,
+    pub shared: Option<Weak<SharedGlobalState>>,
 }
 
 impl std::fmt::Debug for ResolverService {
@@ -115,7 +112,7 @@ impl ResolverService {
         Self {
             loader: shared.loader.clone(),
             caches: shared.caches.clone(),
-            shared: Some(shared),
+            shared: Some(Arc::downgrade(&shared)),
         }
     }
 
@@ -127,8 +124,8 @@ impl ResolverService {
         }
     }
 
-    fn metrics(&self) -> Option<&RuntimeMetrics> {
-        self.shared.as_ref().map(|s| &s.metrics)
+    fn shared_state(&self) -> Option<Arc<SharedGlobalState>> {
+        self.shared.as_ref().and_then(|s| s.upgrade())
     }
 
     pub fn loader(&self) -> &AssemblyLoader {

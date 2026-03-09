@@ -72,7 +72,7 @@ pub fn build_method_info(
         loader.clone(),
         generics,
         shared.caches.clone(),
-        Some(shared),
+        Some(Arc::downgrade(&shared)),
     );
 
     if let Some(body) = &method.method().body {

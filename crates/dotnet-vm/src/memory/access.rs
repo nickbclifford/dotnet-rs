@@ -892,6 +892,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         layout: &LayoutManager,
         recorder: &mut WriteBarrierRecorder<'_, 'gc>,
     ) {
+        if !layout.is_or_contains_refs() {
+            return;
+        }
         let owner_tid = recorder.arena_id;
         match layout {
             LayoutManager::Scalar(Scalar::ObjectRef) => unsafe {
@@ -901,17 +904,29 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 self.record_managedptr_at_ptr_with_recorder(gc, ptr, owner_tid, recorder);
             },
             LayoutManager::Field(flm) => {
-                for field in flm.fields.values() {
-                    if field.layout.is_or_contains_refs() {
-                        unsafe {
-                            self.record_refs_recursive_with_recorder(
-                                gc,
-                                ptr.add(field.position.as_usize()),
-                                &field.layout,
-                                recorder,
-                            );
-                        }
+                // Use GcDesc for fast ObjectRef recording
+                let ptr_size = ObjectRef::SIZE;
+                for word_index in flm.gc_desc.bitmap.iter_ones() {
+                    let offset = word_index * ptr_size;
+                    unsafe {
+                        self.record_objref_at_ptr_with_recorder(
+                            gc,
+                            ptr.add(offset),
+                            owner_tid,
+                            recorder,
+                        );
                     }
+                }
+                // Use visit_managed_ptrs for recursive ManagedPtr recording
+                if flm.has_ref_fields {
+                    flm.visit_managed_ptrs(crate::ByteOffset(0), &mut |offset| unsafe {
+                        self.record_managedptr_at_ptr_with_recorder(
+                            gc,
+                            ptr.add(offset.as_usize()),
+                            owner_tid,
+                            recorder,
+                        );
+                    });
                 }
             }
             LayoutManager::Array(arr) => {

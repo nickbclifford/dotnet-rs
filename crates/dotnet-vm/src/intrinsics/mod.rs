@@ -373,7 +373,7 @@ pub fn intrinsic_call<'gc, T: VesOps<'gc>>(
         ctx.loader_arc(),
         generics,
         ctx.shared().caches.clone(),
-        Some(ctx.shared().clone()),
+        Some(Arc::downgrade(ctx.shared())),
     );
 
     vm_trace_intrinsic!(

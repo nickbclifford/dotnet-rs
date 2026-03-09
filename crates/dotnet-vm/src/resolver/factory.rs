@@ -61,7 +61,12 @@ impl ResolverService {
         td: TypeDescription,
         ctx: &ResolutionContext<'_>,
     ) -> Result<FieldStorage, TypeResolutionError> {
-        let layout = LayoutFactory::instance_field_layout_cached(td, ctx, self.metrics())?;
+        let shared = self.shared_state();
+        let layout = LayoutFactory::instance_field_layout_cached(
+            td,
+            ctx,
+            shared.as_ref().map(|s| &s.metrics),
+        )?;
         let size = layout.size();
         Ok(FieldStorage::new(layout, vec![0; size.as_usize()]))
     }
@@ -71,10 +76,11 @@ impl ResolverService {
         td: TypeDescription,
         ctx: &ResolutionContext<'_>,
     ) -> Result<FieldStorage, TypeResolutionError> {
+        let shared = self.shared_state();
         let layout = Arc::new(LayoutFactory::static_fields_with_metrics(
             td,
             ctx,
-            self.metrics(),
+            shared.as_ref().map(|s| &s.metrics),
         )?);
         let size = layout.size();
         Ok(FieldStorage::new(layout, vec![0; size.as_usize()]))
@@ -400,11 +406,12 @@ impl ResolverService {
         size: usize,
         ctx: &ResolutionContext<'_>,
     ) -> Result<Vector<'gc>, TypeResolutionError> {
+        let shared = self.shared_state();
         let layout = LayoutFactory::create_array_layout_with_metrics(
             element.clone(),
             size,
             ctx,
-            self.metrics(),
+            shared.as_ref().map(|s| &s.metrics),
         )?;
         let total_size = layout.element_layout.size() * size;
         if total_size.as_usize() > 0x7FFF_FFFF {

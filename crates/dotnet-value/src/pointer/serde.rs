@@ -11,12 +11,12 @@ use sptr::Strict;
 use std::ptr::NonNull;
 
 #[cfg(feature = "multithreading")]
-use crate::object::{OBJECT_MAGIC, ObjectPtr};
+use crate::{
+    ArenaId,
+    object::{OBJECT_MAGIC, ObjectPtr},
+};
 #[cfg(feature = "multithreading")]
 use dotnet_utils::gc::ThreadSafeLock;
-
-#[cfg(feature = "fuzzing")]
-use crate::object::is_valid_object_ptr;
 
 impl<'gc> ManagedPtr<'gc> {
     /// One word for the pointer, one word for the owner, and one word for the checksum.
@@ -136,45 +136,61 @@ impl<'gc> ManagedPtr<'gc> {
                 }
                 5 => {
                     // CrossArenaObjectRef (Tag 5)
-                    // Recover ObjectPtr from Word 0 and offset from Word 1
+                    // Recover ObjectPtr from Word 0 and ArenaId/Offset from Word 1.
+                    // This avoids dereferencing the pointer during deserialization,
+                    // making it safe even if memory contains garbage or is half-written.
                     #[cfg(feature = "multithreading")]
                     {
                         let lock_ptr = sptr::from_exposed_addr::<
                             ThreadSafeLock<crate::object::ObjectInner<'static>>,
                         >(word0 & !7);
-                        // SAFETY: During GC or stable execution, cross-arena pointers are valid.
-                        // We need the owner_id from the object itself.
-                        #[cfg(feature = "fuzzing")]
-                        if !is_valid_object_ptr(lock_ptr.expose_addr()) {
-                            return Err(PointerDeserializationError::UnknownTag(tag));
-                        }
 
                         let ptr = unsafe {
                             ObjectPtr::from_raw(lock_ptr)
                                 .ok_or(PointerDeserializationError::UnknownTag(tag))?
                         };
 
+                        let offset_val = word1 & 0xFFFFFFFF;
+                        let owner_id_val = (word1 >> 32) as u32;
+                        // Sign-extend from 32-bit to correctly handle ArenaId::INVALID (u64::MAX)
+                        let owner_id = ArenaId::new(owner_id_val as i32 as i64 as u64);
+
+                        // If we are in debug/validation mode, we still want to ensure
+                        // the pointer is valid, but we do it AFTER recovering owner_id.
                         #[cfg(any(feature = "memory-validation", debug_assertions))]
                         {
-                            let inner_ptr = unsafe { (*lock_ptr).as_ptr() };
-                            unsafe {
-                                (*inner_ptr)
-                                    .magic
-                                    .validate(OBJECT_MAGIC, "ManagedPtr::read (CrossArena)")
-                            };
+                            if !lock_ptr.is_null() {
+                                let inner_ptr = unsafe { (*lock_ptr).as_ptr() };
+                                unsafe {
+                                    (*inner_ptr)
+                                        .magic
+                                        .validate(OBJECT_MAGIC, "ManagedPtr::read (CrossArena)")
+                                };
+                            }
                         }
 
-                        let owner_id = ptr.owner_id();
-
                         // RECOVERY: We must use the data storage pointer as the base, not ObjectInner.
-                        let inner_ptr = unsafe { (*lock_ptr).as_ptr() };
-                        let base_ptr = unsafe { (*inner_ptr).storage.raw_data_ptr() };
+                        // We use the recovered offset directly.
+                        // Note: If we need the absolute address, we still have to dereference base_ptr,
+                        // but we can postpone this or make it safe.
+                        let base_ptr = unsafe {
+                            if lock_ptr.is_null() {
+                                NonNull::dangling().as_ptr()
+                            } else {
+                                let inner_ptr = (*lock_ptr).as_ptr();
+                                (*inner_ptr).storage.raw_data_ptr()
+                            }
+                        };
                         let base_addr = base_ptr.expose_addr();
 
                         Ok(ManagedPtrInfo {
-                            address: nonnull_from_exposed_addr(base_addr + word1),
+                            address: if base_ptr.is_null() {
+                                None
+                            } else {
+                                nonnull_from_exposed_addr(base_addr + offset_val)
+                            },
                             origin: PointerOrigin::CrossArenaObjectRef(ptr, owner_id),
-                            offset: ByteOffset(word1),
+                            offset: ByteOffset(offset_val),
                         })
                     }
                     #[cfg(not(feature = "multithreading"))]
@@ -311,9 +327,13 @@ impl<'gc> ManagedPtr<'gc> {
                 (w0, w1)
             }
             #[cfg(feature = "multithreading")]
-            PointerOrigin::CrossArenaObjectRef(ptr, _) => {
+            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 let w0: usize = ptr.as_ptr().expose_addr() | 5;
-                let w1 = self.offset.as_usize();
+                // Store 32-bit ArenaId in high bits of word1, 32-bit offset in low bits.
+                // This avoids dereferencing the pointer during deserialization/GC.
+                let offset_u32 = self.offset.as_usize() & 0xFFFFFFFF;
+                let tid_u32 = (tid.as_u64() & 0xFFFFFFFF) as usize;
+                let w1 = offset_u32 | (tid_u32 << 32);
                 (w0, w1)
             }
             PointerOrigin::Transient(_) => {

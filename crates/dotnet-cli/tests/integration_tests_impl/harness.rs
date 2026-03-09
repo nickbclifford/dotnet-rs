@@ -6,7 +6,7 @@ use std::{
     io,
     path::{Path, PathBuf},
     process::Command,
-    sync::Arc,
+    sync::{Arc, atomic::Ordering},
     time::Duration,
 };
 
@@ -23,11 +23,11 @@ pub struct TestHarness {
 }
 
 impl TestHarness {
-    pub fn get() -> &'static Self {
+    pub fn get() -> Arc<Self> {
         thread_local! {
-            static INSTANCE: TestHarness = TestHarness::new();
+            static INSTANCE: Arc<TestHarness> = Arc::new(TestHarness::new());
         }
-        INSTANCE.with(|i| unsafe { std::mem::transmute::<&TestHarness, &'static TestHarness>(i) })
+        INSTANCE.with(|i| i.clone())
     }
 
     fn new() -> Self {
@@ -155,7 +155,7 @@ impl TestHarness {
     ) -> u8 {
         let (tx, rx) = std::sync::mpsc::channel();
         let shared_clone = Arc::clone(&shared);
-        std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             let mut executor = vm::Executor::new(shared_clone.clone());
             let entry_method = match resolution.entry_point {
                 Some(EntryPoint::Method(m)) => m,
@@ -193,11 +193,18 @@ impl TestHarness {
         });
 
         match rx.recv_timeout(timeout) {
-            Ok(code) => code,
+            Ok(code) => {
+                handle.join().expect("Executor thread panicked");
+                code
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                shared.abort_requested.store(true, Ordering::Relaxed);
+                let _ = handle.join();
                 panic!("Execution timed out after {:?}", timeout);
             }
             Err(e) => {
+                shared.abort_requested.store(true, Ordering::Relaxed);
+                let _ = handle.join();
                 panic!("Execution failed: {:?}", e);
             }
         }
@@ -248,7 +255,13 @@ impl TestHarness {
     pub fn run_cli(&self, dll_path: &Path) -> (u8, String) {
         let assemblies_path = Self::find_dotnet_app_path();
         let mut command = Command::new("cargo");
-        command.args(["run", "--quiet", "--bin", "dotnet-rs", "--no-default-features"]);
+        command.args([
+            "run",
+            "--quiet",
+            "--bin",
+            "dotnet-rs",
+            "--no-default-features",
+        ]);
 
         #[cfg(feature = "multithreading")]
         command.args(["--features", "multithreading"]);

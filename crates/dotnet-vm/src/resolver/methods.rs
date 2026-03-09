@@ -12,14 +12,14 @@ use std::sync::Arc;
 impl ResolverService {
     pub fn is_intrinsic_cached(&self, method: MethodDescription) -> bool {
         if let Some(cached) = self.caches.intrinsic_cache.get(&method) {
-            if let Some(metrics) = self.metrics() {
-                metrics.record_intrinsic_cache_hit();
+            if let Some(shared) = self.shared_state() {
+                shared.metrics.record_intrinsic_cache_hit();
             }
             return *cached;
         }
 
-        if let Some(metrics) = self.metrics() {
-            metrics.record_intrinsic_cache_miss();
+        if let Some(shared) = self.shared_state() {
+            shared.metrics.record_intrinsic_cache_miss();
         }
         let result =
             crate::intrinsics::is_intrinsic(method, self.loader(), &self.caches.intrinsic_registry);
@@ -29,14 +29,14 @@ impl ResolverService {
 
     pub fn is_intrinsic_field_cached(&self, field: FieldDescription) -> bool {
         if let Some(cached) = self.caches.intrinsic_field_cache.get(&field) {
-            if let Some(metrics) = self.metrics() {
-                metrics.record_intrinsic_field_cache_hit();
+            if let Some(shared) = self.shared_state() {
+                shared.metrics.record_intrinsic_field_cache_hit();
             }
             return *cached;
         }
 
-        if let Some(metrics) = self.metrics() {
-            metrics.record_intrinsic_field_cache_miss();
+        if let Some(shared) = self.shared_state() {
+            shared.metrics.record_intrinsic_field_cache_miss();
         }
         let result = crate::intrinsics::is_intrinsic_field(
             field,
@@ -116,14 +116,14 @@ impl ResolverService {
 
         let key = (base_method, this_type, normalized_generics);
         if let Some(cached) = self.caches.vmt_cache.get(&key) {
-            if let Some(metrics) = self.metrics() {
-                metrics.record_vmt_cache_hit();
+            if let Some(shared) = self.shared_state() {
+                shared.metrics.record_vmt_cache_hit();
             }
             return Ok(*cached);
         }
 
-        if let Some(metrics) = self.metrics() {
-            metrics.record_vmt_cache_miss();
+        if let Some(shared) = self.shared_state() {
+            shared.metrics.record_vmt_cache_miss();
         }
 
         // Standard virtual method resolution: search ancestors
@@ -150,8 +150,14 @@ impl ResolverService {
         if !def.overrides.is_empty() {
             let cache_key = (this_type, generics.clone());
             let overrides = if let Some(map) = self.caches.overrides_cache.get(&cache_key) {
+                if let Some(shared) = self.shared_state() {
+                    shared.metrics.record_overrides_cache_hit();
+                }
                 map.clone()
             } else {
+                if let Some(shared) = self.shared_state() {
+                    shared.metrics.record_overrides_cache_miss();
+                }
                 let mut map = std::collections::HashMap::new();
                 for ovr in def.overrides.iter() {
                     let decl = self.loader.locate_method(

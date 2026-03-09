@@ -367,7 +367,7 @@ pub fn intrinsic_runtime_helpers_get_method_table<
         ctx.loader_arc(),
         generics,
         ctx.shared().caches.clone(),
-        Some(ctx.shared().clone()),
+        Some(dotnet_utils::sync::Arc::downgrade(ctx.shared())),
     );
     let obj = ctx.pop();
     let object_type = match obj {

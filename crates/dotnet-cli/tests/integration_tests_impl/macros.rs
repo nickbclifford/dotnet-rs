@@ -7,6 +7,7 @@ macro_rules! fixture_test {
             let harness = TestHarness::get();
             let dll_path = std::path::Path::new($dll_path);
             let exit_code = harness.run_with_timeout(dll_path, get_test_timeout(60));
+
             assert_eq!(
                 exit_code,
                 $expected,
@@ -25,6 +26,7 @@ macro_rules! fixture_test {
             let harness = TestHarness::get();
             let dll_path = std::path::Path::new($dll_path);
             let exit_code = harness.run_with_timeout(dll_path, get_test_timeout(60));
+
             assert_eq!(
                 exit_code,
                 $expected,
@@ -62,7 +64,7 @@ macro_rules! multi_arena_test {
             let mut handles = Vec::new();
 
             for _ in 0..$thread_count {
-                let harness_ptr = harness as *const TestHarness as usize;
+                let harness = harness.clone();
                 let tx = tx.clone();
                 let shared = std::sync::Arc::new(dotnet_vm::state::SharedGlobalState::new(
                     harness.loader.clone(),
@@ -70,7 +72,6 @@ macro_rules! multi_arena_test {
                 abort_flags.push(std::sync::Arc::clone(&shared.abort_requested));
 
                 let handle = thread::spawn(move || {
-                    let harness = unsafe { &*(harness_ptr as *const TestHarness) };
                     let result =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                             harness.run_with_shared(resolution.clone(), shared)

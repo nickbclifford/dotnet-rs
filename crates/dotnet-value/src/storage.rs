@@ -18,7 +18,6 @@ use std::{
     marker::PhantomData,
 };
 
-#[cfg(any(feature = "memory-validation", debug_assertions))]
 const FIELD_STORAGE_MAGIC: u64 = 0x5AFE_F1E1_D500_0000;
 
 /// A reference to a specific field, carrying its layout type

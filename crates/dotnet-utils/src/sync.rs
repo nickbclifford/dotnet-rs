@@ -117,7 +117,7 @@ pub mod compat {
 }
 
 pub use std::sync::{
-    Arc,
+    Arc, Weak,
     atomic::{
         AtomicBool, AtomicI8, AtomicI16, AtomicI32, AtomicI64, AtomicIsize, AtomicU8, AtomicU16,
         AtomicU32, AtomicU64, AtomicUsize, Ordering,

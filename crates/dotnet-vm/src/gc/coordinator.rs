@@ -49,7 +49,13 @@ impl GCCoordinator {
     /// Unregister a thread-local arena.
     pub fn unregister_arena(&self, thread_id: dotnet_utils::ArenaId) {
         let mut arenas = self.arenas.lock();
-        arenas.remove(&thread_id);
+        if let Some(handle) = arenas.remove(&thread_id) {
+            // Signal any threads waiting for this arena to finish a GC command.
+            // This is critical if the thread is exiting during a stop-the-world pause.
+            let mut cmd = handle.current_command().lock();
+            *cmd = None;
+            handle.finish_signal().notify_all();
+        }
     }
 
     /// Check if any arena requires collection due to allocation pressure.
@@ -364,6 +370,7 @@ pub mod stubs {
     pub fn get_currently_tracing() -> Option<dotnet_utils::ArenaId> {
         None
     }
+    pub fn clear_tracing_state() {}
     pub fn take_found_cross_arena_refs() -> Vec<(dotnet_utils::ArenaId, ObjectPtr)> {
         Vec::new()
     }
@@ -472,6 +479,45 @@ mod tests {
         coordinator.collect_all_arenas(dotnet_utils::ArenaId(1));
 
         done.store(true, Ordering::Relaxed);
+        t.join().unwrap();
+    }
+
+    #[test]
+    fn test_collect_all_arenas_unregister_race() {
+        use std::thread;
+        use std::time::Duration;
+
+        let stw_flag = Arc::new(AtomicBool::new(false));
+        let coordinator = Arc::new(GCCoordinator::new(stw_flag));
+
+        let handle1 = ArenaHandle::new(dotnet_utils::ArenaId(1));
+        let handle2 = ArenaHandle::new(dotnet_utils::ArenaId(2));
+
+        coordinator.register_arena(handle1);
+        coordinator.register_arena(handle2.clone());
+
+        let coordinator_clone = coordinator.clone();
+
+        let t = thread::spawn(move || {
+            // Wait until a command is sent to arena 2
+            loop {
+                let cmd = handle2.current_command().lock();
+                if cmd.is_some() {
+                    break;
+                }
+                drop(cmd);
+                thread::sleep(Duration::from_millis(10));
+            }
+
+            // Instead of finishing the command, unregister the arena!
+            coordinator_clone.unregister_arena(dotnet_utils::ArenaId(2));
+        });
+
+        // Initiator (Thread 1) calls collect_all_arenas.
+        // It will send a command to Thread 2 and wait for it.
+        // If unregister_arena doesn't notify, this will hang.
+        coordinator.collect_all_arenas(dotnet_utils::ArenaId(1));
+
         t.join().unwrap();
     }
 }

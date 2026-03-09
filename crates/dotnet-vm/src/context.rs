@@ -2,7 +2,7 @@ use crate::{
     MethodType,
     resolver::ResolverService,
     state::{GlobalCaches, SharedGlobalState},
-    sync::Arc,
+    sync::{Arc, Weak},
 };
 use dotnet_assemblies::{Ancestor, AssemblyLoader};
 use dotnet_types::{
@@ -20,7 +20,7 @@ use std::sync::OnceLock;
 pub struct ResolutionShared {
     pub loader: Arc<AssemblyLoader>,
     pub caches: Arc<GlobalCaches>,
-    pub shared: Option<Arc<SharedGlobalState>>,
+    pub shared: Option<Weak<SharedGlobalState>>,
     pub(crate) resolver_cache: OnceLock<ResolverService>,
 }
 
@@ -36,7 +36,7 @@ impl ResolutionShared {
     pub fn new(
         loader: Arc<AssemblyLoader>,
         caches: Arc<GlobalCaches>,
-        shared: Option<Arc<SharedGlobalState>>,
+        shared: Option<Weak<SharedGlobalState>>,
     ) -> Self {
         Self {
             loader,
@@ -48,11 +48,12 @@ impl ResolutionShared {
 
     pub fn resolver(&self) -> &ResolverService {
         self.resolver_cache.get_or_init(|| {
-            if let Some(shared) = &self.shared {
-                ResolverService::new(shared.clone())
-            } else {
-                ResolverService::from_parts(self.loader.clone(), self.caches.clone())
+            if let Some(shared_weak) = &self.shared
+                && let Some(shared) = shared_weak.upgrade()
+            {
+                return ResolverService::new(shared);
             }
+            ResolverService::from_parts(self.loader.clone(), self.caches.clone())
         })
     }
 }
@@ -72,7 +73,7 @@ impl<'a> ResolutionContext<'a> {
         loader: Arc<AssemblyLoader>,
         resolution: ResolutionS,
         caches: Arc<GlobalCaches>,
-        shared: Option<Arc<SharedGlobalState>>,
+        shared: Option<Weak<SharedGlobalState>>,
     ) -> Self {
         Self {
             generics,
@@ -88,7 +89,7 @@ impl<'a> ResolutionContext<'a> {
         loader: Arc<AssemblyLoader>,
         generics: &'a GenericLookup,
         caches: Arc<GlobalCaches>,
-        shared: Option<Arc<SharedGlobalState>>,
+        shared: Option<Weak<SharedGlobalState>>,
     ) -> Self {
         Self {
             generics,
@@ -107,8 +108,8 @@ impl<'a> ResolutionContext<'a> {
         &self.state.caches
     }
 
-    pub fn shared_state(&self) -> Option<&Arc<SharedGlobalState>> {
-        self.state.shared.as_ref()
+    pub fn shared_state(&self) -> Option<Arc<SharedGlobalState>> {
+        self.state.shared.as_ref().and_then(|w| w.upgrade())
     }
 
     pub fn resolver(&self) -> &ResolverService {

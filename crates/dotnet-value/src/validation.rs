@@ -12,8 +12,8 @@ pub struct ValidationTag;
 
 #[cfg(not(any(feature = "memory-validation", debug_assertions)))]
 // SAFETY: ValidationTag is empty when validation is disabled.
-unsafe impl gc_arena::Collect for ValidationTag {
-    fn trace(&self, _cc: &mut gc_arena::CollectionContext) {}
+unsafe impl<'gc> gc_arena::Collect<'gc> for ValidationTag {
+    fn trace<Tr: gc_arena::collect::Trace<'gc>>(&self, _cc: &mut Tr) {}
 }
 
 impl ValidationTag {
@@ -36,7 +36,7 @@ impl ValidationTag {
 
 #[cfg(feature = "fuzzing")]
 impl<'a> arbitrary::Arbitrary<'a> for ValidationTag {
-    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+    fn arbitrary(_u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         // We don't really care about the value during fuzzing if it's not enabled,
         // but if it IS enabled, we might want it to be "valid" by default if we
         // are just generating structures. However, usually magic is set by the constructor.

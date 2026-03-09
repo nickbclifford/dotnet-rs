@@ -1,6 +1,6 @@
 use crate::{
     gc::coordinator::{GCCommand, GCCoordinator},
-    threading::{STWGuardOps, ThreadManagerOps, ThreadState},
+    threading::{IS_PERFORMING_GC, STWGuardOps, ThreadManagerOps, ThreadState},
     tracer::Tracer,
 };
 use dotnet_utils::{
@@ -13,18 +13,12 @@ use dotnet_utils::{
 };
 use dotnet_value::object::ObjectPtr;
 use std::{
-    cell::Cell,
     collections::HashMap,
     mem, sync,
     thread::{self, ThreadId},
     time::{Duration, Instant},
 };
 use tracing::warn;
-
-thread_local! {
-    /// Flag indicating if this thread is currently performing GC
-    pub(crate) static IS_PERFORMING_GC: Cell<bool> = const { Cell::new(false) };
-}
 
 /// Global counter for allocating managed thread IDs across all thread managers.
 /// This prevents ArenaId collisions when parallel tests each create their own ThreadManager.

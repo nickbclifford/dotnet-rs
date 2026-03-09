@@ -23,8 +23,13 @@ pub struct CacheStats {
     pub instance_field_layout: CacheStat,
     pub value_type: CacheStat,
     pub has_finalizer: CacheStat,
+    pub overrides: CacheStat,
+    pub method_info: CacheStat,
     pub assembly_type: CacheStat,
     pub assembly_method: CacheStat,
+    pub shared_runtime_types: CacheStat,
+    pub shared_runtime_methods: CacheStat,
+    pub shared_runtime_fields: CacheStat,
 }
 
 impl std::fmt::Display for CacheStats {
@@ -43,8 +48,21 @@ impl std::fmt::Display for CacheStats {
         )?;
         writeln!(f, "  Value Type Cache:       {}", self.value_type)?;
         writeln!(f, "  Has Finalizer Cache:    {}", self.has_finalizer)?;
+        writeln!(f, "  Overrides Cache:        {}", self.overrides)?;
+        writeln!(f, "  Method Info Cache:      {}", self.method_info)?;
         writeln!(f, "  Assembly Type Cache:    {}", self.assembly_type)?;
         writeln!(f, "  Assembly Method Cache:  {}", self.assembly_method)?;
+        writeln!(f, "  Shared Type Cache:      {}", self.shared_runtime_types)?;
+        writeln!(
+            f,
+            "  Shared Method Cache:    {}",
+            self.shared_runtime_methods
+        )?;
+        writeln!(
+            f,
+            "  Shared Field Cache:     {}",
+            self.shared_runtime_fields
+        )?;
         Ok(())
     }
 }
@@ -73,8 +91,13 @@ pub struct CacheSizes {
     pub instance_field_layout_size: usize,
     pub value_type_size: usize,
     pub has_finalizer_size: usize,
+    pub overrides_size: usize,
+    pub method_info_size: usize,
     pub assembly_type_info: (u64, u64, usize),
     pub assembly_method_info: (u64, u64, usize),
+    pub shared_runtime_types_size: usize,
+    pub shared_runtime_methods_size: usize,
+    pub shared_runtime_fields_size: usize,
 }
 
 /// Metrics counters.
@@ -116,6 +139,10 @@ pub struct RuntimeMetrics {
     pub value_type_cache_misses: AtomicU64,
     pub has_finalizer_cache_hits: AtomicU64,
     pub has_finalizer_cache_misses: AtomicU64,
+    pub overrides_cache_hits: AtomicU64,
+    pub overrides_cache_misses: AtomicU64,
+    pub method_info_cache_hits: AtomicU64,
+    pub method_info_cache_misses: AtomicU64,
 }
 
 impl RuntimeMetrics {
@@ -236,6 +263,27 @@ impl RuntimeMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    #[inline]
+    pub fn record_overrides_cache_hit(&self) {
+        self.overrides_cache_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_overrides_cache_miss(&self) {
+        self.overrides_cache_misses.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_method_info_cache_hit(&self) {
+        self.method_info_cache_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_method_info_cache_miss(&self) {
+        self.method_info_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn cache_statistics(&self, sizes: CacheSizes) -> CacheStats {
         CacheStats {
             layout: self.stat(
@@ -286,6 +334,16 @@ impl RuntimeMetrics {
                 self.has_finalizer_cache_misses.load(Ordering::Relaxed),
                 sizes.has_finalizer_size,
             ),
+            overrides: self.stat(
+                self.overrides_cache_hits.load(Ordering::Relaxed),
+                self.overrides_cache_misses.load(Ordering::Relaxed),
+                sizes.overrides_size,
+            ),
+            method_info: self.stat(
+                self.method_info_cache_hits.load(Ordering::Relaxed),
+                self.method_info_cache_misses.load(Ordering::Relaxed),
+                sizes.method_info_size,
+            ),
             assembly_type: self.stat(
                 sizes.assembly_type_info.0,
                 sizes.assembly_type_info.1,
@@ -296,6 +354,9 @@ impl RuntimeMetrics {
                 sizes.assembly_method_info.1,
                 sizes.assembly_method_info.2,
             ),
+            shared_runtime_types: self.stat(0, 0, sizes.shared_runtime_types_size),
+            shared_runtime_methods: self.stat(0, 0, sizes.shared_runtime_methods_size),
+            shared_runtime_fields: self.stat(0, 0, sizes.shared_runtime_fields_size),
         }
     }
 

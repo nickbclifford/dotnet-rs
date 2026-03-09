@@ -106,9 +106,36 @@ unsafe impl<'gc> Collect<'gc> for StaticStorageManager {
             // SAFETY: Tracing happens during a stop-the-world pause, so no other
             // threads are running. We can safely access the inner value without
             // acquiring the lock.
-            let map = unsafe { &*shard.data_ptr() };
-            for v in map.values() {
-                v.trace(cc);
+            #[cfg(debug_assertions)]
+            {
+                #[cfg(feature = "multithreading")]
+                if let Some(id) = dotnet_utils::gc::get_currently_tracing() {
+                    // Robust check: we only assert if the arena is still registered.
+                    // This avoids false positives in parallel tests where reset_arena_registry()
+                    // might have cleared the global registry.
+                    if dotnet_utils::gc::is_valid_cross_arena_ref(id) {
+                        debug_assert!(
+                            dotnet_utils::gc::is_stw_in_progress(id),
+                            "StaticStorageManager::trace: STW flag not set during tracing for arena {:?}",
+                            id
+                        );
+                    }
+                }
+
+                let map = shard.try_read().expect(
+                    "StaticStorageManager::trace: failed to acquire lock; STW failed? \
+                     (another thread is holding a write lock)",
+                );
+                for v in map.values() {
+                    v.trace(cc);
+                }
+            }
+            #[cfg(not(debug_assertions))]
+            {
+                let map = unsafe { &*shard.data_ptr() };
+                for v in map.values() {
+                    v.trace(cc);
+                }
             }
         }
     }

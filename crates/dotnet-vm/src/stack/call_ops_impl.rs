@@ -226,7 +226,6 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
     ) -> StepResult {
         let context = ctx.cloned().unwrap_or_else(|| self.current_context());
 
-        // TEMP: Trace what we are trying to resolve
         tracing::debug!(
             "unified_dispatch: source={:?}, this_type={:?}",
             source,

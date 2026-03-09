@@ -645,8 +645,13 @@ impl Tracer {
             instance_field_layout_size: 0,
             value_type_size: 0,
             has_finalizer_size: 0,
+            overrides_size: 0,
+            method_info_size: 0,
             assembly_type_info: (0, 0, 0),
             assembly_method_info: (0, 0, 0),
+            shared_runtime_types_size: 0,
+            shared_runtime_methods_size: 0,
+            shared_runtime_fields_size: 0,
         });
 
         self.send(LogEntry::DumpRuntimeMetrics(
