@@ -451,6 +451,42 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         }
     }
 
+    /// Atomically adds a value to a memory location.
+    ///
+    /// # Safety
+    /// Caller must ensure the offset and size are valid for the owner object.
+    pub unsafe fn exchange_add_atomic(
+        &mut self,
+        gc: GCHandle<'gc>,
+        owner: Option<MemoryOwner<'gc>>,
+        offset: ByteOffset,
+        value: u64,
+        size: usize,
+        ordering: dotnet_utils::sync::Ordering,
+    ) -> Result<u64, MemoryAccessError> {
+        use dotnet_utils::atomic::{AtomicAccess, StandardAtomicAccess};
+
+        if let Some(owner) = owner {
+            owner.with_data_mut(gc, |data| {
+                let base = data.as_mut_ptr();
+                let len = data.len();
+                let ptr = unsafe { base.add(offset.as_usize()) };
+
+                self.check_bounds_internal(ptr, base, len, size)?;
+
+                Ok(unsafe { StandardAtomicAccess::exchange_add_atomic(ptr, size, value, ordering) })
+            })
+        } else {
+            let ptr = sptr::from_exposed_addr_mut::<u8>(offset.as_usize());
+            if ptr.is_null() {
+                return Err(MemoryAccessError::NullPointer(
+                    "NullReferenceException: exchange_add_atomic to unmanaged null pointer".into(),
+                ));
+            }
+            Ok(unsafe { StandardAtomicAccess::exchange_add_atomic(ptr, size, value, ordering) })
+        }
+    }
+
     /// Atomically loads a value from memory.
     ///
     /// # Safety

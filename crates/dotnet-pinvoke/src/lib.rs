@@ -397,7 +397,7 @@ pub fn external_call<'gc>(
     method: MethodDescription,
     libraries: &NativeLibraries,
 ) -> StepResult {
-    ctx.set_current_intrinsic(Some(method));
+    ctx.set_current_intrinsic(Some(method.clone()));
     let res = external_call_impl(ctx, method, libraries);
     ctx.set_current_intrinsic(None);
     res

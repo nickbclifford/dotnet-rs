@@ -94,6 +94,16 @@ Generic type instantiation affects layout because different type arguments may h
 ### Interaction with Caching
 Cache keys include `GenericLookup` to distinguish between different instantiations of the same generic type/method.
 
+### Finite instantiation closure (no expanding-cycle detection)
+
+ECMA-335 requires that each generic type definition generates a **finite instantiation closure** and describes a validation algorithm based on detecting **expanding-cycles** in the inheritance/interface instantiation graph (§II.9.2).
+
+`dotnet-rs` currently does **not** implement expanding-cycle detection / finite-closure validation during load or resolution.
+
+**Rationale:** This project primarily targets **trusted assemblies** (similar to production runtimes, which typically do not proactively validate this property for already-trusted inputs). Adding the full §II.9.2 analysis would increase loader/resolution complexity and cost for a class of malformed metadata that is not expected in supported workloads.
+
+**Implication:** If an assembly contains an expanding-cycle, type resolution and/or layout computation may recurse indefinitely or otherwise fail at runtime. If `dotnet-rs` is extended to run untrusted or adversarial assemblies, this validation should be added as a loader-level check.
+
 ## Static Field Initialization (`statics.rs`)
 
 `StaticStorageManager` manages static field storage and class constructor (`.cctor`) execution:

@@ -139,7 +139,14 @@ impl ExceptionHandlingSystem {
                 self.search_for_handler(ctx, gc, state.exception, state.cursor)
             }
             ExceptionState::Unwinding(state) => {
-                self.unwind(ctx, gc, state.exception, state.target, state.cursor)
+                self.unwind(
+                    ctx,
+                    gc,
+                    state.exception,
+                    state.target,
+                    state.cursor,
+                    state.nested_filter,
+                )
             }
             ExceptionState::Filtering(_) | ExceptionState::ExecutingHandler(_) => {
                 StepResult::Exception
@@ -271,6 +278,12 @@ impl ExceptionHandlingSystem {
             ctx.frame_stack_mut().clear_suspended();
         }
 
+        let nested_filter = match ctx.exception_mode() {
+            ExceptionState::Filtering(state) => Some(*state),
+            ExceptionState::Searching(state) => state.nested_filter,
+            _ => None,
+        };
+
         *ctx.exception_mode_mut() = ExceptionState::Searching(SearchState {
             exception,
             cursor: HandlerAddress {
@@ -278,6 +291,7 @@ impl ExceptionHandlingSystem {
                 section_index: 0,
                 handler_index: 0,
             },
+            nested_filter,
         });
         self.handle_exception(ctx, gc)
     }
@@ -289,8 +303,21 @@ impl ExceptionHandlingSystem {
         exception: ObjectRef<'gc>,
         cursor: HandlerAddress,
     ) -> StepResult {
-        // Search from the cursor's frame down to the bottom of the stack
-        for frame_index in (0..=cursor.frame_index).rev() {
+        let stop_frame = if let ExceptionState::Searching(state) = ctx.exception_mode() {
+            if let Some(nested) = state.nested_filter {
+                if nested.handler.frame_index == 0 {
+                    panic!("Nested filter handler frame index is 0! (len={})", ctx.frame_stack().len());
+                }
+                nested.handler.frame_index
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        // Search from the cursor's frame down to the stop frame
+        for frame_index in (stop_frame..=cursor.frame_index).rev() {
             let frame = &ctx.frame_stack().frames[frame_index];
             let ip = frame.state.ip;
             let exceptions = frame.state.info_handle.exceptions.clone();
@@ -349,6 +376,7 @@ impl ExceptionHandlingSystem {
                                                 section_index: 0,
                                                 handler_index: 0,
                                             },
+                                            nested_filter: None,
                                         });
                                     return StepResult::Exception;
                                 }
@@ -363,9 +391,14 @@ impl ExceptionHandlingSystem {
                                 section_index,
                                 handler_index,
                             };
+                            let original_ip = ctx.original_ip();
+                            let original_stack_height = ctx.original_stack_height();
+
                             *ctx.exception_mode_mut() = ExceptionState::Filtering(FilterState {
                                 exception,
                                 handler: handler_addr,
+                                original_ip,
+                                original_stack_height,
                             });
 
                             // To run the filter, we must suspend the frames and stack above it.
@@ -395,6 +428,26 @@ impl ExceptionHandlingSystem {
         }
 
         // No handler found - the exception is unhandled.
+        if let ExceptionState::Searching(search_state) = *ctx.exception_mode()
+            && let Some(nested) = search_state.nested_filter
+        {
+            // If this exception occurred during a filter, it is swallowed by the CLI.
+            // We start unwinding the filter's call stack to execute any finally blocks.
+            // When the unwind completes (reaching the filter's entry point), we will
+            // resume the original exception search.
+            *ctx.exception_mode_mut() = ExceptionState::Unwinding(UnwindState {
+                exception: Some(exception),
+                target: UnwindTarget::Instruction(usize::MAX),
+                cursor: HandlerAddress {
+                    frame_index: ctx.frame_stack().len() - 1,
+                    section_index: 0,
+                    handler_index: 0,
+                },
+                nested_filter: Some(nested),
+            });
+            return self.handle_exception(ctx, gc);
+        }
+
         let managed_exc = extract_managed_exception(&gc, exception, ctx);
 
         *ctx.exception_mode_mut() = ExceptionState::None;
@@ -406,14 +459,21 @@ impl ExceptionHandlingSystem {
     fn unwind<'gc>(
         &self,
         ctx: &mut dyn ExceptionContext<'gc>,
-        _gc: GCHandle<'gc>,
+        gc: GCHandle<'gc>,
         exception: Option<ObjectRef<'gc>>,
         target: UnwindTarget,
         cursor: HandlerAddress,
+        nested_filter: Option<FilterState<'gc>>,
     ) -> StepResult {
         let target_frame = match target {
             UnwindTarget::Handler(h) => h.frame_index,
-            UnwindTarget::Instruction(_) => cursor.frame_index,
+            UnwindTarget::Instruction(_) => {
+                if let Some(nested) = nested_filter {
+                    nested.handler.frame_index
+                } else {
+                    cursor.frame_index
+                }
+            }
         };
 
         // Unwind from the cursor's frame down to the target frame
@@ -525,6 +585,7 @@ impl ExceptionHandlingSystem {
                             exception,
                             target,
                             cursor: next_cursor,
+                            nested_filter,
                         });
 
                         let frame = &mut ctx.frame_stack_mut().frames[frame_index];
@@ -540,10 +601,46 @@ impl ExceptionHandlingSystem {
             // we pop it and continue unwinding in the caller.
             if frame_index > target_frame {
                 ctx.unwind_frame();
+
+                // If unwinding the frame triggered a new exception (e.g. wrapping a .cctor failure),
+                // we must stop unwinding and start processing the new exception.
+                if matches!(ctx.exception_mode(), ExceptionState::Throwing(_, _)) {
+                    return self.handle_exception(ctx, gc);
+                }
             }
         }
 
         // We have successfully unwound to the target!
+        if let UnwindTarget::Instruction(usize::MAX) = target
+            && let Some(nested) = nested_filter
+        {
+            // Resume original search
+            // Restore suspended evaluation and frame stacks
+            ctx.evaluation_stack_mut().restore_suspended();
+            ctx.frame_stack_mut().restore_suspended();
+
+            // Restore state of the frame where filter ran
+            let frame = &mut ctx.frame_stack_mut().frames[nested.handler.frame_index];
+            frame.state.ip = nested.original_ip;
+            frame.stack_height = nested
+                .original_stack_height
+                .saturating_sub_idx(frame.base.stack);
+            frame.exception_stack.pop();
+
+            // Result is 0 (false): Continue searching after this filter handler.
+            *ctx.exception_mode_mut() = ExceptionState::Searching(SearchState {
+                exception: nested.exception,
+                cursor: HandlerAddress {
+                    frame_index: nested.handler.frame_index,
+                    section_index: nested.handler.section_index,
+                    handler_index: nested.handler.handler_index + 1,
+                },
+                nested_filter: None,
+            });
+
+            return self.handle_exception(ctx, gc);
+        }
+
         *ctx.exception_mode_mut() = ExceptionState::None;
         match target {
             UnwindTarget::Handler(target_h) => {

@@ -93,7 +93,7 @@ pub fn intrinsic_activator_create_instance<
 
         for m in target_td.definition().methods.iter() {
             if m.name == ".ctor" && m.signature.instance && m.signature.parameters.is_empty() {
-                let desc = MethodDescription::new(target_td, target_td.resolution, m);
+                let desc = MethodDescription::new(target_td, new_lookup.clone(), target_td.resolution, m);
 
                 vm_try!(ctx.constructor_frame(
                     instance,
@@ -131,7 +131,8 @@ pub fn handle_make_generic_type<
         + MemoryOps<'gc>
         + RawMemoryOps<'gc>
         + ReflectionOps<'gc>
-        + ExceptionOps<'gc>,
+        + ExceptionOps<'gc>
+        + LoaderOps,
 >(
     ctx: &mut T,
     _generics: &GenericLookup,
@@ -158,6 +159,31 @@ pub fn handle_make_generic_type<
             .into_iter()
             .map(|p_obj| ctx.resolve_runtime_type(p_obj).clone())
             .collect();
+
+        #[cfg(feature = "generic-constraint-validation")]
+        {
+            let loader = ctx.loader().clone();
+            let new_generics_concrete: Vec<ConcreteType> = new_generics
+                .iter()
+                .map(|rt| rt.to_concrete(loader.as_ref()))
+                .collect();
+            let lookup = GenericLookup::new(new_generics_concrete);
+            if let Err(_e) = lookup.validate_constraints(
+                td.resolution,
+                loader.as_ref(),
+                &td.definition().generic_parameters,
+                false,
+            ) {
+                return ctx.throw_by_name_with_message(
+                    "System.TypeLoadException",
+                    // Avoid expensive / potentially recursive debug formatting of constraint errors
+                    // (which can overflow the host stack). The specific constraint details aren't
+                    // currently surfaced to managed code.
+                    "Generic constraint violation.",
+                );
+            }
+        }
+
         let new_rt = RuntimeType::Generic(td, new_generics);
 
         let rt_obj = ctx.get_runtime_type(new_rt);
@@ -218,7 +244,7 @@ pub fn handle_create_instance_default_ctor<
             && m.signature.instance
             && m.signature.parameters.is_empty()
         {
-            let desc = MethodDescription::new(td, td.resolution, m);
+            let desc = MethodDescription::new(td, new_lookup.clone(), td.resolution, m);
 
             vm_try!(ctx.constructor_frame(
                 instance,

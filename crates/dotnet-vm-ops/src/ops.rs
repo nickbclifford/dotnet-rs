@@ -136,6 +136,12 @@ impl<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc> + VariableOps<'gc> + ?Sized>
 pub trait ExceptionOps<'gc> {
     fn throw_by_name(&mut self, name: &str) -> StepResult;
     fn throw_by_name_with_message(&mut self, name: &str, message: &str) -> StepResult;
+    fn throw_by_name_with_inner(
+        &mut self,
+        name: &str,
+        message: &str,
+        inner: ObjectRef<'gc>,
+    ) -> StepResult;
     fn throw(&mut self, exception: ObjectRef<'gc>) -> StepResult;
     fn rethrow(&mut self) -> StepResult;
     fn leave(&mut self, target_ip: usize) -> StepResult;
@@ -226,6 +232,20 @@ pub trait RawMemoryOps<'gc>: BorrowScopeOps {
     ///
     /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
     unsafe fn exchange_atomic(
+        &mut self,
+        origin: PointerOrigin<'gc>,
+        offset: ByteOffset,
+        value: u64,
+        size: usize,
+        ordering: dotnet_utils::sync::Ordering,
+    ) -> Result<u64, MemoryAccessError>;
+
+    /// Atomically adds a value to a memory location.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `offset` represents a valid memory location relative to `origin`.
+    unsafe fn exchange_add_atomic(
         &mut self,
         origin: PointerOrigin<'gc>,
         offset: ByteOffset,

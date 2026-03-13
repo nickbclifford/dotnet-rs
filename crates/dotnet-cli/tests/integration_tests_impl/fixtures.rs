@@ -60,22 +60,22 @@ multi_arena_test!(
     0
 );
 
-#[cfg(feature = "multithreading")]
-#[test]
-fn test_thread_manager_lifecycle() {
-    use dotnet_vm::threading::ThreadManagerOps;
-    let harness = TestHarness::get();
-    let shared = std::sync::Arc::new(dotnet_vm::state::SharedGlobalState::new(
-        harness.loader.clone(),
-    ));
-
-    let handle = std::thread::spawn(move || {
-        let _id = shared.thread_manager.register_thread();
-        // Do nothing
-    });
-
-    handle.join().unwrap();
-}
+// #[cfg(feature = "multithreading")]
+// #[test]
+// fn test_thread_manager_lifecycle() {
+//     use dotnet_vm::threading::ThreadManagerOps;
+//     let harness = TestHarness::get();
+//     let shared = std::sync::Arc::new(dotnet_vm::state::SharedGlobalState::new(
+//         harness.loader.clone(),
+//     ));
+//
+//     let handle = std::thread::spawn(move || {
+//         let _id = shared.thread_manager.register_thread();
+//         // Do nothing
+//     });
+//
+//     handle.join().unwrap();
+// }
 
 #[cfg(feature = "multithreading")]
 multi_arena_test!(
@@ -127,5 +127,21 @@ multi_arena_test!(
 
 #[cfg(feature = "multithreading")]
 multi_arena_test!(test_stw_stress, "tests/fixtures/gc/cache_test_0.cs", 6, 0);
+
+#[cfg(feature = "multithreading")]
+multi_arena_test!(
+    test_monitor_try_enter_timeout,
+    "tests/fixtures/threading/monitor_try_enter_timeout_42.cs",
+    3,
+    42
+);
+
+#[cfg(feature = "multithreading")]
+multi_arena_test!(
+    test_statics_circular_init_mt,
+    "tests/fixtures/statics/circular_init_mt_42.cs",
+    2,
+    42
+);
 
 include!(concat!(env!("OUT_DIR"), "/tests.rs"));

@@ -59,7 +59,7 @@ impl AssemblyLoader {
         }
 
         let res = self
-            .get_assembly(assembly.name.as_ref())
+            .get_assembly_with_version(assembly.name.as_ref(), Some(assembly.version))
             .map_err(|e| TypeResolutionError::AssemblyLoad(e.to_string()))?;
 
         let (namespace, name) = if let Some(idx) = full_name.rfind('.') {
@@ -341,6 +341,7 @@ impl AssemblyLoader {
         signature: &ManagedMethod<MethodType>,
         sig_res: ResolutionS,
         generics: &GenericLookup,
+        allow_variance: bool,
     ) -> Option<MethodDescription> {
         tracing::debug!(
             "find_method_in_type_with_substitution: desc={}, name={}, generics={:?}",
@@ -348,10 +349,17 @@ impl AssemblyLoader {
             name,
             generics
         );
-        self.comparer()
-            .find_method_in_type_with_substitution(desc, name, signature, sig_res, generics)
+        self.comparer().find_method_in_type_with_substitution(
+            desc,
+            name,
+            signature,
+            sig_res,
+            generics,
+            allow_variance,
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn find_method_in_type_internal(
         &self,
         desc: TypeDescription,
@@ -360,6 +368,7 @@ impl AssemblyLoader {
         sig_res: ResolutionS,
         sig_generics: Option<&GenericLookup>,
         type_generics: Option<&GenericLookup>,
+        allow_variance: bool,
     ) -> Option<MethodDescription> {
         self.comparer().find_method_in_type_internal(
             desc,
@@ -368,6 +377,7 @@ impl AssemblyLoader {
             sig_res,
             sig_generics,
             type_generics,
+            allow_variance,
         )
     }
 
@@ -403,13 +413,14 @@ impl AssemblyLoader {
         );
         if let Some(cached) = self.method_cache.get(&key) {
             self.method_cache_hits.fetch_add(1, Ordering::Relaxed);
-            return Ok(*cached);
+            return Ok(cached.clone());
         }
 
         self.method_cache_misses.fetch_add(1, Ordering::Relaxed);
         let result = match handle {
             UserMethod::Definition(d) => Ok(MethodDescription::new(
                 self.locate_type(resolution, d.parent_type().into())?,
+                GenericLookup::default(),
                 resolution,
                 &resolution.definition()[d],
             )),
@@ -422,7 +433,7 @@ impl AssemblyLoader {
                         let concrete = if let Some(p) = pre_resolved_parent {
                             p
                         } else {
-                            generic_inst.make_concrete(resolution, t.clone())?
+                            generic_inst.make_concrete(resolution, t.clone(), self)?
                         };
 
                         if method_ref.name == ".ctor"
@@ -431,11 +442,12 @@ impl AssemblyLoader {
                             let array_type = self.corlib_type("System.Array")?;
                             for method in &array_type.definition().methods {
                                 if method.name == "CtorArraySentinel" {
-                                    return Ok(MethodDescription::new(
-                                        array_type,
-                                        array_type.resolution,
-                                        method,
-                                    ));
+                        return Ok(MethodDescription::new(
+                            array_type,
+                            GenericLookup::default(),
+                            array_type.resolution,
+                            method,
+                        ));
                                 }
                             }
                             return Err(TypeResolutionError::MethodNotFound(
@@ -443,13 +455,15 @@ impl AssemblyLoader {
                             ));
                         }
 
-                        let parent_type: TypeDescription = self.find_concrete_type(concrete)?;
+                        let parent_type: TypeDescription = self.find_concrete_type(concrete.clone())?;
+                        let parent_generics = concrete.make_lookup();
                         match self.find_method_in_type_with_substitution(
                             parent_type,
                             &method_ref.name,
                             &method_ref.signature,
                             resolution,
-                            generic_inst,
+                            &parent_generics,
+                            false,
                         ) {
                             None => Err(TypeResolutionError::MethodNotFound(format!(
                                 "could not find {} in type {}",
@@ -458,7 +472,10 @@ impl AssemblyLoader {
                                     .show_with_name(resolution.definition(), &method_ref.name),
                                 parent_type.type_name()
                             ))),
-                            Some(method) => Ok(method),
+                            Some(mut m) => {
+                                m.parent_generics = parent_generics;
+                                Ok(m)
+                            }
                         }
                     }
                     Module(_) => todo!("method reference: module"),
@@ -468,7 +485,7 @@ impl AssemblyLoader {
         };
 
         if let Ok(m) = result {
-            self.method_cache.insert(key, m);
+            self.method_cache.insert(key, m.clone());
             Ok(m)
         } else {
             result
@@ -515,7 +532,7 @@ impl AssemblyLoader {
                 use FieldReferenceParent::*;
                 match &field_ref.parent {
                     Type(t) => {
-                        let t = generic_inst.make_concrete(resolution, t.clone())?;
+                        let t = generic_inst.make_concrete(resolution, t.clone(), self)?;
                         let parent_type: TypeDescription = self.find_concrete_type(t.clone())?;
 
                         for (i, field) in parent_type.definition().fields.iter().enumerate() {
@@ -618,6 +635,10 @@ pub(crate) fn load_resolution_core(
     let res = Resolution::parse(byte_slice, ReadOptions::default()).map_err(|e| {
         AssemblyLoadError::InvalidFormat(format!("failed to parse resolution: {}", e))
     })?;
+
+    #[cfg(feature = "metadata-validation")]
+    crate::validation::validate_metadata(&res)?;
+
     let res_ptr = Box::into_raw(Box::new(res));
 
     Ok((ResolutionS::new(res_ptr), res_ptr, aligned_ptr))

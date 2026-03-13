@@ -14,7 +14,7 @@ impl<'a, 'gc> ResolutionOps<'gc> for VesContext<'a, 'gc> {
                 state: self.shared.resolution_shared(),
                 resolution: f.source_resolution,
                 type_owner: Some(f.state.info_handle.source.parent),
-                method_owner: Some(f.state.info_handle.source),
+                method_owner: Some(f.state.info_handle.source.clone()),
             }
         } else {
             ResolutionContext {

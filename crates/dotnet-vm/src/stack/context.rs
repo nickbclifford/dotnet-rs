@@ -124,7 +124,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                         state: self.shared.resolution_shared(),
                         resolution: method.resolution(),
                         type_owner: Some(method.parent),
-                        method_owner: Some(method),
+                        method_owner: Some(method.clone()),
                     };
 
                     let v = match ctx.make_concrete(var_type)?.get() {
@@ -287,6 +287,29 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             self.shared
                 .statics
                 .mark_failed(type_desc, &frame.generic_inst);
+
+            // Wrap exception in TypeInitializationException per ECMA-335 §II.10.5.3.3
+            let current_exception = match *self.exception_mode {
+                ExceptionState::Throwing(ex, _) => Some(ex),
+                ExceptionState::Searching(s) => Some(s.exception),
+                ExceptionState::Unwinding(u) => u.exception,
+                ExceptionState::ExecutingHandler(u) => u.exception,
+                ExceptionState::Filtering(f) => Some(f.exception),
+                ExceptionState::None => None,
+            };
+
+            if let Some(inner) = current_exception {
+                let type_name = type_desc.type_name();
+                let message = format!("The type initializer for '{}' threw an exception.", type_name);
+                // We use throw_by_name_with_inner which updates self.exception_mode to Throwing.
+                // This is safe because unwind_frame is called during the exception handling loop
+                // in dotnet-exceptions, and the next iteration will see the new Throwing state.
+                let _ = self.throw_by_name_with_inner(
+                    "System.TypeInitializationException",
+                    &message,
+                    inner,
+                );
+            }
         }
 
         if frame.is_finalizer {
@@ -347,20 +370,34 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                 .borrow_mut()
                 .insert(addr, *instance);
 
-            // Add to finalization queue if it has a finalizer
-            if let HeapStorage::Obj(o) = &ptr.borrow().storage
-                && (o.description.static_initializer().is_some()
+            // Add to finalization queue if it has a finalizer.
+            // Note: We skip System.Object because it defines a virtual Finalize() method
+            // but we don't want every single object in the VM to be added to the
+            // finalization queue. Only objects that override it or have their own
+            // finalizers should be queued.
+            if let HeapStorage::Obj(o) = &ptr.borrow().storage {
+                let has_finalizer = o.description.static_initializer().is_some()
                     || o.description
                         .definition()
                         .methods
                         .iter()
-                        .any(|m| m.name == "Finalize"))
-            {
-                self.local
-                    .heap
-                    .finalization_queue
-                    .borrow_mut()
-                    .push(*instance);
+                        .any(|m| m.name == "Finalize");
+
+                if has_finalizer {
+                    let system_object = self
+                        .shared
+                        .loader
+                        .corlib_type("System.Object")
+                        .ok();
+
+                    if Some(o.description) != system_object {
+                        self.local
+                            .heap
+                            .finalization_queue
+                            .borrow_mut()
+                            .push(*instance);
+                    }
+                }
             }
         }
     }
@@ -560,17 +597,23 @@ impl<'a, 'gc> BaseStaticsOps<'gc> for VesContext<'a, 'gc> {
             | Ok(crate::statics::StaticInitResult::Recursive) => StepResult::Continue,
             Ok(crate::statics::StaticInitResult::Waiting) => {
                 #[cfg(feature = "multithreading")]
-                self.shared.statics.wait_for_init(
+                if self.shared.statics.wait_for_init(
                     description,
                     &type_generics,
                     self.shared.thread_manager.as_ref(),
                     thread_id,
                     &self.shared.gc_coordinator,
-                );
+                ) {
+                    self.back_up_ip();
+                    return StepResult::Yield;
+                }
                 StepResult::Continue
             }
             Ok(crate::statics::StaticInitResult::Failed) => {
-                self.throw_by_name("System.TypeInitializationException")
+                let type_name = description.type_name();
+                let message =
+                    format!("The type initializer for '{}' threw an exception.", type_name);
+                self.throw_by_name_with_message("System.TypeInitializationException", &message)
             }
             Err(e) => StepResult::Error(e.into()),
         }
@@ -647,7 +690,7 @@ impl<'a, 'gc> BaseVesInternals<'gc> for VesContext<'a, 'gc> {
     }
 
     fn current_intrinsic(&self) -> Option<MethodDescription> {
-        self.current_intrinsic.map(|m| m.0)
+        self.current_intrinsic.as_ref().map(|m| m.0.clone())
     }
 
     #[inline]
@@ -754,6 +797,8 @@ impl<'a, 'gc> VesOps<'gc> for VesContext<'a, 'gc> {
                             _ => break,
                         }
                     }
+                    // Periodic check for safe point after each instruction chunk
+                    let _ = self.check_gc_safe_point();
                     last_res
                 }
                 _ => {
@@ -837,6 +882,7 @@ impl<'a, 'gc> VesOps<'gc> for VesContext<'a, 'gc> {
 
                         let method_desc = MethodDescription::new(
                             object_type,
+                            GenericLookup::default(),
                             object_type.resolution,
                             base_finalize,
                         );

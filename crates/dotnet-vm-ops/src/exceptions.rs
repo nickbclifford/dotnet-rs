@@ -29,6 +29,9 @@ pub struct HandlerAddress {
 pub struct SearchState<'gc> {
     pub exception: ObjectRef<'gc>,
     pub cursor: HandlerAddress,
+    /// If this search was triggered while a filter was executing, this stores
+    /// the filter state so it can be resumed if this exception is unhandled.
+    pub nested_filter: Option<FilterState<'gc>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Collect, Debug)]
@@ -36,6 +39,8 @@ pub struct SearchState<'gc> {
 pub struct FilterState<'gc> {
     pub exception: ObjectRef<'gc>,
     pub handler: HandlerAddress,
+    pub original_ip: usize,
+    pub original_stack_height: dotnet_utils::StackSlotIndex,
 }
 
 #[derive(Clone, Copy, PartialEq, Collect, Debug)]
@@ -44,6 +49,10 @@ pub struct UnwindState<'gc> {
     pub exception: Option<ObjectRef<'gc>>,
     pub target: UnwindTarget,
     pub cursor: HandlerAddress,
+    /// If this unwind was triggered by an unhandled exception in a filter,
+    /// this stores the original filter state to resume searching once the
+    /// unwind completes.
+    pub nested_filter: Option<FilterState<'gc>>,
 }
 
 /// The destination of the current unwind operation.
@@ -68,7 +77,12 @@ pub enum ExceptionState<'gc> {
     /// No exception is currently being processed.
     None,
     /// An exception has just been thrown. The next step is to begin the search phase.
-    /// The boolean flag indicates whether the original stack trace should be preserved (for rethrow).
+    ///
+    /// The boolean flag indicates whether the original stack trace should be preserved (for `rethrow`).
+    /// If `true`, the runtime will attempt to keep the existing stack trace string in the exception
+    /// object instead of overwriting it with a new one starting from the current frame.
+    ///
+    /// See ECMA-335 §III.4.24 ("rethrow"): "A rethrow does not change the stack trace in the object."
     Throwing(ObjectRef<'gc>, bool),
     /// Currently searching for a matching handler (catch or filter).
     Searching(SearchState<'gc>),

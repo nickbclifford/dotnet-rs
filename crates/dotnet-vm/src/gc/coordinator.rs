@@ -1,7 +1,9 @@
 #[cfg(feature = "multithreading")]
+use dotnet_utils::sync::{Arc, AtomicBool};
+#[cfg(feature = "multithreading")]
 use crate::threading::execute_gc_command_for_current_thread;
 #[cfg(feature = "multithreading")]
-use dotnet_utils::sync::{Arc, AtomicBool, Mutex, Ordering};
+use crate::sync::{Mutex, MutexGuard, Ordering};
 #[cfg(feature = "multithreading")]
 use dotnet_value::object::ObjectPtr;
 #[cfg(feature = "multithreading")]
@@ -166,7 +168,7 @@ impl GCCoordinator {
     pub fn collect_all_arenas(&self, initiating_thread_id: dotnet_utils::ArenaId) {
         // This is called by the thread that triggered the GC, after STW is established.
 
-        // Phase 1: Initial marking - each arena marks its local roots
+        // Initial marking: each arena marks its local roots.
         {
             // Clear any stale cross-arena references from previous collections
             let mut refs = self.cross_arena_refs.lock();
@@ -176,7 +178,7 @@ impl GCCoordinator {
         // Send MarkAll command to all arenas
         self.send_command_to_all_and_wait(initiating_thread_id, GCCommand::MarkAll);
 
-        // Phase 2: Fixed-point iteration for cross-arena resurrection
+        // Fixed-point iteration for cross-arena resurrection.
         // Keep iterating until no new cross-arena references are found
         loop {
             let cross_refs = {
@@ -229,10 +231,10 @@ impl GCCoordinator {
             }
         }
 
-        // Phase 3: Finalize
+        // Run finalizers.
         self.send_command_to_all_and_wait(initiating_thread_id, GCCommand::Finalize);
 
-        // Phase 4: Sweep
+        // Sweep unmarked objects.
         self.send_command_to_all_and_wait(initiating_thread_id, GCCommand::Sweep);
     }
 
@@ -304,8 +306,6 @@ impl Default for GCCoordinator {
     }
 }
 
-#[cfg(feature = "multithreading")]
-pub type MutexGuard<'a, T> = crate::sync::MutexGuard<'a, T>;
 
 #[cfg(not(feature = "multithreading"))]
 pub mod stubs {
@@ -521,3 +521,4 @@ mod tests {
         t.join().unwrap();
     }
 }
+

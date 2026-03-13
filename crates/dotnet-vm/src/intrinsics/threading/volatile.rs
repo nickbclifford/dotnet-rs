@@ -50,7 +50,7 @@ pub fn intrinsic_volatile_read<
     let Parameter(_, first_param_type) = &params[0];
 
     let target_type = if let ParameterType::Ref(inner) = first_param_type {
-        vm_try!(generics.make_concrete(method.resolution(), inner.clone()))
+        vm_try!(generics.make_concrete(method.resolution(), inner.clone(), ctx.loader().as_ref()))
     } else {
         panic!(
             "intrinsic_volatile_read: First parameter must be Ref, found {:?}",
@@ -195,7 +195,7 @@ pub fn intrinsic_volatile_write<
     let Parameter(_, target_ref_type) = &params[0];
 
     let target_type = if let ParameterType::Ref(inner) = target_ref_type {
-        vm_try!(generics.make_concrete(method.resolution(), inner.clone()))
+        vm_try!(generics.make_concrete(method.resolution(), inner.clone(), ctx.loader().as_ref()))
     } else {
         panic!(
             "intrinsic_volatile_write: First parameter must be Ref, found {:?}",

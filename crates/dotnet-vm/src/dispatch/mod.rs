@@ -244,7 +244,7 @@ impl<'gc> ExecutionEngine<'gc> {
             method.method().pinvoke,
             method.method().internal_call
         );
-        if ctx.is_intrinsic_cached(method) {
+        if ctx.is_intrinsic_cached(method.clone()) {
             crate::intrinsics::intrinsic_call(&mut ctx, method, &lookup)
         } else if method.method().pinvoke.is_some() {
             let shared = ctx.shared().clone();
@@ -256,7 +256,7 @@ impl<'gc> ExecutionEngine<'gc> {
 
             if method.method().body.is_none() {
                 if let Some(result) =
-                    crate::intrinsics::delegates::try_delegate_dispatch(&mut ctx, method, &lookup)
+                    crate::intrinsics::delegates::try_delegate_dispatch(&mut ctx, method.clone(), &lookup)
                 {
                     return result;
                 }
@@ -288,7 +288,7 @@ impl<'gc> ExecutionEngine<'gc> {
         // 1. Handle return from previous target
         if ctx.frame_stack.current_frame().stack_height > StackSlotIndex(0) {
             let frame = ctx.frame_stack.current_frame();
-            let invoke_method = frame.state.info_handle.source;
+            let invoke_method = frame.state.info_handle.source.clone();
             let has_return_value = invoke_method.method().signature.return_type.1.is_some();
 
             let next_index = frame.multicast_state.as_ref().unwrap().next_index;
@@ -319,7 +319,7 @@ impl<'gc> ExecutionEngine<'gc> {
                 ctx.push(arg);
             }
 
-            let invoke_method = ctx.frame_stack.current_frame().state.info_handle.source;
+            let invoke_method = ctx.frame_stack.current_frame().state.info_handle.source.clone();
             let lookup = ctx.frame_stack.current_frame().generic_inst.clone();
 
             ctx.dispatch_method(invoke_method, lookup)

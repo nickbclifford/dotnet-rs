@@ -92,6 +92,10 @@ pub struct StaticStorageManager {
     /// We use a striped lock table for better performance and to allow concurrent access to different types,
     /// and each StaticStorage has its own locks for even more granularity.
     shards: [RwLock<StaticMap>; 16],
+    /// Tracks which thread is waiting for which other thread to complete type initialization.
+    /// This is used to detect and avoid deadlocks in multi-threaded circular initialization.
+    /// wait_graph[T1] = T2 means T1 is waiting for T2.
+    wait_graph: Mutex<HashMap<u64, u64>>,
 }
 
 const NUM_SHARDS: usize = 16;
@@ -100,6 +104,7 @@ const NUM_SHARDS: usize = 16;
 // The map keys are non-GC metadata and do not need tracing. Each `StaticStorage` value is traced,
 // which in turn traces all GC-managed references in static fields.
 // During tracing, we use data_ptr() to bypass locks, which is safe during stop-the-world GC pauses.
+// The `wait_graph` contains only primitive IDs and does not need tracing.
 unsafe impl<'gc> Collect<'gc> for StaticStorageManager {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
         for shard in &self.shards {
@@ -172,6 +177,7 @@ impl StaticStorageManager {
     pub fn new() -> Self {
         Self {
             shards: std::array::from_fn(|_| RwLock::new(HashMap::new())),
+            wait_graph: Mutex::new(HashMap::new()),
         }
     }
 
@@ -250,11 +256,12 @@ impl StaticStorageManager {
     /// Mark a type as failed after its .cctor throws an exception.
     pub fn mark_failed(&self, description: TypeDescription, generics: &GenericLookup) {
         if let Some(storage) = self.lookup_in_shard(description, generics) {
+            let _lock = storage.init_mutex.lock();
             storage
                 .init_state
                 .store(INIT_STATE_FAILED, Ordering::Release);
+            storage.initializing_thread.store(0, Ordering::Release);
             // Notify any threads waiting for initialization
-            let _lock = storage.init_mutex.lock();
             storage.init_cond.notify_all();
         }
     }
@@ -337,27 +344,33 @@ impl StaticStorageManager {
 
         let cctor = cctor.unwrap();
 
-        match storage.init_state.compare_exchange(
-            INIT_STATE_UNINITIALIZED,
-            INIT_STATE_INITIALIZING,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => {
+        let _lock = storage.init_mutex.lock();
+        match storage.init_state.load(Ordering::Acquire) {
+            INIT_STATE_UNINITIALIZED => {
+                storage
+                    .init_state
+                    .store(INIT_STATE_INITIALIZING, Ordering::Release);
                 storage
                     .initializing_thread
                     .store(thread_id.as_u64(), Ordering::Release);
                 Ok(StaticInitResult::Execute(cctor))
             }
-            Err(INIT_STATE_INITIALIZED) => {
-                // Already initialized by another thread
-                Ok(StaticInitResult::Initialized)
-            }
-            Err(INIT_STATE_INITIALIZING) => {
+            INIT_STATE_INITIALIZED => Ok(StaticInitResult::Initialized),
+            INIT_STATE_FAILED => Ok(StaticInitResult::Failed),
+            INIT_STATE_INITIALIZING => {
                 // Another thread is currently initializing
+                let target_thread = storage.initializing_thread.load(Ordering::Acquire);
+                if target_thread != 0 {
+                    let mut wait_graph = self.wait_graph.lock();
+                    if self.causes_cycle(&wait_graph, thread_id.as_u64(), target_thread) {
+                        return Ok(StaticInitResult::Recursive);
+                    }
+                    // Atomic with cycle check: add the edge before returning Waiting
+                    wait_graph.insert(thread_id.as_u64(), target_thread);
+                }
                 Ok(StaticInitResult::Waiting)
             }
-            Err(_) => unreachable!("Invalid initialization state"),
+            state => unreachable!("Invalid initialization state: {}", state),
         }
     }
 
@@ -365,25 +378,26 @@ impl StaticStorageManager {
     /// This must be called after the .cctor returned by `init()` has finished executing.
     pub fn mark_initialized(&self, description: TypeDescription, generics: &GenericLookup) {
         if let Some(storage) = self.lookup_in_shard(description, generics) {
+            let _lock = storage.init_mutex.lock();
             storage
                 .init_state
                 .store(INIT_STATE_INITIALIZED, Ordering::Release);
+            storage.initializing_thread.store(0, Ordering::Release);
             // Notify any threads waiting for initialization
-            let _lock = storage.init_mutex.lock();
             storage.init_cond.notify_all();
         }
     }
 
     /// Wait for a type's initialization to complete if another thread is currently initializing it.
-    /// This method checks for GC safe points while waiting to avoid deadlocks during stop-the-world pauses.
+    /// This method returns true if a GC safe point yield is requested, allowing the caller to restart the instruction.
     pub fn wait_for_init(
         &self,
         description: TypeDescription,
         generics: &GenericLookup,
         thread_manager: &impl ThreadManagerOps,
         thread_id: dotnet_utils::ArenaId,
-        gc_coordinator: &GCCoordinator,
-    ) {
+        _gc_coordinator: &GCCoordinator,
+    ) -> bool {
         let storage = self.get(description, generics);
 
         loop {
@@ -393,30 +407,56 @@ impl StaticStorageManager {
                 break;
             }
 
+            // Ensure our wait edge is up-to-date
+            let target_thread = storage.initializing_thread.load(Ordering::Acquire);
+            if target_thread != 0 && target_thread != thread_id.as_u64() {
+                let mut wait_graph = self.wait_graph.lock();
+                wait_graph.insert(thread_id.as_u64(), target_thread);
+            }
+
             // Check for GC safe point before waiting
             if thread_manager.is_gc_stop_requested() {
-                thread_manager.safe_point(thread_id, gc_coordinator);
+                return true; // Yield requested
             }
 
             // Try to wait with a timeout
-            let mut lock = storage.init_mutex.lock();
-            if storage.init_state.load(Ordering::Acquire) != INIT_STATE_INITIALIZING {
-                break;
-            }
+            {
+                let mut lock = storage.init_mutex.lock();
+                if storage.init_state.load(Ordering::Acquire) != INIT_STATE_INITIALIZING {
+                    break;
+                }
 
-            // Wait for a short duration to allow periodic safe point checks
-            #[cfg(feature = "multithreading")]
-            {
-                use std::time::Duration;
-                let _ = storage
-                    .init_cond
-                    .wait_for(&mut lock, Duration::from_millis(10));
-            }
-            #[cfg(not(feature = "multithreading"))]
-            {
-                // In single-threaded mode, just wait normally
-                storage.init_cond.wait(&mut lock);
+                // Wait for a short duration to allow periodic safe point checks
+                #[cfg(feature = "multithreading")]
+                {
+                    use std::time::Duration;
+                    let _ = storage
+                        .init_cond
+                        .wait_for(&mut lock, Duration::from_millis(10));
+                }
+                #[cfg(not(feature = "multithreading"))]
+                {
+                    // In single-threaded mode, just wait normally
+                    storage.init_cond.wait(&mut lock);
+                }
             }
         }
+
+        // Remove from wait graph before exit
+        let mut wait_graph = self.wait_graph.lock();
+        wait_graph.remove(&thread_id.as_u64());
+        false
+    }
+
+    /// Helper to detect if adding start -> target edge would cause a cycle.
+    fn causes_cycle(&self, wait_graph: &HashMap<u64, u64>, start: u64, target: u64) -> bool {
+        let mut current = target;
+        while let Some(&next) = wait_graph.get(&current) {
+            if next == start {
+                return true;
+            }
+            current = next;
+        }
+        false
     }
 }

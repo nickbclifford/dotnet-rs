@@ -75,6 +75,7 @@ impl<'gc> HeapManager<'gc> {
             }
         };
 
+        let mut to_finalize = Vec::new();
         if !queue.is_empty() {
             #[cfg(feature = "memory-validation")]
             {
@@ -112,7 +113,6 @@ impl<'gc> HeapManager<'gc> {
                 }
             }
 
-            let mut to_finalize = Vec::new();
             let mut i = 0;
             while i < queue.len() {
                 let obj = queue[i];
@@ -136,37 +136,40 @@ impl<'gc> HeapManager<'gc> {
                     i += 1;
                 }
             }
+        }
 
-            if !to_finalize.is_empty() {
-                let mut pending = self.pending_finalization.borrow_mut();
-                for obj in to_finalize {
-                    let ptr = obj.0.unwrap();
-                    pending.push(obj);
-                    if resurrected.insert(Gc::as_ptr(ptr) as usize) {
-                        // Trace resurrection event
-                        if shared.tracer_enabled.load(Ordering::Relaxed) {
-                            let obj_type_name = match &ptr.borrow().storage {
-                                HeapStorage::Obj(o) => format!("{:?}", o.description),
-                                HeapStorage::Vec(_) => "Vector".to_string(),
-                                HeapStorage::Str(_) => "String".to_string(),
-                                HeapStorage::Boxed(_) => "Boxed".to_string(),
-                            };
-                            let addr = Gc::as_ptr(ptr) as usize;
-                            shared
-                                .tracer
-                                .trace_gc_resurrection(indent, &obj_type_name, addr);
-                        }
-                        Gc::resurrect(fc, ptr);
-                        ptr.borrow().storage.resurrect(fc, &mut resurrected, 0);
+        // 1. Zero out Weak handles for dead objects.
+        // This MUST be done before resurrection because "short" weak handles
+        // are cleared as soon as the object is no longer strongly reachable.
+        zero_out_handles(GCHandleType::Weak, &resurrected);
+
+        if !to_finalize.is_empty() {
+            let mut pending = self.pending_finalization.borrow_mut();
+            for obj in to_finalize {
+                let ptr = obj.0.unwrap();
+                pending.push(obj);
+                if resurrected.insert(Gc::as_ptr(ptr) as usize) {
+                    // Trace resurrection event
+                    if shared.tracer_enabled.load(Ordering::Relaxed) {
+                        let obj_type_name = match &ptr.borrow().storage {
+                            HeapStorage::Obj(o) => format!("{:?}", o.description),
+                            HeapStorage::Vec(_) => "Vector".to_string(),
+                            HeapStorage::Str(_) => "String".to_string(),
+                            HeapStorage::Boxed(_) => "Boxed".to_string(),
+                        };
+                        let addr = Gc::as_ptr(ptr) as usize;
+                        shared
+                            .tracer
+                            .trace_gc_resurrection(indent, &obj_type_name, addr);
                     }
+                    Gc::resurrect(fc, ptr);
+                    ptr.borrow().storage.resurrect(fc, &mut resurrected, 0);
                 }
             }
         }
 
-        // 1. Zero out Weak handles for dead objects
-        zero_out_handles(GCHandleType::Weak, &resurrected);
-
         // 2. Zero out WeakTrackResurrection handles
+        // These are only cleared if the object was NOT resurrected.
         zero_out_handles(GCHandleType::WeakTrackResurrection, &resurrected);
 
         // 3. Prune dead objects from the debugging harness

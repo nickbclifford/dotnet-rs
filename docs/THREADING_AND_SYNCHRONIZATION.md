@@ -133,7 +133,15 @@ Implements .NET's `Monitor.Enter`/`Monitor.Exit` semantics (the `lock` keyword) 
 - **`SyncBlock` Data Structure**: Contains a `Mutex<SyncBlockState>` and a `Condvar`.
 - **`SyncBlockState`**: Tracks the `owner_thread_id` (`ArenaId`) and `recursion_count` to support re-entrant locking by the same thread.
 - Objects are identified by their sync block index, stored in the object's header/layout.
-- `enter_safe` uses a `loop` with `condvar.wait_for(10ms)`. Every 10ms, it wakes up, drops the lock, and calls `thread_manager.is_gc_stop_requested()` and `safe_point()` if necessary, preventing deadlocks when a thread waiting for a monitor lock is asked to suspend by the GC.
+- `enter_safe` uses a `loop` with a configurable yield interval (default 10ms). Periodically, it wakes up, drops the lock, and calls `thread_manager.is_gc_stop_requested()` and `safe_point()` if necessary, preventing deadlocks when a thread waiting for a monitor lock is asked to suspend by the GC.
+
+### Configuration
+
+#### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DOTNET_SAFE_POINT_YIELD_MS` | `10` | The interval (in milliseconds) at which a thread waiting for a monitor lock will wake up to check for a GC safe point request. Lower values reduce GC pause latency but increase CPU overhead during lock contention. |
 
 ### Single-Threaded Implementation (`sync/single_threaded.rs`, ~151 lines)
 
@@ -187,3 +195,20 @@ The codebase uses a conditional aliasing pattern in `dotnet-utils/src/sync.rs` t
 - **With `multithreading`**: Aliases point to `parking_lot::Mutex` and `parking_lot::RwLock`.
 - **Without `multithreading`**: Aliases point to `compat::Mutex` and `compat::RwLock`, which are lightweight wrappers around `std::cell::RefCell` (bypassing OS locking overhead entirely).
 *(Note: `ThreadSafeLock` still exists in `dotnet-utils/src/gc/thread_safe_lock.rs` as a GC-specific lock wrapper that switches between `parking_lot::RwLock` (multi-threaded) and `gc_arena::RefLock` (single-threaded). The general-purpose `Mutex`/`RwLock` aliases in `dotnet-utils/src/sync.rs` are separate.)*
+
+## Asynchronous Exceptions (Thread.Abort and Thread.Interrupt)
+
+### Thread.Abort
+
+Following the direction of modern .NET (.NET 5+ and .NET Core), `dotnet-rs` **does not support** `Thread.Abort`. 
+
+- **Rationale**: `Thread.Abort` is inherently unsafe as it injects a `ThreadAbortException` at arbitrary execution points (asynchronous exceptions per ECMA-335 §I.12.4.2.3). This can interrupt static constructors, leave shared state in an inconsistent manner, or fail to release unmanaged resources.
+- **Compliance**: While ECMA-335 §I.12.4.2.3 describes the mechanism for asynchronous exceptions, it does not mandate that a CLI implementation must provide a public `Thread.Abort` API.
+- **Behavior**: Any attempt to call `Thread.Abort` via BCL will result in a `PlatformNotSupportedException`, consistent with modern .NET runtimes.
+
+### Thread.Interrupt
+
+`Thread.Interrupt` is currently **not implemented** in the `dotnet-rs` VM.
+
+- **Status**: Unlike `Thread.Abort`, `Thread.Interrupt` is still supported in modern .NET for waking threads from waiting states (e.g., `Wait`, `Sleep`, `Join`). However, it has been omitted from the current implementation to maintain a simpler thread state machine.
+- **Future Work**: Implementation would require tracking "interruptible" states and injecting a `ThreadInterruptedException` when the thread next enters or is already in a waiting state.

@@ -203,7 +203,7 @@ pub fn intrinsic_as_span<
 
     let span_type_concrete = match &method.method().signature.return_type.1 {
         Some(ParameterType::Value(t)) => {
-            vm_try!(generics.make_concrete(method.resolution(), t.clone()))
+            vm_try!(generics.make_concrete(method.resolution(), t.clone(), ctx.loader().as_ref()))
         }
         Some(_) => {
             return StepResult::Error(
@@ -325,7 +325,11 @@ pub fn intrinsic_runtime_helpers_create_span<
     };
     let field = field_desc.field();
     let field_resolution = field_desc.field_resolution;
-    let field_type = vm_try!(lookup.make_concrete(field_resolution, field.return_type.clone()));
+    let field_type = vm_try!(lookup.make_concrete(
+        field_resolution,
+        field.return_type.clone(),
+        ctx.loader().as_ref(),
+    ));
     let field_desc = vm_try!(ctx.loader().find_concrete_type(field_type.clone()));
 
     let Some(initial_data) = &field.initial_value else {

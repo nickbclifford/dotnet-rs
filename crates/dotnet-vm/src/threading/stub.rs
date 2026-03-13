@@ -12,6 +12,8 @@ impl ThreadManager {
     pub fn new(_stw_in_progress: Arc<dotnet_utils::sync::AtomicBool>) -> Arc<Self> {
         Arc::new(Self)
     }
+
+    pub fn set_coordinator(&self, _coordinator: std::sync::Weak<GCCoordinator>) {}
 }
 
 impl ThreadManagerOps for ThreadManager {

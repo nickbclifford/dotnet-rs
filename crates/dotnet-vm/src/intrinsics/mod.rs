@@ -369,7 +369,7 @@ pub fn intrinsic_call<'gc, T: VesOps<'gc>>(
     generics: &GenericLookup,
 ) -> StepResult {
     let _res_ctx = ResolutionContext::for_method(
-        method,
+        method.clone(),
         ctx.loader_arc(),
         generics,
         ctx.shared().caches.clone(),
@@ -383,11 +383,11 @@ pub fn intrinsic_call<'gc, T: VesOps<'gc>>(
     );
 
     if let Some(metadata) = classify_intrinsic(
-        method,
+        method.clone(),
         ctx.loader(),
         Some(&ctx.shared().caches.intrinsic_registry),
     ) {
-        ctx.set_current_intrinsic(Some(method));
+        ctx.set_current_intrinsic(Some(method.clone()));
         let res = dispatch_method_intrinsic(metadata.handler, ctx, method, generics);
         ctx.set_current_intrinsic(None);
         return res;

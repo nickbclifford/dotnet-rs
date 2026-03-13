@@ -132,7 +132,7 @@ impl ResolverService {
         generics: &GenericLookup,
         t: &T,
     ) -> Result<ConcreteType, TypeResolutionError> {
-        generics.make_concrete(resolution, t.clone())
+        generics.make_concrete(resolution, t.clone(), self.loader())
     }
 
     pub fn is_value_type(&self, td: TypeDescription) -> Result<bool, TypeResolutionError> {

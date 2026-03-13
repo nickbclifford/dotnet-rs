@@ -168,6 +168,7 @@ pub fn intrinsic_memory_extensions_sequence_equal<
 
         let slow_path_method = MethodDescription::new(
             memory_extensions_type,
+            GenericLookup::default(),
             memory_extensions_type.resolution,
             method_def,
         );

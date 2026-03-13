@@ -49,7 +49,7 @@ pub fn intrinsic_interlocked_compare_exchange<
     let Parameter(_, first_param_type) = &params[0];
 
     let target_type = if let ParameterType::Ref(inner) = first_param_type {
-        vm_try!(generics.make_concrete(method.resolution(), inner.clone()))
+        vm_try!(generics.make_concrete(method.resolution(), inner.clone(), ctx.loader().as_ref()))
     } else {
         panic!(
             "intrinsic_interlocked_compare_exchange: First parameter must be Ref, found {:?}",
@@ -193,7 +193,7 @@ pub fn intrinsic_interlocked_exchange<
     let Parameter(_, first_param_type) = &params[0];
 
     let target_type = if let ParameterType::Ref(inner) = first_param_type {
-        vm_try!(generics.make_concrete(method.resolution(), inner.clone()))
+        vm_try!(generics.make_concrete(method.resolution(), inner.clone(), ctx.loader().as_ref()))
     } else {
         panic!(
             "intrinsic_interlocked_exchange: First parameter must be Ref, found {:?}",
@@ -284,6 +284,92 @@ pub fn intrinsic_interlocked_exchange<
 
             let prev = unsafe { ObjectRef::read_branded(&prev_raw.to_ne_bytes(), &gc) };
             ctx.push_obj(prev);
+        }
+    }
+
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("static int System.Threading.Interlocked::ExchangeAdd(int&, int)")]
+#[dotnet_intrinsic("static long System.Threading.Interlocked::ExchangeAdd(long&, long)")]
+#[dotnet_intrinsic("static int System.Threading.Interlocked::Add(int&, int)")]
+#[dotnet_intrinsic("static long System.Threading.Interlocked::Add(long&, long)")]
+pub fn intrinsic_interlocked_exchange_add<
+    'gc,
+    T: StackOps<'gc>
+        + ThreadOps
+        + MemoryOps<'gc>
+        + RawMemoryOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps
+        + ResolutionOps<'gc>
+        + ReflectionOps<'gc>,
+>(
+    ctx: &mut T,
+    method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let params = &method.method().signature.parameters;
+    let Parameter(_, first_param_type) = &params[0];
+
+    let target_type = if let ParameterType::Ref(inner) = first_param_type {
+        vm_try!(generics.make_concrete(method.resolution(), inner.clone(), ctx.loader().as_ref()))
+    } else {
+        panic!(
+            "intrinsic_interlocked_exchange_add: First parameter must be Ref, found {:?}",
+            first_param_type
+        );
+    };
+
+    match target_type.get() {
+        BaseType::Int32 => {
+            let value = ctx.pop_i32();
+            let target_ptr = ctx.pop_managed_ptr();
+
+            let prev = unsafe {
+                ctx.exchange_add_atomic(
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
+                    value as u64,
+                    4,
+                    Ordering::SeqCst,
+                )
+                .expect("Interlocked.ExchangeAdd failed")
+            } as i32;
+
+            if method.method().name.contains("Add") && !method.method().name.contains("ExchangeAdd") {
+                ctx.push_i32(prev + value);
+            } else {
+                ctx.push_i32(prev);
+            }
+        }
+        BaseType::Int64 => {
+            let value = ctx.pop_i64();
+            let target_ptr = ctx.pop_managed_ptr();
+
+            let prev = unsafe {
+                ctx.exchange_add_atomic(
+                    target_ptr.origin().clone(),
+                    target_ptr.byte_offset(),
+                    value as u64,
+                    8,
+                    Ordering::SeqCst,
+                )
+                .expect("Interlocked.ExchangeAdd failed")
+            } as i64;
+
+            if method.method().name.contains("Add") && !method.method().name.contains("ExchangeAdd") {
+                ctx.push_i64(prev + value);
+            } else {
+                ctx.push_i64(prev);
+            }
+        }
+        _ => {
+            panic!(
+                "intrinsic_interlocked_exchange_add: Unsupported type {:?}",
+                target_type
+            );
         }
     }
 

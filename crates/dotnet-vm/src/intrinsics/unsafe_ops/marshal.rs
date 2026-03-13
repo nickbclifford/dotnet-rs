@@ -1,6 +1,6 @@
 use crate::{
     StepResult,
-    layout::type_layout,
+    layout::{type_layout, LayoutFactory},
     stack::ops::{
         EvalStackOps, ExceptionOps, LoaderOps, RawMemoryOps, ReflectionOps, ResolutionOps,
         TypedStackOps,
@@ -112,19 +112,33 @@ pub fn intrinsic_marshal_offset_of<
     let layout = vm_try!(type_layout(concrete_type.clone(), &ctx.current_context()));
 
     if let LayoutManager::Field(flm) = &*layout {
-        let td = vm_try!(ctx.loader().find_concrete_type(concrete_type.clone()));
-        if let Some(field) = flm.get_field(td, &field_name) {
+        if let Some(field) = flm.get_field_by_name(&field_name) {
             ctx.push_isize(field.position.as_usize() as isize);
+            return StepResult::Continue;
         } else {
             return ctx.throw_by_name_with_message("System.ArgumentException", "Field not found.");
         }
-    } else {
-        return ctx.throw_by_name_with_message(
-            "System.ArgumentException",
-            "Type must be a structure or a class.",
-        );
     }
-    StepResult::Continue
+
+    if concrete_type.is_class(ctx.loader().as_ref()) {
+        let td = vm_try!(ctx.loader().find_concrete_type(concrete_type.clone()));
+        let flm = vm_try!(LayoutFactory::instance_field_layout_cached(
+            td,
+            &ctx.current_context(),
+            None
+        ));
+        if let Some(field) = flm.get_field_by_name(&field_name) {
+            ctx.push_isize(field.position.as_usize() as isize);
+            return StepResult::Continue;
+        } else {
+            return ctx.throw_by_name_with_message("System.ArgumentException", "Field not found.");
+        }
+    }
+
+    ctx.throw_by_name_with_message(
+        "System.ArgumentException",
+        "Type must be a structure or a class.",
+    )
 }
 
 #[dotnet_intrinsic_field("static IntPtr System.IntPtr::Zero")]

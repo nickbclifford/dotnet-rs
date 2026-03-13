@@ -169,8 +169,8 @@ pub fn handle_get_methods<
             };
 
             if match_public && match_static && m.name != ".ctor" && m.name != ".cctor" {
-                let desc = MethodDescription::new(td, td.resolution, m);
                 let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
+                let desc = MethodDescription::new(td, lookup.clone(), td.resolution, m);
                 methods_objs.push(ctx.get_runtime_method_obj(desc, lookup));
             }
         }
@@ -236,8 +236,8 @@ pub fn handle_get_method_impl<
             };
 
             if match_public && match_static {
-                let desc = MethodDescription::new(td, td.resolution, m);
                 let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
+                let desc = MethodDescription::new(td, lookup.clone(), td.resolution, m);
                 found_method = Some(ctx.get_runtime_method_obj(desc, lookup));
                 break;
             }
@@ -300,8 +300,8 @@ pub fn handle_get_constructor_impl<
             };
 
             if match_public && match_static {
-                let desc = MethodDescription::new(td, td.resolution, m);
                 let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
+                let desc = MethodDescription::new(td, lookup.clone(), td.resolution, m);
                 found_constructor = Some(ctx.get_runtime_method_obj(desc, lookup));
                 break;
             }
@@ -551,8 +551,8 @@ pub fn handle_get_constructors<
             };
 
             if match_public && match_static {
-                let desc = MethodDescription::new(td, td.resolution, m);
                 let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
+                let desc = MethodDescription::new(td, lookup.clone(), td.resolution, m);
                 constructors_objs.push(ctx.get_runtime_method_obj(desc, lookup));
             }
         }

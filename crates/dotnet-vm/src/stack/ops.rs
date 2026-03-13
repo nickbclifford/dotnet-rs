@@ -155,6 +155,19 @@ pub trait CallOps<'gc>: BaseCallOps<'gc> {
         this_type: Option<TypeDescription>,
         ctx: Option<&ResolutionContext<'_>>,
     ) -> StepResult;
+
+    fn unified_dispatch_tail(
+        &mut self,
+        source: &MethodSource,
+        this_type: Option<TypeDescription>,
+        ctx: Option<&ResolutionContext<'_>>,
+    ) -> StepResult;
+
+    fn unified_dispatch_jmp(
+        &mut self,
+        source: &MethodSource,
+        ctx: Option<&ResolutionContext<'_>>,
+    ) -> StepResult;
 }
 
 pub trait VesInternals<'gc>: BaseVesInternals<'gc> {}

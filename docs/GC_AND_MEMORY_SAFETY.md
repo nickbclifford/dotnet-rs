@@ -107,11 +107,11 @@ When an object in arena A stores a reference to an object in arena B, this must 
 - If a cross-arena scenario is detected, it calls `record_objref_cross_arena` or `record_managedptr_cross_arena`.
 - Bulk operations like block copying (`initblk`, `cpblk`) use `record_refs_recursive` and `record_refs_in_range` to scan the layout's GC descriptor and record any contained references.
 
-### How They're Used During Collection
-- During the STW mark phase, the marking thread sets a TLS flag via `set_currently_tracing(Some(thread_id))`.
-- When cross-arena refs are scanned during this tracing phase, instead of storing them globally, they are collected locally in a TLS buffer (`FOUND_CROSS_ARENA_REFS`).
-- The coordinator then collects these refs via `take_found_cross_arena_refs()`.
-- The coordinator then dispatches `GCCommand::MarkObjects(ptrs)` to the respective target arenas owning the objects to resurrect them for the current GC cycle.
+### Weak References
+The VM supports `GCHandleType::Weak` and `WeakTrackResurrection` (§I.8.2.4).
+- **Implementation**: `HeapManager::finalize_check` zero-fills weak handles for objects that are unreachable and don't require (or have finished) finalization.
+- **BCL Support**: `System.WeakReference<T>` is currently not in the BCL support library and must be defined by the user or added to `support.dll`.
+- **Cross-Arena Limitation**: The current `GCCoordinator` fixed-point iteration only resurrects strong references. Weak references across arenas are not currently tracked or zeroed correctly by the global coordinator. This is a known limitation for multi-threaded scenarios.
 
 ## BorrowGuard and Deadlock Prevention
 

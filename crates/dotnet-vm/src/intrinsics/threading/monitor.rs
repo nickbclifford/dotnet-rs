@@ -4,12 +4,40 @@ use crate::{
         ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps, ResolutionOps, StackOps,
         ThreadOps,
     },
-    sync::{Arc, SyncBlockOps, SyncManagerOps},
+    sync::{Arc, LockResult, SyncBlockOps, SyncManagerOps},
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{ManagedPtr, StackValue, object::ObjectRef, pointer::PointerOrigin};
+use std::cell::Cell;
+use std::time::{Duration, Instant};
+
+thread_local! {
+    static CURRENT_DEADLINE: Cell<Option<Instant>> = Cell::new(None);
+}
+
+fn get_deadline(timeout_ms: i32) -> Instant {
+    CURRENT_DEADLINE.with(|c| {
+        if let Some(d) = c.get() {
+            d
+        } else {
+            let timeout = if timeout_ms < 0 {
+                // For infinite timeout, use a very long duration (approx 100 years)
+                Duration::from_secs(100 * 365 * 24 * 3600)
+            } else {
+                Duration::from_millis(timeout_ms as u64)
+            };
+            let d = Instant::now() + timeout;
+            c.set(Some(d));
+            d
+        }
+    })
+}
+
+fn clear_deadline() {
+    CURRENT_DEADLINE.with(|c| c.set(None));
+}
 
 const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 
@@ -108,7 +136,7 @@ pub fn intrinsic_monitor_enter_obj<
     _generics: &GenericLookup,
 ) -> StepResult {
     let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
-    let obj_ref = ctx.pop_obj();
+    let obj_ref = ctx.peek_stack_at(0).as_object_ref();
 
     if obj_ref.0.is_some() {
         let thread_id = ctx.thread_id();
@@ -120,18 +148,25 @@ pub fn intrinsic_monitor_enter_obj<
 
         let sync_block = get_or_create_sync_block(&ctx.shared().sync_blocks, obj_ref, gc);
 
-        if !ctx
-            .shared()
-            .sync_blocks
-            .try_enter_block(sync_block, thread_id, &ctx.shared().metrics)
-        {
-            return StepResult::Yield;
+        let gc_coordinator = &ctx.shared().gc_coordinator;
+
+        match sync_block.enter_safe(
+            thread_id,
+            &ctx.shared().metrics,
+            ctx.shared().thread_manager.as_ref(),
+            gc_coordinator,
+        ) {
+            crate::sync::LockResult::Success => {
+                let _ = ctx.pop();
+                StepResult::Continue
+            }
+            crate::sync::LockResult::Yield => StepResult::Yield,
+            crate::sync::LockResult::Timeout => unreachable!("Infinite timeout cannot time out"),
         }
     } else {
-        return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+        let _ = ctx.pop();
+        ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG)
     }
-
-    StepResult::Continue
 }
 
 /// System.Threading.Monitor::ReliableEnter(object, ref bool)
@@ -168,12 +203,19 @@ pub fn intrinsic_monitor_reliable_enter<
 
         let sync_block = get_or_create_sync_block(&ctx.shared().sync_blocks, obj_ref, gc);
 
-        if !ctx
-            .shared()
-            .sync_blocks
-            .try_enter_block(sync_block, thread_id, &ctx.shared().metrics)
-        {
-            return StepResult::Yield;
+        let gc_coordinator = &ctx.shared().gc_coordinator;
+
+        let lock_res = sync_block.enter_safe(
+            thread_id,
+            &ctx.shared().metrics,
+            ctx.shared().thread_manager.as_ref(),
+            gc_coordinator,
+        );
+
+        match lock_res {
+            crate::sync::LockResult::Success => {}
+            crate::sync::LockResult::Yield => return StepResult::Yield,
+            crate::sync::LockResult::Timeout => unreachable!(),
         }
 
         if let Some(index) = success_flag_index {
@@ -273,17 +315,24 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<
 
         let sync_block = get_or_create_sync_block(&ctx.shared().sync_blocks, obj_ref, gc);
 
-        #[cfg(feature = "multithreading")]
-        let success = sync_block.enter_with_timeout_safe(
+        let deadline = get_deadline(timeout_ms);
+        let lock_res = sync_block.enter_with_timeout_safe(
             thread_id,
-            timeout_ms as u64,
+            deadline,
             &ctx.shared().metrics,
             ctx.shared().thread_manager.as_ref(),
             &ctx.shared().gc_coordinator,
         );
-        #[cfg(not(feature = "multithreading"))]
-        let success =
-            sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &ctx.shared().metrics);
+
+        if lock_res != LockResult::Yield {
+            clear_deadline();
+        }
+
+        let success = match lock_res {
+            LockResult::Success => true,
+            LockResult::Timeout => false,
+            LockResult::Yield => return StepResult::Yield,
+        };
 
         if let Some(index) = success_flag_index {
             ctx.set_slot(
@@ -333,8 +382,8 @@ pub fn intrinsic_monitor_try_enter_timeout<
     _generics: &GenericLookup,
 ) -> StepResult {
     let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
-    let timeout_ms = ctx.pop_i32();
-    let obj_ref = ctx.pop_obj();
+    let timeout_ms = ctx.peek_stack_at(0).as_i32();
+    let obj_ref = ctx.peek_stack_at(1).as_object_ref();
 
     if obj_ref.0.is_some() {
         let thread_id = ctx.thread_id();
@@ -346,20 +395,31 @@ pub fn intrinsic_monitor_try_enter_timeout<
 
         let sync_block = get_or_create_sync_block(&ctx.shared().sync_blocks, obj_ref, gc);
 
-        #[cfg(feature = "multithreading")]
-        let success = sync_block.enter_with_timeout_safe(
+        let deadline = get_deadline(timeout_ms);
+        let lock_res = sync_block.enter_with_timeout_safe(
             thread_id,
-            timeout_ms as u64,
+            deadline,
             &ctx.shared().metrics,
             ctx.shared().thread_manager.as_ref(),
             &ctx.shared().gc_coordinator,
         );
-        #[cfg(not(feature = "multithreading"))]
-        let success =
-            sync_block.enter_with_timeout(thread_id, timeout_ms as u64, &ctx.shared().metrics);
 
+        if lock_res != LockResult::Yield {
+            clear_deadline();
+        }
+
+        let success = match lock_res {
+            LockResult::Success => true,
+            LockResult::Timeout => false,
+            LockResult::Yield => return StepResult::Yield,
+        };
+
+        let _ = ctx.pop(); // timeout_ms
+        let _ = ctx.pop(); // obj_ref
         ctx.push_i32(if success { 1 } else { 0 });
     } else {
+        let _ = ctx.pop();
+        let _ = ctx.pop();
         return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
     }
 

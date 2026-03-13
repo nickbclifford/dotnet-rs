@@ -67,13 +67,26 @@ None → Throwing → Searching → Filtering (optional) → Unwinding → Execu
 ### `leave` Instruction
 - The `leave` instruction (used to exit try/catch blocks) triggers the unwind mechanism to run finally blocks, even though no exception is active. It uses `UnwindTarget::Instruction` instead of `UnwindTarget::Handler`.
 
+### Rethrow Semantics
+- The `rethrow` instruction (ECMA-335 §III.4.24) is used within a catch handler to re-propagate the caught exception. Unlike the `throw` instruction, which resets the exception's stack trace to the current execution point, `rethrow` MUST preserve the original stack trace of the exception object.
+- In `dotnet-rs`, this is handled by the `bool` parameter in `ExceptionState::Throwing(ObjectRef, bool)`.
+- When `throw` is called, it passes `false`, causing `begin_throwing` to generate and write a new stack trace string to the `_stackTraceString` field of the exception object.
+- When `rethrow` is called, it passes `true`. `begin_throwing` will then check if the exception object already contains a stack trace. If it does, it skips generating a new one, thereby preserving the original trace from the initial throw site.
+
 ### Interaction with Delegates
 - Multicast delegate invocation in `ExecutionEngine::handle_multicast_step` must handle exceptions thrown by individual delegate targets, as each target runs as a separate method call.
+
+## Implementation Details
+
+### Rethrow Stack Trace Preservation
+- **`crates/dotnet-vm-ops/src/exceptions.rs`**: `ExceptionState::Throwing` includes a `bool` flag for trace preservation.
+- **`crates/dotnet-vm/src/stack/exception_ops_impl.rs`**: `rethrow()` sets this flag to `true`, while `throw()` sets it to `false`.
+- **`crates/dotnet-exceptions/src/lib.rs`**: `begin_throwing()` reads this flag and optionally skips stack trace generation if an existing trace is present and preservation is requested.
 
 ## Notes for Future Documentation
 
 - [ ] Add sequence diagrams for the two-pass exception model
 - [ ] Document the relationship between `ExceptionState` transitions and `StepResult` variants
-- [ ] Explain how `rethrow` preserves stack traces vs `throw` resetting them
+- [x] Explain how `rethrow` preserves stack traces vs `throw` resetting them
 - [ ] Document edge cases: nested exceptions, exceptions in finally blocks, exceptions in filters
 - [ ] Detail the `parse` function that converts dotnetdll metadata to `ProtectedSection`/`Handler`

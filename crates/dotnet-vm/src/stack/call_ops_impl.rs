@@ -3,7 +3,10 @@ use crate::{
     resolution::TypeResolutionExt,
     stack::{
         context::{BasePointer, StackFrame, VesContext},
-        ops::{BaseLoaderOps, CallOps, EvalStackOps, LoaderOps, RawMemoryOps, ResolutionOps},
+        ops::{
+            BaseLoaderOps, BaseStaticsOps, CallOps, EvalStackOps, LoaderOps, RawMemoryOps,
+            ResolutionOps,
+        },
     },
 };
 use dotnet_types::{
@@ -15,7 +18,7 @@ use dotnet_value::{
     object::{HeapStorage, Object as ObjectInstance, ObjectRef},
     pointer::ManagedPtr,
 };
-use dotnetdll::prelude::MethodSource;
+use dotnetdll::prelude::{Instruction, MethodSource};
 
 impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
     fn constructor_frame(
@@ -84,7 +87,7 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
 
         let locals_base = self.evaluation_stack.top_of_stack();
         let (local_values, pinned_locals) =
-            self.init_locals(method.source, method.locals, &generic_inst)?;
+            self.init_locals(method.source.clone(), method.locals, &generic_inst)?;
 
         for (i, v) in local_values.into_iter().enumerate() {
             self.evaluation_stack.set_slot_at(locals_base + i, v);
@@ -157,7 +160,7 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
         }
         let locals_base = self.evaluation_stack.top_of_stack();
         let (local_values, pinned_locals) =
-            self.init_locals(method.source, method.locals, &generic_inst)?;
+            self.init_locals(method.source.clone(), method.locals, &generic_inst)?;
         for v in local_values {
             self.push(v);
         }
@@ -176,11 +179,26 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
         Ok(())
     }
 
-    #[inline]
     fn dispatch_method(&mut self, method: MethodDescription, lookup: GenericLookup) -> StepResult {
         let _gc = self.gc;
+
+        // ECMA-335 §II.10.5.3.3: Types without beforefieldinit must be initialized on
+        // static method calls, instance calls for value types, and constructor calls.
+        if !method.parent.before_field_init() {
+            let is_static = !method.method().signature.instance;
+            let is_value_type = vm_try!(method.parent.is_value_type(&self.current_context()));
+            let is_constructor = method.method().name == ".ctor";
+
+            if is_static || is_value_type || is_constructor {
+                let res = self.initialize_static_storage(method.parent, lookup.clone());
+                if res != StepResult::Continue {
+                    return res;
+                }
+            }
+        }
+
         if let Some(metadata) = crate::intrinsics::classify_intrinsic(
-            method,
+            method.clone(),
             self.loader(),
             Some(&self.shared.caches.intrinsic_registry),
         ) {
@@ -191,7 +209,7 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
         } else {
             if method.method().body.is_none() {
                 if let Some(result) =
-                    crate::intrinsics::delegates::try_delegate_dispatch(self, method, &lookup)
+                    crate::intrinsics::delegates::try_delegate_dispatch(self, method.clone(), &lookup)
                 {
                     return result;
                 }
@@ -203,15 +221,14 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
                 );
             }
 
-            let info =
-                match self
-                    .shared
-                    .caches
-                    .get_method_info(method, &lookup, self.shared.clone())
-                {
-                    Ok(v) => v,
-                    Err(e) => return StepResult::Error(e.into()),
-                };
+            let info = match self.shared.caches.get_method_info(
+                method,
+                &lookup,
+                self.shared.clone(),
+            ) {
+                Ok(v) => v,
+                Err(e) => return StepResult::Error(e.into()),
+            };
             vm_try!(self.call_frame(info, lookup));
             StepResult::FramePushed
         }
@@ -250,5 +267,283 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
         };
 
         self.dispatch_method(final_method, lookup)
+    }
+
+    #[inline]
+    fn unified_dispatch_tail(
+        &mut self,
+        source: &MethodSource,
+        this_type: Option<TypeDescription>,
+        ctx: Option<&ResolutionContext<'_>>,
+    ) -> StepResult {
+        let context = ctx.cloned().unwrap_or_else(|| self.current_context());
+
+        tracing::debug!(
+            "unified_dispatch_tail: source={:?}, this_type={:?}",
+            source,
+            this_type
+        );
+
+        let (resolved, lookup) = match self.resolver().find_generic_method(source, &context) {
+            Ok(v) => v,
+            Err(e) => return StepResult::Error(e.into()),
+        };
+
+        let final_method = if let Some(this_type) = this_type {
+            match self
+                .resolver()
+                .resolve_virtual_method(resolved, this_type, &lookup, &context)
+            {
+                Ok(v) => v,
+                Err(e) => return StepResult::Error(e.into()),
+            }
+        } else {
+            resolved
+        };
+
+        self.dispatch_method_tail(final_method, lookup)
+    }
+
+    #[inline]
+    fn unified_dispatch_jmp(
+        &mut self,
+        source: &MethodSource,
+        ctx: Option<&ResolutionContext<'_>>,
+    ) -> StepResult {
+        let context = ctx.cloned().unwrap_or_else(|| self.current_context());
+
+        tracing::debug!("unified_dispatch_jmp: source={:?}", source);
+
+        let (resolved, lookup) = match self.resolver().find_generic_method(source, &context) {
+            Ok(v) => v,
+            Err(e) => return StepResult::Error(e.into()),
+        };
+
+        // jmp is always a direct call (non-virtual)
+        self.dispatch_method_jmp(resolved, lookup)
+    }
+}
+
+impl<'a, 'gc> VesContext<'a, 'gc> {
+    fn should_honor_tail_call(&self, arg_count: usize) -> bool {
+        let frame = self.frame_stack.current_frame();
+
+        // ECMA-335: tail. is ignored when exiting a synchronized method.
+        if frame.state.info_handle.source.method().synchronized {
+            return false;
+        }
+
+        // Avoid tail-call frame replacement for special frames that have deferred-return semantics
+        // in `return_frame()` (cctor initialization, finalizer processing, multicast, etc.).
+        if frame.state.info_handle.is_cctor
+            || frame.is_finalizer
+            || frame.multicast_state.is_some()
+            || frame.awaiting_invoke_return.is_some()
+        {
+            return false;
+        }
+
+        // ECMA-335: tail. call must be immediately followed by `ret`.
+        let ip = frame.state.ip;
+        let instrs = frame.state.info_handle.instructions;
+        if ip + 1 >= instrs.len() {
+            return false;
+        }
+        if !matches!(instrs[ip + 1], Instruction::Return) {
+            return false;
+        }
+
+        // ECMA-335: stack must be empty except for the call arguments.
+        if frame.stack_height != crate::StackSlotIndex(arg_count) {
+            return false;
+        }
+
+        // ECMA-335: cannot be used to transfer control out of try/filter/catch/finally blocks.
+        for sec in frame.state.info_handle.exceptions.iter() {
+            if sec.instructions.contains(&ip) {
+                return false;
+            }
+            for handler in &sec.handlers {
+                if handler.instructions.contains(&ip) {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+
+    fn dispatch_method_tail(&mut self, method: MethodDescription, lookup: GenericLookup) -> StepResult {
+        // If we can't safely tail-call, fall back to the regular call path.
+        if let Some(metadata) = crate::intrinsics::classify_intrinsic(
+            method.clone(),
+            self.loader(),
+            Some(&self.shared.caches.intrinsic_registry),
+        ) {
+            return crate::intrinsics::dispatch_method_intrinsic(metadata.handler, self, method, &lookup);
+        }
+        if method.method().pinvoke.is_some() {
+            let shared = self.shared.clone();
+            return crate::pinvoke::external_call(self, method, &shared.pinvoke);
+        }
+
+        if method.method().body.is_none() {
+            // Delegate dispatch may emulate a call without a managed body; do not attempt to
+            // tail-call optimize it.
+            return self.dispatch_method(method, lookup);
+        }
+
+        let info = match self
+            .shared
+            .caches
+            .get_method_info(method, &lookup, self.shared.clone())
+        {
+            Ok(v) => v,
+            Err(e) => return StepResult::Error(e.into()),
+        };
+
+        let arg_count = info.signature.instance as usize + info.signature.parameters.len();
+        if !self.should_honor_tail_call(arg_count) {
+            vm_try!(self.call_frame(info, lookup));
+            return StepResult::FramePushed;
+        }
+
+        // Preserve the call arguments.
+        let (args_base, clear_from, old_top) = {
+            let frame = self.frame_stack.current_frame();
+            (frame.base.stack, frame.base.arguments, self.evaluation_stack.top_of_stack())
+        };
+        let mut args = Vec::with_capacity(arg_count);
+        for i in 0..arg_count {
+            args.push(self.evaluation_stack.get_slot(args_base + i));
+        }
+
+        // Pop/discard the current frame and clear its stack slots.
+        let frame = self
+            .frame_stack
+            .pop()
+            .expect("tail call requires a current frame");
+        if self.tracer_enabled() {
+            let method_name = format!("{:?}", frame.state.info_handle.source);
+            self.shared
+                .tracer
+                .trace_method_exit(self.frame_stack.len(), &method_name);
+        }
+
+        for i in clear_from.as_usize()..old_top.as_usize() {
+            self.evaluation_stack
+                .set_slot(crate::StackSlotIndex(i), StackValue::null());
+        }
+        self.evaluation_stack.truncate(clear_from);
+
+        // Re-push arguments onto the (now) caller stack, or directly onto the eval stack if this
+        // was the last frame.
+        if self.frame_stack.current_frame_opt_mut().is_some() {
+            for a in args {
+                self.push(a);
+            }
+        } else {
+            for a in args {
+                self.evaluation_stack.push(a);
+            }
+        }
+
+        vm_try!(self.call_frame(info, lookup));
+        StepResult::FramePushed
+    }
+
+    fn dispatch_method_jmp(&mut self, method: MethodDescription, lookup: GenericLookup) -> StepResult {
+        let frame = self.frame_stack.current_frame();
+
+        // ECMA-335: evaluation stack shall be empty.
+        if frame.stack_height != crate::StackSlotIndex(0) {
+            return StepResult::Error(crate::error::VmError::Execution(
+                crate::error::ExecutionError::Aborted("jmp requires empty evaluation stack".to_string()),
+            ));
+        }
+
+        // ECMA-335: cannot be used to transfer control out of try/filter/catch/fault/finally blocks.
+        let ip = frame.state.ip;
+        for sec in frame.state.info_handle.exceptions.iter() {
+            if sec.instructions.contains(&ip) {
+                return StepResult::Error(crate::error::VmError::Execution(
+                    crate::error::ExecutionError::Aborted("jmp out of try/catch/finally block".to_string()),
+                ));
+            }
+            for handler in &sec.handlers {
+                if handler.instructions.contains(&ip) {
+                    return StepResult::Error(crate::error::VmError::Execution(
+                        crate::error::ExecutionError::Aborted("jmp out of exception handler".to_string()),
+                    ));
+                }
+            }
+        }
+
+        // Signature matching check
+        let current_sig = &frame.state.info_handle.signature;
+        let target_sig = &method.method().signature;
+
+        let loader = self.loader_arc();
+        let comparer = dotnet_types::comparer::TypeComparer::new(loader.as_ref());
+        let res_ctx = self.current_context();
+        let res_s = res_ctx.resolution;
+
+        if !comparer.signatures_equal(
+            res_s,
+            current_sig,
+            Some(res_ctx.generics), // Current generics
+            res_s,
+            target_sig,
+            Some(&lookup), // Target generics
+        ) {
+            return StepResult::Error(crate::error::VmError::Execution(
+                crate::error::ExecutionError::Aborted("jmp signature mismatch".to_string()),
+            ));
+        }
+
+        // Prepare arguments by copying from the current frame's base
+        let arg_count = target_sig.instance as usize + target_sig.parameters.len();
+        let args_base = frame.base.arguments;
+
+        let mut args = Vec::with_capacity(arg_count);
+        for i in 0..arg_count {
+            args.push(self.evaluation_stack.get_slot(args_base + i));
+        }
+
+        // Discard the current frame and its locals/eval stack
+        let old_top = self.evaluation_stack.top_of_stack();
+        let clear_from = frame.base.arguments;
+        
+        let popped_frame = self.frame_stack.pop().expect("jmp requires a current frame");
+        if self.tracer_enabled() {
+            let method_name = format!("{:?}", popped_frame.state.info_handle.source);
+            self.shared
+                .tracer
+                .trace_method_exit(self.frame_stack.len(), &method_name);
+        }
+
+        for i in clear_from.as_usize()..old_top.as_usize() {
+            self.evaluation_stack
+                .set_slot(crate::StackSlotIndex(i), StackValue::null());
+        }
+        self.evaluation_stack.truncate(clear_from);
+
+        // Push arguments back onto the stack for the new call
+        for a in args {
+            self.push(a);
+        }
+
+        // Push new frame
+        let info = match self
+            .shared
+            .caches
+            .get_method_info(method, &lookup, self.shared.clone())
+        {
+            Ok(v) => v,
+            Err(e) => return StepResult::Error(e.into()),
+        };
+
+        vm_try!(self.call_frame(info, lookup));
+        StepResult::FramePushed
     }
 }

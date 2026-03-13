@@ -71,7 +71,7 @@ pub struct MethodInfo<'a> {
 
 unsafe impl<'gc, 'a> Collect<'gc> for MethodInfo<'a> {}
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Collect)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Collect)]
 #[collect(require_static)]
 pub struct CollectableMethodDescription(pub MethodDescription);
 

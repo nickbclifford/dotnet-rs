@@ -51,6 +51,7 @@ dotnet-cli               # CLI entry point, TestHarness, integration tests, feat
 6. **Method Calls and Intrinsics**:
     - Static calls resolve the target method and push a new `StackFrame`.
     - Virtual calls use the object's vtable (computed via the layout system) to find the correct method implementation.
+    - Tail calls (`tail.`) are supported in a guarded manner: when the prefix is present and the call is in a valid tail position (immediately followed by `ret`, eval stack otherwise empty, not inside an exception region, etc.), the VM replaces the current frame before dispatching the callee; otherwise it falls back to a normal call.
     - Intrinsic calls are intercepted and handled by native Rust code in `crates/dotnet-vm/src/intrinsics/`, including core BCL logic and `constants.rs` for intrinsic metadata. Similar to instructions, intrinsics use a monomorphic ID-based dispatch system to ensure high performance.
     
     (See [Delegates and Dispatch](DELEGATES_AND_DISPATCH.md) for more details on invocation paths).
@@ -123,3 +124,18 @@ pub fn handle_instruction<'gc, T: VesOps<'gc> + ?Sized>(
     StepResult::Continue
 }
 ```
+
+## Assembly Isolation and Load Contexts
+
+As of the current implementation, `dotnet-rs` utilizes a single global **Assembly Load Context** (represented by the `AssemblyLoader` in `SharedGlobalState`).
+
+- **Single Namespace**: All assemblies are loaded into a single global namespace. Loading multiple versions of the same assembly name is not supported and will result in a version mismatch error (if strict versioning is enabled) or a warning.
+- **Global Statics**: Static fields are managed by a single `StaticStorageManager` in `SharedGlobalState`, meaning they are shared across all threads and assemblies.
+- **Application Domain**: The current architecture effectively implements a single, process-wide Application Domain (the "Default Domain").
+
+### Future Considerations
+
+If isolation between multiple applications or plugins is required:
+1. **Multiple Loaders**: The `AssemblyLoader` can be instantiated multiple times to create distinct load contexts.
+2. **Context Association**: The VM would need to be updated to associate each `StackFrame` or `Thread` with a specific load context to correctly resolve cross-assembly references.
+3. **Static Isolation**: To support full ECMA-335 AppDomains, `StaticStorageManager` would need to be moved from `SharedGlobalState` to a per-domain structure.

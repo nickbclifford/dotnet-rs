@@ -122,7 +122,7 @@ impl<'a> ResolutionContext<'a> {
             state: self.state.clone(),
             resolution: self.resolution,
             type_owner: self.type_owner,
-            method_owner: self.method_owner,
+            method_owner: self.method_owner.clone(),
         }
     }
 

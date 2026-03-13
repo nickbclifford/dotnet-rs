@@ -28,8 +28,8 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
         let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(instance));
         self.register_new_object(&obj_ref);
 
+        let base_exception_type = vm_try!(self.shared.loader.corlib_type("System.Exception"));
         if !message.is_empty() {
-            let base_exception_type = vm_try!(self.shared.loader.corlib_type("System.Exception"));
             let message_ref = StackValue::string(gc, CLRString::from(message)).as_object_ref();
             self.register_new_object(&message_ref);
             obj_ref.as_object_mut(gc, |obj| {
@@ -44,6 +44,52 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
                 }
             });
         }
+
+        *self.exception_mode = ExceptionState::Throwing(obj_ref, false);
+        StepResult::Exception
+    }
+
+    #[inline]
+    fn throw_by_name_with_inner(
+        &mut self,
+        name: &str,
+        message: &str,
+        inner: ObjectRef<'gc>,
+    ) -> StepResult {
+        let gc = self.gc;
+        let exception_type = vm_try!(self.shared.loader.corlib_type(name));
+        let instance = vm_try!(self.new_object(exception_type));
+        let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(instance));
+        self.register_new_object(&obj_ref);
+
+        let base_exception_type = vm_try!(self.shared.loader.corlib_type("System.Exception"));
+        if !message.is_empty() {
+            let message_ref = StackValue::string(gc, CLRString::from(message)).as_object_ref();
+            self.register_new_object(&message_ref);
+            obj_ref.as_object_mut(gc, |obj| {
+                if obj
+                    .instance_storage
+                    .has_field(base_exception_type, "_message")
+                {
+                    let mut field = obj
+                        .instance_storage
+                        .get_field_mut_local(base_exception_type, "_message");
+                    message_ref.write(&mut field);
+                }
+            });
+        }
+
+        obj_ref.as_object_mut(gc, |obj| {
+            if obj
+                .instance_storage
+                .has_field(base_exception_type, "_innerException")
+            {
+                let mut field = obj
+                    .instance_storage
+                    .get_field_mut_local(base_exception_type, "_innerException");
+                inner.write(&mut field);
+            }
+        });
 
         *self.exception_mode = ExceptionState::Throwing(obj_ref, false);
         StepResult::Exception
@@ -79,6 +125,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
             exception: None,
             target: UnwindTarget::Instruction(target_ip),
             cursor,
+            nested_filter: None,
         });
         self.handle_exception()
     }
@@ -99,15 +146,20 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
 
     #[inline]
     fn endfilter(&mut self, result: i32) -> StepResult {
-        let (exception, handler) = match self.exception_mode {
-            ExceptionState::Filtering(state) => (state.exception, state.handler),
+        let (exception, handler, original_ip, original_stack_height) = match self.exception_mode {
+            ExceptionState::Filtering(state) => (
+                state.exception,
+                state.handler,
+                state.original_ip,
+                state.original_stack_height,
+            ),
             _ => panic!("EndFilter called but not in Filtering mode"),
         };
 
         // Restore state of the frame where filter ran
         let frame = &mut self.frame_stack.frames[handler.frame_index];
-        frame.state.ip = *self.original_ip;
-        frame.stack_height = (*self.original_stack_height).saturating_sub_idx(frame.base.stack);
+        frame.state.ip = original_ip;
+        frame.stack_height = original_stack_height.saturating_sub_idx(frame.base.stack);
         frame.exception_stack.pop();
 
         // Restore suspended evaluation and frame stacks
@@ -124,6 +176,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
                     section_index: 0,
                     handler_index: 0,
                 },
+                nested_filter: None,
             });
         } else {
             // Result is 0: Continue searching after this handler.
@@ -134,6 +187,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
                     section_index: handler.section_index,
                     handler_index: handler.handler_index + 1,
                 },
+                nested_filter: None,
             });
         }
 
@@ -150,6 +204,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
                 exception: state.exception,
                 target: UnwindTarget::Instruction(usize::MAX),
                 cursor: state.cursor,
+                nested_filter: state.nested_filter,
             });
             return self.handle_exception();
         }
@@ -177,6 +232,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
                     section_index: 0,
                     handler_index: 0,
                 },
+                nested_filter: None,
             });
             return self.handle_exception();
         }

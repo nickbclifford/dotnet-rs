@@ -104,6 +104,12 @@ pub fn intrinsic_gc_reregister_for_finalize<
                 .as_obj_mut()
                 .unwrap()
                 .finalizer_suppressed = false;
+
+            // Add back to finalization queue if not already present
+            let mut queue = ctx.heap().finalization_queue.borrow_mut();
+            if !queue.contains(&obj) {
+                queue.push(obj);
+            }
         }
     }
     StepResult::Continue

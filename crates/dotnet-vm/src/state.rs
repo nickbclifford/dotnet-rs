@@ -31,7 +31,6 @@ use std::{
     sync::OnceLock,
 };
 
-#[cfg(feature = "multithreading")]
 use crate::gc::GCCoordinator;
 #[cfg(feature = "multithreading")]
 use dotnet_utils::sync::AtomicUsize;
@@ -63,7 +62,7 @@ pub struct GlobalCaches {
     pub has_finalizer_cache: DashMap<TypeDescription, bool>,
     /// Cache for resolved overrides: (TypeDescription, GenericLookup) -> Map<DeclMethod, ImplMethod>
     pub overrides_cache:
-        DashMap<(TypeDescription, GenericLookup), Arc<HashMap<usize, MethodDescription>>>,
+        DashMap<(TypeDescription, GenericLookup), Arc<HashMap<MethodDescription, MethodDescription>>>,
     /// Cache for method info: (Method, Lookup) -> MethodInfo
     pub method_info_cache: DashMap<(MethodDescription, GenericLookup), Arc<MethodInfo<'static>>>,
     /// Registry of intrinsic methods
@@ -106,7 +105,6 @@ pub struct SharedGlobalState {
     pub statics: Arc<StaticStorageManager>,
     pub last_instructions: std::sync::Arc<std::sync::Mutex<InstructionRingBuffer>>,
     pub abort_requested: Arc<AtomicBool>,
-    #[cfg(feature = "multithreading")]
     pub gc_coordinator: Arc<GCCoordinator>,
     /// Cache for shared reflection objects: RuntimeType -> index
     #[cfg(feature = "multithreading")]
@@ -139,7 +137,7 @@ impl GlobalCaches {
         generics: &GenericLookup,
         shared: Arc<SharedGlobalState>,
     ) -> Result<MethodInfo<'static>, TypeResolutionError> {
-        let key = (method, generics.clone());
+        let key = (method.clone(), generics.clone());
         if let Some(entry) = self.method_info_cache.get(&key) {
             shared.metrics.record_method_info_cache_hit();
             return Ok((**entry).clone());
@@ -180,8 +178,7 @@ impl SharedGlobalState {
                 InstructionRingBuffer::new(),
             )),
             abort_requested: Arc::new(AtomicBool::new(false)),
-            #[cfg(feature = "multithreading")]
-            gc_coordinator: Arc::new(GCCoordinator::new(stw_in_progress)),
+            gc_coordinator: Arc::new(GCCoordinator::new(stw_in_progress.clone())),
             #[cfg(feature = "multithreading")]
             shared_runtime_types: DashMap::new(),
             #[cfg(feature = "multithreading")]
@@ -203,7 +200,6 @@ impl SharedGlobalState {
             resolution_shared_cache: OnceLock::new(),
         };
 
-        #[cfg(feature = "multithreading")]
         state
             .thread_manager
             .set_coordinator(Arc::downgrade(&state.gc_coordinator));

@@ -80,6 +80,58 @@ unsafe impl Sync for MetadataOwner {}
 pub(crate) const SUPPORT_LIBRARY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/support.dll"));
 pub const SUPPORT_ASSEMBLY: &str = "__dotnetrs_support";
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BindingRedirect {
+    pub from_version_start: Version,
+    pub from_version_end: Version,
+    pub to_version: Version,
+}
+
+impl BindingRedirect {
+    pub fn matches(&self, version: &Version) -> bool {
+        version_ge(version, &self.from_version_start) && version_ge(&self.from_version_end, version)
+    }
+}
+
+pub fn versions_equal(v1: &Version, v2: &Version) -> bool {
+    v1.major == v2.major && v1.minor == v2.minor && v1.build == v2.build && v1.revision == v2.revision
+}
+
+pub fn version_ge(v1: &Version, v2: &Version) -> bool {
+    if v1.major > v2.major {
+        return true;
+    }
+    if v1.major < v2.major {
+        return false;
+    }
+    if v1.minor > v2.minor {
+        return true;
+    }
+    if v1.minor < v2.minor {
+        return false;
+    }
+    if v1.build > v2.build {
+        return true;
+    }
+    if v1.build < v2.build {
+        return false;
+    }
+    v1.revision >= v2.revision
+}
+
+pub fn parse_version(s: &str) -> Option<Version> {
+    let parts: Vec<_> = s.split('.').collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    Some(Version {
+        major: parts[0].parse().ok()?,
+        minor: parts[1].parse().ok()?,
+        build: parts[2].parse().ok()?,
+        revision: parts[3].parse().ok()?,
+    })
+}
+
 pub struct AssemblyLoader {
     pub(crate) assembly_root: String,
     pub(crate) external: RwLock<HashMap<String, Option<ResolutionS>>>,
@@ -99,6 +151,8 @@ pub struct AssemblyLoader {
     pub method_cache_hits: AtomicU64,
     pub method_cache_misses: AtomicU64,
     pub(crate) metadata: RwLock<MetadataOwner>,
+    pub(crate) redirects: DashMap<String, Vec<BindingRedirect>>,
+    pub(crate) strict_versioning: bool,
 }
 static_collect!(AssemblyLoader);
 
@@ -147,9 +201,12 @@ impl AssemblyLoader {
             method_cache_hits: AtomicU64::new(0),
             method_cache_misses: AtomicU64::new(0),
             metadata: RwLock::new(MetadataOwner::new()),
+            redirects: DashMap::new(),
+            strict_versioning: std::env::var("DOTNET_STRICT_VERSIONING").is_ok(),
         };
 
         this.add_support_library()?;
+        this.load_redirects()?;
         Ok(this)
     }
 
@@ -187,9 +244,85 @@ impl AssemblyLoader {
         self.reverse_stubs.contains_key(name)
     }
 
+    pub fn add_redirect(&self, name: String, redirect: BindingRedirect) {
+        self.redirects.entry(name).or_default().push(redirect);
+    }
+
+    pub fn set_strict_versioning(&mut self, strict: bool) {
+        self.strict_versioning = strict;
+    }
+
+    pub fn load_redirects(&self) -> Result<(), AssemblyLoadError> {
+        let mut file = PathBuf::from(&self.assembly_root);
+        file.push("redirects.txt");
+        if !file.exists() {
+            return Ok(());
+        }
+
+        let content = fs::read_to_string(file).map_err(|e| {
+            AssemblyLoadError::Io(format!("could not read redirects.txt: {}", e))
+        })?;
+
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            let parts: Vec<_> = line.split_whitespace().collect();
+            if parts.len() != 3 {
+                continue; // Skip invalid lines
+            }
+
+            let name = parts[0];
+            let range: Vec<_> = parts[1].split('-').collect();
+            if range.len() != 2 {
+                continue;
+            }
+
+            if let (Some(start), Some(end), Some(to)) = (
+                parse_version(range[0]),
+                parse_version(range[1]),
+                parse_version(parts[2]),
+            ) {
+                let redirect = BindingRedirect {
+                    from_version_start: start,
+                    from_version_end: end,
+                    to_version: to,
+                };
+                self.redirects
+                    .entry(name.to_string())
+                    .or_default()
+                    .push(redirect);
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn get_assembly(&self, name: &str) -> Result<ResolutionS, AssemblyLoadError> {
+        self.get_assembly_with_version(name, None)
+    }
+
+    pub fn get_assembly_with_version(
+        &self,
+        name: &str,
+        requested_version: Option<Version>,
+    ) -> Result<ResolutionS, AssemblyLoadError> {
+        let mut requested_version = requested_version;
+
+        // Apply redirects
+        if let Some((version, redirects)) = requested_version.zip(self.redirects.get(name)) {
+            for redirect in redirects.value() {
+                if redirect.matches(&version) {
+                    requested_version = Some(redirect.to_version);
+                    break;
+                }
+            }
+        }
+
         let res = { self.external.read().get(name).copied() };
-        match res {
+        let resolution = match res {
             None => {
                 let mut file = PathBuf::from(&self.assembly_root);
                 file.push(format!("{name}.dll"));
@@ -209,14 +342,12 @@ impl AssemblyLoader {
                     Some(a) => {
                         let mut external = self.external.write();
                         external.insert(a.name.to_string(), Some(resolution));
-                        // Also cache under the name it was requested as, to prevent redundant loads
-                        // when the filename doesn't match the assembly name (e.g. mscorlib -> System.Private.CoreLib)
                         if a.name.as_ref() != name {
                             external.insert(name.to_string(), Some(resolution));
                         }
                     }
                 }
-                Ok(resolution)
+                resolution
             }
             Some(None) => {
                 let mut file = PathBuf::from(&self.assembly_root);
@@ -236,10 +367,46 @@ impl AssemblyLoader {
                         }
                     }
                 }
-                Ok(resolution)
+                resolution
             }
-            Some(Some(res)) => Ok(res),
+            Some(Some(res)) => res,
+        };
+
+        // Check version compatibility
+        if let Some((requested, a)) = requested_version.zip(resolution.assembly.as_ref()) {
+            let actual = a.version;
+            // ECMA-335 binding: Major versions MUST match exactly.
+                // Minor versions intended to be backward compatible.
+                // Conforming implementations can be stricter.
+                // For now: require same Major/Minor, and Actual >= Requested.
+                // This is a reasonable "strong" binding for a VM implementation.
+                let mut error = None;
+                if actual.major != requested.major || actual.minor != requested.minor {
+                    error = Some(format!(
+                        "assembly {} has version {}.{}.{}.{}, but {}.{}.{}.{} was requested (and no redirect matched)",
+                        name,
+                        actual.major, actual.minor, actual.build, actual.revision,
+                        requested.major, requested.minor, requested.build, requested.revision
+                    ));
+                } else if !version_ge(&actual, &requested) {
+                    error = Some(format!(
+                        "assembly {} has version {}.{}.{}.{}, which is older than the requested {}.{}.{}.{}",
+                        name,
+                        actual.major, actual.minor, actual.build, actual.revision,
+                        requested.major, requested.minor, requested.build, requested.revision
+                    ));
+                }
+
+                if let Some(msg) = error {
+                    if self.strict_versioning {
+                        return Err(AssemblyLoadError::InvalidFormat(msg));
+                    } else {
+                        tracing::warn!("Binding mismatch: {}", msg);
+                    }
+                }
         }
+
+        Ok(resolution)
     }
 
     pub fn assemblies(&self) -> Vec<ResolutionS> {

@@ -22,7 +22,7 @@ impl ResolverService {
             shared.metrics.record_intrinsic_cache_miss();
         }
         let result =
-            crate::intrinsics::is_intrinsic(method, self.loader(), &self.caches.intrinsic_registry);
+            crate::intrinsics::is_intrinsic(method.clone(), self.loader(), &self.caches.intrinsic_registry);
         self.caches.intrinsic_cache.insert(method, result);
         result
     }
@@ -93,10 +93,19 @@ impl ResolverService {
             parent_type = Some(parent);
         }
 
-        Ok((
-            ctx.locate_method(method, &new_lookup, parent_type)?,
-            new_lookup,
-        ))
+        let method_desc = ctx.locate_method(method, &new_lookup, parent_type)?;
+
+        #[cfg(feature = "generic-constraint-validation")]
+        {
+            new_lookup.validate_constraints(
+                method_desc.resolution(),
+                self.loader(),
+                &method_desc.method().generic_parameters,
+                true,
+            )?;
+        }
+
+        Ok((method_desc, new_lookup))
     }
 
     pub fn resolve_virtual_method(
@@ -106,20 +115,12 @@ impl ResolverService {
         generics: &GenericLookup,
         ctx: &ResolutionContext<'_>,
     ) -> Result<MethodDescription, TypeResolutionError> {
-        let mut normalized_generics = generics.clone();
-        if this_type.definition().generic_parameters.is_empty() {
-            normalized_generics.type_generics = Arc::new([]);
-        }
-        if base_method.method().generic_parameters.is_empty() {
-            normalized_generics.method_generics = Arc::new([]);
-        }
-
-        let key = (base_method, this_type, normalized_generics);
+        let key = (base_method.clone(), this_type, generics.clone());
         if let Some(cached) = self.caches.vmt_cache.get(&key) {
             if let Some(shared) = self.shared_state() {
                 shared.metrics.record_vmt_cache_hit();
             }
-            return Ok(*cached);
+            return Ok(cached.clone());
         }
 
         if let Some(shared) = self.shared_state() {
@@ -127,9 +128,13 @@ impl ResolverService {
         }
 
         // Standard virtual method resolution: search ancestors
+        let is_interface = matches!(base_method.parent.definition().flags.kind, Kind::Interface);
+
         for (parent, _) in ctx.get_ancestors(this_type) {
-            if let Some(this_method) = self.find_and_cache_method(parent, base_method, &key.2)? {
-                self.caches.vmt_cache.insert(key, this_method);
+            if let Some(this_method) =
+                self.find_and_cache_method(parent, base_method.clone(), &key.2, is_interface)?
+            {
+                self.caches.vmt_cache.insert(key, this_method.clone());
                 return Ok(this_method);
             }
         }
@@ -145,6 +150,7 @@ impl ResolverService {
         this_type: TypeDescription,
         method: MethodDescription,
         generics: &GenericLookup,
+        allow_variance: bool,
     ) -> Result<Option<MethodDescription>, TypeResolutionError> {
         let def = this_type.definition();
         if !def.overrides.is_empty() {
@@ -172,7 +178,7 @@ impl ResolverService {
                         generics,
                         Some(this_type.into()),
                     )?;
-                    map.insert(decl.method() as *const _ as usize, impl_m);
+                    map.insert(decl, impl_m);
                 }
                 let arc_map = Arc::new(map);
                 self.caches
@@ -181,11 +187,11 @@ impl ResolverService {
                 arc_map
             };
 
-            if let Some(impl_m) = overrides.get(&(method.method() as *const _ as usize)) {
+            if let Some(impl_m) = overrides.get(&method) {
                 self.caches
                     .vmt_cache
-                    .insert((method, this_type, generics.clone()), *impl_m);
-                return Ok(Some(*impl_m));
+                    .insert((method.clone(), this_type, generics.clone()), impl_m.clone());
+                return Ok(Some(impl_m.clone()));
             }
         }
 
@@ -195,10 +201,11 @@ impl ResolverService {
             &method.method().signature,
             method.resolution(),
             generics,
+            allow_variance,
         ) {
             self.caches
                 .vmt_cache
-                .insert((method, this_type, generics.clone()), this_method);
+                .insert((method, this_type, generics.clone()), this_method.clone());
             return Ok(Some(this_method));
         }
 

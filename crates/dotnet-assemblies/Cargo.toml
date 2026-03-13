@@ -11,3 +11,6 @@ dotnetdll = { workspace = true }
 gc-arena = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+[features]
+metadata-validation = []

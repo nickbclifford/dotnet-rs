@@ -610,6 +610,99 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
     }
 
     #[inline]
+    unsafe fn exchange_add_atomic(
+        &mut self,
+        origin: PointerOrigin<'gc>,
+        offset: dotnet_utils::ByteOffset,
+        value: u64,
+        size: usize,
+        ordering: dotnet_utils::sync::Ordering,
+    ) -> Result<u64, MemoryAccessError> {
+        let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
+        match origin {
+            PointerOrigin::Heap(owner) => {
+                let heap = &self.local.heap;
+                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                unsafe {
+                    memory.exchange_add_atomic(
+                        self.gc,
+                        Some(MemoryOwner::Local(owner)),
+                        offset,
+                        value,
+                        size,
+                        ordering,
+                    )
+                }
+            }
+            PointerOrigin::Static(static_type, lookup) => {
+                let storage = self.statics().get(static_type, &lookup);
+                let base_ptr = unsafe { storage.storage.raw_data_ptr() };
+                let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
+                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                unsafe {
+                    memory.exchange_add_atomic(
+                        self.gc,
+                        None,
+                        dotnet_utils::ByteOffset(abs_ptr.expose_addr()),
+                        value,
+                        size,
+                        ordering,
+                    )
+                }
+            }
+            PointerOrigin::Stack(_idx) => {
+                let ptr = self.resolve_address(origin, offset);
+                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                unsafe {
+                    memory.exchange_add_atomic(
+                        self.gc,
+                        None,
+                        dotnet_utils::ByteOffset(ptr.as_ptr().expose_addr()),
+                        value,
+                        size,
+                        ordering,
+                    )
+                }
+            }
+            PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| {
+                let base_ptr = data.as_ptr();
+                let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
+                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                unsafe {
+                    memory.exchange_add_atomic(
+                        self.gc,
+                        None,
+                        dotnet_utils::ByteOffset(abs_ptr.expose_addr()),
+                        value,
+                        size,
+                        ordering,
+                    )
+                }
+            }),
+            PointerOrigin::Unmanaged => {
+                let heap = &self.local.heap;
+                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                unsafe { memory.exchange_add_atomic(self.gc, None, offset, value, size, ordering) }
+            }
+            #[cfg(feature = "multithreading")]
+            PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
+                let heap = &self.local.heap;
+                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                unsafe {
+                    memory.exchange_add_atomic(
+                        self.gc,
+                        Some(MemoryOwner::CrossArena(ptr, tid)),
+                        offset,
+                        value,
+                        size,
+                        ordering,
+                    )
+                }
+            }
+        }
+    }
+
+    #[inline]
     unsafe fn load_atomic(
         &self,
         origin: PointerOrigin<'gc>,
@@ -786,15 +879,6 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             return false;
         }
         let thread_manager = &self.shared.thread_manager;
-        if thread_manager.is_gc_stop_requested() {
-            // Actually enter the safe point instead of just returning a hint.
-            // This prevents callers from spinning without yielding.
-            #[cfg(feature = "multithreading")]
-            if let Some(managed_id) = thread_manager.current_thread_id() {
-                thread_manager.safe_point(managed_id, &self.shared.gc_coordinator);
-            }
-            return true;
-        }
-        false
+        thread_manager.is_gc_stop_requested()
     }
 }

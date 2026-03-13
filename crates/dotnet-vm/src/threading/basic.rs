@@ -5,7 +5,10 @@ use crate::{
 };
 use dotnet_utils::{
     ArenaId,
-    gc::{register_arena, set_currently_tracing, take_found_cross_arena_refs, unregister_arena},
+    gc::{
+        is_valid_cross_arena_ref, register_arena, set_currently_tracing,
+        take_found_cross_arena_refs, unregister_arena,
+    },
     sync::{
         Arc, AtomicBool, AtomicU64, AtomicUsize, Condvar, MANAGED_THREAD_ID, Mutex, MutexGuard,
         Ordering, get_current_thread_id,
@@ -402,6 +405,13 @@ impl Drop for StopTheWorldGuard {
 
 fn record_found_cross_arena_refs(coordinator: &GCCoordinator) {
     for (target_id, ptr_usize) in take_found_cross_arena_refs() {
+        if !is_valid_cross_arena_ref(target_id) {
+            warn!(
+                "Ignoring found cross-arena reference to exited arena {:?}",
+                target_id
+            );
+            continue;
+        }
         let ptr = unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
         coordinator.record_cross_arena_ref(target_id, ptr);
     }
@@ -412,7 +422,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
     match command {
         GCCommand::MarkAll => {
             THREAD_ARENA.with(|cell| {
-                let mut arena_opt = cell.borrow_mut();
+                let mut arena_opt = cell.try_borrow_mut().expect("Nested arena borrow detected during GC command execution! This is a violation of safe-point invariants.");
                 if let Some(arena) = arena_opt.as_mut() {
                     let thread_id = get_current_thread_id();
                     set_currently_tracing(Some(thread_id));
@@ -432,7 +442,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
         }
         GCCommand::MarkObjects(ptrs) => {
             THREAD_ARENA.with(|cell| {
-                let mut arena_opt = cell.borrow_mut();
+                let mut arena_opt = cell.try_borrow_mut().expect("Nested arena borrow detected during GC command execution! This is a violation of safe-point invariants.");
                 if let Some(arena) = arena_opt.as_mut() {
                     let thread_id = get_current_thread_id();
                     set_currently_tracing(Some(thread_id));
@@ -457,7 +467,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
         }
         GCCommand::Finalize => {
             THREAD_ARENA.with(|cell| {
-                let mut arena_opt = cell.borrow_mut();
+                let mut arena_opt = cell.try_borrow_mut().expect("Nested arena borrow detected during GC command execution! This is a violation of safe-point invariants.");
                 if let Some(arena) = arena_opt.as_mut() {
                     // Ensure we are in Marked phase
                     let marked = arena.finish_marking();
@@ -470,7 +480,7 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
         }
         GCCommand::Sweep => {
             THREAD_ARENA.with(|cell| {
-                let mut arena_opt = cell.borrow_mut();
+                let mut arena_opt = cell.try_borrow_mut().expect("Nested arena borrow detected during GC command execution! This is a violation of safe-point invariants.");
                 if let Some(arena) = arena_opt.as_mut() {
                     // Finish the collection (finalize and sweep)
                     arena.finish_cycle();

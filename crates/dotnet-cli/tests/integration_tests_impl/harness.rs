@@ -23,6 +23,10 @@ pub struct TestHarness {
 }
 
 impl TestHarness {
+    fn fixtures_base_dir() -> PathBuf {
+        PathBuf::from(env!("DOTNET_FIXTURES_BASE"))
+    }
+
     pub fn get() -> Arc<Self> {
         thread_local! {
             static INSTANCE: Arc<TestHarness> = Arc::new(TestHarness::new());
@@ -71,9 +75,8 @@ impl TestHarness {
     pub fn build(&self, fixture_path: &Path) -> io::Result<PathBuf> {
         let file_name = fixture_path.file_stem().unwrap().to_str().unwrap();
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let output_dir = manifest_dir
-            .join("target")
-            .join("dotnet-fixtures")
+        let output_dir = Self::fixtures_base_dir()
+            .join("adhoc")
             .join(file_name);
 
         let fixture_path_abs = if fixture_path.is_absolute() {
@@ -122,22 +125,20 @@ impl TestHarness {
 
     #[allow(dead_code)]
     pub fn prebuilt_dll_path(&self, fixture_path: &Path) -> PathBuf {
-        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let fixtures_base = Self::fixtures_base_dir();
         let file_name = fixture_path.file_stem().unwrap().to_str().unwrap();
-        if let Ok(relative_path) = fixture_path
-            .parent()
-            .unwrap()
-            .strip_prefix("tests/fixtures")
-        {
-            manifest_dir
-                .join("tests/fixtures/bin")
-                .join(relative_path)
-                .join(format!("{}.dll", file_name))
+        if let Ok(relative_path) = fixture_path.strip_prefix("tests/fixtures") {
+            let parent = relative_path.parent().unwrap_or_else(|| Path::new(""));
+            fixtures_base
+                .join(parent)
+                .join(file_name)
+                .join("SingleFile.dll")
         } else {
             // Not a standard fixture path, just return something that won't exist
-            manifest_dir
-                .join("tests/non-existent")
-                .join(format!("{}.dll", file_name))
+            fixtures_base
+                .join("non-existent")
+                .join(file_name)
+                .join("SingleFile.dll")
         }
     }
 
@@ -172,6 +173,7 @@ impl TestHarness {
                     &resolution.definition()[entry_method.parent_type()],
                     entry_method.parent_type(),
                 ),
+                vm::GenericLookup::default(),
                 resolution,
                 &resolution.definition()[entry_method],
             );
@@ -233,6 +235,7 @@ impl TestHarness {
                 &resolution.definition()[entry_method.parent_type()],
                 entry_method.parent_type(),
             ),
+            vm::GenericLookup::default(),
             resolution,
             &resolution.definition()[entry_method],
         );
@@ -283,4 +286,17 @@ impl TestHarness {
 
         (exit_code, stdout)
     }
+}
+
+#[test]
+fn fixtures_base_is_not_crate_local() {
+    let fixtures_base = TestHarness::fixtures_base_dir();
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+    assert!(
+        !fixtures_base.starts_with(&manifest_dir),
+        "expected DOTNET_FIXTURES_BASE to be outside the crate directory; base={:?} manifest={:?}",
+        fixtures_base,
+        manifest_dir
+    );
 }

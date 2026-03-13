@@ -134,7 +134,7 @@ impl LayoutFactory {
                     offset = aligned_offset + layout.size().as_usize();
                 }
 
-                total_size = align_up(offset, max_alignment).max(class_size);
+                total_size = align_up(offset, max_alignment).max(base_size + class_size);
             }
             Layout::Explicit(e) => {
                 // For explicit layout, offsets are relative to the current type's fields
@@ -168,6 +168,18 @@ impl LayoutFactory {
                                     && (layout.is_or_contains_refs()
                                         || prev_layout.is_or_contains_refs())
                                 {
+                                    // ECMA-335 §II.10.7: "offsets occupied by an object reference shall not overlap
+                                    // with offsets occupied by a built-in value type or a part of another object reference.
+                                    // While one object reference can completely overlap another, this is unverifiable."
+                                    let same_range =
+                                        actual_offset == *prev_start && actual_end == *prev_end;
+                                    let both_gc_ptrs = layout.is_gc_ptr() && prev_layout.is_gc_ptr();
+
+                                    if same_range && both_gc_ptrs {
+                                        // Complete overlap of two GC pointers is allowed but unverifiable
+                                        continue;
+                                    }
+
                                     let type_name = owner.type_name();
                                     // Bypass check for System.Runtime.CompilerServices.MethodTable which has overlapping fields
                                     // This is an internal runtime type and we assume it's handled correctly by the runtime/GC or not allocated on GC heap.
@@ -205,7 +217,10 @@ impl LayoutFactory {
                     };
                 }
                 total_size = match e {
-                    Some(ExplicitLayout { class_size }) => class_size.max(offset),
+                    Some(ExplicitLayout { class_size }) => {
+                        // ECMA-335 §II.10.7: .size is relative to the type's own fields
+                        (base_size + class_size).max(offset)
+                    }
                     None => offset,
                 };
             }

@@ -295,18 +295,19 @@ pub fn runtime_type_handle_intrinsic_call<
             let mut found_ctor = false;
             for m in td.definition().methods.iter() {
                 if m.name == ".ctor" && m.signature.instance && m.signature.parameters.is_empty() {
+                    let lookup = if let RuntimeType::Generic(_, type_generics) = rt {
+                        GenericLookup::new(
+                            type_generics
+                                .iter()
+                                .map(|t| t.to_concrete(ctx.loader().as_ref()))
+                                .collect(),
+                        )
+                    } else {
+                        ctx.shared().empty_generics.clone()
+                    };
                     let method_idx = ctx.get_runtime_method_index(
-                        MethodDescription::new(td, td.resolution, m),
-                        if let RuntimeType::Generic(_, type_generics) = rt {
-                            GenericLookup::new(
-                                type_generics
-                                    .iter()
-                                    .map(|t| t.to_concrete(ctx.loader().as_ref()))
-                                    .collect(),
-                            )
-                        } else {
-                            ctx.shared().empty_generics.clone()
-                        },
+                        MethodDescription::new(td, lookup.clone(), td.resolution, m),
+                        lookup,
                     );
 
                     let method_val = StackValue::NativeInt(method_idx as isize);

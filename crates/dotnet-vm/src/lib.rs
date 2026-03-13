@@ -11,7 +11,7 @@
 //! - **Memory Management** (`memory/`, `gc/`): Heap management and garbage collection.
 //! - **Dispatch** (`dispatch/`): Method resolution and execution engine.
 //! - **Threading** (`threading/`): Support for multi-threaded execution.
-use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+pub use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnetdll::prelude::*;
 use std::sync::Arc;
 
@@ -27,6 +27,12 @@ pub mod exceptions {
 mod executor;
 #[cfg(feature = "fuzzing")]
 pub mod fuzzing;
+#[cfg(test)]
+mod tail_calls_tests;
+#[cfg(test)]
+mod jmp_tests;
+#[cfg(test)]
+mod fault_tests;
 pub mod gc;
 mod instructions;
 pub(crate) mod intrinsics;
@@ -68,7 +74,7 @@ pub fn build_method_info(
 ) -> Result<MethodInfo<'static>, error::TypeResolutionError> {
     let loader = shared.loader.clone();
     let ctx = ResolutionContext::for_method(
-        method,
+        method.clone(),
         loader.clone(),
         generics,
         shared.caches.clone(),

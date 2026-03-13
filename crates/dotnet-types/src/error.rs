@@ -22,6 +22,8 @@ pub enum TypeResolutionError {
     InvalidLayout(String),
     #[error("Generic index {index} out of bounds (length {length})")]
     GenericIndexOutOfBounds { index: usize, length: usize },
+    #[error("Generic constraint violation: {0}")]
+    GenericConstraintViolation(String),
 }
 
 #[derive(Debug, Error, Clone, PartialEq)]

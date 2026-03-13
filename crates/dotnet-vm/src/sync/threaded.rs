@@ -1,12 +1,12 @@
 use crate::{
     gc::coordinator::GCCoordinator,
     metrics::RuntimeMetrics,
-    sync::{SyncBlockOps, SyncManagerOps},
+    sync::{LockResult, SyncBlockOps, SyncManagerOps},
     threading::ThreadManagerOps,
 };
 use dotnet_utils::ArenaId;
 use parking_lot::{Condvar, Mutex};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 #[derive(Debug)]
 struct SyncBlockState {
@@ -120,36 +120,36 @@ impl SyncBlockOps for SyncBlock {
         thread_id: ArenaId,
         metrics: &RuntimeMetrics,
         thread_manager: &impl ThreadManagerOps,
-        gc_coordinator: &GCCoordinator,
-    ) {
-        use std::time::{Duration, Instant};
+        _gc_coordinator: &GCCoordinator,
+    ) -> LockResult {
+        use std::time::Instant;
 
         loop {
             let mut state = self.state.lock();
 
             if state.owner_thread_id == thread_id {
                 state.recursion_count += 1;
-                return;
+                return LockResult::Success;
             }
 
             if state.owner_thread_id == ArenaId::INVALID {
                 state.owner_thread_id = thread_id;
                 state.recursion_count = 1;
-                return;
+                return LockResult::Success;
             }
 
             // Owner is someone else, we need to wait
             let start_wait = Instant::now();
 
             // Wait with timeout to allow periodic safe point checks
-            let timeout = Duration::from_millis(10);
+            let timeout = super::get_safe_point_yield_duration();
             let _ = self.condvar.wait_for(&mut state, timeout);
 
             if state.owner_thread_id == ArenaId::INVALID {
                 state.owner_thread_id = thread_id;
                 state.recursion_count = 1;
                 metrics.record_lock_contention(start_wait.elapsed());
-                return;
+                return LockResult::Success;
             }
 
             // Drop the lock before checking safe point
@@ -157,7 +157,7 @@ impl SyncBlockOps for SyncBlock {
 
             // Check for GC safe point
             if thread_manager.is_gc_stop_requested() {
-                thread_manager.safe_point(thread_id, gc_coordinator);
+                return LockResult::Yield;
             }
         }
     }
@@ -165,41 +165,34 @@ impl SyncBlockOps for SyncBlock {
     fn enter_with_timeout_safe(
         &self,
         thread_id: ArenaId,
-        timeout_ms: u64,
+        deadline: Instant,
         metrics: &RuntimeMetrics,
         thread_manager: &impl ThreadManagerOps,
-        gc_coordinator: &GCCoordinator,
-    ) -> bool {
-        use std::time::{Duration, Instant};
-
-        if timeout_ms == 0 {
-            return self.try_enter(thread_id);
-        }
-
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-
+        _gc_coordinator: &GCCoordinator,
+    ) -> LockResult {
         loop {
             let now = Instant::now();
-            if now >= deadline {
-                return false;
-            }
 
             let mut state = self.state.lock();
 
             if state.owner_thread_id == thread_id {
                 state.recursion_count += 1;
-                return true;
+                return LockResult::Success;
             }
 
             if state.owner_thread_id == ArenaId::INVALID {
                 state.owner_thread_id = thread_id;
                 state.recursion_count = 1;
-                return true;
+                return LockResult::Success;
             }
 
-            // Calculate remaining time, with a maximum wait of 10ms
+            if now >= deadline {
+                return LockResult::Timeout;
+            }
+
+            // Calculate remaining time, with a maximum wait defined by the safe point yield interval
             let remaining = deadline - now;
-            let wait_duration = remaining.min(Duration::from_millis(10));
+            let wait_duration = remaining.min(super::get_safe_point_yield_duration());
 
             let start_wait = Instant::now();
             let _ = self.condvar.wait_for(&mut state, wait_duration);
@@ -208,7 +201,7 @@ impl SyncBlockOps for SyncBlock {
                 state.owner_thread_id = thread_id;
                 state.recursion_count = 1;
                 metrics.record_lock_contention(start_wait.elapsed());
-                return true;
+                return LockResult::Success;
             }
 
             // Drop the lock before checking safe point
@@ -216,7 +209,7 @@ impl SyncBlockOps for SyncBlock {
 
             // Check for GC safe point
             if thread_manager.is_gc_stop_requested() {
-                thread_manager.safe_point(thread_id, gc_coordinator);
+                return LockResult::Yield;
             }
         }
     }

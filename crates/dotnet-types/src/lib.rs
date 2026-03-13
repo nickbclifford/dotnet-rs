@@ -9,7 +9,7 @@
 //! - **[`MethodDescription`]**: Represents a resolved .NET method.
 //! - **[`FieldDescription`]**: Represents a resolved .NET field.
 //! - **[`TypeComparer`](comparer::TypeComparer)**: Handles type equality and assignability.
-use crate::{members::MethodDescription, resolution::ResolutionS};
+use crate::{members::MethodDescription, resolution::ResolutionS, generics::GenericLookup};
 use dotnetdll::prelude::{
     MemberType, ResolvedDebug, TypeDefinition, TypeIndex, TypeSource, UserType,
 };
@@ -171,6 +171,10 @@ impl Hash for TypeDescription {
 }
 
 impl TypeDescription {
+    pub fn before_field_init(&self) -> bool {
+        self.definition().flags.before_field_init
+    }
+
     pub fn static_initializer(&self) -> Option<MethodDescription> {
         self.definition().methods.iter().find_map(|m| {
             if m.runtime_special_name
@@ -178,7 +182,7 @@ impl TypeDescription {
                 && !m.signature.instance
                 && m.signature.parameters.is_empty()
             {
-                Some(MethodDescription::new(*self, self.resolution, m))
+                Some(MethodDescription::new(*self, GenericLookup::default(), self.resolution, m))
             } else {
                 None
             }

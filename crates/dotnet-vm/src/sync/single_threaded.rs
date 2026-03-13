@@ -1,16 +1,13 @@
 use crate::{
     gc::coordinator::GCCoordinator,
     metrics::RuntimeMetrics,
-    sync::{Mutex, SyncBlockOps, SyncManagerOps},
+    sync::{Arc, LockResult, Mutex, SyncBlockOps, SyncManagerOps},
     threading::ThreadManagerOps,
 };
 use dotnet_utils::ArenaId;
 use std::{
     collections::HashMap,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 #[derive(Debug)]
@@ -52,19 +49,30 @@ impl SyncBlockOps for SyncBlock {
         metrics: &RuntimeMetrics,
         _thread_manager: &impl ThreadManagerOps,
         _gc_coordinator: &GCCoordinator,
-    ) {
+    ) -> LockResult {
         self.enter(thread_id, metrics);
+        LockResult::Success
     }
 
     fn enter_with_timeout_safe(
         &self,
         thread_id: ArenaId,
-        timeout_ms: u64,
+        deadline: std::time::Instant,
         metrics: &RuntimeMetrics,
         _thread_manager: &impl ThreadManagerOps,
         _gc_coordinator: &GCCoordinator,
-    ) -> bool {
-        self.enter_with_timeout(thread_id, timeout_ms, metrics)
+    ) -> LockResult {
+        let now = std::time::Instant::now();
+        let timeout_ms = if deadline > now {
+            (deadline - now).as_millis() as u64
+        } else {
+            0
+        };
+        if self.enter_with_timeout(thread_id, timeout_ms, metrics) {
+            LockResult::Success
+        } else {
+            LockResult::Timeout
+        }
     }
 
     fn exit(&self, _thread_id: ArenaId) -> bool {

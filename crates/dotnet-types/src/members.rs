@@ -1,4 +1,4 @@
-use crate::{TypeDescription, resolution::ResolutionS};
+use crate::{TypeDescription, resolution::ResolutionS, generics::GenericLookup};
 use dotnetdll::prelude::{Field, Method, ResolvedDebug};
 use gc_arena::static_collect;
 use std::{
@@ -7,9 +7,10 @@ use std::{
     ptr::NonNull,
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct MethodDescription {
     pub parent: TypeDescription,
+    pub parent_generics: GenericLookup,
     pub method_resolution: ResolutionS,
     method_ptr: NonNull<Method<'static>>,
 }
@@ -20,13 +21,15 @@ unsafe impl Send for MethodDescription {}
 unsafe impl Sync for MethodDescription {}
 
 impl MethodDescription {
-    pub const fn new(
+    pub fn new(
         parent: TypeDescription,
+        parent_generics: GenericLookup,
         method_resolution: ResolutionS,
         method: &'static Method<'static>,
     ) -> Self {
         Self {
             parent,
+            parent_generics,
             method_resolution,
             method_ptr: unsafe { NonNull::new_unchecked(method as *const _ as *mut _) },
         }
@@ -64,7 +67,7 @@ impl Debug for MethodDescription {
 
 impl PartialEq for MethodDescription {
     fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.method(), other.method())
+        std::ptr::eq(self.method(), other.method()) && self.parent_generics == other.parent_generics
     }
 }
 
@@ -73,6 +76,7 @@ impl Eq for MethodDescription {}
 impl Hash for MethodDescription {
     fn hash<H: Hasher>(&self, state: &mut H) {
         (self.method() as *const Method).hash(state);
+        self.parent_generics.hash(state);
     }
 }
 

@@ -262,7 +262,7 @@ pub(crate) fn make_runtime_type(res_ctx: &ResolutionContext, t: &MethodType) -> 
             index: *i as u16,
         },
         MethodType::MethodGeneric(i) => RuntimeType::MethodParameter {
-            owner: res_ctx.method_owner.expect("missing method owner"),
+            owner: res_ctx.method_owner.clone().expect("missing method owner"),
             index: *i as u16,
         },
     }
@@ -278,7 +278,7 @@ pub(crate) fn get_runtime_method_index<'gc>(
         let index = *ctx
             .shared()
             .shared_runtime_methods
-            .entry((method, lookup.clone()))
+            .entry((method.clone(), lookup.clone()))
             .or_insert_with(|| {
                 let idx = ctx
                     .shared()
@@ -341,12 +341,12 @@ pub(crate) fn get_runtime_method_obj<'gc>(
     if let Some(obj) = ctx
         .reflection()
         .method_objs_read()
-        .get(&(method, lookup.clone()))
+        .get(&(method.clone(), lookup.clone()))
     {
         return *obj;
     }
 
-    let index = get_runtime_method_index(ctx, method, lookup.clone()) as usize;
+    let index = get_runtime_method_index(ctx, method.clone(), lookup.clone()) as usize;
 
     let is_ctor = method.method().name == ".ctor" || method.method().name == ".cctor";
     let class_name = if is_ctor {

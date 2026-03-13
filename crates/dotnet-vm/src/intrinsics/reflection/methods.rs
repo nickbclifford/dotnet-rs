@@ -139,7 +139,7 @@ pub fn runtime_method_info_intrinsic_call<
         ("GetParameters", 0) => {
             let obj = ctx.pop_obj();
             let (method, lookup) = ctx.resolve_runtime_method(obj);
-            let method_index = ctx.get_runtime_method_index(method, lookup.clone());
+            let method_index = ctx.get_runtime_method_index(method.clone(), lookup.clone());
 
             let param_count = method.method().signature.parameters.len();
 

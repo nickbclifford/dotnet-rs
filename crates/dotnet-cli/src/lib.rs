@@ -63,6 +63,7 @@ pub fn run_cli() -> ExitCode {
             &resolution.definition()[entry_method.parent_type()],
             entry_method.parent_type(),
         ),
+        vm::GenericLookup::default(),
         resolution,
         &resolution.definition()[entry_method],
     );

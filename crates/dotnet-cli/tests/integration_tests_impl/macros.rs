@@ -63,12 +63,13 @@ macro_rules! multi_arena_test {
             let mut abort_flags = Vec::new();
             let mut handles = Vec::new();
 
+            let shared = std::sync::Arc::new(dotnet_vm::state::SharedGlobalState::new(
+                harness.loader.clone(),
+            ));
             for _ in 0..$thread_count {
                 let harness = harness.clone();
                 let tx = tx.clone();
-                let shared = std::sync::Arc::new(dotnet_vm::state::SharedGlobalState::new(
-                    harness.loader.clone(),
-                ));
+                let shared = std::sync::Arc::clone(&shared);
                 abort_flags.push(std::sync::Arc::clone(&shared.abort_requested));
 
                 let handle = thread::spawn(move || {

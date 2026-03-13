@@ -471,22 +471,28 @@ impl Drop for Executor {
             // 1. Unregister from GC coordinator FIRST.
             // This ensures no new STW collection will target this thread.
             self.shared.gc_coordinator.unregister_arena(self.thread_id);
+        }
 
-            // 2. Clear THREAD_ARENA.
-            // Since we're no longer in the coordinator, no concurrent collection
-            // will try to access this arena via the coordinator.
+        // 2. Clear other thread-locals.
+        crate::threading::IS_PERFORMING_GC.set(false);
+        clear_tracing_state();
+
+        // 3. Unregister from ThreadManager.
+        // This keeps the thread "visible" to any already-in-progress STW collections
+        // until we are mostly torn down, ensuring they wait for us to finish.
+        self.shared.thread_manager.unregister_thread(self.thread_id);
+
+        #[cfg(feature = "multithreading")]
+        {
+            // 4. Clear THREAD_ARENA LAST.
+            // We must keep the arena memory alive until AFTER we have unregistered from
+            // the ThreadManager. This ensures that any concurrent GC that was waiting
+            // for us will see the thread as 'Exited' and proceed, but the memory
+            // will still be valid if they happen to encounter a dangling reference
+            // to this arena before we finish dropping.
             THREAD_ARENA.with(|cell| {
                 *cell.borrow_mut() = None;
             });
         }
-
-        // 3. Clear other thread-locals.
-        crate::threading::IS_PERFORMING_GC.set(false);
-        clear_tracing_state();
-
-        // 4. Unregister from ThreadManager LAST.
-        // This keeps the thread "visible" to any already-in-progress STW collections
-        // until we are fully torn down, ensuring they wait for us to finish.
-        self.shared.thread_manager.unregister_thread(self.thread_id);
     }
 }

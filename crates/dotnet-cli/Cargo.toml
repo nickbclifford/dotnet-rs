@@ -5,6 +5,7 @@ edition = "2024"
 
 [features]
 default = ["multithreading"]
+generic-constraint-validation = ["dotnet-vm/generic-constraint-validation"]
 multithreading = [
     "dep:parking_lot",
     "dotnet-utils/multithreading",

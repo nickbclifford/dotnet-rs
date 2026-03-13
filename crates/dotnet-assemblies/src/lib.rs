@@ -7,6 +7,11 @@ pub mod error;
 pub mod loader;
 pub mod resolution;
 pub mod support;
+pub mod validation;
+#[cfg(test)]
+mod version_tests;
+#[cfg(test)]
+mod validation_tests;
 
 pub use ancestors::Ancestor;
 pub use loader::{AssemblyLoader, MetadataOwner, SUPPORT_ASSEMBLY};

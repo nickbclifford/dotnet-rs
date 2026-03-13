@@ -42,6 +42,58 @@ impl ResolverService {
         ctx: &ResolutionContext<'_>,
     ) -> Result<ObjectRef<'gc>, TypeResolutionError> {
         let t = self.normalize_type(t.clone())?;
+
+        // ECMA-335 §I.8.2.4: Boxing Nullable<T> produces null if HasValue=false, or boxed T if HasValue=true.
+        if t.is_nullable(self.loader.as_ref()) && matches!(data, StackValue::ValueType(_)) {
+            let StackValue::ValueType(obj) = &data else { unreachable!() };
+            let layout = obj.instance_storage.layout();
+                let has_value_field = layout
+                    .fields
+                    .iter()
+                    .find(|(k, _)| k.name == "hasValue" || k.name == "_hasValue")
+                    .map(|(_, v)| v);
+
+                if let Some(field_layout) = has_value_field {
+                    let pos = field_layout.position.as_usize();
+                    let has_value = obj.instance_storage.with_data(|d| d[pos]) != 0;
+
+                    if !has_value {
+                        return Ok(ObjectRef(None));
+                    }
+
+                    // HasValue is true, box the 'value' field.
+                    let value_field = layout
+                        .fields
+                        .iter()
+                        .find(|(k, _)| k.name == "value" || k.name == "_value")
+                        .expect("Nullable<T> must have a value field");
+
+                    let (_, value_field_layout) = value_field;
+                    let value_pos = value_field_layout.position.as_usize();
+                    let value_size = value_field_layout.layout.size().as_usize();
+
+                    // T is the first generic argument of Nullable<T>
+                    let source = t.get();
+                    let inner_t = if let BaseType::Type {
+                        source: TypeSource::Generic { parameters, .. },
+                        ..
+                    } = source
+                    {
+                        parameters
+                            .first()
+                            .ok_or(TypeResolutionError::InvalidHandle)?
+                    } else {
+                        return Err(TypeResolutionError::InvalidHandle);
+                    };
+
+                    let cts_value = obj.instance_storage.with_data(|d| {
+                        let value_data = &d[value_pos..value_pos + value_size];
+                        self.read_cts_value(inner_t, value_data, gc, ctx)
+                    })?;
+                    return self.box_value(inner_t, cts_value.into_stack(), gc, ctx);
+                }
+            }
+
         match self.new_cts_value(&t, data, ctx)? {
             CTSValue::Value(v) => {
                 let td = self.loader.find_concrete_type(t)?;

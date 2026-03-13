@@ -181,17 +181,15 @@ unsafe impl<'gc> Collect<'gc> for ObjectRef<'gc> {
             {
                 // Check for cross-arena reference
                 if let Some(tracing_id) = get_currently_tracing() {
-                    // SAFETY: During stop-the-world GC, no other threads are running,
-                    // so we can safely access the owner_id without acquiring the lock.
-                    // This avoids potential deadlock if a thread was stopped while holding a write lock.
                     let lock_ptr: *const ThreadSafeLock<ObjectInner> = Gc::as_ptr(h);
+                    // DANGER: lock_ptr might be dangling if the arena exited.
+                    // But in STW, we hope it's either local or the other arena is also stopped.
                     let owner_id = unsafe { (*(*lock_ptr).as_ptr()).owner_id };
                     if owner_id != tracing_id {
-                        // This is a reference to an object in another arena.
-                        // Do not trace it here; instead, record it for coordinated resurrection.
-                        // We cast to usize because utilities cannot depend on ObjectPtr.
                         let ptr = Gc::as_ptr(h) as usize;
-                        record_cross_arena_ref(owner_id, ptr);
+                        if !record_cross_arena_ref(owner_id, ptr) {
+                            return;
+                        }
                         return;
                     }
                 }
@@ -339,7 +337,11 @@ impl<'gc> ObjectRef<'gc> {
                     let real_ptr_val = ptr_val & 0x0000FFFFFFFFFFF8;
                     let real_ptr = real_ptr_val as *const ThreadSafeLock<ObjectInner<'static>>;
 
-                    record_cross_arena_ref(owner_id, real_ptr as usize);
+                    if !record_cross_arena_ref(owner_id, real_ptr as usize) {
+                        // The arena is no longer valid (e.g., thread exited).
+                        // Do not attempt to dereference the pointer or construct an ObjectRef.
+                        return ObjectRef(None);
+                    }
 
                     // Continue with the untagged pointer to construct the ObjectRef
                     let ptr = real_ptr.cast::<ThreadSafeLock<ObjectInner<'gc>>>();

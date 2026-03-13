@@ -79,7 +79,9 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
         if let MethodReferenceParent::Type(t) = &method_ref.parent {
             let concrete = {
                 let res_ctx = ctx.current_context();
-                res_ctx.generics.make_concrete(resolution, t.clone())
+                res_ctx
+                    .generics
+                    .make_concrete(resolution, t.clone(), res_ctx.loader().as_ref())
             };
 
             let concrete = vm_try!(concrete);
@@ -145,6 +147,7 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
                 .expect("Failed to locate corlib base for delegate");
             method = MethodDescription::new(
                 base,
+                crate::GenericLookup::default(),
                 base.resolution,
                 base.definition()
                     .methods
@@ -176,7 +179,7 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
         ctx.push(StackValue::NativeInt(native_val));
         StepResult::Continue
     } else {
-        if ctx.is_intrinsic_cached(method) {
+        if ctx.is_intrinsic_cached(method.clone()) {
             let is_value_type = vm_try!(ctx.resolver().is_value_type(parent));
             if is_value_type && method_name == ".ctor" && parent_name != "System.String" {
                 let arg_count = method.method().signature.parameters.len();

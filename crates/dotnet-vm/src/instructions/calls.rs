@@ -16,10 +16,19 @@ use dotnet_macros::dotnet_instruction;
 use dotnet_value::{StackValue, object::ObjectRef};
 use dotnetdll::prelude::*;
 
-#[dotnet_instruction(Call { param0 })]
-pub fn call<'gc, T: CallOps<'gc>>(ctx: &mut T, param0: &MethodSource) -> StepResult {
-    // Use unified dispatch pipeline for static calls
-    ctx.unified_dispatch(param0, None, None)
+#[dotnet_instruction(Jump(param0))]
+pub fn jmp<'gc, T: CallOps<'gc>>(ctx: &mut T, param0: &MethodSource) -> StepResult {
+    ctx.unified_dispatch_jmp(param0, None)
+}
+
+#[dotnet_instruction(Call { param0, tail_call })]
+pub fn call<'gc, T: CallOps<'gc>>(ctx: &mut T, param0: &MethodSource, tail_call: bool) -> StepResult {
+    // Use unified dispatch pipeline for calls. If `tail.` is present, attempt to honor it.
+    if tail_call {
+        ctx.unified_dispatch_tail(param0, None, None)
+    } else {
+        ctx.unified_dispatch(param0, None, None)
+    }
 }
 
 #[dotnet_instruction(CallVirtual { param0 })]
@@ -66,6 +75,48 @@ pub fn callvirt<
         ctx.push(a);
     }
     ctx.unified_dispatch(param0, Some(this_type), None)
+}
+
+#[dotnet_instruction(CallVirtualTail(param0))]
+pub fn callvirt_tail<
+    'gc,
+    T: CallOps<'gc>
+        + ResolutionOps<'gc>
+        + ExceptionOps<'gc>
+        + EvalStackOps<'gc>
+        + LoaderOps
+        + ReflectionOps<'gc>,
+>(
+    ctx: &mut T,
+    param0: &MethodSource,
+) -> StepResult {
+    // Tail-prefixed callvirt: extract runtime this type (and perform null check), then request
+    // tail dispatch.
+    let (base_method, _) = vm_try!(
+        ctx.resolver()
+            .find_generic_method(param0, &ctx.current_context())
+    );
+    let num_args = 1 + base_method.method().signature.parameters.len();
+    let args = ctx.pop_multiple(num_args);
+
+    let this_value = args[0].clone();
+    let this_type = match this_value {
+        StackValue::ObjectRef(ObjectRef(None)) => {
+            return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+        }
+        StackValue::ObjectRef(ObjectRef(Some(o))) => {
+            vm_try!(ctx.current_context().get_heap_description(o))
+        }
+        StackValue::ManagedPtr(m) => m.inner_type(),
+        rest => {
+            return StepResult::type_error("ObjectRef or ManagedPtr", format!("{:?}", rest));
+        }
+    };
+
+    for a in args {
+        ctx.push(a);
+    }
+    ctx.unified_dispatch_tail(param0, Some(this_type), None)
 }
 
 #[dotnet_instruction(CallConstrained(constraint, source))]
@@ -149,6 +200,7 @@ pub fn callvirt_constrained<
             &base_method.method().signature,
             base_method.resolution(),
             &lookup,
+            false,
         ) {
             // Value type has its own implementation
             Ok(overriding_method)
@@ -248,6 +300,7 @@ pub fn callvirt_constrained<
             &base_method.method().signature,
             base_method.resolution(),
             &lookup,
+            false,
         ) {
             Ok(impl_method)
         } else {
