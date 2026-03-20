@@ -10,11 +10,13 @@ use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{ManagedPtr, StackValue, object::ObjectRef, pointer::PointerOrigin};
-use std::cell::Cell;
-use std::time::{Duration, Instant};
+use std::{
+    cell::Cell,
+    time::{Duration, Instant},
+};
 
 thread_local! {
-    static CURRENT_DEADLINE: Cell<Option<Instant>> = Cell::new(None);
+    static CURRENT_DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) };
 }
 
 fn get_deadline(timeout_ms: i32) -> Instant {

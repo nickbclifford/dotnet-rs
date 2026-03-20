@@ -767,10 +767,19 @@ pub fn execute_cil_program_with_loader(program: FuzzProgram, loader: Arc<Assembl
     let typedef = &res_s.definition()[type_idx];
     let method_def = &res_s.definition()[method_idx];
 
+    let td = TypeDescription::new(res_s.clone(), type_idx);
+    let method_index = td
+        .definition()
+        .methods
+        .iter()
+        .position(|m| std::ptr::eq(m, method_def))
+        .unwrap();
+
     let entrypoint = MethodDescription::new(
-        TypeDescription::new(res_s, typedef, type_idx),
+        td,
+        GenericLookup::default(),
         res_s,
-        method_def,
+        MethodMemberIndex::Method(method_index),
     );
 
     let mut executor = Executor::new(shared);

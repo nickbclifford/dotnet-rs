@@ -95,7 +95,7 @@ impl<'a> ResolutionContext<'a> {
             generics,
             state: Arc::new(ResolutionShared::new(loader, caches, shared)),
             resolution: method.resolution(),
-            type_owner: Some(method.parent),
+            type_owner: Some(method.parent.clone()),
             method_owner: Some(method),
         }
     }
@@ -120,8 +120,8 @@ impl<'a> ResolutionContext<'a> {
         ResolutionContext {
             generics,
             state: self.state.clone(),
-            resolution: self.resolution,
-            type_owner: self.type_owner,
+            resolution: self.resolution.clone(),
+            type_owner: self.type_owner.clone(),
             method_owner: self.method_owner.clone(),
         }
     }
@@ -136,7 +136,7 @@ impl<'a> ResolutionContext<'a> {
         generics: &'a GenericLookup,
     ) -> ResolutionContext<'a> {
         ResolutionContext {
-            resolution: td.resolution,
+            resolution: td.resolution.clone(),
             generics,
             state: self.state.clone(),
             type_owner: Some(td),
@@ -145,7 +145,7 @@ impl<'a> ResolutionContext<'a> {
     }
 
     pub fn locate_type(&self, handle: UserType) -> Result<TypeDescription, TypeResolutionError> {
-        self.resolver().locate_type(self.resolution, handle)
+        self.resolver().locate_type(self.resolution.clone(), handle)
     }
 
     pub fn locate_method(
@@ -154,8 +154,12 @@ impl<'a> ResolutionContext<'a> {
         generic_inst: &GenericLookup,
         pre_resolved_parent: Option<ConcreteType>,
     ) -> Result<MethodDescription, TypeResolutionError> {
-        self.resolver()
-            .locate_method(self.resolution, handle, generic_inst, pre_resolved_parent)
+        self.resolver().locate_method(
+            self.resolution.clone(),
+            handle,
+            generic_inst,
+            pre_resolved_parent,
+        )
     }
 
     pub fn locate_field(
@@ -163,7 +167,7 @@ impl<'a> ResolutionContext<'a> {
         field: FieldSource,
     ) -> Result<(FieldDescription, GenericLookup), TypeResolutionError> {
         self.resolver()
-            .locate_field(self.resolution, field, self.generics)
+            .locate_field(self.resolution.clone(), field, self.generics)
     }
 
     pub fn get_ancestors(
@@ -193,7 +197,7 @@ impl<'a> ResolutionContext<'a> {
         t: &T,
     ) -> Result<ConcreteType, TypeResolutionError> {
         self.resolver()
-            .make_concrete(self.resolution, self.generics, t)
+            .make_concrete(self.resolution.clone(), self.generics, t)
     }
 
     pub fn get_field_type(
@@ -201,7 +205,7 @@ impl<'a> ResolutionContext<'a> {
         field: FieldDescription,
     ) -> Result<ConcreteType, TypeResolutionError> {
         self.resolver()
-            .get_field_type(self.resolution, self.generics, field)
+            .get_field_type(self.resolution.clone(), self.generics, field)
     }
 
     pub fn get_field_desc(
@@ -209,7 +213,7 @@ impl<'a> ResolutionContext<'a> {
         field: FieldDescription,
     ) -> Result<TypeDescription, TypeResolutionError> {
         self.resolver()
-            .get_field_desc(self.resolution, self.generics, field)
+            .get_field_desc(self.resolution.clone(), self.generics, field)
     }
 
     pub fn normalize_type(&self, t: ConcreteType) -> Result<ConcreteType, TypeResolutionError> {

@@ -1,7 +1,6 @@
 use crate::{gc::coordinator::GCCoordinator, metrics::RuntimeMetrics, threading::ThreadManagerOps};
 use dotnet_utils::ArenaId;
-use std::sync::OnceLock;
-use std::time::Duration;
+use std::{sync::OnceLock, time::Duration};
 
 pub const DEFAULT_SAFE_POINT_YIELD_MS: u64 = 10;
 
@@ -96,11 +95,11 @@ mod tests {
 
     #[test]
     fn test_default_yield_duration() {
-        // Since OnceLock is used, we can't easily test changing the env var 
+        // Since OnceLock is used, we can't easily test changing the env var
         // if it has already been initialized by another test or the runtime.
         // But we can check that it returns a reasonable value.
         let duration = get_safe_point_yield_duration();
-        
+
         // If not set in the environment, it should be the default 10ms.
         // If it was set by the environment in this process, it will be that value.
         // In a clean test run, it should be 10ms.

@@ -111,7 +111,7 @@ pub(super) fn invoke_delegate<
         // Read Target field
         let target = instance
             .instance_storage
-            .field::<ObjectRef<'gc>>(delegate_type, "_target")
+            .field::<ObjectRef<'gc>>(delegate_type.clone(), "_target")
             .unwrap()
             .read();
 

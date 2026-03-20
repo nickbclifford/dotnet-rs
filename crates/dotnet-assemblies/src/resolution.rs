@@ -4,16 +4,17 @@ use dotnet_types::{
     error::TypeResolutionError,
     generics::{ConcreteType, GenericLookup},
     members::{FieldDescription, MethodDescription},
-    resolution::ResolutionS,
+    resolution::{MetadataArena, ResolutionS},
 };
 use dotnet_utils::sync::Ordering;
-use dotnetdll::prelude::*;
+use dotnetdll::prelude::{FieldSource, *};
 use std::{
     error::Error,
     fmt, fs,
     io::Read,
     path::{Path, PathBuf},
     ptr,
+    sync::Arc,
 };
 
 impl TypeResolver for AssemblyLoader {
@@ -31,6 +32,10 @@ impl TypeResolver for AssemblyLoader {
 
     fn find_concrete_type(&self, ty: ConcreteType) -> Result<TypeDescription, TypeResolutionError> {
         self.find_concrete_type(ty)
+    }
+
+    fn canonical_type_name<'a>(&'a self, name: &'a str) -> &'a str {
+        self.canonical_type_name(name)
     }
 }
 
@@ -55,7 +60,7 @@ impl AssemblyLoader {
         full_name: &str,
     ) -> Result<TypeDescription, TypeResolutionError> {
         if let Some(t) = self.stubs.get(full_name) {
-            return Ok(*t);
+            return Ok(t.clone());
         }
 
         let res = self
@@ -105,24 +110,24 @@ impl AssemblyLoader {
                                 "Internal error: invalid type definition index".to_string(),
                             )
                         })?;
-                Ok(TypeDescription::new(res, t, type_index))
+                Ok(TypeDescription::new(res, type_index))
             }
         }
     }
 
     pub fn corlib_type(&self, name: &str) -> Result<TypeDescription, TypeResolutionError> {
         if let Some(t) = self.corlib_cache.get(name) {
-            return Ok(*t);
+            return Ok(t.clone());
         }
 
         let result = self.corlib_type_internal(name)?;
-        self.corlib_cache.insert(name.to_string(), result);
+        self.corlib_cache.insert(name.to_string(), result.clone());
         Ok(result)
     }
 
     fn corlib_type_internal(&self, name: &str) -> Result<TypeDescription, TypeResolutionError> {
         if let Some(t) = self.stubs.get(name) {
-            return Ok(*t);
+            return Ok(t.clone());
         }
 
         let mut tried_mscorlib = false;
@@ -192,7 +197,7 @@ impl AssemblyLoader {
                 .definition()
                 .type_definition_index(index)
                 .unwrap();
-            return Some(TypeDescription::new(resolution, t, type_index));
+            return Some(TypeDescription::new(resolution, type_index));
         }
 
         for e in &resolution.definition().exported_types {
@@ -210,7 +215,7 @@ impl AssemblyLoader {
                         .definition()
                         .type_definition_index(index)
                         .unwrap();
-                    let td = TypeDescription::new(resolution, t, type_index);
+                    let td = TypeDescription::new(resolution.clone(), type_index);
                     if td.type_name().replace('/', "+") == normalized_target {
                         return Some(td);
                     }
@@ -226,27 +231,21 @@ impl AssemblyLoader {
         resolution: ResolutionS,
         handle: UserType,
     ) -> Result<TypeDescription, TypeResolutionError> {
-        let key = (resolution, handle);
+        let key = (resolution.clone(), handle);
         if let Some(cached) = self.type_cache.get(&key) {
             self.type_cache_hits.fetch_add(1, Ordering::Relaxed);
-            return Ok(*cached);
+            return Ok(cached.clone());
         }
 
         self.type_cache_misses.fetch_add(1, Ordering::Relaxed);
         let result = match handle {
-            UserType::Definition(d) => {
-                let def = resolution.definition();
-                let definition = &def[d];
-                if let Some(t) = self.stubs.get(&definition.type_name()) {
-                    *t
-                } else {
-                    TypeDescription::new(resolution, definition, d)
-                }
-            }
+            // Definition handles are already resolved against a concrete metadata table.
+            // Redirecting them to support stubs can mismatch member indices and method bodies.
+            UserType::Definition(d) => TypeDescription::new(resolution, d),
             UserType::Reference(r) => self.locate_type_ref(resolution, r)?,
         };
 
-        self.type_cache.insert(key, result);
+        self.type_cache.insert(key, result.clone());
         Ok(result)
     }
 
@@ -264,8 +263,8 @@ impl AssemblyLoader {
             Assembly(a) => self.find_in_assembly(&resolution[*a], &type_ref.type_name()),
             Exported => todo!(),
             Nested(o) => {
-                let td = self.locate_type_ref(resolution, *o)?;
-                let res = td.resolution;
+                let td = self.locate_type_ref(resolution.clone(), *o)?;
+                let res = td.resolution.clone();
                 let owner = td.definition();
 
                 for t in &res.definition().type_definitions {
@@ -287,7 +286,7 @@ impl AssemblyLoader {
                                 .ok_or_else(|| {
                                     TypeResolutionError::TypeNotFound("Internal error".to_string())
                                 })?;
-                        return Ok(TypeDescription::new(res, t, type_index));
+                        return Ok(TypeDescription::new(res, type_index));
                     }
                 }
 
@@ -392,6 +391,66 @@ impl AssemblyLoader {
             .find_method_in_type(desc, name, signature, sig_res)
     }
 
+    /// Recover the `MethodMemberIndex` for a `MethodIndex` by scanning all sub-collections
+    /// of the parent `TypeDefinition` via pointer equality.  This is needed because
+    /// `MethodIndex::member` is `pub(crate)` in dotnetdll and has no public accessor.
+    fn method_member_index_from_index(
+        resolution: &Resolution<'static>,
+        d: MethodIndex,
+    ) -> MethodMemberIndex {
+        let method: *const Method = &resolution[d];
+        let def = &resolution[d.parent_type()];
+        for (i, m) in def.methods.iter().enumerate() {
+            if ptr::eq(m as *const Method, method) {
+                return MethodMemberIndex::Method(i);
+            }
+        }
+        for (prop_idx, prop) in def.properties.iter().enumerate() {
+            if let Some(getter) = &prop.getter
+                && ptr::eq(getter as *const Method, method)
+            {
+                return MethodMemberIndex::PropertyGetter(prop_idx);
+            }
+            if let Some(setter) = &prop.setter
+                && ptr::eq(setter as *const Method, method)
+            {
+                return MethodMemberIndex::PropertySetter(prop_idx);
+            }
+            for (other_idx, other) in prop.other.iter().enumerate() {
+                if ptr::eq(other as *const Method, method) {
+                    return MethodMemberIndex::PropertyOther {
+                        property: prop_idx,
+                        other: other_idx,
+                    };
+                }
+            }
+        }
+        for (event_idx, event) in def.events.iter().enumerate() {
+            if ptr::eq(&event.add_listener as *const Method, method) {
+                return MethodMemberIndex::EventAdd(event_idx);
+            }
+            if ptr::eq(&event.remove_listener as *const Method, method) {
+                return MethodMemberIndex::EventRemove(event_idx);
+            }
+            if let Some(raise) = &event.raise_event
+                && ptr::eq(raise as *const Method, method)
+            {
+                return MethodMemberIndex::EventRaise(event_idx);
+            }
+            for (other_idx, other) in event.other.iter().enumerate() {
+                if ptr::eq(other as *const Method, method) {
+                    return MethodMemberIndex::EventOther {
+                        event: event_idx,
+                        other: other_idx,
+                    };
+                }
+            }
+        }
+        panic!(
+            "method_member_index_from_index: method pointer not found in any sub-collection of parent type"
+        );
+    }
+
     pub fn locate_method(
         &self,
         resolution: ResolutionS,
@@ -406,7 +465,7 @@ impl AssemblyLoader {
             pre_resolved_parent
         );
         let key = (
-            resolution,
+            resolution.clone(),
             handle,
             generic_inst.clone(),
             pre_resolved_parent.clone(),
@@ -418,12 +477,18 @@ impl AssemblyLoader {
 
         self.method_cache_misses.fetch_add(1, Ordering::Relaxed);
         let result = match handle {
-            UserMethod::Definition(d) => Ok(MethodDescription::new(
-                self.locate_type(resolution, d.parent_type().into())?,
-                GenericLookup::default(),
-                resolution,
-                &resolution.definition()[d],
-            )),
+            UserMethod::Definition(d) => {
+                let parent_type = self.locate_type(resolution.clone(), d.parent_type().into())?;
+                // `MethodIndex::member` is pub(crate) in dotnetdll with no public accessor.
+                // Use the ptr-scan helper to recover the correct `MethodMemberIndex` variant.
+                let member_index = Self::method_member_index_from_index(resolution.definition(), d);
+                Ok(MethodDescription::new(
+                    parent_type,
+                    GenericLookup::default(),
+                    resolution.clone(),
+                    member_index,
+                ))
+            }
             UserMethod::Reference(r) => {
                 let method_ref = &resolution.definition()[r];
 
@@ -433,21 +498,22 @@ impl AssemblyLoader {
                         let concrete = if let Some(p) = pre_resolved_parent {
                             p
                         } else {
-                            generic_inst.make_concrete(resolution, t.clone(), self)?
+                            generic_inst.make_concrete(resolution.clone(), t.clone(), self)?
                         };
 
                         if method_ref.name == ".ctor"
                             && let BaseType::Array(_, _) = concrete.get()
                         {
                             let array_type = self.corlib_type("System.Array")?;
-                            for method in &array_type.definition().methods {
+                            for (idx, method) in array_type.definition().methods.iter().enumerate()
+                            {
                                 if method.name == "CtorArraySentinel" {
-                        return Ok(MethodDescription::new(
-                            array_type,
-                            GenericLookup::default(),
-                            array_type.resolution,
-                            method,
-                        ));
+                                    return Ok(MethodDescription::new(
+                                        array_type.clone(),
+                                        GenericLookup::default(),
+                                        array_type.resolution.clone(),
+                                        MethodMemberIndex::Method(idx),
+                                    ));
                                 }
                             }
                             return Err(TypeResolutionError::MethodNotFound(
@@ -455,13 +521,14 @@ impl AssemblyLoader {
                             ));
                         }
 
-                        let parent_type: TypeDescription = self.find_concrete_type(concrete.clone())?;
+                        let parent_type: TypeDescription =
+                            self.find_concrete_type(concrete.clone())?;
                         let parent_generics = concrete.make_lookup();
                         match self.find_method_in_type_with_substitution(
-                            parent_type,
+                            parent_type.clone(),
                             &method_ref.name,
                             &method_ref.signature,
-                            resolution,
+                            resolution.clone(),
                             &parent_generics,
                             false,
                         ) {
@@ -513,7 +580,7 @@ impl AssemblyLoader {
     ) -> Result<(FieldDescription, GenericLookup), TypeResolutionError> {
         match field {
             FieldSource::Definition(d) => {
-                let parent = self.locate_type(resolution, d.parent_type().into())?;
+                let parent = self.locate_type(resolution.clone(), d.parent_type().into())?;
                 let field = &resolution.definition()[d];
                 let index = parent
                     .definition()
@@ -522,7 +589,7 @@ impl AssemblyLoader {
                     .position(|f| ptr::eq(f, field))
                     .ok_or_else(|| TypeResolutionError::FieldNotFound(field.name.to_string()))?;
                 Ok((
-                    FieldDescription::new(parent, resolution, field, index),
+                    FieldDescription::new(parent, resolution, index),
                     generic_inst.clone(),
                 ))
             }
@@ -549,9 +616,8 @@ impl AssemblyLoader {
 
                                 return Ok((
                                     FieldDescription::new(
-                                        parent_type,
-                                        parent_type.resolution,
-                                        field,
+                                        parent_type.clone(),
+                                        parent_type.resolution.clone(),
                                         i,
                                     ),
                                     GenericLookup::new(type_generics),
@@ -581,13 +647,13 @@ impl fmt::Display for AttrResolveError {
     }
 }
 
-impl Resolver<'static> for AssemblyLoader {
+impl<'a> Resolver<'a> for &'a AssemblyLoader {
     type Error = AttrResolveError;
 
     fn find_type(
         &self,
         name: &str,
-    ) -> Result<(&TypeDefinition<'static>, &Resolution<'static>), Self::Error> {
+    ) -> Result<(&'a TypeDefinition<'a>, &'a Resolution<'a>), Self::Error> {
         if name.contains("=") {
             todo!("fully qualified name {}", name)
         }
@@ -598,7 +664,8 @@ impl Resolver<'static> for AssemblyLoader {
 
 pub(crate) fn load_resolution_core(
     path: impl AsRef<Path>,
-) -> Result<(ResolutionS, *const Resolution<'static>, *mut [u64]), AssemblyLoadError> {
+    arena: &Arc<MetadataArena>,
+) -> Result<ResolutionS, AssemblyLoadError> {
     let path_ref = path.as_ref();
     let mut file = fs::File::open(path_ref).map_err(|e| {
         AssemblyLoadError::Io(format!(
@@ -625,6 +692,9 @@ pub(crate) fn load_resolution_core(
     let aligned_ptr = Box::into_raw(aligned_boxed);
     // SAFETY: We manually track this leaked box to reclaim it later.
     let aligned_slice: &'static mut [u64] = unsafe { &mut *aligned_ptr };
+    unsafe {
+        arena.add_u64_slice(aligned_ptr);
+    }
 
     // Create the byte slice view
     let byte_slice =
@@ -640,8 +710,12 @@ pub(crate) fn load_resolution_core(
     crate::validation::validate_metadata(&res)?;
 
     let res_ptr = Box::into_raw(Box::new(res));
+    // SAFETY: We manually track this leaked box to reclaim it later.
+    unsafe {
+        arena.add_resolution(res_ptr);
+    }
 
-    Ok((ResolutionS::new(res_ptr), res_ptr, aligned_ptr))
+    Ok(ResolutionS::new(res_ptr, arena.clone()))
 }
 
 pub fn find_dotnet_sdk_path() -> Option<PathBuf> {

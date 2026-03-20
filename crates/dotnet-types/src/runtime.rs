@@ -79,10 +79,11 @@ runtime_type_impls! {
         Void | TypedReference => loader
             .corlib_type("System.Object")
             .expect("System.Object must exist")
-            .resolution,
-        Type(td) => td.resolution,
-        Generic(td, _) => td.resolution,
-        TypeParameter { owner, .. } => owner.resolution,
+            .resolution
+            .clone(),
+        Type(td) => td.resolution.clone(),
+        Generic(td, _) => td.resolution.clone(),
+        TypeParameter { owner, .. } => owner.resolution.clone(),
         MethodParameter { owner, .. } => owner.resolution(),
 
         Vector(_)
@@ -143,14 +144,14 @@ runtime_type_impls! {
                 .corlib_type("System.TypedReference")
                 .expect("System.TypedReference must exist"),
         ),
-        Type(td) => ConcreteType::from(*td),
+        Type(td) => ConcreteType::from(td.clone()),
         Generic(td, args) => {
             let source = TypeSource::Generic {
                 base: UserType::Definition(td.index),
                 parameters: args.iter().map(|a| a.to_concrete(loader)).collect(),
             };
             ConcreteType::new(
-                td.resolution,
+                td.resolution.clone(),
                 BaseType::Type {
                     source,
                     value_kind: None,
@@ -158,10 +159,10 @@ runtime_type_impls! {
             )
         },
         Vector(t) => {
-            ConcreteType::new(corlib_res, BaseType::Vector(vec![], t.to_concrete(loader)))
+            ConcreteType::new(corlib_res.clone(), BaseType::Vector(vec![], t.to_concrete(loader)))
         },
         Array(t, rank) => ConcreteType::new(
-            corlib_res,
+            corlib_res.clone(),
             BaseType::Array(
                 t.to_concrete(loader),
                 dotnetdll::binary::signature::encoded::ArrayShape {
@@ -173,7 +174,7 @@ runtime_type_impls! {
         ),
         Pointer(t) | ValuePointer(t, _) => {
             ConcreteType::new(
-                corlib_res,
+                corlib_res.clone(),
                 BaseType::ValuePointer(vec![], Some(t.to_concrete(loader))),
             )
         },
@@ -182,7 +183,7 @@ runtime_type_impls! {
                 .corlib_type("System.ByReference`1")
                 .expect("System.ByReference`1 not found");
             ConcreteType::new(
-                by_ref_type.resolution,
+                by_ref_type.resolution.clone(),
                 BaseType::Type {
                     source: TypeSource::Generic {
                         base: UserType::Definition(by_ref_type.index),
@@ -193,7 +194,7 @@ runtime_type_impls! {
             )
         },
         TypeParameter { .. } | MethodParameter { .. } => {
-            ConcreteType::new(corlib_res, BaseType::Object)
+            ConcreteType::new(corlib_res.clone(), BaseType::Object)
         },
         FunctionPointer(sig) => {
             let parameters = sig.parameters.iter().map(|p| {
@@ -216,7 +217,7 @@ runtime_type_impls! {
                 return_type,
                 varargs: None,
             };
-            ConcreteType::new(corlib_res, BaseType::FunctionPointer(managed_method))
+            ConcreteType::new(corlib_res.clone(), BaseType::FunctionPointer(managed_method))
         },
     }
 }

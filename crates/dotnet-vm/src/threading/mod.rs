@@ -94,7 +94,9 @@ pub trait STWGuardOps {
 }
 
 pub trait ThreadManagerOps {
-    type Guard: STWGuardOps;
+    type Guard<'a>: STWGuardOps
+    where
+        Self: 'a;
 
     fn register_thread(&self) -> dotnet_utils::ArenaId;
     fn register_thread_traced(&self, tracer: &mut Tracer, name: &str) -> dotnet_utils::ArenaId;
@@ -112,6 +114,6 @@ pub trait ThreadManagerOps {
         tracer: &mut Tracer,
         location: &str,
     );
-    fn request_stop_the_world(&self) -> Self::Guard;
-    fn request_stop_the_world_traced(&self, tracer: &mut Tracer) -> Self::Guard;
+    fn request_stop_the_world(&self) -> Self::Guard<'_>;
+    fn request_stop_the_world_traced(&self, tracer: &mut Tracer) -> Self::Guard<'_>;
 }

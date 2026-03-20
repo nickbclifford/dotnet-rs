@@ -11,7 +11,7 @@
 //! - **Memory Management** (`memory/`, `gc/`): Heap management and garbage collection.
 //! - **Dispatch** (`dispatch/`): Method resolution and execution engine.
 //! - **Threading** (`threading/`): Support for multi-threaded execution.
-pub use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+#![allow(clippy::mutable_key_type)]
 use dotnetdll::prelude::*;
 use std::sync::Arc;
 
@@ -25,17 +25,15 @@ pub mod exceptions {
     pub use dotnet_exceptions::*;
 }
 mod executor;
-#[cfg(feature = "fuzzing")]
-pub mod fuzzing;
-#[cfg(test)]
-mod tail_calls_tests;
-#[cfg(test)]
-mod jmp_tests;
 #[cfg(test)]
 mod fault_tests;
+#[cfg(feature = "fuzzing")]
+pub mod fuzzing;
 pub mod gc;
 mod instructions;
 pub(crate) mod intrinsics;
+#[cfg(test)]
+mod jmp_tests;
 pub mod layout;
 pub mod memory;
 pub mod metrics;
@@ -48,9 +46,12 @@ mod stack;
 pub mod state;
 pub mod statics;
 pub mod sync;
+#[cfg(test)]
+mod tail_calls_tests;
 pub mod threading;
 pub mod tracer;
 
+pub use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 pub use dotnet_utils::{
     ArenaId, ArgumentIndex, ByteOffset, FieldIndex, LocalIndex, StackSlotIndex,
 };

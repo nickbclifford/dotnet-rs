@@ -17,7 +17,7 @@ use std::{
 use arbitrary::Arbitrary;
 
 #[cfg(feature = "multithreading")]
-use dotnet_utils::gc::{get_currently_tracing, record_cross_arena_ref};
+use dotnet_utils::gc::{get_currently_tracing, record_cross_arena_ref, try_acquire_lease};
 
 #[cfg(all(feature = "multithreading", feature = "memory-validation"))]
 use dotnet_utils::gc::{is_stw_in_progress, is_valid_cross_arena_ref};
@@ -183,7 +183,8 @@ unsafe impl<'gc> Collect<'gc> for ObjectRef<'gc> {
                 if let Some(tracing_id) = get_currently_tracing() {
                     let lock_ptr: *const ThreadSafeLock<ObjectInner> = Gc::as_ptr(h);
                     // DANGER: lock_ptr might be dangling if the arena exited.
-                    // But in STW, we hope it's either local or the other arena is also stopped.
+                    // But in STW, we assume it's either local or the other arena is also stopped.
+                    // All threads MUST be at a safepoint during finish_marking.
                     let owner_id = unsafe { (*(*lock_ptr).as_ptr()).owner_id };
                     if owner_id != tracing_id {
                         let ptr = Gc::as_ptr(h) as usize;
@@ -337,11 +338,16 @@ impl<'gc> ObjectRef<'gc> {
                     let real_ptr_val = ptr_val & 0x0000FFFFFFFFFFF8;
                     let real_ptr = real_ptr_val as *const ThreadSafeLock<ObjectInner<'static>>;
 
-                    if !record_cross_arena_ref(owner_id, real_ptr as usize) {
-                        // The arena is no longer valid (e.g., thread exited).
-                        // Do not attempt to dereference the pointer or construct an ObjectRef.
+                    // Acquire a lease to pin the arena while we reconstruct the Gc pointer.
+                    // This ensures the memory remains valid during magic check and construction.
+                    let lease = try_acquire_lease(owner_id);
+                    if lease.is_none() {
                         return ObjectRef(None);
                     }
+                    let _lease = lease;
+
+                    // Also record it if we are tracing
+                    record_cross_arena_ref(owner_id, real_ptr as usize);
 
                     // Continue with the untagged pointer to construct the ObjectRef
                     let ptr = real_ptr.cast::<ThreadSafeLock<ObjectInner<'gc>>>();
@@ -418,24 +424,35 @@ impl<'gc> ObjectRef<'gc> {
                 let ptr = Gc::as_ptr(s) as usize;
                 #[cfg(feature = "multithreading")]
                 {
-                    // Tag cross-arena references with Tag 5
+                    // Encode arena ownership with Tag 5 for every managed owner.
+                    // This keeps ownership metadata intact when references flow through
+                    // shared storage (e.g. statics) and are later read on another thread.
                     // SAFETY: We can safely access owner_id during write because:
                     // 1. The Gc<T> is alive (we hold a reference via self.0)
                     // 2. We use raw pointer access to avoid deadlocking with the write lock on the owner object.
                     //    The owner_id is immutable after object creation.
-                    let current_id = get_current_thread_id();
-                    let owner_id = unsafe { (*(*Gc::as_ptr(s)).as_ptr()).owner_id };
-                    if owner_id != current_id && owner_id != ArenaId::INVALID {
-                        // This is a cross-arena reference - tag it with Tag 5
-                        // Store the 16-bit ArenaId in the upper bits of the pointer.
-                        // We assume 48-bit addressing (standard on current 64-bit OSs).
-                        debug_assert_eq!(
-                            ptr & 0xFFFF000000000000,
-                            0,
-                            "Pointer upper bits should be clear"
-                        );
-                        debug_assert_eq!(ptr & 7, 0, "Pointer low bits should be clear");
-                        (ptr & 0x0000FFFFFFFFFFFF) | 5 | ((owner_id.as_u64() as usize) << 48)
+                    let lock_ptr = Gc::as_ptr(s);
+                    // DANGER: speculative read of owner_id.
+                    // Safe because owner_id is immutable after object creation.
+                    let owner_id = unsafe { (*(*lock_ptr).as_ptr()).owner_id };
+                    if owner_id != ArenaId::INVALID {
+                        // Verify with a lease that the arena is still alive before
+                        // we encode its ID into the tagged reference.
+                        if let Some(_lease) = try_acquire_lease(owner_id) {
+                            // Store pointer + owner arena id in a stable tagged form.
+                            // Store the 16-bit ArenaId in the upper bits of the pointer.
+                            // We assume 48-bit addressing (standard on current 64-bit OSs).
+                            debug_assert_eq!(
+                                ptr & 0xFFFF000000000000,
+                                0,
+                                "Pointer upper bits should be clear"
+                            );
+                            debug_assert_eq!(ptr & 7, 0, "Pointer low bits should be clear");
+                            (ptr & 0x0000FFFFFFFFFFFF) | 5 | ((owner_id.as_u64() as usize) << 48)
+                        } else {
+                            // Arena exited; write as NULL.
+                            0
+                        }
                     } else {
                         ptr
                     }
@@ -609,5 +626,168 @@ impl<'gc> PointerLike for ObjectRef<'gc> {
     #[inline]
     fn pointer(&self) -> Option<NonNull<u8>> {
         ObjectRef::pointer(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[allow(unused_imports)]
+    use super::*;
+    #[cfg(feature = "multithreading")]
+    use dotnet_utils::ArenaId;
+    #[cfg(feature = "multithreading")]
+    use dotnet_utils::gc::{register_arena, unregister_arena};
+    #[cfg(feature = "multithreading")]
+    use dotnet_utils::sync::MANAGED_THREAD_ID;
+    #[cfg(feature = "multithreading")]
+    use std::sync::Arc;
+    #[cfg(feature = "multithreading")]
+    use std::sync::atomic::AtomicBool;
+    #[cfg(feature = "multithreading")]
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+    #[cfg(feature = "multithreading")]
+    static NEXT_TEST_ARENA_ID: AtomicU64 = AtomicU64::new(2000);
+
+    #[cfg(feature = "multithreading")]
+    fn next_test_arena_id() -> ArenaId {
+        ArenaId::new(NEXT_TEST_ARENA_ID.fetch_add(1, AtomicOrdering::Relaxed))
+    }
+
+    #[cfg(feature = "multithreading")]
+    struct ManagedThreadIdGuard {
+        previous: Option<ArenaId>,
+    }
+
+    #[cfg(feature = "multithreading")]
+    impl ManagedThreadIdGuard {
+        fn set(id: ArenaId) -> Self {
+            let previous = MANAGED_THREAD_ID.with(|thread_id| {
+                let prev = thread_id.get();
+                thread_id.set(Some(id));
+                prev
+            });
+            Self { previous }
+        }
+    }
+
+    #[cfg(feature = "multithreading")]
+    impl Drop for ManagedThreadIdGuard {
+        fn drop(&mut self) {
+            MANAGED_THREAD_ID.with(|thread_id| thread_id.set(self.previous));
+        }
+    }
+
+    #[cfg(feature = "multithreading")]
+    #[test]
+    fn test_read_unchecked_cross_arena_invalid() {
+        let arena_id = ArenaId::new(1000);
+        unregister_arena(arena_id);
+
+        // Construct a Tag 5 pointer for arena 1000.
+        // Pointer value doesn't matter much since it shouldn't be dereferenced.
+        let raw_ptr = 0x123456780000usize;
+        let tagged_ptr = (raw_ptr & 0x0000FFFFFFFFFFFF) | 5 | ((arena_id.as_u64() as usize) << 48);
+
+        let mut source = [0u8; 8];
+        source.copy_from_slice(&tagged_ptr.to_ne_bytes());
+
+        // SAFETY: tagged_ptr is a validly constructed Tag 5 pointer.
+        let obj_ref = unsafe { ObjectRef::read_unchecked(&source) };
+
+        assert!(
+            obj_ref.0.is_none(),
+            "Should return None for unregistered arena"
+        );
+    }
+
+    #[cfg(feature = "multithreading")]
+    #[test]
+    fn test_read_unchecked_cross_arena_valid() {
+        use gc_arena::{Arena, Rootable};
+        struct Root;
+        unsafe impl<'gc> gc_arena::Collect<'gc> for Root {
+            fn trace<Tr: gc_arena::collect::Trace<'gc>>(&self, _cc: &mut Tr) {}
+        }
+        let arena = Arena::<Rootable![Root]>::new(|_mc| Root);
+        arena.mutate(|mc, _root| {
+            let arena_id = ArenaId::new(1001);
+            register_arena(arena_id, Arc::new(AtomicBool::new(false)));
+
+            // We need a pointer to something that looks like an ObjectInner to pass magic check.
+            let inner = ObjectInner {
+                magic: ValidationTag::new(OBJECT_MAGIC),
+                owner_id: arena_id,
+                storage: HeapStorage::Str(crate::string::CLRString::from("test")),
+            };
+            let lock = gc_arena::Gc::new(mc, ThreadSafeLock::new(inner));
+            let lock_ptr = gc_arena::Gc::as_ptr(lock) as usize;
+
+            let tagged_ptr =
+                (lock_ptr & 0x0000FFFFFFFFFFFF) | 5 | ((arena_id.as_u64() as usize) << 48);
+
+            let mut source = [0u8; 8];
+            source.copy_from_slice(&tagged_ptr.to_ne_bytes());
+
+            // SAFETY: lock is a valid GC pointer.
+            let obj_ref = unsafe { ObjectRef::read_unchecked(&source) };
+
+            assert!(
+                obj_ref.0.is_some(),
+                "Should return Some for registered arena"
+            );
+
+            unregister_arena(arena_id);
+        });
+    }
+
+    #[cfg(feature = "multithreading")]
+    #[test]
+    fn test_write_encodes_owner_tag_even_on_owner_thread() {
+        use gc_arena::{Arena, Rootable};
+
+        struct Root;
+        unsafe impl<'gc> gc_arena::Collect<'gc> for Root {
+            fn trace<Tr: gc_arena::collect::Trace<'gc>>(&self, _cc: &mut Tr) {}
+        }
+
+        let arena_id = next_test_arena_id();
+        let _thread_guard = ManagedThreadIdGuard::set(arena_id);
+        register_arena(arena_id, Arc::new(AtomicBool::new(false)));
+
+        let arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(arena_id);
+        let arena_handle = unsafe {
+            std::mem::transmute::<
+                &dotnet_utils::gc::ArenaHandleInner,
+                &'static dotnet_utils::gc::ArenaHandleInner,
+            >(arena_handle_owner.as_inner())
+        };
+        let arena = Arena::<Rootable![Root]>::new(|_mc| Root);
+        arena.mutate(|mc, _root| {
+            let handle = dotnet_utils::gc::GCHandle::new(mc, arena_handle);
+            let obj = ObjectRef::new(
+                handle,
+                HeapStorage::Str(crate::string::CLRString::from("x")),
+            );
+
+            let mut bytes = [0u8; std::mem::size_of::<usize>()];
+            obj.write(&mut bytes);
+            let encoded = usize::from_ne_bytes(bytes);
+
+            assert_eq!(encoded & 7, 5, "ObjectRef::write must persist owner tag");
+            assert_eq!(
+                (encoded >> 48) as u16 as u64,
+                arena_id.as_u64() & 0xFFFF,
+                "encoded arena id must match owner"
+            );
+
+            let roundtrip = unsafe { ObjectRef::read_unchecked(&bytes) };
+            assert!(
+                roundtrip.0.is_some(),
+                "tagged reference should decode while owner arena is live"
+            );
+        });
+
+        unregister_arena(arena_id);
     }
 }

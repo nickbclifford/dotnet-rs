@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 dotnetdll = { workspace = true }
+dotnet-utils = { workspace = true, default-features = false }
 gc-arena = { workspace = true }
 thiserror = { workspace = true }
 arbitrary = { version = "1.3", features = ["derive"], optional = true }

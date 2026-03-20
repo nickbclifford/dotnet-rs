@@ -22,7 +22,11 @@ pub fn jmp<'gc, T: CallOps<'gc>>(ctx: &mut T, param0: &MethodSource) -> StepResu
 }
 
 #[dotnet_instruction(Call { param0, tail_call })]
-pub fn call<'gc, T: CallOps<'gc>>(ctx: &mut T, param0: &MethodSource, tail_call: bool) -> StepResult {
+pub fn call<'gc, T: CallOps<'gc>>(
+    ctx: &mut T,
+    param0: &MethodSource,
+    tail_call: bool,
+) -> StepResult {
     // Use unified dispatch pipeline for calls. If `tail.` is present, attempt to honor it.
     if tail_call {
         ctx.unified_dispatch_tail(param0, None, None)
@@ -192,10 +196,14 @@ pub fn callvirt_constrained<
     );
 
     // Determine dispatch strategy based on constraint type
-    let method = if vm_try!(constraint_type.is_value_type(&ctx.current_context())) {
+    let method = if vm_try!(
+        constraint_type
+            .clone()
+            .is_value_type(&ctx.current_context())
+    ) {
         // Value type: check for direct override first
         if let Some(overriding_method) = ctx.loader().find_method_in_type_with_substitution(
-            constraint_type,
+            constraint_type.clone(),
             &base_method.method().name,
             &base_method.method().signature,
             base_method.resolution(),
@@ -223,7 +231,7 @@ pub fn callvirt_constrained<
                     m.origin().clone(),
                     m.byte_offset(),
                     &layout,
-                    Some(constraint_type),
+                    Some(constraint_type.clone()),
                 )
             } {
                 Ok(v) => v,

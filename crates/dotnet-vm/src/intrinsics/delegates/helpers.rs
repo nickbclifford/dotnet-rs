@@ -39,7 +39,7 @@ pub fn is_delegate_type<'gc, T: LoaderOps + ResolutionOps<'gc>>(
             let (ut, _) = decompose_type_source::<MemberType>(extends);
             let base_td = ctx
                 .resolver()
-                .locate_type(td.resolution, ut)
+                .locate_type(td.resolution.clone(), ut)
                 .expect("Failed to locate base type");
             if base_td == td {
                 break;
@@ -74,7 +74,7 @@ pub fn try_delegate_dispatch<
     }
 
     // Check if this is a delegate type
-    if !is_delegate_type(ctx, method.parent) {
+    if !is_delegate_type(ctx, method.parent.clone()) {
         return None;
     }
 
@@ -103,7 +103,7 @@ pub(super) fn get_delegate_info<'gc, T: LoaderOps>(
             .expect("System.Delegate must exist");
         let target = instance
             .instance_storage
-            .field::<ObjectRef<'gc>>(delegate_type, "_target")
+            .field::<ObjectRef<'gc>>(delegate_type.clone(), "_target")
             .unwrap()
             .read();
         let index = instance
@@ -125,7 +125,7 @@ pub(super) fn get_multicast_targets_ref<'gc, T: LoaderOps + ResolutionOps<'gc>>(
             .corlib_type("System.MulticastDelegate")
             .expect("System.MulticastDelegate must exist");
 
-        let mut curr = instance.description;
+        let mut curr = instance.description.clone();
         let mut is_multicast = false;
         loop {
             let raw_type_name = curr.type_name();
@@ -137,7 +137,7 @@ pub(super) fn get_multicast_targets_ref<'gc, T: LoaderOps + ResolutionOps<'gc>>(
                 let (ut, _) = decompose_type_source::<MemberType>(parent);
                 let next = ctx
                     .resolver()
-                    .locate_type(curr.resolution, ut)
+                    .locate_type(curr.resolution.clone(), ut)
                     .expect("Failed to locate base type");
                 if next == curr {
                     break;

@@ -62,6 +62,8 @@ macro_rules! multi_arena_test {
             let (tx, rx) = mpsc::channel();
             let mut abort_flags = Vec::new();
             let mut handles = Vec::new();
+            let release_gate =
+                std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
 
             let shared = std::sync::Arc::new(dotnet_vm::state::SharedGlobalState::new(
                 harness.loader.clone(),
@@ -70,14 +72,27 @@ macro_rules! multi_arena_test {
                 let harness = harness.clone();
                 let tx = tx.clone();
                 let shared = std::sync::Arc::clone(&shared);
+                let release_gate = std::sync::Arc::clone(&release_gate);
+                let resolution = resolution.clone();
                 abort_flags.push(std::sync::Arc::clone(&shared.abort_requested));
 
                 let handle = thread::spawn(move || {
+                    let tx_ok = tx.clone();
+                    let tx_err = tx;
                     let result =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                            harness.run_with_shared(resolution.clone(), shared)
+                            harness.run_with_shared_signal_then_wait(
+                                resolution.clone(),
+                                shared,
+                                &release_gate,
+                                move |exit_code| {
+                                    let _ = tx_ok.send(Ok(exit_code));
+                                },
+                            );
                         }));
-                    let _ = tx.send(result);
+                    if let Err(panic_info) = result {
+                        let _ = tx_err.send(Err(panic_info));
+                    }
                 });
                 handles.push(handle);
             }
@@ -104,6 +119,12 @@ macro_rules! multi_arena_test {
                         for flag in &abort_flags {
                             flag.store(true, Ordering::Relaxed);
                         }
+                        {
+                            let (lock, condvar) = &*release_gate;
+                            let mut released = lock.lock().expect("release gate lock poisoned");
+                            *released = true;
+                            condvar.notify_all();
+                        }
                         // Join all before resuming unwind
                         for handle in handles {
                             let _ = handle.join();
@@ -124,12 +145,24 @@ macro_rules! multi_arena_test {
                 for flag in &abort_flags {
                     flag.store(true, Ordering::Relaxed);
                 }
+                {
+                    let (lock, condvar) = &*release_gate;
+                    let mut released = lock.lock().expect("release gate lock poisoned");
+                    *released = true;
+                    condvar.notify_all();
+                }
                 for handle in handles {
                     let _ = handle.join();
                 }
                 panic!("{}", err);
             }
 
+            {
+                let (lock, condvar) = &*release_gate;
+                let mut released = lock.lock().expect("release gate lock poisoned");
+                *released = true;
+                condvar.notify_all();
+            }
             for handle in handles {
                 let _ = handle.join();
             }

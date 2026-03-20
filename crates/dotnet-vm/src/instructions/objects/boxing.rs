@@ -7,11 +7,11 @@ use crate::{
 const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
 const INVALID_PROGRAM_MSG: &str = "Common Language Runtime detected an invalid program.";
 const INVALID_CAST_MSG: &str = "Specified cast is not valid.";
+use dotnet_macros::dotnet_instruction;
 use dotnet_types::{
     comparer::decompose_type_source,
     generics::{ConcreteType, GenericLookup},
 };
-use dotnet_macros::dotnet_instruction;
 use dotnet_value::{
     ByteOffset, StackValue,
     layout::HasLayout,
@@ -84,14 +84,15 @@ pub fn unbox_any<
                 };
                 let (_, generics) = decompose_type_source(source);
                 let lookup = GenericLookup::new(generics.clone());
-                let ctx_with_generics = res_ctx.for_type_with_generics(td, &lookup);
+                let ctx_with_generics = res_ctx.for_type_with_generics(td.clone(), &lookup);
                 let instance = vm_try!(ctx_with_generics.new_object(td));
 
                 ctx.push(StackValue::ValueType(instance));
                 return StepResult::Continue;
             } else {
                 // unbox.any on null value type throws NullReferenceException (III.4.33)
-                return ctx.throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
+                return ctx
+                    .throw_by_name_with_message("System.NullReferenceException", NULL_REF_MSG);
             }
         }
 
@@ -99,7 +100,7 @@ pub fn unbox_any<
             match storage {
                 HeapStorage::Boxed(o) | HeapStorage::Obj(o) => {
                     // Boxed value or struct is an Object.
-                    let td = o.description;
+                    let td = o.description.clone();
 
                     if is_nullable {
                         // ECMA-335 §III.4.33: unbox.any Nullable<T> on boxed T.
@@ -109,48 +110,68 @@ pub fn unbox_any<
                         };
                         let (_ut, generics) = decompose_type_source(source);
                         let inner_t: &ConcreteType = generics.first().ok_or(())?;
-                        let concrete_inner_t = res_ctx.normalize_type(inner_t.clone()).map_err(|_| ())?;
+                        let concrete_inner_t =
+                            res_ctx.normalize_type(inner_t.clone()).map_err(|_| ())?;
 
                         // Check if obj is indeed a boxed T.
-                        let obj_type = res_ctx.get_heap_description(obj.0.unwrap()).map_err(|_| ())?;
+                        let obj_type = res_ctx
+                            .get_heap_description(obj.0.unwrap())
+                            .map_err(|_| ())?;
                         let obj_ct = res_ctx.normalize_type(obj_type.into()).map_err(|_| ())?;
 
-                        if !res_ctx.is_a(obj_ct, concrete_inner_t.clone()).map_err(|_| ())? {
-                             return Err(());
+                        if !res_ctx
+                            .is_a(obj_ct, concrete_inner_t.clone())
+                            .map_err(|_| ())?
+                        {
+                            return Err(());
                         }
 
                         // Create Nullable<T> instance.
-                        let target_td = ctx.loader().find_concrete_type(target_ct.clone()).map_err(|_| ())?;
-                        
+                        let target_td = ctx
+                            .loader()
+                            .find_concrete_type(target_ct.clone())
+                            .map_err(|_| ())?;
+
                         let (_, generics) = decompose_type_source(source);
                         let lookup = GenericLookup::new(generics.clone());
-                        let ctx_with_generics = res_ctx.for_type_with_generics(target_td, &lookup);
+                        let ctx_with_generics =
+                            res_ctx.for_type_with_generics(target_td.clone(), &lookup);
 
-                        let nullable_instance = ctx_with_generics.new_object(target_td).map_err(|_| ())?;
+                        let nullable_instance =
+                            ctx_with_generics.new_object(target_td).map_err(|_| ())?;
 
                         // Set HasValue = true.
                         let layout = nullable_instance.instance_storage.layout().clone();
-                        let has_value_field = layout.fields.iter()
-                                .find(|(k, _)| k.name == "hasValue" || k.name == "_hasValue")
-                                .map(|(_, v)| v).ok_or(())?;
-                        
+                        let has_value_field = layout
+                            .fields
+                            .iter()
+                            .find(|(k, _)| k.name == "hasValue" || k.name == "_hasValue")
+                            .map(|(_, v)| v)
+                            .ok_or(())?;
+
                         nullable_instance.instance_storage.with_data_mut(|d| {
                             d[has_value_field.position.as_usize()] = 1;
                         });
 
                         // Set Value = data from boxed object.
-                        let value_field = layout.fields.iter()
-                                .find(|(k, _)| k.name == "value" || k.name == "_value")
-                                .map(|(_, v)| v).ok_or(())?;
+                        let value_field = layout
+                            .fields
+                            .iter()
+                            .find(|(k, _)| k.name == "value" || k.name == "_value")
+                            .map(|(_, v)| v)
+                            .ok_or(())?;
 
                         let value_pos = value_field.position.as_usize();
                         let value_size = value_field.layout.size().as_usize();
-                        
-                        nullable_instance.instance_storage.with_data_mut(|nullable_data| {
-                            o.instance_storage.with_data(|boxed_data| {
-                                nullable_data[value_pos .. value_pos + value_size].copy_from_slice(&boxed_data[..value_size]);
-                            })
-                        });
+
+                        nullable_instance
+                            .instance_storage
+                            .with_data_mut(|nullable_data| {
+                                o.instance_storage.with_data(|boxed_data| {
+                                    nullable_data[value_pos..value_pos + value_size]
+                                        .copy_from_slice(&boxed_data[..value_size]);
+                                })
+                            });
 
                         return Ok(StackValue::ValueType(nullable_instance));
                     }
@@ -213,7 +234,10 @@ pub fn unbox_any<
 }
 
 #[dotnet_instruction(UnboxIntoAddress { param0 })]
-pub fn unbox<'gc, T: ResolutionOps<'gc> + ExceptionOps<'gc> + EvalStackOps<'gc> + LoaderOps + MemoryOps<'gc>>(
+pub fn unbox<
+    'gc,
+    T: ResolutionOps<'gc> + ExceptionOps<'gc> + EvalStackOps<'gc> + LoaderOps + MemoryOps<'gc>,
+>(
     ctx: &mut T,
     param0: &MethodType,
 ) -> StepResult {
@@ -235,56 +259,69 @@ pub fn unbox<'gc, T: ResolutionOps<'gc> + ExceptionOps<'gc> + EvalStackOps<'gc> 
     if is_nullable {
         // ECMA-335 §III.4.32: Manufacture a new Nullable<T> on the heap.
         let td = vm_try!(ctx.loader().find_concrete_type(target_ct.clone()));
-        
+
         let BaseType::Type { source, .. } = target_ct.get() else {
             unreachable!("Nullable must be a type");
         };
         let (_, generics) = decompose_type_source(source);
         let lookup = GenericLookup::new(generics.clone());
-        let res_ctx_with_generics = res_ctx.for_type_with_generics(td, &lookup);
-        
+        let res_ctx_with_generics = res_ctx.for_type_with_generics(td.clone(), &lookup);
+
         let instance = vm_try!(res_ctx_with_generics.new_object(td));
 
         if let Some(h) = obj.0 {
             // Boxed T exists.
-            let inner_t: &ConcreteType = generics.first().expect("Nullable must have generic parameter");
+            let inner_t: &ConcreteType = generics
+                .first()
+                .expect("Nullable must have generic parameter");
             let concrete_inner_t = vm_try!(res_ctx.normalize_type(inner_t.clone()));
 
             // Check if obj is indeed a boxed T.
             let obj_type = vm_try!(res_ctx.get_heap_description(h));
             let obj_ct = vm_try!(res_ctx.normalize_type(obj_type.into()));
             if !vm_try!(res_ctx.is_a(obj_ct, concrete_inner_t)) {
-                return ctx.throw_by_name_with_message("System.InvalidCastException", INVALID_CAST_MSG);
+                return ctx
+                    .throw_by_name_with_message("System.InvalidCastException", INVALID_CAST_MSG);
             }
 
             // Set HasValue = true.
             let layout = instance.instance_storage.layout().clone();
-            let has_value_field = layout.fields.iter()
-                    .find(|(k, _)| k.name == "hasValue" || k.name == "_hasValue")
-                    .map(|(_, v)| v).expect("Nullable must have hasValue");
-            
+            let has_value_field = layout
+                .fields
+                .iter()
+                .find(|(k, _)| k.name == "hasValue" || k.name == "_hasValue")
+                .map(|(_, v)| v)
+                .expect("Nullable must have hasValue");
+
             instance.instance_storage.with_data_mut(|d| {
                 d[has_value_field.position.as_usize()] = 1;
             });
 
             // Set Value = data from boxed object.
-            let value_field = layout.fields.iter()
-                    .find(|(k, _)| k.name == "value" || k.name == "_value")
-                    .map(|(_, v)| v).expect("Nullable must have value");
+            let value_field = layout
+                .fields
+                .iter()
+                .find(|(k, _)| k.name == "value" || k.name == "_value")
+                .map(|(_, v)| v)
+                .expect("Nullable must have value");
 
             let value_pos = value_field.position.as_usize();
             let value_size = value_field.layout.size().as_usize();
-            
+
             instance.instance_storage.with_data_mut(|nullable_data| {
                 h.borrow().storage.with_data(|boxed_data| {
-                    nullable_data[value_pos .. value_pos + value_size].copy_from_slice(&boxed_data[..value_size]);
+                    nullable_data[value_pos..value_pos + value_size]
+                        .copy_from_slice(&boxed_data[..value_size]);
                 })
             });
         }
         // If obj is null, HasValue remains false (zero-initialized).
 
         // Wrap the manufactured Nullable<T> into a boxed object on the heap.
-        let boxed_nullable = ObjectRef::new(ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()), HeapStorage::Boxed(instance));
+        let boxed_nullable = ObjectRef::new(
+            ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+            HeapStorage::Boxed(instance),
+        );
         ctx.register_new_object(&boxed_nullable);
 
         let h = boxed_nullable.0.unwrap();

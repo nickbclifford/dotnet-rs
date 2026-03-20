@@ -8,7 +8,7 @@ public class Program {
     static volatile int s_thread_1_tried_and_failed = 0;
     static volatile int s_thread_2_tried_and_succeeded = 0;
 
-    static void Yield() { }
+    static void Yield() { Thread.Sleep(1); }
 
     public static int Main() {
         // Simple manual thread ID assignment via Interlocked

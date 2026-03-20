@@ -377,7 +377,7 @@ impl<'a, 'gc> Arbitrary<'a> for Object<'gc> {
 impl<'gc> Clone for Object<'gc> {
     fn clone(&self) -> Self {
         Self {
-            description: self.description,
+            description: self.description.clone(),
             generics: self.generics.clone(),
             instance_storage: self.instance_storage.clone(),
             finalizer_suppressed: self.finalizer_suppressed,

@@ -216,7 +216,7 @@ impl<'gc> ManagedPtr<'gc> {
                                 Ok(ManagedPtrInfo {
                                     address: raw_ptr,
                                     origin: PointerOrigin::Static(
-                                        meta.type_desc,
+                                        meta.type_desc.clone(),
                                         meta.generics.clone(),
                                     ),
                                     offset: ByteOffset(slot_offset),
@@ -300,14 +300,14 @@ impl<'gc> ManagedPtr<'gc> {
                 (w0, w1)
             }
             PointerOrigin::Static(type_desc, generics) => {
-                let key = (*type_desc, generics.clone());
+                let key = (type_desc.clone(), generics.clone());
                 let id = *super::static_dedup_map().entry(key).or_insert_with(|| {
                     let new_id =
                         super::NEXT_STATIC_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     super::static_registry().insert(
                         new_id,
                         std::sync::Arc::new(super::StaticMetadata {
-                            type_desc: *type_desc,
+                            type_desc: type_desc.clone(),
                             generics: generics.clone(),
                         }),
                     );

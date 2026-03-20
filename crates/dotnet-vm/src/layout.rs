@@ -173,7 +173,8 @@ impl LayoutFactory {
                                     // While one object reference can completely overlap another, this is unverifiable."
                                     let same_range =
                                         actual_offset == *prev_start && actual_end == *prev_end;
-                                    let both_gc_ptrs = layout.is_gc_ptr() && prev_layout.is_gc_ptr();
+                                    let both_gc_ptrs =
+                                        layout.is_gc_ptr() && prev_layout.is_gc_ptr();
 
                                     if same_range && both_gc_ptrs {
                                         // Complete overlap of two GC pointers is allowed but unverifiable
@@ -249,13 +250,13 @@ impl LayoutFactory {
         metrics: Option<&RuntimeMetrics>,
         include_base: bool,
     ) -> Result<FieldLayoutManager, TypeResolutionError> {
-        let ancestors: Vec<_> = context.get_ancestors(td).collect();
+        let ancestors: Vec<_> = context.get_ancestors(td.clone()).collect();
 
         // Build layout hierarchically: first compute base class layout, then add derived fields
         let base_layout = if include_base && ancestors.len() > 1 {
             // We have a base class - compute its layout first
             let (base_td, base_generics) = &ancestors[1];
-            let base_res = base_td.resolution;
+            let base_res = base_td.resolution.clone();
 
             let new_lookup = GenericLookup::new(
                 base_generics
@@ -267,13 +268,13 @@ impl LayoutFactory {
                 generics: &new_lookup,
                 resolution: base_res,
                 state: context.state.clone(),
-                type_owner: Some(*base_td),
+                type_owner: Some(base_td.clone()),
                 method_owner: None,
             };
 
             // Recursively compute base layout
             Some(Self::collect_fields(
-                *base_td,
+                base_td.clone(),
                 &base_ctx,
                 predicate,
                 metrics,
@@ -299,11 +300,15 @@ impl LayoutFactory {
             let layout = if f.by_ref {
                 Arc::new(Scalar::ManagedPtr.into())
             } else {
-                let t = context.get_field_type(FieldDescription::new(td, td.resolution, f, i))?;
+                let t = context.get_field_type(FieldDescription::new(
+                    td.clone(),
+                    td.resolution.clone(),
+                    i,
+                ))?;
                 type_layout_with_metrics(t, context, metrics)?
             };
 
-            current_type_fields.push((td, f.name.as_ref(), f.offset, layout));
+            current_type_fields.push((td.clone(), f.name.as_ref(), f.offset, layout));
         }
 
         // Create layout with hierarchical approach
@@ -339,7 +344,7 @@ impl LayoutFactory {
         context: &ResolutionContext,
         metrics: Option<&RuntimeMetrics>,
     ) -> Result<Arc<FieldLayoutManager>, TypeResolutionError> {
-        let key = (td, context.generics.clone());
+        let key = (td.clone(), context.generics.clone());
 
         if let Some(cached) = context.caches().instance_field_layout_cache.get(&key) {
             if let Some(m) = metrics {
@@ -364,7 +369,7 @@ impl LayoutFactory {
         context: &ResolutionContext,
         metrics: Option<&RuntimeMetrics>,
     ) -> Result<FieldLayoutManager, TypeResolutionError> {
-        let context = context.for_type(td);
+        let context = context.for_type(td.clone());
         Self::collect_fields(td, &context, &mut |f| !f.static_member, metrics, true)
     }
 
@@ -380,7 +385,7 @@ impl LayoutFactory {
         context: &ResolutionContext,
         metrics: Option<&RuntimeMetrics>,
     ) -> Result<FieldLayoutManager, TypeResolutionError> {
-        let context = context.for_type(td);
+        let context = context.for_type(td.clone());
         Self::collect_fields(td, &context, &mut |f| f.static_member, metrics, false)
     }
 

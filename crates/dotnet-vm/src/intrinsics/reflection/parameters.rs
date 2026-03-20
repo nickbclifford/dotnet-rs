@@ -63,12 +63,12 @@ pub(crate) fn resolve_runtime_parameter<'gc>(
     obj.as_object(|instance| {
         let method_index = instance
             .instance_storage
-            .field::<usize>(instance.description, "method_index")
+            .field::<usize>(instance.description.clone(), "method_index")
             .unwrap()
             .read();
         let position = instance
             .instance_storage
-            .field::<i32>(instance.description, "position")
+            .field::<i32>(instance.description.clone(), "position")
             .unwrap()
             .read();
         let (m_desc, lookup) = ctx.lookup_method_by_index(method_index);

@@ -1,8 +1,7 @@
 use crate::{
     StepResult,
     dispatch::ExecutionEngine,
-    stack::{CallStack, GCArena},
-    stack::ops::CallOps,
+    stack::{CallStack, GCArena, ops::CallOps},
     state::{ArenaLocalState, SharedGlobalState},
     sync::Arc,
 };
@@ -17,7 +16,7 @@ use dotnetdll::{
         assembly::ExternalAssemblyReference,
         members::{Method, MethodSource, UserMethod},
         signature::ReturnType,
-        types::{ExternalTypeReference, ResolutionScope, TypeDefinition},
+        types::{ExternalTypeReference, ResolutionScope, TypeDefinition, UserType},
     },
 };
 use std::sync::OnceLock;
@@ -30,33 +29,46 @@ fn get_mock_loader() -> Arc<AssemblyLoader> {
             let loader = AssemblyLoader::new_bare("mock_root".to_string())
                 .expect("Failed to create mock AssemblyLoader");
 
-            // Register mock assemblies so that System.Object can be resolved.
-            let mut mscorlib = Resolution::new(Module::new("mscorlib.dll"));
-            mscorlib.assembly = Some(Assembly::new("mscorlib"));
-            let mut obj = TypeDefinition::new(None, "Object");
-            obj.namespace = Some("System".into());
-            mscorlib.push_type_definition(obj);
-            loader.register_owned_assembly(mscorlib);
+            let mut corlib = Resolution::new(Module::new("System.Private.CoreLib.dll"));
+            corlib.assembly = Some(Assembly::new("System.Private.CoreLib"));
 
-            let mut system_runtime = Resolution::new(Module::new("System.Runtime.dll"));
-            system_runtime.assembly = Some(Assembly::new("System.Runtime"));
+            let mut object_type = TypeDefinition::new(None, "Object");
+            object_type.namespace = Some("System".into());
+            let object_idx = corlib.push_type_definition(object_type);
 
-            let mut obj2 = TypeDefinition::new(None, "Object");
-            obj2.namespace = Some("System".into());
-            system_runtime.push_type_definition(obj2);
+            let mut value_type = TypeDefinition::new(None, "ValueType");
+            value_type.namespace = Some("System".into());
+            value_type.extends = Some(UserType::Definition(object_idx).into());
+            let value_type_idx = corlib.push_type_definition(value_type);
+
+            let mut enum_type = TypeDefinition::new(None, "Enum");
+            enum_type.namespace = Some("System".into());
+            enum_type.extends = Some(UserType::Definition(value_type_idx).into());
+            corlib.push_type_definition(enum_type);
 
             let mut type_type = TypeDefinition::new(None, "Type");
             type_type.namespace = Some("System".into());
-            system_runtime.push_type_definition(type_type);
+            type_type.extends = Some(UserType::Definition(object_idx).into());
+            corlib.push_type_definition(type_type);
 
             let mut array_type = TypeDefinition::new(None, "Array");
             array_type.namespace = Some("System".into());
-            system_runtime.push_type_definition(array_type);
+            array_type.extends = Some(UserType::Definition(object_idx).into());
+            corlib.push_type_definition(array_type);
 
             let mut string_type = TypeDefinition::new(None, "String");
             string_type.namespace = Some("System".into());
-            system_runtime.push_type_definition(string_type);
+            string_type.extends = Some(UserType::Definition(object_idx).into());
+            corlib.push_type_definition(string_type);
 
+            loader.register_owned_assembly(corlib.clone());
+
+            let mut mscorlib = corlib.clone();
+            mscorlib.assembly = Some(Assembly::new("mscorlib"));
+            loader.register_owned_assembly(mscorlib);
+
+            let mut system_runtime = corlib;
+            system_runtime.assembly = Some(Assembly::new("System.Runtime"));
             loader.register_owned_assembly(system_runtime);
             Arc::new(loader)
         })
@@ -176,13 +188,20 @@ fn run_tail_chain_and_measure_max_depth(tail_call: bool, chain_len: usize) -> us
     );
 
     let res_s = loader.register_owned_assembly(res);
-    let typedef = &res_s.definition()[type_idx];
+    let _typedef = &res_s.definition()[type_idx];
     let method_def = &res_s.definition()[main_idx];
+    let td = TypeDescription::new(res_s.clone(), type_idx);
+    let method_index = td
+        .definition()
+        .methods
+        .iter()
+        .position(|m| std::ptr::eq(m, method_def))
+        .unwrap();
     let entrypoint = MethodDescription::new(
-        TypeDescription::new(res_s, typedef, type_idx),
+        td,
         GenericLookup::default(),
         res_s,
-        method_def,
+        MethodMemberIndex::Method(method_index),
     );
 
     // Run by directly stepping the execution engine so we can observe frame depth.

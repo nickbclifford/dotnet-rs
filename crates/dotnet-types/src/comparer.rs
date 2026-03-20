@@ -5,15 +5,24 @@ use crate::{
     resolution::ResolutionS,
 };
 use dotnetdll::prelude::*;
-use std::collections::{HashSet, VecDeque};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet, VecDeque},
+};
 
 pub struct TypeComparer<'a, R: TypeResolver> {
     loader: &'a R,
+    assignability_cache: RefCell<HashMap<(ConcreteType, ConcreteType), bool>>,
+    assignability_in_progress: RefCell<HashSet<(ConcreteType, ConcreteType)>>,
 }
 
 impl<'a, R: TypeResolver> TypeComparer<'a, R> {
     pub fn new(loader: &'a R) -> Self {
-        Self { loader }
+        Self {
+            loader,
+            assignability_cache: RefCell::new(HashMap::new()),
+            assignability_in_progress: RefCell::new(HashSet::new()),
+        }
     }
 
     pub fn type_slices_equal(
@@ -29,7 +38,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
             return false;
         }
         for (a, b) in a.iter().zip(b.iter()) {
-            if !self.types_equal(res1, a, generics1, res2, b, generics2) {
+            if !self.types_equal(res1.clone(), a, generics1, res2.clone(), b, generics2) {
                 return false;
             }
         }
@@ -54,14 +63,27 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                 (BaseType::Type { source: ts1, .. }, BaseType::Type { source: ts2, .. }) => {
                     let (ut1, generics1_list) = decompose_type_source(ts1);
                     let (ut2, generics2_list) = decompose_type_source(ts2);
-                    let td1 = self.loader.locate_type(res1, ut1);
-                    let td2 = self.loader.locate_type(res2, ut2);
-                    td1 == td2
+                    let td1 = self.loader.locate_type(res1.clone(), ut1);
+                    let td2 = self.loader.locate_type(res2.clone(), ut2);
+                    let same_type = match (td1, td2) {
+                        (Ok(left), Ok(right)) => {
+                            let left_type_name = left.type_name();
+                            let right_type_name = right.type_name();
+                            left == right
+                                || (!left.is_null()
+                                    && !right.is_null()
+                                    && self.loader.canonical_type_name(&left_type_name)
+                                        == self.loader.canonical_type_name(&right_type_name))
+                        }
+                        _ => false,
+                    };
+
+                    same_type
                         && self.type_slices_equal(
-                            res1,
+                            res1.clone(),
                             &generics1_list,
                             generics1,
-                            res2,
+                            res2.clone(),
                             &generics2_list,
                             generics2,
                         )
@@ -177,7 +199,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
             return false;
         }
         for (Parameter(_, a), Parameter(_, b)) in a.iter().zip(b.iter()) {
-            if !self.param_types_equal(res1, a, generics1, res2, b, generics2) {
+            if !self.param_types_equal(res1.clone(), a, generics1, res2.clone(), b, generics2) {
                 return false;
             }
         }
@@ -215,11 +237,11 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                     ParameterType::Value(v) | ParameterType::Ref(v) => v,
                     ParameterType::TypedReference => return false, // Not variant
                 };
-                let Ok(l_concrete) = lookup1.make_concrete(res1, l_m.clone(), self.loader)
+                let Ok(l_concrete) = lookup1.make_concrete(res1.clone(), l_m.clone(), self.loader)
                 else {
                     return false;
                 };
-                let Ok(r_concrete) = lookup2.make_concrete(res2, r_m.clone(), self.loader)
+                let Ok(r_concrete) = lookup2.make_concrete(res2.clone(), r_m.clone(), self.loader)
                 else {
                     return false;
                 };
@@ -234,10 +256,14 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         for (Parameter(_, a_p), Parameter(_, b_p)) in a.parameters.iter().zip(b.parameters.iter()) {
             match (a_p, b_p) {
                 (ParameterType::Value(a_v), ParameterType::Value(b_v)) => {
-                    let Ok(a_concrete) = lookup1.make_concrete(res1, a_v.clone(), self.loader) else {
+                    let Ok(a_concrete) =
+                        lookup1.make_concrete(res1.clone(), a_v.clone(), self.loader)
+                    else {
                         return false;
                     };
-                    let Ok(b_concrete) = lookup2.make_concrete(res2, b_v.clone(), self.loader) else {
+                    let Ok(b_concrete) =
+                        lookup2.make_concrete(res2.clone(), b_v.clone(), self.loader)
+                    else {
                         return false;
                     };
                     if !self.is_assignable_to(&a_concrete, &b_concrete) {
@@ -246,7 +272,14 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                 }
                 _ => {
                     // Non-value parameters (ByRef, Pinned) must match exactly
-                    if !self.param_types_equal(res1, a_p, generics1, res2, b_p, generics2) {
+                    if !self.param_types_equal(
+                        res1.clone(),
+                        a_p,
+                        generics1,
+                        res2.clone(),
+                        b_p,
+                        generics2,
+                    ) {
                         return false;
                     }
                 }
@@ -277,7 +310,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                 generics2,
             ),
             (ReturnType(_, Some(l)), ReturnType(_, Some(r))) => {
-                if self.param_types_equal(res1, l, generics1, res2, r, generics2) {
+                if self.param_types_equal(res1.clone(), l, generics1, res2.clone(), r, generics2) {
                     self.params_equal(
                         res1,
                         &a.parameters,
@@ -344,7 +377,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                     .expect("Type resolution failed during comparison");
                 let td2 = self
                     .loader
-                    .locate_type(res2, ut2)
+                    .locate_type(res2.clone(), ut2)
                     .expect("Type resolution failed during comparison");
 
                 if td1 != td2 {
@@ -360,7 +393,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                 }
 
                 for (g1, g2) in generics1.iter().zip(generics2_list.iter()) {
-                    if !self.concrete_equals_method_type(g1, res2, g2, generics2) {
+                    if !self.concrete_equals_method_type(g1, res2.clone(), g2, generics2) {
                         return false;
                     }
                 }
@@ -403,6 +436,30 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
     }
 
     pub fn is_assignable_to(&self, source: &ConcreteType, target: &ConcreteType) -> bool {
+        let key = (source.clone(), target.clone());
+        if let Some(cached) = self.assignability_cache.borrow().get(&key) {
+            return *cached;
+        }
+
+        // Recursive generic variance checks can re-enter assignability with the
+        // same `(source, target)` before the outer call completes. Treat the
+        // cycle as assignable to fail-open under GCV rather than spinning.
+        if !self
+            .assignability_in_progress
+            .borrow_mut()
+            .insert(key.clone())
+        {
+            return true;
+        }
+
+        let result = self.is_assignable_to_impl(source, target);
+
+        self.assignability_in_progress.borrow_mut().remove(&key);
+        self.assignability_cache.borrow_mut().insert(key, result);
+        result
+    }
+
+    fn is_assignable_to_impl(&self, source: &ConcreteType, target: &ConcreteType) -> bool {
         if self.concrete_types_equal(source, target) {
             return true;
         }
@@ -413,6 +470,10 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
 
         if matches!(target.get(), BaseType::Object) {
             return true;
+        }
+
+        if self.is_system_value_type(target) {
+            return source.is_value_type(self.loader);
         }
 
         if target.is_interface(self.loader) {
@@ -426,9 +487,27 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         false
     }
 
+    fn is_system_value_type(&self, ty: &ConcreteType) -> bool {
+        let BaseType::Type { source, .. } = ty.get() else {
+            return false;
+        };
+        let (ut, _) = decompose_type_source(source);
+        let Ok(td) = self.loader.locate_type(ty.resolution(), ut) else {
+            return false;
+        };
+        let td_name = td.type_name();
+        self.loader.canonical_type_name(&td_name) == "System.ValueType"
+    }
+
+    #[allow(clippy::mutable_key_type)]
     pub fn is_subclass_of(&self, source: &ConcreteType, target: &ConcreteType) -> bool {
         let mut curr = source.clone();
-        while let Ok(td) = self.loader.find_concrete_type(curr.clone()) {
+        let mut seen = HashSet::new();
+
+        while seen.insert(curr.clone()) {
+            let Ok(td) = self.loader.find_concrete_type(curr.clone()) else {
+                break;
+            };
             if let Some(base_source) = &td.definition().extends {
                 let lookup = curr.make_lookup();
                 if let Ok(base) = lookup.make_concrete(
@@ -450,6 +529,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         false
     }
 
+    #[allow(clippy::mutable_key_type)]
     pub fn implements_interface(&self, source: &ConcreteType, target: &ConcreteType) -> bool {
         let mut queue = VecDeque::new();
         let mut seen = HashSet::new();
@@ -464,7 +544,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                 // Check direct interfaces
                 for (_, itf_source) in &td.definition().implements {
                     if let Ok(itf) = lookup.make_concrete(
-                        td.resolution,
+                        td.resolution.clone(),
                         member_to_method_type(itf_source),
                         self.loader,
                     ) {
@@ -480,7 +560,7 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                 // Check base class interfaces
                 if let Some(base_source) = &td.definition().extends
                     && let Ok(base) = lookup.make_concrete(
-                        td.resolution,
+                        td.resolution.clone(),
                         member_to_method_type(base_source),
                         self.loader,
                     )
@@ -537,98 +617,116 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
         let def = desc.definition();
 
         macro_rules! check {
-            ($method:expr) => {
+            ($method:expr, $member_index:expr) => {
                 let m = $method;
                 if m.name == name
                     && m.signature.parameters.len() == signature.parameters.len()
                     && (if allow_variance {
                         self.signatures_compatible_with_variance(
-                            sig_res,
+                            sig_res.clone(),
                             signature,
                             sig_generics,
-                            desc.resolution,
+                            desc.resolution.clone(),
                             &m.signature,
                             type_generics,
                         )
                     } else {
                         self.signatures_equal(
-                            sig_res,
+                            sig_res.clone(),
                             signature,
                             sig_generics,
-                            desc.resolution,
+                            desc.resolution.clone(),
                             &m.signature,
                             type_generics,
                         )
                     })
                 {
                     return Some(MethodDescription::new(
-                        desc,
+                        desc.clone(),
                         type_generics.cloned().unwrap_or_default(),
-                        desc.resolution,
-                        m,
+                        desc.resolution.clone(),
+                        $member_index,
                     ));
                 }
             };
         }
 
-        for method in def.methods.iter().rev() {
-            check!(method);
+        for (i, method) in def.methods.iter().enumerate().rev() {
+            check!(method, MethodMemberIndex::Method(i));
         }
 
         if let Some(prop_name) = name.strip_prefix("get_") {
-            for prop in &def.properties {
+            for (prop_idx, prop) in def.properties.iter().enumerate() {
                 if let (true, Some(getter)) = (prop.name == prop_name, &prop.getter) {
-                    check!(getter);
+                    check!(getter, MethodMemberIndex::PropertyGetter(prop_idx));
                 }
             }
         } else if let Some(prop_name) = name.strip_prefix("set_") {
-            for prop in &def.properties {
+            for (prop_idx, prop) in def.properties.iter().enumerate() {
                 if let (true, Some(setter)) = (prop.name == prop_name, &prop.setter) {
-                    check!(setter);
+                    check!(setter, MethodMemberIndex::PropertySetter(prop_idx));
                 }
             }
         }
 
         if let Some(event_name) = name.strip_prefix("add_") {
-            for event in &def.events {
+            for (event_idx, event) in def.events.iter().enumerate() {
                 if event.name == event_name {
-                    check!(&event.add_listener);
+                    check!(&event.add_listener, MethodMemberIndex::EventAdd(event_idx));
                 }
             }
         } else if let Some(event_name) = name.strip_prefix("remove_") {
-            for event in &def.events {
+            for (event_idx, event) in def.events.iter().enumerate() {
                 if event.name == event_name {
-                    check!(&event.remove_listener);
+                    check!(
+                        &event.remove_listener,
+                        MethodMemberIndex::EventRemove(event_idx)
+                    );
                 }
             }
         } else if let Some(event_name) = name.strip_prefix("raise_") {
-            for event in &def.events {
+            for (event_idx, event) in def.events.iter().enumerate() {
                 if let (true, Some(raise_event)) = (event.name == event_name, &event.raise_event) {
-                    check!(raise_event);
+                    check!(raise_event, MethodMemberIndex::EventRaise(event_idx));
                 }
             }
         }
 
-        for prop in &def.properties {
-            for method in &prop.other {
-                check!(method);
+        for (prop_idx, prop) in def.properties.iter().enumerate() {
+            for (other_idx, method) in prop.other.iter().enumerate() {
+                check!(
+                    method,
+                    MethodMemberIndex::PropertyOther {
+                        property: prop_idx,
+                        other: other_idx
+                    }
+                );
             }
             if let Some(m) = &prop.getter {
-                check!(m);
+                check!(m, MethodMemberIndex::PropertyGetter(prop_idx));
             }
             if let Some(m) = &prop.setter {
-                check!(m);
+                check!(m, MethodMemberIndex::PropertySetter(prop_idx));
             }
         }
 
-        for event in &def.events {
-            for method in &event.other {
-                check!(method);
+        for (event_idx, event) in def.events.iter().enumerate() {
+            for (other_idx, method) in event.other.iter().enumerate() {
+                check!(
+                    method,
+                    MethodMemberIndex::EventOther {
+                        event: event_idx,
+                        other: other_idx
+                    }
+                );
             }
-            check!(&event.add_listener);
-            check!(&event.remove_listener);
+            check!(&event.add_listener, MethodMemberIndex::EventAdd(event_idx));
+            check!(
+                &event.remove_listener,
+                MethodMemberIndex::EventRemove(event_idx)
+            );
             if let Some(m) = &event.raise_event {
-                check!(m);
+                check!(m, MethodMemberIndex::EventRaise(event_idx));
             }
         }
 
@@ -782,34 +880,36 @@ pub fn decompose_type_source<T: Clone>(t: &TypeSource<T>) -> (UserType, Vec<T>) 
 mod tests {
     use super::*;
     use crate::error::TypeResolutionError;
-    use crate::resolution::ResolutionS;
+    use crate::resolution::{MetadataArena, ResolutionS};
+    use std::sync::Arc;
 
     struct MockResolver;
     impl TypeResolver for MockResolver {
         fn corlib_type(&self, _name: &str) -> Result<TypeDescription, TypeResolutionError> {
-            Ok(TypeDescription::from_raw(
-                ResolutionS::new(std::ptr::null()),
-                None,
-                unsafe { std::mem::transmute::<usize, TypeIndex>(0usize) },
+            Ok(TypeDescription::new(
+                ResolutionS::NULL,
+                crate::sentinel_type_index(),
             ))
         }
         fn locate_type(
             &self,
             res: ResolutionS,
-            _handle: UserType,
+            handle: UserType,
         ) -> Result<TypeDescription, TypeResolutionError> {
-            Ok(TypeDescription::from_raw(res, None, unsafe {
-                std::mem::transmute::<usize, TypeIndex>(0usize)
-            }))
+            match handle {
+                UserType::Definition(d) => Ok(TypeDescription::new(res, d)),
+                UserType::Reference(_) => {
+                    Ok(TypeDescription::new(res, crate::sentinel_type_index()))
+                }
+            }
         }
         fn find_concrete_type(
             &self,
             _ty: ConcreteType,
         ) -> Result<TypeDescription, TypeResolutionError> {
-            Ok(TypeDescription::from_raw(
-                ResolutionS::new(std::ptr::null()),
-                None,
-                unsafe { std::mem::transmute::<usize, TypeIndex>(0usize) },
+            Ok(TypeDescription::new(
+                ResolutionS::NULL,
+                crate::sentinel_type_index(),
             ))
         }
     }
@@ -818,27 +918,170 @@ mod tests {
     fn test_types_equal_primitive() {
         let resolver = MockResolver;
         let comparer = TypeComparer::new(&resolver);
-        let res = ResolutionS::new(std::ptr::null());
+        let res = ResolutionS::NULL;
 
         let t1 = MethodType::Base(Box::new(BaseType::Int32));
         let t2 = MethodType::Base(Box::new(BaseType::Int32));
         let t3 = MethodType::Base(Box::new(BaseType::Int64));
 
-        assert!(comparer.types_equal(res, &t1, None, res, &t2, None));
-        assert!(!comparer.types_equal(res, &t1, None, res, &t3, None));
+        assert!(comparer.types_equal(res.clone(), &t1, None, res.clone(), &t2, None));
+        assert!(!comparer.types_equal(res.clone(), &t1, None, res.clone(), &t3, None));
     }
 
     #[test]
     fn test_param_types_equal() {
         let resolver = MockResolver;
         let comparer = TypeComparer::new(&resolver);
-        let res = ResolutionS::new(std::ptr::null());
+        let res = ResolutionS::NULL;
 
         let t1 = ParameterType::Value(MethodType::Base(Box::new(BaseType::Int32)));
         let t2 = ParameterType::Value(MethodType::Base(Box::new(BaseType::Int32)));
         let t3 = ParameterType::Ref(MethodType::Base(Box::new(BaseType::Int32)));
 
-        assert!(comparer.param_types_equal(res, &t1, None, res, &t2, None));
-        assert!(!comparer.param_types_equal(res, &t1, None, res, &t3, None));
+        assert!(comparer.param_types_equal(res.clone(), &t1, None, res.clone(), &t2, None));
+        assert!(!comparer.param_types_equal(res.clone(), &t1, None, res.clone(), &t3, None));
+    }
+
+    // Regression test for property getter method lookup.
+    //
+    // `find_method_in_type` must return `Some(MethodDescription)` when the target
+    // method is a property getter that lives in `def.properties[i].getter`, even
+    // though the getter is NOT present in `TypeDefinition.methods`.
+    //
+    // This previously panicked when the lookup path only scanned
+    // `def.methods` and missed accessor-backed methods.
+    #[test]
+    fn property_getter_lookup_panics_on_ptr_eq_unwrap() {
+        use crate::TypeDescription;
+
+        // Build an instance void() getter method named "get_Value".
+        let getter_method: Method<'static> = Method {
+            name: "get_Value".into(),
+            signature: ManagedMethod {
+                instance: true,
+                explicit_this: false,
+                calling_convention: CallingConvention::Default,
+                parameters: vec![],
+                return_type: ReturnType(vec![], None),
+                varargs: None,
+            },
+            attributes: vec![],
+            body: None,
+            accessibility: MemberAccessibility::Access(Accessibility::Public),
+            generic_parameters: vec![],
+            return_type_metadata: None,
+            parameter_metadata: vec![],
+            sealed: false,
+            virtual_member: false,
+            hide_by_sig: true,
+            vtable_layout: VtableLayout::ReuseSlot,
+            strict: false,
+            abstract_member: false,
+            special_name: true,
+            runtime_special_name: false,
+            pinvoke: None,
+            security: None,
+            require_sec_object: false,
+            body_format: BodyFormat::IL,
+            body_management: BodyManagement::Managed,
+            forward_ref: false,
+            preserve_sig: false,
+            internal_call: false,
+            synchronized: false,
+            no_inlining: false,
+            no_optimization: false,
+        };
+
+        // TypeDefinition "MyClass": property "Value" with a getter, but methods is EMPTY.
+        // This is the key pre-condition: accessor methods are NOT in def.methods.
+        let mut type_def = TypeDefinition::new(None, "MyClass");
+        type_def.properties = vec![Property {
+            attributes: vec![],
+            name: "Value".into(),
+            getter: Some(getter_method),
+            setter: None,
+            other: vec![],
+            static_member: false,
+            property_type: Parameter(
+                vec![],
+                ParameterType::Value(MemberType::Base(Box::new(BaseType::Int32))),
+            ),
+            parameters: vec![],
+            special_name: false,
+            runtime_special_name: false,
+            default: None,
+        }];
+        assert!(
+            type_def.methods.is_empty(),
+            "pre-condition: getter must not be in def.methods"
+        );
+
+        // Resolution::new inserts <Module> at index 0; our type is at index 1.
+        let mut resolution = Resolution::new(Module::new("test.dll"));
+        resolution.type_definitions.push(type_def);
+
+        // SAFETY: pointer comes from Box::into_raw; MetadataArena::drop calls
+        // Box::from_raw on the same pointer, so ownership is correctly transferred.
+        let ptr = Box::into_raw(Box::new(resolution)) as *const Resolution<'static>;
+        let arena = Arc::new(MetadataArena::new());
+        unsafe { arena.add_resolution(ptr) };
+        let res_s = ResolutionS::new(ptr, arena);
+
+        // TypeIndex 1 = "MyClass" (the <Module> sentinel is at index 0).
+        let type_index: TypeIndex = crate::type_index_from_usize(1usize);
+        let type_desc = TypeDescription::new(res_s.clone(), type_index);
+
+        // Search signature: instance void() — matches the getter exactly.
+        let search_sig: ManagedMethod<MethodType> = ManagedMethod {
+            instance: true,
+            explicit_this: false,
+            calling_convention: CallingConvention::Default,
+            parameters: vec![],
+            return_type: ReturnType(vec![], None),
+            varargs: None,
+        };
+
+        let resolver = MockResolver;
+        let comparer = TypeComparer::new(&resolver);
+
+        // Accessor methods may live outside `def.methods`; lookup must still return Some(_).
+        let result = comparer.find_method_in_type(type_desc, "get_Value", &search_sig, res_s);
+        assert!(
+            result.is_some(),
+            "find_method_in_type must return Some for a property getter"
+        );
+    }
+
+    #[test]
+    fn types_equal_matches_same_name_across_resolutions() {
+        fn build_resolution_with_type(name: &'static str) -> (ResolutionS, TypeIndex) {
+            let mut resolution = Resolution::new(Module::new("test.dll"));
+            let type_index =
+                resolution.push_type_definition(TypeDefinition::new(Some("System".into()), name));
+
+            let ptr = Box::into_raw(Box::new(resolution)) as *const Resolution<'static>;
+            let arena = Arc::new(MetadataArena::new());
+            unsafe { arena.add_resolution(ptr) };
+            (ResolutionS::new(ptr, arena), type_index)
+        }
+
+        let (res_left, type_left) = build_resolution_with_type("ReadOnlySpan`1");
+        let (res_right, type_right) = build_resolution_with_type("ReadOnlySpan`1");
+
+        let left = MethodType::Base(Box::new(BaseType::Type {
+            value_kind: Some(dotnetdll::resolved::types::ValueKind::ValueType),
+            source: TypeSource::User(UserType::Definition(type_left)),
+        }));
+        let right = MethodType::Base(Box::new(BaseType::Type {
+            value_kind: Some(dotnetdll::resolved::types::ValueKind::ValueType),
+            source: TypeSource::User(UserType::Definition(type_right)),
+        }));
+
+        let resolver = MockResolver;
+        let comparer = TypeComparer::new(&resolver);
+        assert!(
+            comparer.types_equal(res_left, &left, None, res_right, &right, None),
+            "matching full names across different resolutions should compare equal"
+        );
     }
 }

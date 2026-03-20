@@ -78,7 +78,7 @@ pub fn ldtoken_type<
 
     let res_ctx = ctx.current_context();
     let rth = vm_try!(ctx.loader().corlib_type("System.RuntimeTypeHandle"));
-    let instance = vm_try!(res_ctx.new_object(rth));
+    let instance = vm_try!(res_ctx.new_object(rth.clone()));
     rt_obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 
     ctx.push(StackValue::ValueType(instance));
@@ -102,7 +102,7 @@ pub fn ldtoken_method<
 
     let res_ctx = ctx.current_context();
     let rmh = vm_try!(ctx.loader().corlib_type("System.RuntimeMethodHandle"));
-    let instance = vm_try!(res_ctx.new_object(rmh));
+    let instance = vm_try!(res_ctx.new_object(rmh.clone()));
     method_obj.write(&mut instance.instance_storage.get_field_mut_local(rmh, "_value"));
 
     ctx.push(StackValue::ValueType(instance));
@@ -123,7 +123,7 @@ pub fn ldtoken_field<
 
     let res_ctx = ctx.current_context();
     let rfh = vm_try!(ctx.loader().corlib_type("System.RuntimeFieldHandle"));
-    let instance = vm_try!(res_ctx.new_object(rfh));
+    let instance = vm_try!(res_ctx.new_object(rfh.clone()));
     field_obj.write(&mut instance.instance_storage.get_field_mut_local(rfh, "_value"));
 
     ctx.push(StackValue::ValueType(instance));

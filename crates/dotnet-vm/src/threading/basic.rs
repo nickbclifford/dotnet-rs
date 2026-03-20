@@ -6,8 +6,8 @@ use crate::{
 use dotnet_utils::{
     ArenaId,
     gc::{
-        is_valid_cross_arena_ref, register_arena, set_currently_tracing,
-        take_found_cross_arena_refs, unregister_arena,
+        register_arena, set_currently_tracing, take_found_cross_arena_refs_with_generation,
+        try_acquire_lease, unregister_arena,
     },
     sync::{
         Arc, AtomicBool, AtomicU64, AtomicUsize, Condvar, MANAGED_THREAD_ID, Mutex, MutexGuard,
@@ -17,7 +17,7 @@ use dotnet_utils::{
 use dotnet_value::object::ObjectPtr;
 use std::{
     collections::HashMap,
-    mem, sync,
+    sync,
     thread::{self, ThreadId},
     time::{Duration, Instant},
 };
@@ -66,8 +66,6 @@ impl ManagedThread {
 pub struct ThreadManager {
     /// Map from managed thread ID to thread info
     pub(super) threads: Mutex<HashMap<ArenaId, Arc<ManagedThread>>>,
-    /// Weak reference to self for creating guards
-    pub(super) self_weak: sync::OnceLock<sync::Weak<ThreadManager>>,
 
     gc_stop_requested: AtomicBool,
     /// Number of threads that have reached safe point during GC
@@ -84,9 +82,8 @@ pub struct ThreadManager {
 
 impl ThreadManager {
     pub fn new(stw_in_progress: Arc<AtomicBool>) -> Arc<Self> {
-        let manager = Arc::new(Self {
+        Arc::new(Self {
             threads: Mutex::new(HashMap::new()),
-            self_weak: sync::OnceLock::new(),
 
             gc_stop_requested: AtomicBool::new(false),
             threads_at_safepoint: AtomicUsize::new(0),
@@ -94,9 +91,7 @@ impl ThreadManager {
             gc_coordination: Mutex::new(()),
             stw_in_progress,
             coordinator: Mutex::new(None),
-        });
-        let _ = manager.self_weak.set(Arc::downgrade(&manager));
-        manager
+        })
     }
 
     pub(super) fn resume_threads(&self) {
@@ -124,7 +119,7 @@ impl ThreadManager {
 }
 
 impl ThreadManagerOps for ThreadManager {
-    type Guard = StopTheWorldGuard;
+    type Guard<'a> = StopTheWorldGuard<'a>;
 
     /// Register a new thread with the thread manager.
     /// Returns the managed thread ID assigned to this thread.
@@ -272,7 +267,7 @@ impl ThreadManagerOps for ThreadManager {
         self.safe_point(managed_id, coordinator);
     }
 
-    fn request_stop_the_world(&self) -> Self::Guard {
+    fn request_stop_the_world(&self) -> Self::Guard<'_> {
         let start_time = Instant::now();
         const WARN_TIMEOUT: Duration = Duration::from_secs(1);
         let mut warned = false;
@@ -280,6 +275,25 @@ impl ThreadManagerOps for ThreadManager {
         // Signal all threads to stop.
         // Multiple threads might do this simultaneously, which is fine.
         self.gc_stop_requested.store(true, Ordering::Release);
+
+        // Panic guard: if anything below panics before we hand ownership to
+        // `StopTheWorldGuard`, resume threads so they are never left hanging.
+        // `armed` is set to false only on the successful return path.
+        struct ResumeOnPanic<'m> {
+            manager: &'m ThreadManager,
+            armed: bool,
+        }
+        impl Drop for ResumeOnPanic<'_> {
+            fn drop(&mut self) {
+                if self.armed {
+                    self.manager.resume_threads();
+                }
+            }
+        }
+        let mut panic_guard = ResumeOnPanic {
+            manager: self,
+            armed: true,
+        };
 
         let mut guard = loop {
             if let Some(g) = self.gc_coordination.try_lock() {
@@ -343,24 +357,12 @@ impl ThreadManagerOps for ThreadManager {
             );
         }
 
-        // Upgrade the weak reference to get an Arc
-        let manager_arc = self
-            .self_weak
-            .get()
-            .expect("ThreadManager::self_weak not initialized")
-            .upgrade()
-            .expect("ThreadManager dropped while request_stop_the_world was called");
-
-        // SAFETY: We transmute the guard lifetime to 'static. This is safe because:
-        // 1. We're storing an Arc<ThreadManager> which keeps the ThreadManager alive
-        // 2. The guard borrows from the ThreadManager's gc_coordination mutex
-        // 3. The StopTheWorldGuard holds both the Arc and the guard, ensuring the mutex
-        //    outlives the guard
-        let guard_static: MutexGuard<'static, ()> = unsafe { mem::transmute(guard) };
-        StopTheWorldGuard::new(manager_arc, guard_static, start_time)
+        // Disarm: StopTheWorldGuard takes over responsibility for resume.
+        panic_guard.armed = false;
+        StopTheWorldGuard::new(self, guard, start_time)
     }
 
-    fn request_stop_the_world_traced(&self, tracer: &mut Tracer) -> Self::Guard {
+    fn request_stop_the_world_traced(&self, tracer: &mut Tracer) -> Self::Guard<'_> {
         let thread_count = self.thread_count();
         if tracer.is_enabled() {
             tracer.trace_stw_start(0, thread_count);
@@ -369,16 +371,16 @@ impl ThreadManagerOps for ThreadManager {
     }
 }
 
-pub struct StopTheWorldGuard {
-    manager: Arc<ThreadManager>,
-    _lock: MutexGuard<'static, ()>,
+pub struct StopTheWorldGuard<'a> {
+    manager: &'a ThreadManager,
+    _lock: MutexGuard<'a, ()>,
     start_time: Instant,
 }
 
-impl StopTheWorldGuard {
+impl<'a> StopTheWorldGuard<'a> {
     pub(super) fn new(
-        manager: Arc<ThreadManager>,
-        lock: MutexGuard<'static, ()>,
+        manager: &'a ThreadManager,
+        lock: MutexGuard<'a, ()>,
         start_time: Instant,
     ) -> Self {
         IS_PERFORMING_GC.set(true);
@@ -390,30 +392,51 @@ impl StopTheWorldGuard {
     }
 }
 
-impl STWGuardOps for StopTheWorldGuard {
+impl STWGuardOps for StopTheWorldGuard<'_> {
     fn elapsed_micros(&self) -> u64 {
         self.start_time.elapsed().as_micros() as u64
     }
 }
 
-impl Drop for StopTheWorldGuard {
+impl Drop for StopTheWorldGuard<'_> {
     fn drop(&mut self) {
+        // Ensure IS_PERFORMING_GC is always cleared even if resume_threads
+        // panics, so the thread-local flag is never left in a stale "true" state.
+        struct GcFlagGuard;
+        impl Drop for GcFlagGuard {
+            fn drop(&mut self) {
+                IS_PERFORMING_GC.set(false);
+            }
+        }
+        let _flag_guard = GcFlagGuard;
         self.manager.resume_threads();
-        IS_PERFORMING_GC.set(false);
+        // _flag_guard drops here (or on unwind), clearing IS_PERFORMING_GC.
     }
 }
 
 fn record_found_cross_arena_refs(coordinator: &GCCoordinator) {
-    for (target_id, ptr_usize) in take_found_cross_arena_refs() {
-        if !is_valid_cross_arena_ref(target_id) {
+    for (target_id, ptr_usize, recorded_gen) in take_found_cross_arena_refs_with_generation() {
+        if let Some(lease) = try_acquire_lease(target_id) {
+            if lease.generation() == recorded_gen {
+                // SAFETY: The pointer was recorded from a live cross-arena reference.
+                // We hold a matching generation lease for `target_id`, so teardown
+                // cannot complete while reconstructing `ObjectPtr`.
+                let ptr = unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
+                coordinator.record_cross_arena_ref(target_id, ptr);
+            } else {
+                warn!(
+                    "Ignoring found cross-arena reference to re-registered arena {:?} (gen mismatch: expected {}, got {})",
+                    target_id,
+                    recorded_gen,
+                    lease.generation()
+                );
+            }
+        } else {
             warn!(
                 "Ignoring found cross-arena reference to exited arena {:?}",
                 target_id
             );
-            continue;
         }
-        let ptr = unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
-        coordinator.record_cross_arena_ref(target_id, ptr);
     }
 }
 
@@ -450,6 +473,9 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                     arena.mutate(|_, c| {
                         let mut roots = c.stack.local.heap.cross_arena_roots.borrow_mut();
                         for ptr_usize in ptrs {
+                            // SAFETY: `ptrs` originates from coordinator-owned object pointers
+                            // captured during marking. They are only consumed during the same
+                            // collection cycle while arenas are stopped.
                             let ptr =
                                 unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
                             roots.insert(ptr);
@@ -487,5 +513,301 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                 }
             });
         }
+    }
+}
+
+#[cfg(all(test, feature = "multithreading"))]
+mod tests {
+    use super::*;
+    use crate::threading::ThreadManagerOps;
+    use std::{sync::mpsc, thread, time::Duration};
+
+    // ---------------------------------------------------------------------------
+    // Helpers
+    // ---------------------------------------------------------------------------
+
+    /// A minimal armed resume-on-panic guard that mirrors the one inside
+    /// `request_stop_the_world`.  Used in tests to verify the RAII pattern
+    /// without going through the full STW machinery.
+    struct ResumeOnPanic<'m> {
+        manager: &'m ThreadManager,
+        armed: bool,
+    }
+    impl Drop for ResumeOnPanic<'_> {
+        fn drop(&mut self) {
+            if self.armed {
+                self.manager.resume_threads();
+            }
+        }
+    }
+
+    #[test]
+    fn stw_guard_drop_resets_gc_flags() {
+        let manager = ThreadManager::new(Arc::new(AtomicBool::new(false)));
+
+        assert!(!manager.is_gc_stop_requested());
+        assert!(!IS_PERFORMING_GC.get());
+
+        {
+            let _guard = manager.request_stop_the_world();
+            assert!(manager.is_gc_stop_requested());
+            assert!(IS_PERFORMING_GC.get());
+        }
+
+        assert!(!manager.is_gc_stop_requested());
+        assert!(!IS_PERFORMING_GC.get());
+    }
+
+    #[test]
+    fn stw_guard_holds_gc_coordination_lock_until_drop() {
+        let manager = ThreadManager::new(Arc::new(AtomicBool::new(false)));
+        let first_guard = manager.request_stop_the_world();
+
+        let manager_clone = Arc::clone(&manager);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+
+        let join = thread::spawn(move || {
+            let _second_guard = manager_clone.request_stop_the_world();
+            entered_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        });
+
+        assert!(
+            entered_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "second request_stop_the_world unexpectedly acquired coordination lock early"
+        );
+
+        drop(first_guard);
+
+        entered_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("second request_stop_the_world did not acquire coordination lock after drop");
+        release_tx.send(()).unwrap();
+        join.join().unwrap();
+    }
+
+    /// `resume_threads` is idempotent: calling it multiple times must not panic
+    /// and must leave `gc_stop_requested` cleared.
+    #[test]
+    fn resume_threads_is_idempotent() {
+        let manager = ThreadManager::new(Arc::new(AtomicBool::new(false)));
+
+        // Prime the flag as if STW was in progress.
+        manager.gc_stop_requested.store(true, Ordering::Release);
+        assert!(manager.is_gc_stop_requested());
+
+        manager.resume_threads();
+        assert!(!manager.is_gc_stop_requested());
+
+        // Second call: must be a no-op, not a panic or corruption.
+        manager.resume_threads();
+        assert!(!manager.is_gc_stop_requested());
+    }
+
+    /// When the `ResumeOnPanic` guard is armed and then dropped (simulating an
+    /// unwind before `StopTheWorldGuard` is constructed), it calls
+    /// `resume_threads` so that no other thread hangs waiting for resume.
+    #[test]
+    fn stw_panic_guard_armed_resumes_threads_on_drop() {
+        let manager = ThreadManager::new(Arc::new(AtomicBool::new(false)));
+
+        // Simulate: gc_stop_requested was set by request_stop_the_world, then
+        // a panic fires before the StopTheWorldGuard is returned.
+        manager.gc_stop_requested.store(true, Ordering::Release);
+        assert!(manager.is_gc_stop_requested());
+
+        {
+            let _guard = ResumeOnPanic {
+                manager: &manager,
+                armed: true,
+            };
+            // Drop without disarming → resume_threads() is called.
+        }
+
+        assert!(
+            !manager.is_gc_stop_requested(),
+            "armed ResumeOnPanic must clear gc_stop_requested on drop"
+        );
+    }
+
+    /// When the `ResumeOnPanic` guard is disarmed (normal STW success path),
+    /// dropping it must NOT call `resume_threads` again.
+    #[test]
+    fn stw_panic_guard_disarmed_does_not_resume_on_drop() {
+        let manager = ThreadManager::new(Arc::new(AtomicBool::new(false)));
+
+        manager.gc_stop_requested.store(true, Ordering::Release);
+
+        {
+            let mut guard = ResumeOnPanic {
+                manager: &manager,
+                armed: true,
+            };
+            guard.armed = false; // disarm — StopTheWorldGuard takes ownership
+            // Drop: armed=false, so resume_threads is NOT called.
+        }
+
+        // gc_stop_requested is still true: the guard was correctly disarmed and
+        // did not interfere with the subsequent StopTheWorldGuard.
+        assert!(
+            manager.is_gc_stop_requested(),
+            "disarmed ResumeOnPanic must not call resume_threads"
+        );
+
+        // Clean up.
+        manager.resume_threads();
+    }
+
+    /// Dropping `StopTheWorldGuard` clears `IS_PERFORMING_GC` — the
+    /// `GcFlagGuard` inside `Drop` ensures the flag is always reset.
+    #[test]
+    fn stw_guard_gc_flag_cleared_on_drop() {
+        let manager = ThreadManager::new(Arc::new(AtomicBool::new(false)));
+
+        IS_PERFORMING_GC.set(false);
+        let guard = manager.request_stop_the_world();
+        assert!(
+            IS_PERFORMING_GC.get(),
+            "IS_PERFORMING_GC must be true while guard is live"
+        );
+
+        drop(guard);
+        assert!(
+            !IS_PERFORMING_GC.get(),
+            "IS_PERFORMING_GC must be false after StopTheWorldGuard drop"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Stress: register/unregister interleaved with repeated STW cycles
+    //
+    // N worker threads register, spin calling safe_point, then unregister.
+    // An unregistered GC driver thread fires request_stop_the_world in a loop.
+    // All threads must quiesce at each safepoint and resume cleanly; no
+    // deadlocks, panics, or leaked gc_stop_requested state are permitted.
+    // ------------------------------------------------------------------
+    #[test]
+    fn stress_register_unregister_interleaved_with_stw() {
+        use std::sync::Arc as StdArc;
+        use std::sync::Barrier;
+
+        const WORKER_THREADS: usize = 3;
+        const STW_CYCLES: usize = 5;
+
+        let stw_flag = Arc::new(AtomicBool::new(false));
+        let manager = ThreadManager::new(stw_flag.clone());
+        let coordinator = Arc::new(crate::gc::coordinator::GCCoordinator::new(stw_flag));
+        manager.set_coordinator(Arc::downgrade(&coordinator));
+
+        let barrier = StdArc::new(Barrier::new(WORKER_THREADS + 1));
+        let done = Arc::new(AtomicBool::new(false));
+
+        let mut handles = vec![];
+
+        for _ in 0..WORKER_THREADS {
+            let manager = Arc::clone(&manager);
+            let coordinator = Arc::clone(&coordinator);
+            let barrier = barrier.clone();
+            let done = done.clone();
+            handles.push(thread::spawn(move || {
+                let managed_id = manager.register_thread();
+                barrier.wait(); // synchronise: all workers registered before GC starts
+
+                // Spin at safepoints until the GC driver signals completion.
+                while !done.load(Ordering::Acquire) {
+                    manager.safe_point(managed_id, &coordinator);
+                    thread::yield_now();
+                }
+
+                // One final pass to drain any in-flight STW.
+                manager.safe_point(managed_id, &coordinator);
+                manager.unregister_thread(managed_id);
+            }));
+        }
+
+        // GC driver is not a registered managed thread.
+        barrier.wait();
+
+        for _ in 0..STW_CYCLES {
+            // Guard drop calls resume_threads(), clearing gc_stop_requested.
+            let _guard = manager.request_stop_the_world();
+        }
+
+        // Tell workers to exit, then wake any still blocked in safe_point.
+        done.store(true, Ordering::Release);
+        manager.resume_threads();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert!(
+            !manager.is_gc_stop_requested(),
+            "gc_stop_requested must be clear after stress"
+        );
+        assert!(
+            !IS_PERFORMING_GC.get(),
+            "IS_PERFORMING_GC must be clear after stress"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Stress: unregister during STW wait must not deadlock
+    //
+    // The GC driver waits for threads_at_safepoint >= thread_count.  When a
+    // thread unregisters instead of hitting a safepoint, thread_count
+    // decreases and all_threads_stopped is notified.  The driver must detect
+    // the reduced thread count and proceed without hanging.
+    // ------------------------------------------------------------------
+    #[test]
+    fn stress_unregister_during_stw_wait_does_not_deadlock() {
+        use std::sync::Arc as StdArc;
+        use std::sync::Barrier;
+
+        const WORKER_THREADS: usize = 3;
+        const ROUNDS: usize = 4;
+
+        let stw_flag = Arc::new(AtomicBool::new(false));
+        let manager = ThreadManager::new(stw_flag.clone());
+        let coordinator = Arc::new(crate::gc::coordinator::GCCoordinator::new(stw_flag));
+        manager.set_coordinator(Arc::downgrade(&coordinator));
+
+        for _ in 0..ROUNDS {
+            let barrier = StdArc::new(Barrier::new(WORKER_THREADS + 1));
+
+            let mut handles = vec![];
+
+            for _ in 0..WORKER_THREADS {
+                let manager = Arc::clone(&manager);
+                let coordinator = Arc::clone(&coordinator);
+                let barrier = barrier.clone();
+                handles.push(thread::spawn(move || {
+                    let managed_id = manager.register_thread();
+                    barrier.wait(); // let GC driver start STW before we react
+
+                    // Each worker either hits a safe_point OR simply unregisters
+                    // without going through a safepoint, interleaved by thread
+                    // scheduling.  Both paths must allow the GC driver to make
+                    // forward progress (no hang).
+                    manager.safe_point(managed_id, &coordinator);
+                    manager.unregister_thread(managed_id);
+                }));
+            }
+
+            // GC driver fires STW right after all workers are registered.
+            barrier.wait();
+            {
+                let _guard = manager.request_stop_the_world();
+                // Guard drops here: resume_threads() fires.
+            }
+
+            for h in handles {
+                h.join().unwrap();
+            }
+        }
+
+        assert!(!manager.is_gc_stop_requested());
+        assert!(!IS_PERFORMING_GC.get());
     }
 }

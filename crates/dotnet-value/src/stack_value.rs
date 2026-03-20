@@ -894,5 +894,4 @@ mod tests {
         assert_eq!(err.exception_type, "System.OverflowException");
         assert_eq!(err.message, "Arithmetic operation resulted in an overflow.");
     }
-
 }

@@ -941,7 +941,7 @@ fn external_call_impl<'gc>(
             };
             let m = ManagedPtr::new(
                 NonNull::new(addr as *mut u8),
-                *type_desc.clone(),
+                (*type_desc).clone(),
                 None,
                 false,
                 Some(ByteOffset(0)),

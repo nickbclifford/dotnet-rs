@@ -12,10 +12,8 @@ fn static_reg_test_lock() -> &'static Mutex<()> {
 }
 
 #[test]
-#[cfg_attr(
-    feature = "memory-validation",
-    should_panic(expected = "ManagedPtr::offset: bounds violation")
-)]
+#[cfg(feature = "memory-validation")]
+#[should_panic(expected = "ManagedPtr::offset: bounds violation")]
 fn test_managed_ptr_offset_oob() {
     type TestRoot = Rootable![()];
     let arena = Arena::<TestRoot>::new(|_mc| ());
@@ -185,7 +183,7 @@ fn test_managed_ptr_serialization_roundtrip() {
         let ptr_static = ManagedPtr::new_static(
             nonnull_from_exposed_addr(static_addr + static_offset),
             TypeDescription::NULL,
-            type_desc,
+            type_desc.clone(),
             generics.clone(),
             false,
             ByteOffset(static_offset),
@@ -322,7 +320,7 @@ fn test_static_registry_deduplication() {
     let ptr1 = ManagedPtr::new_static(
         nonnull_from_exposed_addr(0x1000),
         TypeDescription::NULL,
-        type_desc,
+        type_desc.clone(),
         generics.clone(),
         false,
         ByteOffset(0),

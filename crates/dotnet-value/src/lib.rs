@@ -10,6 +10,7 @@
 //! - **[`ManagedPtr`]**: Pointer to a location within a managed object or the stack.
 //! - **[`Object`]**: Internal representation of an object's instance data and layout.
 //! - **[`CLRString`]**: Specialized representation for .NET strings.
+#![allow(clippy::mutable_key_type)]
 #[cfg(test)]
 mod atomic_tests;
 pub mod layout;

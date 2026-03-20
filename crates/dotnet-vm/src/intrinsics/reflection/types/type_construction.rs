@@ -13,7 +13,7 @@ use dotnet_types::{
     runtime::RuntimeType,
 };
 use dotnet_value::{StackValue, object::ObjectRef};
-use dotnetdll::prelude::TypeSource;
+use dotnetdll::prelude::{MethodMemberIndex, TypeSource};
 
 #[dotnet_intrinsic(
     "static void System.Runtime.CompilerServices.RuntimeHelpers::RunClassConstructor(System.RuntimeTypeHandle)"
@@ -81,7 +81,7 @@ pub fn intrinsic_activator_create_instance<
         ctx.push_value_type(instance);
         StepResult::Continue
     } else {
-        let instance = vm_try!(ctx.new_object(target_td));
+        let instance = vm_try!(ctx.new_object(target_td.clone()));
         let mut new_lookup = GenericLookup::default();
         if let dotnetdll::prelude::BaseType::Type {
             source: TypeSource::Generic { parameters, .. },
@@ -91,9 +91,14 @@ pub fn intrinsic_activator_create_instance<
             new_lookup.type_generics = parameters.clone().into();
         }
 
-        for m in target_td.definition().methods.iter() {
+        for (idx, m) in target_td.definition().methods.iter().enumerate() {
             if m.name == ".ctor" && m.signature.instance && m.signature.parameters.is_empty() {
-                let desc = MethodDescription::new(target_td, new_lookup.clone(), target_td.resolution, m);
+                let desc = MethodDescription::new(
+                    target_td.clone(),
+                    new_lookup.clone(),
+                    target_td.resolution.clone(),
+                    MethodMemberIndex::Method(idx),
+                );
 
                 vm_try!(ctx.constructor_frame(
                     instance,
@@ -169,7 +174,7 @@ pub fn handle_make_generic_type<
                 .collect();
             let lookup = GenericLookup::new(new_generics_concrete);
             if let Err(_e) = lookup.validate_constraints(
-                td.resolution,
+                td.resolution.clone(),
                 loader.as_ref(),
                 &td.definition().generic_parameters,
                 false,
@@ -236,15 +241,20 @@ pub fn handle_create_instance_default_ctor<
     let new_lookup = GenericLookup::new(type_generics_concrete);
     let new_ctx = ctx.current_context().with_generics(&new_lookup);
 
-    let instance = vm_try!(new_ctx.new_object(td));
+    let instance = vm_try!(new_ctx.new_object(td.clone()));
 
-    for m in &td.definition().methods {
+    for (idx, m) in td.definition().methods.iter().enumerate() {
         if m.runtime_special_name
             && m.name == ".ctor"
             && m.signature.instance
             && m.signature.parameters.is_empty()
         {
-            let desc = MethodDescription::new(td, new_lookup.clone(), td.resolution, m);
+            let desc = MethodDescription::new(
+                td.clone(),
+                new_lookup.clone(),
+                td.resolution.clone(),
+                MethodMemberIndex::Method(idx),
+            );
 
             vm_try!(ctx.constructor_frame(
                 instance,

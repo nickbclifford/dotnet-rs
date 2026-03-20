@@ -1,6 +1,6 @@
 use crate::{
     StepResult,
-    layout::{type_layout, LayoutFactory},
+    layout::{LayoutFactory, type_layout},
     stack::ops::{
         EvalStackOps, ExceptionOps, LoaderOps, RawMemoryOps, ReflectionOps, ResolutionOps,
         TypedStackOps,

@@ -169,10 +169,8 @@ mod tests {
         });
     }
     #[test]
-    #[cfg_attr(
-        feature = "memory-validation",
-        should_panic(expected = "Alignment violation")
-    )]
+    #[cfg(feature = "memory-validation")]
+    #[should_panic(expected = "Alignment violation")]
     fn test_misaligned_load() {
         let data = [0u8; 16];
         let ptr = unsafe { data.as_ptr().add(1) };

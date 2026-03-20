@@ -73,15 +73,17 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
     if method.method().name == "CtorArraySentinel"
         && let UserMethod::Reference(r) = *ctor
     {
-        let resolution = ctx.current_frame().source_resolution;
+        let resolution = ctx.current_frame().source_resolution.clone();
         let method_ref = &resolution[r];
 
         if let MethodReferenceParent::Type(t) = &method_ref.parent {
             let concrete = {
                 let res_ctx = ctx.current_context();
-                res_ctx
-                    .generics
-                    .make_concrete(resolution, t.clone(), res_ctx.loader().as_ref())
+                res_ctx.generics.make_concrete(
+                    resolution.clone(),
+                    t.clone(),
+                    res_ctx.loader().as_ref(),
+                )
             };
 
             let concrete = vm_try!(concrete);
@@ -132,7 +134,8 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
         }
     }
 
-    let parent = method.parent;
+    let parent = method.parent.clone();
+    let object_type = parent.clone();
     if let (None, Some(ts)) = (&method.method().body, &parent.definition().extends) {
         let (ut, _) = decompose_type_source::<MemberType>(ts);
         let type_name = ut.type_name(parent.resolution.definition());
@@ -145,15 +148,18 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
                 .loader()
                 .corlib_type(&type_name)
                 .expect("Failed to locate corlib base for delegate");
+            let (idx, _) = base
+                .definition()
+                .methods
+                .iter()
+                .enumerate()
+                .find(|(_, m)| m.name == ".ctor")
+                .unwrap();
             method = MethodDescription::new(
-                base,
+                base.clone(),
                 crate::GenericLookup::default(),
-                base.resolution,
-                base.definition()
-                    .methods
-                    .iter()
-                    .find(|m| m.name == ".ctor")
-                    .unwrap(),
+                base.resolution.clone(),
+                MethodMemberIndex::Method(idx),
             );
         }
     }
@@ -180,22 +186,28 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
         StepResult::Continue
     } else {
         if ctx.is_intrinsic_cached(method.clone()) {
-            let is_value_type = vm_try!(ctx.resolver().is_value_type(parent));
+            let is_value_type = vm_try!(ctx.resolver().is_value_type(method.parent.clone()));
             if is_value_type && method_name == ".ctor" && parent_name != "System.String" {
                 let arg_count = method.method().signature.parameters.len();
                 let args = ctx.pop_multiple(arg_count);
 
                 let res_ctx = ctx
                     .current_context()
-                    .for_type_with_generics(parent, &lookup);
-                let instance = vm_try!(res_ctx.new_object(parent));
+                    .for_type_with_generics(method.parent.clone(), &lookup);
+                let instance = vm_try!(res_ctx.new_object(method.parent.clone()));
 
                 ctx.push_value_type(instance);
                 let this_slot = ctx.top_of_stack() - 1;
                 let this_ptr_slot = this_slot + 1;
 
                 // Push placeholder ManagedPtr
-                ctx.push_managed_ptr(ManagedPtr::new(None, parent, None, false, None));
+                ctx.push_managed_ptr(ManagedPtr::new(
+                    None,
+                    method.parent.clone(),
+                    None,
+                    false,
+                    None,
+                ));
 
                 for arg in args {
                     ctx.push(arg);
@@ -226,15 +238,15 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
             return ctx.execute_intrinsic_call(method, &lookup);
         }
 
-        let res = ctx.initialize_static_storage(parent, lookup.clone());
+        let res = ctx.initialize_static_storage(object_type.clone(), lookup.clone());
         if res != StepResult::Continue {
             return res;
         }
 
         let res_ctx = ctx
             .current_context()
-            .for_type_with_generics(parent, &lookup);
-        let instance = vm_try!(res_ctx.new_object(parent));
+            .for_type_with_generics(object_type.clone(), &lookup);
+        let instance = vm_try!(res_ctx.new_object(object_type));
 
         vm_try!(ctx.constructor_frame(
             instance,

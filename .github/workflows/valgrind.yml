@@ -1,0 +1,81 @@
+name: Valgrind
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 4 * * *' # Daily at 04:00 UTC (offset from Miri 02:00 and fuzz midnight cron)
+
+jobs:
+  valgrind:
+    name: Valgrind
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2.8.2
+
+      - name: Setup .NET SDK (10.0.x)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libffi-dev valgrind libc6-dbg
+
+      - name: Cache .NET fixtures
+        uses: actions/cache@v4
+        with:
+          path: crates/dotnet-cli/target/dotnet-fixtures
+          key: ${{ runner.os }}-dotnet-fixtures-${{ hashFiles('crates/dotnet-cli/tests/fixtures/**/*.cs', 'crates/dotnet-cli/tests/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-dotnet-fixtures-
+
+      - name: Build integration test binary
+        run: |
+          cargo test -p dotnet-cli --test integration_tests \
+            --no-run \
+            --no-default-features \
+            --features multithreading
+
+      - name: Run Valgrind (integration tests)
+        continue-on-error: true
+        run: |
+          BINARY=$(ls target/debug/deps/integration_tests-* 2>/dev/null | grep -v '\.d$' | head -1)
+          if [ -z "$BINARY" ]; then
+            echo "ERROR: integration_tests binary not found in target/debug/deps/" >&2
+            exit 1
+          fi
+          echo "Using binary: $BINARY"
+          EXIT=0
+          for TEST in \
+            integration_tests_impl::fixtures::hello_world \
+            integration_tests_impl::fixtures::threading_monitor_try_enter_timeout_single_42; do
+            echo "--- Running Valgrind for: $TEST ---"
+            timeout 600s valgrind \
+              --suppressions=valgrind.supp \
+              --error-exitcode=1 \
+              --leak-check=full \
+              --show-leak-kinds=all \
+              -s \
+              "$BINARY" \
+              --test-threads=1 \
+              --nocapture \
+              --exact \
+              "$TEST" || EXIT=$?
+          done
+          exit $EXIT

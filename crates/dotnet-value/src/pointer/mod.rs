@@ -207,7 +207,7 @@ impl<'gc> ManagedPtr<'gc> {
         &self.origin
     }
     pub fn inner_type(&self) -> TypeDescription {
-        self.inner_type
+        self.inner_type.clone()
     }
     pub fn is_pinned(&self) -> bool {
         self.pinned

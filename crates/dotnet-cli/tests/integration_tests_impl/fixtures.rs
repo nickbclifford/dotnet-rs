@@ -130,14 +130,6 @@ multi_arena_test!(test_stw_stress, "tests/fixtures/gc/cache_test_0.cs", 6, 0);
 
 #[cfg(feature = "multithreading")]
 multi_arena_test!(
-    test_monitor_try_enter_timeout,
-    "tests/fixtures/threading/monitor_try_enter_timeout_42.cs",
-    3,
-    42
-);
-
-#[cfg(feature = "multithreading")]
-multi_arena_test!(
     test_statics_circular_init_mt,
     "tests/fixtures/statics/circular_init_mt_42.cs",
     2,

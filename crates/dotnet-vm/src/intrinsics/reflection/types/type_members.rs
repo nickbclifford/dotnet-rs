@@ -20,7 +20,7 @@ use dotnet_value::{
     StackValue,
     object::{HeapStorage, ObjectRef},
 };
-use dotnetdll::prelude::{Accessibility, MemberAccessibility, TypeDefinition};
+use dotnetdll::prelude::{Accessibility, MemberAccessibility, MethodMemberIndex, TypeDefinition};
 
 #[dotnet_intrinsic("object[] System.Reflection.Assembly::GetCustomAttributes(System.Type, bool)")]
 pub fn intrinsic_assembly_get_custom_attributes<
@@ -107,7 +107,7 @@ pub fn handle_get_assembly<
         .loader()
         .get_assembly(SUPPORT_ASSEMBLY)
         .expect("support library must be loadable");
-    let (index, definition) = support_res
+    let (index, _definition) = support_res
         .definition()
         .type_definitions
         .iter()
@@ -115,11 +115,10 @@ pub fn handle_get_assembly<
         .find(|(_, a): &(usize, &TypeDefinition)| a.type_name() == "DotnetRs.Assembly")
         .expect("could find DotnetRs.Assembly in support library");
     let type_index = support_res.type_definition_index(index).unwrap();
-    let asm_handle =
-        vm_try!(ctx.new_object(TypeDescription::new(support_res, definition, type_index)));
+    let asm_handle = vm_try!(ctx.new_object(TypeDescription::new(support_res, type_index)));
     asm_handle
         .instance_storage
-        .field::<usize>(asm_handle.description, "resolution")
+        .field::<usize>(asm_handle.description.clone(), "resolution")
         .unwrap()
         .write(resolution.as_raw() as usize);
     let v = ObjectRef::new(gc, HeapStorage::Obj(asm_handle));
@@ -152,8 +151,8 @@ pub fn handle_get_methods<
     const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
 
     let mut methods_objs = Vec::new();
-    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
-        for m in td.definition().methods.iter() {
+    if let RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) = target_type {
+        for (idx, m) in td.definition().methods.iter().enumerate() {
             let is_public = m.accessibility == MemberAccessibility::Access(Accessibility::Public);
             let is_static = !m.signature.instance;
 
@@ -170,7 +169,12 @@ pub fn handle_get_methods<
 
             if match_public && match_static && m.name != ".ctor" && m.name != ".cctor" {
                 let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
-                let desc = MethodDescription::new(td, lookup.clone(), td.resolution, m);
+                let desc = MethodDescription::new(
+                    td.clone(),
+                    lookup.clone(),
+                    td.resolution.clone(),
+                    MethodMemberIndex::Method(idx),
+                );
                 methods_objs.push(ctx.get_runtime_method_obj(desc, lookup));
             }
         }
@@ -216,8 +220,8 @@ pub fn handle_get_method_impl<
     const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
 
     let mut found_method = None;
-    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
-        for m in td.definition().methods.iter() {
+    if let RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) = target_type {
+        for (idx, m) in td.definition().methods.iter().enumerate() {
             if m.name != name {
                 continue;
             }
@@ -237,7 +241,12 @@ pub fn handle_get_method_impl<
 
             if match_public && match_static {
                 let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
-                let desc = MethodDescription::new(td, lookup.clone(), td.resolution, m);
+                let desc = MethodDescription::new(
+                    td.clone(),
+                    lookup.clone(),
+                    td.resolution.clone(),
+                    MethodMemberIndex::Method(idx),
+                );
                 found_method = Some(ctx.get_runtime_method_obj(desc, lookup));
                 break;
             }
@@ -280,8 +289,8 @@ pub fn handle_get_constructor_impl<
     const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
 
     let mut found_constructor = None;
-    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
-        for m in td.definition().methods.iter() {
+    if let RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) = target_type {
+        for (idx, m) in td.definition().methods.iter().enumerate() {
             if m.name != ".ctor" {
                 continue;
             }
@@ -301,7 +310,12 @@ pub fn handle_get_constructor_impl<
 
             if match_public && match_static {
                 let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
-                let desc = MethodDescription::new(td, lookup.clone(), td.resolution, m);
+                let desc = MethodDescription::new(
+                    td.clone(),
+                    lookup.clone(),
+                    td.resolution.clone(),
+                    MethodMemberIndex::Method(idx),
+                );
                 found_constructor = Some(ctx.get_runtime_method_obj(desc, lookup));
                 break;
             }
@@ -384,7 +398,7 @@ pub fn handle_get_fields<
     const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
 
     let mut fields_objs = Vec::new();
-    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
+    if let RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) = target_type {
         for (index, f) in td.definition().fields.iter().enumerate() {
             let is_public = f.accessibility == MemberAccessibility::Access(Accessibility::Public);
             let is_static = f.static_member;
@@ -401,8 +415,11 @@ pub fn handle_get_fields<
             };
 
             if match_public && match_static {
-                let desc =
-                    dotnet_types::members::FieldDescription::new(td, td.resolution, f, index);
+                let desc = dotnet_types::members::FieldDescription::new(
+                    td.clone(),
+                    td.resolution.clone(),
+                    index,
+                );
                 let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
                 fields_objs.push(ctx.get_runtime_field_obj(desc, lookup));
             }
@@ -444,7 +461,7 @@ pub fn handle_get_field<
     const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
 
     let mut found_field = None;
-    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
+    if let RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) = target_type {
         for (index, f) in td.definition().fields.iter().enumerate() {
             if f.name != name {
                 continue;
@@ -464,8 +481,11 @@ pub fn handle_get_field<
             };
 
             if match_public && match_static {
-                let desc =
-                    dotnet_types::members::FieldDescription::new(td, td.resolution, f, index);
+                let desc = dotnet_types::members::FieldDescription::new(
+                    td.clone(),
+                    td.resolution.clone(),
+                    index,
+                );
                 let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
                 found_field = Some(ctx.get_runtime_field_obj(desc, lookup));
                 break;
@@ -531,8 +551,8 @@ pub fn handle_get_constructors<
     const BINDING_FLAGS_NON_PUBLIC: i32 = 32;
 
     let mut constructors_objs = Vec::new();
-    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
-        for m in td.definition().methods.iter() {
+    if let RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) = target_type {
+        for (idx, m) in td.definition().methods.iter().enumerate() {
             if m.name != ".ctor" {
                 continue;
             }
@@ -552,7 +572,12 @@ pub fn handle_get_constructors<
 
             if match_public && match_static {
                 let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
-                let desc = MethodDescription::new(td, lookup.clone(), td.resolution, m);
+                let desc = MethodDescription::new(
+                    td.clone(),
+                    lookup.clone(),
+                    td.resolution.clone(),
+                    MethodMemberIndex::Method(idx),
+                );
                 constructors_objs.push(ctx.get_runtime_method_obj(desc, lookup));
             }
         }

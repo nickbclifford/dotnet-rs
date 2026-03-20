@@ -85,6 +85,8 @@ pub struct BorrowGuardHandle<'ctx> {
 
 impl<'ctx> Drop for BorrowGuardHandle<'ctx> {
     fn drop(&mut self) {
+        // SAFETY: `ctx` comes from `BorrowGuardHandle::new` and remains valid for `'ctx`.
+        // Drop runs at most once for this handle and balances `enter_borrow_scope`.
         unsafe { (*self.ctx).exit_borrow_scope() };
     }
 }
@@ -109,34 +111,12 @@ impl<'ctx> BorrowGuardHandle<'ctx> {
 
     /// Exiting the borrow scope returns the NoActiveBorrows token
     pub fn exit(self) -> NoActiveBorrows<'ctx> {
+        // SAFETY: `ctx` comes from `BorrowGuardHandle::new` and is valid for `'ctx`.
+        // `mem::forget(self)` prevents Drop from running, so this remains a single balanced exit.
         unsafe { (*self.ctx).exit_borrow_scope() };
         std::mem::forget(self);
         NoActiveBorrows {
             _marker: PhantomData,
         }
-    }
-}
-
-pub struct BorrowGuard {
-    ctx: *const (dyn BorrowScopeOps + 'static),
-}
-
-impl BorrowGuard {
-    pub fn new(ctx: &dyn BorrowScopeOps) -> Self {
-        ctx.enter_borrow_scope();
-        Self {
-            ctx: unsafe {
-                std::mem::transmute::<
-                    *const dyn BorrowScopeOps,
-                    *const (dyn BorrowScopeOps + 'static),
-                >(ctx as *const dyn BorrowScopeOps)
-            },
-        }
-    }
-}
-
-impl Drop for BorrowGuard {
-    fn drop(&mut self) {
-        unsafe { (*self.ctx).exit_borrow_scope() };
     }
 }

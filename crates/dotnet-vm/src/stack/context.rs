@@ -123,7 +123,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                         generics,
                         state: self.shared.resolution_shared(),
                         resolution: method.resolution(),
-                        type_owner: Some(method.parent),
+                        type_owner: Some(method.parent.clone()),
                         method_owner: Some(method.clone()),
                     };
 
@@ -283,10 +283,10 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             .expect("unwind_frame called with empty stack");
 
         if frame.state.info_handle.is_cctor {
-            let type_desc = frame.state.info_handle.source.parent;
+            let type_desc = frame.state.info_handle.source.parent.clone();
             self.shared
                 .statics
-                .mark_failed(type_desc, &frame.generic_inst);
+                .mark_failed(type_desc.clone(), &frame.generic_inst);
 
             // Wrap exception in TypeInitializationException per ECMA-335 §II.10.5.3.3
             let current_exception = match *self.exception_mode {
@@ -300,7 +300,10 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
 
             if let Some(inner) = current_exception {
                 let type_name = type_desc.type_name();
-                let message = format!("The type initializer for '{}' threw an exception.", type_name);
+                let message = format!(
+                    "The type initializer for '{}' threw an exception.",
+                    type_name
+                );
                 // We use throw_by_name_with_inner which updates self.exception_mode to Throwing.
                 // This is safe because unwind_frame is called during the exception handling loop
                 // in dotnet-exceptions, and the next iteration will see the new Throwing state.
@@ -340,7 +343,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     pub fn locate_type(&self, handle: UserType) -> TypeDescription {
         let f = self.current_frame();
         self.resolver()
-            .locate_type(f.source_resolution, handle)
+            .locate_type(f.source_resolution.clone(), handle)
             .expect("Type resolution failed")
     }
 
@@ -384,13 +387,9 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                         .any(|m| m.name == "Finalize");
 
                 if has_finalizer {
-                    let system_object = self
-                        .shared
-                        .loader
-                        .corlib_type("System.Object")
-                        .ok();
+                    let system_object = self.shared.loader.corlib_type("System.Object").ok();
 
-                    if Some(o.description) != system_object {
+                    if Some(o.description.clone()) != system_object {
                         self.local
                             .heap
                             .finalization_queue
@@ -443,7 +442,7 @@ impl<'a, 'gc> BaseResolutionOps<'gc> for VesContext<'a, 'gc> {
     ) -> Result<ConcreteType, TypeResolutionError> {
         let f = self.frame_stack.current_frame();
         self.resolver()
-            .make_concrete(f.source_resolution, &f.generic_inst, t)
+            .make_concrete(f.source_resolution.clone(), &f.generic_inst, t)
     }
 
     #[inline]
@@ -588,7 +587,7 @@ impl<'a, 'gc> BaseStaticsOps<'gc> for VesContext<'a, 'gc> {
         match self
             .shared
             .statics
-            .init(description, &context, thread_id, metrics)
+            .init(description.clone(), &context, thread_id, metrics)
         {
             Ok(crate::statics::StaticInitResult::Execute(cctor)) => {
                 self.dispatch_method(cctor, type_generics)
@@ -598,7 +597,7 @@ impl<'a, 'gc> BaseStaticsOps<'gc> for VesContext<'a, 'gc> {
             Ok(crate::statics::StaticInitResult::Waiting) => {
                 #[cfg(feature = "multithreading")]
                 if self.shared.statics.wait_for_init(
-                    description,
+                    description.clone(),
                     &type_generics,
                     self.shared.thread_manager.as_ref(),
                     thread_id,
@@ -611,8 +610,10 @@ impl<'a, 'gc> BaseStaticsOps<'gc> for VesContext<'a, 'gc> {
             }
             Ok(crate::statics::StaticInitResult::Failed) => {
                 let type_name = description.type_name();
-                let message =
-                    format!("The type initializer for '{}' threw an exception.", type_name);
+                let message = format!(
+                    "The type initializer for '{}' threw an exception.",
+                    type_name
+                );
                 self.throw_by_name_with_message("System.TypeInitializationException", &message)
             }
             Err(e) => StepResult::Error(e.into()),
@@ -849,7 +850,7 @@ impl<'a, 'gc> VesOps<'gc> for VesContext<'a, 'gc> {
             if self.tracer_enabled() {
                 let ptr = instance.0.unwrap();
                 let obj_type = match &ptr.borrow().storage {
-                    HeapStorage::Obj(o) => o.description,
+                    HeapStorage::Obj(o) => o.description.clone(),
                     _ => unreachable!(),
                 };
                 let type_name = format!("{:?}", obj_type);
@@ -862,18 +863,19 @@ impl<'a, 'gc> VesOps<'gc> for VesContext<'a, 'gc> {
             let finalizer_data: Option<(MethodDescription, GenericLookup)> = instance
                 .as_heap_storage(|storage| {
                     if let HeapStorage::Obj(o) = storage {
-                        let obj_type = o.description;
+                        let obj_type = o.description.clone();
                         let generics = o.generics.clone();
                         let object_type = self
                             .shared
                             .loader
                             .corlib_type("System.Object")
                             .expect("System.Object must exist in corlib");
-                        let base_finalize = object_type
+                        let (idx, _) = object_type
                             .definition()
                             .methods
                             .iter()
-                            .find(|m| {
+                            .enumerate()
+                            .find(|(_, m)| {
                                 m.name == "Finalize"
                                     && m.virtual_member
                                     && m.signature.parameters.is_empty()
@@ -881,10 +883,10 @@ impl<'a, 'gc> VesOps<'gc> for VesContext<'a, 'gc> {
                             .expect("System.Object::Finalize not found");
 
                         let method_desc = MethodDescription::new(
-                            object_type,
+                            object_type.clone(),
                             GenericLookup::default(),
-                            object_type.resolution,
-                            base_finalize,
+                            object_type.resolution.clone(),
+                            MethodMemberIndex::Method(idx),
                         );
 
                         Some((

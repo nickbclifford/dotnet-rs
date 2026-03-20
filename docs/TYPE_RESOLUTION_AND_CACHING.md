@@ -16,6 +16,17 @@ Resolution converts metadata tokens (from parsed .NET assemblies) into runtime d
 
 ## Resolution Pipeline
 
+### Descriptor Representation (`dotnet-types/src/`)
+
+Descriptors are owner-tied and index-based:
+
+- `ResolutionS` stores `(Arc<MetadataArena>, NonNull<Resolution<'static>>)` as a single handle.
+- `TypeDescription` stores a `TypeIndex` into the owning resolution.
+- `MethodDescription` stores a `MethodMemberIndex` (supports ordinary methods plus property/event accessors) rather than raw pointer identity.
+- `FieldDescription` stores a field index into the owning type.
+
+This keeps metadata lifetime explicit while preserving stable, hashable descriptor keys for caches.
+
 ### Type Resolution (`resolver/types.rs`)
 
 1. Metadata token (`UserType`: `TypeDefOrRef`, `TypeSpec`, `TypeRef`) arrives from a CIL instruction.

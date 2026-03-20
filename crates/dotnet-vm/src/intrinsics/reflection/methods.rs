@@ -118,7 +118,7 @@ pub fn runtime_method_info_intrinsic_call<
                 .loader()
                 .corlib_type("System.RuntimeMethodHandle")
                 .expect("System.RuntimeMethodHandle must exist");
-            let instance = vm_try!(ctx.new_object(rmh));
+            let instance = vm_try!(ctx.new_object(rmh.clone()));
             instance
                 .instance_storage
                 .field::<ObjectRef<'gc>>(rmh, "_value")
@@ -150,18 +150,19 @@ pub fn runtime_method_info_intrinsic_call<
 
             let mut pi_objs = Vec::with_capacity(param_count);
             for i in 0..param_count {
-                let pi_obj = vm_try!(ctx.new_object(pi_type));
+                let pi_obj = vm_try!(ctx.new_object(pi_type.clone()));
                 let pi_ref = ObjectRef::new(gc, HeapStorage::Obj(pi_obj));
                 ctx.register_new_object(&pi_ref);
+                let pi_type_inner = pi_type.clone();
                 pi_ref.as_object_mut(gc, |instance| {
                     instance
                         .instance_storage
-                        .field::<usize>(pi_type, "method_index")
+                        .field::<usize>(pi_type_inner.clone(), "method_index")
                         .unwrap()
                         .write(method_index);
                     instance
                         .instance_storage
-                        .field::<i32>(pi_type, "position")
+                        .field::<i32>(pi_type_inner, "position")
                         .unwrap()
                         .write(i as i32);
                 });
@@ -223,7 +224,7 @@ pub fn runtime_method_info_intrinsic_call<
             args.append(&mut invoke_args);
 
             let return_type = if is_constructor {
-                RuntimeType::Type(method.parent)
+                RuntimeType::Type(method.parent.clone())
             } else {
                 resolve_return_type(ctx, &method, &lookup)
             };
@@ -248,7 +249,7 @@ pub fn runtime_method_info_intrinsic_call<
             let (method, lookup) = ctx.resolve_runtime_method(method_obj);
 
             // For ConstructorInfo.Invoke(parameters), we need to create the instance
-            let instance = vm_try!(ctx.new_object(method.parent));
+            let instance = vm_try!(ctx.new_object(method.parent.clone()));
             let this_obj = ObjectRef::new(gc, HeapStorage::Obj(instance));
             ctx.register_new_object(&this_obj);
 
@@ -267,7 +268,7 @@ pub fn runtime_method_info_intrinsic_call<
 
             ctx.frame_stack_mut()
                 .current_frame_mut()
-                .awaiting_invoke_return = Some(RuntimeType::Type(method.parent));
+                .awaiting_invoke_return = Some(RuntimeType::Type(method.parent.clone()));
 
             for arg in args {
                 ctx.push(arg);

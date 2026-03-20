@@ -41,6 +41,7 @@ jobs:
         features:
           - ""                                    # No features
           - "multithreading"                      # Multithreading (full)
+          - "generic-constraint-validation"       # Generic constraint validation
     steps:
       - uses: actions/checkout@v4
 
@@ -87,6 +88,10 @@ jobs:
           - name: "Multithreading"
             features: "multithreading"
 
+          # Generic constraint validation configuration
+          - name: "Generic constraint validation"
+            features: "generic-constraint-validation"
+
     steps:
       - uses: actions/checkout@v4
 
@@ -130,3 +135,24 @@ jobs:
           else
             cargo test --verbose --no-default-features --features ${{ matrix.features }} -- --nocapture
           fi
+
+      - name: Hang-probe integration tests (${{ matrix.name }})
+        if: ${{ matrix.features == 'multithreading' }}
+        timeout-minutes: 5
+        env:
+          DOTNET_TEST_TIMEOUT_SECS: "60"
+        run: |
+          FEATURES_ARGS="--no-default-features"
+          if [ -n "${{ matrix.features }}" ]; then
+            FEATURES_ARGS="$FEATURES_ARGS --features ${{ matrix.features }}"
+          fi
+          FAIL=0
+          for test in \
+            "integration_tests_impl::fixtures::test_allocation_pressure" \
+            "integration_tests_impl::fixtures::test_gc_coordinator" \
+            "integration_tests_impl::fixtures::test_multiple_arenas" \
+            "integration_tests_impl::fixtures::test_stw_stress"; do
+            cargo test $FEATURES_ARGS -p dotnet-cli --test integration_tests "$test" \
+              -- --test-threads=1 --nocapture || FAIL=1
+          done
+          exit $FAIL

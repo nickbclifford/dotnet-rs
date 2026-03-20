@@ -17,7 +17,7 @@ impl ThreadManager {
 }
 
 impl ThreadManagerOps for ThreadManager {
-    type Guard = StopTheWorldGuard;
+    type Guard<'a> = StopTheWorldGuard;
 
     fn register_thread(&self) -> ArenaId {
         ArenaId::new(1)
@@ -56,11 +56,11 @@ impl ThreadManagerOps for ThreadManager {
     ) {
     }
 
-    fn request_stop_the_world(&self) -> Self::Guard {
+    fn request_stop_the_world(&self) -> Self::Guard<'_> {
         StopTheWorldGuard
     }
 
-    fn request_stop_the_world_traced(&self, _tracer: &mut Tracer) -> Self::Guard {
+    fn request_stop_the_world_traced(&self, _tracer: &mut Tracer) -> Self::Guard<'_> {
         StopTheWorldGuard
     }
 }

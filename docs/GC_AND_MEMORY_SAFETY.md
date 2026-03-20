@@ -10,7 +10,7 @@ This document describes the garbage collection subsystem, memory safety invarian
 - **`dotnet-vm/src/memory/`**: Heap manager, raw memory access, memory ops
 - **`dotnet-value/src/object/`**: Heap object representation (`mod.rs`, `heap_storage.rs`, `types.rs`)
 - **`dotnet-value/src/storage.rs`**: Field storage with atomic capabilities
-- **`dotnet-utils/src/lib.rs`**: `BorrowGuard` and `BorrowScopeOps`
+- **`dotnet-utils/src/lib.rs`**: `BorrowGuardHandle<'ctx>` and `BorrowScopeOps`
 - **`dotnet-utils/src/gc/`**: GC utility types (`mod.rs`), `GCCommand`, `ThreadSafeLock` (`thread_safe_lock.rs`), arena helpers (`arena.rs`), and cross-arena refs (`cross_arena.rs`)
 
 ## Arena Architecture
@@ -54,6 +54,7 @@ Two implementations are selected via the `multithreading` feature flag:
 **Multi-threaded (`cfg(feature = "multithreading")`)**:
 - Tracks all arena handles via `register_arena`/`unregister_arena`.
 - Monitors allocation pressure via `ArenaHandleInner::record_allocation`. If `allocation_counter + size > ALLOCATION_THRESHOLD`, sets a `needs_collection` flag. The coordinator checks this flag in `should_collect`.
+- Enforces a two-state coordinator model (`CollectionState::Idle` / `CollectionState::Collecting`) with assertions around `start_collection` and `finish_collection`.
 - Orchestrates STW collection via `collect_all_arenas` using a phase-based approach:
   1. **Phase 1 (MarkAll)**: Acquires collection lock, clears cross-arena references table, and sends `MarkAll` to all arenas.
   2. **Phase 2 (Fixed-point MarkObjects)**: Repeatedly sends `MarkObjects` commands for cross-arena references discovered during marking. Iterates until no new cross-arena references are found.
@@ -101,6 +102,18 @@ sequenceDiagram
 
 When an object in arena A stores a reference to an object in arena B, this must be tracked so arena B's collector doesn't reclaim the referenced object prematurely.
 
+### Arena Liveness and Generation Tracking (`dotnet-utils/src/gc/cross_arena.rs`)
+
+Cross-arena registration is backed by `ArenaState` entries in a global registry:
+
+- `ArenaState` contains `stw_in_progress`, `active_leases`, `is_alive`, and a monotonically increasing `generation`.
+- `try_acquire_lease(arena_id)` returns an `ArenaLease` guard that increments `active_leases`.
+- `unregister_arena` removes the entry, flips `is_alive`, then waits until `active_leases == 0` before returning.
+
+This closes the dereference TOCTOU window because in-flight dereferences hold a lease while reading cross-arena pointers.
+
+Recorded cross-arena references are generation-stamped as `(arena_id, raw_ptr, generation)`. At harvest, callers reacquire a lease and compare `lease.generation()` with the recorded generation; mismatches are discarded as stale pointers after unregister/re-register cycles.
+
 ### How References Are Recorded
 - Memory mutations occur through `RawMemoryAccess` (`memory/access.rs`).
 - `RawMemoryAccess::write_value_internal` (and unaligned/atomic equivalents) checks the `ArenaId` of the written `ObjectRef` or `ManagedPtr` against the destination `MemoryOwner`.
@@ -113,22 +126,27 @@ The VM supports `GCHandleType::Weak` and `WeakTrackResurrection` (§I.8.2.4).
 - **BCL Support**: `System.WeakReference<T>` is currently not in the BCL support library and must be defined by the user or added to `support.dll`.
 - **Cross-Arena Limitation**: The current `GCCoordinator` fixed-point iteration only resurrects strong references. Weak references across arenas are not currently tracked or zeroed correctly by the global coordinator. This is a known limitation for multi-threaded scenarios.
 
-## BorrowGuard and Deadlock Prevention
+## BorrowGuardHandle and Deadlock Prevention
 
 ### The Problem
 `gc-arena` requires exclusive access to an arena for collection. If a thread holds a borrow on a heap object (via `Gc::borrow`) when STW is requested, it cannot release the arena, leading to a deadlock. Furthermore, traversing the heap during a STW pause while mutator threads hold locks can also cause deadlocks.
 
-### The Solution: `BorrowGuard` (`dotnet-utils/src/lib.rs`)
+### The Solution: `BorrowGuardHandle<'ctx>` (`dotnet-utils/src/lib.rs`)
 - `BorrowScopeOps` trait: `enter_borrow_scope()` / `exit_borrow_scope()`
-- `BorrowGuard::new(ctx)` increments a counter; when `counter > 0`, `check_gc_safe_point` immediately returns `false` without blocking or polling the thread manager.
+- `BorrowGuardHandle<'ctx>` is an owner-carrying RAII guard. The lifetime parameter `'ctx` ties the guard to the lifetime of the `BorrowScopeOps` context, preventing use-after-free at compile time.
+- Construct via `BorrowGuardHandle::new(ctx, token)` — increments the borrow counter; when `counter > 0`, `check_gc_safe_point` immediately returns `false` without blocking or polling the thread manager.
 - RAII — `Drop` decrements the counter.
 - **`data_ptr()` Tracing**: During the STW pause, `gc-arena` tracing callbacks use `raw_data_ptr()` or `data_ptr()` to read object fields, directly bypassing `ThreadSafeLock` checks. This is safe because all mutator threads are suspended.
 
 ### Rules (enforced by convention, not compiler)
 1. Never call `check_gc_safe_point()` while holding a heap borrow.
 2. Never allocate while holding a heap borrow (allocation may trigger GC).
-3. Always use `BorrowGuard` when borrowing heap objects in instruction handlers/intrinsics.
-4. Chunk large operations — e.g., in `string_ops/`, `span/`, or `unsafe_ops/`, long loops check `ctx.check_gc_safe_point()` periodically (e.g. every 1024 iterations or similar block size), dropping and re-acquiring `BorrowGuard` between iterations.
+3. Always use `BorrowGuardHandle::new(ctx, token)` when borrowing heap objects in instruction handlers/intrinsics.
+4. Chunk large operations — e.g., in `string_ops/`, `span/`, or `unsafe_ops/`, long loops check `ctx.check_gc_safe_point()` periodically (e.g. every 1024 iterations or similar block size), dropping and re-acquiring `BorrowGuardHandle` between iterations.
+
+## Panic-Safety Guarantees During STW
+
+`ThreadManager::request_stop_the_world` uses a panic guard that calls `resume_threads()` if any panic occurs before ownership is handed to `StopTheWorldGuard`. This prevents mutator threads from being left permanently paused.
 
 ## HeapManager (`memory/heap.rs` & `memory/ops.rs`)
 

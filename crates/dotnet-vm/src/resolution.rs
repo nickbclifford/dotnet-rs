@@ -108,10 +108,10 @@ impl<'a> ValueResolution for ResolutionContext<'a> {
 
 impl TypeResolutionExt for TypeDescription {
     fn is_value_type(&self, ctx: &ResolutionContext) -> Result<bool, TypeResolutionError> {
-        ctx.resolver().is_value_type(*self)
+        ctx.resolver().is_value_type(self.clone())
     }
 
     fn has_finalizer(&self, ctx: &ResolutionContext) -> Result<bool, TypeResolutionError> {
-        ctx.resolver().has_finalizer(*self)
+        ctx.resolver().has_finalizer(self.clone())
     }
 }

@@ -191,6 +191,22 @@ pub static INTRINSIC_ENTRIES: &[StaticIntrinsicEntry] = &[
 pub static INTRINSIC_LOOKUP: phf::Map<&'static str, Range> = ...;
 ```
 
+## dotnet-cli Fixture Test Generation (`crates/dotnet-cli/build.rs`)
+
+`dotnet-cli` also uses build-time generation for integration test wiring. Its `build.rs` scans `tests/fixtures/**/*.cs` and emits Rust test macros into `$OUT_DIR/tests.rs`.
+
+Generated forms:
+
+- `fixture_test!(name, dll_path, expected_exit_code)` for regular fixture runs.
+- `multi_arena_test!(name, fixture_rel_path, thread_count, expected_exit_code)` for inherently concurrent fixtures that require multiple executor arenas.
+
+The build script applies feature-aware ignore policy during generation:
+
+- `monitor_try_enter_timeout_42` and `circular_init_mt_42` are ignored outside `multithreading`.
+- `generic_constraints_fail_0` is ignored unless `generic-constraint-validation` is enabled.
+
+Fixture binaries are built under Cargo's target tree (`DOTNET_FIXTURES_BASE`) and a fixture content hash is used to skip unnecessary rebuilds.
+
 ## Notes for Future Documentation
 
 - [x] Document the exact PHF key format with examples

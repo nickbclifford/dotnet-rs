@@ -63,10 +63,6 @@ pub mod compat {
             self.0.try_borrow_mut().ok().map(RwLockWriteGuard)
         }
     }
-    unsafe impl<T> Sync for Mutex<T> {}
-    unsafe impl<T> Send for Mutex<T> {}
-    unsafe impl<T> Sync for RwLock<T> {}
-    unsafe impl<T> Send for RwLock<T> {}
     pub struct RwLockReadGuard<'a, T>(Ref<'a, T>);
     impl<T> Deref for RwLockReadGuard<'_, T> {
         type Target = T;
@@ -150,3 +146,86 @@ pub use parking_lot::{
 
 #[cfg(not(feature = "multithreading"))]
 pub use compat::*;
+
+// ── compile-time + runtime tests for single-threaded compat sync primitives ──
+//
+// These tests are only meaningful (and only compilable) under
+// `--no-default-features`, i.e. when the `compat` module is in use.
+#[cfg(all(test, not(feature = "multithreading")))]
+mod sync_send_sync_tests {
+    use super::compat::{Condvar, Mutex, RwLock};
+    use static_assertions::{assert_impl_all, assert_not_impl_all};
+
+    // ── compile-time: Sync must NOT be implemented ──────────────────────────
+    // `RefCell<T>` is unconditionally `!Sync`; wrapping it must not change that.
+    assert_not_impl_all!(Mutex<i32>: Sync);
+    assert_not_impl_all!(RwLock<i32>: Sync);
+    // Guards borrow from the RefCell, so they must also be !Sync.
+    assert_not_impl_all!(super::compat::MutexGuard<'static, i32>: Sync);
+    assert_not_impl_all!(super::compat::RwLockReadGuard<'static, i32>: Sync);
+    assert_not_impl_all!(super::compat::RwLockWriteGuard<'static, i32>: Sync);
+
+    // ── compile-time: Send follows the inner T ───────────────────────────────
+    // When T: Send, the wrapper must be Send.
+    assert_impl_all!(Mutex<i32>: Send);
+    assert_impl_all!(RwLock<i32>: Send);
+    // When T: !Send (raw pointer), the wrapper must NOT be Send.
+    assert_not_impl_all!(Mutex<*mut i32>: Send);
+    assert_not_impl_all!(RwLock<*mut i32>: Send);
+
+    // ── runtime: basic lock/unlock round-trips ────────────────────────────────
+    #[test]
+    fn compat_mutex_lock_unlock() {
+        let m = Mutex::new(0u32);
+        {
+            let mut g = m.lock();
+            *g = 42;
+        }
+        assert_eq!(*m.lock(), 42);
+    }
+
+    #[test]
+    fn compat_rwlock_read_write() {
+        let rw = RwLock::new(String::from("hello"));
+        assert_eq!(*rw.read(), "hello");
+        *rw.write() = String::from("world");
+        assert_eq!(*rw.read(), "world");
+    }
+
+    #[test]
+    fn compat_rwlock_try_variants_succeed_when_unlocked() {
+        let rw = RwLock::new(99i32);
+        assert!(rw.try_read().is_some());
+        assert!(rw.try_write().is_some());
+    }
+
+    #[test]
+    fn compat_rwlock_try_write_fails_while_borrowed() {
+        let rw = RwLock::new(0i32);
+        let _r = rw.read();
+        // A second immutable borrow is allowed by RefCell.
+        assert!(rw.try_read().is_some());
+        // But a mutable borrow must fail.
+        assert!(rw.try_write().is_none());
+    }
+
+    // ── runtime: confirm double-mutable-borrow panics (RefCell semantics) ────
+    #[test]
+    #[should_panic]
+    fn compat_mutex_double_lock_panics() {
+        let m = Mutex::new(0i32);
+        let _g1 = m.lock();
+        let _g2 = m.lock(); // RefCell: already mutably borrowed → panic
+    }
+
+    // ── runtime: Condvar no-ops must not panic ────────────────────────────────
+    #[test]
+    fn compat_condvar_noop_methods_do_not_panic() {
+        let cv = Condvar::new();
+        cv.notify_one();
+        cv.notify_all();
+        let m = Mutex::new(());
+        let mut g = m.lock();
+        cv.wait(&mut g); // single-threaded stub: immediate return
+    }
+}

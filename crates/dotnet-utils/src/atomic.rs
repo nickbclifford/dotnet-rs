@@ -110,7 +110,8 @@ pub trait AtomicAccess {
     /// # Safety
     /// - `ptr` must be valid and aligned for the operation
     /// - The pointed memory must be valid for reads and writes
-    unsafe fn exchange_add_atomic(ptr: *mut u8, size: usize, value: u64, ordering: Ordering) -> u64;
+    unsafe fn exchange_add_atomic(ptr: *mut u8, size: usize, value: u64, ordering: Ordering)
+    -> u64;
 }
 
 /// Concrete implementation using `AtomicT::from_ptr`
@@ -183,18 +184,19 @@ impl AtomicAccess for StandardAtomicAccess {
         }
     }
 
-    unsafe fn exchange_add_atomic(ptr: *mut u8, size: usize, value: u64, ordering: Ordering) -> u64 {
+    unsafe fn exchange_add_atomic(
+        ptr: *mut u8,
+        size: usize,
+        value: u64,
+        ordering: Ordering,
+    ) -> u64 {
         crate::validate_alignment(ptr as *const u8, size);
         match size {
             1 => unsafe { AtomicU8::from_ptr(ptr) }.fetch_add(value as u8, ordering) as u64,
-            2 => {
-                unsafe { AtomicU16::from_ptr(ptr as *mut u16) }.fetch_add(value as u16, ordering)
-                    as u64
-            }
-            4 => {
-                unsafe { AtomicU32::from_ptr(ptr as *mut u32) }.fetch_add(value as u32, ordering)
-                    as u64
-            }
+            2 => unsafe { AtomicU16::from_ptr(ptr as *mut u16) }.fetch_add(value as u16, ordering)
+                as u64,
+            4 => unsafe { AtomicU32::from_ptr(ptr as *mut u32) }.fetch_add(value as u32, ordering)
+                as u64,
             8 => unsafe { AtomicU64::from_ptr(ptr as *mut u64) }.fetch_add(value, ordering),
             _ => panic!("Unsupported atomic size: {}", size),
         }
@@ -256,7 +258,12 @@ impl AtomicAccess for StandardAtomicAccess {
         current
     }
 
-    unsafe fn exchange_add_atomic(ptr: *mut u8, size: usize, value: u64, _ordering: Ordering) -> u64 {
+    unsafe fn exchange_add_atomic(
+        ptr: *mut u8,
+        size: usize,
+        value: u64,
+        _ordering: Ordering,
+    ) -> u64 {
         let current = unsafe { Self::load_atomic(ptr, size, Ordering::Relaxed) };
         unsafe { Self::store_atomic(ptr, size, current.wrapping_add(value), Ordering::Relaxed) };
         current

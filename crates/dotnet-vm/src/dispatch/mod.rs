@@ -255,9 +255,11 @@ impl<'gc> ExecutionEngine<'gc> {
             }
 
             if method.method().body.is_none() {
-                if let Some(result) =
-                    crate::intrinsics::delegates::try_delegate_dispatch(&mut ctx, method.clone(), &lookup)
-                {
+                if let Some(result) = crate::intrinsics::delegates::try_delegate_dispatch(
+                    &mut ctx,
+                    method.clone(),
+                    &lookup,
+                ) {
                     return result;
                 }
 
@@ -319,7 +321,13 @@ impl<'gc> ExecutionEngine<'gc> {
                 ctx.push(arg);
             }
 
-            let invoke_method = ctx.frame_stack.current_frame().state.info_handle.source.clone();
+            let invoke_method = ctx
+                .frame_stack
+                .current_frame()
+                .state
+                .info_handle
+                .source
+                .clone();
             let lookup = ctx.frame_stack.current_frame().generic_inst.clone();
 
             ctx.dispatch_method(invoke_method, lookup)

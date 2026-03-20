@@ -28,7 +28,7 @@ impl ResolverService {
         ctx: &ResolutionContext<'_>,
     ) -> Result<Object<'gc>, TypeResolutionError> {
         Ok(Object::new(
-            td,
+            td.clone(),
             ctx.generics.clone(),
             self.new_instance_fields(td, ctx)?,
         ))
@@ -45,54 +45,56 @@ impl ResolverService {
 
         // ECMA-335 §I.8.2.4: Boxing Nullable<T> produces null if HasValue=false, or boxed T if HasValue=true.
         if t.is_nullable(self.loader.as_ref()) && matches!(data, StackValue::ValueType(_)) {
-            let StackValue::ValueType(obj) = &data else { unreachable!() };
+            let StackValue::ValueType(obj) = &data else {
+                unreachable!()
+            };
             let layout = obj.instance_storage.layout();
-                let has_value_field = layout
+            let has_value_field = layout
+                .fields
+                .iter()
+                .find(|(k, _)| k.name == "hasValue" || k.name == "_hasValue")
+                .map(|(_, v)| v);
+
+            if let Some(field_layout) = has_value_field {
+                let pos = field_layout.position.as_usize();
+                let has_value = obj.instance_storage.with_data(|d| d[pos]) != 0;
+
+                if !has_value {
+                    return Ok(ObjectRef(None));
+                }
+
+                // HasValue is true, box the 'value' field.
+                let value_field = layout
                     .fields
                     .iter()
-                    .find(|(k, _)| k.name == "hasValue" || k.name == "_hasValue")
-                    .map(|(_, v)| v);
+                    .find(|(k, _)| k.name == "value" || k.name == "_value")
+                    .expect("Nullable<T> must have a value field");
 
-                if let Some(field_layout) = has_value_field {
-                    let pos = field_layout.position.as_usize();
-                    let has_value = obj.instance_storage.with_data(|d| d[pos]) != 0;
+                let (_, value_field_layout) = value_field;
+                let value_pos = value_field_layout.position.as_usize();
+                let value_size = value_field_layout.layout.size().as_usize();
 
-                    if !has_value {
-                        return Ok(ObjectRef(None));
-                    }
+                // T is the first generic argument of Nullable<T>
+                let source = t.get();
+                let inner_t = if let BaseType::Type {
+                    source: TypeSource::Generic { parameters, .. },
+                    ..
+                } = source
+                {
+                    parameters
+                        .first()
+                        .ok_or(TypeResolutionError::InvalidHandle)?
+                } else {
+                    return Err(TypeResolutionError::InvalidHandle);
+                };
 
-                    // HasValue is true, box the 'value' field.
-                    let value_field = layout
-                        .fields
-                        .iter()
-                        .find(|(k, _)| k.name == "value" || k.name == "_value")
-                        .expect("Nullable<T> must have a value field");
-
-                    let (_, value_field_layout) = value_field;
-                    let value_pos = value_field_layout.position.as_usize();
-                    let value_size = value_field_layout.layout.size().as_usize();
-
-                    // T is the first generic argument of Nullable<T>
-                    let source = t.get();
-                    let inner_t = if let BaseType::Type {
-                        source: TypeSource::Generic { parameters, .. },
-                        ..
-                    } = source
-                    {
-                        parameters
-                            .first()
-                            .ok_or(TypeResolutionError::InvalidHandle)?
-                    } else {
-                        return Err(TypeResolutionError::InvalidHandle);
-                    };
-
-                    let cts_value = obj.instance_storage.with_data(|d| {
-                        let value_data = &d[value_pos..value_pos + value_size];
-                        self.read_cts_value(inner_t, value_data, gc, ctx)
-                    })?;
-                    return self.box_value(inner_t, cts_value.into_stack(), gc, ctx);
-                }
+                let cts_value = obj.instance_storage.with_data(|d| {
+                    let value_data = &d[value_pos..value_pos + value_size];
+                    self.read_cts_value(inner_t, value_data, gc, ctx)
+                })?;
+                return self.box_value(inner_t, cts_value.into_stack(), gc, ctx);
             }
+        }
 
         match self.new_cts_value(&t, data, ctx)? {
             CTSValue::Value(v) => {
@@ -400,7 +402,7 @@ impl ResolverService {
 
                     let m = ManagedPtr::new(
                         NonNull::new(sptr::from_exposed_addr_mut(addr)),
-                        *type_desc.clone(),
+                        (*type_desc).clone(),
                         None,
                         false,
                         Some(dotnet_utils::ByteOffset(0)),
@@ -408,7 +410,7 @@ impl ResolverService {
                     return Ok(CTSValue::Value(TypedRef(m, type_desc)));
                 }
 
-                let instance = self.new_object(td, &new_ctx)?;
+                let instance = self.new_object(td.clone(), &new_ctx)?;
                 let layout = instance.instance_storage.layout().clone();
 
                 instance.instance_storage.with_data_mut(|storage| {
@@ -419,17 +421,17 @@ impl ResolverService {
                             let field_data = &data[pos..pos + size];
 
                             if field_layout.layout.has_managed_ptrs() {
-                                let field_info = td
+                                let index = td
                                     .definition()
                                     .fields
                                     .iter()
-                                    .find(|f| f.name == key.name)
+                                    .position(|f| f.name == key.name)
                                     .expect("field not found during read_cts_value patching");
 
                                 let field_desc =
-                                    FieldDescription::new(td, td.resolution, field_info, 0);
+                                    FieldDescription::new(td.clone(), td.resolution.clone(), index);
                                 let field_type = self.get_field_type(
-                                    td.resolution,
+                                    td.resolution.clone(),
                                     new_ctx.generics,
                                     field_desc,
                                 )?;

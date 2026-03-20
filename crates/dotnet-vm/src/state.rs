@@ -2,6 +2,7 @@ use crate::{
     MethodInfo,
     dispatch::ring_buffer::InstructionRingBuffer,
     error::TypeResolutionError,
+    gc::GCCoordinator,
     intrinsics::IntrinsicRegistry,
     memory::HeapManager,
     metrics::{CacheSizes, CacheStats, RuntimeMetrics},
@@ -31,7 +32,6 @@ use std::{
     sync::OnceLock,
 };
 
-use crate::gc::GCCoordinator;
 #[cfg(feature = "multithreading")]
 use dotnet_utils::sync::AtomicUsize;
 
@@ -61,8 +61,10 @@ pub struct GlobalCaches {
     /// Cache for finalizer checks: TypeDescription -> bool
     pub has_finalizer_cache: DashMap<TypeDescription, bool>,
     /// Cache for resolved overrides: (TypeDescription, GenericLookup) -> Map<DeclMethod, ImplMethod>
-    pub overrides_cache:
-        DashMap<(TypeDescription, GenericLookup), Arc<HashMap<MethodDescription, MethodDescription>>>,
+    pub overrides_cache: DashMap<
+        (TypeDescription, GenericLookup),
+        Arc<HashMap<MethodDescription, MethodDescription>>,
+    >,
     /// Cache for method info: (Method, Lookup) -> MethodInfo
     pub method_info_cache: DashMap<(MethodDescription, GenericLookup), Arc<MethodInfo<'static>>>,
     /// Registry of intrinsic methods
@@ -130,6 +132,16 @@ pub struct SharedGlobalState {
     pub resolution_shared_cache: OnceLock<Arc<crate::context::ResolutionShared>>,
 }
 
+// SAFETY: Under `--no-default-features` the runtime is single-threaded; `SharedGlobalState` is
+// never accessed concurrently.  The `!Sync`/`!Send` fields are compat `Mutex`/`RwLock` wrappers
+// over `RefCell` and `NonNull`-bearing descriptors, all safe here because no concurrent access
+// can occur in this build.  These impls are intentionally absent when `multithreading` is
+// enabled so the real thread-safe types provide the `Send`/`Sync` guarantees instead.
+#[cfg(not(feature = "multithreading"))]
+unsafe impl Sync for SharedGlobalState {}
+#[cfg(not(feature = "multithreading"))]
+unsafe impl Send for SharedGlobalState {}
+
 impl GlobalCaches {
     pub fn get_method_info(
         &self,
@@ -150,6 +162,7 @@ impl GlobalCaches {
 }
 
 impl SharedGlobalState {
+    #[allow(clippy::arc_with_non_send_sync)]
     pub fn new(loader: Arc<AssemblyLoader>) -> Self {
         let tracer = Tracer::new();
         let caches = Arc::new(GlobalCaches::new(&loader, &tracer));

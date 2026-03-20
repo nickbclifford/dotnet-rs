@@ -35,7 +35,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
             obj_ref.as_object_mut(gc, |obj| {
                 if obj
                     .instance_storage
-                    .has_field(base_exception_type, "_message")
+                    .has_field(base_exception_type.clone(), "_message")
                 {
                     let mut field = obj
                         .instance_storage
@@ -69,11 +69,11 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
             obj_ref.as_object_mut(gc, |obj| {
                 if obj
                     .instance_storage
-                    .has_field(base_exception_type, "_message")
+                    .has_field(base_exception_type.clone(), "_message")
                 {
                     let mut field = obj
                         .instance_storage
-                        .get_field_mut_local(base_exception_type, "_message");
+                        .get_field_mut_local(base_exception_type.clone(), "_message");
                     message_ref.write(&mut field);
                 }
             });
@@ -82,7 +82,7 @@ impl<'a, 'gc> ExceptionOps<'gc> for VesContext<'a, 'gc> {
         obj_ref.as_object_mut(gc, |obj| {
             if obj
                 .instance_storage
-                .has_field(base_exception_type, "_innerException")
+                .has_field(base_exception_type.clone(), "_innerException")
             {
                 let mut field = obj
                     .instance_storage

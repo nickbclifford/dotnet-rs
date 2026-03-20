@@ -28,7 +28,7 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
         generic_inst: GenericLookup,
     ) -> Result<(), TypeResolutionError> {
         let gc = self.gc;
-        let desc = instance.description;
+        let desc = instance.description.clone();
 
         let value = if desc.is_value_type(&self.current_context())? {
             StackValue::ValueType(instance)
@@ -99,7 +99,7 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
         if method.signature.instance {
             let this_val = self.evaluation_stack.get_slot(argument_base);
             if let StackValue::ObjectRef(obj) = this_val {
-                let td = method.source.parent;
+                let td = method.source.parent.clone();
                 if td.is_value_type(&self.current_context())? {
                     // Unbox this to a managed pointer. This is required when a virtual call
                     // on a boxed value type reaches a value type override.
@@ -186,11 +186,12 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
         // static method calls, instance calls for value types, and constructor calls.
         if !method.parent.before_field_init() {
             let is_static = !method.method().signature.instance;
-            let is_value_type = vm_try!(method.parent.is_value_type(&self.current_context()));
+            let is_value_type =
+                vm_try!(method.parent.clone().is_value_type(&self.current_context()));
             let is_constructor = method.method().name == ".ctor";
 
             if is_static || is_value_type || is_constructor {
-                let res = self.initialize_static_storage(method.parent, lookup.clone());
+                let res = self.initialize_static_storage(method.parent.clone(), lookup.clone());
                 if res != StepResult::Continue {
                     return res;
                 }
@@ -208,9 +209,11 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
             crate::pinvoke::external_call(self, method, &shared.pinvoke)
         } else {
             if method.method().body.is_none() {
-                if let Some(result) =
-                    crate::intrinsics::delegates::try_delegate_dispatch(self, method.clone(), &lookup)
-                {
+                if let Some(result) = crate::intrinsics::delegates::try_delegate_dispatch(
+                    self,
+                    method.clone(),
+                    &lookup,
+                ) {
                     return result;
                 }
 
@@ -221,14 +224,15 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
                 );
             }
 
-            let info = match self.shared.caches.get_method_info(
-                method,
-                &lookup,
-                self.shared.clone(),
-            ) {
-                Ok(v) => v,
-                Err(e) => return StepResult::Error(e.into()),
-            };
+            let info =
+                match self
+                    .shared
+                    .caches
+                    .get_method_info(method, &lookup, self.shared.clone())
+                {
+                    Ok(v) => v,
+                    Err(e) => return StepResult::Error(e.into()),
+                };
             vm_try!(self.call_frame(info, lookup));
             StepResult::FramePushed
         }
@@ -373,14 +377,23 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         true
     }
 
-    fn dispatch_method_tail(&mut self, method: MethodDescription, lookup: GenericLookup) -> StepResult {
+    fn dispatch_method_tail(
+        &mut self,
+        method: MethodDescription,
+        lookup: GenericLookup,
+    ) -> StepResult {
         // If we can't safely tail-call, fall back to the regular call path.
         if let Some(metadata) = crate::intrinsics::classify_intrinsic(
             method.clone(),
             self.loader(),
             Some(&self.shared.caches.intrinsic_registry),
         ) {
-            return crate::intrinsics::dispatch_method_intrinsic(metadata.handler, self, method, &lookup);
+            return crate::intrinsics::dispatch_method_intrinsic(
+                metadata.handler,
+                self,
+                method,
+                &lookup,
+            );
         }
         if method.method().pinvoke.is_some() {
             let shared = self.shared.clone();
@@ -411,7 +424,11 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         // Preserve the call arguments.
         let (args_base, clear_from, old_top) = {
             let frame = self.frame_stack.current_frame();
-            (frame.base.stack, frame.base.arguments, self.evaluation_stack.top_of_stack())
+            (
+                frame.base.stack,
+                frame.base.arguments,
+                self.evaluation_stack.top_of_stack(),
+            )
         };
         let mut args = Vec::with_capacity(arg_count);
         for i in 0..arg_count {
@@ -452,13 +469,19 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         StepResult::FramePushed
     }
 
-    fn dispatch_method_jmp(&mut self, method: MethodDescription, lookup: GenericLookup) -> StepResult {
+    fn dispatch_method_jmp(
+        &mut self,
+        method: MethodDescription,
+        lookup: GenericLookup,
+    ) -> StepResult {
         let frame = self.frame_stack.current_frame();
 
         // ECMA-335: evaluation stack shall be empty.
         if frame.stack_height != crate::StackSlotIndex(0) {
             return StepResult::Error(crate::error::VmError::Execution(
-                crate::error::ExecutionError::Aborted("jmp requires empty evaluation stack".to_string()),
+                crate::error::ExecutionError::Aborted(
+                    "jmp requires empty evaluation stack".to_string(),
+                ),
             ));
         }
 
@@ -467,13 +490,17 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         for sec in frame.state.info_handle.exceptions.iter() {
             if sec.instructions.contains(&ip) {
                 return StepResult::Error(crate::error::VmError::Execution(
-                    crate::error::ExecutionError::Aborted("jmp out of try/catch/finally block".to_string()),
+                    crate::error::ExecutionError::Aborted(
+                        "jmp out of try/catch/finally block".to_string(),
+                    ),
                 ));
             }
             for handler in &sec.handlers {
                 if handler.instructions.contains(&ip) {
                     return StepResult::Error(crate::error::VmError::Execution(
-                        crate::error::ExecutionError::Aborted("jmp out of exception handler".to_string()),
+                        crate::error::ExecutionError::Aborted(
+                            "jmp out of exception handler".to_string(),
+                        ),
                     ));
                 }
             }
@@ -486,10 +513,10 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         let loader = self.loader_arc();
         let comparer = dotnet_types::comparer::TypeComparer::new(loader.as_ref());
         let res_ctx = self.current_context();
-        let res_s = res_ctx.resolution;
+        let res_s = res_ctx.resolution.clone();
 
         if !comparer.signatures_equal(
-            res_s,
+            res_s.clone(),
             current_sig,
             Some(res_ctx.generics), // Current generics
             res_s,
@@ -513,8 +540,11 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         // Discard the current frame and its locals/eval stack
         let old_top = self.evaluation_stack.top_of_stack();
         let clear_from = frame.base.arguments;
-        
-        let popped_frame = self.frame_stack.pop().expect("jmp requires a current frame");
+
+        let popped_frame = self
+            .frame_stack
+            .pop()
+            .expect("jmp requires a current frame");
         if self.tracer_enabled() {
             let method_name = format!("{:?}", popped_frame.state.info_handle.source);
             self.shared

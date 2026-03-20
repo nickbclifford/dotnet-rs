@@ -9,15 +9,15 @@
 //! - **[`MethodDescription`]**: Represents a resolved .NET method.
 //! - **[`FieldDescription`]**: Represents a resolved .NET field.
 //! - **[`TypeComparer`](comparer::TypeComparer)**: Handles type equality and assignability.
-use crate::{members::MethodDescription, resolution::ResolutionS, generics::GenericLookup};
+#![allow(clippy::mutable_key_type)]
+use crate::{generics::GenericLookup, members::MethodDescription, resolution::ResolutionS};
 use dotnetdll::prelude::{
-    MemberType, ResolvedDebug, TypeDefinition, TypeIndex, TypeSource, UserType,
+    MemberType, MethodMemberIndex, ResolvedDebug, TypeDefinition, TypeIndex, TypeSource, UserType,
 };
 use gc_arena::static_collect;
 use std::{
     fmt::{Debug, Formatter},
     hash::{Hash, Hasher},
-    ptr::NonNull,
 };
 
 #[cfg(feature = "fuzzing")]
@@ -33,6 +33,19 @@ pub mod members;
 pub mod resolution;
 pub mod runtime;
 
+const _: [(); std::mem::size_of::<TypeIndex>()] = [(); std::mem::size_of::<usize>()];
+
+#[inline]
+pub(crate) const fn type_index_from_usize(index: usize) -> TypeIndex {
+    // SAFETY: `dotnetdll` defines `TypeIndex` as a newtype around `usize`.
+    unsafe { std::mem::transmute::<usize, TypeIndex>(index) }
+}
+
+#[inline]
+pub(crate) const fn sentinel_type_index() -> TypeIndex {
+    type_index_from_usize(0)
+}
+
 pub trait TypeResolver {
     fn corlib_type(&self, name: &str) -> Result<TypeDescription, error::TypeResolutionError>;
     fn locate_type(
@@ -44,13 +57,16 @@ pub trait TypeResolver {
         &self,
         ty: generics::ConcreteType,
     ) -> Result<TypeDescription, error::TypeResolutionError>;
+
+    fn canonical_type_name<'a>(&'a self, name: &'a str) -> &'a str {
+        name
+    }
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct TypeDescription {
     pub resolution: ResolutionS,
-    definition_ptr: Option<NonNull<TypeDefinition<'static>>>,
     pub index: TypeIndex,
 }
 
@@ -58,107 +74,53 @@ pub struct TypeDescription {
 impl<'a> Arbitrary<'a> for TypeDescription {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let resolution: ResolutionS = u.arbitrary()?;
-        let def_ptr_val: usize = u.arbitrary()?;
-        let definition_ptr = NonNull::new(def_ptr_val as *mut TypeDefinition<'static>);
-        let index_bytes: [u8; std::mem::size_of::<TypeIndex>()] = u.arbitrary()?;
-        let index = unsafe { std::mem::transmute_copy(&index_bytes) };
+        let index = type_index_from_usize(u.arbitrary()?);
 
-        Ok(Self {
-            resolution,
-            definition_ptr,
-            index,
-        })
+        Ok(Self { resolution, index })
     }
 }
 
 static_collect!(TypeDescription);
 
-// SAFETY: TypeDescription only contains a ResolutionS (which is a raw pointer wrapper)
-// and a NonNull pointer to a TypeDefinition. Both point to data with 'static lifetime
-// managed by the VM's assembly loader. Thread-safety is guaranteed by the read-only
-// nature of metadata once loaded.
-unsafe impl Send for TypeDescription {}
-unsafe impl Sync for TypeDescription {}
-
 impl TypeDescription {
     pub const NULL: Self = Self {
         resolution: ResolutionS::NULL,
-        definition_ptr: None,
-        index: unsafe {
-            std::mem::transmute::<[u8; size_of::<TypeIndex>()], TypeIndex>(
-                [0u8; size_of::<TypeIndex>()],
-            )
-        },
+        index: sentinel_type_index(),
     };
 
-    pub const fn new(
-        resolution: ResolutionS,
-        definition: &'static TypeDefinition<'static>,
-        index: TypeIndex,
-    ) -> Self {
-        Self {
-            resolution,
-            definition_ptr: NonNull::new(definition as *const _ as *mut _),
-            index,
-        }
-    }
-
-    pub const fn from_raw(
-        resolution: ResolutionS,
-        definition_ptr: Option<NonNull<TypeDefinition<'static>>>,
-        index: TypeIndex,
-    ) -> Self {
-        Self {
-            resolution,
-            definition_ptr,
-            index,
-        }
-    }
-
-    pub const fn definition_ptr(&self) -> Option<NonNull<TypeDefinition<'static>>> {
-        self.definition_ptr
+    pub fn new(resolution: ResolutionS, index: TypeIndex) -> Self {
+        Self { resolution, index }
     }
 
     pub fn definition(&self) -> &'static TypeDefinition<'static> {
-        match self.definition_ptr {
-            Some(p) => {
-                // SAFETY: definition_ptr is derived from a &'static reference during construction,
-                // ensuring it points to valid metadata that persists for the program lifetime.
-                unsafe { &*p.as_ptr() }
-            }
-            None => {
-                panic!("Attempted to access definition of a null or uninitialized TypeDescription")
-            }
+        if self.is_null() {
+            panic!("Attempted to access definition of a null or uninitialized TypeDescription")
         }
+        &self.resolution.definition()[self.index]
     }
 
     pub const fn is_null(&self) -> bool {
-        self.definition_ptr.is_none()
+        self.resolution.is_null()
     }
 }
 
 impl Debug for TypeDescription {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self.definition_ptr {
-            None => write!(f, "NULL"),
-            Some(_) => {
-                if self.resolution.is_null() {
-                    write!(f, "TypeDescription(No Resolution)")
-                } else {
-                    write!(
-                        f,
-                        "{}",
-                        self.definition().show(self.resolution.definition())
-                    )
-                }
-            }
+        if self.is_null() {
+            write!(f, "NULL")
+        } else {
+            write!(
+                f,
+                "{}",
+                self.definition().show(self.resolution.definition())
+            )
         }
     }
 }
 
 impl PartialEq for TypeDescription {
     fn eq(&self, other: &Self) -> bool {
-        self.definition_ptr == other.definition_ptr
+        self.index == other.index && self.resolution == other.resolution
     }
 }
 
@@ -166,7 +128,8 @@ impl Eq for TypeDescription {}
 
 impl Hash for TypeDescription {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.definition_ptr.hash(state);
+        self.index.hash(state);
+        self.resolution.hash(state);
     }
 }
 
@@ -176,17 +139,26 @@ impl TypeDescription {
     }
 
     pub fn static_initializer(&self) -> Option<MethodDescription> {
-        self.definition().methods.iter().find_map(|m| {
-            if m.runtime_special_name
-                && m.name == ".cctor"
-                && !m.signature.instance
-                && m.signature.parameters.is_empty()
-            {
-                Some(MethodDescription::new(*self, GenericLookup::default(), self.resolution, m))
-            } else {
-                None
-            }
-        })
+        self.definition()
+            .methods
+            .iter()
+            .enumerate()
+            .find_map(|(idx, m)| {
+                if m.runtime_special_name
+                    && m.name == ".cctor"
+                    && !m.signature.instance
+                    && m.signature.parameters.is_empty()
+                {
+                    Some(MethodDescription::new(
+                        self.clone(),
+                        GenericLookup::default(),
+                        self.resolution.clone(),
+                        MethodMemberIndex::Method(idx),
+                    ))
+                } else {
+                    None
+                }
+            })
     }
 
     pub fn type_name(&self) -> String {
@@ -223,9 +195,41 @@ impl TypeDescription {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dotnetdll::prelude::Resolution;
+
+    fn assert_send<T: Send>() {}
+    fn assert_sync<T: Sync>() {}
+
     #[test]
     fn test_null_exists() {
         let _ = TypeDescription::NULL;
         let _ = ResolutionS::NULL;
+    }
+
+    #[test]
+    fn test_send_sync_traits() {
+        assert_send::<Resolution<'static>>();
+        assert_sync::<Resolution<'static>>();
+
+        assert_send::<resolution::MetadataArena>();
+        assert_sync::<resolution::MetadataArena>();
+
+        assert_send::<resolution::ResolutionS>();
+        assert_sync::<resolution::ResolutionS>();
+
+        assert_send::<TypeDescription>();
+        assert_sync::<TypeDescription>();
+
+        assert_send::<members::MethodDescription>();
+        assert_sync::<members::MethodDescription>();
+
+        assert_send::<members::FieldDescription>();
+        assert_sync::<members::FieldDescription>();
+
+        assert_send::<generics::ConcreteType>();
+        assert_sync::<generics::ConcreteType>();
+
+        assert_send::<generics::GenericLookup>();
+        assert_sync::<generics::GenericLookup>();
     }
 }

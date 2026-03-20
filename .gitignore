@@ -20,4 +20,6 @@ crates/*/target
 # Junie
 .junie/
 .output.txt
+
 rustc-ice-*.txt
+__pycache__

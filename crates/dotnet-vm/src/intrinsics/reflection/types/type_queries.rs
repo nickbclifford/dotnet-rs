@@ -152,7 +152,7 @@ pub fn intrinsic_type_get_type_handle<'gc, T: TypedStackOps<'gc> + LoaderOps + M
     let obj = ctx.pop_obj();
 
     let rth = vm_try!(ctx.loader().corlib_type("System.RuntimeTypeHandle"));
-    let instance = vm_try!(ctx.new_object(rth));
+    let instance = vm_try!(ctx.new_object(rth.clone()));
     instance
         .instance_storage
         .field::<ObjectRef<'gc>>(rth, "_value")
@@ -271,10 +271,10 @@ pub fn handle_get_interfaces<
         }
     };
 
-    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
+    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = &target_type {
         let mut queue = VecDeque::new();
         let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
-        queue.push_back((td, lookup));
+        queue.push_back((td.clone(), lookup));
 
         while let Some((curr_td, curr_lookup)) = queue.pop_front() {
             // Check interfaces implemented by this type
@@ -294,7 +294,7 @@ pub fn handle_get_interfaces<
                 let base_rt = ctx.make_runtime_type(&ctx.with_generics(&curr_lookup), &method_type);
                 if let RuntimeType::Type(base_td) | RuntimeType::Generic(base_td, _) = &base_rt {
                     let base_lookup = build_generic_lookup_from_runtime_type(ctx, &base_rt);
-                    queue.push_back((*base_td, base_lookup));
+                    queue.push_back((base_td.clone(), base_lookup));
                 }
             }
         }
@@ -342,9 +342,9 @@ pub fn handle_get_interface<
     };
 
     let mut found = None;
-    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = target_type {
+    if let RuntimeType::Type(td) | RuntimeType::Generic(td, _) = &target_type {
         let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
-        queue.push_back((td, lookup));
+        queue.push_back((td.clone(), lookup));
 
         'outer: while let Some((curr_td, curr_lookup)) = queue.pop_front() {
             for (_, interface_source) in &curr_td.definition().implements {
@@ -370,7 +370,7 @@ pub fn handle_get_interface<
                     {
                         let itf_lookup =
                             build_generic_lookup_from_runtime_type(ctx, &resolved_interface);
-                        queue.push_back((*itf_td, itf_lookup));
+                        queue.push_back((itf_td.clone(), itf_lookup));
                     }
                 }
             }
@@ -380,7 +380,7 @@ pub fn handle_get_interface<
                 let base_rt = ctx.make_runtime_type(&ctx.with_generics(&curr_lookup), &method_type);
                 if let RuntimeType::Type(base_td) | RuntimeType::Generic(base_td, _) = &base_rt {
                     let base_lookup = build_generic_lookup_from_runtime_type(ctx, &base_rt);
-                    queue.push_back((*base_td, base_lookup));
+                    queue.push_back((base_td.clone(), base_lookup));
                 }
             }
         }
@@ -528,7 +528,7 @@ pub fn handle_get_base_type<
     let obj = ctx.pop_obj();
     let target_type = ctx.resolve_runtime_type(obj);
     match target_type {
-        RuntimeType::Type(td) | RuntimeType::Generic(td, _) => {
+        RuntimeType::Type(ref td) | RuntimeType::Generic(ref td, _) => {
             if let Some(base) = &td.definition().extends {
                 let lookup = build_generic_lookup_from_runtime_type(ctx, &target_type);
                 let method_type = super::member_to_method_type(base);
@@ -568,7 +568,10 @@ pub fn handle_get_generic_type_definition<
         RuntimeType::Generic(td, _) => {
             let n_params = td.definition().generic_parameters.len();
             let params = (0..n_params as u16)
-                .map(|index| RuntimeType::TypeParameter { owner: td, index })
+                .map(|index| RuntimeType::TypeParameter {
+                    owner: td.clone(),
+                    index,
+                })
                 .collect();
             let def_rt = RuntimeType::Generic(td, params);
             let rt_obj = ctx.get_runtime_type(def_rt);
@@ -634,7 +637,7 @@ pub fn handle_get_type_handle<
     let obj = ctx.pop_obj();
 
     let rth = vm_try!(ctx.loader().corlib_type("System.RuntimeTypeHandle"));
-    let instance = vm_try!(ctx.current_context().new_object(rth));
+    let instance = vm_try!(ctx.current_context().new_object(rth.clone()));
     obj.write(&mut instance.instance_storage.get_field_mut_local(rth, "_value"));
 
     ctx.push(StackValue::ValueType(instance));

@@ -97,7 +97,7 @@ pub(crate) fn get_runtime_type<'gc>(
         .corlib_type("System.RuntimeType")
         .expect("System.RuntimeType not found");
     let rt_obj = ctx
-        .new_object(rt)
+        .new_object(rt.clone())
         .expect("Failed to create RuntimeType object");
     let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
     ctx.register_new_object(&obj_ref);
@@ -122,7 +122,7 @@ pub(crate) fn resolve_runtime_type<'gc>(
     obj.as_object(|instance| {
         let index = instance
             .instance_storage
-            .field::<usize>(instance.description, "index")
+            .field::<usize>(instance.description.clone(), "index")
             .unwrap()
             .read();
         #[cfg(feature = "multithreading")]
@@ -145,7 +145,7 @@ pub(crate) fn resolve_runtime_method<'gc>(
     obj.as_object(|instance| {
         let index = instance
             .instance_storage
-            .field::<usize>(instance.description, "index")
+            .field::<usize>(instance.description.clone(), "index")
             .unwrap()
             .read();
         #[cfg(feature = "multithreading")]
@@ -170,7 +170,7 @@ pub(crate) fn resolve_runtime_field<'gc>(
     obj.as_object(|instance| {
         let index = instance
             .instance_storage
-            .field::<usize>(instance.description, "index")
+            .field::<usize>(instance.description.clone(), "index")
             .unwrap()
             .read();
         #[cfg(feature = "multithreading")]
@@ -258,7 +258,7 @@ pub(crate) fn make_runtime_type(res_ctx: &ResolutionContext, t: &MethodType) -> 
             }
         },
         MethodType::TypeGeneric(i) => RuntimeType::TypeParameter {
-            owner: res_ctx.type_owner.expect("missing type owner"),
+            owner: res_ctx.type_owner.clone().expect("missing type owner"),
             index: *i as u16,
         },
         MethodType::MethodGeneric(i) => RuntimeType::MethodParameter {
@@ -310,7 +310,7 @@ pub(crate) fn get_runtime_field_index<'gc>(
         let index = *ctx
             .shared()
             .shared_runtime_fields
-            .entry((field, lookup.clone()))
+            .entry((field.clone(), lookup.clone()))
             .or_insert_with(|| {
                 let idx = ctx
                     .shared()
@@ -360,7 +360,7 @@ pub(crate) fn get_runtime_method_obj<'gc>(
         .corlib_type(class_name)
         .expect("reflection type not found");
     let rt_obj = ctx
-        .new_object(rt)
+        .new_object(rt.clone())
         .expect("Failed to create reflection object");
     let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
     ctx.register_new_object(&obj_ref);
@@ -389,19 +389,19 @@ pub(crate) fn get_runtime_field_obj<'gc>(
     if let Some(obj) = ctx
         .reflection()
         .field_objs_read()
-        .get(&(field, lookup.clone()))
+        .get(&(field.clone(), lookup.clone()))
     {
         return *obj;
     }
 
-    let index = get_runtime_field_index(ctx, field, lookup.clone()) as usize;
+    let index = get_runtime_field_index(ctx, field.clone(), lookup.clone()) as usize;
 
     let rt = ctx
         .loader()
         .corlib_type("DotnetRs.FieldInfo")
         .expect("FieldInfo not found");
     let rt_obj = ctx
-        .new_object(rt)
+        .new_object(rt.clone())
         .expect("Failed to create FieldInfo object");
     let obj_ref = ObjectRef::new(gc, HeapStorage::Obj(rt_obj));
     ctx.register_new_object(&obj_ref);

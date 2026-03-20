@@ -22,7 +22,8 @@ fn cargo_profile_target_dir_from_out_dir(out_dir: &Path) -> PathBuf {
     // but outside the per-build-script hash dir.
     for ancestor in out_dir.ancestors() {
         if ancestor.file_name().is_some_and(|n| n == "build")
-            && let Some(profile_dir) = ancestor.parent() {
+            && let Some(profile_dir) = ancestor.parent()
+        {
             return profile_dir.to_path_buf();
         }
     }
@@ -74,13 +75,11 @@ fn main() {
 
         // Restore packages once for SingleFile.csproj.
         let restore_status = Command::new("dotnet")
-            .args([
-                "restore",
-                "SingleFile.csproj",
-                "-v:q",
-                "--nologo",
-            ])
-            .arg(format!("-p:BaseIntermediateOutputPath={}/", msbuild_obj.display()))
+            .args(["restore", "SingleFile.csproj", "-v:q", "--nologo"])
+            .arg(format!(
+                "-p:BaseIntermediateOutputPath={}/",
+                msbuild_obj.display()
+            ))
             .arg(format!("-p:BaseOutputPath={}/", msbuild_bin.display()))
             .current_dir(&tests_dir)
             .status()
@@ -100,7 +99,10 @@ fn main() {
                 "--no-restore",
             ])
             .arg(format!("-p:FixtureOutputBase={}/", output_base.display()))
-            .arg(format!("-p:BaseIntermediateOutputPath={}/", msbuild_obj.display()))
+            .arg(format!(
+                "-p:BaseIntermediateOutputPath={}/",
+                msbuild_obj.display()
+            ))
             .arg(format!("-p:BaseOutputPath={}/", msbuild_bin.display()))
             .current_dir(&tests_dir)
             .status()
@@ -139,21 +141,44 @@ fn main() {
 
         let mut ignore_prefix = "".to_string();
         let is_multithreading_enabled = std::env::var("CARGO_FEATURE_MULTITHREADING").is_ok();
-        if file_name == "bench_loop_42" 
-            || !dll_path.exists()
-            || (file_name == "monitor_try_enter_timeout_42" && !is_multithreading_enabled) {
+        let is_generic_constraint_validation_enabled =
+            std::env::var("CARGO_FEATURE_GENERIC_CONSTRAINT_VALIDATION").is_ok();
+        if !dll_path.exists()
+            // monitor_try_enter_timeout_42 uses Interlocked.Increment to assign roles across
+            // three threads and busy-spins on cross-thread volatile flags. This is permanently
+            // incompatible with single-threaded execution: Thread 0 would spin-wait forever for
+            // Thread 1 which never runs. Single-threaded Monitor.TryEnter semantics are covered
+            // by monitor_try_enter_timeout_single_42 instead.
+            || (file_name == "monitor_try_enter_timeout_42" && !is_multithreading_enabled)
+            // circular_init_mt_42 requires two concurrent executors entering opposing
+            // type initializers. A single-executor run hangs in Program.Arrive().
+            || (file_name == "circular_init_mt_42" && !is_multithreading_enabled)
+            // generic_constraints_fail_0 deliberately tests constraint-violation rejection;
+            // that logic only exists under the generic-constraint-validation feature.
+            || (file_name == "generic_constraints_fail_0"
+                && !is_generic_constraint_validation_enabled)
+        {
             ignore_prefix = "#[ignore] ".to_string();
         }
 
-        // `generic_constraints_fail_0.cs` currently triggers a stack overflow when executed under
-        // `generic-constraint-validation` (see `MakeGenericType` constraint checking).
-        // Keep the test generated but ignored to avoid aborting the test suite.
-        if test_name == "generics_generic_constraints_fail_0" {
+        let multi_arena_threads = match file_name {
+            // This fixture is inherently multi-threaded: threads are assigned roles via
+            // Interlocked.Increment, so a single-executor fixture_test! would hang forever
+            // (Thread 0 busy-waits for Thread 1 which never runs). Use 3 executors.
+            "monitor_try_enter_timeout_42" => Some(3),
+            // This fixture intentionally deadlocks two type initializers unless both roles
+            // run concurrently. Use 2 executors to ensure each role gets a worker thread.
+            "circular_init_mt_42" => Some(2),
+            _ => None,
+        };
+
+        if let Some(thread_count) = multi_arena_threads.filter(|_| is_multithreading_enabled) {
             writeln!(
                 f,
-                "fixture_test!(#[ignore] {}, {:?}, {});",
+                "#[cfg(feature = \"multithreading\")] multi_arena_test!({}, {:?}, {}, {});",
                 test_name,
-                dll_path.to_str().unwrap(),
+                path.strip_prefix(manifest_dir).unwrap().to_string_lossy(),
+                thread_count,
                 expected_exit_code
             )
             .unwrap();

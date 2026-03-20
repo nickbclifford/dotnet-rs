@@ -3,13 +3,17 @@ use dotnetdll::prelude::{
     Accessibility, BaseType, Kind, MemberAccessibility, MethodType, Resolution, ResolvedDebug,
     TypeSource, UserType,
 };
-#[cfg(feature = "generic-constraint-validation")]
-use dotnetdll::resolved::generic::Generic;
 use gc_arena::{Collect, collect::Trace};
 use std::{
+    collections::HashSet,
     fmt::{Debug, Formatter},
     sync::Arc,
 };
+
+#[cfg(feature = "generic-constraint-validation")]
+use dotnetdll::resolved::generic::Generic;
+#[cfg(feature = "generic-constraint-validation")]
+use std::cell::RefCell;
 
 #[cfg(feature = "fuzzing")]
 use arbitrary::Arbitrary;
@@ -75,6 +79,7 @@ impl ConcreteType {
         )
     }
 
+    #[allow(clippy::mutable_key_type)]
     pub fn is_value_type(&self, loader: &impl TypeResolver) -> bool {
         match self.base.as_ref() {
             dotnetdll::prelude::BaseType::Type {
@@ -97,7 +102,11 @@ impl ConcreteType {
             | dotnetdll::prelude::BaseType::UIntPtr => true,
             dotnetdll::prelude::BaseType::Type { .. } => {
                 let mut curr = self.clone();
-                while let Ok(td) = loader.find_concrete_type(curr.clone()) {
+                let mut seen = HashSet::new();
+                while seen.insert(curr.clone()) {
+                    let Ok(td) = loader.find_concrete_type(curr.clone()) else {
+                        break;
+                    };
                     let def = td.definition();
                     if def.name == "ValueType" && def.namespace.as_deref() == Some("System") {
                         return true;
@@ -122,7 +131,7 @@ impl ConcreteType {
     }
 
     pub fn resolution(&self) -> ResolutionS {
-        self.source
+        self.source.clone()
     }
 
     pub fn is_interface(&self, loader: &impl TypeResolver) -> bool {
@@ -266,17 +275,17 @@ impl GenericLookup {
         match t {
             MethodType::Base(b) => {
                 let mut err = None;
-                let concrete_base = b.map(|t| match self.make_concrete(res, t, _loader) {
+                let concrete_base = b.map(|t| match self.make_concrete(res.clone(), t, _loader) {
                     Ok(c) => c,
                     Err(e) => {
                         err = Some(e);
-                        ConcreteType::new(res, BaseType::Boolean)
+                        ConcreteType::new(res.clone(), BaseType::Boolean)
                     }
                 });
                 if let Some(e) = err {
                     Err(e)
                 } else {
-                    let concrete = ConcreteType::new(res, concrete_base);
+                    let concrete = ConcreteType::new(res.clone(), concrete_base);
 
                     #[cfg(feature = "generic-constraint-validation")]
                     {
@@ -285,12 +294,89 @@ impl GenericLookup {
                             ..
                         } = concrete.get()
                         {
-                            let td = _loader.locate_type(res, *base)?;
+                            // Copy/clone before releasing the borrow on `concrete`.
+                            let base = *base;
+                            let parameters = parameters.clone();
+                            let cache_key = concrete.clone();
+
+                            if let Some(cached_result) =
+                                cached_constraint_validation_result(&cache_key)
+                            {
+                                cached_result?;
+                                return Ok(concrete);
+                            }
+
+                            // Cycle guard: if this (resolution, type) pair is already
+                            // being validated on this thread, we have a constraint cycle.
+                            // Short-circuit permissively to avoid infinite recursion on
+                            // valid recursive BCL constraints.
+                            let key = (res.clone(), base);
+                            let already_visiting =
+                                CONSTRAINT_VALIDATION_VISITING.with(|v| v.borrow().contains(&key));
+                            if already_visiting {
+                                cache_constraint_validation_result(cache_key, Ok(()));
+                                return Ok(concrete);
+                            }
+
+                            let td = _loader.locate_type(res.clone(), base)?;
                             let lookup = GenericLookup {
-                                type_generics: parameters.clone().into(),
+                                type_generics: parameters.into(),
                                 method_generics: Arc::new([]),
                             };
-                            lookup.validate_constraints(td.resolution, _loader, &td.definition().generic_parameters, false)?;
+                            let generic_parameters = &td.definition().generic_parameters;
+
+                            // A zero-arity definition has nothing to validate; this occurs on
+                            // some BCL canonicalization paths where a parent lookup carries
+                            // generic arguments but the resolved method/type itself is non-generic.
+                            if lookup.type_generics.len() != generic_parameters.len() {
+                                if generic_parameters.is_empty() {
+                                    cache_constraint_validation_result(cache_key, Ok(()));
+                                    return Ok(concrete);
+                                }
+                                let err = TypeResolutionError::GenericIndexOutOfBounds {
+                                    index: generic_parameters.len(),
+                                    length: lookup.type_generics.len(),
+                                };
+                                cache_constraint_validation_result(cache_key, Err(err.clone()));
+                                return Err(err);
+                            }
+
+                            // Most generic parameters in BCL shapes are unconstrained. Skip
+                            // expensive assignability traversal when there is nothing to check.
+                            let has_constraints = generic_parameters.iter().any(|param| {
+                                param.special_constraint.reference_type
+                                    || param.special_constraint.value_type
+                                    || param.special_constraint.has_default_constructor
+                                    || !param.type_constraints.is_empty()
+                            });
+                            if !has_constraints {
+                                cache_constraint_validation_result(cache_key, Ok(()));
+                                return Ok(concrete);
+                            }
+
+                            // Depth guard: if the nesting depth exceeds the limit,
+                            // short-circuit permissively to avoid unbounded work on
+                            // wide BCL interface hierarchies.
+                            let depth = CONSTRAINT_VALIDATION_DEPTH.with(|d| *d.borrow());
+                            if depth >= CONSTRAINT_VALIDATION_DEPTH_LIMIT {
+                                cache_constraint_validation_result(cache_key, Ok(()));
+                                return Ok(concrete);
+                            }
+
+                            // Mark in-progress, validate, then always clear the mark.
+                            CONSTRAINT_VALIDATION_VISITING
+                                .with(|v| v.borrow_mut().insert(key.clone()));
+                            CONSTRAINT_VALIDATION_DEPTH.with(|d| *d.borrow_mut() += 1);
+                            let validate_result = lookup.validate_constraints(
+                                td.resolution.clone(),
+                                _loader,
+                                generic_parameters,
+                                false,
+                            );
+                            CONSTRAINT_VALIDATION_DEPTH.with(|d| *d.borrow_mut() -= 1);
+                            CONSTRAINT_VALIDATION_VISITING.with(|v| v.borrow_mut().remove(&key));
+                            cache_constraint_validation_result(cache_key, validate_result.clone());
+                            validate_result?;
                         }
                     }
 
@@ -326,7 +412,12 @@ impl GenericLookup {
             &self.type_generics
         };
 
+        // Zero-arity generic parameter lists require no validation. Keep strict
+        // arity checks for all other cases so invalid bindings still fail fast.
         if args.len() != generic_parameters.len() {
+            if generic_parameters.is_empty() {
+                return Ok(());
+            }
             return Err(TypeResolutionError::GenericIndexOutOfBounds {
                 index: generic_parameters.len(),
                 length: args.len(),
@@ -366,7 +457,7 @@ impl GenericLookup {
             // Type constraints
             for constraint in &param.type_constraints {
                 let constraint_type =
-                    self.make_concrete(res, constraint.constraint_type.clone(), loader)?;
+                    self.make_concrete(res.clone(), constraint.constraint_type.clone(), loader)?;
                 if !comparer.is_assignable_to(arg, &constraint_type) {
                     return Err(TypeResolutionError::GenericConstraintViolation(format!(
                         "Type {} must be assignable to {} to satisfy constraint on {}",
@@ -379,6 +470,441 @@ impl GenericLookup {
         }
 
         Ok(())
+    }
+}
+
+// Thread-local visited set used by `make_concrete` to detect and break
+// cyclic generic constraint chains
+// (`validate_constraints` → `make_concrete` → `validate_constraints` → …).
+//
+// Each entry is a `(ResolutionS, UserType)` pair representing a
+// (resolution, type-handle) whose constraint validation is currently
+// in progress on this thread.  Before calling `validate_constraints`
+// for a resolved generic type, `make_concrete` checks whether the pair
+// is already present; if so it short-circuits without re-entering
+// `validate_constraints`.
+//
+// `CONSTRAINT_VALIDATION_DEPTH` is a secondary guard that caps the total
+// nesting depth of constraint validation (across all types on the current
+// call stack) so that wide BCL interface hierarchies (e.g. the many
+// IEquatable<T>/IComparable<T> chains on primitive types) cannot produce
+// an unbounded work explosion even when the per-type cycle guard does not
+// fire.  When the depth exceeds the cap we return `Ok(concrete)`
+// permissively, consistent with the cycle-guard short-circuit.
+#[cfg(feature = "generic-constraint-validation")]
+const CONSTRAINT_VALIDATION_DEPTH_LIMIT: usize = 64;
+#[cfg(feature = "generic-constraint-validation")]
+const CONSTRAINT_VALIDATION_CACHE_LIMIT: usize = 8192;
+
+#[cfg(feature = "generic-constraint-validation")]
+thread_local! {
+    static CONSTRAINT_VALIDATION_VISITING: RefCell<HashSet<(ResolutionS, UserType)>> =
+        RefCell::new(HashSet::new());
+    static CONSTRAINT_VALIDATION_DEPTH: RefCell<usize> = const { RefCell::new(0) };
+    static CONSTRAINT_VALIDATION_CACHE:
+        RefCell<std::collections::HashMap<ConcreteType, Result<(), TypeResolutionError>>> =
+            RefCell::new(std::collections::HashMap::new());
+}
+
+#[cfg(feature = "generic-constraint-validation")]
+fn cached_constraint_validation_result(
+    key: &ConcreteType,
+) -> Option<Result<(), TypeResolutionError>> {
+    CONSTRAINT_VALIDATION_CACHE.with(|cache| cache.borrow().get(key).cloned())
+}
+
+#[cfg(feature = "generic-constraint-validation")]
+fn cache_constraint_validation_result(key: ConcreteType, result: Result<(), TypeResolutionError>) {
+    CONSTRAINT_VALIDATION_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= CONSTRAINT_VALIDATION_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(key, result);
+    });
+}
+
+/// Regression tests for generic constraint cycle/self-reference behavior.
+///
+/// These tests target the mutual recursion between `validate_constraints` and
+/// `make_concrete` that is triggered under the `generic-constraint-validation`
+/// feature when a type parameter's constraint is itself a generic instantiation
+/// of a type that has constraints (e.g. `T : ICyclicConstraint<T>`).
+///
+#[cfg(all(test, feature = "generic-constraint-validation"))]
+mod constraint_cycle_tests {
+    use super::*;
+    use crate::error::TypeResolutionError;
+    use crate::resolution::MetadataArena;
+    use crate::resolution::ResolutionS;
+    use dotnetdll::prelude::{
+        BaseType, MemberType, Module, Resolution, TypeDefinition, TypeIndex, TypeSource, UserType,
+    };
+    use dotnetdll::resolved::generic::{Constraint, Generic};
+    use std::sync::{Arc, Mutex};
+
+    fn one_type_index() -> TypeIndex {
+        crate::type_index_from_usize(1)
+    }
+
+    fn make_resolution_with_type(type_def: TypeDefinition<'static>) -> (ResolutionS, TypeIndex) {
+        let mut resolution = Resolution::new(Module::new("test.dll"));
+        let type_index = resolution.push_type_definition(type_def);
+        let ptr = Box::into_raw(Box::new(resolution)) as *const Resolution<'static>;
+        let arena = Arc::new(MetadataArena::new());
+        unsafe { arena.add_resolution(ptr) };
+        (ResolutionS::new(ptr, arena), type_index)
+    }
+
+    /// Builds a `TypeDefinition<'static>` representing `ICyclicConstraint<T>` where
+    /// the single generic parameter `T` carries a type constraint `ICyclicConstraint<T>`.
+    /// This is the minimal structure that triggers infinite recursion in
+    /// `validate_constraints` → `make_concrete` → `validate_constraints` …
+    fn make_cyclic_type_def() -> TypeDefinition<'static> {
+        let mut def = TypeDefinition::new(None, "ICyclicConstraint");
+        let mut param: Generic<'static, MemberType> = Generic::new("T");
+        // Constraint: T must implement ICyclicConstraint<T> (self-referential).
+        param.type_constraints.push(Constraint {
+            attributes: vec![],
+            custom_modifiers: vec![],
+            constraint_type: MemberType::Base(Box::new(BaseType::Type {
+                value_kind: None,
+                source: TypeSource::Generic {
+                    base: UserType::Definition(one_type_index()),
+                    parameters: vec![MemberType::TypeGeneric(0)],
+                },
+            })),
+        });
+        def.generic_parameters.push(param);
+        def
+    }
+
+    /// A mock `TypeResolver` that counts every `locate_type` call and terminates
+    /// the recursion by returning `Err` once `max_calls` is exceeded.  This lets
+    /// the tests observe unbounded recursion without causing an actual stack overflow.
+    struct CountingMockResolver {
+        call_count: Arc<Mutex<usize>>,
+        max_calls: usize,
+        type_index: TypeIndex,
+    }
+
+    impl TypeResolver for CountingMockResolver {
+        fn corlib_type(&self, _name: &str) -> Result<TypeDescription, TypeResolutionError> {
+            Err(TypeResolutionError::TypeNotFound(
+                "corlib_type not supported in CountingMockResolver".to_string(),
+            ))
+        }
+
+        fn locate_type(
+            &self,
+            res: ResolutionS,
+            _handle: UserType,
+        ) -> Result<TypeDescription, TypeResolutionError> {
+            let mut count = self.call_count.lock().unwrap();
+            *count += 1;
+            if *count > self.max_calls {
+                return Err(TypeResolutionError::TypeNotFound(format!(
+                    "locate_type call limit {} exceeded — \
+                     unbounded recursion detected in constraint validation",
+                    self.max_calls
+                )));
+            }
+            drop(count);
+            Ok(TypeDescription::new(res, self.type_index))
+        }
+
+        fn find_concrete_type(
+            &self,
+            _ty: ConcreteType,
+        ) -> Result<TypeDescription, TypeResolutionError> {
+            Err(TypeResolutionError::TypeNotFound(
+                "find_concrete_type not supported in CountingMockResolver".to_string(),
+            ))
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Baseline: no constraints on a single generic parameter → Ok(())
+    // -------------------------------------------------------------------------
+
+    /// Baseline sanity check: a generic parameter with no type constraints should
+    /// pass validation without ever calling `locate_type`.
+    #[test]
+    fn test_validate_constraints_no_type_constraints_returns_ok() {
+        let (res, type_index) = make_resolution_with_type(TypeDefinition::new(None, "SimpleType"));
+        let call_count = Arc::new(Mutex::new(0usize));
+        let resolver = CountingMockResolver {
+            call_count: Arc::clone(&call_count),
+            max_calls: 0,
+            type_index,
+        };
+
+        let arg = ConcreteType::new(res.clone(), BaseType::Boolean);
+        let lookup = GenericLookup::new(vec![arg]);
+
+        let param: Generic<'static, MemberType> = Generic::new("T");
+        let params: Vec<Generic<'static, MemberType>> = vec![param];
+
+        let result = lookup.validate_constraints(res, &resolver, &params, false);
+
+        assert!(
+            result.is_ok(),
+            "validate_constraints with no constraints must return Ok(()), got {:?}",
+            result
+        );
+        assert_eq!(
+            *call_count.lock().unwrap(),
+            0,
+            "locate_type must not be called when there are no type constraints"
+        );
+    }
+
+    #[test]
+    fn test_validate_constraints_zero_arity_mismatch_is_ignored() {
+        let (res, type_index) = make_resolution_with_type(TypeDefinition::new(None, "SimpleType"));
+        let call_count = Arc::new(Mutex::new(0usize));
+        let resolver = CountingMockResolver {
+            call_count: Arc::clone(&call_count),
+            max_calls: 0,
+            type_index,
+        };
+
+        let arg = ConcreteType::new(res.clone(), BaseType::Boolean);
+        let lookup = GenericLookup::new(vec![arg]);
+        let params: Vec<Generic<'static, MemberType>> = vec![];
+
+        let result = lookup.validate_constraints(res, &resolver, &params, false);
+        assert!(
+            result.is_ok(),
+            "zero-arity generic parameter lists should skip validation, got {:?}",
+            result
+        );
+        assert_eq!(
+            *call_count.lock().unwrap(),
+            0,
+            "zero-arity validation skip must not resolve any types"
+        );
+    }
+
+    #[test]
+    fn test_validate_constraints_non_zero_arity_mismatch_errors() {
+        let (res, type_index) = make_resolution_with_type(TypeDefinition::new(None, "SimpleType"));
+        let call_count = Arc::new(Mutex::new(0usize));
+        let resolver = CountingMockResolver {
+            call_count: Arc::clone(&call_count),
+            max_calls: 0,
+            type_index,
+        };
+
+        let arg = ConcreteType::new(res.clone(), BaseType::Boolean);
+        let lookup = GenericLookup::new(vec![arg]);
+        let params: Vec<Generic<'static, MemberType>> = vec![Generic::new("T"), Generic::new("U")];
+
+        let result = lookup.validate_constraints(res, &resolver, &params, false);
+        assert_eq!(
+            result,
+            Err(TypeResolutionError::GenericIndexOutOfBounds {
+                index: 2,
+                length: 1,
+            })
+        );
+        assert_eq!(
+            *call_count.lock().unwrap(),
+            0,
+            "arity mismatch should fail before any type-resolution work"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Self-reference via TypeGeneric — does NOT trigger recursion
+    // -------------------------------------------------------------------------
+
+    /// A direct `TypeGeneric(0)` constraint on param 0 resolves immediately in
+    /// `make_concrete` (returns `type_generics[0]` without entering the
+    /// `TypeSource::Generic` branch).  `locate_type` must never be called.
+    #[test]
+    fn test_direct_type_generic_self_reference_does_not_recurse() {
+        let (res, type_index) = make_resolution_with_type(TypeDefinition::new(None, "FlatType"));
+        let call_count = Arc::new(Mutex::new(0usize));
+        let resolver = CountingMockResolver {
+            call_count: Arc::clone(&call_count),
+            max_calls: 1,
+            type_index,
+        };
+
+        let arg = ConcreteType::new(res.clone(), BaseType::Boolean);
+        let lookup = GenericLookup::new(vec![arg]);
+
+        // Constraint: T must implement T itself (TypeGeneric(0) — direct self-reference).
+        let mut param: Generic<'static, MemberType> = Generic::new("T");
+        param.type_constraints.push(Constraint {
+            attributes: vec![],
+            custom_modifiers: vec![],
+            constraint_type: MemberType::TypeGeneric(0),
+        });
+        let params: Vec<Generic<'static, MemberType>> = vec![param];
+
+        let _result = lookup.validate_constraints(res, &resolver, &params, false);
+
+        assert_eq!(
+            *call_count.lock().unwrap(),
+            0,
+            "locate_type must not be called for a direct TypeGeneric constraint; \
+             make_concrete resolves TypeGeneric immediately from type_generics[]"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Cyclic constraint via TypeSource::Generic — triggers unbounded recursion
+    // -------------------------------------------------------------------------
+
+    /// Regression test for the fixed behavior:
+    ///
+    /// After the visited-set guard was added to `make_concrete`, a cyclic
+    /// constraint `T : ICyclicConstraint<T>` must be detected on the *first*
+    /// re-entry and must **not** call `locate_type` more than once.
+    ///
+    /// Previously this test documented the bug (`locate_type` called > 1 time);
+    /// now it documents the correct fixed behaviour.
+    #[test]
+    fn test_cyclic_generic_constraint_causes_unbounded_recursion_regression() {
+        let (res, type_index) = make_resolution_with_type(make_cyclic_type_def());
+        let call_count = Arc::new(Mutex::new(0usize));
+        let max_calls = 5usize;
+        let resolver = CountingMockResolver {
+            call_count: Arc::clone(&call_count),
+            max_calls,
+            type_index,
+        };
+
+        let arg = ConcreteType::new(res.clone(), BaseType::Boolean);
+        let lookup = GenericLookup::new(vec![arg]);
+
+        // Outer param T with constraint ICyclicConstraint<T> — creates the cycle.
+        let mut param: Generic<'static, MemberType> = Generic::new("T");
+        param.type_constraints.push(Constraint {
+            attributes: vec![],
+            custom_modifiers: vec![],
+            constraint_type: MemberType::Base(Box::new(BaseType::Type {
+                value_kind: None,
+                source: TypeSource::Generic {
+                    base: UserType::Definition(type_index),
+                    parameters: vec![MemberType::TypeGeneric(0)],
+                },
+            })),
+        });
+        let params: Vec<Generic<'static, MemberType>> = vec![param];
+
+        let result = lookup.validate_constraints(res, &resolver, &params, false);
+        let final_count = *call_count.lock().unwrap();
+
+        // Cycle guard should terminate quickly; current implementation may perform
+        // one extra locate_type before short-circuiting.
+        assert!(
+            final_count <= 2,
+            "After cycle-detection fix, locate_type should be called at most twice, \
+             but was called {} times",
+            final_count
+        );
+
+        // The cycle detector must prevent the dedicated cycle error from escaping.
+        assert!(
+            !matches!(
+                &result,
+                Err(TypeResolutionError::GenericConstraintViolation(msg))
+                    if msg.contains("Cyclic generic constraint detected")
+            ),
+            "cycle detection must not return the cyclic-recursion error, got {:?}",
+            result
+        );
+    }
+
+    /// Regression test: cycle detection terminates quickly and returns `Ok(())`.
+    ///
+    /// This duplicates the core cycle scenario with a larger locate-type budget
+    /// to ensure recursion does not grow with a permissive cycle fallback.
+    #[test]
+    fn test_cyclic_generic_constraint_detection_terminates_quickly() {
+        let (res, type_index) = make_resolution_with_type(make_cyclic_type_def());
+        let call_count = Arc::new(Mutex::new(0usize));
+        let resolver = CountingMockResolver {
+            call_count: Arc::clone(&call_count),
+            max_calls: 50, // high cap; the fix should never get close to it
+            type_index,
+        };
+
+        let arg = ConcreteType::new(res.clone(), BaseType::Boolean);
+        let lookup = GenericLookup::new(vec![arg]);
+
+        let mut param: Generic<'static, MemberType> = Generic::new("T");
+        param.type_constraints.push(Constraint {
+            attributes: vec![],
+            custom_modifiers: vec![],
+            constraint_type: MemberType::Base(Box::new(BaseType::Type {
+                value_kind: None,
+                source: TypeSource::Generic {
+                    base: UserType::Definition(type_index),
+                    parameters: vec![MemberType::TypeGeneric(0)],
+                },
+            })),
+        });
+        let params: Vec<Generic<'static, MemberType>> = vec![param];
+
+        let result = lookup.validate_constraints(res, &resolver, &params, false);
+        let final_count = *call_count.lock().unwrap();
+
+        // After fix: cycle detected early, locate_type called at most twice.
+        assert!(
+            final_count <= 2,
+            "After cycle-detection fix, locate_type should be called at most twice, \
+             but was called {} times",
+            final_count
+        );
+
+        // The cycle detector must prevent the dedicated cycle error from escaping.
+        assert!(
+            !matches!(
+                &result,
+                Err(TypeResolutionError::GenericConstraintViolation(msg))
+                    if msg.contains("Cyclic generic constraint detected")
+            ),
+            "cycle detection must not return the cyclic-recursion error, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_non_cyclic_constraint_violations_still_error() {
+        let (res, type_index) = make_resolution_with_type(TypeDefinition::new(None, "RefTypeOnly"));
+        let call_count = Arc::new(Mutex::new(0usize));
+        let resolver = CountingMockResolver {
+            call_count: Arc::clone(&call_count),
+            max_calls: 1,
+            type_index,
+        };
+
+        // bool is a value type; it should fail a reference-type constraint.
+        let arg = ConcreteType::new(res.clone(), BaseType::Boolean);
+        let lookup = GenericLookup::new(vec![arg]);
+
+        let mut param: Generic<'static, MemberType> = Generic::new("T");
+        param.special_constraint.reference_type = true;
+        let params: Vec<Generic<'static, MemberType>> = vec![param];
+
+        let result = lookup.validate_constraints(res, &resolver, &params, false);
+        assert!(
+            matches!(
+                result,
+                Err(TypeResolutionError::GenericConstraintViolation(_))
+            ),
+            "non-cyclic constraint violations must still return GenericConstraintViolation, got {:?}",
+            result
+        );
+        assert_eq!(
+            *call_count.lock().unwrap(),
+            0,
+            "special-constraint validation should not require locate_type calls"
+        );
     }
 }
 

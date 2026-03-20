@@ -101,7 +101,7 @@ impl ResolverService {
                 result = true;
                 break;
             }
-            if !seen.insert(current) {
+            if !seen.insert(current.clone()) {
                 continue;
             }
 
@@ -109,7 +109,9 @@ impl ResolverService {
                 let handle = match interface_source {
                     TypeSource::User(h) | TypeSource::Generic { base: h, .. } => *h,
                 };
-                let interface = self.loader.locate_type(current.resolution, handle)?;
+                let interface = self
+                    .loader
+                    .locate_type(current.resolution.clone(), handle)?;
                 queue.push_back(interface);
             }
         }
@@ -149,9 +151,9 @@ impl ResolverService {
         let enum_type = self.loader.corlib_type("System.Enum")?;
         let value_type = self.loader.corlib_type("System.ValueType")?;
 
-        for (a, _) in self.loader.ancestors(td) {
+        for (a, _) in self.loader.ancestors(td.clone()) {
             if a == enum_type || a == value_type {
-                self.caches.value_type_cache.insert(td, true);
+                self.caches.value_type_cache.insert(td.clone(), true);
                 return Ok(true);
             }
         }
@@ -184,14 +186,14 @@ impl ResolverService {
             })
         };
 
-        if check_type(td) {
-            self.caches.has_finalizer_cache.insert(td, true);
+        if check_type(td.clone()) {
+            self.caches.has_finalizer_cache.insert(td.clone(), true);
             return Ok(true);
         }
 
-        for (ancestor, _) in self.loader.ancestors(td) {
+        for (ancestor, _) in self.loader.ancestors(td.clone()) {
             if check_type(ancestor) {
-                self.caches.has_finalizer_cache.insert(td, true);
+                self.caches.has_finalizer_cache.insert(td.clone(), true);
                 return Ok(true);
             }
         }
@@ -238,10 +240,10 @@ impl ResolverService {
     ) -> Result<TypeDescription, TypeResolutionError> {
         use dotnet_value::object::HeapStorage::*;
         match &inner.storage {
-            Obj(o) => Ok(o.description),
+            Obj(o) => Ok(o.description.clone()),
             Vec(_) => self.loader.corlib_type("System.Array"),
             Str(_) => self.loader.corlib_type("System.String"),
-            Boxed(o) => Ok(o.description),
+            Boxed(o) => Ok(o.description.clone()),
         }
     }
 
@@ -267,7 +269,7 @@ impl ResolverService {
             ValueType::Float32(_) => asms.corlib_type("System.Single"),
             ValueType::Float64(_) => asms.corlib_type("System.Double"),
             ValueType::TypedRef(_, _) => asms.corlib_type("System.TypedReference"),
-            ValueType::Struct(s) => Ok(s.description),
+            ValueType::Struct(s) => Ok(s.description.clone()),
         }
     }
 
@@ -286,7 +288,7 @@ impl ResolverService {
             StackValue::ObjectRef(ObjectRef(Some(o))) => self.get_heap_description(*o),
             StackValue::ObjectRef(ObjectRef(None)) => self.loader.corlib_type("System.Object"),
             StackValue::ManagedPtr(m) => Ok(m.inner_type()),
-            StackValue::ValueType(o) => Ok(o.description),
+            StackValue::ValueType(o) => Ok(o.description.clone()),
             StackValue::TypedRef(_, _) => self.loader.corlib_type("System.TypedReference"),
             #[cfg(feature = "multithreading")]
             StackValue::CrossArenaObjectRef(ptr, _) => {

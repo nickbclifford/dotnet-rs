@@ -1,9 +1,10 @@
 #[cfg(feature = "multithreading")]
+use crate::{
+    sync::{Mutex, MutexGuard, Ordering},
+    threading::execute_gc_command_for_current_thread,
+};
+#[cfg(feature = "multithreading")]
 use dotnet_utils::sync::{Arc, AtomicBool};
-#[cfg(feature = "multithreading")]
-use crate::threading::execute_gc_command_for_current_thread;
-#[cfg(feature = "multithreading")]
-use crate::sync::{Mutex, MutexGuard, Ordering};
 #[cfg(feature = "multithreading")]
 use dotnet_value::object::ObjectPtr;
 #[cfg(feature = "multithreading")]
@@ -31,6 +32,22 @@ pub struct GCCoordinator {
 }
 
 #[cfg(feature = "multithreading")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Explicit GC/STW coordinator states.
+///
+/// Invariants:
+/// - `Idle`: `is_collecting = false` and `stw_in_progress = false`
+/// - `Collecting`: `is_collecting = true` and `stw_in_progress = true`
+///
+/// Allowed transitions:
+/// - `start_collection`: `Idle -> Collecting`
+/// - `finish_collection`: `Collecting -> Idle`
+enum CollectionState {
+    Idle,
+    Collecting,
+}
+
+#[cfg(feature = "multithreading")]
 impl GCCoordinator {
     pub fn new(stw_in_progress: Arc<AtomicBool>) -> Self {
         Self {
@@ -39,6 +56,39 @@ impl GCCoordinator {
             is_collecting: AtomicBool::new(false),
             stw_in_progress,
             cross_arena_refs: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn assert_collection_state(&self, expected: CollectionState, context: &str) {
+        let is_collecting = self.is_collecting.load(Ordering::Acquire);
+        let stw_in_progress = self.stw_in_progress.load(Ordering::Acquire);
+
+        match expected {
+            CollectionState::Idle => {
+                assert!(
+                    !is_collecting && !stw_in_progress,
+                    "{context}: expected coordinator to be Idle (is_collecting=false, stw_in_progress=false), got is_collecting={is_collecting}, stw_in_progress={stw_in_progress}",
+                );
+            }
+            CollectionState::Collecting => {
+                assert!(
+                    is_collecting && stw_in_progress,
+                    "{context}: expected coordinator to be Collecting (is_collecting=true, stw_in_progress=true), got is_collecting={is_collecting}, stw_in_progress={stw_in_progress}",
+                );
+            }
+        }
+    }
+
+    fn assert_no_pending_commands(&self, context: &str) {
+        let arenas = self.arenas.lock();
+        for handle in arenas.values() {
+            let cmd = handle.current_command().lock();
+            assert!(
+                cmd.is_none(),
+                "{context}: expected no pending GC command for arena {:?}, found {:?}",
+                handle.thread_id(),
+                *cmd
+            );
         }
     }
 
@@ -74,23 +124,44 @@ impl GCCoordinator {
     /// Mark that a collection has started.
     pub fn start_collection(&self) -> Option<MutexGuard<'_, ()>> {
         let guard = self.collection_lock.try_lock()?;
-        self.is_collecting.store(true, Ordering::Release);
+
+        self.assert_collection_state(CollectionState::Idle, "start_collection precondition");
+        self.assert_no_pending_commands("start_collection precondition");
+
         self.stw_in_progress.store(true, Ordering::Release);
+        self.is_collecting.store(true, Ordering::Release);
+
+        self.assert_collection_state(
+            CollectionState::Collecting,
+            "start_collection postcondition",
+        );
+
         Some(guard)
     }
 
     /// Mark that a collection has finished.
     pub fn finish_collection(&self) {
+        self.assert_collection_state(
+            CollectionState::Collecting,
+            "finish_collection precondition",
+        );
+        self.assert_no_pending_commands("finish_collection precondition");
+
         self.is_collecting.store(false, Ordering::Release);
         self.stw_in_progress.store(false, Ordering::Release);
 
         // Reset all collection flags
-        let arenas = self.arenas.lock();
-        for handle in arenas.values() {
-            handle.needs_collection().store(false, Ordering::Release);
-            // We don't reset allocation_counter here as it might be useful for stats,
-            // or we might want to reset it. For now, let's just clear the flag.
+        {
+            let arenas = self.arenas.lock();
+            for handle in arenas.values() {
+                handle.needs_collection().store(false, Ordering::Release);
+                // We don't reset allocation_counter here as it might be useful for stats,
+                // or we might want to reset it. For now, let's just clear the flag.
+            }
         }
+
+        self.assert_no_pending_commands("finish_collection postcondition");
+        self.assert_collection_state(CollectionState::Idle, "finish_collection postcondition");
     }
 
     /// Get the total allocated size across all arenas.
@@ -130,6 +201,8 @@ impl GCCoordinator {
     }
 
     fn wait_on_other_arenas(&self, initiating_thread_id: dotnet_utils::ArenaId) {
+        self.assert_collection_state(CollectionState::Collecting, "wait_on_other_arenas");
+
         for handle in self.get_all_arenas() {
             if handle.thread_id() != initiating_thread_id {
                 let mut cmd = handle.current_command().lock();
@@ -145,9 +218,18 @@ impl GCCoordinator {
         initiating_thread_id: dotnet_utils::ArenaId,
         command: GCCommand,
     ) {
+        self.assert_collection_state(CollectionState::Collecting, "send_command_to_other_arenas");
+
         for handle in self.get_all_arenas() {
             if handle.thread_id() != initiating_thread_id {
                 let mut cmd = handle.current_command().lock();
+                assert!(
+                    cmd.is_none(),
+                    "send_command_to_other_arenas: arena {:?} already has pending command {:?} before dispatching {:?}",
+                    handle.thread_id(),
+                    *cmd,
+                    command
+                );
                 *cmd = Some(command.clone());
                 handle.command_signal().notify_all();
             }
@@ -159,6 +241,7 @@ impl GCCoordinator {
         initiating_thread_id: dotnet_utils::ArenaId,
         command: GCCommand,
     ) {
+        self.assert_collection_state(CollectionState::Collecting, "send_command_to_all_and_wait");
         self.send_command_to_other_arenas(initiating_thread_id, command.clone());
         execute_gc_command_for_current_thread(command, self);
         self.wait_on_other_arenas(initiating_thread_id);
@@ -167,6 +250,15 @@ impl GCCoordinator {
     /// Perform a coordinated collection across all registered arenas.
     pub fn collect_all_arenas(&self, initiating_thread_id: dotnet_utils::ArenaId) {
         // This is called by the thread that triggered the GC, after STW is established.
+        self.assert_collection_state(
+            CollectionState::Collecting,
+            "collect_all_arenas precondition",
+        );
+        assert!(
+            self.get_arena(initiating_thread_id).is_some(),
+            "collect_all_arenas precondition: initiating thread {:?} must be registered",
+            initiating_thread_id
+        );
 
         // Initial marking: each arena marks its local roots.
         {
@@ -260,6 +352,11 @@ impl GCCoordinator {
     pub fn command_finished(&self, thread_id: dotnet_utils::ArenaId) {
         if let Some(handle) = self.get_arena(thread_id) {
             let mut cmd = handle.current_command().lock();
+            assert!(
+                cmd.is_some(),
+                "command_finished: arena {:?} has no pending command to finish",
+                thread_id
+            );
             *cmd = None;
             handle.finish_signal().notify_all();
         }
@@ -294,6 +391,7 @@ impl GCCoordinator {
 
     /// Record a cross-arena reference found during marking.
     pub fn record_cross_arena_ref(&self, target_thread_id: dotnet_utils::ArenaId, ptr: ObjectPtr) {
+        self.assert_collection_state(CollectionState::Collecting, "record_cross_arena_ref");
         let mut refs = self.cross_arena_refs.lock();
         refs.entry(target_thread_id).or_default().insert(ptr);
     }
@@ -305,7 +403,6 @@ impl Default for GCCoordinator {
         Self::new(Arc::new(AtomicBool::new(false)))
     }
 }
-
 
 #[cfg(not(feature = "multithreading"))]
 pub mod stubs {
@@ -434,6 +531,7 @@ mod tests {
         assert!(handle.needs_collection().load(Ordering::Acquire));
 
         // Reset via coordinator
+        let _guard = coordinator.start_collection().unwrap();
         coordinator.finish_collection();
         assert!(!handle.needs_collection().load(Ordering::Acquire));
     }
@@ -476,7 +574,9 @@ mod tests {
         // Initiator (Thread 1) calls collect_all_arenas.
         // This used to deadlock because wait_on_other_arenas held the arenas lock
         // while waiting for command_finished, which also needed the arenas lock.
+        let _gc_lock = coordinator.start_collection().unwrap();
         coordinator.collect_all_arenas(dotnet_utils::ArenaId(1));
+        coordinator.finish_collection();
 
         done.store(true, Ordering::Relaxed);
         t.join().unwrap();
@@ -516,9 +616,169 @@ mod tests {
         // Initiator (Thread 1) calls collect_all_arenas.
         // It will send a command to Thread 2 and wait for it.
         // If unregister_arena doesn't notify, this will hang.
+        let _gc_lock = coordinator.start_collection().unwrap();
         coordinator.collect_all_arenas(dotnet_utils::ArenaId(1));
+        coordinator.finish_collection();
 
         t.join().unwrap();
     }
-}
 
+    #[test]
+    #[should_panic(expected = "finish_collection precondition")]
+    fn test_finish_collection_requires_active_collection() {
+        let stw_flag = Arc::new(AtomicBool::new(false));
+        let coordinator = GCCoordinator::new(stw_flag);
+        coordinator.finish_collection();
+    }
+
+    #[test]
+    #[should_panic(expected = "collect_all_arenas precondition")]
+    fn test_collect_all_arenas_requires_active_collection_state() {
+        let stw_flag = Arc::new(AtomicBool::new(false));
+        let coordinator = GCCoordinator::new(stw_flag);
+        let handle1 = ArenaHandle::new(dotnet_utils::ArenaId(1));
+        coordinator.register_arena(handle1);
+
+        coordinator.collect_all_arenas(dotnet_utils::ArenaId(1));
+    }
+
+    #[test]
+    #[should_panic(expected = "command_finished")]
+    fn test_command_finished_requires_pending_command() {
+        let stw_flag = Arc::new(AtomicBool::new(false));
+        let coordinator = GCCoordinator::new(stw_flag);
+        let handle1 = ArenaHandle::new(dotnet_utils::ArenaId(1));
+        coordinator.register_arena(handle1);
+        let _gc_lock = coordinator.start_collection().unwrap();
+
+        coordinator.command_finished(dotnet_utils::ArenaId(1));
+    }
+
+    // ------------------------------------------------------------------
+    // Stress: concurrent register/unregister racing with collection cycles
+    //
+    // Invariant: start_collection/finish_collection must never deadlock or
+    // panic regardless of how many arenas are concurrently registered or
+    // unregistered around the collection window.
+    // ------------------------------------------------------------------
+    #[test]
+    fn stress_concurrent_register_unregister_with_collection_cycles() {
+        use std::sync::Barrier;
+        use std::thread;
+
+        const WORKER_THREADS: usize = 4;
+        const ITERATIONS: usize = 60;
+        const GC_CYCLES: usize = 20;
+        // Use arena IDs in a range that won't collide with other tests.
+        const BASE_ID: u64 = 900_000;
+
+        let stw_flag = Arc::new(AtomicBool::new(false));
+        let coordinator = Arc::new(GCCoordinator::new(stw_flag));
+        let barrier = Arc::new(Barrier::new(WORKER_THREADS + 1));
+
+        let mut handles = vec![];
+
+        // Worker threads: each cyclically registers and unregisters an arena,
+        // recording allocations to ensure `should_collect` can fire.
+        for t in 0..WORKER_THREADS {
+            let coordinator = coordinator.clone();
+            let barrier = barrier.clone();
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                for i in 0..ITERATIONS {
+                    let id = dotnet_utils::ArenaId(BASE_ID + (t * ITERATIONS + i) as u64);
+                    let handle = ArenaHandle::new(id);
+                    coordinator.register_arena(handle.clone());
+                    // Simulate some allocation pressure so the coordinator
+                    // exercises the should_collect path in some iterations.
+                    if i % 5 == 0 {
+                        handle.record_allocation(ALLOCATION_THRESHOLD / 2);
+                    }
+                    coordinator.unregister_arena(id);
+                }
+            }));
+        }
+
+        // GC driver thread (this thread): loops calling start/finish_collection
+        // while worker threads hammer register/unregister concurrently.
+        barrier.wait();
+        for _ in 0..GC_CYCLES {
+            // start_collection returns None when another collection is already
+            // in progress; we simply skip and yield in that case.
+            if let Some(_guard) = coordinator.start_collection() {
+                coordinator.finish_collection();
+            }
+            thread::yield_now();
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Stress: register/unregister races with safepoint command dispatch
+    //
+    // Fires collect_all_arenas while arenas register and unregister
+    // concurrently, exercising the "unregister beats command" path where
+    // unregister_arena notifies all_threads_stopped.
+    // ------------------------------------------------------------------
+    #[test]
+    fn stress_collect_all_arenas_with_concurrent_unregisters() {
+        use std::sync::Barrier;
+        use std::thread;
+        use std::time::Duration;
+
+        const WORKER_THREADS: usize = 3;
+        const ROUNDS: usize = 10;
+        const BASE_ID: u64 = 950_000;
+
+        let stw_flag = Arc::new(AtomicBool::new(false));
+        let coordinator = Arc::new(GCCoordinator::new(stw_flag));
+        let barrier = Arc::new(Barrier::new(WORKER_THREADS + 1));
+
+        let mut handles = vec![];
+
+        for t in 0..WORKER_THREADS {
+            let coordinator = coordinator.clone();
+            let barrier = barrier.clone();
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                for round in 0..ROUNDS {
+                    let id = dotnet_utils::ArenaId(BASE_ID + (t * ROUNDS + round) as u64);
+                    let handle = ArenaHandle::new(id);
+
+                    coordinator.register_arena(handle.clone());
+
+                    // Brief pause so the initiator can race the command send.
+                    thread::sleep(Duration::from_micros(50));
+
+                    // Unregistering mid-collection: coordinator must not hang
+                    // waiting for this arena's command_finished, because
+                    // unregister_arena removes it from the pending set.
+                    coordinator.unregister_arena(id);
+                }
+            }));
+        }
+
+        barrier.wait();
+        // GC initiator: register a stable arena representing "this thread" so
+        // collect_all_arenas can be invoked (it requires an initiating_thread_id).
+        let initiator_id = dotnet_utils::ArenaId(BASE_ID - 1);
+        coordinator.register_arena(ArenaHandle::new(initiator_id));
+
+        for _ in 0..ROUNDS {
+            if let Some(_guard) = coordinator.start_collection() {
+                coordinator.collect_all_arenas(initiator_id);
+                coordinator.finish_collection();
+            }
+            thread::yield_now();
+        }
+
+        coordinator.unregister_arena(initiator_id);
+
+        for h in handles {
+            h.join().unwrap();
+        }
+    }
+}

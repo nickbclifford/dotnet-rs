@@ -96,12 +96,12 @@ Safe points are checked at:
 - **Method calls**: Before pushing a new frame
 - **Explicit checks**: `CallStack::check_gc_safe_point` in `dispatch/mod.rs`
 
-### Safe Point ↔ BorrowGuard Interaction
-When a `BorrowGuard` is active (borrow scope counter > 0), `check_gc_safe_point` returns early without blocking. This prevents deadlocks when a thread holds a GC borrow but the coordinator requests STW.
+### Safe Point ↔ BorrowGuardHandle Interaction
+When a `BorrowGuardHandle` is active (borrow scope counter > 0), `check_gc_safe_point` returns early without blocking. This prevents deadlocks when a thread holds a GC borrow but the coordinator requests STW.
 
 The path to thread suspension:
 1. `check_gc_safe_point()` evaluates `ThreadManager::is_gc_stop_requested()`.
-   - If a `BorrowGuard` is active (borrow scope counter > 0), it returns `false` to prevent deadlocks (since the thread cannot safely park while holding GC locks).
+   - If a `BorrowGuardHandle` is active (borrow scope counter > 0), it returns `false` to prevent deadlocks (since the thread cannot safely park while holding GC locks).
 2. If `true`, the loop or instruction handler exits early (often returning `StepResult::Continue` without advancing IP, or completing a chunk of work).
 3. The main execution loop in `crates/dotnet-vm/src/executor.rs` catches this, drops any transient locks, and explicitly calls `ThreadManagerOps::safe_point(thread_id, coordinator)`.
 4. In `basic.rs`, `safe_point()` sets the thread state to `AtSafePoint`, notifies the STW coordinator, and blocks on a condition variable.
@@ -182,6 +182,13 @@ During a STW pause, the coordinator issues commands (like `MarkAll`, `MarkObject
 
 ### Cross-Arena References (`record_found_cross_arena_refs`)
 In a multi-arena GC, objects in one thread's arena might reference objects in another. During the `MarkAll` or `MarkObjects` phase, when a thread discovers a reference pointing outside its own arena, it logs it. `record_found_cross_arena_refs` takes these accumulated references and registers them with the central `GCCoordinator` so they can be pushed to the owning arena's root set in a subsequent marking iteration.
+
+Cross-arena discovery uses lease-guarded generation stamps:
+
+- Recording path acquires `ArenaLease` with `try_acquire_lease(target_id)`.
+- The discovered pointer is recorded as `(target_id, ptr, generation)`.
+- Harvest path reacquires a lease and compares generations before dereference.
+- `unregister_arena` waits for outstanding leases, so in-flight dereferences cannot race arena teardown.
 
 ### Thread-Local Storage Patterns
 - `THREAD_ARENA`: A thread-local `RefCell<Option<GCArena>>` storing the thread's local GC heap. Used to execute GC commands without lock contention.

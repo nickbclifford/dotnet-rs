@@ -194,7 +194,7 @@ impl StaticStorageManager {
         context: &ResolutionContext,
         metrics: Option<&RuntimeMetrics>,
     ) -> Result<Arc<FieldLayoutManager>, TypeResolutionError> {
-        let key = (description, context.generics.clone());
+        let key = (description.clone(), context.generics.clone());
 
         if let Some(cached) = context.caches().static_field_layout_cache.get(&key) {
             if let Some(m) = metrics {
@@ -207,7 +207,7 @@ impl StaticStorageManager {
             m.record_static_field_layout_cache_miss();
         }
         let result = Arc::new(LayoutFactory::static_fields_with_metrics(
-            description,
+            description.clone(),
             context,
             metrics,
         )?);
@@ -242,20 +242,20 @@ impl StaticStorageManager {
         description: TypeDescription,
         generics: &GenericLookup,
     ) -> Arc<StaticStorage> {
-        self.lookup_in_shard(description, generics)
+        self.lookup_in_shard(description.clone(), generics)
             .expect("Static storage should have been initialized via init()")
     }
 
     /// Get the current initialization state of a type.
     pub fn get_init_state(&self, description: TypeDescription, generics: &GenericLookup) -> u8 {
-        self.lookup_in_shard(description, generics)
+        self.lookup_in_shard(description.clone(), generics)
             .map(|s| s.init_state.load(Ordering::Acquire))
             .unwrap_or(INIT_STATE_UNINITIALIZED)
     }
 
     /// Mark a type as failed after its .cctor throws an exception.
     pub fn mark_failed(&self, description: TypeDescription, generics: &GenericLookup) {
-        if let Some(storage) = self.lookup_in_shard(description, generics) {
+        if let Some(storage) = self.lookup_in_shard(description.clone(), generics) {
             let _lock = storage.init_mutex.lock();
             storage
                 .init_state
@@ -279,7 +279,7 @@ impl StaticStorageManager {
         thread_id: dotnet_utils::ArenaId,
         metrics: Option<&RuntimeMetrics>,
     ) -> Result<StaticInitResult, TypeResolutionError> {
-        let key = (description, context.generics.clone());
+        let key = (description.clone(), context.generics.clone());
         let shard_idx = self.get_shard_idx(&key);
 
         // Ensure the storage exists.
@@ -292,7 +292,7 @@ impl StaticStorageManager {
             // Use the cached layout if available, or create and cache it.
             // DO NOT hold the shard lock while doing layout computation,
             // as it might be expensive or trigger recursive resolutions.
-            let layout = self.get_static_field_layout(description, context, metrics)?;
+            let layout = self.get_static_field_layout(description.clone(), context, metrics)?;
             let size = layout.size();
             let mut shard = self.shards[shard_idx].write();
             #[allow(clippy::arc_with_non_send_sync)]
@@ -308,7 +308,7 @@ impl StaticStorageManager {
         }
 
         // Get the storage and check its state.
-        let storage = self.get(description, context.generics);
+        let storage = self.get(description.clone(), context.generics);
         let state = storage.init_state.load(Ordering::Acquire);
 
         if state == INIT_STATE_INITIALIZED {
@@ -326,7 +326,7 @@ impl StaticStorageManager {
         }
 
         // Check if there's a static initializer
-        let cctor = description.static_initializer();
+        let cctor = description.clone().static_initializer();
 
         if cctor.is_none() {
             // No .cctor, so mark as initialized if it was uninitialized

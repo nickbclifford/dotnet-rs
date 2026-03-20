@@ -12,8 +12,8 @@ impl<'a, 'gc> ResolutionOps<'gc> for VesContext<'a, 'gc> {
             ResolutionContext {
                 generics: &f.generic_inst,
                 state: self.shared.resolution_shared(),
-                resolution: f.source_resolution,
-                type_owner: Some(f.state.info_handle.source.parent),
+                resolution: f.source_resolution.clone(),
+                type_owner: Some(f.state.info_handle.source.parent.clone()),
                 method_owner: Some(f.state.info_handle.source.clone()),
             }
         } else {
@@ -38,7 +38,7 @@ impl<'a, 'gc> ResolutionOps<'gc> for VesContext<'a, 'gc> {
         ResolutionContext {
             generics: lookup,
             state: self.shared.resolution_shared(),
-            resolution: frame.source_resolution,
+            resolution: frame.source_resolution.clone(),
             type_owner: None,
             method_owner: None,
         }

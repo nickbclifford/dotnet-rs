@@ -9,11 +9,17 @@ use crate::{
     },
 };
 use dotnet_macros::dotnet_intrinsic;
-use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
+use dotnet_types::{
+    TypeDescription,
+    generics::{ConcreteType, GenericLookup},
+    members::MethodDescription,
+};
 use dotnet_value::{
+    StackValue,
     layout::{HasLayout, LayoutManager, Scalar},
     pointer::ManagedPtr,
 };
+use dotnetdll::prelude::MethodMemberIndex;
 
 fn chunked_sequence_equal<
     'gc,
@@ -80,19 +86,35 @@ pub fn intrinsic_memory_extensions_sequence_equal<
 ) -> StepResult {
     let b_val = ctx.peek_stack();
     let a_val = ctx.peek_stack_at(1);
-    let b = b_val.as_value_type();
-    let a = a_val.as_value_type();
+    let (a, b) = match (&a_val, &b_val) {
+        (StackValue::ValueType(a), StackValue::ValueType(b)) => (a.clone(), b.clone()),
+        // Some runtime packs call SequenceEqualSlowPath with already-projected values
+        // instead of ReadOnlySpan<T>. In that case, compare the values directly.
+        _ => {
+            ctx.pop_multiple(2);
+            ctx.push_i32((a_val == b_val) as i32);
+            return StepResult::Continue;
+        }
+    };
 
     let element_type = &generics.method_generics[0];
 
     // Check length
     let a_len = match read_span_length(&a) {
         Ok(l) => l,
-        Err(e) => return StepResult::Error(e.into()),
+        Err(_) => {
+            ctx.pop_multiple(2);
+            ctx.push_i32((a_val == b_val) as i32);
+            return StepResult::Continue;
+        }
     };
     let b_len = match read_span_length(&b) {
         Ok(l) => l,
-        Err(e) => return StepResult::Error(e.into()),
+        Err(_) => {
+            ctx.pop_multiple(2);
+            ctx.push_i32((a_val == b_val) as i32);
+            return StepResult::Continue;
+        }
     };
 
     if a_len != b_len {
@@ -135,7 +157,7 @@ pub fn intrinsic_memory_extensions_sequence_equal<
             }
         };
 
-        let a_mptr = ManagedPtr::from_info_full(a_ptr_info, element_desc, false);
+        let a_mptr = ManagedPtr::from_info_full(a_ptr_info, element_desc.clone(), false);
         let b_mptr = ManagedPtr::from_info_full(b_ptr_info, element_desc, false);
 
         let total_bytes = a_len as usize * element_size;
@@ -151,7 +173,7 @@ pub fn intrinsic_memory_extensions_sequence_equal<
         let memory_extensions_type = vm_try!(loader.corlib_type("System.MemoryExtensions"));
         let def = memory_extensions_type.definition();
 
-        let (_method_idx, method_def) = match def
+        let (method_idx, _) = match def
             .methods
             .iter()
             .enumerate()
@@ -167,14 +189,150 @@ pub fn intrinsic_memory_extensions_sequence_equal<
         };
 
         let slow_path_method = MethodDescription::new(
-            memory_extensions_type,
+            memory_extensions_type.clone(),
             GenericLookup::default(),
-            memory_extensions_type.resolution,
-            method_def,
+            memory_extensions_type.resolution.clone(),
+            MethodMemberIndex::Method(method_idx),
         );
 
         ctx.dispatch_method(slow_path_method, generics.clone())
     }
+}
+
+#[dotnet_intrinsic("int System.Span<T>::get_Length()")]
+#[dotnet_intrinsic("int System.ReadOnlySpan<T>::get_Length()")]
+pub fn intrinsic_span_get_length<
+    'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + ResolutionOps<'gc>
+        + LoaderOps
+        + ExceptionOps<'gc>
+        + RawMemoryOps<'gc>
+        + MemoryOps<'gc>
+        + ReflectionOps<'gc>,
+>(
+    ctx: &mut T,
+    method: MethodDescription,
+    _generics: &GenericLookup,
+) -> StepResult {
+    let this = ctx.pop();
+    let len = match this {
+        StackValue::ValueType(span) => match read_span_length(&span) {
+            Ok(l) => l,
+            Err(e) => return StepResult::Error(e.into()),
+        },
+        StackValue::ManagedPtr(span_ptr) => {
+            let span_concrete: ConcreteType = method.parent.clone().into();
+            let span_layout = vm_try!(type_layout(span_concrete, &ctx.current_context()));
+            let field_layout = match &*span_layout {
+                LayoutManager::Field(f) => f,
+                _ => {
+                    return StepResult::type_error(
+                        "Span/ReadOnlySpan field layout",
+                        format!("{:?}", span_layout),
+                    );
+                }
+            };
+
+            match read_span_length_from_ptr(&span_ptr, field_layout, ctx) {
+                Ok(l) => l,
+                Err(e) => return StepResult::Error(e.into()),
+            }
+        }
+        other => {
+            return StepResult::type_error("ValueType or ManagedPtr", format!("{:?}", other));
+        }
+    };
+
+    ctx.push_i32(len);
+    StepResult::Continue
+}
+
+#[dotnet_intrinsic("T& System.Span<T>::get_Item(int)")]
+#[dotnet_intrinsic("T& System.ReadOnlySpan<T>::get_Item(int)")]
+pub fn intrinsic_span_get_item<
+    'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + ResolutionOps<'gc>
+        + LoaderOps
+        + ExceptionOps<'gc>
+        + RawMemoryOps<'gc>
+        + MemoryOps<'gc>
+        + ReflectionOps<'gc>,
+>(
+    ctx: &mut T,
+    method: MethodDescription,
+    generics: &GenericLookup,
+) -> StepResult {
+    let index = ctx.pop_i32();
+    let this = ctx.pop();
+
+    let Some(element_type) = generics.type_generics.first().cloned() else {
+        return StepResult::internal_error("Span.get_Item missing type generic parameter");
+    };
+
+    let span_concrete: ConcreteType = method.parent.clone().into();
+    let span_layout = vm_try!(type_layout(span_concrete, &ctx.current_context()));
+    let element_layout = vm_try!(type_layout(element_type.clone(), &ctx.current_context()));
+    let element_size = element_layout.size().as_usize();
+    let element_desc = vm_try!(ctx.loader().find_concrete_type(element_type));
+
+    let (base_ptr, len) = match this {
+        StackValue::ValueType(span) => {
+            let len = match read_span_length(&span) {
+                Ok(v) => v,
+                Err(e) => return StepResult::Error(e.into()),
+            };
+            let info = match read_span_reference(&span) {
+                Ok(v) => v,
+                Err(e) => return StepResult::Error(e.into()),
+            };
+            (
+                ManagedPtr::from_info_full(info, element_desc.clone(), false),
+                len,
+            )
+        }
+        StackValue::ManagedPtr(span_ptr) => {
+            let field_layout = match &*span_layout {
+                LayoutManager::Field(f) => f,
+                _ => {
+                    return StepResult::type_error(
+                        "Span/ReadOnlySpan field layout",
+                        format!("{:?}", span_layout),
+                    );
+                }
+            };
+
+            let len = match read_span_length_from_ptr(&span_ptr, field_layout, ctx) {
+                Ok(v) => v,
+                Err(e) => return StepResult::Error(e.into()),
+            };
+            let raw_ref_ptr = match read_span_reference_from_ptr(&span_ptr, field_layout, ctx) {
+                Ok(v) => v,
+                Err(e) => return StepResult::Error(e.into()),
+            };
+            (
+                ManagedPtr::from_info_full(raw_ref_ptr.into_info(), element_desc.clone(), false),
+                len,
+            )
+        }
+        other => {
+            return StepResult::type_error("ValueType or ManagedPtr", format!("{:?}", other));
+        }
+    };
+
+    if index < 0 || index >= len {
+        return ctx.throw_by_name_with_message(
+            "System.IndexOutOfRangeException",
+            "Index was outside the bounds of the span.",
+        );
+    }
+
+    let ptr = unsafe { base_ptr.offset((index as usize * element_size) as isize) };
+    ctx.push(StackValue::ManagedPtr(ptr));
+    StepResult::Continue
 }
 
 #[dotnet_intrinsic(

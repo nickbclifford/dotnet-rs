@@ -25,12 +25,12 @@ impl AssemblyLoader {
         }
         let aligned_boxed = aligned.into_boxed_slice();
         let aligned_ptr = Box::into_raw(aligned_boxed);
-        // SAFETY: We manually track this leaked box in MetadataOwner to reclaim it on drop.
-        // It's safe to treat as 'static because AssemblyLoader owns MetadataOwner and
+        // SAFETY: We manually track this leaked box in MetadataArena to reclaim it on drop.
+        // It's safe to treat as 'static because AssemblyLoader owns the Arc<MetadataArena> and
         // ensures it lives long enough.
         let aligned_slice: &'static mut [u64] = unsafe { &mut *aligned_ptr };
         unsafe {
-            self.metadata.get_mut().add_u64_slice(aligned_ptr);
+            self.metadata.add_u64_slice(aligned_ptr);
         }
 
         let byte_slice =
@@ -45,18 +45,16 @@ impl AssemblyLoader {
             })?;
         let support_res_box = Box::new(support_res_raw);
         let support_res_ptr = Box::into_raw(support_res_box);
-        // SAFETY: We manually track this leaked box in MetadataOwner to reclaim it on drop.
+        // SAFETY: We manually track this leaked box in MetadataArena to reclaim it on drop.
         let support_res: &'static mut Resolution<'static> = unsafe { &mut *support_res_ptr };
         unsafe {
-            self.metadata.get_mut().add_resolution(support_res_ptr);
+            self.metadata.add_resolution(support_res_ptr);
         }
 
+        let res_s = ResolutionS::new(support_res, self.metadata.clone());
         {
             let mut external = self.external.write();
-            external.insert(
-                SUPPORT_ASSEMBLY.to_string(),
-                Some(ResolutionS::new(support_res)),
-            );
+            external.insert(SUPPORT_ASSEMBLY.to_string(), Some(res_s.clone()));
         }
 
         for (index, t) in support_res.type_definitions.iter().enumerate() {
@@ -70,12 +68,14 @@ impl AssemblyLoader {
                     }
                 };
                 if parent.type_name() == "DotnetRs.StubAttribute" {
-                    let data = a.instantiation_data(self, &*support_res).map_err(|e| {
-                        AssemblyLoadError::InvalidFormat(format!(
-                            "failed to parse stub attribute data: {}",
-                            e
-                        ))
-                    })?;
+                    let data = a
+                        .instantiation_data(&(self as &AssemblyLoader), &*support_res)
+                        .map_err(|e| {
+                            AssemblyLoadError::InvalidFormat(format!(
+                                "failed to parse stub attribute data: {}",
+                                e
+                            ))
+                        })?;
                     for n in data.named_args {
                         match n {
                             NamedArg::Field(name, FixedArg::String(Some(target)))
@@ -90,11 +90,7 @@ impl AssemblyLoader {
                                 let support_type_name = t.type_name();
                                 self.stubs.insert(
                                     target.to_string(),
-                                    TypeDescription::new(
-                                        ResolutionS::new(support_res),
-                                        t,
-                                        type_index,
-                                    ),
+                                    TypeDescription::new(res_s.clone(), type_index),
                                 );
                                 self.reverse_stubs
                                     .insert(support_type_name, target.to_string());

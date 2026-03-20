@@ -30,7 +30,7 @@ dotnet-cli               # CLI entry point, TestHarness, integration tests, feat
         │   ├── dotnet-assemblies    # Assembly loading, resolution, bundled support library (.cs stubs)
         │   ├── dotnet-value         # StackValue, Managed/Unmanaged Pointers, Heap Objects, FieldStorage, Layout
         │   ├── dotnet-types         # Type/Method/Field descriptors, Generics, TypeComparer, RuntimeType, Error types
-        │   ├── dotnet-utils         # GC utilities, ThreadSafeLock, AtomicAccess, Sync primitives, Newtypes, BorrowGuard
+        │   ├── dotnet-utils         # GC utilities, ThreadSafeLock, AtomicAccess, Sync primitives, Newtypes, BorrowGuardHandle
         │   ├── dotnet-metrics       # RuntimeMetrics, CacheStats (standalone, serde)
         │   └── dotnet-tracer        # Tracer, LogEntry, structured logging (standalone)
         ├── dotnet-macros        # Proc-macros: #[dotnet_intrinsic], #[dotnet_instruction], #[dotnet_intrinsic_field]
@@ -63,7 +63,7 @@ dotnet-cli               # CLI entry point, TestHarness, integration tests, feat
 - **Heap Management**: `HeapManager` handles the allocation of objects. Each thread typically has its own arena for allocation to minimize contention.
 - **GC Roots**: The evaluation stack, local variables, and static fields serve as the primary roots for GC.
 - **STW Coordination**: When a GC is triggered, all threads are brought to a "Safe Point" (e.g., at a loop back-edge or method call). Once all threads are paused, the collector traces all reachable objects across all arenas.
-- **BorrowGuard**: To prevent deadlocks during STW, `BorrowGuard` must be used when holding a reference to heap-allocated data. It informs the GC that the thread is currently "busy" and cannot safely pause until the guard is dropped.
+- **BorrowGuardHandle**: To prevent deadlocks during STW, `BorrowGuardHandle` must be used when holding a reference to heap-allocated data. It informs the GC that the thread is currently "busy" and cannot safely pause until the guard is dropped.
 - **Collect Trait**: Every type stored on the heap or containing GC references must implement the `Collect` trait to allow the tracer to find nested references.
 
 ## Threading Model
@@ -91,6 +91,17 @@ For more details on caching and resolution pipelines, see [Type Resolution and C
 - **Type Resolution**: Types are resolved lazily. `ResolutionContext` manages the scope of resolution, including generic parameters.
 - **Layout Calculation**: `LayoutFactory` computes the physical memory layout of objects and value types, including field offsets and GC descriptors (which fields are references).
 - **Generics**: Generic types and methods are instantiated on-demand, with metadata specialized for the specific type arguments.
+
+### Descriptor Ownership Model
+
+Metadata descriptors are index-based and owner-tied:
+
+- `ResolutionS` carries both a raw metadata pointer and an `Arc<MetadataArena>` owner.
+- `TypeDescription` stores `(ResolutionS, TypeIndex)`.
+- `MethodDescription` stores `(parent, parent_generics, method_resolution, MethodMemberIndex)` so accessors/events are represented without raw pointer identity tricks.
+- `FieldDescription` stores `(parent, field_resolution, index)`.
+
+This model avoids publishing naked `'static` metadata references while preserving fast descriptor hashing and cache keys.
 
 ## Trait Architecture
 

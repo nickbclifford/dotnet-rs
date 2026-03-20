@@ -306,6 +306,252 @@ impl SyncManagerOps for SyncBlockManager {
     }
 }
 
+#[cfg(all(test, feature = "multithreading"))]
+mod tests {
+    use super::*;
+    use crate::{
+        gc::coordinator::{GCCommand, GCCoordinator},
+        metrics::RuntimeMetrics,
+        sync::LockResult,
+        threading::{STWGuardOps, ThreadManagerOps},
+        tracer::Tracer,
+    };
+    use dotnet_utils::ArenaId;
+    use std::{
+        sync::{
+            Arc as StdArc,
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        },
+        thread,
+        time::{Duration, Instant},
+    };
+
+    // ArenaId constants for test threads
+    const THREAD_A: ArenaId = ArenaId(1);
+    const THREAD_B: ArenaId = ArenaId(2);
+
+    // --- Minimal mock for ThreadManagerOps ---
+
+    struct MockSTWGuard;
+    impl STWGuardOps for MockSTWGuard {
+        fn elapsed_micros(&self) -> u64 {
+            0
+        }
+    }
+
+    struct MockThreadManager {
+        gc_stop: AtomicBool,
+    }
+
+    impl MockThreadManager {
+        fn new() -> Self {
+            Self {
+                gc_stop: AtomicBool::new(false),
+            }
+        }
+
+        fn set_gc_stop(&self, v: bool) {
+            self.gc_stop.store(v, Ordering::SeqCst);
+        }
+    }
+
+    impl ThreadManagerOps for MockThreadManager {
+        type Guard<'a> = MockSTWGuard;
+
+        fn register_thread(&self) -> ArenaId {
+            THREAD_A
+        }
+        fn register_thread_traced(&self, _tracer: &mut Tracer, _name: &str) -> ArenaId {
+            THREAD_A
+        }
+        fn unregister_thread(&self, _managed_id: ArenaId) {}
+        fn unregister_thread_traced(&self, _managed_id: ArenaId, _tracer: &mut Tracer) {}
+        fn current_thread_id(&self) -> Option<ArenaId> {
+            None
+        }
+        fn thread_count(&self) -> usize {
+            1
+        }
+        fn is_gc_stop_requested(&self) -> bool {
+            self.gc_stop.load(Ordering::SeqCst)
+        }
+        fn safe_point(&self, _managed_id: ArenaId, _coordinator: &GCCoordinator) {}
+        fn execute_gc_command(&self, _command: GCCommand, _coordinator: &GCCoordinator) {}
+        fn safe_point_traced(
+            &self,
+            _managed_id: ArenaId,
+            _coordinator: &GCCoordinator,
+            _tracer: &mut Tracer,
+            _location: &str,
+        ) {
+        }
+        fn request_stop_the_world(&self) -> Self::Guard<'_> {
+            MockSTWGuard
+        }
+        fn request_stop_the_world_traced(&self, _tracer: &mut Tracer) -> Self::Guard<'_> {
+            MockSTWGuard
+        }
+    }
+
+    fn make_gc() -> GCCoordinator {
+        GCCoordinator::new(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+            false,
+        )))
+    }
+
+    fn make_metrics() -> RuntimeMetrics {
+        RuntimeMetrics::new()
+    }
+
+    // ===== enter_with_timeout tests =====
+
+    #[test]
+    fn enter_with_timeout_zero_on_free_lock_succeeds() {
+        // timeout_ms=0 delegates to try_enter; free lock → true
+        let block = SyncBlock::new();
+        assert!(block.enter_with_timeout(THREAD_A, 0, &make_metrics()));
+    }
+
+    #[test]
+    fn enter_with_timeout_zero_on_held_lock_fails() {
+        // timeout_ms=0 delegates to try_enter; lock held by another → false
+        let block = SyncBlock::new();
+        block.enter_with_timeout(THREAD_A, 1000, &make_metrics());
+        assert!(!block.enter_with_timeout(THREAD_B, 0, &make_metrics()));
+    }
+
+    #[test]
+    fn enter_with_timeout_nonzero_on_free_lock_succeeds() {
+        // Non-zero timeout; lock is free → immediate acquire → true
+        let block = SyncBlock::new();
+        assert!(block.enter_with_timeout(THREAD_A, 500, &make_metrics()));
+    }
+
+    #[test]
+    fn enter_with_timeout_recursive_reentry_by_same_thread_succeeds() {
+        // Same thread enters twice; both calls return true and recursion count is tracked
+        let block = SyncBlock::new();
+        let metrics = make_metrics();
+        assert!(block.enter_with_timeout(THREAD_A, 500, &metrics));
+        assert!(block.enter_with_timeout(THREAD_A, 500, &metrics));
+        // Two exits needed to fully release
+        assert!(block.exit(THREAD_A));
+        assert!(block.exit(THREAD_A));
+    }
+
+    #[test]
+    fn enter_with_timeout_returns_false_when_held_past_deadline() {
+        // Lock held by THREAD_A; THREAD_B uses a tiny timeout and must time out
+        let block = SyncBlock::new();
+        block.enter_with_timeout(THREAD_A, 5000, &make_metrics());
+        let result = block.enter_with_timeout(THREAD_B, 1, &make_metrics());
+        assert!(!result, "expected timeout (false) while lock is held");
+    }
+
+    #[test]
+    fn enter_with_timeout_succeeds_after_lock_released_by_other_thread() {
+        // THREAD_A holds the lock briefly, then releases; THREAD_B acquires successfully
+        let block = StdArc::new(SyncBlock::new());
+        let block_a = StdArc::clone(&block);
+        let (tx, rx) = mpsc::channel::<()>();
+
+        let handle = thread::spawn(move || {
+            block_a.enter_with_timeout(THREAD_A, 5000, &make_metrics());
+            let _ = tx.send(()); // signal: lock is held
+            thread::sleep(Duration::from_millis(20));
+            block_a.exit(THREAD_A);
+        });
+
+        rx.recv().unwrap(); // wait until thread A holds the lock
+
+        let result = block.enter_with_timeout(THREAD_B, 500, &make_metrics());
+        assert!(
+            result,
+            "expected to acquire lock after thread A released it"
+        );
+
+        handle.join().unwrap();
+    }
+
+    // ===== enter_with_timeout_safe tests =====
+
+    #[test]
+    fn enter_with_timeout_safe_free_lock_returns_success() {
+        // Free lock with generous deadline → Success immediately
+        let block = SyncBlock::new();
+        let mgr = MockThreadManager::new();
+        let gc = make_gc();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let result = block.enter_with_timeout_safe(THREAD_A, deadline, &make_metrics(), &mgr, &gc);
+        assert_eq!(result, LockResult::Success);
+    }
+
+    #[test]
+    fn enter_with_timeout_safe_recursive_reentry_by_same_thread_returns_success() {
+        // Same thread calls twice; second call must return Success and recursion is tracked
+        let block = SyncBlock::new();
+        let mgr = MockThreadManager::new();
+        let gc = make_gc();
+        let d = || Instant::now() + Duration::from_secs(5);
+        block.enter_with_timeout_safe(THREAD_A, d(), &make_metrics(), &mgr, &gc);
+        let result = block.enter_with_timeout_safe(THREAD_A, d(), &make_metrics(), &mgr, &gc);
+        assert_eq!(result, LockResult::Success);
+        assert!(block.exit(THREAD_A));
+        assert!(block.exit(THREAD_A));
+    }
+
+    #[test]
+    fn enter_with_timeout_safe_expired_deadline_on_held_lock_returns_timeout() {
+        // THREAD_A holds lock; THREAD_B uses already-expired deadline → Timeout
+        let block = SyncBlock::new();
+        block.enter_with_timeout(THREAD_A, 5000, &make_metrics());
+        let mgr = MockThreadManager::new();
+        let gc = make_gc();
+        let expired = Instant::now() - Duration::from_millis(1);
+        let result = block.enter_with_timeout_safe(THREAD_B, expired, &make_metrics(), &mgr, &gc);
+        assert_eq!(result, LockResult::Timeout);
+    }
+
+    #[test]
+    fn enter_with_timeout_safe_gc_stop_requested_returns_yield() {
+        // THREAD_A holds lock; GC stop is flagged → THREAD_B gets Yield after safe-point interval
+        let block = SyncBlock::new();
+        block.enter_with_timeout(THREAD_A, 5000, &make_metrics());
+        let mgr = MockThreadManager::new();
+        mgr.set_gc_stop(true);
+        let gc = make_gc();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let result = block.enter_with_timeout_safe(THREAD_B, deadline, &make_metrics(), &mgr, &gc);
+        assert_eq!(result, LockResult::Yield);
+    }
+
+    #[test]
+    fn enter_with_timeout_safe_succeeds_after_lock_released_by_other_thread() {
+        // THREAD_A holds lock briefly, releases; THREAD_B acquires → Success
+        let block = StdArc::new(SyncBlock::new());
+        let block_a = StdArc::clone(&block);
+        let (tx, rx) = mpsc::channel::<()>();
+
+        let handle = thread::spawn(move || {
+            block_a.enter_with_timeout(THREAD_A, 5000, &make_metrics());
+            let _ = tx.send(());
+            thread::sleep(Duration::from_millis(20));
+            block_a.exit(THREAD_A);
+        });
+
+        rx.recv().unwrap();
+
+        let mgr = MockThreadManager::new();
+        let gc = make_gc();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let result = block.enter_with_timeout_safe(THREAD_B, deadline, &make_metrics(), &mgr, &gc);
+        assert_eq!(result, LockResult::Success);
+
+        handle.join().unwrap();
+    }
+}
+
 impl Default for SyncBlockManager {
     fn default() -> Self {
         Self::new()

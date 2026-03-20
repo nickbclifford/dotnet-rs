@@ -40,10 +40,13 @@ pub fn extract_managed_exception<'gc>(
         .expect("Failed to resolve System.Exception type");
 
     exception.as_object(|obj| {
-        if obj.instance_storage.has_field(exception_type, "_message") {
+        if obj
+            .instance_storage
+            .has_field(exception_type.clone(), "_message")
+        {
             let message_bytes = obj
                 .instance_storage
-                .get_field_local(exception_type, "_message");
+                .get_field_local(exception_type.clone(), "_message");
             // SAFETY: message_bytes contains a valid ObjectRef from the object's storage.
             let message_ref = unsafe { ObjectRef::read_branded(&message_bytes, gc) };
             if let Some(msg_inner) = message_ref.0 {
@@ -55,11 +58,11 @@ pub fn extract_managed_exception<'gc>(
         }
         if obj
             .instance_storage
-            .has_field(exception_type, "_stackTraceString")
+            .has_field(exception_type.clone(), "_stackTraceString")
         {
             let st_bytes = obj
                 .instance_storage
-                .get_field_local(exception_type, "_stackTraceString");
+                .get_field_local(exception_type.clone(), "_stackTraceString");
             // SAFETY: st_bytes contains a valid ObjectRef from the object's storage.
             let st_ref = unsafe { ObjectRef::read_branded(&st_bytes, gc) };
             if let Some(st_inner) = st_ref.0 {
@@ -138,16 +141,14 @@ impl ExceptionHandlingSystem {
             ExceptionState::Searching(state) => {
                 self.search_for_handler(ctx, gc, state.exception, state.cursor)
             }
-            ExceptionState::Unwinding(state) => {
-                self.unwind(
-                    ctx,
-                    gc,
-                    state.exception,
-                    state.target,
-                    state.cursor,
-                    state.nested_filter,
-                )
-            }
+            ExceptionState::Unwinding(state) => self.unwind(
+                ctx,
+                gc,
+                state.exception,
+                state.target,
+                state.cursor,
+                state.nested_filter,
+            ),
             ExceptionState::Filtering(_) | ExceptionState::ExecutingHandler(_) => {
                 StepResult::Exception
             }
@@ -184,11 +185,11 @@ impl ExceptionHandlingSystem {
             exception.as_object(|obj| {
                 if obj
                     .instance_storage
-                    .has_field(exception_type, "_stackTraceString")
+                    .has_field(exception_type.clone(), "_stackTraceString")
                 {
                     let st_bytes = obj
                         .instance_storage
-                        .get_field_local(exception_type, "_stackTraceString");
+                        .get_field_local(exception_type.clone(), "_stackTraceString");
                     // SAFETY: st_bytes contains a valid ObjectRef from the object's storage.
                     let st_ref = unsafe { ObjectRef::read_branded(&st_bytes, &gc) };
                     if let Some(st_inner) = st_ref.0 {
@@ -248,7 +249,7 @@ impl ExceptionHandlingSystem {
             exception.as_object(|obj| {
                 if obj
                     .instance_storage
-                    .has_field(exception_type, "_stackTraceString")
+                    .has_field(exception_type.clone(), "_stackTraceString")
                 {
                     let clr_str = CLRString::from(trace);
                     let str_obj = ObjectRef::new(gc, HeapStorage::Str(clr_str));
@@ -256,7 +257,7 @@ impl ExceptionHandlingSystem {
 
                     let mut field_data = obj
                         .instance_storage
-                        .get_field_mut_local(exception_type, "_stackTraceString");
+                        .get_field_mut_local(exception_type.clone(), "_stackTraceString");
                     let val = StackValue::ObjectRef(str_obj);
                     // SAFETY: field_data is a valid mutable slice of the object's instance storage,
                     // and val is a valid StackValue::ObjectRef.
@@ -306,7 +307,10 @@ impl ExceptionHandlingSystem {
         let stop_frame = if let ExceptionState::Searching(state) = ctx.exception_mode() {
             if let Some(nested) = state.nested_filter {
                 if nested.handler.frame_index == 0 {
-                    panic!("Nested filter handler frame index is 0! (len={})", ctx.frame_stack().len());
+                    panic!(
+                        "Nested filter handler frame index is 0! (len={})",
+                        ctx.frame_stack().len()
+                    );
                 }
                 nested.handler.frame_index
             } else {

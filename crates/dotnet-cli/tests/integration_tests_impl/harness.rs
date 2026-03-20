@@ -75,9 +75,7 @@ impl TestHarness {
     pub fn build(&self, fixture_path: &Path) -> io::Result<PathBuf> {
         let file_name = fixture_path.file_stem().unwrap().to_str().unwrap();
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let output_dir = Self::fixtures_base_dir()
-            .join("adhoc")
-            .join(file_name);
+        let output_dir = Self::fixtures_base_dir().join("adhoc").join(file_name);
 
         let fixture_path_abs = if fixture_path.is_absolute() {
             fixture_path.to_path_buf()
@@ -167,15 +165,19 @@ impl TestHarness {
                     panic!("expected input module to have an entry point, received one without")
                 }
             };
+            let td = TypeDescription::new(resolution.clone(), entry_method.parent_type());
+            let method_index = td
+                .definition()
+                .methods
+                .iter()
+                .position(|m| std::ptr::eq(m, &resolution.definition()[entry_method]))
+                .unwrap();
+
             let method = MethodDescription::new(
-                TypeDescription::new(
-                    resolution,
-                    &resolution.definition()[entry_method.parent_type()],
-                    entry_method.parent_type(),
-                ),
+                td,
                 vm::GenericLookup::default(),
                 resolution,
-                &resolution.definition()[entry_method],
+                MethodMemberIndex::Method(method_index),
             );
             executor.entrypoint(method);
 
@@ -223,25 +225,63 @@ impl TestHarness {
         resolution: ResolutionS,
         shared: Arc<state::SharedGlobalState>,
     ) -> u8 {
+        self.run_with_shared_internal(resolution, shared, |_| {})
+    }
+
+    #[cfg(feature = "multithreading")]
+    pub fn run_with_shared_signal_then_wait<F>(
+        &self,
+        resolution: ResolutionS,
+        shared: Arc<state::SharedGlobalState>,
+        release_gate: &Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+        on_result: F,
+    ) where
+        F: FnOnce(u8),
+    {
+        self.run_with_shared_internal(resolution, shared, |result| {
+            on_result(result);
+            let (lock, condvar) = &**release_gate;
+            let mut released = lock.lock().expect("release gate lock poisoned");
+            while !*released {
+                released = condvar
+                    .wait(released)
+                    .expect("release gate wait lock poisoned");
+            }
+        });
+    }
+
+    fn run_with_shared_internal<F>(
+        &self,
+        resolution: ResolutionS,
+        shared: Arc<state::SharedGlobalState>,
+        on_complete: F,
+    ) -> u8
+    where
+        F: FnOnce(u8),
+    {
         let mut executor = vm::Executor::new(shared.clone());
         let entry_method = match resolution.entry_point {
             Some(EntryPoint::Method(m)) => m,
             Some(EntryPoint::File(f)) => todo!("find entry point in file {}", resolution[f].name),
             None => panic!("expected input module to have an entry point, received one without"),
         };
+        let td = TypeDescription::new(resolution.clone(), entry_method.parent_type());
+        let method_index = td
+            .definition()
+            .methods
+            .iter()
+            .position(|m| std::ptr::eq(m, &resolution.definition()[entry_method]))
+            .unwrap();
+
         let method = MethodDescription::new(
-            TypeDescription::new(
-                resolution,
-                &resolution.definition()[entry_method.parent_type()],
-                entry_method.parent_type(),
-            ),
+            td,
             vm::GenericLookup::default(),
             resolution,
-            &resolution.definition()[entry_method],
+            MethodMemberIndex::Method(method_index),
         );
         executor.entrypoint(method);
 
-        match executor.run() {
+        let result = match executor.run() {
             vm::ExecutorResult::Exited(code) => code,
             vm::ExecutorResult::Threw(e) => {
                 eprintln!("Execution threw: {:?}", e);
@@ -251,35 +291,69 @@ impl TestHarness {
                 eprintln!("Execution error: {:?}", e);
                 255
             }
-        }
+        };
+
+        // Drop the executor BEFORE calling on_complete.
+        //
+        // Executor::drop unregisters the arena from the GC coordinator first, then
+        // unregisters the thread. If we kept the executor alive across on_complete, a
+        // caller that blocks inside on_complete (e.g. run_with_shared_signal_then_wait
+        // waiting on the release-gate condvar) would leave this thread still registered
+        // with the GC coordinator. Any concurrent arena that triggers a collection would
+        // then dispatch GCCommand::MarkAll to this thread's ArenaHandle; the blocked
+        // thread never calls safe_point again, so wait_on_other_arenas hangs forever.
+        //
+        // Dropping here executes the correct teardown sequence:
+        //   1. unregister_arena (GC coordinator will no longer target this thread)
+        //   2. unregister_thread (ThreadManager)
+        //   3. clear THREAD_ARENA
+        // Only after all of that does on_complete run (and potentially block at a gate).
+        drop(executor);
+        on_complete(result);
+        result
     }
 
     /// Runs the CLI binary as a subprocess and captures its output.
     pub fn run_cli(&self, dll_path: &Path) -> (u8, String) {
         let assemblies_path = Self::find_dotnet_app_path();
-        let mut command = Command::new("cargo");
-        command.args([
-            "run",
-            "--quiet",
-            "--bin",
-            "dotnet-rs",
-            "--no-default-features",
-        ]);
+        let output = if let Some(bin_path) = std::env::var_os("CARGO_BIN_EXE_dotnet-rs") {
+            Command::new(bin_path)
+                .args([
+                    "-a",
+                    assemblies_path.to_str().unwrap(),
+                    dll_path.to_str().unwrap(),
+                ])
+                .output()
+                .expect("failed to run dotnet-rs binary")
+        } else {
+            let cargo_bin = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+            let mut command = Command::new(cargo_bin);
+            command.args([
+                "run",
+                "--quiet",
+                "--bin",
+                "dotnet-rs",
+                "--no-default-features",
+            ]);
 
-        #[cfg(feature = "multithreading")]
-        command.args(["--features", "multithreading"]);
+            #[cfg(feature = "multithreading")]
+            command.args(["--features", "multithreading"]);
 
-        #[cfg(feature = "memory-validation")]
-        command.args(["--features", "memory-validation"]);
+            #[cfg(feature = "memory-validation")]
+            command.args(["--features", "memory-validation"]);
 
-        command.args([
-            "--",
-            "-a",
-            assemblies_path.to_str().unwrap(),
-            dll_path.to_str().unwrap(),
-        ]);
+            if let Ok(target) = std::env::var("CARGO_BUILD_TARGET") {
+                command.args(["--target", target.as_str()]);
+            }
 
-        let output = command.output().expect("failed to run cargo run");
+            command.args([
+                "--",
+                "-a",
+                assemblies_path.to_str().unwrap(),
+                dll_path.to_str().unwrap(),
+            ]);
+            command.output().expect("failed to run cargo run")
+        };
 
         let exit_code = output.status.code().unwrap_or(255) as u8;
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();

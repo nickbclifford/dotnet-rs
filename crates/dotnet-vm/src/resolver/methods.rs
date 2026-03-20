@@ -10,6 +10,18 @@ use dotnetdll::prelude::*;
 use std::sync::Arc;
 
 impl ResolverService {
+    fn is_delegate_type_in_hierarchy(
+        &self,
+        this_type: &TypeDescription,
+        ctx: &ResolutionContext<'_>,
+    ) -> bool {
+        ctx.get_ancestors(this_type.clone()).any(|(parent, _)| {
+            let raw_type_name = parent.type_name();
+            let type_name = self.loader.canonical_type_name(&raw_type_name);
+            type_name == "System.Delegate" || type_name == "System.MulticastDelegate"
+        })
+    }
+
     pub fn is_intrinsic_cached(&self, method: MethodDescription) -> bool {
         if let Some(cached) = self.caches.intrinsic_cache.get(&method) {
             if let Some(shared) = self.shared_state() {
@@ -21,9 +33,12 @@ impl ResolverService {
         if let Some(shared) = self.shared_state() {
             shared.metrics.record_intrinsic_cache_miss();
         }
-        let result =
-            crate::intrinsics::is_intrinsic(method.clone(), self.loader(), &self.caches.intrinsic_registry);
-        self.caches.intrinsic_cache.insert(method, result);
+        let result = crate::intrinsics::is_intrinsic(
+            method.clone(),
+            self.loader(),
+            &self.caches.intrinsic_registry,
+        );
+        self.caches.intrinsic_cache.insert(method.clone(), result);
         result
     }
 
@@ -39,7 +54,7 @@ impl ResolverService {
             shared.metrics.record_intrinsic_field_cache_miss();
         }
         let result = crate::intrinsics::is_intrinsic_field(
-            field,
+            field.clone(),
             self.loader(),
             &self.caches.intrinsic_registry,
         );
@@ -97,12 +112,14 @@ impl ResolverService {
 
         #[cfg(feature = "generic-constraint-validation")]
         {
-            new_lookup.validate_constraints(
-                method_desc.resolution(),
-                self.loader(),
-                &method_desc.method().generic_parameters,
-                true,
-            )?;
+            if !method_desc.method().generic_parameters.is_empty() {
+                new_lookup.validate_constraints(
+                    method_desc.resolution(),
+                    self.loader(),
+                    &method_desc.method().generic_parameters,
+                    true,
+                )?;
+            }
         }
 
         Ok((method_desc, new_lookup))
@@ -115,7 +132,7 @@ impl ResolverService {
         generics: &GenericLookup,
         ctx: &ResolutionContext<'_>,
     ) -> Result<MethodDescription, TypeResolutionError> {
-        let key = (base_method.clone(), this_type, generics.clone());
+        let key = (base_method.clone(), this_type.clone(), generics.clone());
         if let Some(cached) = self.caches.vmt_cache.get(&key) {
             if let Some(shared) = self.shared_state() {
                 shared.metrics.record_vmt_cache_hit();
@@ -127,10 +144,21 @@ impl ResolverService {
             shared.metrics.record_vmt_cache_miss();
         }
 
+        // Delegate Invoke/BeginInvoke/EndInvoke methods are runtime-synthesized and have no
+        // concrete virtual override entries in metadata tables.
+        let method_name = &*base_method.method().name;
+        if base_method.method().body.is_none()
+            && matches!(method_name, "Invoke" | "BeginInvoke" | "EndInvoke")
+            && self.is_delegate_type_in_hierarchy(&this_type, ctx)
+        {
+            self.caches.vmt_cache.insert(key, base_method.clone());
+            return Ok(base_method);
+        }
+
         // Standard virtual method resolution: search ancestors
         let is_interface = matches!(base_method.parent.definition().flags.kind, Kind::Interface);
 
-        for (parent, _) in ctx.get_ancestors(this_type) {
+        for (parent, _) in ctx.get_ancestors(this_type.clone()) {
             if let Some(this_method) =
                 self.find_and_cache_method(parent, base_method.clone(), &key.2, is_interface)?
             {
@@ -154,7 +182,7 @@ impl ResolverService {
     ) -> Result<Option<MethodDescription>, TypeResolutionError> {
         let def = this_type.definition();
         if !def.overrides.is_empty() {
-            let cache_key = (this_type, generics.clone());
+            let cache_key = (this_type.clone(), generics.clone());
             let overrides = if let Some(map) = self.caches.overrides_cache.get(&cache_key) {
                 if let Some(shared) = self.shared_state() {
                     shared.metrics.record_overrides_cache_hit();
@@ -167,16 +195,16 @@ impl ResolverService {
                 let mut map = std::collections::HashMap::new();
                 for ovr in def.overrides.iter() {
                     let decl = self.loader.locate_method(
-                        this_type.resolution,
+                        this_type.resolution.clone(),
                         ovr.declaration,
                         generics,
                         None,
                     )?;
                     let impl_m = self.loader.locate_method(
-                        this_type.resolution,
+                        this_type.resolution.clone(),
                         ovr.implementation,
                         generics,
-                        Some(this_type.into()),
+                        Some(this_type.clone().into()),
                     )?;
                     map.insert(decl, impl_m);
                 }
@@ -188,15 +216,16 @@ impl ResolverService {
             };
 
             if let Some(impl_m) = overrides.get(&method) {
-                self.caches
-                    .vmt_cache
-                    .insert((method.clone(), this_type, generics.clone()), impl_m.clone());
+                self.caches.vmt_cache.insert(
+                    (method.clone(), this_type.clone(), generics.clone()),
+                    impl_m.clone(),
+                );
                 return Ok(Some(impl_m.clone()));
             }
         }
 
         if let Some(this_method) = self.loader.find_method_in_type_with_substitution(
-            this_type,
+            this_type.clone(),
             &method.method().name,
             &method.method().signature,
             method.resolution(),

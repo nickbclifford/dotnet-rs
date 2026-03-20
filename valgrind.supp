@@ -1,0 +1,65 @@
+# Valgrind suppression file for dotnet-rs
+#
+# Policy:
+#   The `possibly lost: 48 bytes in 1 blocks` reports that appear in every
+#   Valgrind run (hello_world, threading_monitor_try_enter_timeout_single_42,
+#   and the per-thread copies in threading_monitor_try_enter_timeout_42) are
+#   NOT real leaks.  They originate from Rust's test harness allocating an
+#   Arc<thread::Inner> for the current thread name via:
+#
+#     malloc → alloc → alloc_impl → allocate
+#       → Thread::new → init_current → current_or_unnamed
+#       → mpmc::Context::new → __rust_std_internal_init_fn
+#       → [thread-local lazy init] → test harness recv loop
+#
+#   The Arc is stored inside a thread-local lazy cell (mpmc CONTEXT) that is
+#   never explicitly freed before process exit, so Valgrind sees the heap
+#   pointer as "possibly lost" even though the OS reclaims it.
+#   This is a well-known Rust test-harness false positive with no actionable
+#   fix in dotnet-rs code.
+#
+#   Real fix: not possible without patching Rust's std test harness.
+#   Decision: suppress via this file so `--error-exitcode=1` no longer
+#   produces false-positive non-zero exits for otherwise clean runs.
+#
+# Recommended invocation:
+#   valgrind \
+#     --suppressions=valgrind.supp \
+#     --error-exitcode=1 \
+#     --leak-check=full \
+#     --show-leak-kinds=all \
+#     -s \
+#     <binary> [args]
+
+# ── Rust test harness: Arc<thread::Inner> via current_or_unnamed ─────────────
+# malloc → alloc_impl → allocate → [Thread::new / init_current frames, some
+# with build-hash suffixes] → current_or_unnamed → mpmc::Context chain.
+# Uses ... to skip over hash-suffixed mangled frames that change per build.
+{
+   rust_test_harness_thread_inner_arc_possibly_lost
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:malloc
+   fun:alloc
+   fun:alloc_impl
+   fun:allocate
+   ...
+   fun:current_or_unnamed
+   ...
+}
+
+# ── Fallback: same pattern via __rust_std_internal_init_fn root ──────────────
+# Some toolchain versions may not surface current_or_unnamed demangled;
+# __rust_std_internal_init_fn is the stable lazy-init trampoline just above it.
+{
+   rust_test_harness_thread_inner_arc_possibly_lost_via_init_fn
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:malloc
+   fun:alloc
+   fun:alloc_impl
+   fun:allocate
+   ...
+   fun:__rust_std_internal_init_fn
+   ...
+}

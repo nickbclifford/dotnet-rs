@@ -257,11 +257,11 @@ pub fn intrinsic_as_span<
         Some(offset),
     );
     span.instance_storage
-        .field::<ManagedPtr<'gc>>(span.description, "_reference")
+        .field::<ManagedPtr<'gc>>(span.description.clone(), "_reference")
         .unwrap()
         .write(managed);
     span.instance_storage
-        .field::<i32>(span.description, "_length")
+        .field::<i32>(span.description.clone(), "_length")
         .unwrap()
         .write(len as i32);
 
@@ -296,7 +296,7 @@ pub fn intrinsic_runtime_helpers_create_span<
 
     let res_ctx_handle = ctx.current_context();
     let handle_layout = vm_try!(type_layout(
-        ConcreteType::from(field_handle.description),
+        ConcreteType::from(field_handle.description.clone()),
         &res_ctx_handle
     ));
     let _value_offset = match &*handle_layout {
@@ -355,7 +355,7 @@ pub fn intrinsic_runtime_helpers_create_span<
         let span_type = vm_try!(ctx.loader().corlib_type("System.ReadOnlySpan`1"));
         let span_lookup = GenericLookup::new(vec![element_type.clone()]);
         let span_res_ctx = res_ctx.with_generics(&span_lookup);
-        let span_instance = vm_try!(span_res_ctx.new_object(span_type));
+        let span_instance = vm_try!(span_res_ctx.new_object(span_type.clone()));
 
         let layout = vm_try!(type_layout(ConcreteType::from(span_type), &span_res_ctx));
         let (_ref_offset, _length_offset) = match &*layout {
@@ -388,14 +388,14 @@ pub fn intrinsic_runtime_helpers_create_span<
         );
         span_instance
             .instance_storage
-            .field::<ManagedPtr<'gc>>(span_instance.description, "_reference")
+            .field::<ManagedPtr<'gc>>(span_instance.description.clone(), "_reference")
             .unwrap()
             .write(managed);
 
         let element_count = (array_size / element_size.as_usize()) as i32;
         span_instance
             .instance_storage
-            .field::<i32>(span_instance.description, "_length")
+            .field::<i32>(span_instance.description.clone(), "_length")
             .unwrap()
             .write(element_count);
 
@@ -432,7 +432,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<
     // Resolve field
     let res_ctx_field = ctx.current_context();
     let field_layout = vm_try!(type_layout(
-        ConcreteType::from(field_handle.description),
+        ConcreteType::from(field_handle.description.clone()),
         &res_ctx_field
     ));
     let _field_value_offset = match &*field_layout {
@@ -464,7 +464,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<
     // Resolve type
     let res_ctx_type = ctx.current_context();
     let runtime_type_layout = vm_try!(type_layout(
-        ConcreteType::from(type_handle.description),
+        ConcreteType::from(type_handle.description.clone()),
         &res_ctx_type
     ));
     let _type_value_offset = match &*runtime_type_layout {

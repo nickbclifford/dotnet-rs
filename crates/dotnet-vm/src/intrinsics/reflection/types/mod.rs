@@ -18,7 +18,7 @@ use dotnet_value::{
     layout::{LayoutManager, Scalar},
     object::{HeapStorage, ObjectRef},
 };
-use dotnetdll::prelude::{BaseType, MemberType, MethodType, TypeSource};
+use dotnetdll::prelude::{BaseType, MemberType, MethodMemberIndex, MethodType, TypeSource};
 
 pub mod type_construction;
 pub mod type_members;
@@ -260,9 +260,9 @@ pub fn runtime_type_handle_intrinsic_call<
             };
 
             let rt = ctx.resolve_runtime_type(rt_obj);
-            let td = match rt {
-                RuntimeType::Type(td) => td,
-                RuntimeType::Generic(td, _) => td,
+            let td = match &rt {
+                RuntimeType::Type(td) => td.clone(),
+                RuntimeType::Generic(td, _) => td.clone(),
                 _ => panic!("GetActivationInfo called on non-type: {:?}", rt),
             };
 
@@ -293,7 +293,7 @@ pub fn runtime_type_handle_intrinsic_call<
 
             // Find default ctor
             let mut found_ctor = false;
-            for m in td.definition().methods.iter() {
+            for (idx, m) in td.definition().methods.iter().enumerate() {
                 if m.name == ".ctor" && m.signature.instance && m.signature.parameters.is_empty() {
                     let lookup = if let RuntimeType::Generic(_, type_generics) = rt {
                         GenericLookup::new(
@@ -306,7 +306,12 @@ pub fn runtime_type_handle_intrinsic_call<
                         ctx.shared().empty_generics.clone()
                     };
                     let method_idx = ctx.get_runtime_method_index(
-                        MethodDescription::new(td, lookup.clone(), td.resolution, m),
+                        MethodDescription::new(
+                            td.clone(),
+                            lookup.clone(),
+                            td.resolution.clone(),
+                            MethodMemberIndex::Method(idx),
+                        ),
                         lookup,
                     );
 
@@ -379,7 +384,7 @@ pub fn intrinsic_runtime_helpers_get_method_table<
         _ => panic!("invalid type on stack"),
     };
 
-    let mt_ptr = vm_try!(object_type).definition_ptr().unwrap().as_ptr();
+    let mt_ptr = vm_try!(object_type).definition() as *const _;
     ctx.push_isize(mt_ptr as isize);
     StepResult::Continue
 }

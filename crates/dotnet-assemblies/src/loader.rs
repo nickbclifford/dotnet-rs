@@ -1,3 +1,4 @@
+#![allow(unexpected_cfgs)]
 use crate::error::AssemblyLoadError;
 use dashmap::DashMap;
 use dotnet_types::{
@@ -5,7 +6,7 @@ use dotnet_types::{
     comparer::TypeComparer,
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
-    resolution::ResolutionS,
+    resolution::{MetadataArena, ResolutionS},
 };
 use dotnet_utils::sync::{AtomicU64, RwLock};
 use dotnetdll::prelude::*;
@@ -14,68 +15,8 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
 };
-
-/// Owns leaked metadata and byte slices to allow recapture on drop.
-pub struct MetadataOwner {
-    resolutions: Vec<*mut Resolution<'static>>,
-    u64_slices: Vec<*mut [u64]>,
-}
-
-impl MetadataOwner {
-    pub fn new() -> Self {
-        Self {
-            resolutions: Vec::new(),
-            u64_slices: Vec::new(),
-        }
-    }
-}
-
-impl Default for MetadataOwner {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl MetadataOwner {
-    /// # Safety
-    ///
-    /// The pointer must have been obtained from `Box::into_raw(Box::new(res))`.
-    pub unsafe fn add_resolution(&mut self, res: *const Resolution<'static>) {
-        self.resolutions.push(res as *mut _);
-    }
-
-    /// # Safety
-    ///
-    /// The pointer must have been obtained from `Box::into_raw(vec.into_boxed_slice())`.
-    pub unsafe fn add_u64_slice(&mut self, slice: *mut [u64]) {
-        self.u64_slices.push(slice);
-    }
-}
-
-impl Drop for MetadataOwner {
-    fn drop(&mut self) {
-        // Drop resolutions first as they may contain references to the slices
-        for res in self.resolutions.drain(..) {
-            // SAFETY: The pointer was added via add_resolution, which requires it to be from Box::into_raw.
-            unsafe {
-                drop(Box::from_raw(res));
-            }
-        }
-        for slice in self.u64_slices.drain(..) {
-            // SAFETY: The pointer was added via add_u64_slice, which requires it to be from Box::into_raw.
-            unsafe {
-                drop(Box::from_raw(slice));
-            }
-        }
-    }
-}
-
-// SAFETY: MetadataOwner only contains raw pointers to metadata that is not being
-// mutated and is owned by this type. Reclaiming it on drop is safe if no references
-// exist.
-unsafe impl Send for MetadataOwner {}
-unsafe impl Sync for MetadataOwner {}
 
 pub(crate) const SUPPORT_LIBRARY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/support.dll"));
 pub const SUPPORT_ASSEMBLY: &str = "__dotnetrs_support";
@@ -94,7 +35,10 @@ impl BindingRedirect {
 }
 
 pub fn versions_equal(v1: &Version, v2: &Version) -> bool {
-    v1.major == v2.major && v1.minor == v2.minor && v1.build == v2.build && v1.revision == v2.revision
+    v1.major == v2.major
+        && v1.minor == v2.minor
+        && v1.build == v2.build
+        && v1.revision == v2.revision
 }
 
 pub fn version_ge(v1: &Version, v2: &Version) -> bool {
@@ -150,11 +94,22 @@ pub struct AssemblyLoader {
     pub type_cache_misses: AtomicU64,
     pub method_cache_hits: AtomicU64,
     pub method_cache_misses: AtomicU64,
-    pub(crate) metadata: RwLock<MetadataOwner>,
+    pub(crate) metadata: Arc<MetadataArena>,
     pub(crate) redirects: DashMap<String, Vec<BindingRedirect>>,
     pub(crate) strict_versioning: bool,
 }
 static_collect!(AssemblyLoader);
+
+// SAFETY: Under `--no-default-features` the runtime is single-threaded; `AssemblyLoader` is
+// never accessed concurrently.  The `!Sync` / `!Send` fields are compat `RwLock` wrappers over
+// `RefCell` and `NonNull`-bearing descriptors (`ResolutionS`), all of which are safe here
+// because concurrent access cannot occur in this build.
+// These impls are intentionally absent when `multithreading` is enabled so the real
+// thread-safe types provide the `Send`/`Sync` guarantees instead.
+#[cfg(not(feature = "multithreading"))]
+unsafe impl Sync for AssemblyLoader {}
+#[cfg(not(feature = "multithreading"))]
+unsafe impl Send for AssemblyLoader {}
 
 impl AssemblyLoader {
     pub fn new(assembly_root: String) -> Result<Self, AssemblyLoadError> {
@@ -200,7 +155,7 @@ impl AssemblyLoader {
             type_cache_misses: AtomicU64::new(0),
             method_cache_hits: AtomicU64::new(0),
             method_cache_misses: AtomicU64::new(0),
-            metadata: RwLock::new(MetadataOwner::new()),
+            metadata: Arc::new(MetadataArena::new()),
             redirects: DashMap::new(),
             strict_versioning: std::env::var("DOTNET_STRICT_VERSIONING").is_ok(),
         };
@@ -227,16 +182,7 @@ impl AssemblyLoader {
         &self,
         path: impl AsRef<Path>,
     ) -> Result<ResolutionS, AssemblyLoadError> {
-        let (res, raw_ptr, slice_ptr) = crate::resolution::load_resolution_core(path)?;
-        {
-            let mut metadata = self.metadata.write();
-            // SAFETY: raw_ptr and slice_ptr were obtained from Box::into_raw in load_resolution_core.
-            unsafe {
-                metadata.add_resolution(raw_ptr);
-                metadata.add_u64_slice(slice_ptr);
-            }
-        }
-        Ok(res)
+        crate::resolution::load_resolution_core(path, &self.metadata)
     }
 
     /// Returns true if the given name is an alias for a stubbed type.
@@ -253,51 +199,61 @@ impl AssemblyLoader {
     }
 
     pub fn load_redirects(&self) -> Result<(), AssemblyLoadError> {
-        let mut file = PathBuf::from(&self.assembly_root);
-        file.push("redirects.txt");
-        if !file.exists() {
-            return Ok(());
+        // Miri's isolation mode blocks all filesystem syscalls (including `statx` from
+        // `Path::exists`). Since no `redirects.txt` will be present in Miri test
+        // environments, returning early is semantically identical to the normal
+        // "file not found → Ok(())" path and keeps Miri coverage unblocked.
+        #[cfg(miri)]
+        return Ok(());
+
+        #[cfg(not(miri))]
+        {
+            let mut file = PathBuf::from(&self.assembly_root);
+            file.push("redirects.txt");
+            if !file.exists() {
+                return Ok(());
+            }
+
+            let content = fs::read_to_string(file).map_err(|e| {
+                AssemblyLoadError::Io(format!("could not read redirects.txt: {}", e))
+            })?;
+
+            for line in content.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+
+                let parts: Vec<_> = line.split_whitespace().collect();
+                if parts.len() != 3 {
+                    continue; // Skip invalid lines
+                }
+
+                let name = parts[0];
+                let range: Vec<_> = parts[1].split('-').collect();
+                if range.len() != 2 {
+                    continue;
+                }
+
+                if let (Some(start), Some(end), Some(to)) = (
+                    parse_version(range[0]),
+                    parse_version(range[1]),
+                    parse_version(parts[2]),
+                ) {
+                    let redirect = BindingRedirect {
+                        from_version_start: start,
+                        from_version_end: end,
+                        to_version: to,
+                    };
+                    self.redirects
+                        .entry(name.to_string())
+                        .or_default()
+                        .push(redirect);
+                }
+            }
+
+            Ok(())
         }
-
-        let content = fs::read_to_string(file).map_err(|e| {
-            AssemblyLoadError::Io(format!("could not read redirects.txt: {}", e))
-        })?;
-
-        for line in content.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-
-            let parts: Vec<_> = line.split_whitespace().collect();
-            if parts.len() != 3 {
-                continue; // Skip invalid lines
-            }
-
-            let name = parts[0];
-            let range: Vec<_> = parts[1].split('-').collect();
-            if range.len() != 2 {
-                continue;
-            }
-
-            if let (Some(start), Some(end), Some(to)) = (
-                parse_version(range[0]),
-                parse_version(range[1]),
-                parse_version(parts[2]),
-            ) {
-                let redirect = BindingRedirect {
-                    from_version_start: start,
-                    from_version_end: end,
-                    to_version: to,
-                };
-                self.redirects
-                    .entry(name.to_string())
-                    .or_default()
-                    .push(redirect);
-            }
-        }
-
-        Ok(())
     }
 
     pub fn get_assembly(&self, name: &str) -> Result<ResolutionS, AssemblyLoadError> {
@@ -321,7 +277,7 @@ impl AssemblyLoader {
             }
         }
 
-        let res = { self.external.read().get(name).copied() };
+        let res = { self.external.read().get(name).cloned() };
         let resolution = match res {
             None => {
                 let mut file = PathBuf::from(&self.assembly_root);
@@ -341,9 +297,9 @@ impl AssemblyLoader {
                     }
                     Some(a) => {
                         let mut external = self.external.write();
-                        external.insert(a.name.to_string(), Some(resolution));
+                        external.insert(a.name.to_string(), Some(resolution.clone()));
                         if a.name.as_ref() != name {
-                            external.insert(name.to_string(), Some(resolution));
+                            external.insert(name.to_string(), Some(resolution.clone()));
                         }
                     }
                 }
@@ -361,9 +317,9 @@ impl AssemblyLoader {
                     }
                     Some(a) => {
                         let mut external = self.external.write();
-                        external.insert(a.name.to_string(), Some(resolution));
+                        external.insert(a.name.to_string(), Some(resolution.clone()));
                         if a.name.as_ref() != name {
-                            external.insert(name.to_string(), Some(resolution));
+                            external.insert(name.to_string(), Some(resolution.clone()));
                         }
                     }
                 }
@@ -376,41 +332,53 @@ impl AssemblyLoader {
         if let Some((requested, a)) = requested_version.zip(resolution.assembly.as_ref()) {
             let actual = a.version;
             // ECMA-335 binding: Major versions MUST match exactly.
-                // Minor versions intended to be backward compatible.
-                // Conforming implementations can be stricter.
-                // For now: require same Major/Minor, and Actual >= Requested.
-                // This is a reasonable "strong" binding for a VM implementation.
-                let mut error = None;
-                if actual.major != requested.major || actual.minor != requested.minor {
-                    error = Some(format!(
-                        "assembly {} has version {}.{}.{}.{}, but {}.{}.{}.{} was requested (and no redirect matched)",
-                        name,
-                        actual.major, actual.minor, actual.build, actual.revision,
-                        requested.major, requested.minor, requested.build, requested.revision
-                    ));
-                } else if !version_ge(&actual, &requested) {
-                    error = Some(format!(
-                        "assembly {} has version {}.{}.{}.{}, which is older than the requested {}.{}.{}.{}",
-                        name,
-                        actual.major, actual.minor, actual.build, actual.revision,
-                        requested.major, requested.minor, requested.build, requested.revision
-                    ));
-                }
+            // Minor versions intended to be backward compatible.
+            // Conforming implementations can be stricter.
+            // For now: require same Major/Minor, and Actual >= Requested.
+            // This is a reasonable "strong" binding for a VM implementation.
+            let mut error = None;
+            if actual.major != requested.major || actual.minor != requested.minor {
+                error = Some(format!(
+                    "assembly {} has version {}.{}.{}.{}, but {}.{}.{}.{} was requested (and no redirect matched)",
+                    name,
+                    actual.major,
+                    actual.minor,
+                    actual.build,
+                    actual.revision,
+                    requested.major,
+                    requested.minor,
+                    requested.build,
+                    requested.revision
+                ));
+            } else if !version_ge(&actual, &requested) {
+                error = Some(format!(
+                    "assembly {} has version {}.{}.{}.{}, which is older than the requested {}.{}.{}.{}",
+                    name,
+                    actual.major,
+                    actual.minor,
+                    actual.build,
+                    actual.revision,
+                    requested.major,
+                    requested.minor,
+                    requested.build,
+                    requested.revision
+                ));
+            }
 
-                if let Some(msg) = error {
-                    if self.strict_versioning {
-                        return Err(AssemblyLoadError::InvalidFormat(msg));
-                    } else {
-                        tracing::warn!("Binding mismatch: {}", msg);
-                    }
+            if let Some(msg) = error {
+                if self.strict_versioning {
+                    return Err(AssemblyLoadError::InvalidFormat(msg));
+                } else {
+                    tracing::warn!("Binding mismatch: {}", msg);
                 }
+            }
         }
 
         Ok(resolution)
     }
 
     pub fn assemblies(&self) -> Vec<ResolutionS> {
-        self.external.read().values().flatten().copied().collect()
+        self.external.read().values().flatten().cloned().collect()
     }
 
     pub fn type_cache_size(&self) -> usize {
@@ -434,16 +402,13 @@ impl AssemblyLoader {
     pub fn register_owned_assembly(&self, res: Resolution<'static>) -> ResolutionS {
         let res_box = Box::new(res);
         let res_ptr = Box::into_raw(res_box);
-        let res_s = ResolutionS::new(res_ptr);
+        let res_s = ResolutionS::new(res_ptr, self.metadata.clone());
 
-        {
-            let mut metadata = self.metadata.write();
-            unsafe {
-                metadata.add_resolution(res_ptr);
-            }
+        unsafe {
+            self.metadata.add_resolution(res_ptr);
         }
 
-        self.register_assembly(res_s);
+        self.register_assembly(res_s.clone());
         res_s
     }
 

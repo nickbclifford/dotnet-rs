@@ -57,15 +57,19 @@ pub fn run_cli() -> ExitCode {
     let shared = Arc::new(state::SharedGlobalState::new(loader));
     let mut executor = vm::Executor::new(shared);
 
+    let td = TypeDescription::new(resolution.clone(), entry_method.parent_type());
+    let method_index = td
+        .definition()
+        .methods
+        .iter()
+        .position(|m| std::ptr::eq(m, &resolution.definition()[entry_method]))
+        .unwrap();
+
     let entrypoint = MethodDescription::new(
-        TypeDescription::new(
-            resolution,
-            &resolution.definition()[entry_method.parent_type()],
-            entry_method.parent_type(),
-        ),
+        td,
         vm::GenericLookup::default(),
         resolution,
-        &resolution.definition()[entry_method],
+        MethodMemberIndex::Method(method_index),
     );
     executor.entrypoint(entrypoint);
 

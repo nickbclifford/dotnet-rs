@@ -353,7 +353,7 @@ pub fn is_intrinsic_field(
 
     // Check for IntrinsicAttribute
     for a in &field.field().attributes {
-        if let Ok(ctor) = loader.locate_attribute(field.parent.resolution, a)
+        if let Ok(ctor) = loader.locate_attribute(field.parent.resolution.clone(), a)
             && ctor.parent.type_name() == INTRINSIC_ATTR
         {
             return true;
@@ -470,7 +470,7 @@ fn object_get_type<
     }
 
     let rt: RuntimeType = this.as_heap_storage(|storage| match storage {
-        HeapStorage::Obj(o) => RuntimeType::Type(o.description),
+        HeapStorage::Obj(o) => RuntimeType::Type(o.description.clone()),
         HeapStorage::Str(_) => RuntimeType::String,
         // For arrays, return System.Array as a conservative fallback.
         // TODO: encode exact element type and rank into RuntimeType (Vector/Array)
@@ -498,7 +498,7 @@ fn object_get_type<
                 "System.Double" => RuntimeType::Float64,
                 "System.IntPtr" => RuntimeType::IntPtr,
                 "System.UIntPtr" => RuntimeType::UIntPtr,
-                _ => RuntimeType::Type(o.description),
+                _ => RuntimeType::Type(o.description.clone()),
             }
         }
     });

@@ -18,7 +18,7 @@ use dotnet_value::{
 pub fn read_span_reference<'gc>(span: &Object<'gc>) -> Result<ManagedPtrInfo<'gc>, IntrinsicError> {
     let ptr = span
         .instance_storage
-        .field::<ManagedPtr<'gc>>(span.description, "_reference")
+        .field::<ManagedPtr<'gc>>(span.description.clone(), "_reference")
         .ok_or_else(|| IntrinsicError::Message("Span must have _reference field".to_string()))?
         .read();
     Ok(ptr.into_info())
@@ -28,7 +28,7 @@ pub fn read_span_reference<'gc>(span: &Object<'gc>) -> Result<ManagedPtrInfo<'gc
 pub fn read_span_length(span: &Object) -> Result<i32, IntrinsicError> {
     Ok(span
         .instance_storage
-        .field::<i32>(span.description, "_length")
+        .field::<i32>(span.description.clone(), "_length")
         .ok_or_else(|| IntrinsicError::Message("Span must have _length field".to_string()))?
         .read())
 }

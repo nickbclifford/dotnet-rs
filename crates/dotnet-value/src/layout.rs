@@ -488,6 +488,7 @@ impl<'gc> FieldType for ManagedPtr<'gc> {
 }
 
 #[cfg(test)]
+#[allow(clippy::mutable_key_type)]
 mod tests {
     use super::*;
 

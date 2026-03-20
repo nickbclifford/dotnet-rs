@@ -10,7 +10,6 @@ use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 use dotnet_value::{StackValue, object::ObjectRef};
 use dotnetdll::prelude::{BaseType, Parameter, ParameterType};
-use gc_arena::Gc;
 
 #[allow(dead_code)]
 const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";
@@ -63,6 +62,8 @@ pub fn intrinsic_interlocked_compare_exchange<
             let value = ctx.pop_i32();
             let target_ptr = ctx.pop_managed_ptr();
 
+            // SAFETY: `target_ptr` is the managed `ref T` argument for this intrinsic,
+            // and the size/orderings match the selected primitive operation.
             let prev = match unsafe {
                 ctx.compare_exchange_atomic(
                     target_ptr.origin().clone(),
@@ -84,6 +85,8 @@ pub fn intrinsic_interlocked_compare_exchange<
             let value = ctx.pop_i64();
             let target_ptr = ctx.pop_managed_ptr();
 
+            // SAFETY: `target_ptr` is the managed `ref T` argument for this intrinsic,
+            // and the size/orderings match the selected primitive operation.
             let prev = match unsafe {
                 ctx.compare_exchange_atomic(
                     target_ptr.origin().clone(),
@@ -106,6 +109,8 @@ pub fn intrinsic_interlocked_compare_exchange<
             let target_ptr = ctx.pop_managed_ptr();
 
             let size = ObjectRef::SIZE;
+            // SAFETY: `target_ptr` is the managed `ref T` argument for this intrinsic,
+            // and the size/orderings match pointer-width CAS.
             let prev = match unsafe {
                 ctx.compare_exchange_atomic(
                     target_ptr.origin().clone(),
@@ -128,16 +133,22 @@ pub fn intrinsic_interlocked_compare_exchange<
             let value = ctx.pop_obj();
             let target_ptr = ctx.pop_managed_ptr();
 
-            let val_raw = match value.0 {
-                Some(ptr) => Gc::as_ptr(ptr) as usize,
-                None => 0,
-            };
-            let comp_raw = match comparand.0 {
-                Some(ptr) => Gc::as_ptr(ptr) as usize,
-                None => 0,
-            };
+            // Encode using ObjectRef::write so the tagged representation (Tag-5 +
+            // ArenaId in upper 16 bits) matches what is stored in memory by the
+            // normal field-write path.  Using Gc::as_ptr directly would produce an
+            // untagged pointer that never matches the stored tagged bytes.
+            let mut val_buf = [0u8; ObjectRef::SIZE];
+            value.write(&mut val_buf);
+            let val_raw = usize::from_ne_bytes(val_buf);
 
+            let mut comp_buf = [0u8; ObjectRef::SIZE];
+            comparand.write(&mut comp_buf);
+            let comp_raw = usize::from_ne_bytes(comp_buf);
+
+            let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
             let size = ObjectRef::SIZE;
+            // SAFETY: `target_ptr` is the managed `ref T` argument and `comp_raw`/`val_raw`
+            // use the same tagged object representation as regular field writes.
             let prev_raw = match unsafe {
                 ctx.compare_exchange_atomic(
                     target_ptr.origin().clone(),
@@ -152,13 +163,12 @@ pub fn intrinsic_interlocked_compare_exchange<
                 Ok(prev) | Err(prev) => prev as usize,
             };
 
-            let prev = if prev_raw == 0 {
-                ObjectRef(None)
-            } else {
-                // SAFETY: We just read this from an atomic access where we stored valid Gc payload pointers.
-                // The object is kept alive because we are in an intrinsic call and the stack roots it (or the static field roots it).
-                ObjectRef(Some(unsafe { Gc::from_ptr(prev_raw as *const _) }))
-            };
+            // Decode via read_branded so the tag bits are stripped correctly and
+            // the GC lifetime is properly branded.  Gc::from_ptr(prev_raw) would
+            // use the tagged value as a raw address, producing an invalid pointer.
+            // SAFETY: `prev_raw` came from VM-managed object slot bytes and `gc`
+            // brands the returned reference to the current arena lifetime.
+            let prev = unsafe { ObjectRef::read_branded(&prev_raw.to_ne_bytes(), &gc) };
             ctx.push_obj(prev);
         }
     }
@@ -206,6 +216,7 @@ pub fn intrinsic_interlocked_exchange<
             let value = ctx.pop_i32();
             let target_ptr = ctx.pop_managed_ptr();
 
+            // SAFETY: `target_ptr` is the managed `ref T` argument and size matches `i32`.
             let prev = unsafe {
                 ctx.exchange_atomic(
                     target_ptr.origin().clone(),
@@ -223,6 +234,7 @@ pub fn intrinsic_interlocked_exchange<
             let value = ctx.pop_i64();
             let target_ptr = ctx.pop_managed_ptr();
 
+            // SAFETY: `target_ptr` is the managed `ref T` argument and size matches `i64`.
             let prev = unsafe {
                 ctx.exchange_atomic(
                     target_ptr.origin().clone(),
@@ -241,6 +253,7 @@ pub fn intrinsic_interlocked_exchange<
             let target_ptr = ctx.pop_managed_ptr();
 
             let size = ObjectRef::SIZE;
+            // SAFETY: `target_ptr` is the managed `ref T` argument and size matches pointer width.
             let prev = unsafe {
                 ctx.exchange_atomic(
                     target_ptr.origin().clone(),
@@ -260,9 +273,14 @@ pub fn intrinsic_interlocked_exchange<
             let value = ctx.pop();
             let target_ptr = ctx.pop_managed_ptr();
 
+            // Encode using ObjectRef::write so the tagged representation matches
+            // what is stored in memory by the normal field-write path.
             let val_raw = match value {
-                StackValue::ObjectRef(ObjectRef(Some(ptr))) => Gc::as_ptr(ptr) as usize,
-                StackValue::ObjectRef(ObjectRef(None)) => 0,
+                StackValue::ObjectRef(ref obj_ref) => {
+                    let mut buf = [0u8; ObjectRef::SIZE];
+                    obj_ref.write(&mut buf);
+                    usize::from_ne_bytes(buf)
+                }
                 StackValue::NativeInt(i) => i as usize,
                 _ => panic!(
                     "intrinsic_interlocked_exchange: Expected ObjectRef or NativeInt, got {:?}",
@@ -271,6 +289,8 @@ pub fn intrinsic_interlocked_exchange<
             };
 
             let size = ObjectRef::SIZE;
+            // SAFETY: `target_ptr` is the managed `ref T` argument and `val_raw`
+            // uses the VM tagged object representation.
             let prev_raw = unsafe {
                 ctx.exchange_atomic(
                     target_ptr.origin().clone(),
@@ -282,6 +302,8 @@ pub fn intrinsic_interlocked_exchange<
                 .expect("Interlocked.Exchange failed")
             } as usize;
 
+            // SAFETY: `prev_raw` came from VM-managed object slot bytes and `gc`
+            // brands the returned reference to the current arena lifetime.
             let prev = unsafe { ObjectRef::read_branded(&prev_raw.to_ne_bytes(), &gc) };
             ctx.push_obj(prev);
         }
@@ -327,6 +349,7 @@ pub fn intrinsic_interlocked_exchange_add<
             let value = ctx.pop_i32();
             let target_ptr = ctx.pop_managed_ptr();
 
+            // SAFETY: `target_ptr` is the managed `ref T` argument and size matches `i32`.
             let prev = unsafe {
                 ctx.exchange_add_atomic(
                     target_ptr.origin().clone(),
@@ -338,7 +361,8 @@ pub fn intrinsic_interlocked_exchange_add<
                 .expect("Interlocked.ExchangeAdd failed")
             } as i32;
 
-            if method.method().name.contains("Add") && !method.method().name.contains("ExchangeAdd") {
+            if method.method().name.contains("Add") && !method.method().name.contains("ExchangeAdd")
+            {
                 ctx.push_i32(prev + value);
             } else {
                 ctx.push_i32(prev);
@@ -348,6 +372,7 @@ pub fn intrinsic_interlocked_exchange_add<
             let value = ctx.pop_i64();
             let target_ptr = ctx.pop_managed_ptr();
 
+            // SAFETY: `target_ptr` is the managed `ref T` argument and size matches `i64`.
             let prev = unsafe {
                 ctx.exchange_add_atomic(
                     target_ptr.origin().clone(),
@@ -359,7 +384,8 @@ pub fn intrinsic_interlocked_exchange_add<
                 .expect("Interlocked.ExchangeAdd failed")
             } as i64;
 
-            if method.method().name.contains("Add") && !method.method().name.contains("ExchangeAdd") {
+            if method.method().name.contains("Add") && !method.method().name.contains("ExchangeAdd")
+            {
                 ctx.push_i64(prev + value);
             } else {
                 ctx.push_i64(prev);

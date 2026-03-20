@@ -50,6 +50,8 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
     #[cfg(feature = "multithreading")]
     pub fn record_ref(&mut self, target: ObjectRef<'gc>) {
         if let Some(h) = target.0 {
+            // SAFETY: `h` is a live `Gc` handle; reading immutable `owner_id`
+            // does not move or mutate the object.
             let ref_tid = unsafe { (*h.as_ptr()).owner_id };
             if ref_tid != self.arena_id {
                 self.buffer
@@ -84,6 +86,8 @@ impl<'gc> MemoryOwner<'gc> {
     pub fn owner_id(&self) -> ArenaId {
         match self {
             Self::Local(r) => {
+                // SAFETY: `h` is a live `Gc` handle; reading immutable `owner_id`
+                // does not move or mutate the object.
                 r.0.map(|h| unsafe { (*h.as_ptr()).owner_id })
                     .unwrap_or(ArenaId(0))
             }
@@ -108,14 +112,11 @@ impl<'gc> MemoryOwner<'gc> {
         }
     }
 
-    pub fn as_heap_storage<T>(&self, f: impl FnOnce(&HeapStorage<'gc>) -> T) -> T {
+    pub fn as_heap_storage<T>(&self, f: impl for<'a> FnOnce(&HeapStorage<'a>) -> T) -> T {
         match self {
             Self::Local(r) => r.as_heap_storage(f),
             #[cfg(feature = "multithreading")]
-            Self::CrossArena(p, _) => p.as_heap_storage(|s| {
-                // SAFETY: Casting 'static to 'gc for transient access is safe.
-                f(unsafe { std::mem::transmute::<&HeapStorage<'static>, &HeapStorage<'gc>>(s) })
-            }),
+            Self::CrossArena(p, _) => p.as_heap_storage(f),
         }
     }
 }
@@ -474,7 +475,11 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
                 self.check_bounds_internal(ptr, base, len, size)?;
 
-                Ok(unsafe { StandardAtomicAccess::exchange_add_atomic(ptr, size, value, ordering) })
+                Ok(
+                    unsafe {
+                        StandardAtomicAccess::exchange_add_atomic(ptr, size, value, ordering)
+                    },
+                )
             })
         } else {
             let ptr = sptr::from_exposed_addr_mut::<u8>(offset.as_usize());
@@ -1104,11 +1109,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             ))
                         })?;
 
-                        let actual_desc = type_desc.unwrap_or(TypeDescription::from_raw(
-                            ResolutionS::new(ptr::null()),
-                            None,
-                            std::mem::zeroed(),
-                        ));
+                        let actual_desc = type_desc
+                            .unwrap_or(TypeDescription::new(ResolutionS::NULL, std::mem::zeroed()));
 
                         let m = ManagedPtr::from_info_full(info, actual_desc, false);
                         StackValue::ManagedPtr(m)
@@ -1136,6 +1138,56 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     ));
                 }
             })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "multithreading")]
+    use super::MemoryOwner;
+    #[cfg(feature = "multithreading")]
+    use dotnet_utils::{ArenaId, gc::ThreadSafeLock};
+    #[cfg(feature = "multithreading")]
+    use dotnet_value::{
+        CLRString, ValidationTag,
+        object::{HeapStorage, OBJECT_MAGIC, ObjectInner, ObjectPtr},
+    };
+
+    #[cfg(feature = "multithreading")]
+    fn storage_is_string<'a>(storage: &HeapStorage<'a>) -> bool {
+        matches!(storage, HeapStorage::Str(_))
+    }
+
+    #[cfg(feature = "multithreading")]
+    fn cross_arena_with_short_lifetime<'short>(
+        owner: MemoryOwner<'short>,
+        _token: &'short mut u8,
+    ) -> bool {
+        owner.as_heap_storage(storage_is_string)
+    }
+
+    #[cfg(feature = "multithreading")]
+    #[test]
+    fn cross_arena_heap_storage_access_supports_non_static_gc_lifetime() {
+        let arena_id = ArenaId::new(4043);
+        let lock = Box::new(ThreadSafeLock::new(ObjectInner {
+            magic: ValidationTag::new(OBJECT_MAGIC),
+            owner_id: arena_id,
+            storage: HeapStorage::Str(CLRString::from("cross-arena-lifetime")),
+        }));
+        let raw: *const ThreadSafeLock<ObjectInner<'static>> = Box::leak(lock);
+        // SAFETY: `raw` comes from `Box::leak`, is non-null, and remains valid
+        // for the duration of this test until reconstructed with `Box::from_raw`.
+        let ptr = unsafe { ObjectPtr::from_raw(raw) }.expect("non-null leaked lock pointer");
+        let owner = MemoryOwner::CrossArena(ptr, arena_id);
+
+        let mut token = 0u8;
+        assert!(cross_arena_with_short_lifetime(owner, &mut token));
+
+        // Fix leak for Miri
+        unsafe {
+            let _ = Box::from_raw(raw as *mut ThreadSafeLock<ObjectInner<'static>>);
         }
     }
 }
