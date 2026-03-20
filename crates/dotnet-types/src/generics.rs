@@ -71,36 +71,36 @@ impl ConcreteType {
         }
         matches!(
             self.base.as_ref(),
-            dotnetdll::prelude::BaseType::Type { .. }
-                | dotnetdll::prelude::BaseType::Object
-                | dotnetdll::prelude::BaseType::String
-                | dotnetdll::prelude::BaseType::Vector(_, _)
-                | dotnetdll::prelude::BaseType::Array(_, _)
+            BaseType::Type { .. }
+                | BaseType::Object
+                | BaseType::String
+                | BaseType::Vector(_, _)
+                | BaseType::Array(_, _)
         )
     }
 
     #[allow(clippy::mutable_key_type)]
     pub fn is_value_type(&self, loader: &impl TypeResolver) -> bool {
         match self.base.as_ref() {
-            dotnetdll::prelude::BaseType::Type {
+            BaseType::Type {
                 value_kind: Some(dotnetdll::prelude::ValueKind::ValueType),
                 ..
             } => true,
-            dotnetdll::prelude::BaseType::Boolean
-            | dotnetdll::prelude::BaseType::Char
-            | dotnetdll::prelude::BaseType::Int8
-            | dotnetdll::prelude::BaseType::UInt8
-            | dotnetdll::prelude::BaseType::Int16
-            | dotnetdll::prelude::BaseType::UInt16
-            | dotnetdll::prelude::BaseType::Int32
-            | dotnetdll::prelude::BaseType::UInt32
-            | dotnetdll::prelude::BaseType::Int64
-            | dotnetdll::prelude::BaseType::UInt64
-            | dotnetdll::prelude::BaseType::Float32
-            | dotnetdll::prelude::BaseType::Float64
-            | dotnetdll::prelude::BaseType::IntPtr
-            | dotnetdll::prelude::BaseType::UIntPtr => true,
-            dotnetdll::prelude::BaseType::Type { .. } => {
+            BaseType::Boolean
+            | BaseType::Char
+            | BaseType::Int8
+            | BaseType::UInt8
+            | BaseType::Int16
+            | BaseType::UInt16
+            | BaseType::Int32
+            | BaseType::UInt32
+            | BaseType::Int64
+            | BaseType::UInt64
+            | BaseType::Float32
+            | BaseType::Float64
+            | BaseType::IntPtr
+            | BaseType::UIntPtr => true,
+            BaseType::Type { .. } => {
                 let mut curr = self.clone();
                 let mut seen = HashSet::new();
                 while seen.insert(curr.clone()) {
@@ -207,22 +207,20 @@ impl ResolvedDebug for ConcreteType {
 }
 
 pub(crate) fn member_to_method_type(
-    src: &dotnetdll::prelude::TypeSource<dotnetdll::prelude::MemberType>,
+    src: &TypeSource<dotnetdll::prelude::MemberType>,
 ) -> MethodType {
     match src {
-        dotnetdll::prelude::TypeSource::User(h) => MethodType::Base(Box::new(BaseType::Type {
-            source: dotnetdll::prelude::TypeSource::User(*h),
+        TypeSource::User(h) => MethodType::Base(Box::new(BaseType::Type {
+            source: TypeSource::User(*h),
             value_kind: None,
         })),
-        dotnetdll::prelude::TypeSource::Generic { base, parameters } => {
-            MethodType::Base(Box::new(BaseType::Type {
-                source: dotnetdll::prelude::TypeSource::Generic {
-                    base: *base,
-                    parameters: parameters.iter().cloned().map(MethodType::from).collect(),
-                },
-                value_kind: None,
-            }))
-        }
+        TypeSource::Generic { base, parameters } => MethodType::Base(Box::new(BaseType::Type {
+            source: TypeSource::Generic {
+                base: *base,
+                parameters: parameters.iter().cloned().map(MethodType::from).collect(),
+            },
+            value_kind: None,
+        })),
     }
 }
 
@@ -431,7 +429,7 @@ impl GenericLookup {
             if param.special_constraint.reference_type && !arg.is_class(loader) {
                 return Err(TypeResolutionError::GenericConstraintViolation(format!(
                     "Type {} must be a reference type to satisfy constraint on {}",
-                    arg.show(&arg.resolution().definition()),
+                    arg.show(arg.resolution().definition()),
                     param.name
                 )));
             }
@@ -440,7 +438,7 @@ impl GenericLookup {
             {
                 return Err(TypeResolutionError::GenericConstraintViolation(format!(
                     "Type {} must be a non-nullable value type to satisfy constraint on {}",
-                    arg.show(&arg.resolution().definition()),
+                    arg.show(arg.resolution().definition()),
                     param.name
                 )));
             }
@@ -449,7 +447,7 @@ impl GenericLookup {
             {
                 return Err(TypeResolutionError::GenericConstraintViolation(format!(
                     "Type {} must have a public default constructor to satisfy constraint on {}",
-                    arg.show(&arg.resolution().definition()),
+                    arg.show(arg.resolution().definition()),
                     param.name
                 )));
             }
@@ -461,8 +459,8 @@ impl GenericLookup {
                 if !comparer.is_assignable_to(arg, &constraint_type) {
                     return Err(TypeResolutionError::GenericConstraintViolation(format!(
                         "Type {} must be assignable to {} to satisfy constraint on {}",
-                        arg.show(&arg.resolution().definition()),
-                        constraint_type.show(&constraint_type.resolution().definition()),
+                        arg.show(arg.resolution().definition()),
+                        constraint_type.show(constraint_type.resolution().definition()),
                         param.name
                     )));
                 }
