@@ -276,6 +276,14 @@ unsafe impl<'gc> Collect<'gc> for FieldStorage {
         // SAFETY: Tracing also happens during a stop-the-world pause, same reasoning as above
         let data = unsafe { self.raw_data_unsynchronized() };
 
+        if std::env::var("DOTNET_TRACE_GC_PTR_READ").is_ok() {
+            eprintln!(
+                "[GC] FieldStorage trace: data_len={} gc_desc_bitmap={:?}",
+                data.len(),
+                self.layout.gc_desc.bitmap
+            );
+        }
+
         self.layout.trace(data, cc);
     }
 }

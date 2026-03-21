@@ -251,6 +251,20 @@ impl GcDesc {
 
             // Safety: layout creation ensures this offset is valid and contains a pointer
             if offset + ptr_size <= storage.len() {
+                // Env-gated diagnostic for CI debugging
+                if std::env::var("DOTNET_TRACE_GC_PTR_READ").is_ok() {
+                    let raw_bytes = &storage[offset..offset + ptr_size.min(storage.len() - offset)];
+                    let raw_value = if raw_bytes.len() >= 8 {
+                        u64::from_ne_bytes(raw_bytes[..8].try_into().unwrap())
+                    } else {
+                        0
+                    };
+                    eprintln!(
+                        "[GC] trace word_idx={} offset={} raw=0x{:016X} storage_len={}",
+                        word_index, offset, raw_value, storage.len()
+                    );
+                }
+
                 // Use read_unchecked to handle potential unaligned access safely
                 // and correctly reconstruct the ObjectRef.
                 let ptr = unsafe { ObjectRef::read_unchecked(&storage[offset..]) };

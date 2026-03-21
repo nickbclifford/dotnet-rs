@@ -403,6 +403,12 @@ impl<'gc> Eq for Object<'gc> {}
 // We use the layout manager associated with the type description to trace fields.
 unsafe impl<'gc> Collect<'gc> for Object<'gc> {
     fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
+        if std::env::var("DOTNET_TRACE_GC_PTR_READ").is_ok() {
+            eprintln!(
+                "[GC] tracing Object type={:?} generics={:?}",
+                self.description, self.generics
+            );
+        }
         self.instance_storage.trace(cc);
         // ManagedPtr fields are self-contained and traced via their layout.
     }
