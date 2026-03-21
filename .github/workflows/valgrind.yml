@@ -45,17 +45,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-dotnet-fixtures-
 
-      - name: Build integration test binary
+      - name: Build integration test binary (No features)
         run: |
           cargo test -p dotnet-cli --test integration_tests \
             --no-run \
-            --no-default-features \
-            --features multithreading
+            --no-default-features
 
-      - name: Run Valgrind (integration tests)
+      - name: Run Valgrind (No features)
         continue-on-error: true
         run: |
-          BINARY=$(ls target/debug/deps/integration_tests-* 2>/dev/null | grep -v '\.d$' | head -1)
+          BINARY=$(ls -t target/debug/deps/integration_tests-* 2>/dev/null | grep -v '\.d$' | head -1)
           if [ -z "$BINARY" ]; then
             echo "ERROR: integration_tests binary not found in target/debug/deps/" >&2
             exit 1
@@ -64,6 +63,41 @@ jobs:
           EXIT=0
           for TEST in \
             integration_tests_impl::fixtures::hello_world \
+            integration_tests_impl::fixtures::memory_nullable_boxing_42; do
+            echo "--- Running Valgrind for: $TEST ---"
+            timeout 600s valgrind \
+              --suppressions=valgrind.supp \
+              --error-exitcode=1 \
+              --leak-check=full \
+              --show-leak-kinds=all \
+              -s \
+              "$BINARY" \
+              --test-threads=1 \
+              --nocapture \
+              --exact \
+              "$TEST" || EXIT=$?
+          done
+          exit $EXIT
+
+      - name: Build integration test binary (Multithreading)
+        run: |
+          cargo test -p dotnet-cli --test integration_tests \
+            --no-run \
+            --no-default-features \
+            --features multithreading
+
+      - name: Run Valgrind (Multithreading)
+        continue-on-error: true
+        run: |
+          BINARY=$(ls -t target/debug/deps/integration_tests-* 2>/dev/null | grep -v '\.d$' | head -1)
+          if [ -z "$BINARY" ]; then
+            echo "ERROR: integration_tests binary not found in target/debug/deps/" >&2
+            exit 1
+          fi
+          echo "Using binary: $BINARY"
+          EXIT=0
+          for TEST in \
+            integration_tests_impl::fixtures::threading_monitor_try_enter_timeout_42 \
             integration_tests_impl::fixtures::threading_monitor_try_enter_timeout_single_42; do
             echo "--- Running Valgrind for: $TEST ---"
             timeout 600s valgrind \

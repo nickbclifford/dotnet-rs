@@ -7,7 +7,7 @@ use dotnet_utils::{
     ArenaId,
     gc::{
         register_arena, set_currently_tracing, take_found_cross_arena_refs_with_generation,
-        try_acquire_lease, unregister_arena,
+        try_acquire_lease,
     },
     sync::{
         Arc, AtomicBool, AtomicU64, AtomicUsize, Condvar, MANAGED_THREAD_ID, Mutex, MutexGuard,
@@ -274,6 +274,8 @@ impl ThreadManagerOps for ThreadManager {
     fn request_stop_the_world(&self) -> Self::Guard<'_> {
         let start_time = Instant::now();
         const WARN_TIMEOUT: Duration = Duration::from_secs(1);
+        #[cfg(feature = "multithreading")]
+        const WAIT_RECHECK_INTERVAL: Duration = Duration::from_millis(10);
         let mut warned = false;
 
         // Signal all threads to stop.
@@ -351,7 +353,18 @@ impl ThreadManagerOps for ThreadManager {
                 warned = true;
             }
 
-            self.all_threads_stopped.wait(&mut guard);
+            // Re-check periodically to avoid a lost-notify deadlock window:
+            // thread_count / threads_at_safepoint are updated outside
+            // gc_coordination, so a notify can race with this wait call.
+            #[cfg(feature = "multithreading")]
+            {
+                self.all_threads_stopped
+                    .wait_for(&mut guard, WAIT_RECHECK_INTERVAL);
+            }
+            #[cfg(not(feature = "multithreading"))]
+            {
+                self.all_threads_stopped.wait(&mut guard);
+            }
         }
 
         if warned {

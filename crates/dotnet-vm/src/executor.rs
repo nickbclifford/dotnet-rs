@@ -487,10 +487,9 @@ impl Executor {
     pub fn extract_arena(&self) -> Option<ArenaGuard> {
         let arena_id = self.thread_id;
         THREAD_ARENA.with(|cell| {
-            cell.borrow_mut().take().map(|arena| ArenaGuard {
-                arena,
-                arena_id,
-            })
+            cell.borrow_mut()
+                .take()
+                .map(|arena| ArenaGuard { arena, arena_id })
         })
     }
 }
