@@ -298,7 +298,7 @@ impl TestHarness {
         // that point into this arena's memory, so we must keep it alive until after
         // the on_complete callback (and any gate waits) finish.
         #[cfg(feature = "multithreading")]
-        let arena_guard = vm::Executor::extract_arena();
+        let arena_guard = executor.extract_arena();
 
         // Drop the executor BEFORE calling on_complete to avoid STW deadlocks.
         //

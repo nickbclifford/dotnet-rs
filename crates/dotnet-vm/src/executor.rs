@@ -484,13 +484,34 @@ impl Executor {
     ///
     /// After calling this, the Executor's drop will skip clearing THREAD_ARENA.
     #[cfg(feature = "multithreading")]
-    pub fn extract_arena() -> Option<ArenaGuard> {
-        THREAD_ARENA.with(|cell| cell.borrow_mut().take().map(ArenaGuard))
+    pub fn extract_arena(&self) -> Option<ArenaGuard> {
+        let arena_id = self.thread_id;
+        THREAD_ARENA.with(|cell| {
+            cell.borrow_mut().take().map(|arena| ArenaGuard {
+                arena,
+                arena_id,
+            })
+        })
     }
 }
 
 #[cfg(feature = "multithreading")]
-pub struct ArenaGuard(#[allow(dead_code)] Box<GCArena>);
+pub struct ArenaGuard {
+    #[allow(dead_code)]
+    arena: Box<GCArena>,
+    arena_id: dotnet_utils::ArenaId,
+}
+
+#[cfg(feature = "multithreading")]
+impl Drop for ArenaGuard {
+    fn drop(&mut self) {
+        // Unregister the arena from the cross-arena tracking system.
+        // This MUST happen when the arena memory is about to be destroyed,
+        // not when the Executor drops, because other threads may still
+        // need to access objects created in this arena.
+        dotnet_utils::gc::cross_arena::unregister_arena(self.arena_id);
+    }
+}
 
 impl Drop for Executor {
     fn drop(&mut self) {
@@ -520,10 +541,21 @@ impl Drop for Executor {
             // to this arena before we finish dropping.
             //
             // Note: In some test scenarios, the arena may have been extracted via
-            // extract_arena() to defer its destruction. In that case, this is a no-op.
-            THREAD_ARENA.with(|cell| {
-                *cell.borrow_mut() = None;
+            // extract_arena() to defer its destruction. In that case, this is a no-op
+            // and ArenaGuard will handle unregistration when it drops.
+            let arena_dropped = THREAD_ARENA.with(|cell| {
+                let mut guard = cell.borrow_mut();
+                let had_arena = guard.is_some();
+                *guard = None;
+                had_arena
             });
+
+            // Unregister the arena from the cross-arena tracking system ONLY if we
+            // actually dropped it here (i.e., it wasn't extracted). This ensures the
+            // arena remains valid for cross-arena references until the memory is freed.
+            if arena_dropped {
+                dotnet_utils::gc::cross_arena::unregister_arena(self.thread_id);
+            }
         }
     }
 }

@@ -261,7 +261,10 @@ impl GcDesc {
                     };
                     eprintln!(
                         "[GC] trace word_idx={} offset={} raw=0x{:016X} storage_len={}",
-                        word_index, offset, raw_value, storage.len()
+                        word_index,
+                        offset,
+                        raw_value,
+                        storage.len()
                     );
                 }
 

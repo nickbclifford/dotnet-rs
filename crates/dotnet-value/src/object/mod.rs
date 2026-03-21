@@ -440,7 +440,7 @@ impl<'gc> ObjectRef<'gc> {
                         // we encode its ID into the tagged reference.
                         if let Some(_lease) = try_acquire_lease(owner_id) {
                             // Store pointer + owner arena id in a stable tagged form.
-                            // Store the 16-bit ArenaId in the upper bits of the pointer.
+                            // Store the 16-byte ArenaId in the upper bits of the pointer.
                             // We assume 48-bit addressing (standard on current 64-bit OSs).
                             debug_assert_eq!(
                                 ptr & 0xFFFF000000000000,

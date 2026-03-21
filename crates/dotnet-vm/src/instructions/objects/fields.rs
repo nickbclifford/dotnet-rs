@@ -248,6 +248,7 @@ pub fn stsfld<'gc, T: VesOps<'gc>>(
         .unwrap();
     let mut val_bytes = vec![0u8; field_layout.layout.size().as_usize()];
     vm_try!(ctx.new_cts_value(&t, value)).write(&mut val_bytes);
+
     storage
         .storage
         .set_field_atomic(field.parent, name, &val_bytes, ordering);

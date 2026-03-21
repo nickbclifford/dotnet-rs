@@ -596,15 +596,47 @@ impl<'a, 'gc> BaseStaticsOps<'gc> for VesContext<'a, 'gc> {
             | Ok(crate::statics::StaticInitResult::Recursive) => StepResult::Continue,
             Ok(crate::statics::StaticInitResult::Waiting) => {
                 #[cfg(feature = "multithreading")]
-                if self.shared.statics.wait_for_init(
-                    description.clone(),
-                    &type_generics,
-                    self.shared.thread_manager.as_ref(),
-                    thread_id,
-                    &self.shared.gc_coordinator,
-                ) {
-                    self.back_up_ip();
-                    return StepResult::Yield;
+                {
+                    if self.shared.statics.wait_for_init(
+                        description.clone(),
+                        &type_generics,
+                        self.shared.thread_manager.as_ref(),
+                        thread_id,
+                        &self.shared.gc_coordinator,
+                    ) {
+                        self.back_up_ip();
+                        return StepResult::Yield;
+                    }
+                    // Re-check initialization state after waiting.
+                    // If the .cctor failed in another thread, we must throw TypeInitializationException.
+                    let state = self
+                        .shared
+                        .statics
+                        .get_init_state(description.clone(), &type_generics);
+                    match state {
+                        crate::statics::INIT_STATE_INITIALIZED => {
+                            // Success - continue with the operation
+                        }
+                        crate::statics::INIT_STATE_FAILED => {
+                            let type_name = description.type_name();
+                            let message = format!(
+                                "The type initializer for '{}' threw an exception.",
+                                type_name
+                            );
+                            return self.throw_by_name_with_message(
+                                "System.TypeInitializationException",
+                                &message,
+                            );
+                        }
+                        _ => {
+                            // Unexpected state - this should not happen
+                            return StepResult::internal_error(format!(
+                                "Type initialization for '{}' ended in unexpected state {}",
+                                description.type_name(),
+                                state
+                            ));
+                        }
+                    }
                 }
                 StepResult::Continue
             }

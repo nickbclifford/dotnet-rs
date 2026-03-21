@@ -256,17 +256,34 @@ impl ResolverService {
                 }
 
                 if let StackValue::ValueType(mut o) = data {
-                    if o.description != td {
-                        // Keep description/storage layout in sync when coercing between value types.
-                        // Rebuild storage for the target type and preserve overlapping bytes.
-                        let replacement = self.new_instance_fields(td.clone(), &new_ctx)?;
+                    let shared = self.shared_state();
+                    let expected_layout = LayoutFactory::instance_field_layout_cached(
+                        td.clone(),
+                        &new_ctx,
+                        shared.as_ref().map(|s| &s.metrics),
+                    )?;
+
+                    let needs_canonicalization = o.description != td
+                        || o.generics != new_lookup
+                        || !Arc::ptr_eq(o.instance_storage.layout(), &expected_layout);
+
+                    if needs_canonicalization {
+                        // Keep description/generics/storage layout in sync when coercing value types.
+                        // Generic instantiation can change GC descriptors even when the type
+                        // definition is the same (e.g., Nullable<T>), so we canonicalize by
+                        // target context and preserve overlapping payload bytes.
+                        let replacement = FieldStorage::new(
+                            expected_layout.clone(),
+                            vec![0; expected_layout.size().as_usize()],
+                        );
                         o.instance_storage.with_data(|src| {
                             replacement.with_data_mut(|dst| {
                                 let copy_len = src.len().min(dst.len());
                                 dst[..copy_len].copy_from_slice(&src[..copy_len]);
                             });
                         });
-                        o.description = td;
+                        o.description = td.clone();
+                        o.generics = new_lookup.clone();
                         o.instance_storage = replacement;
                     }
                     Ok(CTSValue::Value(Struct(o)))

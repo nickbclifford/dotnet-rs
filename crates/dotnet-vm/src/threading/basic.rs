@@ -165,8 +165,12 @@ impl ThreadManagerOps for ThreadManager {
         // Clear thread-local cache
         MANAGED_THREAD_ID.set(None);
 
-        #[cfg(feature = "multithreading")]
-        unregister_arena(managed_id);
+        // NOTE: We do NOT call unregister_arena here anymore.
+        // Arena unregistration happens when the arena memory is actually freed:
+        // - In Executor::drop when THREAD_ARENA is cleared (normal case)
+        // - In ArenaGuard::drop when the extracted arena is dropped (test case)
+        // This ensures the arena remains valid for cross-arena references until
+        // the memory is actually destroyed.
 
         #[cfg(feature = "multithreading")]
         {
