@@ -257,7 +257,17 @@ impl ResolverService {
 
                 if let StackValue::ValueType(mut o) = data {
                     if o.description != td {
+                        // Keep description/storage layout in sync when coercing between value types.
+                        // Rebuild storage for the target type and preserve overlapping bytes.
+                        let replacement = self.new_instance_fields(td.clone(), &new_ctx)?;
+                        o.instance_storage.with_data(|src| {
+                            replacement.with_data_mut(|dst| {
+                                let copy_len = src.len().min(dst.len());
+                                dst[..copy_len].copy_from_slice(&src[..copy_len]);
+                            });
+                        });
                         o.description = td;
+                        o.instance_storage = replacement;
                     }
                     Ok(CTSValue::Value(Struct(o)))
                 } else {

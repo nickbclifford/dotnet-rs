@@ -1,4 +1,7 @@
-use crate::{ByteOffset, context::ResolutionContext, metrics::RuntimeMetrics, sync::Arc};
+use crate::{
+    ByteOffset, context::ResolutionContext, metrics::RuntimeMetrics, resolution::TypeResolutionExt,
+    sync::Arc,
+};
 use dotnet_types::{
     TypeDescription,
     error::TypeResolutionError,
@@ -370,7 +373,15 @@ impl LayoutFactory {
         metrics: Option<&RuntimeMetrics>,
     ) -> Result<FieldLayoutManager, TypeResolutionError> {
         let context = context.for_type(td.clone());
-        Self::collect_fields(td, &context, &mut |f| !f.static_member, metrics, true)
+        // Value types do not physically include System.ValueType/Object instance fields.
+        let include_base = !td.is_value_type(&context)?;
+        Self::collect_fields(
+            td,
+            &context,
+            &mut |f| !f.static_member,
+            metrics,
+            include_base,
+        )
     }
 
     pub fn static_fields(
@@ -510,4 +521,83 @@ fn type_layout_internal(
         | BaseType::Vector(_, _)
         | BaseType::Array(_, _) => Scalar::ObjectRef.into(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LayoutFactory;
+    use crate::{context::ResolutionContext, state::SharedGlobalState};
+    use dotnet_assemblies::AssemblyLoader;
+    use dotnet_types::generics::{ConcreteType, GenericLookup};
+    use dotnetdll::prelude::{BaseType, TypeSource, UserType};
+    use std::{path::PathBuf, sync::Arc};
+
+    fn find_dotnet_app_path() -> PathBuf {
+        let base = std::env::var("DOTNET_ROOT")
+            .map(|p| PathBuf::from(p).join("shared/Microsoft.NETCore.App"))
+            .unwrap_or_else(|_| PathBuf::from("/usr/share/dotnet/shared/Microsoft.NETCore.App"));
+
+        let base = if !base.exists() {
+            let alt_base = PathBuf::from("/usr/lib/dotnet/shared/Microsoft.NETCore.App");
+            if alt_base.exists() { alt_base } else { base }
+        } else {
+            base
+        };
+
+        let mut entries: Vec<_> = std::fs::read_dir(base)
+            .expect("failed to read .NET shared path")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+            .collect();
+        entries.sort_by_key(|e| e.file_name());
+        entries
+            .last()
+            .expect("no .NET runtime version found")
+            .path()
+    }
+
+    #[test]
+    fn nullable_int_layout_has_empty_gc_desc() {
+        let loader =
+            Arc::new(AssemblyLoader::new(find_dotnet_app_path().display().to_string()).unwrap());
+        let shared = Arc::new(SharedGlobalState::new(loader.clone()));
+        let empty = GenericLookup::default();
+
+        let nullable_td = loader.corlib_type("System.Nullable`1").unwrap();
+        let int_ct = ConcreteType::new(nullable_td.resolution.clone(), BaseType::Int32);
+        let lookup = GenericLookup::new(vec![int_ct.clone()]);
+
+        let ctx = ResolutionContext::new(
+            &empty,
+            loader.clone(),
+            nullable_td.resolution.clone(),
+            shared.caches.clone(),
+            Some(Arc::downgrade(&shared)),
+        );
+        let typed_ctx = ctx.for_type_with_generics(nullable_td.clone(), &lookup);
+
+        let layout =
+            LayoutFactory::instance_field_layout_cached(nullable_td.clone(), &typed_ctx, None)
+                .unwrap();
+
+        assert_eq!(layout.total_size, 8, "Nullable<int> should be 8 bytes");
+        assert!(
+            layout.gc_desc.bitmap.not_any(),
+            "Nullable<int> should not contain object references"
+        );
+
+        // Sanity check that this context really represents Nullable<int>.
+        let nullable_int = ConcreteType::new(
+            nullable_td.resolution.clone(),
+            BaseType::Type {
+                source: TypeSource::Generic {
+                    base: UserType::Definition(nullable_td.index),
+                    parameters: vec![int_ct],
+                },
+                value_kind: None,
+            },
+        );
+        let resolved_nullable = loader.find_concrete_type(nullable_int).unwrap();
+        assert_eq!(resolved_nullable, nullable_td);
+    }
 }
