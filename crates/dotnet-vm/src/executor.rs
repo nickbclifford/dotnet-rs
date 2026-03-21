@@ -472,6 +472,26 @@ impl Executor {
     }
 }
 
+impl Executor {
+    /// Extract the thread-local arena without destroying it.
+    ///
+    /// In multithreading mode, this removes the arena from THREAD_ARENA and returns it
+    /// as an opaque guard. The arena memory will be destroyed when the guard is dropped.
+    ///
+    /// This is used in test scenarios where the arena lifetime must extend beyond the
+    /// Executor's lifetime to avoid use-after-free when other threads may still access
+    /// shared static references.
+    ///
+    /// After calling this, the Executor's drop will skip clearing THREAD_ARENA.
+    #[cfg(feature = "multithreading")]
+    pub fn extract_arena() -> Option<ArenaGuard> {
+        THREAD_ARENA.with(|cell| cell.borrow_mut().take().map(ArenaGuard))
+    }
+}
+
+#[cfg(feature = "multithreading")]
+pub struct ArenaGuard(#[allow(dead_code)] Box<GCArena>);
+
 impl Drop for Executor {
     fn drop(&mut self) {
         #[cfg(feature = "multithreading")]
@@ -492,12 +512,15 @@ impl Drop for Executor {
 
         #[cfg(feature = "multithreading")]
         {
-            // 4. Clear THREAD_ARENA LAST.
+            // 4. Clear THREAD_ARENA LAST (if it hasn't been extracted already).
             // We must keep the arena memory alive until AFTER we have unregistered from
             // the ThreadManager. This ensures that any concurrent GC that was waiting
             // for us will see the thread as 'Exited' and proceed, but the memory
             // will still be valid if they happen to encounter a dangling reference
             // to this arena before we finish dropping.
+            //
+            // Note: In some test scenarios, the arena may have been extracted via
+            // extract_arena() to defer its destruction. In that case, this is a no-op.
             THREAD_ARENA.with(|cell| {
                 *cell.borrow_mut() = None;
             });

@@ -293,7 +293,14 @@ impl TestHarness {
             }
         };
 
-        // Drop the executor BEFORE calling on_complete.
+        // In multithreading mode, extract the arena BEFORE dropping the executor.
+        // Other threads may still be executing and accessing shared static references
+        // that point into this arena's memory, so we must keep it alive until after
+        // the on_complete callback (and any gate waits) finish.
+        #[cfg(feature = "multithreading")]
+        let arena_guard = vm::Executor::extract_arena();
+
+        // Drop the executor BEFORE calling on_complete to avoid STW deadlocks.
         //
         // Executor::drop unregisters the arena from the GC coordinator first, then
         // unregisters the thread. If we kept the executor alive across on_complete, a
@@ -303,13 +310,16 @@ impl TestHarness {
         // then dispatch GCCommand::MarkAll to this thread's ArenaHandle; the blocked
         // thread never calls safe_point again, so wait_on_other_arenas hangs forever.
         //
-        // Dropping here executes the correct teardown sequence:
-        //   1. unregister_arena (GC coordinator will no longer target this thread)
-        //   2. unregister_thread (ThreadManager)
-        //   3. clear THREAD_ARENA
-        // Only after all of that does on_complete run (and potentially block at a gate).
+        // The arena has already been extracted above (in multithreading mode), so
+        // Executor::drop will find THREAD_ARENA empty and skip clearing it.
         drop(executor);
+
         on_complete(result);
+
+        // In multithreading mode, drop the arena AFTER on_complete (and any gate waits) finish.
+        #[cfg(feature = "multithreading")]
+        drop(arena_guard);
+
         result
     }
 
