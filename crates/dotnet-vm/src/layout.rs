@@ -66,16 +66,12 @@ impl LayoutFactory {
 
         match layout {
             Layout::Automatic => {
-                // For automatic layout, we can optimize by reordering fields
+                // Preserve metadata order for auto layout. Reordering can break
+                // runtime assumptions in framework code that depend on field positions.
                 // Start after base class fields
                 let mut offset = base_size;
 
-                // Sort fields by alignment (largest first) to minimize padding
-                let mut sorted_fields = fields;
-                sorted_fields
-                    .sort_by_key(|(_, _, _, layout)| std::cmp::Reverse(layout.alignment()));
-
-                for (owner, name, _, layout) in sorted_fields {
+                for (owner, name, _, layout) in fields {
                     let field_align = layout.alignment();
                     max_alignment = max_alignment.max(field_align);
 
