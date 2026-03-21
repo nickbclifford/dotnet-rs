@@ -278,9 +278,10 @@ unsafe impl<'gc> Collect<'gc> for FieldStorage {
 
         if std::env::var("DOTNET_TRACE_GC_PTR_READ").is_ok() {
             eprintln!(
-                "[GC] FieldStorage trace: data_len={} gc_desc_bitmap={:?}",
+                "[GC] FieldStorage trace: data_len={} gc_desc_bitmap={:?} gc_desc_unaligned={:?}",
                 data.len(),
-                self.layout.gc_desc.bitmap
+                self.layout.gc_desc.bitmap,
+                self.layout.gc_desc.unaligned_offsets
             );
         }
 

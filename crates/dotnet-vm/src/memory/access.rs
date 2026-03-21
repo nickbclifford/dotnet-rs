@@ -958,6 +958,16 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         );
                     }
                 }
+                for offset in &flm.gc_desc.unaligned_offsets {
+                    unsafe {
+                        self.record_objref_at_ptr_with_recorder(
+                            gc,
+                            ptr.add(*offset),
+                            owner_tid,
+                            recorder,
+                        );
+                    }
+                }
                 // Use visit_managed_ptrs for recursive ManagedPtr recording
                 if flm.has_ref_fields {
                     flm.visit_managed_ptrs(crate::ByteOffset(0), &mut |offset| unsafe {

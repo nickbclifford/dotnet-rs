@@ -227,6 +227,7 @@ impl std::fmt::Display for FieldKey {
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct GcDesc {
     pub bitmap: BitVec<usize, Lsb0>,
+    pub unaligned_offsets: Vec<usize>,
 }
 
 impl GcDesc {
@@ -237,11 +238,30 @@ impl GcDesc {
         self.bitmap.set(word_index, true);
     }
 
+    pub fn set_offset(&mut self, byte_offset: usize) {
+        let ptr_size = ObjectRef::SIZE;
+        if byte_offset % ptr_size == 0 {
+            self.set(byte_offset / ptr_size);
+            return;
+        }
+
+        if !self.unaligned_offsets.contains(&byte_offset) {
+            self.unaligned_offsets.push(byte_offset);
+            self.unaligned_offsets.sort_unstable();
+        }
+    }
+
     pub fn merge(&mut self, other: &GcDesc) {
         if other.bitmap.len() > self.bitmap.len() {
             self.bitmap.resize(other.bitmap.len(), false);
         }
         self.bitmap |= &other.bitmap;
+        for offset in &other.unaligned_offsets {
+            if !self.unaligned_offsets.contains(offset) {
+                self.unaligned_offsets.push(*offset);
+            }
+        }
+        self.unaligned_offsets.sort_unstable();
     }
 
     pub fn trace<'gc, Tr: Trace<'gc>>(&self, storage: &[u8], cc: &mut Tr) {
@@ -271,6 +291,13 @@ impl GcDesc {
                 // Use read_unchecked to handle potential unaligned access safely
                 // and correctly reconstruct the ObjectRef.
                 let ptr = unsafe { ObjectRef::read_unchecked(&storage[offset..]) };
+                ptr.trace(cc);
+            }
+        }
+
+        for offset in &self.unaligned_offsets {
+            if *offset + ptr_size <= storage.len() {
+                let ptr = unsafe { ObjectRef::read_unchecked(&storage[*offset..]) };
                 ptr.trace(cc);
             }
         }

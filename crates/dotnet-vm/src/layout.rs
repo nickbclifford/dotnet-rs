@@ -25,12 +25,14 @@ impl LayoutFactory {
         let ptr_size = ObjectRef::SIZE;
         match layout {
             LayoutManager::Scalar(Scalar::ObjectRef) => {
-                desc.set(base_offset / ptr_size);
+                desc.set_offset(base_offset);
             }
             LayoutManager::Field(m) => {
-                let offset_words = base_offset / ptr_size;
                 for word_idx in m.gc_desc.bitmap.iter_ones() {
-                    desc.set(offset_words + word_idx);
+                    desc.set_offset(base_offset + (word_idx * ptr_size));
+                }
+                for offset in &m.gc_desc.unaligned_offsets {
+                    desc.set_offset(base_offset + *offset);
                 }
             }
             LayoutManager::Array(arr) => {
@@ -525,6 +527,7 @@ mod tests {
     use crate::{context::ResolutionContext, state::SharedGlobalState};
     use dotnet_assemblies::AssemblyLoader;
     use dotnet_types::generics::{ConcreteType, GenericLookup};
+    use dotnet_value::layout::{LayoutManager, Scalar};
     use dotnetdll::prelude::{BaseType, TypeSource, UserType};
     use std::{path::PathBuf, sync::Arc};
 
@@ -581,6 +584,10 @@ mod tests {
             layout.gc_desc.bitmap.not_any(),
             "Nullable<int> should not contain object references"
         );
+        assert!(
+            layout.gc_desc.unaligned_offsets.is_empty(),
+            "Nullable<int> should not contain unaligned object-reference offsets"
+        );
 
         // Sanity check that this context really represents Nullable<int>.
         let nullable_int = ConcreteType::new(
@@ -595,5 +602,32 @@ mod tests {
         );
         let resolved_nullable = loader.find_concrete_type(nullable_int).unwrap();
         assert_eq!(resolved_nullable, nullable_td);
+    }
+
+    #[test]
+    fn gc_desc_tracks_unaligned_reference_offsets_without_word_rounding() {
+        let mut desc = dotnet_value::layout::GcDesc::default();
+        LayoutFactory::populate_gc_desc(&LayoutManager::Scalar(Scalar::ObjectRef), 1, &mut desc);
+
+        assert!(
+            desc.bitmap.not_any(),
+            "unaligned refs must not be rounded into bitmap words"
+        );
+        assert_eq!(desc.unaligned_offsets, vec![1]);
+
+        let mut nested = dotnet_value::layout::GcDesc::default();
+        nested.set_offset(3);
+        let nested_layout = LayoutManager::Field(dotnet_value::layout::FieldLayoutManager {
+            fields: std::collections::HashMap::new(),
+            total_size: 16,
+            alignment: 1,
+            gc_desc: nested,
+            has_ref_fields: false,
+        });
+
+        let mut outer = dotnet_value::layout::GcDesc::default();
+        LayoutFactory::populate_gc_desc(&nested_layout, 5, &mut outer);
+        assert!(outer.unaligned_offsets.is_empty());
+        assert!(outer.bitmap.get(1).is_some_and(|b| *b));
     }
 }
