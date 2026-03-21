@@ -271,14 +271,24 @@ impl ResolverService {
                     }
                     Ok(CTSValue::Value(Struct(o)))
                 } else {
-                    let mut instance = self.new_object(td, &new_ctx)?;
+                    let mut instance = self.new_object(td.clone(), &new_ctx)?;
                     if let StackValue::ObjectRef(o) = data
                         && let Some(handle) = o.0
                     {
                         let borrowed = handle.borrow();
                         match &borrowed.storage {
-                            HeapStorage::Obj(obj) => {
-                                instance.instance_storage = obj.instance_storage.clone();
+                            HeapStorage::Obj(obj) | HeapStorage::Boxed(obj) => {
+                                // Unboxing: keep description/storage layout in sync.
+                                // The source obj may have a different type than td, so rebuild
+                                // storage with the target layout and copy overlapping data.
+                                let replacement = self.new_instance_fields(td, &new_ctx)?;
+                                obj.instance_storage.with_data(|src| {
+                                    replacement.with_data_mut(|dst| {
+                                        let copy_len = src.len().min(dst.len());
+                                        dst[..copy_len].copy_from_slice(&src[..copy_len]);
+                                    });
+                                });
+                                instance.instance_storage = replacement;
                             }
                             _ => panic!("cannot unbox from non-object storage"),
                         }
