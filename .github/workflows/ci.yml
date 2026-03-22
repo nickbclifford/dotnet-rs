@@ -127,6 +127,11 @@ jobs:
             cargo build --verbose --no-default-features --features ${{ matrix.features }}
           fi
 
+      - name: Enable GC pointer-read trace (${{ matrix.name }})
+        if: ${{ matrix.features == '' || matrix.features == 'generic-constraint-validation' }}
+        run: |
+          echo "DOTNET_TRACE_GC_PTR_READ=1" >> "$GITHUB_ENV"
+
       - name: Run tests (${{ matrix.name }})
         timeout-minutes: 20
         run: |
