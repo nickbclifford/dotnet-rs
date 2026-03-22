@@ -240,7 +240,7 @@ impl GcDesc {
 
     pub fn set_offset(&mut self, byte_offset: usize) {
         let ptr_size = ObjectRef::SIZE;
-        if byte_offset % ptr_size == 0 {
+        if byte_offset.is_multiple_of(ptr_size) {
             self.set(byte_offset / ptr_size);
             return;
         }
