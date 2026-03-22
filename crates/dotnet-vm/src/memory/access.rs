@@ -660,6 +660,74 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
         let dest_layout = self.get_layout_from_owner(owner);
 
+        if std::env::var("DOTNET_TRACE_CULTUREDATA_WRITES").is_ok() {
+            let write_start = offset.as_usize();
+            let write_end = write_start + layout.size().as_usize();
+            let target_start = 288usize;
+            let target_end = target_start + ObjectRef::SIZE;
+
+            if write_start < target_end && write_end > target_start {
+                owner.as_heap_storage(|storage| {
+                    if let HeapStorage::Obj(o) = storage
+                        && o.description.type_name() == "System.Globalization.CultureData"
+                    {
+                        let value_kind = match &value {
+                            StackValue::Int32(_) => "Int32",
+                            StackValue::Int64(_) => "Int64",
+                            StackValue::NativeInt(_) => "NativeInt",
+                            StackValue::NativeFloat(_) => "NativeFloat",
+                            StackValue::ObjectRef(_) => "ObjectRef",
+                            StackValue::UnmanagedPtr(_) => "UnmanagedPtr",
+                            StackValue::ManagedPtr(_) => "ManagedPtr",
+                            StackValue::ValueType(_) => "ValueType",
+                            StackValue::TypedRef(_, _) => "TypedRef",
+                            #[cfg(feature = "multithreading")]
+                            StackValue::CrossArenaObjectRef(_, _) => "CrossArenaObjectRef",
+                        };
+
+                        eprintln!(
+                            "[GCDBG] CultureData write overlap: offset={} size={} layout_tag={} value_kind={}",
+                            write_start,
+                            layout.size().as_usize(),
+                            layout.type_tag(),
+                            value_kind
+                        );
+
+                        match &value {
+                            StackValue::ObjectRef(ObjectRef(Some(h))) => {
+                                eprintln!(
+                                    "[GCDBG] CultureData write ObjectRef raw_ptr=0x{:016X}",
+                                    gc_arena::Gc::as_ptr(*h) as usize
+                                );
+                            }
+                            StackValue::ObjectRef(ObjectRef(None)) => {
+                                eprintln!("[GCDBG] CultureData write ObjectRef raw_ptr=NULL");
+                            }
+                            StackValue::UnmanagedPtr(p) => {
+                                eprintln!(
+                                    "[GCDBG] CultureData write UnmanagedPtr raw_ptr=0x{:016X}",
+                                    p.0.as_ptr() as usize
+                                );
+                            }
+                            StackValue::ValueType(v) => {
+                                eprintln!(
+                                    "[GCDBG] CultureData write ValueType type={} size={}",
+                                    v.description.type_name(),
+                                    v.instance_storage.layout().size().as_usize()
+                                );
+                            }
+                            _ => {}
+                        }
+
+                        eprintln!(
+                            "[GCDBG] CultureData write backtrace:\n{}",
+                            std::backtrace::Backtrace::force_capture()
+                        );
+                    }
+                });
+            }
+        }
+
         WB_LOCAL_BUF.with(|buf| {
             let mut b = buf.borrow_mut();
             let mut recorder = WriteBarrierRecorder::new(owner.owner_id(), &mut b);

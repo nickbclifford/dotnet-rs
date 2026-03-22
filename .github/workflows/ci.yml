@@ -131,6 +131,7 @@ jobs:
         if: ${{ matrix.features == '' || matrix.features == 'generic-constraint-validation' }}
         run: |
           echo "DOTNET_TRACE_GC_PTR_READ=1" >> "$GITHUB_ENV"
+          echo "DOTNET_TRACE_CULTUREDATA_WRITES=1" >> "$GITHUB_ENV"
 
       - name: Run tests (${{ matrix.name }})
         timeout-minutes: 20
