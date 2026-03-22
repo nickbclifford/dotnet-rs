@@ -143,9 +143,42 @@ pub fn stfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
         &res_ctx,
         Some(&ctx.shared().metrics),
     ));
-    let field_layout = layout.get_field(field.parent, name.as_ref()).unwrap();
+    let field_layout = layout.get_field(field.parent.clone(), name.as_ref()).unwrap();
 
     let offset = base_offset + field_layout.position;
+
+    if std::env::var("DOTNET_TRACE_CULTUREDATA_WRITES").is_ok()
+        && field.parent.type_name() == "System.Globalization.CultureData"
+    {
+        let frame = ctx.current_frame();
+        let method = &frame.state.info_handle.source;
+        let ip = frame.state.ip;
+        let value_kind = match &value {
+            StackValue::Int32(_) => "Int32",
+            StackValue::Int64(_) => "Int64",
+            StackValue::NativeInt(_) => "NativeInt",
+            StackValue::NativeFloat(_) => "NativeFloat",
+            StackValue::ObjectRef(_) => "ObjectRef",
+            StackValue::UnmanagedPtr(_) => "UnmanagedPtr",
+            StackValue::ManagedPtr(_) => "ManagedPtr",
+            StackValue::ValueType(_) => "ValueType",
+            StackValue::TypedRef(_, _) => "TypedRef",
+            #[cfg(feature = "multithreading")]
+            StackValue::CrossArenaObjectRef(_, _) => "CrossArenaObjectRef",
+        };
+
+        eprintln!(
+            "[GCDBG] stfld CultureData: method={}.{} ip={} field={} offset={} layout_tag={} value_kind={}",
+            method.parent.type_name(),
+            method.method().name,
+            ip,
+            name,
+            offset.as_usize(),
+            field_layout.layout.type_tag(),
+            value_kind
+        );
+    }
+
     // SAFETY: write_unaligned handles GC-safe writing to the heap if an owner is provided.
     // It also performs bounds checking and write barriers.
     match unsafe { ctx.write_unaligned(origin, offset, value, &field_layout.layout) } {
