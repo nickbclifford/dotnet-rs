@@ -1,4 +1,4 @@
-use crate::{Executor, state::SharedGlobalState, sync::Arc};
+use crate::{Executor, state::SharedGlobalState, sync::Arc, GenericLookup};
 use arbitrary::Arbitrary;
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{TypeDescription, members::MethodDescription};
@@ -764,7 +764,7 @@ pub fn execute_cil_program_with_loader(program: FuzzProgram, loader: Arc<Assembl
     let res_s = loader.register_owned_assembly(res);
 
     // Construct MethodDescription and TypeDescription for executor
-    let typedef = &res_s.definition()[type_idx];
+    let _typedef = &res_s.definition()[type_idx];
     let method_def = &res_s.definition()[method_idx];
 
     let td = TypeDescription::new(res_s.clone(), type_idx);

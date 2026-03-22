@@ -36,22 +36,29 @@ pub fn validate_atomic_access(ptr: *const u8, is_atomic: bool) {
     }
 }
 
-#[cfg(feature = "memory-validation")]
 fn validate_ordering(ordering: Ordering, is_load: bool) {
-    match (is_load, ordering) {
-        (true, Ordering::Release) | (true, Ordering::AcqRel) => {
-            panic!("Invalid load ordering: {:?}", ordering);
+    #[cfg(feature = "multithreading")]
+    {
+        match (is_load, ordering) {
+            (true, Ordering::Release) | (true, Ordering::AcqRel) => {
+                panic!("Invalid load ordering: {:?}", ordering);
+            }
+            (false, Ordering::Acquire) | (false, Ordering::AcqRel) => {
+                panic!("Invalid store ordering: {:?}", ordering);
+            }
+            _ => {}
         }
-        (false, Ordering::Acquire) | (false, Ordering::AcqRel) => {
-            panic!("Invalid store ordering: {:?}", ordering);
-        }
-        _ => {}
-    }
 
-    if ordering == Ordering::Relaxed {
-        tracing::warn!(
-            "Relaxed ordering used for atomic access. Ensure this is intentional (e.g., not for a .NET volatile field)."
-        );
+        if ordering == Ordering::Relaxed {
+            tracing::warn!(
+                "Relaxed ordering used for atomic access. Ensure this is intentional (e.g., not for a .NET volatile field)."
+            );
+        }
+    }
+    #[cfg(not(feature = "multithreading"))]
+    {
+        let _ = ordering;
+        let _ = is_load;
     }
 }
 
@@ -59,11 +66,6 @@ fn validate_ordering(ordering: Ordering, is_load: bool) {
 #[inline(always)]
 #[allow(dead_code)] // Only used when multithreading is enabled, but kept as a stub in other configurations
 pub fn validate_atomic_access(_ptr: *const u8, _is_atomic: bool) {}
-
-#[cfg(not(feature = "memory-validation"))]
-#[inline(always)]
-#[allow(dead_code)] // Only used when multithreading is enabled, but kept as a stub in other configurations
-fn validate_ordering(_ordering: Ordering, _is_load: bool) {}
 
 /// Unified atomic memory access operations.
 ///

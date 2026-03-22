@@ -42,6 +42,9 @@ jobs:
           - ""                                    # No features
           - "multithreading"                      # Multithreading (full)
           - "generic-constraint-validation"       # Generic constraint validation
+          - "memory-validation"                   # Memory validation (GC checks)
+          - "metadata-validation"                 # Metadata validation (Assembly checks)
+          - "fuzzing"                             # Fuzzing instrumentation and traits
     steps:
       - uses: actions/checkout@v4
 

@@ -143,7 +143,9 @@ pub fn stfld<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource, volatile: b
         &res_ctx,
         Some(&ctx.shared().metrics),
     ));
-    let field_layout = layout.get_field(field.parent.clone(), name.as_ref()).unwrap();
+    let field_layout = layout
+        .get_field(field.parent.clone(), name.as_ref())
+        .unwrap();
 
     let offset = base_offset + field_layout.position;
 

@@ -120,7 +120,7 @@ pub use std::sync::{
     },
 };
 
-#[cfg(feature = "multithreading")]
+#[cfg(any(feature = "multithreading", feature = "memory-validation"))]
 thread_local! {
     /// Cached managed thread ID for the current thread
     pub static MANAGED_THREAD_ID: std::cell::Cell<Option<crate::ArenaId>> = const { std::cell::Cell::new(None) };
@@ -128,11 +128,11 @@ thread_local! {
 
 /// Get the current thread's managed ID from thread-local storage.
 pub fn get_current_thread_id() -> crate::ArenaId {
-    #[cfg(feature = "multithreading")]
+    #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
     {
         MANAGED_THREAD_ID.with(|id| id.get().unwrap_or(crate::ArenaId::INVALID))
     }
-    #[cfg(not(feature = "multithreading"))]
+    #[cfg(not(any(feature = "multithreading", feature = "memory-validation")))]
     {
         crate::ArenaId(1)
     }

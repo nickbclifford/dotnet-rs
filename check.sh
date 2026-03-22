@@ -4,6 +4,9 @@ FEATURES_COMBINATIONS=(
     ""
     "multithreading"
     "generic-constraint-validation"
+    "memory-validation"
+    "metadata-validation"
+    "fuzzing"
 )
 echo "Running checks for all feature combinations..."
 for features in "${FEATURES_COMBINATIONS[@]}"; do
