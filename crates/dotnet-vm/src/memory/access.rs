@@ -876,9 +876,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
     pub(crate) unsafe fn write_value_internal_with_recorder(
         &mut self,
-        _gc: GCHandle<'gc>,
+        gc: GCHandle<'gc>,
         ptr: *mut u8,
-        _owner: Option<MemoryOwner<'gc>>,
+        owner: Option<MemoryOwner<'gc>>,
         value: StackValue<'gc>,
         layout: &LayoutManager,
         _recorder: &mut WriteBarrierRecorder<'_, 'gc>,
@@ -890,6 +890,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     "RawMemoryAccess::write_value_internal called with null pointer!".to_string(),
                 ));
             }
+
+            Self::backward_barrier_for_heap_ref_write(gc, owner, &value, layout);
 
             match layout {
                 LayoutManager::Scalar(s) => match s {
@@ -934,7 +936,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             m.write(std::slice::from_raw_parts_mut(ptr, ManagedPtr::SIZE));
 
                             #[cfg(feature = "multithreading")]
-                            if let Some(owner) = _owner {
+                            if let Some(owner) = owner {
                                 self.record_managedptr_cross_arena_with_recorder(
                                     &m,
                                     owner.owner_id(),
@@ -954,7 +956,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             r.write(std::slice::from_raw_parts_mut(ptr, ObjectRef::SIZE));
 
                             #[cfg(feature = "multithreading")]
-                            if let Some(owner) = _owner {
+                            if let Some(owner) = owner {
                                 self.record_objref_cross_arena_with_recorder(
                                     r,
                                     owner.owner_id(),
@@ -974,8 +976,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         ptr::copy_nonoverlapping(src_ptr, ptr, flm.size().as_usize());
 
                         #[cfg(feature = "multithreading")]
-                        if _owner.is_some() {
-                            self.record_refs_recursive_with_recorder(_gc, ptr, layout, _recorder);
+                        if owner.is_some() {
+                            self.record_refs_recursive_with_recorder(gc, ptr, layout, _recorder);
                         }
                     } else {
                         return Err(MemoryAccessError::TypeMismatch(
@@ -991,6 +993,42 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             }
             Ok(())
         }
+    }
+
+    fn backward_barrier_for_heap_ref_write(
+        gc: GCHandle<'gc>,
+        owner: Option<MemoryOwner<'gc>>,
+        value: &StackValue<'gc>,
+        layout: &LayoutManager,
+    ) {
+        let should_barrier = match layout {
+            LayoutManager::Scalar(Scalar::ObjectRef) => {
+                matches!(value, StackValue::ObjectRef(ObjectRef(Some(_))))
+            }
+            LayoutManager::Scalar(Scalar::ManagedPtr) => matches!(
+                value,
+                StackValue::ManagedPtr(m) if m.owner().is_some_and(|r| r.0.is_some())
+            ),
+            LayoutManager::Field(flm) => {
+                flm.has_ref_fields && matches!(value, StackValue::ValueType(_))
+            }
+            _ => false,
+        };
+
+        if !should_barrier {
+            return;
+        }
+
+        let Some(MemoryOwner::Local(parent)) = owner else {
+            return;
+        };
+        let Some(parent_gc) = parent.0 else {
+            return;
+        };
+
+        // FieldStorage writes use interior mutability over raw bytes, so we must
+        // explicitly trigger a backward barrier before adopting new GC children.
+        let _ = gc_arena::Gc::write(gc.mutation(), parent_gc);
     }
 
     #[cfg(feature = "multithreading")]
