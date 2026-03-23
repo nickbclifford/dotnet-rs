@@ -137,7 +137,8 @@ impl TestHarness {
             "WARNING: Prebuilt DLL missing at {:?}. Lazy compiling {:?} using SingleFile.csproj...",
             prebuilt, fixture_path
         );
-        self.build(fixture_path).expect("failed to lazy compile fixture")
+        self.build(fixture_path)
+            .expect("failed to lazy compile fixture")
     }
 
     pub fn prebuilt_dll_path(&self, fixture_path: &Path) -> PathBuf {
@@ -434,7 +435,9 @@ impl TestHarness {
         let mut handles = Vec::new();
         let release_gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
 
-        let shared = Arc::new(dotnet_vm::state::SharedGlobalState::new(self.loader.clone()));
+        let shared = Arc::new(dotnet_vm::state::SharedGlobalState::new(
+            self.loader.clone(),
+        ));
         for _ in 0..thread_count {
             let harness = self.clone();
             let tx = tx.clone();
