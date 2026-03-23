@@ -1,7 +1,34 @@
 #[cfg(test)]
 mod tests {
     use crate::{LoadType, StackValue, StoreType};
+    #[cfg(all(feature = "memory-validation", feature = "multithreading"))]
+    use dotnet_utils::sync::MANAGED_THREAD_ID;
     use dotnet_utils::sync::Ordering as AtomicOrdering;
+
+    #[cfg(all(feature = "memory-validation", feature = "multithreading"))]
+    struct ManagedThreadIdGuard {
+        previous: Option<dotnet_utils::ArenaId>,
+    }
+
+    #[cfg(all(feature = "memory-validation", feature = "multithreading"))]
+    impl ManagedThreadIdGuard {
+        fn set(id: dotnet_utils::ArenaId) -> Self {
+            let previous = MANAGED_THREAD_ID.with(|thread_id| {
+                let prev = thread_id.get();
+                thread_id.set(Some(id));
+                prev
+            });
+            Self { previous }
+        }
+    }
+
+    #[cfg(all(feature = "memory-validation", feature = "multithreading"))]
+    impl Drop for ManagedThreadIdGuard {
+        fn drop(&mut self) {
+            MANAGED_THREAD_ID.with(|thread_id| thread_id.set(self.previous));
+        }
+    }
+
     #[repr(align(8))]
     struct Aligned8([u8; 8]);
     #[test]
@@ -123,6 +150,8 @@ mod tests {
         let arena = Arena::<TestRoot>::new(|_mc| ());
         #[cfg(feature = "multithreading")]
         let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(dotnet_utils::ArenaId(0));
+        #[cfg(all(feature = "memory-validation", feature = "multithreading"))]
+        let _thread_id_guard = ManagedThreadIdGuard::set(dotnet_utils::ArenaId(0));
         #[cfg(feature = "multithreading")]
         let arena_handle = unsafe {
             std::mem::transmute::<

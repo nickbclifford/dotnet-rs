@@ -374,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "memory-validation")]
+    #[cfg(all(feature = "memory-validation", feature = "multithreading"))]
     #[should_panic(expected = "Invalid load ordering")]
     fn test_invalid_load_ordering() {
         let val = 0u64;
@@ -385,7 +385,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "memory-validation")]
+    #[cfg(all(feature = "memory-validation", feature = "multithreading"))]
     #[should_panic(expected = "Invalid store ordering")]
     fn test_invalid_store_ordering() {
         let mut val = 0u64;

@@ -556,6 +556,7 @@ impl<'gc> ObjectRef<'gc> {
         };
         let inner = o.borrow();
         inner.validate_magic();
+        inner.validate_arena_id();
         op(&inner.storage)
     }
 
