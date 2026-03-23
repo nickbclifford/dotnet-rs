@@ -8,11 +8,17 @@ default = ["multithreading"]
 generic-constraint-validation = ["dotnet-vm/generic-constraint-validation"]
 multithreading = [
     "dep:parking_lot",
-    "dotnet-utils/multithreading",
-    "dotnet-value/multithreading",
     "dotnet-vm/multithreading",
 ]
-memory-validation = ["dotnet-vm/memory-validation", "dotnet-value/memory-validation"]
+memory-validation = ["dotnet-vm/memory-validation"]
+metadata-validation = ["dotnet-vm/metadata-validation"]
+validation-all = [
+    "dotnet-vm/validation-all",
+    "memory-validation",
+    "metadata-validation",
+    "generic-constraint-validation",
+]
+fuzzing = ["dotnet-vm/fuzzing"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }

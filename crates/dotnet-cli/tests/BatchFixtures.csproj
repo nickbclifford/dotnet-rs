@@ -19,12 +19,17 @@
     BuildInParallel="true" allows concurrent Roslyn compilations.
   -->
   <Target Name="BatchCompileFixtures" BeforeTargets="Build">
+    <ItemGroup>
+      <_FilteredFixtures Include="@(TestFixture)" 
+                         Condition="'$(DOTNET_TEST_FILTER)' == '' or $([System.String]::new('%(RecursiveDir)%(Filename)').Contains('$(DOTNET_TEST_FILTER)'))" />
+    </ItemGroup>
     <MSBuild Projects="SingleFile.csproj"
+             Condition="'@(_FilteredFixtures)' != ''"
              Properties="
-               TestFile=%(TestFixture.FullPath);
+               TestFile=%(_FilteredFixtures.FullPath);
                AllowUnsafeBlocks=true;
-               OutputPath=$(FixtureOutputBase)%(TestFixture.RecursiveDir)%(TestFixture.Filename)/;
-               IntermediateOutputPath=$(FixtureOutputBase)obj/%(TestFixture.RecursiveDir)%(TestFixture.Filename)/"
+               OutputPath=$(FixtureOutputBase)%(_FilteredFixtures.RecursiveDir)%(_FilteredFixtures.Filename)/;
+               IntermediateOutputPath=$(FixtureOutputBase)obj/%(_FilteredFixtures.RecursiveDir)%(_FilteredFixtures.Filename)/"
              Targets="Build"
              BuildInParallel="true" />
   </Target>

@@ -17,6 +17,8 @@ Deterministic correctness checks are blocking. Instrumentation-heavy checks (fuz
 
 ## `ci.yml` — Blocking Correctness Gate
 
+`ci.yml` runs the main test suite across a matrix of feature combinations to ensure that validation logic does not regress. See [Validation Features](VALIDATION_FEATURES.md) for a detailed breakdown of what each feature validates.
+
 Jobs:
 
 1. `format`: `cargo fmt --all -- --check`
@@ -36,6 +38,29 @@ Hang probes use tighter timeouts and run these filters individually:
 
 ## Local Equivalent
 
+### Building Fixtures Locally
+
+If you are working on the VM and don't want to wait for .NET compilation during every `cargo test` run, you can build the fixtures once:
+
+```bash
+./scripts/build_fixtures.sh
+```
+
+Then run tests using the prebuilt fixtures:
+
+```bash
+DOTNET_USE_PREBUILT_FIXTURES=1 cargo test
+```
+
+You can also specify a custom output directory:
+
+```bash
+./scripts/build_fixtures.sh --output-dir /tmp/my-fixtures
+DOTNET_FIXTURES_BASE=/tmp/my-fixtures DOTNET_USE_PREBUILT_FIXTURES=1 cargo test
+```
+
+### Full Check Matrix
+
 ```bash
 # Format
 cargo fmt --all -- --check
@@ -44,11 +69,19 @@ cargo fmt --all -- --check
 cargo clippy --all-targets --no-default-features -- -D warnings
 cargo clippy --all-targets --no-default-features --features multithreading -- -D warnings
 cargo clippy --all-targets --no-default-features --features generic-constraint-validation -- -D warnings
+cargo clippy --all-targets --no-default-features --features memory-validation -- -D warnings
+cargo clippy --all-targets --no-default-features --features metadata-validation -- -D warnings
+cargo clippy --all-targets --no-default-features --features multithreading,memory-validation -- -D warnings
+cargo clippy --all-targets --no-default-features --features multithreading,validation-all -- -D warnings
 
 # Test matrix
-DOTNET_TEST_TIMEOUT_SECS=180 timeout 1200 cargo test --no-default-features -- --nocapture --test-threads=1
-DOTNET_TEST_TIMEOUT_SECS=180 timeout 1200 cargo test --no-default-features --features multithreading -- --nocapture
-DOTNET_TEST_TIMEOUT_SECS=180 timeout 1200 cargo test --no-default-features --features generic-constraint-validation -- --nocapture --test-threads=1
+DOTNET_TEST_TIMEOUT_SECS=180 cargo test --no-default-features -- --nocapture --test-threads=1
+DOTNET_TEST_TIMEOUT_SECS=180 cargo test --no-default-features --features multithreading -- --nocapture
+DOTNET_TEST_TIMEOUT_SECS=180 cargo test --no-default-features --features generic-constraint-validation -- --nocapture --test-threads=1
+DOTNET_TEST_TIMEOUT_SECS=180 cargo test --no-default-features --features memory-validation -- --nocapture --test-threads=1
+DOTNET_TEST_TIMEOUT_SECS=180 cargo test --no-default-features --features metadata-validation -- --nocapture --test-threads=1
+DOTNET_TEST_TIMEOUT_SECS=180 cargo test --no-default-features --features multithreading,memory-validation -- --nocapture
+DOTNET_TEST_TIMEOUT_SECS=180 cargo test --no-default-features --features multithreading,validation-all -- --nocapture
 
 # Hang probes (multithreading only)
 for TEST in \
@@ -158,6 +191,7 @@ Never suppress leaks that originate in `dotnet-rs` crates.
 
 ## See Also
 
+- [`VALIDATION_FEATURES.md`](VALIDATION_FEATURES.md)
 - [`FUZZING.md`](FUZZING.md)
 - [`THREADING_AND_SYNCHRONIZATION.md`](THREADING_AND_SYNCHRONIZATION.md)
 - [`GC_AND_MEMORY_SAFETY.md`](GC_AND_MEMORY_SAFETY.md)

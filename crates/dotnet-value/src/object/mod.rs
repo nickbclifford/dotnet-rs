@@ -764,7 +764,11 @@ mod tests {
         };
         let arena = Arena::<Rootable![Root]>::new(|_mc| Root);
         arena.mutate(|mc, _root| {
+            #[cfg(not(feature = "memory-validation"))]
             let handle = dotnet_utils::gc::GCHandle::new(mc, arena_handle);
+            #[cfg(feature = "memory-validation")]
+            let handle = dotnet_utils::gc::GCHandle::new(mc, arena_handle, arena_id);
+
             let obj = ObjectRef::new(
                 handle,
                 HeapStorage::Str(crate::string::CLRString::from("x")),

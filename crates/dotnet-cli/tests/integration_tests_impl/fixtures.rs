@@ -10,13 +10,7 @@ use crate::integration_tests_impl::harness::TestHarness;
 #[cfg(feature = "multithreading")]
 pub fn setup_multi_arena_fixture(fixture_path: &str) -> PathBuf {
     let harness = TestHarness::get();
-    let path = Path::new(fixture_path);
-    let dll_path = harness.prebuilt_dll_path(path);
-    if dll_path.exists() {
-        dll_path
-    } else {
-        harness.build(path).unwrap()
-    }
+    harness.ensure_dll(Path::new(fixture_path))
 }
 
 #[test]

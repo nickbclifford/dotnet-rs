@@ -44,6 +44,12 @@ memory-validation = [
     "dotnet-exceptions/memory-validation",
     "dotnet-pinvoke/memory-validation",
 ]
+metadata-validation = ["dotnet-assemblies/metadata-validation"]
+validation-all = [
+    "memory-validation",
+    "metadata-validation",
+    "generic-constraint-validation",
+]
 fuzzing = [
     "dep:arbitrary",
     "dotnet-value/fuzzing",

@@ -6,6 +6,8 @@ FEATURES_COMBINATIONS=(
     "generic-constraint-validation"
     "memory-validation"
     "metadata-validation"
+    "multithreading,memory-validation"
+    "multithreading,validation-all"
     "fuzzing"
 )
 echo "Running checks for all feature combinations..."

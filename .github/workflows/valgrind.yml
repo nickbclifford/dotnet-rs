@@ -18,6 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    env:
+      DOTNET_USE_PREBUILT_FIXTURES: "1"
+
     steps:
       - uses: actions/checkout@v4
 
@@ -38,12 +41,20 @@ jobs:
           sudo apt-get install -y libffi-dev valgrind libc6-dbg
 
       - name: Cache .NET fixtures
+        id: cache-fixtures
         uses: actions/cache@v4
         with:
-          path: crates/dotnet-cli/target/dotnet-fixtures
+          path: target/debug/dotnet-fixtures
           key: ${{ runner.os }}-dotnet-fixtures-${{ hashFiles('crates/dotnet-cli/tests/fixtures/**/*.cs', 'crates/dotnet-cli/tests/*.csproj') }}
           restore-keys: |
             ${{ runner.os }}-dotnet-fixtures-
+
+      - name: Build fixtures
+        if: steps.cache-fixtures.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p target/debug/dotnet-fixtures
+          dotnet restore crates/dotnet-cli/tests/SingleFile.csproj -p:BaseIntermediateOutputPath=$(pwd)/target/debug/dotnet-fixtures/msbuild-obj/ -p:BaseOutputPath=$(pwd)/target/debug/dotnet-fixtures/msbuild-bin/ --nologo -v:q
+          dotnet build crates/dotnet-cli/tests/BatchFixtures.csproj -p:FixtureOutputBase=$(pwd)/target/debug/dotnet-fixtures/ -p:BaseIntermediateOutputPath=$(pwd)/target/debug/dotnet-fixtures/msbuild-obj/ -p:BaseOutputPath=$(pwd)/target/debug/dotnet-fixtures/msbuild-bin/ -m -v:q --nologo -clp:ErrorsOnly --no-restore
 
       - name: Build integration test binary (No features)
         run: |

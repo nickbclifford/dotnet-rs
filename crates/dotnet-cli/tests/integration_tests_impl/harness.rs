@@ -22,6 +22,12 @@ pub struct TestHarness {
     pub loader: Arc<assemblies::AssemblyLoader>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionResult {
+    pub exit_code: u8,
+    pub stderr: Option<String>,
+}
+
 impl TestHarness {
     fn fixtures_base_dir() -> PathBuf {
         PathBuf::from(env!("DOTNET_FIXTURES_BASE"))
@@ -121,7 +127,19 @@ impl TestHarness {
         Ok(dll_path)
     }
 
-    #[allow(dead_code)]
+    pub fn ensure_dll(&self, fixture_path: &Path) -> PathBuf {
+        let prebuilt = self.prebuilt_dll_path(fixture_path);
+        if prebuilt.exists() {
+            return prebuilt;
+        }
+
+        eprintln!(
+            "WARNING: Prebuilt DLL missing at {:?}. Lazy compiling {:?} using SingleFile.csproj...",
+            prebuilt, fixture_path
+        );
+        self.build(fixture_path).expect("failed to lazy compile fixture")
+    }
+
     pub fn prebuilt_dll_path(&self, fixture_path: &Path) -> PathBuf {
         let fixtures_base = Self::fixtures_base_dir();
         let file_name = fixture_path.file_stem().unwrap().to_str().unwrap();
@@ -140,7 +158,7 @@ impl TestHarness {
         }
     }
 
-    pub fn run_with_timeout(&self, dll_path: &Path, timeout: Duration) -> u8 {
+    pub fn run_with_timeout(&self, dll_path: &Path, timeout: Duration) -> ExecutionResult {
         let resolution = self.loader.load_resolution_from_file(dll_path).unwrap();
         let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&self.loader)));
         self.run_with_shared_timeout(resolution, shared, timeout)
@@ -151,7 +169,7 @@ impl TestHarness {
         resolution: ResolutionS,
         shared: Arc<state::SharedGlobalState>,
         timeout: Duration,
-    ) -> u8 {
+    ) -> ExecutionResult {
         let (tx, rx) = std::sync::mpsc::channel();
         let shared_clone = Arc::clone(&shared);
         let handle = std::thread::spawn(move || {
@@ -182,14 +200,25 @@ impl TestHarness {
             executor.entrypoint(method);
 
             let result = match executor.run() {
-                vm::ExecutorResult::Exited(code) => code,
+                vm::ExecutorResult::Exited(code) => ExecutionResult {
+                    exit_code: code,
+                    stderr: None,
+                },
                 vm::ExecutorResult::Threw(e) => {
-                    eprintln!("Execution threw: {:?}", e);
-                    1
+                    let msg = format!("Execution threw: {:?}", e);
+                    eprintln!("{}", msg);
+                    ExecutionResult {
+                        exit_code: 1,
+                        stderr: Some(msg),
+                    }
                 }
                 vm::ExecutorResult::Error(e) => {
-                    eprintln!("Execution error: {:?}", e);
-                    255
+                    let msg = format!("Execution error: {:?}", e);
+                    eprintln!("{}", msg);
+                    ExecutionResult {
+                        exit_code: 255,
+                        stderr: Some(msg),
+                    }
                 }
             };
 
@@ -197,9 +226,9 @@ impl TestHarness {
         });
 
         match rx.recv_timeout(timeout) {
-            Ok(code) => {
+            Ok(result) => {
                 handle.join().expect("Executor thread panicked");
-                code
+                result
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 shared.abort_requested.store(true, Ordering::Relaxed);
@@ -217,14 +246,14 @@ impl TestHarness {
     pub fn run(&self, dll_path: &Path) -> u8 {
         let resolution = self.loader.load_resolution_from_file(dll_path).unwrap();
         let shared = Arc::new(state::SharedGlobalState::new(Arc::clone(&self.loader)));
-        self.run_with_shared(resolution, shared)
+        self.run_with_shared(resolution, shared).exit_code
     }
 
     pub fn run_with_shared(
         &self,
         resolution: ResolutionS,
         shared: Arc<state::SharedGlobalState>,
-    ) -> u8 {
+    ) -> ExecutionResult {
         self.run_with_shared_internal(resolution, shared, |_| {})
     }
 
@@ -236,7 +265,7 @@ impl TestHarness {
         release_gate: &Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
         on_result: F,
     ) where
-        F: FnOnce(u8),
+        F: FnOnce(ExecutionResult),
     {
         self.run_with_shared_internal(resolution, shared, |result| {
             on_result(result);
@@ -255,9 +284,9 @@ impl TestHarness {
         resolution: ResolutionS,
         shared: Arc<state::SharedGlobalState>,
         on_complete: F,
-    ) -> u8
+    ) -> ExecutionResult
     where
-        F: FnOnce(u8),
+        F: FnOnce(ExecutionResult),
     {
         let mut executor = vm::Executor::new(shared.clone());
         let entry_method = match resolution.entry_point {
@@ -282,14 +311,25 @@ impl TestHarness {
         executor.entrypoint(method);
 
         let result = match executor.run() {
-            vm::ExecutorResult::Exited(code) => code,
+            vm::ExecutorResult::Exited(code) => ExecutionResult {
+                exit_code: code,
+                stderr: None,
+            },
             vm::ExecutorResult::Threw(e) => {
-                eprintln!("Execution threw: {:?}", e);
-                1
+                let msg = format!("Execution threw: {:?}", e);
+                eprintln!("{}", msg);
+                ExecutionResult {
+                    exit_code: 1,
+                    stderr: Some(msg),
+                }
             }
             vm::ExecutorResult::Error(e) => {
-                eprintln!("Execution error: {:?}", e);
-                255
+                let msg = format!("Execution error: {:?}", e);
+                eprintln!("{}", msg);
+                ExecutionResult {
+                    exit_code: 255,
+                    stderr: Some(msg),
+                }
             }
         };
 
@@ -314,7 +354,7 @@ impl TestHarness {
         // Executor::drop will find THREAD_ARENA empty and skip clearing it.
         drop(executor);
 
-        on_complete(result);
+        on_complete(result.clone());
 
         // In multithreading mode, drop the arena AFTER on_complete (and any gate waits) finish.
         #[cfg(feature = "multithreading")]
@@ -369,6 +409,126 @@ impl TestHarness {
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
         (exit_code, stdout)
+    }
+
+    /// Orchestrates a multi-arena test with the given fixture.
+    #[cfg(feature = "multithreading")]
+    pub fn run_multi_arena_fixture(
+        self: &Arc<Self>,
+        dll_path: &Path,
+        thread_count: usize,
+        expected_exit_code: u8,
+        timeout: Duration,
+        test_name: &str,
+    ) {
+        use std::sync::mpsc;
+        use std::thread;
+
+        let resolution = self
+            .loader
+            .load_resolution_from_file(dll_path)
+            .expect("Failed to load assembly");
+
+        let (tx, rx) = mpsc::channel();
+        let mut abort_flags = Vec::new();
+        let mut handles = Vec::new();
+        let release_gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+
+        let shared = Arc::new(dotnet_vm::state::SharedGlobalState::new(self.loader.clone()));
+        for _ in 0..thread_count {
+            let harness = self.clone();
+            let tx = tx.clone();
+            let shared = Arc::clone(&shared);
+            let release_gate = Arc::clone(&release_gate);
+            let resolution = resolution.clone();
+            abort_flags.push(Arc::clone(&shared.abort_requested));
+
+            let handle = thread::spawn(move || {
+                let tx_ok = tx.clone();
+                let tx_err = tx;
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    harness.run_with_shared_signal_then_wait(
+                        resolution.clone(),
+                        shared,
+                        &release_gate,
+                        move |result| {
+                            let _ = tx_ok.send(Ok(result));
+                        },
+                    );
+                }));
+                if let Err(panic_info) = result {
+                    let _ = tx_err.send(Err(panic_info));
+                }
+            });
+            handles.push(handle);
+        }
+
+        let start = std::time::Instant::now();
+        let mut test_error = None;
+
+        for _ in 0..thread_count {
+            let remaining = timeout.saturating_sub(start.elapsed());
+            match rx.recv_timeout(remaining) {
+                Ok(Ok(result)) => {
+                    if result.exit_code != expected_exit_code {
+                        test_error = Some(format!(
+                            "Multi-arena test {} failed: expected exit code {}, got {}. Stderr: {:?}",
+                            test_name, expected_exit_code, result.exit_code, result.stderr
+                        ));
+                        break;
+                    }
+                }
+                Ok(Err(panic_info)) => {
+                    for flag in &abort_flags {
+                        flag.store(true, Ordering::Relaxed);
+                    }
+                    {
+                        let (lock, condvar) = &*release_gate;
+                        let mut released = lock.lock().expect("release gate lock poisoned");
+                        *released = true;
+                        condvar.notify_all();
+                    }
+                    // Join all before resuming unwind
+                    for handle in handles {
+                        let _ = handle.join();
+                    }
+                    std::panic::resume_unwind(panic_info);
+                }
+                Err(_) => {
+                    for flag in &abort_flags {
+                        flag.store(true, Ordering::Relaxed);
+                    }
+                    test_error = Some(format!("TIMEOUT in {}", test_name));
+                    break;
+                }
+            }
+        }
+
+        if let Some(err) = test_error {
+            for flag in &abort_flags {
+                flag.store(true, Ordering::Relaxed);
+            }
+            {
+                let (lock, condvar) = &*release_gate;
+                let mut released = lock.lock().expect("release gate lock poisoned");
+                *released = true;
+                condvar.notify_all();
+            }
+            for handle in handles {
+                let _ = handle.join();
+            }
+            panic!("{}", err);
+        }
+
+        {
+            let (lock, condvar) = &*release_gate;
+            let mut released = lock.lock().expect("release gate lock poisoned");
+            *released = true;
+            condvar.notify_all();
+        }
+        for handle in handles {
+            let _ = handle.join();
+        }
     }
 }
 

@@ -15,6 +15,11 @@ fn should_skip_dotnet_build() -> bool {
         || std::env::var("DOTNET_SKIP_BUILD").is_ok_and(|v| v == "1")
 }
 
+/// Returns true when we should use prebuilt fixtures from `target/<profile>/dotnet-fixtures`.
+fn use_prebuilt_fixtures() -> bool {
+    std::env::var("DOTNET_USE_PREBUILT_FIXTURES").is_ok_and(|v| v == "1")
+}
+
 fn cargo_profile_target_dir_from_out_dir(out_dir: &Path) -> PathBuf {
     // `OUT_DIR` typically looks like:
     //   <target>/<profile>/build/<pkg>-<hash>/out
@@ -38,6 +43,9 @@ fn main() {
     // Ensure adding/removing fixtures triggers regeneration of `tests.rs`.
     println!("cargo:rerun-if-changed=tests/fixtures");
     println!("cargo:rerun-if-env-changed=DOTNET_SKIP_BUILD");
+    println!("cargo:rerun-if-env-changed=DOTNET_USE_PREBUILT_FIXTURES");
+    println!("cargo:rerun-if-env-changed=DOTNET_FIXTURES_BASE");
+    println!("cargo:rerun-if-env-changed=DOTNET_TEST_FILTER");
 
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let out_dir_path = PathBuf::from(&out_dir);
@@ -47,8 +55,14 @@ fn main() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let tests_dir = manifest_dir.join("tests");
     let fixtures_dir = tests_dir.join("fixtures");
-    let cargo_profile_target_dir = cargo_profile_target_dir_from_out_dir(&out_dir_path);
-    let output_base = cargo_profile_target_dir.join("dotnet-fixtures");
+
+    let output_base = std::env::var("DOTNET_FIXTURES_BASE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let cargo_profile_target_dir = cargo_profile_target_dir_from_out_dir(&out_dir_path);
+            cargo_profile_target_dir.join("dotnet-fixtures")
+        });
+
     println!(
         "cargo:rustc-env=DOTNET_FIXTURES_BASE={}",
         output_base.display()
@@ -58,65 +72,95 @@ fn main() {
     find_fixtures(&fixtures_dir, &mut fixtures);
     fixtures.sort_by_key(|p| p.to_string_lossy().to_string());
 
-    let hash = compute_fixtures_hash(&fixtures, &tests_dir);
-    let hash_file = output_base.join(".fixtures_hash");
-    let previous_hash: Option<u64> = std::fs::read_to_string(&hash_file)
-        .ok()
-        .and_then(|s| s.trim().parse().ok());
-
-    let needs_dotnet_build = previous_hash != Some(hash);
-
-    if !should_skip_dotnet_build() && needs_dotnet_build {
-        // Ensure output_base exists before we save the hash later
-        std::fs::create_dir_all(&output_base).unwrap();
-
-        let msbuild_obj = output_base.join("msbuild-obj");
-        let msbuild_bin = output_base.join("msbuild-bin");
-
-        // Restore packages once for SingleFile.csproj.
-        let restore_status = Command::new("dotnet")
-            .args(["restore", "SingleFile.csproj", "-v:q", "--nologo"])
-            .arg(format!(
-                "-p:BaseIntermediateOutputPath={}/",
-                msbuild_obj.display()
-            ))
-            .arg(format!("-p:BaseOutputPath={}/", msbuild_bin.display()))
-            .current_dir(&tests_dir)
-            .status()
-            .expect("Failed to run dotnet restore");
-
-        assert!(restore_status.success(), "dotnet restore failed");
-
-        // Batch compile all fixtures (restore already done).
-        let status = Command::new("dotnet")
-            .args([
-                "build",
-                "BatchFixtures.csproj",
-                "-m",              // parallel MSBuild nodes
-                "-v:q",            // quiet verbosity
-                "--nologo",        // suppress banner
-                "-clp:ErrorsOnly", // only show errors
-                "--no-restore",
-            ])
-            .arg(format!("-p:FixtureOutputBase={}/", output_base.display()))
-            .arg(format!(
-                "-p:BaseIntermediateOutputPath={}/",
-                msbuild_obj.display()
-            ))
-            .arg(format!("-p:BaseOutputPath={}/", msbuild_bin.display()))
-            .current_dir(&tests_dir)
-            .status()
-            .expect("Failed to run dotnet build. Is the .NET SDK installed?");
-
-        assert!(
-            status.success(),
-            "dotnet build BatchFixtures.csproj failed. Check that the .NET 10 SDK is installed."
-        );
-
-        // Save hash on success
-        std::fs::write(&hash_file, hash.to_string()).unwrap();
+    if let Ok(filter) = std::env::var("DOTNET_TEST_FILTER")
+        && !filter.is_empty()
+    {
+        fixtures.retain(|p| p.to_string_lossy().contains(&filter));
     }
 
+    if use_prebuilt_fixtures() {
+        // Validate prebuilt fixtures exist and directory is not empty.
+        if !output_base.exists() {
+            println!(
+                "cargo:warning=DOTNET_USE_PREBUILT_FIXTURES=1 but {} does not exist",
+                output_base.display()
+            );
+            panic!("Prebuilt fixtures directory missing");
+        }
+
+        let is_empty = std::fs::read_dir(&output_base)
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(true);
+
+        if is_empty {
+            println!(
+                "cargo:warning=DOTNET_USE_PREBUILT_FIXTURES=1 but {} is empty",
+                output_base.display()
+            );
+            panic!("Prebuilt fixtures directory empty");
+        }
+    } else {
+        let hash = compute_fixtures_hash(&fixtures, &tests_dir);
+        let hash_file = output_base.join(".fixtures_hash");
+        let previous_hash: Option<u64> = std::fs::read_to_string(&hash_file)
+            .ok()
+            .and_then(|s| s.trim().parse().ok());
+
+        let needs_dotnet_build = previous_hash != Some(hash);
+
+        if !should_skip_dotnet_build() && needs_dotnet_build {
+            // Ensure output_base exists before we save the hash later
+            std::fs::create_dir_all(&output_base).unwrap();
+
+            let msbuild_obj = output_base.join("msbuild-obj");
+            let msbuild_bin = output_base.join("msbuild-bin");
+
+            // Restore packages once for SingleFile.csproj.
+            let restore_status = Command::new("dotnet")
+                .args(["restore", "SingleFile.csproj", "-v:q", "--nologo"])
+                .arg(format!(
+                    "-p:BaseIntermediateOutputPath={}/",
+                    msbuild_obj.display()
+                ))
+                .arg(format!("-p:BaseOutputPath={}/", msbuild_bin.display()))
+                .current_dir(&tests_dir)
+                .status()
+                .expect("Failed to run dotnet restore");
+
+            assert!(restore_status.success(), "dotnet restore failed");
+
+            // Batch compile all fixtures (restore already done).
+            let status = Command::new("dotnet")
+                .args([
+                    "build",
+                    "BatchFixtures.csproj",
+                    "-m",              // parallel MSBuild nodes
+                    "-v:q",            // quiet verbosity
+                    "--nologo",        // suppress banner
+                    "-clp:ErrorsOnly", // only show errors
+                    "--no-restore",
+                ])
+                .arg(format!("-p:FixtureOutputBase={}/", output_base.display()))
+                .arg(format!(
+                    "-p:BaseIntermediateOutputPath={}/",
+                    msbuild_obj.display()
+                ))
+                .arg(format!("-p:BaseOutputPath={}/", msbuild_bin.display()))
+                .current_dir(&tests_dir)
+                .status()
+                .expect("Failed to run dotnet build. Is the .NET SDK installed?");
+
+            assert!(
+                status.success(),
+                "dotnet build BatchFixtures.csproj failed. Check that the .NET 10 SDK is installed."
+            );
+
+            // Save hash on success
+            std::fs::write(&hash_file, hash.to_string()).unwrap();
+        }
+    }
+
+    let mut missing_prebuilt_dlls = Vec::new();
     for path in fixtures {
         let file_name = path.file_stem().unwrap().to_str().unwrap();
         let expected_exit_code: u8 = file_name
@@ -143,16 +187,15 @@ fn main() {
         let is_multithreading_enabled = std::env::var("CARGO_FEATURE_MULTITHREADING").is_ok();
         let is_generic_constraint_validation_enabled =
             std::env::var("CARGO_FEATURE_GENERIC_CONSTRAINT_VALIDATION").is_ok();
-        if !dll_path.exists()
-            // monitor_try_enter_timeout_42 uses Interlocked.Increment to assign roles across
-            // three threads and busy-spins on cross-thread volatile flags. This is permanently
-            // incompatible with single-threaded execution: Thread 0 would spin-wait forever for
-            // Thread 1 which never runs. Single-threaded Monitor.TryEnter semantics are covered
-            // by monitor_try_enter_timeout_single_42 instead.
-            || (file_name == "monitor_try_enter_timeout_42" && !is_multithreading_enabled)
-            // circular_init_mt_42 requires two concurrent executors entering opposing
-            // type initializers. A single-executor run hangs in Program.Arrive().
-            || (file_name == "circular_init_mt_42" && !is_multithreading_enabled)
+
+        if !dll_path.exists() {
+            if use_prebuilt_fixtures() {
+                missing_prebuilt_dlls.push(dll_path.display().to_string());
+            }
+            ignore_prefix = "#[ignore] ".to_string();
+        } else if (file_name == "monitor_try_enter_timeout_42"
+            || file_name == "circular_init_mt_42")
+            && !is_multithreading_enabled
             // generic_constraints_fail_0 deliberately tests constraint-violation rejection;
             // that logic only exists under the generic-constraint-validation feature.
             || (file_name == "generic_constraints_fail_0"
@@ -172,28 +215,42 @@ fn main() {
             _ => None,
         };
 
+        let source_path = path.strip_prefix(manifest_dir).unwrap().to_str().unwrap();
+
         if let Some(thread_count) = multi_arena_threads.filter(|_| is_multithreading_enabled) {
             writeln!(
                 f,
-                "#[cfg(feature = \"multithreading\")] multi_arena_test!({}, {:?}, {}, {});",
+                "#[cfg(feature = \"multithreading\")] multi_arena_test!({}, {:?}, {}, {}, {:?});",
                 test_name,
-                path.strip_prefix(manifest_dir).unwrap().to_string_lossy(),
+                dll_path.to_str().unwrap(),
                 thread_count,
-                expected_exit_code
+                expected_exit_code,
+                source_path
             )
             .unwrap();
         } else {
             writeln!(
                 f,
-                "fixture_test!({}{}, {:?}, {});",
+                "fixture_test!({}{}, {:?}, {}, Some({:?}));",
                 ignore_prefix,
                 test_name,
                 dll_path.to_str().unwrap(),
-                expected_exit_code
+                expected_exit_code,
+                source_path
             )
             .unwrap();
         }
         println!("cargo:rerun-if-changed={}", path.display());
+    }
+
+    if !missing_prebuilt_dlls.is_empty() {
+        for dll in &missing_prebuilt_dlls {
+            println!("cargo:warning=Missing prebuilt DLL: {}", dll);
+        }
+        panic!(
+            "Stale/incomplete artifact: {} DLLs missing. Run scripts/build_fixtures.sh to update.",
+            missing_prebuilt_dlls.len()
+        );
     }
 }
 
