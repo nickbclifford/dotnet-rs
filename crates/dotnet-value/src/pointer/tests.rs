@@ -2,18 +2,18 @@ use crate::{
     object::{HeapStorage, ObjectRef},
     pointer::*,
 };
-#[cfg(all(feature = "memory-validation", feature = "multithreading"))]
+#[cfg(feature = "memory-validation")]
 use dotnet_utils::sync::MANAGED_THREAD_ID;
 use gc_arena::{Arena, Gc, Rootable};
 use sptr::Strict;
 use std::sync::{Mutex, OnceLock};
 
-#[cfg(all(feature = "memory-validation", feature = "multithreading"))]
+#[cfg(feature = "memory-validation")]
 struct ManagedThreadIdGuard {
     previous: Option<crate::ArenaId>,
 }
 
-#[cfg(all(feature = "memory-validation", feature = "multithreading"))]
+#[cfg(feature = "memory-validation")]
 impl ManagedThreadIdGuard {
     fn set(id: crate::ArenaId) -> Self {
         let previous = MANAGED_THREAD_ID.with(|thread_id| {
@@ -25,7 +25,7 @@ impl ManagedThreadIdGuard {
     }
 }
 
-#[cfg(all(feature = "memory-validation", feature = "multithreading"))]
+#[cfg(feature = "memory-validation")]
 impl Drop for ManagedThreadIdGuard {
     fn drop(&mut self) {
         MANAGED_THREAD_ID.with(|thread_id| thread_id.set(self.previous));
@@ -45,7 +45,7 @@ fn test_managed_ptr_offset_oob() {
     let arena = Arena::<TestRoot>::new(|_mc| ());
     #[cfg(feature = "multithreading")]
     let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(crate::ArenaId(0));
-    #[cfg(all(feature = "memory-validation", feature = "multithreading"))]
+    #[cfg(feature = "memory-validation")]
     let _thread_id_guard = ManagedThreadIdGuard::set(crate::ArenaId(0));
     #[cfg(feature = "multithreading")]
     let arena_handle = unsafe {
@@ -89,7 +89,7 @@ fn test_managed_ptr_offset_valid() {
     let arena = Arena::<TestRoot>::new(|_mc| ());
     #[cfg(feature = "multithreading")]
     let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(crate::ArenaId(0));
-    #[cfg(all(feature = "memory-validation", feature = "multithreading"))]
+    #[cfg(feature = "memory-validation")]
     let _thread_id_guard = ManagedThreadIdGuard::set(crate::ArenaId(0));
     #[cfg(feature = "multithreading")]
     let arena_handle = unsafe {
@@ -133,7 +133,7 @@ fn test_managed_ptr_serialization_roundtrip() {
     let arena = Arena::<TestRoot>::new(|_mc| ());
     #[cfg(feature = "multithreading")]
     let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(crate::ArenaId(0));
-    #[cfg(all(feature = "memory-validation", feature = "multithreading"))]
+    #[cfg(feature = "memory-validation")]
     let _thread_id_guard = ManagedThreadIdGuard::set(crate::ArenaId(0));
     #[cfg(feature = "multithreading")]
     let arena_handle = unsafe {
@@ -288,7 +288,7 @@ fn test_managed_ptr_serialization_bugs_reproduction() {
     let arena = Arena::<TestRoot>::new(|_mc| ());
     #[cfg(feature = "multithreading")]
     let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(crate::ArenaId(0));
-    #[cfg(all(feature = "memory-validation", feature = "multithreading"))]
+    #[cfg(feature = "memory-validation")]
     let _thread_id_guard = ManagedThreadIdGuard::set(crate::ArenaId(0));
     #[cfg(feature = "multithreading")]
     let arena_handle = unsafe {

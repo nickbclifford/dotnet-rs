@@ -1,16 +1,16 @@
 #[cfg(test)]
 mod tests {
     use crate::object::{HeapStorage, ObjectRef};
-    #[cfg(all(feature = "memory-validation", feature = "multithreading"))]
+    #[cfg(feature = "memory-validation")]
     use dotnet_utils::sync::MANAGED_THREAD_ID;
     use gc_arena::{Arena, Rootable};
 
-    #[cfg(all(feature = "memory-validation", feature = "multithreading"))]
+    #[cfg(feature = "memory-validation")]
     struct ManagedThreadIdGuard {
         previous: Option<dotnet_utils::ArenaId>,
     }
 
-    #[cfg(all(feature = "memory-validation", feature = "multithreading"))]
+    #[cfg(feature = "memory-validation")]
     impl ManagedThreadIdGuard {
         fn set(id: dotnet_utils::ArenaId) -> Self {
             let previous = MANAGED_THREAD_ID.with(|thread_id| {
@@ -22,7 +22,7 @@ mod tests {
         }
     }
 
-    #[cfg(all(feature = "memory-validation", feature = "multithreading"))]
+    #[cfg(feature = "memory-validation")]
     impl Drop for ManagedThreadIdGuard {
         fn drop(&mut self) {
             MANAGED_THREAD_ID.with(|thread_id| thread_id.set(self.previous));
@@ -33,7 +33,7 @@ mod tests {
     fn test_read_branded_null() {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
-        #[cfg(feature = "multithreading")]
+        #[cfg(feature = "memory-validation")]
         let arena_id = dotnet_utils::ArenaId(0);
         #[cfg(feature = "multithreading")]
         dotnet_utils::gc::register_arena(
@@ -42,7 +42,7 @@ mod tests {
         );
         #[cfg(feature = "multithreading")]
         let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(arena_id);
-        #[cfg(all(feature = "memory-validation", feature = "multithreading"))]
+        #[cfg(feature = "memory-validation")]
         let _thread_id_guard = ManagedThreadIdGuard::set(arena_id);
         #[cfg(feature = "multithreading")]
         let arena_handle = unsafe {
@@ -72,7 +72,7 @@ mod tests {
     fn test_read_valid_object() {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
-        #[cfg(feature = "multithreading")]
+        #[cfg(feature = "memory-validation")]
         let arena_id = dotnet_utils::ArenaId(0);
         #[cfg(feature = "multithreading")]
         dotnet_utils::gc::register_arena(
@@ -81,7 +81,7 @@ mod tests {
         );
         #[cfg(feature = "multithreading")]
         let _arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(arena_id);
-        #[cfg(all(feature = "memory-validation", feature = "multithreading"))]
+        #[cfg(feature = "memory-validation")]
         let _thread_id_guard = ManagedThreadIdGuard::set(arena_id);
         #[cfg(feature = "multithreading")]
         let arena_handle = unsafe {
