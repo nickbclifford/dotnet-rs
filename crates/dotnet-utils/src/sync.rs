@@ -128,13 +128,20 @@ thread_local! {
 
 /// Get the current thread's managed ID from thread-local storage.
 pub fn get_current_thread_id() -> crate::ArenaId {
-    #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
+    #[cfg(feature = "multithreading")]
     {
         MANAGED_THREAD_ID.with(|id| id.get().unwrap_or(crate::ArenaId::INVALID))
     }
-    #[cfg(not(any(feature = "multithreading", feature = "memory-validation")))]
+    #[cfg(not(feature = "multithreading"))]
     {
-        crate::ArenaId(1)
+        #[cfg(feature = "memory-validation")]
+        {
+            MANAGED_THREAD_ID.with(|id| id.get().unwrap_or(crate::ArenaId(1)))
+        }
+        #[cfg(not(feature = "memory-validation"))]
+        {
+            crate::ArenaId(1)
+        }
     }
 }
 
