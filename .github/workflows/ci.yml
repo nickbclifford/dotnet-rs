@@ -95,6 +95,14 @@ jobs:
           - name: "Generic constraint validation"
             features: "generic-constraint-validation"
 
+          # Memory validation configuration (GC checks)
+          - name: "Memory validation"
+            features: "memory-validation"
+
+          # Metadata validation configuration (Assembly checks)
+          - name: "Metadata validation"
+            features: "metadata-validation"
+
     steps:
       - uses: actions/checkout@v4
 
