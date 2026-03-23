@@ -36,8 +36,8 @@ pub fn validate_atomic_access(ptr: *const u8, is_atomic: bool) {
     }
 }
 
+#[cfg(feature = "multithreading")]
 fn validate_ordering(ordering: Ordering, is_load: bool) {
-    #[cfg(feature = "multithreading")]
     {
         match (is_load, ordering) {
             (true, Ordering::Release) | (true, Ordering::AcqRel) => {
@@ -54,11 +54,6 @@ fn validate_ordering(ordering: Ordering, is_load: bool) {
                 "Relaxed ordering used for atomic access. Ensure this is intentional (e.g., not for a .NET volatile field)."
             );
         }
-    }
-    #[cfg(not(feature = "multithreading"))]
-    {
-        let _ = ordering;
-        let _ = is_load;
     }
 }
 

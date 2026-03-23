@@ -1,4 +1,4 @@
-use crate::{Executor, state::SharedGlobalState, sync::Arc, GenericLookup};
+use crate::{Executor, GenericLookup, state::SharedGlobalState, sync::Arc};
 use arbitrary::Arbitrary;
 use dotnet_assemblies::AssemblyLoader;
 use dotnet_types::{TypeDescription, members::MethodDescription};
