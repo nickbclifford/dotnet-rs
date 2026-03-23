@@ -33,7 +33,7 @@ mod tests {
     fn test_read_branded_null() {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
-        #[cfg(feature = "memory-validation")]
+        #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
         let arena_id = dotnet_utils::ArenaId(0);
         #[cfg(feature = "multithreading")]
         dotnet_utils::gc::register_arena(
@@ -58,7 +58,7 @@ mod tests {
                 #[cfg(feature = "multithreading")]
                 arena_handle,
                 #[cfg(feature = "memory-validation")]
-                dotnet_utils::ArenaId(0),
+                arena_id,
             );
             unsafe {
                 let obj = ObjectRef::read_branded(&null_bytes, &gc_handle);
@@ -72,7 +72,7 @@ mod tests {
     fn test_read_valid_object() {
         type TestRoot = Rootable![()];
         let arena = Arena::<TestRoot>::new(|_mc| ());
-        #[cfg(feature = "memory-validation")]
+        #[cfg(any(feature = "multithreading", feature = "memory-validation"))]
         let arena_id = dotnet_utils::ArenaId(0);
         #[cfg(feature = "multithreading")]
         dotnet_utils::gc::register_arena(
@@ -97,7 +97,7 @@ mod tests {
                 #[cfg(feature = "multithreading")]
                 arena_handle,
                 #[cfg(feature = "memory-validation")]
-                dotnet_utils::ArenaId(0),
+                arena_id,
             );
             let obj = ObjectRef::new(gc_handle, storage);
             let mut buffer = [0u8; ObjectRef::SIZE];
