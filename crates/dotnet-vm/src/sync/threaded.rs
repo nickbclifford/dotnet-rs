@@ -1,6 +1,7 @@
-use crate::sync::{Arc, Condvar, Mutex};
 use crate::{
-    gc::coordinator::GCCoordinator, metrics::RuntimeMetrics, sync::LockResult,
+    gc::coordinator::GCCoordinator,
+    metrics::RuntimeMetrics,
+    sync::{Arc, Condvar, LockResult, Mutex},
     threading::ThreadManagerOps,
 };
 use dotnet_utils::ArenaId;
@@ -393,9 +394,7 @@ mod tests {
     }
 
     fn make_gc() -> GCCoordinator {
-        GCCoordinator::new(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
-            false,
-        )))
+        GCCoordinator::new(Arc::new(AtomicBool::new(false)))
     }
 
     fn make_metrics() -> RuntimeMetrics {

@@ -229,10 +229,7 @@ impl<'a> ResolutionOps<'_> for ResolutionContext<'a> {
         self.resolver().stack_value_type(val)
     }
 
-    fn make_concrete(
-        &self,
-        t: &dotnetdll::prelude::MethodType,
-    ) -> Result<ConcreteType, TypeResolutionError> {
+    fn make_concrete(&self, t: &MethodType) -> Result<ConcreteType, TypeResolutionError> {
         self.make_concrete(t)
     }
 

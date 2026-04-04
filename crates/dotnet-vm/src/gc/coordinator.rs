@@ -8,11 +8,11 @@ use dotnet_utils::sync::{Arc, AtomicBool};
 #[cfg(feature = "multithreading")]
 use dotnet_value::object::ObjectPtr;
 #[cfg(feature = "multithreading")]
-use std::collections::{HashMap, HashSet};
-#[cfg(feature = "multithreading")]
-use std::marker::PhantomData;
-#[cfg(feature = "multithreading")]
-use std::mem::ManuallyDrop;
+use std::{
+    collections::{HashMap, HashSet},
+    marker::PhantomData,
+    mem::ManuallyDrop,
+};
 
 #[cfg(feature = "multithreading")]
 pub use dotnet_utils::gc::{

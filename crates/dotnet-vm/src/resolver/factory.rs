@@ -442,7 +442,7 @@ impl ResolverService {
                         (*type_desc).clone(),
                         None,
                         false,
-                        Some(dotnet_utils::ByteOffset(0)),
+                        Some(ByteOffset(0)),
                     );
                     return Ok(CTSValue::Value(TypedRef(m, type_desc)));
                 }

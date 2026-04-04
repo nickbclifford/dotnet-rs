@@ -23,7 +23,7 @@ pub use cross_arena::*;
 pub struct GCHandle<'gc> {
     pub(crate) mutation: &'gc Mutation<'gc>,
     #[cfg(feature = "multithreading")]
-    pub(crate) arena: &'gc arena::ArenaHandleInner,
+    pub(crate) arena: &'gc ArenaHandleInner,
     #[cfg(feature = "memory-validation")]
     pub(crate) thread_id: crate::ArenaId,
 }
@@ -36,7 +36,7 @@ pub struct GcLifetime<'gc> {
 impl<'gc> GCHandle<'gc> {
     pub fn new(
         mutation: &'gc Mutation<'gc>,
-        #[cfg(feature = "multithreading")] arena: &'gc arena::ArenaHandleInner,
+        #[cfg(feature = "multithreading")] arena: &'gc ArenaHandleInner,
         #[cfg(feature = "memory-validation")] thread_id: crate::ArenaId,
     ) -> Self {
         #[cfg(all(feature = "memory-validation", feature = "multithreading"))]

@@ -348,7 +348,7 @@ pub fn delegate_remove<
             let array_v = vm_try!(ctx.new_vector(delegate_concrete, new_list.len()));
             let array_obj = ObjectRef::new(
                 ctx.gc_with_token(&ctx.no_active_borrows_token()),
-                dotnet_value::object::HeapStorage::Vec(array_v),
+                HeapStorage::Vec(array_v),
             );
             ctx.register_new_object(&array_obj);
 

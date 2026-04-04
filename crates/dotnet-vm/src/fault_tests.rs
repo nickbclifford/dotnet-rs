@@ -26,80 +26,40 @@ mod tests {
     };
     fn get_mock_loader() -> Arc<AssemblyLoader> {
         thread_local! {
-            static MOCK_LOADER: Arc<AssemblyLoader> = {
-                let loader = AssemblyLoader::new_bare("mock_root_fault".to_string())
-                    .expect("Failed to create mock AssemblyLoader");
-                let mut system_runtime = Resolution::new(Module::new("System.Private.CoreLib.dll"));
-                system_runtime.assembly = Some(Assembly::new("System.Private.CoreLib"));
-                let mut obj2 = TypeDefinition::new(None, "Object");
-                obj2.namespace = Some("System".into());
-                let obj_idx = system_runtime.push_type_definition(obj2);
-                let void_sig = MethodSignature {
-                    instance: true,
-                    explicit_this: false,
-                    calling_convention: CallingConvention::Default,
-                    parameters: vec![],
-                    return_type: ReturnType(vec![], None),
-                    varargs: None,
-                };
-                system_runtime.push_method(
-                    obj_idx,
-                    Method::new(
-                        resolved_mod::Accessibility::Public,
-                        void_sig.clone(),
-                        ".ctor",
-                        Some(body::Method {
-                            header: body::Header {
-                                maximum_stack_size: 1,
-                                local_variables: vec![],
-                                initialize_locals: true,
-                            },
-                            instructions: vec![Instruction::Return],
-                            data_sections: vec![],
-                        }),
-                    ),
-                );
-                let mut exc = TypeDefinition::new(None, "Exception");
-                exc.namespace = Some("System".into());
-                let exc_idx = system_runtime.push_type_definition(exc);
-                system_runtime.push_method(
-                    exc_idx,
-                    Method::new(
-                        resolved_mod::Accessibility::Public,
-                        void_sig,
-                        ".ctor",
-                        Some(body::Method {
-                            header: body::Header {
-                                maximum_stack_size: 1,
-                                local_variables: vec![],
-                                initialize_locals: true,
-                            },
-                            instructions: vec![Instruction::Return],
-                            data_sections: vec![],
-                        }),
-                    ),
-                );
-                let mut val_type = TypeDefinition::new(None, "ValueType");
-                val_type.namespace = Some("System".into());
-                system_runtime.push_type_definition(val_type);
-                let mut enum_type = TypeDefinition::new(None, "Enum");
-                enum_type.namespace = Some("System".into());
-                system_runtime.push_type_definition(enum_type);
-                let mut array_type = TypeDefinition::new(None, "Array");
-                array_type.namespace = Some("System".into());
-                system_runtime.push_type_definition(array_type);
-                let mut string_type = TypeDefinition::new(None, "String");
-                string_type.namespace = Some("System".into());
-                system_runtime.push_type_definition(string_type);
-                loader.register_owned_assembly(system_runtime.clone());
-                let mut mscorlib = system_runtime.clone();
-                mscorlib.assembly = Some(Assembly::new("mscorlib"));
-                loader.register_owned_assembly(mscorlib);
-                let mut system_runtime_compat = system_runtime;
-                system_runtime_compat.assembly = Some(Assembly::new("System.Runtime"));
-                loader.register_owned_assembly(system_runtime_compat);
-                Arc::new(loader)
-            };
+            static MOCK_LOADER : Arc < AssemblyLoader > = { let loader =
+            AssemblyLoader::new_bare("mock_root_fault".to_string())
+            .expect("Failed to create mock AssemblyLoader"); let mut system_runtime =
+            Resolution::new(Module::new("System.Private.CoreLib.dll")); system_runtime
+            .assembly = Some(Assembly::new("System.Private.CoreLib")); let mut obj2 =
+            TypeDefinition::new(None, "Object"); obj2.namespace = Some("System".into());
+            let obj_idx = system_runtime.push_type_definition(obj2); let void_sig =
+            MethodSignature { instance : true, explicit_this : false, calling_convention
+            : CallingConvention::Default, parameters : vec![], return_type :
+            ReturnType(vec![], None), varargs : None, }; system_runtime
+            .push_method(obj_idx, Method::new(Accessibility::Public, void_sig.clone(),
+            ".ctor", Some(body::Method { header : body::Header { maximum_stack_size : 1,
+            local_variables : vec![], initialize_locals : true, }, instructions :
+            vec![Instruction::Return], data_sections : vec![], }),),); let mut exc =
+            TypeDefinition::new(None, "Exception"); exc.namespace = Some("System"
+            .into()); let exc_idx = system_runtime.push_type_definition(exc);
+            system_runtime.push_method(exc_idx, Method::new(Accessibility::Public,
+            void_sig, ".ctor", Some(body::Method { header : body::Header {
+            maximum_stack_size : 1, local_variables : vec![], initialize_locals : true,
+            }, instructions : vec![Instruction::Return], data_sections : vec![], }),),);
+            let mut val_type = TypeDefinition::new(None, "ValueType"); val_type.namespace
+            = Some("System".into()); system_runtime.push_type_definition(val_type); let
+            mut enum_type = TypeDefinition::new(None, "Enum"); enum_type.namespace =
+            Some("System".into()); system_runtime.push_type_definition(enum_type); let
+            mut array_type = TypeDefinition::new(None, "Array"); array_type.namespace =
+            Some("System".into()); system_runtime.push_type_definition(array_type); let
+            mut string_type = TypeDefinition::new(None, "String"); string_type.namespace
+            = Some("System".into()); system_runtime.push_type_definition(string_type);
+            loader.register_owned_assembly(system_runtime.clone()); let mut mscorlib =
+            system_runtime.clone(); mscorlib.assembly = Some(Assembly::new("mscorlib"));
+            loader.register_owned_assembly(mscorlib); let mut system_runtime_compat =
+            system_runtime; system_runtime_compat.assembly =
+            Some(Assembly::new("System.Runtime")); loader
+            .register_owned_assembly(system_runtime_compat); Arc::new(loader) };
         }
         MOCK_LOADER.with(|l| l.clone())
     }
@@ -126,9 +86,9 @@ mod tests {
             parameters: vec![],
             return_type: ReturnType(
                 vec![],
-                Some(dotnetdll::prelude::ParameterType::Value(MethodType::Base(
-                    Box::new(BaseType::Int32),
-                ))),
+                Some(ParameterType::Value(MethodType::Base(Box::new(
+                    BaseType::Int32,
+                )))),
             ),
             varargs: None,
         };
@@ -165,12 +125,7 @@ mod tests {
         };
         let method_idx = res.push_method(
             type_idx,
-            Method::new(
-                resolved_mod::Accessibility::Public,
-                sig.clone(),
-                "TestMethod",
-                Some(body),
-            ),
+            Method::new(Accessibility::Public, sig.clone(), "TestMethod", Some(body)),
         );
         let res_s = loader.register_owned_assembly(res);
         let _typedef = &res_s.definition()[type_idx];
@@ -273,9 +228,9 @@ mod tests {
             parameters: vec![],
             return_type: ReturnType(
                 vec![],
-                Some(dotnetdll::prelude::ParameterType::Value(MethodType::Base(
-                    Box::new(BaseType::Int32),
-                ))),
+                Some(ParameterType::Value(MethodType::Base(Box::new(
+                    BaseType::Int32,
+                )))),
             ),
             varargs: None,
         };
@@ -338,7 +293,7 @@ mod tests {
         let method_idx = res.push_method(
             type_idx,
             Method::new(
-                resolved_mod::Accessibility::Public,
+                Accessibility::Public,
                 sig.clone(),
                 "TestMethodExc",
                 Some(body),

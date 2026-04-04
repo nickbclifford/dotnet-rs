@@ -134,34 +134,31 @@ impl<'gc> EvaluationStack<'gc> {
             StackValue::ValueType(obj) => {
                 let layout = obj.instance_storage.layout().clone();
                 obj.instance_storage.with_data_mut(|data| {
-                    layout.visit_managed_ptrs(
-                        dotnet_utils::ByteOffset(0),
-                        &mut |offset: dotnet_utils::ByteOffset| {
-                            if offset.as_usize() + 16 <= data.len() {
-                                let offset_val = offset.as_usize();
-                                let slice = &mut data[offset_val..offset_val + 16];
-                                let info = unsafe { ManagedPtr::read_stack_info(slice) };
-                                if let PointerOrigin::Stack(idx) = info.origin {
-                                    let slot_ptr = if idx.as_usize() < slot_locations.len() {
-                                        slot_locations[idx.as_usize()]
-                                    } else {
-                                        suspended_locations[idx.as_usize() - slot_locations.len()]
-                                    };
-                                    let new_ptr = unsafe {
-                                        NonNull::new_unchecked(
-                                            slot_ptr.as_ptr().add(info.offset.as_usize()),
-                                        )
-                                    };
-                                    let word0: usize = 1
-                                        | ((idx.as_usize() & 0x3FFFFFFF) << 3)
-                                        | (info.offset.as_usize() << 33);
-                                    let word1 = new_ptr.as_ptr() as usize;
-                                    slice[0..8].copy_from_slice(&word0.to_ne_bytes());
-                                    slice[8..16].copy_from_slice(&word1.to_ne_bytes());
-                                }
+                    layout.visit_managed_ptrs(ByteOffset(0), &mut |offset: ByteOffset| {
+                        if offset.as_usize() + 16 <= data.len() {
+                            let offset_val = offset.as_usize();
+                            let slice = &mut data[offset_val..offset_val + 16];
+                            let info = unsafe { ManagedPtr::read_stack_info(slice) };
+                            if let PointerOrigin::Stack(idx) = info.origin {
+                                let slot_ptr = if idx.as_usize() < slot_locations.len() {
+                                    slot_locations[idx.as_usize()]
+                                } else {
+                                    suspended_locations[idx.as_usize() - slot_locations.len()]
+                                };
+                                let new_ptr = unsafe {
+                                    NonNull::new_unchecked(
+                                        slot_ptr.as_ptr().add(info.offset.as_usize()),
+                                    )
+                                };
+                                let word0: usize = 1
+                                    | ((idx.as_usize() & 0x3FFFFFFF) << 3)
+                                    | (info.offset.as_usize() << 33);
+                                let word1 = new_ptr.as_ptr() as usize;
+                                slice[0..8].copy_from_slice(&word0.to_ne_bytes());
+                                slice[8..16].copy_from_slice(&word1.to_ne_bytes());
                             }
-                        },
-                    );
+                        }
+                    });
                 });
             }
             _ => {}

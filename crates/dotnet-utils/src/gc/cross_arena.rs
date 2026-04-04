@@ -40,9 +40,10 @@
 //! `is_stw_in_progress`, and `record_cross_arena_ref` retain their existing
 //! signatures and semantics so that legacy call sites continue to compile
 //! unchanged while adopting `ArenaLease`.
-#[cfg(doc)]
-use crate::newtypes::ArenaId;
-use crate::sync::{Arc, AtomicBool, Ordering, RwLock};
+use crate::{
+    newtypes::ArenaId,
+    sync::{Arc, AtomicBool, Ordering, RwLock},
+};
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
@@ -123,7 +124,7 @@ pub struct ArenaLease {
 impl ArenaLease {
     /// Returns the generation of the arena at the time this lease was acquired.
     ///
-    /// Two leases for the same [`crate::ArenaId`] with different generations indicate
+    /// Two leases for the same [`ArenaId`] with different generations indicate
     /// that the arena was unregistered and re-registered between the two
     /// acquisitions.  Any cross-arena pointer recorded under the old
     /// generation must be considered invalid.
@@ -165,12 +166,12 @@ impl Drop for ArenaLease {
 // Global registry
 // ---------------------------------------------------------------------------
 
-static VALID_ARENAS: std::sync::LazyLock<RwLock<HashMap<crate::ArenaId, Arc<ArenaState>>>> =
+static VALID_ARENAS: std::sync::LazyLock<RwLock<HashMap<ArenaId, Arc<ArenaState>>>> =
     std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// A fast-path bitset for the first 64 Arena IDs to avoid lock contention on
 /// every object read.
-static VALID_ARENAS_FAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static VALID_ARENAS_FAST: AtomicU64 = AtomicU64::new(0);
 
 // ---------------------------------------------------------------------------
 // Registry management
@@ -182,7 +183,7 @@ static VALID_ARENAS_FAST: std::sync::atomic::AtomicU64 = std::sync::atomic::Atom
 /// stop-the-world pause begins for this arena.  The same `Arc` is embedded in
 /// the [`ArenaState`] so that [`is_stw_in_progress`] and [`try_acquire_lease`]
 /// can read it without requiring the original owner to be present.
-pub fn register_arena(thread_id: crate::ArenaId, stw_in_progress: Arc<AtomicBool>) {
+pub fn register_arena(thread_id: ArenaId, stw_in_progress: Arc<AtomicBool>) {
     let id = thread_id.0;
     if id < 64 {
         VALID_ARENAS_FAST.fetch_or(1 << id, Ordering::Release);
@@ -201,7 +202,7 @@ pub fn register_arena(thread_id: crate::ArenaId, stw_in_progress: Arc<AtomicBool
 ///
 /// In practice leases are held only for the duration of a single pointer
 /// dereference (nanoseconds), so the spin terminates almost immediately.
-pub fn unregister_arena(thread_id: crate::ArenaId) {
+pub fn unregister_arena(thread_id: ArenaId) {
     let id = thread_id.0;
     if id < 64 {
         VALID_ARENAS_FAST.fetch_and(!(1 << id), Ordering::Release);
@@ -239,7 +240,7 @@ pub fn unregister_arena(thread_id: crate::ArenaId) {
 /// `try_acquire_lease` call is in the middle of incrementing the counter.
 /// After the read lock is released, `unregister_arena` (if it wins the write
 /// lock) will observe `active_leases > 0` and spin.
-pub fn try_acquire_lease(target_id: crate::ArenaId) -> Option<ArenaLease> {
+pub fn try_acquire_lease(target_id: ArenaId) -> Option<ArenaLease> {
     // Fast path: if the arena is definitely absent, skip the lock entirely.
     let id = target_id.0;
     if id < 64 && (VALID_ARENAS_FAST.load(Ordering::Acquire) & (1 << id)) == 0 {
@@ -270,7 +271,7 @@ pub fn try_acquire_lease(target_id: crate::ArenaId) -> Option<ArenaLease> {
 /// **Note**: this function has a TOCTOU race — the arena may unregister
 /// between this call and any subsequent dereference.  Prefer
 /// [`try_acquire_lease`] for dereference-guarded access.
-pub fn is_valid_cross_arena_ref(target_thread_id: crate::ArenaId) -> bool {
+pub fn is_valid_cross_arena_ref(target_thread_id: ArenaId) -> bool {
     let id = target_thread_id.0;
     if id < 64 {
         (VALID_ARENAS_FAST.load(Ordering::Acquire) & (1 << id)) != 0
@@ -284,13 +285,13 @@ pub fn reset_arena_registry() {
     VALID_ARENAS.write().clear();
 }
 
-pub fn set_stw_in_progress(arena_id: crate::ArenaId, in_progress: bool) {
+pub fn set_stw_in_progress(arena_id: ArenaId, in_progress: bool) {
     if let Some(state) = VALID_ARENAS.read().get(&arena_id) {
         state.stw_in_progress.store(in_progress, Ordering::Release);
     }
 }
 
-pub fn is_stw_in_progress(arena_id: crate::ArenaId) -> bool {
+pub fn is_stw_in_progress(arena_id: ArenaId) -> bool {
     VALID_ARENAS
         .read()
         .get(&arena_id)
@@ -308,20 +309,20 @@ thread_local! {
     /// so that harvest sites can verify the target arena has not been
     /// unregistered and re-registered (changing its generation) between
     /// recording and dereference.
-    static FOUND_CROSS_ARENA_REFS: RefCell<Vec<(crate::ArenaId, usize, u64)>> = const { RefCell::new(Vec::new()) };
+    static FOUND_CROSS_ARENA_REFS: RefCell<Vec<(ArenaId, usize, u64)>> = const { RefCell::new(Vec::new()) };
     /// The thread ID of the arena currently being traced.
-    static CURRENTLY_TRACING_THREAD_ID: Cell<Option<crate::ArenaId>> = const { Cell::new(None) };
+    static CURRENTLY_TRACING_THREAD_ID: Cell<Option<ArenaId>> = const { Cell::new(None) };
 }
 
 /// Set the thread ID of the arena currently being traced.
-pub fn set_currently_tracing(thread_id: Option<crate::ArenaId>) {
+pub fn set_currently_tracing(thread_id: Option<ArenaId>) {
     CURRENTLY_TRACING_THREAD_ID.with(|id| {
         id.set(thread_id);
     });
 }
 
 /// Get the thread ID of the arena currently being traced.
-pub fn get_currently_tracing() -> Option<crate::ArenaId> {
+pub fn get_currently_tracing() -> Option<ArenaId> {
     CURRENTLY_TRACING_THREAD_ID.get()
 }
 
@@ -331,7 +332,7 @@ pub fn get_currently_tracing() -> Option<crate::ArenaId> {
 /// stripped for backward compatibility with callers not yet migrated to the
 /// generation-aware API.  Prefer [`take_found_cross_arena_refs_with_generation`]
 /// for new code.
-pub fn take_found_cross_arena_refs() -> Vec<(crate::ArenaId, usize)> {
+pub fn take_found_cross_arena_refs() -> Vec<(ArenaId, usize)> {
     FOUND_CROSS_ARENA_REFS.with(|refs| {
         let mut r = refs.borrow_mut();
         mem::take(&mut *r)
@@ -349,7 +350,7 @@ pub fn take_found_cross_arena_refs() -> Vec<(crate::ArenaId, usize)> {
 /// `lease.generation()` against the stored generation; a mismatch means the
 /// target arena was unregistered and re-registered between recording and
 /// harvest, and the pointer must be discarded.
-pub fn take_found_cross_arena_refs_with_generation() -> Vec<(crate::ArenaId, usize, u64)> {
+pub fn take_found_cross_arena_refs_with_generation() -> Vec<(ArenaId, usize, u64)> {
     FOUND_CROSS_ARENA_REFS.with(|refs| {
         let mut r = refs.borrow_mut();
         mem::take(&mut *r)
@@ -369,7 +370,7 @@ pub fn take_found_cross_arena_refs_with_generation() -> Vec<(crate::ArenaId, usi
 /// reflect a live registration.  The lease is released immediately after the
 /// push; dereference-side protection is provided at the harvest site via
 /// [`take_found_cross_arena_refs_with_generation`].
-pub fn record_cross_arena_ref(target_thread_id: crate::ArenaId, ptr: usize) -> bool {
+pub fn record_cross_arena_ref(target_thread_id: ArenaId, ptr: usize) -> bool {
     // Only record the reference if we are currently in a GC tracing phase.
     if CURRENTLY_TRACING_THREAD_ID.with(|id| id.get().is_some()) {
         // Acquire a lease to pin the arena and capture its generation atomically.
@@ -537,7 +538,7 @@ mod lease_tests {
         let unregister_thread = std::thread::spawn(move || {
             // This must block until the lease is dropped.
             unregister_arena(id);
-            unregister_returned_clone.store(true, std::sync::atomic::Ordering::Release);
+            unregister_returned_clone.store(true, Ordering::Release);
         });
 
         // Give the unregister thread time to reach the spin loop.
@@ -545,24 +546,24 @@ mod lease_tests {
 
         // unregister should NOT have returned yet because we still hold the lease.
         assert!(
-            !unregister_returned.load(std::sync::atomic::Ordering::Acquire),
+            !unregister_returned.load(Ordering::Acquire),
             "unregister_arena returned while lease was still held"
         );
 
         // Drop the lease — this should unblock unregister_arena.
         drop(lease);
-        lease_dropped.store(true, std::sync::atomic::Ordering::Release);
+        lease_dropped.store(true, Ordering::Release);
 
         unregister_thread
             .join()
             .expect("unregister thread panicked");
 
         assert!(
-            unregister_returned.load(std::sync::atomic::Ordering::Acquire),
+            unregister_returned.load(Ordering::Acquire),
             "unregister_arena did not return after lease was dropped"
         );
         assert!(
-            lease_dropped.load(std::sync::atomic::Ordering::Acquire),
+            lease_dropped.load(Ordering::Acquire),
             "lease_dropped flag not set"
         );
     }

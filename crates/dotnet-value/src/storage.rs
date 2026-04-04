@@ -51,11 +51,11 @@ impl BoundedPtr {
     /// # Safety
     /// The caller must ensure that `offset` is within the bounds of `self.ptr` and `self.len`.
     pub unsafe fn read<T: FieldType>(&self, offset: usize) -> T {
-        assert!(offset + std::mem::size_of::<T>() <= self.len);
+        assert!(offset + size_of::<T>() <= self.len);
         unsafe {
             T::read_from(std::slice::from_raw_parts(
                 self.ptr.add(offset),
-                std::mem::size_of::<T>(),
+                size_of::<T>(),
             ))
         }
     }

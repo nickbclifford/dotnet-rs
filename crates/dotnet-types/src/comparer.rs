@@ -763,18 +763,18 @@ impl<'a, R: TypeResolver> TypeComparer<'a, R> {
                     let param = &def.generic_parameters[i];
                     // variance is likely an enum with None, Covariant, Contravariant
                     match param.variance {
-                        dotnetdll::resolved::generic::Variance::Invariant => {
+                        generic::Variance::Invariant => {
                             if !self.concrete_types_equal(g1, g2) {
                                 return false;
                             }
                         }
-                        dotnetdll::resolved::generic::Variance::Covariant => {
+                        generic::Variance::Covariant => {
                             // Covariant: source must be assignable to target
                             if !self.is_assignable_to(g1, g2) {
                                 return false;
                             }
                         }
-                        dotnetdll::resolved::generic::Variance::Contravariant => {
+                        generic::Variance::Contravariant => {
                             // Contravariant: target must be assignable to source
                             if !self.is_assignable_to(g2, g1) {
                                 return false;
@@ -1069,11 +1069,11 @@ mod tests {
         let (res_right, type_right) = build_resolution_with_type("ReadOnlySpan`1");
 
         let left = MethodType::Base(Box::new(BaseType::Type {
-            value_kind: Some(dotnetdll::resolved::types::ValueKind::ValueType),
+            value_kind: Some(ValueKind::ValueType),
             source: TypeSource::User(UserType::Definition(type_left)),
         }));
         let right = MethodType::Base(Box::new(BaseType::Type {
-            value_kind: Some(dotnetdll::resolved::types::ValueKind::ValueType),
+            value_kind: Some(ValueKind::ValueType),
             source: TypeSource::User(UserType::Definition(type_right)),
         }));
 

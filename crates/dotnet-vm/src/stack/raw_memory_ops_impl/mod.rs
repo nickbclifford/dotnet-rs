@@ -66,24 +66,22 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             PointerOrigin::Stack(idx) => {
                 let slot = self.evaluation_stack.get_slot_ref(idx);
                 let base_ptr = slot.data_location().as_ptr();
-                unsafe { std::ptr::NonNull::new_unchecked(base_ptr.add(offset.as_usize())) }
+                unsafe { NonNull::new_unchecked(base_ptr.add(offset.as_usize())) }
             }
             PointerOrigin::Static(static_type, lookup) => {
                 let storage = self.statics().get(static_type, &lookup);
                 storage.storage.with_data(|data| unsafe {
-                    std::ptr::NonNull::new_unchecked(
-                        data.as_ptr().add(offset.as_usize()).cast_mut(),
-                    )
+                    NonNull::new_unchecked(data.as_ptr().add(offset.as_usize()).cast_mut())
                 })
             }
             PointerOrigin::Heap(owner) => {
                 let handle = owner.0.expect("resolve_address: null owner handle");
                 let inner = handle.borrow();
                 let ptr = unsafe { inner.storage.raw_data_ptr() };
-                unsafe { std::ptr::NonNull::new_unchecked(ptr.add(offset.as_usize())) }
+                unsafe { NonNull::new_unchecked(ptr.add(offset.as_usize())) }
             }
             PointerOrigin::Unmanaged => {
-                std::ptr::NonNull::new(sptr::from_exposed_addr_mut::<u8>(offset.as_usize()))
+                NonNull::new(sptr::from_exposed_addr_mut::<u8>(offset.as_usize()))
                     .expect("resolve_address: null unmanaged pointer (offset=0)")
             }
             #[cfg(feature = "multithreading")]
@@ -91,12 +89,10 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let lock = unsafe { &*ptr.as_ptr() };
                 let guard = lock.borrow();
                 let storage = &guard.storage;
-                unsafe {
-                    std::ptr::NonNull::new_unchecked(storage.raw_data_ptr().add(offset.as_usize()))
-                }
+                unsafe { NonNull::new_unchecked(storage.raw_data_ptr().add(offset.as_usize())) }
             }
             PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| unsafe {
-                std::ptr::NonNull::new_unchecked(data.as_ptr().add(offset.as_usize()).cast_mut())
+                NonNull::new_unchecked(data.as_ptr().add(offset.as_usize()).cast_mut())
             }),
         }
     }
@@ -109,7 +105,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
     unsafe fn write_unaligned(
         &mut self,
         origin: PointerOrigin<'gc>,
-        offset: dotnet_utils::ByteOffset,
+        offset: ByteOffset,
         value: StackValue<'gc>,
         layout: &dotnet_value::layout::LayoutManager,
     ) -> Result<(), MemoryAccessError> {
@@ -195,7 +191,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
     unsafe fn read_unaligned(
         &self,
         origin: PointerOrigin<'gc>,
-        offset: dotnet_utils::ByteOffset,
+        offset: ByteOffset,
         layout: &dotnet_value::layout::LayoutManager,
         type_desc: Option<TypeDescription>,
     ) -> Result<StackValue<'gc>, MemoryAccessError> {
@@ -274,7 +270,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
     unsafe fn write_bytes(
         &mut self,
         origin: PointerOrigin<'gc>,
-        offset: dotnet_utils::ByteOffset,
+        offset: ByteOffset,
         data: &[u8],
     ) -> Result<(), MemoryAccessError> {
         let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
@@ -283,12 +279,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let ptr = self.resolve_address(origin, offset);
                 let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
-                    memory.write_bytes(
-                        self.gc,
-                        None,
-                        dotnet_utils::ByteOffset(ptr.as_ptr().expose_addr()),
-                        data,
-                    )
+                    memory.write_bytes(self.gc, None, ByteOffset(ptr.as_ptr().expose_addr()), data)
                 }
             }
             PointerOrigin::Static(type_desc, lookup) => {
@@ -349,7 +340,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
     unsafe fn read_bytes(
         &self,
         origin: PointerOrigin<'gc>,
-        offset: dotnet_utils::ByteOffset,
+        offset: ByteOffset,
         dest: &mut [u8],
     ) -> Result<(), MemoryAccessError> {
         let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
@@ -357,13 +348,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
                 let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
-                unsafe {
-                    memory.read_bytes(
-                        None,
-                        dotnet_utils::ByteOffset(ptr.as_ptr().expose_addr()),
-                        dest,
-                    )
-                }
+                unsafe { memory.read_bytes(None, ByteOffset(ptr.as_ptr().expose_addr()), dest) }
             }
             PointerOrigin::Static(type_desc, lookup) => {
                 let storage = self.statics().get(type_desc, &lookup);
@@ -421,7 +406,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
     unsafe fn compare_exchange_atomic(
         &mut self,
         origin: PointerOrigin<'gc>,
-        offset: dotnet_utils::ByteOffset,
+        offset: ByteOffset,
         expected: u64,
         new: u64,
         size: usize,
@@ -455,7 +440,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.compare_exchange_atomic(
                         self.gc,
                         None,
-                        dotnet_utils::ByteOffset(abs_ptr.expose_addr()),
+                        ByteOffset(abs_ptr.expose_addr()),
                         expected,
                         new,
                         size,
@@ -471,7 +456,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.compare_exchange_atomic(
                         self.gc,
                         None,
-                        dotnet_utils::ByteOffset(ptr.as_ptr().expose_addr()),
+                        ByteOffset(ptr.as_ptr().expose_addr()),
                         expected,
                         new,
                         size,
@@ -488,7 +473,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.compare_exchange_atomic(
                         self.gc,
                         None,
-                        dotnet_utils::ByteOffset(abs_ptr.expose_addr()),
+                        ByteOffset(abs_ptr.expose_addr()),
                         expected,
                         new,
                         size,
@@ -530,7 +515,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
     unsafe fn exchange_atomic(
         &mut self,
         origin: PointerOrigin<'gc>,
-        offset: dotnet_utils::ByteOffset,
+        offset: ByteOffset,
         value: u64,
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
@@ -560,7 +545,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.exchange_atomic(
                         self.gc,
                         None,
-                        dotnet_utils::ByteOffset(abs_ptr.expose_addr()),
+                        ByteOffset(abs_ptr.expose_addr()),
                         value,
                         size,
                         ordering,
@@ -574,7 +559,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.exchange_atomic(
                         self.gc,
                         None,
-                        dotnet_utils::ByteOffset(ptr.as_ptr().expose_addr()),
+                        ByteOffset(ptr.as_ptr().expose_addr()),
                         value,
                         size,
                         ordering,
@@ -589,7 +574,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.exchange_atomic(
                         self.gc,
                         None,
-                        dotnet_utils::ByteOffset(abs_ptr.expose_addr()),
+                        ByteOffset(abs_ptr.expose_addr()),
                         value,
                         size,
                         ordering,
@@ -623,7 +608,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
     unsafe fn exchange_add_atomic(
         &mut self,
         origin: PointerOrigin<'gc>,
-        offset: dotnet_utils::ByteOffset,
+        offset: ByteOffset,
         value: u64,
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
@@ -653,7 +638,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.exchange_add_atomic(
                         self.gc,
                         None,
-                        dotnet_utils::ByteOffset(abs_ptr.expose_addr()),
+                        ByteOffset(abs_ptr.expose_addr()),
                         value,
                         size,
                         ordering,
@@ -667,7 +652,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.exchange_add_atomic(
                         self.gc,
                         None,
-                        dotnet_utils::ByteOffset(ptr.as_ptr().expose_addr()),
+                        ByteOffset(ptr.as_ptr().expose_addr()),
                         value,
                         size,
                         ordering,
@@ -682,7 +667,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.exchange_add_atomic(
                         self.gc,
                         None,
-                        dotnet_utils::ByteOffset(abs_ptr.expose_addr()),
+                        ByteOffset(abs_ptr.expose_addr()),
                         value,
                         size,
                         ordering,
@@ -716,7 +701,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
     unsafe fn load_atomic(
         &self,
         origin: PointerOrigin<'gc>,
-        offset: dotnet_utils::ByteOffset,
+        offset: ByteOffset,
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
     ) -> Result<u64, MemoryAccessError> {
@@ -735,24 +720,14 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
                 let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
-                    memory.load_atomic(
-                        None,
-                        dotnet_utils::ByteOffset(abs_ptr.expose_addr()),
-                        size,
-                        ordering,
-                    )
+                    memory.load_atomic(None, ByteOffset(abs_ptr.expose_addr()), size, ordering)
                 }
             }
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
                 let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
-                    memory.load_atomic(
-                        None,
-                        dotnet_utils::ByteOffset(ptr.as_ptr().expose_addr()),
-                        size,
-                        ordering,
-                    )
+                    memory.load_atomic(None, ByteOffset(ptr.as_ptr().expose_addr()), size, ordering)
                 }
             }
             PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| {
@@ -760,12 +735,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
                 let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
-                    memory.load_atomic(
-                        None,
-                        dotnet_utils::ByteOffset(abs_ptr.expose_addr()),
-                        size,
-                        ordering,
-                    )
+                    memory.load_atomic(None, ByteOffset(abs_ptr.expose_addr()), size, ordering)
                 }
             }),
             PointerOrigin::Unmanaged => {
@@ -793,7 +763,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
     unsafe fn store_atomic(
         &mut self,
         origin: PointerOrigin<'gc>,
-        offset: dotnet_utils::ByteOffset,
+        offset: ByteOffset,
         value: u64,
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
@@ -823,7 +793,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.store_atomic(
                         self.gc,
                         None,
-                        dotnet_utils::ByteOffset(abs_ptr.expose_addr()),
+                        ByteOffset(abs_ptr.expose_addr()),
                         value,
                         size,
                         ordering,
@@ -837,7 +807,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.store_atomic(
                         self.gc,
                         None,
-                        dotnet_utils::ByteOffset(ptr.as_ptr().expose_addr()),
+                        ByteOffset(ptr.as_ptr().expose_addr()),
                         value,
                         size,
                         ordering,
@@ -852,7 +822,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     memory.store_atomic(
                         self.gc,
                         None,
-                        dotnet_utils::ByteOffset(abs_ptr.expose_addr()),
+                        ByteOffset(abs_ptr.expose_addr()),
                         value,
                         size,
                         ordering,

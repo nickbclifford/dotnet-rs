@@ -2,11 +2,12 @@ use crate::{
     object::{HeapStorage, ObjectRef},
     pointer::*,
 };
-#[cfg(feature = "memory-validation")]
-use dotnet_utils::sync::MANAGED_THREAD_ID;
 use gc_arena::{Arena, Gc, Rootable};
 use sptr::Strict;
 use std::sync::{Mutex, OnceLock};
+
+#[cfg(feature = "memory-validation")]
+use dotnet_utils::sync::MANAGED_THREAD_ID;
 
 #[cfg(feature = "memory-validation")]
 struct ManagedThreadIdGuard {
@@ -309,7 +310,7 @@ fn test_managed_ptr_serialization_bugs_reproduction() {
         let mut buf = [0u8; ManagedPtr::SIZE];
 
         // 1. Transient origin (Fixed behavior in Stage 1)
-        let layout = std::sync::Arc::new(crate::layout::FieldLayoutManager {
+        let layout = Arc::new(crate::layout::FieldLayoutManager {
             fields: std::collections::HashMap::new(),
             total_size: 0,
             alignment: 1,

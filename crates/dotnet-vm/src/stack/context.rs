@@ -436,10 +436,7 @@ impl<'a, 'gc> BaseResolutionOps<'gc> for VesContext<'a, 'gc> {
     }
 
     #[inline]
-    fn make_concrete(
-        &self,
-        t: &dotnetdll::prelude::MethodType,
-    ) -> Result<ConcreteType, TypeResolutionError> {
+    fn make_concrete(&self, t: &MethodType) -> Result<ConcreteType, TypeResolutionError> {
         let f = self.frame_stack.current_frame();
         self.resolver()
             .make_concrete(f.source_resolution.clone(), &f.generic_inst, t)

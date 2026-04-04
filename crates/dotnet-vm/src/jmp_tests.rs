@@ -24,23 +24,18 @@ mod tests {
     };
     fn get_mock_loader() -> Arc<AssemblyLoader> {
         thread_local! {
-            static MOCK_LOADER: Arc<AssemblyLoader> = {
-                let loader = AssemblyLoader::new_bare("mock_root_jmp".to_string())
-                    .expect("Failed to create mock AssemblyLoader");
-                let mut mscorlib = Resolution::new(Module::new("mscorlib.dll"));
-                mscorlib.assembly = Some(Assembly::new("mscorlib"));
-                let mut obj = TypeDefinition::new(None, "Object");
-                obj.namespace = Some("System".into());
-                mscorlib.push_type_definition(obj);
-                loader.register_owned_assembly(mscorlib);
-                let mut system_runtime = Resolution::new(Module::new("System.Runtime.dll"));
-                system_runtime.assembly = Some(Assembly::new("System.Runtime"));
-                let mut obj2 = TypeDefinition::new(None, "Object");
-                obj2.namespace = Some("System".into());
-                system_runtime.push_type_definition(obj2);
-                loader.register_owned_assembly(system_runtime);
-                Arc::new(loader)
-            };
+            static MOCK_LOADER : Arc < AssemblyLoader > = { let loader =
+            AssemblyLoader::new_bare("mock_root_jmp".to_string())
+            .expect("Failed to create mock AssemblyLoader"); let mut mscorlib =
+            Resolution::new(Module::new("mscorlib.dll")); mscorlib.assembly =
+            Some(Assembly::new("mscorlib")); let mut obj = TypeDefinition::new(None,
+            "Object"); obj.namespace = Some("System".into()); mscorlib
+            .push_type_definition(obj); loader.register_owned_assembly(mscorlib); let mut
+            system_runtime = Resolution::new(Module::new("System.Runtime.dll"));
+            system_runtime.assembly = Some(Assembly::new("System.Runtime")); let mut obj2
+            = TypeDefinition::new(None, "Object"); obj2.namespace = Some("System"
+            .into()); system_runtime.push_type_definition(obj2); loader
+            .register_owned_assembly(system_runtime); Arc::new(loader) };
         }
         MOCK_LOADER.with(|l| l.clone())
     }
@@ -64,21 +59,15 @@ mod tests {
             instance: false,
             explicit_this: false,
             calling_convention: CallingConvention::Default,
-            parameters: vec![dotnetdll::resolved::signature::Parameter(
+            parameters: vec![Parameter(
                 vec![],
-                dotnetdll::prelude::ParameterType::Value(
-                    dotnetdll::resolved::types::MethodType::Base(Box::new(
-                        dotnetdll::resolved::types::BaseType::Int32,
-                    )),
-                ),
+                ParameterType::Value(MethodType::Base(Box::new(BaseType::Int32))),
             )],
             return_type: ReturnType(
                 vec![],
-                Some(dotnetdll::prelude::ParameterType::Value(
-                    dotnetdll::resolved::types::MethodType::Base(Box::new(
-                        dotnetdll::resolved::types::BaseType::Int32,
-                    )),
-                )),
+                Some(ParameterType::Value(MethodType::Base(Box::new(
+                    BaseType::Int32,
+                )))),
             ),
             varargs: None,
         };
@@ -99,7 +88,7 @@ mod tests {
         let target_idx = res.push_method(
             type_idx,
             Method::new(
-                resolved_mod::Accessibility::Public,
+                Accessibility::Public,
                 sig.clone(),
                 "Target",
                 Some(target_body),
@@ -119,7 +108,7 @@ mod tests {
         let jumper_idx = res.push_method(
             type_idx,
             Method::new(
-                resolved_mod::Accessibility::Public,
+                Accessibility::Public,
                 sig.clone(),
                 "Jumper",
                 Some(jumper_body),
@@ -232,7 +221,7 @@ mod tests {
         let target_idx = res.push_method(
             type_idx,
             Method::new(
-                resolved_mod::Accessibility::Public,
+                Accessibility::Public,
                 sig.clone(),
                 "Target",
                 Some(body::Method {
@@ -261,7 +250,7 @@ mod tests {
         let jumper_idx = res.push_method(
             type_idx,
             Method::new(
-                resolved_mod::Accessibility::Public,
+                Accessibility::Public,
                 sig.clone(),
                 "Jumper",
                 Some(jumper_body),
@@ -362,7 +351,7 @@ mod tests {
         let target_idx = res.push_method(
             type_idx,
             Method::new(
-                resolved_mod::Accessibility::Public,
+                Accessibility::Public,
                 sig.clone(),
                 "Target",
                 Some(body::Method {
@@ -400,7 +389,7 @@ mod tests {
         let jumper_idx = res.push_method(
             type_idx,
             Method::new(
-                resolved_mod::Accessibility::Public,
+                Accessibility::Public,
                 sig.clone(),
                 "Jumper",
                 Some(jumper_body),
@@ -505,28 +494,22 @@ mod tests {
             instance: false,
             explicit_this: false,
             calling_convention: CallingConvention::Default,
-            parameters: vec![dotnetdll::resolved::signature::Parameter(
+            parameters: vec![Parameter(
                 vec![],
-                dotnetdll::prelude::ParameterType::Value(
-                    dotnetdll::resolved::types::MethodType::Base(Box::new(
-                        dotnetdll::resolved::types::BaseType::Int32,
-                    )),
-                ),
+                ParameterType::Value(MethodType::Base(Box::new(BaseType::Int32))),
             )],
             return_type: ReturnType(
                 vec![],
-                Some(dotnetdll::prelude::ParameterType::Value(
-                    dotnetdll::resolved::types::MethodType::Base(Box::new(
-                        dotnetdll::resolved::types::BaseType::Int32,
-                    )),
-                )),
+                Some(ParameterType::Value(MethodType::Base(Box::new(
+                    BaseType::Int32,
+                )))),
             ),
             varargs: None,
         };
         let target_idx = res.push_method(
             type_idx,
             Method::new(
-                resolved_mod::Accessibility::Public,
+                Accessibility::Public,
                 sig_int,
                 "Target",
                 Some(body::Method {
@@ -553,12 +536,7 @@ mod tests {
         };
         let jumper_idx = res.push_method(
             type_idx,
-            Method::new(
-                resolved_mod::Accessibility::Public,
-                sig_void,
-                "Jumper",
-                Some(jumper_body),
-            ),
+            Method::new(Accessibility::Public, sig_void, "Jumper", Some(jumper_body)),
         );
         let res_s = loader.register_owned_assembly(res);
         let _typedef = &res_s.definition()[type_idx];

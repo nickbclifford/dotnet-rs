@@ -15,7 +15,6 @@ use std::{cell::RefCell, marker::PhantomData, ptr, sync::Arc};
 
 #[cfg(feature = "multithreading")]
 use dotnet_utils::gc::GcLifetime;
-
 #[cfg(feature = "multithreading")]
 use dotnet_value::{object::ObjectPtr, pointer::PointerOrigin};
 
@@ -1196,7 +1195,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 if flm.has_ref_fields {
                     // SAFETY: `visit_managed_ptrs` yields offsets that are within
                     // the field struct's backing storage; `ptr.add(offset)` is valid.
-                    flm.visit_managed_ptrs(crate::ByteOffset(0), &mut |offset| unsafe {
+                    flm.visit_managed_ptrs(ByteOffset(0), &mut |offset| unsafe {
                         self.record_managedptr_at_ptr_with_recorder(
                             gc,
                             ptr.add(offset.as_usize()),

@@ -210,7 +210,7 @@ impl LayoutFactory {
                                     name: name.to_string(),
                                 },
                                 FieldLayout {
-                                    position: dotnet_utils::ByteOffset(actual_offset),
+                                    position: ByteOffset(actual_offset),
                                     layout: layout.clone(),
                                 },
                             );

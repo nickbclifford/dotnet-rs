@@ -436,9 +436,7 @@ impl TestHarness {
         let mut handles = Vec::new();
         let release_gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
 
-        let shared = Arc::new(dotnet_vm::state::SharedGlobalState::new(
-            self.loader.clone(),
-        ));
+        let shared = Arc::new(state::SharedGlobalState::new(self.loader.clone()));
         for _ in 0..thread_count {
             let harness = self.clone();
             let tx = tx.clone();

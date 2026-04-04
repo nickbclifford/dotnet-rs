@@ -226,7 +226,7 @@ fn process_intrinsic_file(path: &Path, entries: &mut Vec<IntrinsicEntry>) {
     let file = syn::parse_file(&content).expect("Failed to parse file for intrinsics");
 
     for item in file.items {
-        if let syn::Item::Fn(item_fn) = item {
+        if let Item::Fn(item_fn) = item {
             let func_name = item_fn.sig.ident.to_string();
             for attr in &item_fn.attrs {
                 if attr.path().is_ident("dotnet_intrinsic") {

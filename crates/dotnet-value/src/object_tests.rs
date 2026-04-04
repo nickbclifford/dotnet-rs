@@ -4,12 +4,10 @@ mod tests {
     #[cfg(feature = "memory-validation")]
     use dotnet_utils::sync::MANAGED_THREAD_ID;
     use gc_arena::{Arena, Rootable};
-
     #[cfg(feature = "memory-validation")]
     struct ManagedThreadIdGuard {
         previous: Option<dotnet_utils::ArenaId>,
     }
-
     #[cfg(feature = "memory-validation")]
     impl ManagedThreadIdGuard {
         fn set(id: dotnet_utils::ArenaId) -> Self {
@@ -21,14 +19,12 @@ mod tests {
             Self { previous }
         }
     }
-
     #[cfg(feature = "memory-validation")]
     impl Drop for ManagedThreadIdGuard {
         fn drop(&mut self) {
             MANAGED_THREAD_ID.with(|thread_id| thread_id.set(self.previous));
         }
     }
-
     #[test]
     fn test_read_branded_null() {
         type TestRoot = Rootable![()];

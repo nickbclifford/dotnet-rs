@@ -84,13 +84,14 @@
 //! ```
 use crate::state::{GlobalCaches, SharedGlobalState};
 use dotnet_assemblies::AssemblyLoader;
+use dotnet_utils::sync::{Arc, Weak};
+
 #[cfg(doc)]
 use dotnet_types::{
     TypeDescription,
     generics::GenericLookup,
     members::{FieldDescription, MethodDescription},
 };
-use dotnet_utils::sync::{Arc, Weak};
 
 /// Service for resolving types, methods, and fields with caching.
 #[derive(Clone)]

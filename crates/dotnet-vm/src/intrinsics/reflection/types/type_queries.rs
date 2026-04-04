@@ -466,8 +466,8 @@ pub fn handle_get_attribute_flags_impl<
         };
 
         attrs |= match flags.kind {
-            dotnetdll::prelude::Kind::Class => 0x00,
-            dotnetdll::prelude::Kind::Interface => 0x20,
+            Kind::Class => 0x00,
+            Kind::Interface => 0x20,
         };
 
         if flags.abstract_type {

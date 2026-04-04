@@ -197,7 +197,7 @@ pub fn intrinsic_as_span<
     } else {
         unsafe { base_ptr.add(start * element_size) }
     };
-    offset += dotnet_utils::ByteOffset(start * element_size);
+    offset += ByteOffset(start * element_size);
     let len = actual_length;
 
     let span_type_concrete = match &method.method().signature.return_type.1 {

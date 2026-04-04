@@ -201,7 +201,7 @@ runtime_type_impls! {
                 Parameter(vec![], ParameterType::Value(p.to_concrete(loader)))
             }).collect();
             let return_type = match &*sig.return_type {
-                RuntimeType::Void => ReturnType(vec![], None),
+                Void => ReturnType(vec![], None),
                 t => ReturnType(vec![], Some(ParameterType::Value(t.to_concrete(loader)))),
             };
             let calling_convention = match sig.calling_convention {

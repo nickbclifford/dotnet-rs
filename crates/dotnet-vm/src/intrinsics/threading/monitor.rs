@@ -158,12 +158,12 @@ pub fn intrinsic_monitor_enter_obj<
             ctx.shared().thread_manager.as_ref(),
             gc_coordinator,
         ) {
-            crate::sync::LockResult::Success => {
+            LockResult::Success => {
                 let _ = ctx.pop();
                 StepResult::Continue
             }
-            crate::sync::LockResult::Yield => StepResult::Yield,
-            crate::sync::LockResult::Timeout => unreachable!("Infinite timeout cannot time out"),
+            LockResult::Yield => StepResult::Yield,
+            LockResult::Timeout => unreachable!("Infinite timeout cannot time out"),
         }
     } else {
         let _ = ctx.pop();
@@ -215,9 +215,9 @@ pub fn intrinsic_monitor_reliable_enter<
         );
 
         match lock_res {
-            crate::sync::LockResult::Success => {}
-            crate::sync::LockResult::Yield => return StepResult::Yield,
-            crate::sync::LockResult::Timeout => unreachable!(),
+            LockResult::Success => {}
+            LockResult::Yield => return StepResult::Yield,
+            LockResult::Timeout => unreachable!(),
         }
 
         if let Some(index) = success_flag_index {

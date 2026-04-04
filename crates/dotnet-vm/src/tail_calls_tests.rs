@@ -117,7 +117,7 @@ fn run_tail_chain_and_measure_max_depth(tail_call: bool, chain_len: usize) -> us
     let mut next_method_idx = res.push_method(
         type_idx,
         Method::new(
-            resolved_mod::Accessibility::Public,
+            Accessibility::Public,
             void_sig.clone(),
             "ChainEnd",
             Some(end_body),
@@ -144,7 +144,7 @@ fn run_tail_chain_and_measure_max_depth(tail_call: bool, chain_len: usize) -> us
         next_method_idx = res.push_method(
             type_idx,
             Method::new(
-                resolved_mod::Accessibility::Public,
+                Accessibility::Public,
                 void_sig.clone(),
                 format!("Chain{i}"),
                 Some(body),
@@ -177,12 +177,7 @@ fn run_tail_chain_and_measure_max_depth(tail_call: bool, chain_len: usize) -> us
     };
     let main_idx = res.push_method(
         type_idx,
-        Method::new(
-            resolved_mod::Accessibility::Public,
-            main_sig,
-            "Main",
-            Some(main_body),
-        ),
+        Method::new(Accessibility::Public, main_sig, "Main", Some(main_body)),
     );
 
     let res_s = loader.register_owned_assembly(res);

@@ -759,7 +759,7 @@ mod tests {
 
         let stw_flag = Arc::new(AtomicBool::new(false));
         let manager = ThreadManager::new(stw_flag.clone());
-        let coordinator = Arc::new(crate::gc::coordinator::GCCoordinator::new(stw_flag));
+        let coordinator = Arc::new(GCCoordinator::new(stw_flag));
         manager.set_coordinator(Arc::downgrade(&coordinator));
 
         let barrier = StdArc::new(Barrier::new(WORKER_THREADS + 1));
@@ -832,7 +832,7 @@ mod tests {
 
         let stw_flag = Arc::new(AtomicBool::new(false));
         let manager = ThreadManager::new(stw_flag.clone());
-        let coordinator = Arc::new(crate::gc::coordinator::GCCoordinator::new(stw_flag));
+        let coordinator = Arc::new(GCCoordinator::new(stw_flag));
         manager.set_coordinator(Arc::downgrade(&coordinator));
 
         for _ in 0..ROUNDS {

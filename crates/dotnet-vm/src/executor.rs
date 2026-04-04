@@ -497,7 +497,7 @@ impl Executor {
 pub struct ArenaGuard {
     #[allow(dead_code)]
     arena: Box<GCArena>,
-    arena_id: dotnet_utils::ArenaId,
+    arena_id: ArenaId,
 }
 
 #[cfg(feature = "multithreading")]

@@ -12,6 +12,7 @@
 #![allow(clippy::mutable_key_type)]
 #[cfg(doc)]
 use crate::members::FieldDescription;
+
 use crate::{generics::GenericLookup, members::MethodDescription, resolution::ResolutionS};
 use dotnetdll::prelude::{
     MemberType, MethodMemberIndex, ResolvedDebug, TypeDefinition, TypeIndex, TypeSource, UserType,
@@ -35,7 +36,7 @@ pub mod members;
 pub mod resolution;
 pub mod runtime;
 
-const _: [(); std::mem::size_of::<TypeIndex>()] = [(); std::mem::size_of::<usize>()];
+const _: [(); size_of::<TypeIndex>()] = [(); size_of::<usize>()];
 
 #[inline]
 pub(crate) const fn type_index_from_usize(index: usize) -> TypeIndex {
@@ -216,14 +217,14 @@ mod tests {
         assert_send::<resolution::MetadataArena>();
         assert_sync::<resolution::MetadataArena>();
 
-        assert_send::<resolution::ResolutionS>();
-        assert_sync::<resolution::ResolutionS>();
+        assert_send::<ResolutionS>();
+        assert_sync::<ResolutionS>();
 
         assert_send::<TypeDescription>();
         assert_sync::<TypeDescription>();
 
-        assert_send::<members::MethodDescription>();
-        assert_sync::<members::MethodDescription>();
+        assert_send::<MethodDescription>();
+        assert_sync::<MethodDescription>();
 
         assert_send::<members::FieldDescription>();
         assert_sync::<members::FieldDescription>();
@@ -231,7 +232,7 @@ mod tests {
         assert_send::<generics::ConcreteType>();
         assert_sync::<generics::ConcreteType>();
 
-        assert_send::<generics::GenericLookup>();
-        assert_sync::<generics::GenericLookup>();
+        assert_send::<GenericLookup>();
+        assert_sync::<GenericLookup>();
     }
 }

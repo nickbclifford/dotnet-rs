@@ -765,7 +765,7 @@ mod tests {
         use gc_arena::{Arena, Rootable};
         struct Root;
         unsafe impl<'gc> gc_arena::Collect<'gc> for Root {
-            fn trace<Tr: gc_arena::collect::Trace<'gc>>(&self, _cc: &mut Tr) {}
+            fn trace<Tr: Trace<'gc>>(&self, _cc: &mut Tr) {}
         }
         let arena = Arena::<Rootable![Root]>::new(|_mc| Root);
         arena.mutate(|mc, _root| {
@@ -778,8 +778,8 @@ mod tests {
                 owner_id: arena_id,
                 storage: HeapStorage::Str(crate::string::CLRString::from("test")),
             };
-            let lock = gc_arena::Gc::new(mc, ThreadSafeLock::new(inner));
-            let lock_ptr = gc_arena::Gc::as_ptr(lock) as usize;
+            let lock = Gc::new(mc, ThreadSafeLock::new(inner));
+            let lock_ptr = Gc::as_ptr(lock) as usize;
 
             let tagged_ptr =
                 (lock_ptr & 0x0000FFFFFFFFFFFF) | 5 | ((arena_id.as_u64() as usize) << 48);
@@ -806,7 +806,7 @@ mod tests {
 
         struct Root;
         unsafe impl<'gc> gc_arena::Collect<'gc> for Root {
-            fn trace<Tr: gc_arena::collect::Trace<'gc>>(&self, _cc: &mut Tr) {}
+            fn trace<Tr: Trace<'gc>>(&self, _cc: &mut Tr) {}
         }
 
         let arena_id = next_test_arena_id();
@@ -828,7 +828,7 @@ mod tests {
         let arena = Arena::<Rootable![Root]>::new(|_mc| Root);
         arena.mutate(|mc, _root| {
             #[cfg(not(feature = "memory-validation"))]
-            let handle = dotnet_utils::gc::GCHandle::new(mc, arena_handle);
+            let handle = GCHandle::new(mc, arena_handle);
             #[cfg(feature = "memory-validation")]
             let handle = dotnet_utils::gc::GCHandle::new(mc, arena_handle, arena_id);
 
@@ -837,7 +837,7 @@ mod tests {
                 HeapStorage::Str(crate::string::CLRString::from("x")),
             );
 
-            let mut bytes = [0u8; std::mem::size_of::<usize>()];
+            let mut bytes = [0u8; size_of::<usize>()];
             obj.write(&mut bytes);
             let encoded = usize::from_ne_bytes(bytes);
 
