@@ -41,7 +41,7 @@ pub fn intrinsic_equality_comparer_get_default<
     let new_lookup = GenericLookup::new(vec![target_type]);
     let res_ctx = ctx.with_generics(generics).with_generics(&new_lookup);
     let instance = ObjectRef::new(
-        ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+        ctx.gc_with_token(&ctx.no_active_borrows_token()),
         HeapStorage::Obj(vm_try!(res_ctx.new_object(comparer_td))),
     );
 

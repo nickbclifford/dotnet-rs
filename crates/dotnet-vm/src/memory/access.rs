@@ -1,5 +1,5 @@
 use crate::{
-    error::MemoryAccessError,
+    error::{CompareExchangeError, MemoryAccessError},
     memory::{heap::HeapManager, validation::*},
 };
 use dotnet_types::{TypeDescription, generics::GenericLookup, resolution::ResolutionS};
@@ -14,13 +14,16 @@ use dotnet_value::{
 use std::{cell::RefCell, marker::PhantomData, ptr, sync::Arc};
 
 #[cfg(feature = "multithreading")]
+use dotnet_utils::gc::GcLifetime;
+
+#[cfg(feature = "multithreading")]
 use dotnet_value::{object::ObjectPtr, pointer::PointerOrigin};
 
 #[derive(Copy, Clone)]
 pub enum MemoryOwner<'gc> {
     Local(ObjectRef<'gc>),
     #[cfg(feature = "multithreading")]
-    CrossArena(ObjectPtr, ArenaId),
+    CrossArena(ObjectPtr, ArenaId, GcLifetime<'gc>),
 }
 
 #[derive(Copy, Clone)]
@@ -28,6 +31,42 @@ pub struct HeapWriteTarget<'gc>(pub MemoryOwner<'gc>);
 
 thread_local! {
     static WB_LOCAL_BUF: RefCell<Vec<(ArenaId, usize)>> = RefCell::new(Vec::with_capacity(128));
+}
+
+/// RAII guard that drains the thread-local write-barrier buffer on drop.
+///
+/// Place one instance (as `let _flush_guard = WriteBarrierFlushGuard;`) immediately
+/// before each `WB_LOCAL_BUF.with(...)` write-barrier block.  Because `Drop` runs
+/// even during stack unwinding the buffer is always flushed to the GC coordinator,
+/// preventing stale cross-arena references from accumulating when a closure panics
+/// mid-write.
+///
+/// # Drop ordering
+/// The guard must be declared *before* the `WB_LOCAL_BUF.with(...)` call so that
+/// it drops *after* that call returns (Rust drops locals in reverse declaration
+/// order).  By the time `Drop` runs, the `RefMut` borrowed inside the `with`
+/// closure has already been released, so the re-borrow in `Drop` cannot panic.
+pub(crate) struct WriteBarrierFlushGuard;
+
+impl Drop for WriteBarrierFlushGuard {
+    fn drop(&mut self) {
+        WB_LOCAL_BUF.with(|buf| {
+            // SAFETY: The `RefMut` from the write operation that created this
+            // guard lives inside the `WB_LOCAL_BUF.with(...)` closure body,
+            // which has already returned — either normally or via unwind —
+            // before this `Drop` executes.  Therefore `borrow_mut` here cannot
+            // encounter an already-active mutable borrow and will not panic.
+            #[cfg(feature = "multithreading")]
+            for (tid, ptr) in buf.borrow_mut().drain(..) {
+                dotnet_utils::gc::record_cross_arena_ref(tid, ptr);
+            }
+            // Under non-multithreading the recorder push methods are no-ops so
+            // the buffer is always empty in production.  We clear explicitly
+            // anyway to keep the invariant sound for tests that seed it directly.
+            #[cfg(not(feature = "multithreading"))]
+            buf.borrow_mut().clear();
+        });
+    }
 }
 
 pub struct WriteBarrierRecorder<'a, 'gc> {
@@ -83,6 +122,11 @@ impl<'a, 'gc> WriteBarrierRecorder<'a, 'gc> {
 }
 
 impl<'gc> MemoryOwner<'gc> {
+    #[cfg(feature = "multithreading")]
+    pub fn cross_arena(gc: GCHandle<'gc>, ptr: ObjectPtr, tid: ArenaId) -> Self {
+        Self::CrossArena(ptr, tid, gc.lifetime())
+    }
+
     pub fn owner_id(&self) -> ArenaId {
         match self {
             Self::Local(r) => {
@@ -92,7 +136,7 @@ impl<'gc> MemoryOwner<'gc> {
                     .unwrap_or(ArenaId(0))
             }
             #[cfg(feature = "multithreading")]
-            Self::CrossArena(_, tid) => *tid,
+            Self::CrossArena(_, tid, _) => *tid,
         }
     }
 
@@ -100,7 +144,7 @@ impl<'gc> MemoryOwner<'gc> {
         match self {
             Self::Local(r) => r.with_data(f),
             #[cfg(feature = "multithreading")]
-            Self::CrossArena(p, _) => p.with_data(f),
+            Self::CrossArena(p, _, _) => p.with_data(f),
         }
     }
 
@@ -108,7 +152,7 @@ impl<'gc> MemoryOwner<'gc> {
         match self {
             Self::Local(r) => r.with_data_mut(gc, f),
             #[cfg(feature = "multithreading")]
-            Self::CrossArena(p, _) => p.with_data_mut(gc, f),
+            Self::CrossArena(p, _, _) => p.with_data_mut(gc, f),
         }
     }
 
@@ -116,9 +160,39 @@ impl<'gc> MemoryOwner<'gc> {
         match self {
             Self::Local(r) => r.as_heap_storage(f),
             #[cfg(feature = "multithreading")]
-            Self::CrossArena(p, _) => p.as_heap_storage(f),
+            Self::CrossArena(p, _, _) => p.as_heap_storage(f),
         }
     }
+}
+
+/// Checks whether a pointer `ptr` into a buffer `[base, base+len)` can safely
+/// access `size` bytes.  Returns `Err(BoundsCheck)` when the access would
+/// exceed the buffer, wrapping around, or go before `base`.
+///
+/// `base` being null disables the check (unmanaged pointer path).
+fn check_bounds(
+    ptr: *const u8,
+    base: *const u8,
+    len: usize,
+    size: usize,
+) -> Result<(), MemoryAccessError> {
+    if !base.is_null() {
+        let base_addr = base.addr();
+        let ptr_addr = ptr.addr();
+
+        if ptr_addr < base_addr
+            || (ptr_addr - base_addr)
+                .checked_add(size)
+                .is_none_or(|end| end > len)
+        {
+            return Err(MemoryAccessError::BoundsCheck {
+                offset: ptr_addr.wrapping_sub(base_addr),
+                size,
+                len,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Manages unsafe memory access, enforcing bounds checks, GC write barriers, and type integrity.
@@ -150,11 +224,14 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             let dest_layout = self.get_layout_from_owner(owner);
 
             // SAFETY: with_data_mut ensures the lock is held for the duration of the closure.
-            // write_value_internal will copy the data.
+            // write_value_internal will copy the data.  The flush guard drains
+            // WB_LOCAL_BUF on drop, ensuring cross-arena refs are recorded even
+            // if the inner closure panics.
+            let _flush_guard = WriteBarrierFlushGuard;
             WB_LOCAL_BUF.with(|buf| {
                 let mut b = buf.borrow_mut();
                 let mut recorder = WriteBarrierRecorder::new(owner.owner_id(), &mut b);
-                let result = owner.with_data_mut(gc, |data| {
+                owner.with_data_mut(gc, |data| {
                     let base = data.as_mut_ptr();
                     let len = data.len();
                     let ptr = base.wrapping_add(offset.0);
@@ -177,14 +254,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             &mut recorder,
                         )
                     }
-                });
-
-                #[cfg(feature = "multithreading")]
-                for (tid, ptr) in b.drain(..) {
-                    dotnet_utils::gc::record_cross_arena_ref(tid, ptr);
-                }
-
-                result
+                })
             })
         } else {
             let ptr = sptr::from_exposed_addr_mut::<u8>(offset.0);
@@ -272,11 +342,14 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             #[cfg(feature = "multithreading")]
             let layout = self.get_layout_from_owner(owner);
 
+            // The flush guard drains WB_LOCAL_BUF on drop, ensuring cross-arena
+            // refs are recorded even if the inner closure panics.
+            let _flush_guard = WriteBarrierFlushGuard;
             WB_LOCAL_BUF.with(|buf| {
                 let mut b = buf.borrow_mut();
                 let mut _recorder = WriteBarrierRecorder::new(owner.owner_id(), &mut b);
 
-                let result = owner.with_data_mut(gc, |obj_data| {
+                owner.with_data_mut(gc, |obj_data| {
                     let base = obj_data.as_mut_ptr();
                     let len = obj_data.len();
                     let ptr = base.wrapping_add(offset.0);
@@ -286,6 +359,10 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     self.check_bounds_internal(ptr, base, len, data.len())?;
 
                     // Perform Write
+                    // SAFETY: `ptr` points into `obj_data` at an offset that was
+                    // just bounds-checked.  `data` (the caller's source slice) is
+                    // a separate allocation, so there is no aliasing.  Both
+                    // pointers are valid for `data.len()` bytes.
                     unsafe {
                         ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
                     }
@@ -293,6 +370,10 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     #[cfg(feature = "multithreading")]
                     {
                         if let Some(layout) = layout {
+                            // SAFETY: `base` is the start of the object's backing
+                            // storage (held mutably for the duration of this closure).
+                            // The range `[offset, offset+data.len())` was just
+                            // bounds-checked above; `ptr.add` within that range is valid.
                             unsafe {
                                 self.record_refs_in_range_with_recorder(
                                     gc,
@@ -306,14 +387,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         }
                     }
                     Ok(())
-                });
-
-                #[cfg(feature = "multithreading")]
-                for (tid, ptr) in b.drain(..) {
-                    dotnet_utils::gc::record_cross_arena_ref(tid, ptr);
-                }
-
-                result
+                })
             })
         } else {
             let ptr = sptr::from_exposed_addr_mut::<u8>(offset.0);
@@ -323,6 +397,10 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 ));
             }
             validate_atomic_access(ptr as *const u8, false);
+            // SAFETY: `ptr` is a non-null unmanaged pointer whose validity is
+            // guaranteed by the caller (unsafe fn contract).  `data` is a
+            // distinct slice, so there is no aliasing.  Both pointers are
+            // valid for `data.len()` bytes.
             unsafe {
                 ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
             }
@@ -387,32 +465,43 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         size: usize,
         success: dotnet_utils::sync::Ordering,
         failure: dotnet_utils::sync::Ordering,
-    ) -> Result<u64, u64> {
+    ) -> Result<u64, CompareExchangeError> {
         use dotnet_utils::atomic::{AtomicAccess, StandardAtomicAccess};
 
         if let Some(owner) = owner {
             owner.with_data_mut(gc, |data| {
                 let base = data.as_mut_ptr();
                 let len = data.len();
+                // SAFETY: `base` is the start of the object's backing storage.
+                // The result may be out-of-bounds, but `check_bounds_internal`
+                // (called immediately after) validates the range before any
+                // dereference.  The slice length is bounded by `isize::MAX`, so
+                // the arithmetic does not overflow.
                 let ptr = unsafe { base.add(offset.as_usize()) };
 
-                if let Err(e) = self.check_bounds_internal(ptr, base, len, size) {
-                    panic!("Atomic operation bounds check failed: {}", e);
-                }
+                self.check_bounds_internal(ptr, base, len, size)
+                    .map_err(CompareExchangeError::Bounds)?;
 
+                // SAFETY: Bounds are verified above. `ptr` is a valid, aligned
+                // pointer into `data` for `size` bytes, as guaranteed by
+                // `check_bounds_internal`.
                 unsafe {
                     StandardAtomicAccess::compare_exchange_atomic(
                         ptr, size, expected, new, success, failure,
                     )
                 }
+                .map_err(CompareExchangeError::Mismatch)
             })
         } else {
             let ptr = sptr::from_exposed_addr_mut::<u8>(offset.as_usize());
+            // SAFETY: Caller guarantees `offset` encodes a valid unmanaged address
+            // when `owner` is None.
             unsafe {
                 StandardAtomicAccess::compare_exchange_atomic(
                     ptr, size, expected, new, success, failure,
                 )
             }
+            .map_err(CompareExchangeError::Mismatch)
         }
     }
 
@@ -435,10 +524,14 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             owner.with_data_mut(gc, |data| {
                 let base = data.as_mut_ptr();
                 let len = data.len();
+                // SAFETY: `base` is the start of the object's backing storage.
+                // Bounds are checked immediately after by `check_bounds_internal`.
                 let ptr = unsafe { base.add(offset.as_usize()) };
 
                 self.check_bounds_internal(ptr, base, len, size)?;
 
+                // SAFETY: `ptr` is within the object's backing storage (just
+                // bounds-checked).  `size` bytes at `ptr` support atomic exchange.
                 Ok(unsafe { StandardAtomicAccess::exchange_atomic(ptr, size, value, ordering) })
             })
         } else {
@@ -448,6 +541,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     "NullReferenceException: exchange_atomic to unmanaged null pointer".into(),
                 ));
             }
+            // SAFETY: `ptr` is a non-null unmanaged address whose validity is
+            // guaranteed by the caller (unsafe fn contract).
             Ok(unsafe { StandardAtomicAccess::exchange_atomic(ptr, size, value, ordering) })
         }
     }
@@ -471,11 +566,15 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             owner.with_data_mut(gc, |data| {
                 let base = data.as_mut_ptr();
                 let len = data.len();
+                // SAFETY: `base` is the start of the object's backing storage.
+                // Bounds are checked immediately after by `check_bounds_internal`.
                 let ptr = unsafe { base.add(offset.as_usize()) };
 
                 self.check_bounds_internal(ptr, base, len, size)?;
 
                 Ok(
+                    // SAFETY: `ptr` is within the object's backing storage (just
+                    // bounds-checked).  `size` bytes at `ptr` support atomic add.
                     unsafe {
                         StandardAtomicAccess::exchange_add_atomic(ptr, size, value, ordering)
                     },
@@ -488,6 +587,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     "NullReferenceException: exchange_add_atomic to unmanaged null pointer".into(),
                 ));
             }
+            // SAFETY: `ptr` is a non-null unmanaged address whose validity is
+            // guaranteed by the caller (unsafe fn contract).
             Ok(unsafe { StandardAtomicAccess::exchange_add_atomic(ptr, size, value, ordering) })
         }
     }
@@ -508,8 +609,13 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             owner.with_data(|data| {
                 let base = data.as_ptr();
                 let len = data.len();
+                // SAFETY: `base` is the start of the object's backing storage
+                // (immutable borrow).  Bounds are checked immediately after.
                 let ptr = unsafe { base.add(offset.as_usize()) };
                 self.check_bounds_internal(ptr, base, len, size)?;
+                // SAFETY: `ptr` is within the object's backing storage (just
+                // bounds-checked).  The shared borrow prevents concurrent
+                // mutation through safe Rust.
                 Ok(unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) })
             })
         } else {
@@ -519,6 +625,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     "NullReferenceException: load_atomic from unmanaged null pointer".into(),
                 ));
             }
+            // SAFETY: `ptr` is a non-null unmanaged address whose validity is
+            // guaranteed by the caller (unsafe fn contract).
             Ok(unsafe { StandardAtomicAccess::load_atomic(ptr, size, ordering) })
         }
     }
@@ -541,8 +649,12 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             owner.with_data_mut(gc, |data| {
                 let base = data.as_mut_ptr();
                 let len = data.len();
+                // SAFETY: `base` is the start of the object's backing storage.
+                // Bounds are checked immediately after by `check_bounds_internal`.
                 let ptr = unsafe { base.add(offset.as_usize()) };
                 self.check_bounds_internal(ptr, base, len, size)?;
+                // SAFETY: `ptr` is within the object's backing storage (just
+                // bounds-checked).  `size` bytes at `ptr` support atomic store.
                 unsafe {
                     StandardAtomicAccess::store_atomic(ptr, size, value, ordering);
                 }
@@ -555,6 +667,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     "NullReferenceException: store_atomic to unmanaged null pointer".into(),
                 ));
             }
+            // SAFETY: `ptr` is a non-null unmanaged address whose validity is
+            // guaranteed by the caller (unsafe fn contract).
             unsafe {
                 StandardAtomicAccess::store_atomic(ptr, size, value, ordering);
             }
@@ -567,6 +681,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             let obj = h.borrow();
             match &obj.storage {
                 HeapStorage::Obj(_) | HeapStorage::Boxed(_) | HeapStorage::Vec(_) => {
+                    // SAFETY: `obj` is a live, borrow-locked `ObjectInner`.
+                    // `raw_data_ptr()` returns a pointer to the inner allocation
+                    // that is valid for at least the lifetime of `obj` (the guard).
                     let ptr = unsafe { obj.storage.raw_data_ptr() } as *const u8;
                     let size = obj.storage.size_bytes();
                     (ptr, size)
@@ -585,23 +702,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         len: usize,
         size: usize,
     ) -> Result<(), MemoryAccessError> {
-        if !base.is_null() {
-            let base_addr = base.addr();
-            let ptr_addr = ptr.addr();
-
-            if ptr_addr < base_addr
-                || (ptr_addr - base_addr)
-                    .checked_add(size)
-                    .is_none_or(|end| end > len)
-            {
-                return Err(MemoryAccessError::BoundsCheck {
-                    offset: ptr_addr.wrapping_sub(base_addr),
-                    size,
-                    len,
-                });
-            }
-        }
-        Ok(())
+        check_bounds(ptr, base, len, size)
     }
 
     fn check_integrity_internal_with_layout(
@@ -728,10 +829,13 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             }
         }
 
+        // The flush guard drains WB_LOCAL_BUF on drop, ensuring cross-arena
+        // refs are recorded even if the inner closure panics.
+        let _flush_guard = WriteBarrierFlushGuard;
         WB_LOCAL_BUF.with(|buf| {
             let mut b = buf.borrow_mut();
             let mut recorder = WriteBarrierRecorder::new(owner.owner_id(), &mut b);
-            let result = owner.with_data_mut(gc, |data| {
+            owner.with_data_mut(gc, |data| {
                 let base = data.as_mut_ptr();
                 let len = data.len();
                 let ptr = base.wrapping_add(offset.0);
@@ -750,13 +854,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                         &mut recorder,
                     )
                 }
-            });
-
-            #[cfg(feature = "multithreading")]
-            for (tid, ptr) in b.drain(..) {
-                dotnet_utils::gc::record_cross_arena_ref(tid, ptr);
-            }
-            result
+            })
         })
     }
 
@@ -800,6 +898,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         recorder: &mut WriteBarrierRecorder<'_, 'gc>,
     ) {
         let mut buf = [0u8; ObjectRef::SIZE];
+        // SAFETY: The caller guarantees `ptr` points to `ObjectRef::SIZE` bytes
+        // of readable memory within a live object's storage.  `buf` is a
+        // distinct stack allocation so there is no aliasing.
         unsafe {
             ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), ObjectRef::SIZE);
             let r = ObjectRef::read_branded(&buf, &gc);
@@ -825,6 +926,10 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         owner_tid: ArenaId,
         recorder: &mut WriteBarrierRecorder<'_, 'gc>,
     ) {
+        // SAFETY: The caller guarantees `ptr` points to `ManagedPtr::SIZE` bytes
+        // of readable memory within a live object's storage.  `from_raw_parts`
+        // is sound because `ManagedPtr::SIZE` matches the slice length and `ptr`
+        // is valid for that many bytes.
         let info = unsafe {
             ManagedPtr::read_branded(std::slice::from_raw_parts(ptr, ManagedPtr::SIZE), &gc)
                 .expect("record_managedptr_at_ptr: failed to read ManagedPtr")
@@ -850,13 +955,19 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         value: StackValue<'gc>,
         layout: &LayoutManager,
     ) -> Result<(), MemoryAccessError> {
+        // The flush guard drains WB_LOCAL_BUF on drop, ensuring cross-arena
+        // refs are recorded even if the inner closure panics.
+        let _flush_guard = WriteBarrierFlushGuard;
         WB_LOCAL_BUF.with(|buf| {
             let mut b = buf.borrow_mut();
             let mut _recorder = WriteBarrierRecorder::new(
                 owner.map(|o| o.owner_id()).unwrap_or(ArenaId(0)),
                 &mut b,
             );
-            let res = unsafe {
+            // SAFETY: `ptr` is a valid, non-null pointer that was verified by
+            // the outer unsafe fn's contract.  The `WB_LOCAL_BUF` borrow lives
+            // only inside this closure so there is no re-entrant borrow conflict.
+            unsafe {
                 self.write_value_internal_with_recorder(
                     gc,
                     ptr,
@@ -865,12 +976,7 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     layout,
                     &mut _recorder,
                 )
-            };
-            #[cfg(feature = "multithreading")]
-            for (tid, ptr) in b.drain(..) {
-                dotnet_utils::gc::record_cross_arena_ref(tid, ptr);
             }
-            res
         })
     }
 
@@ -883,7 +989,11 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         layout: &LayoutManager,
         _recorder: &mut WriteBarrierRecorder<'_, 'gc>,
     ) -> Result<(), MemoryAccessError> {
-        // Safety: `write_unaligned` ensures `ptr` is valid.
+        // SAFETY: `ptr` is non-null (checked immediately below) and has been
+        // validated by the caller (`write_unaligned` / `write_to_heap` paths
+        // perform bounds and integrity checks before reaching here).
+        // All `ptr::write_unaligned` calls are sound because `ptr` is valid for
+        // the write size and unaligned writes are explicitly allowed.
         unsafe {
             if ptr.is_null() {
                 return Err(MemoryAccessError::NullPointer(
@@ -1044,6 +1154,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
         }
         let owner_tid = recorder.arena_id;
         match layout {
+            // SAFETY: For each scalar variant, the caller guarantees `ptr`
+            // points to a valid, readable slot of the appropriate size within
+            // a live object's backing storage.
             LayoutManager::Scalar(Scalar::ObjectRef) => unsafe {
                 self.record_objref_at_ptr_with_recorder(gc, ptr, owner_tid, recorder);
             },
@@ -1055,6 +1168,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 let ptr_size = ObjectRef::SIZE;
                 for word_index in flm.gc_desc.bitmap.iter_ones() {
                     let offset = word_index * ptr_size;
+                    // SAFETY: `offset` is a word-aligned byte offset derived from
+                    // the layout's GC bitmap; `ptr.add(offset)` stays within the
+                    // field struct whose total size is bounded by the allocation.
                     unsafe {
                         self.record_objref_at_ptr_with_recorder(
                             gc,
@@ -1065,6 +1181,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     }
                 }
                 for offset in &flm.gc_desc.unaligned_offsets {
+                    // SAFETY: Unaligned offsets are validated by layout construction
+                    // to lie within the struct's storage.
                     unsafe {
                         self.record_objref_at_ptr_with_recorder(
                             gc,
@@ -1076,6 +1194,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 }
                 // Use visit_managed_ptrs for recursive ManagedPtr recording
                 if flm.has_ref_fields {
+                    // SAFETY: `visit_managed_ptrs` yields offsets that are within
+                    // the field struct's backing storage; `ptr.add(offset)` is valid.
                     flm.visit_managed_ptrs(crate::ByteOffset(0), &mut |offset| unsafe {
                         self.record_managedptr_at_ptr_with_recorder(
                             gc,
@@ -1090,6 +1210,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                 if arr.element_layout.is_or_contains_refs() {
                     let elem_size = arr.element_layout.size().as_usize();
                     for i in 0..arr.length {
+                        // SAFETY: `i * elem_size` is within the array allocation
+                        // because `i < arr.length` and `arr.length * elem_size`
+                        // equals the total allocation size.
                         unsafe {
                             self.record_refs_recursive_with_recorder(
                                 gc,
@@ -1123,6 +1246,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
             | LayoutManager::Scalar(Scalar::ManagedPtr) => {
                 // If the scalar overlaps at all with the written range, we should re-record it
                 // because it might have been partially or fully overwritten.
+                // SAFETY: `ptr` is the base of this scalar slot (passed in from
+                // the parent call), which is valid for the scalar's size within
+                // the enclosing object's backing storage.
                 unsafe { self.record_refs_recursive_with_recorder(gc, ptr, layout, recorder) };
             }
             LayoutManager::Field(flm) => {
@@ -1130,6 +1256,9 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                     let f_start = field.position.as_usize();
                     let f_end = f_start + field.layout.size().as_usize();
                     if f_start < range_end && f_end > range_start {
+                        // SAFETY: `f_start` is a field offset within the struct
+                        // layout; `ptr.add(f_start)` remains within the struct's
+                        // backing storage which the caller guarantees is live.
                         unsafe {
                             self.record_refs_in_range_with_recorder(
                                 gc,
@@ -1153,6 +1282,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
                     for i in start_idx..end_idx {
                         let f_start = i * elem_size;
+                        // SAFETY: `f_start = i * elem_size` with `i < alm.length`
+                        // is within the array's backing storage.
                         unsafe {
                             self.record_refs_in_range_with_recorder(
                                 gc,
@@ -1260,15 +1391,148 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
 #[cfg(test)]
 mod tests {
+    use super::{WB_LOCAL_BUF, WriteBarrierFlushGuard, check_bounds};
+    use crate::error::{CompareExchangeError, MemoryAccessError};
+    use dotnet_utils::ArenaId;
+
+    /// `check_bounds` is the gate used by `compare_exchange_atomic` to detect
+    /// out-of-bounds accesses.  These tests confirm it produces the correct
+    /// `MemoryAccessError::BoundsCheck` payload that gets wrapped into
+    /// `CompareExchangeError::Bounds` at the call site.
+    #[test]
+    fn check_bounds_in_range_ok() {
+        let buf = [0u8; 8];
+        let base = buf.as_ptr();
+        // offset=0, size=4 inside an 8-byte buffer — must succeed
+        assert!(check_bounds(base, base, 8, 4).is_ok());
+    }
+
+    #[test]
+    fn check_bounds_null_base_skips_check() {
+        // Null base means unmanaged pointer — check is skipped entirely.
+        assert!(check_bounds(std::ptr::null(), std::ptr::null(), 0, 8).is_ok());
+    }
+
+    #[test]
+    fn check_bounds_out_of_range_err() {
+        let buf = [0u8; 4];
+        let base = buf.as_ptr();
+        // offset=0, size=8 overflows a 4-byte buffer — must fail
+        assert_eq!(
+            check_bounds(base, base, 4, 8),
+            Err(MemoryAccessError::BoundsCheck {
+                offset: 0,
+                size: 8,
+                len: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn check_bounds_offset_overflow_err() {
+        let buf = [0u8; 8];
+        let base = buf.as_ptr();
+        // ptr points 6 bytes in; reading 4 bytes would end at offset 10 > 8 — must fail
+        // SAFETY: `base.add(6)` stays within the 8-byte allocation.
+        let ptr = unsafe { base.add(6) };
+        assert_eq!(
+            check_bounds(ptr, base, 8, 4),
+            Err(MemoryAccessError::BoundsCheck {
+                offset: 6,
+                size: 4,
+                len: 8,
+            })
+        );
+    }
+
+    /// Verify that `CompareExchangeError` variants carry the expected payloads,
+    /// covering the two match arms at every call site.
+    #[test]
+    fn compare_exchange_error_variants() {
+        // Mismatch arm — carries the actual current value.
+        let mismatch = CompareExchangeError::Mismatch(42);
+        match mismatch {
+            CompareExchangeError::Mismatch(v) => assert_eq!(v, 42),
+            _ => panic!("expected Mismatch"),
+        }
+
+        // Bounds arm — carries the underlying MemoryAccessError.
+        let bounds_inner = MemoryAccessError::BoundsCheck {
+            offset: 0,
+            size: 8,
+            len: 4,
+        };
+        let bounds_err = CompareExchangeError::Bounds(bounds_inner.clone());
+        match bounds_err {
+            CompareExchangeError::Bounds(e) => assert_eq!(e, bounds_inner),
+            _ => panic!("expected Bounds"),
+        }
+    }
+
+    /// Confirm that `check_bounds` errors can be promoted to `CompareExchangeError::Bounds`
+    /// exactly as `compare_exchange_atomic` does it via `.map_err(CompareExchangeError::Bounds)`.
+    #[test]
+    fn check_bounds_error_promoted_to_compare_exchange_error() {
+        let buf = [0u8; 4];
+        let base = buf.as_ptr();
+        let cas_result: Result<(), CompareExchangeError> =
+            check_bounds(base, base, 4, 8).map_err(CompareExchangeError::Bounds);
+        assert_eq!(
+            cas_result,
+            Err(CompareExchangeError::Bounds(
+                MemoryAccessError::BoundsCheck {
+                    offset: 0,
+                    size: 8,
+                    len: 4,
+                }
+            ))
+        );
+    }
+
+    /// Verify that `WriteBarrierFlushGuard::drop` drains `WB_LOCAL_BUF` even
+    /// when the surrounding code panics mid-write.
+    ///
+    /// We manually seed the TLS buffer, then force a panic inside
+    /// `catch_unwind` while the guard is live.  After unwinding the buffer
+    /// must be empty — confirming that `Drop` ran and drained it.
+    #[test]
+    fn write_barrier_flush_guard_drains_on_panic() {
+        use std::panic::{self, AssertUnwindSafe};
+
+        // Seed the TLS buffer with a dummy entry so there is something to drain.
+        WB_LOCAL_BUF.with(|buf| {
+            buf.borrow_mut().push((ArenaId(0), 0xDEAD_BEEF));
+        });
+
+        // Introduce a guard, then panic.  The guard's Drop must drain the buffer
+        // even though control never reaches the end of the closure normally.
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            let _flush_guard = WriteBarrierFlushGuard;
+            panic!("intentional test panic to verify flush-guard drop");
+        }));
+
+        assert!(result.is_err(), "expected the panic to be caught");
+
+        // Buffer must be empty: Drop fired and drained it.
+        WB_LOCAL_BUF.with(|buf| {
+            assert!(
+                buf.borrow().is_empty(),
+                "WB_LOCAL_BUF should be empty after WriteBarrierFlushGuard dropped on unwind"
+            );
+        });
+    }
+
     #[cfg(feature = "multithreading")]
     use super::MemoryOwner;
     #[cfg(feature = "multithreading")]
-    use dotnet_utils::{ArenaId, gc::ThreadSafeLock};
+    use dotnet_utils::gc::{ArenaHandle, GCHandle, ThreadSafeLock};
     #[cfg(feature = "multithreading")]
     use dotnet_value::{
         CLRString, ValidationTag,
         object::{HeapStorage, OBJECT_MAGIC, ObjectInner, ObjectPtr},
     };
+    #[cfg(feature = "multithreading")]
+    use gc_arena::{Arena, Rootable};
 
     #[cfg(feature = "multithreading")]
     fn storage_is_string<'a>(storage: &HeapStorage<'a>) -> bool {
@@ -1277,11 +1541,18 @@ mod tests {
 
     #[cfg(feature = "multithreading")]
     fn cross_arena_with_short_lifetime<'short>(
-        owner: MemoryOwner<'short>,
-        _token: &'short mut u8,
+        gc: GCHandle<'short>,
+        ptr: ObjectPtr,
+        tid: ArenaId,
     ) -> bool {
+        let owner = MemoryOwner::cross_arena(gc, ptr, tid);
         owner.as_heap_storage(storage_is_string)
     }
+
+    #[cfg(feature = "multithreading")]
+    use dotnet_utils::gc::{register_arena, unregister_arena};
+    #[cfg(feature = "multithreading")]
+    use std::sync::{Arc, atomic::AtomicBool};
 
     #[cfg(feature = "multithreading")]
     #[test]
@@ -1296,12 +1567,41 @@ mod tests {
         // SAFETY: `raw` comes from `Box::leak`, is non-null, and remains valid
         // for the duration of this test until reconstructed with `Box::from_raw`.
         let ptr = unsafe { ObjectPtr::from_raw(raw) }.expect("non-null leaked lock pointer");
-        let owner = MemoryOwner::CrossArena(ptr, arena_id);
 
-        let mut token = 0u8;
-        assert!(cross_arena_with_short_lifetime(owner, &mut token));
+        // Register the arena so that `validate_arena_id` considers the
+        // cross-arena reference live.  Under `memory-validation` the accessor
+        // now calls `validate_arena_id`, which checks the global registry;
+        // without registration it would panic with "Dangling cross-arena
+        // reference".
+        register_arena(arena_id, Arc::new(AtomicBool::new(false)));
+
+        type TestRoot = Rootable![()];
+        let arena = Arena::<TestRoot>::new(|_mc| ());
+        let arena_handle = Box::into_raw(Box::new(ArenaHandle::new(arena_id)));
+        assert!(arena.mutate(|mc, _| {
+            // SAFETY: `arena_handle` was created by `Box::into_raw` above and
+            // is not freed until after `mutate` returns; this shared borrow is valid.
+            let arena_inner = unsafe { (&*arena_handle).as_inner() };
+            let gc = GCHandle::new(
+                mc,
+                arena_inner,
+                #[cfg(feature = "memory-validation")]
+                arena_id,
+            );
+            cross_arena_with_short_lifetime(gc, ptr, arena_id)
+        }));
+        // SAFETY: `arena_handle` came from `Box::into_raw` above and remains
+        // uniquely owned here; reconstructing it drops the allocation exactly once.
+        unsafe {
+            drop(Box::from_raw(arena_handle));
+        }
+
+        unregister_arena(arena_id);
 
         // Fix leak for Miri
+        // SAFETY: `raw` was obtained from `Box::leak` earlier in this test;
+        // we reconstruct the `Box` to release the memory.  No other owner
+        // exists at this point, so this is the unique drop.
         unsafe {
             let _ = Box::from_raw(raw as *mut ThreadSafeLock<ObjectInner<'static>>);
         }

@@ -100,16 +100,11 @@ pub struct AssemblyLoader {
 }
 static_collect!(AssemblyLoader);
 
-// SAFETY: Under `--no-default-features` the runtime is single-threaded; `AssemblyLoader` is
-// never accessed concurrently.  The `!Sync` / `!Send` fields are compat `RwLock` wrappers over
-// `RefCell` and `NonNull`-bearing descriptors (`ResolutionS`), all of which are safe here
-// because concurrent access cannot occur in this build.
-// These impls are intentionally absent when `multithreading` is enabled so the real
-// thread-safe types provide the `Send`/`Sync` guarantees instead.
-#[cfg(not(feature = "multithreading"))]
-unsafe impl Sync for AssemblyLoader {}
-#[cfg(not(feature = "multithreading"))]
-unsafe impl Send for AssemblyLoader {}
+// AssemblyLoader is !Sync / !Send when multithreading is disabled because it contains
+// compat::RwLock (which uses RefCell internally). This is sound as long as the runtime
+// remains single-threaded. However, to prevent unsound use in statics (e.g., in tests),
+// we do NOT provide manual Sync/Send implementations here unless multithreading is enabled
+// (at which point the fields themselves will be Sync/Send).
 
 impl AssemblyLoader {
     pub fn new(assembly_root: String) -> Result<Self, AssemblyLoadError> {
@@ -404,6 +399,11 @@ impl AssemblyLoader {
         let res_ptr = Box::into_raw(res_box);
         let res_s = ResolutionS::new(res_ptr, self.metadata.clone());
 
+        // SAFETY: `res_ptr` was obtained from `Box::into_raw(Box::new(res))` two
+        // lines above.  Ownership is transferred to `self.metadata`; the `MetadataArena`
+        // will call `Box::from_raw` on it in its `Drop` impl.  `res_s` holds an
+        // `Arc<MetadataArena>` ensuring the arena (and thus `res_ptr`) remains live
+        // for as long as any `ResolutionS` derived from it exists.
         unsafe {
             self.metadata.add_resolution(res_ptr);
         }

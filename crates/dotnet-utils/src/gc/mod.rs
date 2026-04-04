@@ -1,6 +1,6 @@
 //! Garbage collection utility types.
 use gc_arena::{Collect, Mutation};
-use std::ops::Deref;
+use std::{marker::PhantomData, ops::Deref};
 
 #[cfg(feature = "multithreading")]
 use std::collections::HashSet;
@@ -26,6 +26,11 @@ pub struct GCHandle<'gc> {
     pub(crate) arena: &'gc arena::ArenaHandleInner,
     #[cfg(feature = "memory-validation")]
     pub(crate) thread_id: crate::ArenaId,
+}
+
+#[derive(Copy, Clone)]
+pub struct GcLifetime<'gc> {
+    _marker: PhantomData<&'gc mut Mutation<'gc>>,
 }
 
 impl<'gc> GCHandle<'gc> {
@@ -58,6 +63,12 @@ impl<'gc> GCHandle<'gc> {
         #[cfg(feature = "memory-validation")]
         self.validate_thread();
         self.mutation
+    }
+
+    pub fn lifetime(self) -> GcLifetime<'gc> {
+        GcLifetime {
+            _marker: PhantomData,
+        }
     }
 
     /// Record an allocation of the given size in the arena.
@@ -139,16 +150,76 @@ impl From<i32> for GCHandleType {
 }
 
 #[cfg(feature = "multithreading")]
-/// GC commands sent from the coordinator to worker threads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct OpaqueObjectPtr(usize);
+
+#[cfg(feature = "multithreading")]
+impl OpaqueObjectPtr {
+    pub fn from_raw(ptr: *const ()) -> Self {
+        Self(ptr as usize)
+    }
+
+    pub fn as_ptr(self) -> *const () {
+        self.0 as *const ()
+    }
+}
+
+#[cfg(feature = "multithreading")]
+#[derive(Debug, Clone, Default)]
+pub struct MarkObjectPointers(HashSet<OpaqueObjectPtr>);
+
+#[cfg(feature = "multithreading")]
+impl MarkObjectPointers {
+    pub fn new() -> Self {
+        Self(HashSet::new())
+    }
+
+    pub fn insert(&mut self, ptr: OpaqueObjectPtr) -> bool {
+        self.0.insert(ptr)
+    }
+}
+
+#[cfg(feature = "multithreading")]
+impl FromIterator<OpaqueObjectPtr> for MarkObjectPointers {
+    fn from_iter<T: IntoIterator<Item = OpaqueObjectPtr>>(iter: T) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+#[cfg(feature = "multithreading")]
+impl IntoIterator for MarkObjectPointers {
+    type Item = OpaqueObjectPtr;
+    type IntoIter = std::collections::hash_set::IntoIter<OpaqueObjectPtr>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+#[cfg(feature = "multithreading")]
+/// Mark-phase commands sent from the coordinator to worker threads.
 #[derive(Debug, Clone)]
-pub enum GCCommand {
+pub enum MarkPhaseCommand {
     /// Start the marking phase (clear roots, mark local roots).
-    MarkAll,
+    All,
     /// Mark specific objects in the local arena (for cross-arena resurrection).
-    /// Stores opaque pointers (usize) to avoid dependency on ObjectPtr.
-    MarkObjects(HashSet<usize>),
+    Objects(MarkObjectPointers),
+}
+
+#[cfg(feature = "multithreading")]
+/// Reclaim-phase commands sent from the coordinator to worker threads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SweepPhaseCommand {
     /// Run finalizers for dead objects.
     Finalize,
     /// Finish collection (sweep).
     Sweep,
+}
+
+#[cfg(feature = "multithreading")]
+/// GC commands sent from the coordinator to worker threads.
+#[derive(Debug, Clone)]
+pub enum GCCommand {
+    Mark(MarkPhaseCommand),
+    Sweep(SweepPhaseCommand),
 }

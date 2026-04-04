@@ -256,10 +256,9 @@ impl<'gc> ManagedPtr<'gc> {
     }
 
     pub fn owner(&self) -> Option<ObjectRef<'gc>> {
-        if let PointerOrigin::Heap(o) = self.origin {
-            Some(o)
-        } else {
-            None
+        match &self.origin {
+            PointerOrigin::Heap(o) => Some(*o),
+            _ => None,
         }
     }
 
@@ -356,32 +355,8 @@ impl<'gc> ManagedPtr<'gc> {
         }
     }
 
-    #[deprecated(note = "Use from_info_full to explicitly specify pinning status")]
-    pub fn from_info(info: ManagedPtrInfo<'gc>, inner_type: TypeDescription) -> Self {
-        Self::from_info_full(info, inner_type, false)
-    }
-
     pub(crate) fn validate_magic(&self) {
         self.magic.validate(MANAGED_PTR_MAGIC as u64, "ManagedPtr");
-    }
-
-    #[deprecated(note = "Use with_data instead to ensure memory safety and lock protection")]
-    pub fn pointer(&self) -> Option<NonNull<u8>> {
-        self.validate_magic();
-        if let Some(owner) = self.owner() {
-            let handle = owner.0?;
-            let base_ptr = unsafe { handle.borrow().storage.raw_data_ptr() };
-            if base_ptr.is_null() {
-                None
-            } else {
-                NonNull::new(base_ptr.wrapping_add(self.offset.as_usize()))
-            }
-        } else {
-            // For both stack and static/absolute pointers, use the cached value.
-            // Stack pointers should have their cached value updated on stack reallocation.
-            // Static/absolute pointers are stable or don't have enough info to re-resolve.
-            self._value
-        }
     }
 
     /// Safely accesses the data pointed to by this ManagedPtr.
@@ -390,35 +365,50 @@ impl<'gc> ManagedPtr<'gc> {
     /// If there is no owner, this method assumes the cached pointer is valid for at least `size` bytes.
     pub unsafe fn with_data<T>(&self, size: usize, f: impl FnOnce(&[u8]) -> T) -> T {
         self.validate_magic();
-        if let Some(owner) = self.owner() {
-            let handle = owner.0.expect("ManagedPtr::with_data: null owner handle");
-            let inner = handle.borrow();
-            let ptr = unsafe { inner.storage.raw_data_ptr() };
-            let slice = unsafe { std::slice::from_raw_parts(ptr, inner.storage.size_bytes()) };
-            let offset = self.offset.as_usize();
-            let available = slice.len().saturating_sub(offset);
-            let to_access = std::cmp::min(size, available);
-            f(&slice[offset..offset + to_access])
-        } else if let PointerOrigin::Transient(obj) = &self.origin {
-            obj.with_data(|data| {
+        match &self.origin {
+            PointerOrigin::Heap(owner) => {
+                let handle = owner
+                    .0
+                    .expect("ManagedPtr::with_data: null heap owner handle");
+                let inner = handle.borrow();
+                // SAFETY: `inner` holds a shared lock on the object storage;
+                // we only read the raw base pointer.
+                let ptr = unsafe { inner.storage.raw_data_ptr() };
+                // SAFETY: `ptr` points to `inner.storage` which remains locked
+                // for this scope, and `size_bytes()` is the exact allocation size.
+                let slice = unsafe { std::slice::from_raw_parts(ptr, inner.storage.size_bytes()) };
+                let offset = self.offset.as_usize();
+                let available = slice.len().saturating_sub(offset);
+                let to_access = std::cmp::min(size, available);
+                f(&slice[offset..offset + to_access])
+            }
+            #[cfg(feature = "multithreading")]
+            PointerOrigin::CrossArenaObjectRef(ptr, _) => ptr.with_data(|data| {
                 let offset = self.offset.as_usize();
                 let available = data.len().saturating_sub(offset);
                 let to_access = std::cmp::min(size, available);
                 f(&data[offset..offset + to_access])
-            })
-        } else {
-            // SAFETY: Caller must ensure the pointer is valid.
-            // Inline pointer resolution to avoid calling deprecated pointer()
-            let ptr = if let Some((_idx, _offset)) = self.stack_slot_origin() {
-                // Stack pointer - use cached value
-                self._value
-                    .expect("ManagedPtr::with_data: null stack pointer")
-            } else {
-                // Static data pointer or absolute pointer - use cached value
-                self._value.expect("ManagedPtr::with_data: null pointer")
-            };
-            let slice = unsafe { std::slice::from_raw_parts(ptr.as_ptr(), size) };
-            f(slice)
+            }),
+            PointerOrigin::Transient(obj) => obj.with_data(|data| {
+                let offset = self.offset.as_usize();
+                let available = data.len().saturating_sub(offset);
+                let to_access = std::cmp::min(size, available);
+                f(&data[offset..offset + to_access])
+            }),
+            _ => {
+                // SAFETY: Caller must ensure the pointer is valid.
+                // Inline pointer resolution to avoid lockless aliasing.
+                let ptr = if let Some((_idx, _offset)) = self.stack_slot_origin() {
+                    // Stack pointer - use cached value
+                    self._value
+                        .expect("ManagedPtr::with_data: null stack pointer")
+                } else {
+                    // Static data pointer or absolute pointer - use cached value
+                    self._value.expect("ManagedPtr::with_data: null pointer")
+                };
+                let slice = unsafe { std::slice::from_raw_parts(ptr.as_ptr(), size) };
+                f(slice)
+            }
         }
     }
 
@@ -455,17 +445,32 @@ impl<'gc> ManagedPtr<'gc> {
         transform: impl FnOnce(Option<NonNull<u8>>) -> Option<NonNull<u8>>,
     ) -> Self {
         self.validate_magic();
-        let old_ptr = if let Some(owner) = self.owner() {
-            owner.0.and_then(|h| {
+        let old_ptr = match &self.origin {
+            PointerOrigin::Heap(owner) => owner.0.and_then(|h| {
+                // SAFETY: `h` is a live object handle and we only read the
+                // immutable base pointer for offset computation.
                 let base_ptr = unsafe { h.borrow().storage.raw_data_ptr() };
                 if base_ptr.is_null() {
                     None
                 } else {
                     NonNull::new(base_ptr.wrapping_add(self.offset.as_usize()))
                 }
-            })
-        } else {
-            self._value
+            }),
+            #[cfg(feature = "multithreading")]
+            PointerOrigin::CrossArenaObjectRef(ptr, _) => {
+                let base_ptr = ptr.as_heap_storage(|storage| {
+                    // SAFETY: `as_heap_storage` validates the object and keeps
+                    // the lock held for the closure duration; we only read the
+                    // base storage pointer.
+                    unsafe { storage.raw_data_ptr() }
+                });
+                if base_ptr.is_null() {
+                    None
+                } else {
+                    NonNull::new(base_ptr.wrapping_add(self.offset.as_usize()))
+                }
+            }
+            _ => self._value,
         };
         let new_value = transform(old_ptr);
         let mut m = self.clone();
@@ -577,18 +582,38 @@ impl<'gc> PointerLike for ManagedPtr<'gc> {
     #[inline]
     fn pointer(&self) -> Option<NonNull<u8>> {
         self.validate_magic();
-        if let Some(owner) = self.owner() {
-            let handle = owner.0?;
-            let base_ptr = unsafe { handle.borrow().storage.raw_data_ptr() };
-            if base_ptr.is_null() {
-                None
-            } else {
-                // SAFETY: offset calculation mirrors ManagedPtr::with_data bounds scheme; caller must ensure validity
-                NonNull::new(unsafe { base_ptr.add(self.offset.as_usize()) })
+        match &self.origin {
+            PointerOrigin::Heap(owner) => {
+                let handle = owner.0?;
+                // SAFETY: `handle` is a live object handle and we only read the
+                // immutable base pointer for offset computation.
+                let base_ptr = unsafe { handle.borrow().storage.raw_data_ptr() };
+                if base_ptr.is_null() {
+                    None
+                } else {
+                    // SAFETY: offset calculation mirrors ManagedPtr::with_data bounds scheme; caller must ensure validity
+                    NonNull::new(unsafe { base_ptr.add(self.offset.as_usize()) })
+                }
             }
-        } else {
-            // For stack/static/absolute pointers, use cached value
-            self._value
+            #[cfg(feature = "multithreading")]
+            PointerOrigin::CrossArenaObjectRef(ptr, _) => {
+                let base_ptr = ptr.as_heap_storage(|storage| {
+                    // SAFETY: `as_heap_storage` validates the object and keeps
+                    // the lock held for the closure duration; we only read the
+                    // base storage pointer.
+                    unsafe { storage.raw_data_ptr() }
+                });
+                if base_ptr.is_null() {
+                    None
+                } else {
+                    // SAFETY: offset calculation mirrors ManagedPtr::with_data bounds scheme; caller must ensure validity
+                    NonNull::new(unsafe { base_ptr.add(self.offset.as_usize()) })
+                }
+            }
+            _ => {
+                // For stack/static/absolute pointers, use cached value
+                self._value
+            }
         }
     }
 }

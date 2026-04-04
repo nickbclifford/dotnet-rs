@@ -24,11 +24,9 @@ mod tests {
             },
         },
     };
-    use std::sync::OnceLock;
-    static MOCK_LOADER: OnceLock<Arc<AssemblyLoader>> = OnceLock::new();
     fn get_mock_loader() -> Arc<AssemblyLoader> {
-        MOCK_LOADER
-            .get_or_init(|| {
+        thread_local! {
+            static MOCK_LOADER: Arc<AssemblyLoader> = {
                 let loader = AssemblyLoader::new_bare("mock_root_fault".to_string())
                     .expect("Failed to create mock AssemblyLoader");
                 let mut system_runtime = Resolution::new(Module::new("System.Private.CoreLib.dll"));
@@ -101,8 +99,9 @@ mod tests {
                 system_runtime_compat.assembly = Some(Assembly::new("System.Runtime"));
                 loader.register_owned_assembly(system_runtime_compat);
                 Arc::new(loader)
-            })
-            .clone()
+            };
+        }
+        MOCK_LOADER.with(|l| l.clone())
     }
     #[test]
     fn test_fault_handler_skipped_on_normal_exit() {

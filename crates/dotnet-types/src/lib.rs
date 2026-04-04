@@ -10,6 +10,8 @@
 //! - **[`FieldDescription`]**: Represents a resolved .NET field.
 //! - **[`TypeComparer`](comparer::TypeComparer)**: Handles type equality and assignability.
 #![allow(clippy::mutable_key_type)]
+#[cfg(doc)]
+use crate::members::FieldDescription;
 use crate::{generics::GenericLookup, members::MethodDescription, resolution::ResolutionS};
 use dotnetdll::prelude::{
     MemberType, MethodMemberIndex, ResolvedDebug, TypeDefinition, TypeIndex, TypeSource, UserType,

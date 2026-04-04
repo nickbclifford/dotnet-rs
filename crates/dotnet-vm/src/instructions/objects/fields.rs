@@ -240,7 +240,7 @@ pub fn ldsfld<'gc, T: VesOps<'gc>>(
     let value = vm_try!(res_ctx.read_cts_value(
         &t,
         &val_bytes,
-        ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new())
+        ctx.gc_with_token(&ctx.no_active_borrows_token())
     ));
 
     ctx.push(value.into_stack());
@@ -410,7 +410,7 @@ pub fn ldflda<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &FieldSource) -> StepRes
         let info = match unsafe {
             MP::read_branded(
                 &ptr_bytes,
-                &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+                &ctx.gc_with_token(&ctx.no_active_borrows_token()),
             )
         } {
             Ok(i) => i,

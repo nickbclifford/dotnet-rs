@@ -33,7 +33,7 @@ pub(crate) fn get_runtime_member_index<T: PartialEq>(
 }
 
 pub(crate) fn pre_initialize_reflection<'gc>(ctx: &mut (impl ReflectionOps<'gc> + LoaderOps)) {
-    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let blessed = [
         RuntimeType::Void,
         RuntimeType::Boolean,
@@ -63,7 +63,7 @@ pub(crate) fn get_runtime_type<'gc>(
     ctx: &mut (impl ReflectionOps<'gc> + LoaderOps),
     target: RuntimeType,
 ) -> ObjectRef<'gc> {
-    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     if let Some(obj) = ctx.reflection().types_read().get(&target) {
         return *obj;
     }
@@ -337,7 +337,7 @@ pub(crate) fn get_runtime_method_obj<'gc>(
     method: MethodDescription,
     lookup: GenericLookup,
 ) -> ObjectRef<'gc> {
-    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     if let Some(obj) = ctx
         .reflection()
         .method_objs_read()
@@ -385,7 +385,7 @@ pub(crate) fn get_runtime_field_obj<'gc>(
     field: FieldDescription,
     lookup: GenericLookup,
 ) -> ObjectRef<'gc> {
-    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     if let Some(obj) = ctx
         .reflection()
         .field_objs_read()

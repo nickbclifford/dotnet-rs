@@ -194,7 +194,7 @@ pub(super) fn get_invocation_list<'gc, T: LoaderOps + ResolutionOps<'gc> + Memor
                 let entry = unsafe {
                     ObjectRef::read_branded(
                         &v.get()[i * ObjectRef::SIZE..],
-                        &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+                        &ctx.gc_with_token(&ctx.no_active_borrows_token()),
                     )
                 };
                 result.push(entry);

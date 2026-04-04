@@ -17,15 +17,11 @@ use dotnetdll::{
         },
     },
 };
-use std::{path::PathBuf, sync::OnceLock};
-
-static LOADER: OnceLock<Arc<AssemblyLoader>> = OnceLock::new();
-#[cfg(test)]
-static MOCK_LOADER: OnceLock<Arc<AssemblyLoader>> = OnceLock::new();
+use std::path::PathBuf;
 
 fn get_loader() -> Arc<AssemblyLoader> {
-    LOADER
-        .get_or_init(|| {
+    thread_local! {
+        static LOADER: Arc<AssemblyLoader> = {
             let base = std::env::var("DOTNET_ROOT")
                 .map(|p| PathBuf::from(p).join("shared/Microsoft.NETCore.App"))
                 .unwrap_or_else(|_| {
@@ -54,14 +50,15 @@ fn get_loader() -> Arc<AssemblyLoader> {
             let loader = AssemblyLoader::new(path.to_str().unwrap().to_string())
                 .expect("Failed to create AssemblyLoader");
             Arc::new(loader)
-        })
-        .clone()
+        };
+    }
+    LOADER.with(|l| l.clone())
 }
 
 #[cfg(test)]
 fn get_mock_loader() -> Arc<AssemblyLoader> {
-    MOCK_LOADER
-        .get_or_init(|| {
+    thread_local! {
+        static MOCK_LOADER: Arc<AssemblyLoader> = {
             let loader = AssemblyLoader::new_bare("mock_root".to_string())
                 .expect("Failed to create mock AssemblyLoader");
 
@@ -96,8 +93,9 @@ fn get_mock_loader() -> Arc<AssemblyLoader> {
             loader.register_owned_assembly(system_runtime);
 
             Arc::new(loader)
-        })
-        .clone()
+        };
+    }
+    MOCK_LOADER.with(|l| l.clone())
 }
 
 #[derive(Debug, Arbitrary, Clone)]

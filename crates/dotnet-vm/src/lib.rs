@@ -12,6 +12,7 @@
 //! - **Dispatch** (`dispatch/`): Method resolution and execution engine.
 //! - **Threading** (`threading/`): Support for multi-threaded execution.
 #![allow(clippy::mutable_key_type)]
+#![allow(clippy::arc_with_non_send_sync)]
 use dotnetdll::prelude::*;
 use std::sync::Arc;
 

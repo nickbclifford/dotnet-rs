@@ -1,3 +1,4 @@
+#![allow(clippy::arc_with_non_send_sync)]
 use dotnet_assemblies as assemblies;
 use dotnet_types::{TypeDescription, members::MethodDescription, resolution::ResolutionS};
 use dotnet_vm::{self as vm, state};

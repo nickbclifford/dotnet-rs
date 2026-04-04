@@ -9,10 +9,15 @@ use dotnet_utils::sync::{Arc, AtomicBool};
 use dotnet_value::object::ObjectPtr;
 #[cfg(feature = "multithreading")]
 use std::collections::{HashMap, HashSet};
+#[cfg(feature = "multithreading")]
+use std::marker::PhantomData;
+#[cfg(feature = "multithreading")]
+use std::mem::ManuallyDrop;
 
 #[cfg(feature = "multithreading")]
 pub use dotnet_utils::gc::{
-    ALLOCATION_THRESHOLD, ArenaHandle, GCCommand, clear_tracing_state, get_currently_tracing,
+    ALLOCATION_THRESHOLD, ArenaHandle, GCCommand, MarkObjectPointers, MarkPhaseCommand,
+    OpaqueObjectPtr, SweepPhaseCommand, clear_tracing_state, get_currently_tracing,
     set_currently_tracing, take_found_cross_arena_refs,
 };
 
@@ -23,28 +28,10 @@ pub struct GCCoordinator {
     arenas: Mutex<HashMap<dotnet_utils::ArenaId, ArenaHandle>>,
     /// Global lock held during collection
     collection_lock: Mutex<()>,
-    /// Flag indicating if a collection is currently in progress
-    is_collecting: AtomicBool,
     /// Flag indicating if a stop-the-world pause is in progress (shared with arenas)
     stw_in_progress: Arc<AtomicBool>,
     /// Cross-arena references found during marking
     cross_arena_refs: Mutex<HashMap<dotnet_utils::ArenaId, HashSet<ObjectPtr>>>,
-}
-
-#[cfg(feature = "multithreading")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Explicit GC/STW coordinator states.
-///
-/// Invariants:
-/// - `Idle`: `is_collecting = false` and `stw_in_progress = false`
-/// - `Collecting`: `is_collecting = true` and `stw_in_progress = true`
-///
-/// Allowed transitions:
-/// - `start_collection`: `Idle -> Collecting`
-/// - `finish_collection`: `Collecting -> Idle`
-enum CollectionState {
-    Idle,
-    Collecting,
 }
 
 #[cfg(feature = "multithreading")]
@@ -53,29 +40,8 @@ impl GCCoordinator {
         Self {
             arenas: Mutex::new(HashMap::new()),
             collection_lock: Mutex::new(()),
-            is_collecting: AtomicBool::new(false),
             stw_in_progress,
             cross_arena_refs: Mutex::new(HashMap::new()),
-        }
-    }
-
-    fn assert_collection_state(&self, expected: CollectionState, context: &str) {
-        let is_collecting = self.is_collecting.load(Ordering::Acquire);
-        let stw_in_progress = self.stw_in_progress.load(Ordering::Acquire);
-
-        match expected {
-            CollectionState::Idle => {
-                assert!(
-                    !is_collecting && !stw_in_progress,
-                    "{context}: expected coordinator to be Idle (is_collecting=false, stw_in_progress=false), got is_collecting={is_collecting}, stw_in_progress={stw_in_progress}",
-                );
-            }
-            CollectionState::Collecting => {
-                assert!(
-                    is_collecting && stw_in_progress,
-                    "{context}: expected coordinator to be Collecting (is_collecting=true, stw_in_progress=true), got is_collecting={is_collecting}, stw_in_progress={stw_in_progress}",
-                );
-            }
         }
     }
 
@@ -121,33 +87,33 @@ impl GCCoordinator {
         false
     }
 
-    /// Mark that a collection has started.
-    pub fn start_collection(&self) -> Option<MutexGuard<'_, ()>> {
-        let guard = self.collection_lock.try_lock()?;
-
-        self.assert_collection_state(CollectionState::Idle, "start_collection precondition");
-        self.assert_no_pending_commands("start_collection precondition");
-
-        self.stw_in_progress.store(true, Ordering::Release);
-        self.is_collecting.store(true, Ordering::Release);
-
-        self.assert_collection_state(
-            CollectionState::Collecting,
-            "start_collection postcondition",
-        );
-
-        Some(guard)
+    /// Enter a collection session by acquiring the coordinator lock and
+    /// setting `stw_in_progress`.
+    pub fn begin_collection(&self) -> Option<CollectionSession<'_>> {
+        let lock = self.collection_lock.try_lock()?;
+        self.enter_collecting_state("begin_collection");
+        Some(CollectionSession::new(self, lock))
     }
 
-    /// Mark that a collection has finished.
-    pub fn finish_collection(&self) {
-        self.assert_collection_state(
-            CollectionState::Collecting,
-            "finish_collection precondition",
+    fn enter_collecting_state(&self, context: &str) {
+        let stw_in_progress = self.stw_in_progress.load(Ordering::Acquire);
+        assert!(
+            !stw_in_progress,
+            "{context}: expected idle coordinator before beginning collection, got stw_in_progress={stw_in_progress}",
         );
-        self.assert_no_pending_commands("finish_collection precondition");
+        self.assert_no_pending_commands(&format!("{context} precondition"));
 
-        self.is_collecting.store(false, Ordering::Release);
+        self.stw_in_progress.store(true, Ordering::Release);
+    }
+
+    fn finish_collection_inner(&self, context: &str) {
+        let stw_in_progress = self.stw_in_progress.load(Ordering::Acquire);
+        assert!(
+            stw_in_progress,
+            "{context}: expected active collection before finishing, got stw_in_progress={stw_in_progress}",
+        );
+        self.assert_no_pending_commands(&format!("{context} precondition"));
+
         self.stw_in_progress.store(false, Ordering::Release);
 
         // Reset all collection flags
@@ -160,8 +126,12 @@ impl GCCoordinator {
             }
         }
 
-        self.assert_no_pending_commands("finish_collection postcondition");
-        self.assert_collection_state(CollectionState::Idle, "finish_collection postcondition");
+        self.assert_no_pending_commands(&format!("{context} postcondition"));
+        let stw_in_progress = self.stw_in_progress.load(Ordering::Acquire);
+        assert!(
+            !stw_in_progress,
+            "{context}: expected Idle after finishing, got stw_in_progress={stw_in_progress}",
+        );
     }
 
     /// Get the total allocated size across all arenas.
@@ -200,138 +170,8 @@ impl GCCoordinator {
         arenas.values().cloned().collect()
     }
 
-    fn wait_on_other_arenas(&self, initiating_thread_id: dotnet_utils::ArenaId) {
-        self.assert_collection_state(CollectionState::Collecting, "wait_on_other_arenas");
-
-        for handle in self.get_all_arenas() {
-            if handle.thread_id() != initiating_thread_id {
-                let mut cmd = handle.current_command().lock();
-                while cmd.is_some() {
-                    handle.finish_signal().wait(&mut cmd);
-                }
-            }
-        }
-    }
-
-    fn send_command_to_other_arenas(
-        &self,
-        initiating_thread_id: dotnet_utils::ArenaId,
-        command: GCCommand,
-    ) {
-        self.assert_collection_state(CollectionState::Collecting, "send_command_to_other_arenas");
-
-        for handle in self.get_all_arenas() {
-            if handle.thread_id() != initiating_thread_id {
-                let mut cmd = handle.current_command().lock();
-                assert!(
-                    cmd.is_none(),
-                    "send_command_to_other_arenas: arena {:?} already has pending command {:?} before dispatching {:?}",
-                    handle.thread_id(),
-                    *cmd,
-                    command
-                );
-                *cmd = Some(command.clone());
-                handle.command_signal().notify_all();
-            }
-        }
-    }
-
-    fn send_command_to_all_and_wait(
-        &self,
-        initiating_thread_id: dotnet_utils::ArenaId,
-        command: GCCommand,
-    ) {
-        self.assert_collection_state(CollectionState::Collecting, "send_command_to_all_and_wait");
-        self.send_command_to_other_arenas(initiating_thread_id, command.clone());
-        execute_gc_command_for_current_thread(command, self);
-        self.wait_on_other_arenas(initiating_thread_id);
-    }
-
-    /// Perform a coordinated collection across all registered arenas.
-    pub fn collect_all_arenas(&self, initiating_thread_id: dotnet_utils::ArenaId) {
-        // This is called by the thread that triggered the GC, after STW is established.
-        self.assert_collection_state(
-            CollectionState::Collecting,
-            "collect_all_arenas precondition",
-        );
-        assert!(
-            self.get_arena(initiating_thread_id).is_some(),
-            "collect_all_arenas precondition: initiating thread {:?} must be registered",
-            initiating_thread_id
-        );
-
-        // Initial marking: each arena marks its local roots.
-        {
-            // Clear any stale cross-arena references from previous collections
-            let mut refs = self.cross_arena_refs.lock();
-            refs.clear();
-        }
-
-        // Send MarkAll command to all arenas
-        self.send_command_to_all_and_wait(initiating_thread_id, GCCommand::MarkAll);
-
-        // Fixed-point iteration for cross-arena resurrection.
-        // Keep iterating until no new cross-arena references are found
-        loop {
-            let cross_refs = {
-                let refs = self.cross_arena_refs.lock();
-                if refs.is_empty() {
-                    // No cross-arena references found, we're done
-                    break;
-                }
-                // Take a snapshot of current cross-arena refs
-                refs.clone()
-            };
-
-            // Clear the global table for the next iteration
-            {
-                let mut refs = self.cross_arena_refs.lock();
-                refs.clear();
-            }
-
-            // For each target arena, send MarkObjects command with the objects to resurrect
-            let mut initiator_mark_objs = None;
-            for (target_thread_id, ptrs) in cross_refs {
-                let ptrs_usize: HashSet<usize> = ptrs.iter().map(|p| p.as_ptr() as usize).collect();
-                if target_thread_id == initiating_thread_id {
-                    // Save for direct execution by initiating thread
-                    initiator_mark_objs = Some(ptrs_usize);
-                } else if let Some(handle) = self.get_arena(target_thread_id) {
-                    let mut cmd = handle.current_command().lock();
-                    *cmd = Some(GCCommand::MarkObjects(ptrs_usize));
-                    handle.command_signal().notify_all();
-                }
-            }
-
-            // Execute MarkObjects for the initiating thread directly
-            if let Some(ptrs) = initiator_mark_objs {
-                execute_gc_command_for_current_thread(GCCommand::MarkObjects(ptrs), self);
-            }
-
-            // Wait for all MarkObjects commands to complete (excluding initiating thread)
-            self.wait_on_other_arenas(initiating_thread_id);
-
-            // Check if any new cross-arena references were discovered
-            let has_new_refs = {
-                let refs = self.cross_arena_refs.lock();
-                !refs.is_empty()
-            };
-
-            if !has_new_refs {
-                // Fixed point reached - no new cross-arena references found
-                break;
-            }
-        }
-
-        // Run finalizers.
-        self.send_command_to_all_and_wait(initiating_thread_id, GCCommand::Finalize);
-
-        // Sweep unmarked objects.
-        self.send_command_to_all_and_wait(initiating_thread_id, GCCommand::Sweep);
-    }
-
     /// Check if a thread has a pending GC command.
-    pub fn has_command(&self, thread_id: dotnet_utils::ArenaId) -> bool {
+    pub(crate) fn has_command(&self, thread_id: dotnet_utils::ArenaId) -> bool {
         if let Some(handle) = self.get_arena(thread_id) {
             handle.current_command().lock().is_some()
         } else {
@@ -339,17 +179,8 @@ impl GCCoordinator {
         }
     }
 
-    /// Get the pending command for a thread.
-    pub fn get_command(&self, thread_id: dotnet_utils::ArenaId) -> Option<GCCommand> {
-        if let Some(handle) = self.get_arena(thread_id) {
-            handle.current_command().lock().clone()
-        } else {
-            None
-        }
-    }
-
     /// Mark a command as finished for a thread.
-    pub fn command_finished(&self, thread_id: dotnet_utils::ArenaId) {
+    pub(crate) fn command_finished(&self, thread_id: dotnet_utils::ArenaId) {
         if let Some(handle) = self.get_arena(thread_id) {
             let mut cmd = handle.current_command().lock();
             assert!(
@@ -364,7 +195,7 @@ impl GCCoordinator {
 
     /// Wait for a command or for the GC to finish.
     /// Returns Some(command) if a command was received, or None if the GC finished.
-    pub fn wait_for_command_or_resume(
+    pub(crate) fn wait_for_command_or_resume(
         &self,
         thread_id: dotnet_utils::ArenaId,
         stop_requested: &AtomicBool,
@@ -382,7 +213,7 @@ impl GCCoordinator {
     }
 
     /// Notify all arenas that they should check their resume condition.
-    pub fn notify_resume(&self) {
+    pub(crate) fn notify_resume(&self) {
         let arenas = self.arenas.lock();
         for handle in arenas.values() {
             handle.command_signal().notify_all();
@@ -390,8 +221,16 @@ impl GCCoordinator {
     }
 
     /// Record a cross-arena reference found during marking.
-    pub fn record_cross_arena_ref(&self, target_thread_id: dotnet_utils::ArenaId, ptr: ObjectPtr) {
-        self.assert_collection_state(CollectionState::Collecting, "record_cross_arena_ref");
+    pub(crate) fn record_cross_arena_ref(
+        &self,
+        target_thread_id: dotnet_utils::ArenaId,
+        ptr: ObjectPtr,
+    ) {
+        let stw_in_progress = self.stw_in_progress.load(Ordering::Acquire);
+        assert!(
+            stw_in_progress,
+            "record_cross_arena_ref: requires active collection, got stw_in_progress={stw_in_progress}",
+        );
         let mut refs = self.cross_arena_refs.lock();
         refs.entry(target_thread_id).or_default().insert(ptr);
     }
@@ -404,9 +243,290 @@ impl Default for GCCoordinator {
     }
 }
 
+/// RAII collection session.
+///
+/// Constructed by [`GCCoordinator::begin_collection`]. While this value is
+/// alive, the coordinator lock is held and `stw_in_progress` is set. Dropping
+/// this value restores idle coordinator state.
+#[cfg(feature = "multithreading")]
+pub struct CollectionSession<'coord> {
+    coordinator: &'coord GCCoordinator,
+    /// Holds the coordinator's `collection_lock` for the duration of the session.
+    lock: Option<MutexGuard<'coord, ()>>,
+}
+
+#[cfg(feature = "multithreading")]
+impl<'coord> CollectionSession<'coord> {
+    fn new(coordinator: &'coord GCCoordinator, lock: MutexGuard<'coord, ()>) -> Self {
+        Self {
+            coordinator,
+            lock: Some(lock),
+        }
+    }
+
+    fn finish_inner(&mut self, context: &str) {
+        let Some(lock) = self.lock.take() else {
+            return;
+        };
+        self.coordinator.finish_collection_inner(context);
+        drop(lock);
+    }
+}
+
+#[cfg(feature = "multithreading")]
+impl CollectionSession<'_> {
+    fn wait_on_other_arenas(&self, initiating_thread_id: dotnet_utils::ArenaId) {
+        for handle in self.coordinator.get_all_arenas() {
+            if handle.thread_id() != initiating_thread_id {
+                let mut cmd = handle.current_command().lock();
+                while cmd.is_some() {
+                    handle.finish_signal().wait(&mut cmd);
+                }
+            }
+        }
+    }
+
+    fn enqueue_command_for_arena(&self, handle: &ArenaHandle, command: GCCommand, context: &str) {
+        let mut cmd = handle.current_command().lock();
+        assert!(
+            cmd.is_none(),
+            "{context}: arena {:?} already has pending command {:?} before dispatching {:?}",
+            handle.thread_id(),
+            *cmd,
+            command
+        );
+        *cmd = Some(command);
+        handle.command_signal().notify_all();
+    }
+
+    fn send_command_to_other_arenas_collecting(
+        &self,
+        initiating_thread_id: dotnet_utils::ArenaId,
+        command: GCCommand,
+    ) {
+        for handle in self.coordinator.get_all_arenas() {
+            if handle.thread_id() != initiating_thread_id {
+                self.enqueue_command_for_arena(
+                    &handle,
+                    command.clone(),
+                    "send_command_to_other_arenas",
+                );
+            }
+        }
+    }
+
+    fn send_command_to_all_and_wait(
+        &self,
+        initiating_thread_id: dotnet_utils::ArenaId,
+        command: GCCommand,
+    ) {
+        self.send_command_to_other_arenas_collecting(initiating_thread_id, command.clone());
+        execute_gc_command_for_current_thread(command, self.coordinator);
+        self.wait_on_other_arenas(initiating_thread_id);
+    }
+
+    /// Perform a coordinated collection across all registered arenas.
+    pub fn collect_all_arenas(&self, initiating_thread_id: dotnet_utils::ArenaId) {
+        assert!(
+            self.coordinator.get_arena(initiating_thread_id).is_some(),
+            "collect_all_arenas precondition: initiating thread {:?} must be registered",
+            initiating_thread_id
+        );
+
+        // Initial marking: each arena marks its local roots.
+        {
+            // Clear any stale cross-arena references from previous collections
+            let mut refs = self.coordinator.cross_arena_refs.lock();
+            refs.clear();
+        }
+
+        // Send MarkAll command to all arenas
+        self.send_command_to_all_and_wait(
+            initiating_thread_id,
+            GCCommand::Mark(MarkPhaseCommand::All),
+        );
+
+        // Fixed-point iteration for cross-arena resurrection.
+        // Keep iterating until no new cross-arena references are found
+        loop {
+            let cross_refs = {
+                let refs = self.coordinator.cross_arena_refs.lock();
+                if refs.is_empty() {
+                    // No cross-arena references found, we're done
+                    break;
+                }
+                // Take a snapshot of current cross-arena refs
+                refs.clone()
+            };
+
+            // Clear the global table for the next iteration
+            {
+                let mut refs = self.coordinator.cross_arena_refs.lock();
+                refs.clear();
+            }
+
+            // For each target arena, send MarkObjects command with the objects to resurrect
+            let mut initiator_mark_objs = None;
+            for (target_thread_id, ptrs) in cross_refs {
+                let ptrs_for_mark: MarkObjectPointers = ptrs
+                    .iter()
+                    .map(|p| OpaqueObjectPtr::from_raw(p.as_ptr() as *const ()))
+                    .collect();
+                if target_thread_id == initiating_thread_id {
+                    // Save for direct execution by initiating thread
+                    initiator_mark_objs = Some(ptrs_for_mark);
+                } else if let Some(handle) = self.coordinator.get_arena(target_thread_id) {
+                    self.enqueue_command_for_arena(
+                        &handle,
+                        GCCommand::Mark(MarkPhaseCommand::Objects(ptrs_for_mark)),
+                        "collect_all_arenas fixed-point dispatch",
+                    );
+                }
+            }
+
+            // Execute MarkObjects for the initiating thread directly
+            if let Some(ptrs) = initiator_mark_objs {
+                assert!(
+                    !self.coordinator.has_command(initiating_thread_id),
+                    "collect_all_arenas fixed-point dispatch: initiating arena {:?} unexpectedly has a pending command",
+                    initiating_thread_id
+                );
+                execute_gc_command_for_current_thread(
+                    GCCommand::Mark(MarkPhaseCommand::Objects(ptrs)),
+                    self.coordinator,
+                );
+            }
+
+            // Wait for all MarkObjects commands to complete (excluding initiating thread)
+            self.wait_on_other_arenas(initiating_thread_id);
+
+            // Check if any new cross-arena references were discovered
+            let has_new_refs = {
+                let refs = self.coordinator.cross_arena_refs.lock();
+                !refs.is_empty()
+            };
+
+            if !has_new_refs {
+                // Fixed point reached - no new cross-arena references found
+                break;
+            }
+        }
+
+        // Run finalizers.
+        self.send_command_to_all_and_wait(
+            initiating_thread_id,
+            GCCommand::Sweep(SweepPhaseCommand::Finalize),
+        );
+
+        // Sweep unmarked objects.
+        self.send_command_to_all_and_wait(
+            initiating_thread_id,
+            GCCommand::Sweep(SweepPhaseCommand::Sweep),
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn send_command_to_other_arenas(
+        &self,
+        initiating_thread_id: dotnet_utils::ArenaId,
+        command: GCCommand,
+    ) {
+        self.send_command_to_other_arenas_collecting(initiating_thread_id, command);
+    }
+
+    /// Finish the collection session early. `Drop` is a no-op afterwards.
+    pub fn finish(mut self) {
+        self.finish_inner("CollectionSession::finish");
+    }
+}
+
+#[cfg(feature = "multithreading")]
+impl Drop for CollectionSession<'_> {
+    fn drop(&mut self) {
+        self.finish_inner("CollectionSession::drop");
+    }
+}
+
+/// RAII guard that ensures [`GCCoordinator::command_finished`] is called when the
+/// guard is dropped, unless the guard has been explicitly disarmed.
+///
+/// Used in the safe-point loop to guarantee the completion signal is always sent
+/// to the coordinator even when the command handler unwinds due to a panic, so
+/// the GC initiator is never left waiting forever for a finish notification.
+#[cfg(feature = "multithreading")]
+pub(crate) struct Armed;
+
+#[cfg(feature = "multithreading")]
+pub(crate) struct Disarmed;
+
+#[cfg(feature = "multithreading")]
+pub(crate) trait CompletionGuardState {
+    const COMPLETE_ON_DROP: bool;
+}
+
+#[cfg(feature = "multithreading")]
+impl CompletionGuardState for Armed {
+    const COMPLETE_ON_DROP: bool = true;
+}
+
+#[cfg(feature = "multithreading")]
+impl CompletionGuardState for Disarmed {
+    const COMPLETE_ON_DROP: bool = false;
+}
+
+#[cfg(feature = "multithreading")]
+pub(crate) struct CommandCompletionGuard<'coord, State: CompletionGuardState> {
+    coordinator: &'coord GCCoordinator,
+    thread_id: dotnet_utils::ArenaId,
+    _state: PhantomData<State>,
+}
+
+#[cfg(feature = "multithreading")]
+impl<'coord> CommandCompletionGuard<'coord, Armed> {
+    /// Create a new armed guard for `thread_id` on `coordinator`.
+    ///
+    /// Call this immediately before executing a GC command so that any
+    /// panic inside the command handler still delivers the finish signal.
+    pub(crate) fn new(
+        thread_id: dotnet_utils::ArenaId,
+        coordinator: &'coord GCCoordinator,
+    ) -> Self {
+        Self {
+            coordinator,
+            thread_id,
+            _state: PhantomData,
+        }
+    }
+
+    /// Disarm the guard, transitioning from `Armed` to `Disarmed`.
+    ///
+    /// Call this on the normal completion path after `command_finished` has
+    /// already been called manually.
+    pub(crate) fn disarm(self) -> CommandCompletionGuard<'coord, Disarmed> {
+        let this = ManuallyDrop::new(self);
+        CommandCompletionGuard {
+            coordinator: this.coordinator,
+            thread_id: this.thread_id,
+            _state: PhantomData,
+        }
+    }
+}
+
+#[cfg(feature = "multithreading")]
+impl<State: CompletionGuardState> Drop for CommandCompletionGuard<'_, State> {
+    fn drop(&mut self) {
+        if State::COMPLETE_ON_DROP {
+            // The scope exited while still `Armed` — either the command handler
+            // panicked or a future refactor forgot to disarm. Call
+            // `command_finished` so the GC initiator is never left blocked in
+            // `wait_on_other_arenas`.
+            self.coordinator.command_finished(self.thread_id);
+        }
+    }
+}
+
 #[cfg(not(feature = "multithreading"))]
 pub mod stubs {
-    use crate::sync::MutexGuard;
     use dotnet_value::object::ObjectPtr;
     use std::collections::HashSet;
 
@@ -429,6 +549,15 @@ pub mod stubs {
         pub fn record_allocation(&self, _size: usize) {}
     }
 
+    pub struct CollectionSession<'coord> {
+        _marker: std::marker::PhantomData<&'coord ()>,
+    }
+
+    impl CollectionSession<'_> {
+        pub fn collect_all_arenas(&self, _initiating_thread_id: dotnet_utils::ArenaId) {}
+        pub fn finish(self) {}
+    }
+
     pub struct GCCoordinator;
 
     impl GCCoordinator {
@@ -442,14 +571,14 @@ pub mod stubs {
         pub fn should_collect(&self) -> bool {
             false
         }
-        pub fn finish_collection(&self) {}
         pub fn record_cross_arena_ref(
             &self,
             _target_thread_id: dotnet_utils::ArenaId,
             _ptr: ObjectPtr,
         ) {
         }
-        pub fn start_collection(&self) -> Option<MutexGuard<'_, ()>> {
+
+        pub fn begin_collection(&self) -> Option<CollectionSession<'_>> {
             None
         }
         pub fn total_allocated(&self) -> usize {
@@ -504,8 +633,8 @@ mod tests {
         handle.needs_collection().store(true, Ordering::Release);
         assert!(coordinator.should_collect());
 
-        let _guard = coordinator.start_collection().unwrap();
-        coordinator.finish_collection();
+        let session = coordinator.begin_collection().unwrap();
+        session.finish();
 
         assert!(!coordinator.should_collect());
         assert!(!handle.needs_collection().load(Ordering::Acquire));
@@ -531,8 +660,8 @@ mod tests {
         assert!(handle.needs_collection().load(Ordering::Acquire));
 
         // Reset via coordinator
-        let _guard = coordinator.start_collection().unwrap();
-        coordinator.finish_collection();
+        let session = coordinator.begin_collection().unwrap();
+        session.finish();
         assert!(!handle.needs_collection().load(Ordering::Acquire));
     }
 
@@ -574,9 +703,9 @@ mod tests {
         // Initiator (Thread 1) calls collect_all_arenas.
         // This used to deadlock because wait_on_other_arenas held the arenas lock
         // while waiting for command_finished, which also needed the arenas lock.
-        let _gc_lock = coordinator.start_collection().unwrap();
-        coordinator.collect_all_arenas(dotnet_utils::ArenaId(1));
-        coordinator.finish_collection();
+        let session = coordinator.begin_collection().unwrap();
+        session.collect_all_arenas(dotnet_utils::ArenaId(1));
+        session.finish();
 
         done.store(true, Ordering::Relaxed);
         t.join().unwrap();
@@ -616,30 +745,25 @@ mod tests {
         // Initiator (Thread 1) calls collect_all_arenas.
         // It will send a command to Thread 2 and wait for it.
         // If unregister_arena doesn't notify, this will hang.
-        let _gc_lock = coordinator.start_collection().unwrap();
-        coordinator.collect_all_arenas(dotnet_utils::ArenaId(1));
-        coordinator.finish_collection();
+        let session = coordinator.begin_collection().unwrap();
+        session.collect_all_arenas(dotnet_utils::ArenaId(1));
+        session.finish();
 
         t.join().unwrap();
     }
 
     #[test]
-    #[should_panic(expected = "finish_collection precondition")]
-    fn test_finish_collection_requires_active_collection() {
-        let stw_flag = Arc::new(AtomicBool::new(false));
-        let coordinator = GCCoordinator::new(stw_flag);
-        coordinator.finish_collection();
-    }
-
-    #[test]
     #[should_panic(expected = "collect_all_arenas precondition")]
-    fn test_collect_all_arenas_requires_active_collection_state() {
+    fn test_collect_all_arenas_requires_registered_initiator() {
         let stw_flag = Arc::new(AtomicBool::new(false));
         let coordinator = GCCoordinator::new(stw_flag);
         let handle1 = ArenaHandle::new(dotnet_utils::ArenaId(1));
         coordinator.register_arena(handle1);
 
-        coordinator.collect_all_arenas(dotnet_utils::ArenaId(1));
+        let session = coordinator
+            .begin_collection()
+            .expect("collection should start");
+        session.collect_all_arenas(dotnet_utils::ArenaId(2));
     }
 
     #[test]
@@ -649,7 +773,7 @@ mod tests {
         let coordinator = GCCoordinator::new(stw_flag);
         let handle1 = ArenaHandle::new(dotnet_utils::ArenaId(1));
         coordinator.register_arena(handle1);
-        let _gc_lock = coordinator.start_collection().unwrap();
+        let _session = coordinator.begin_collection().unwrap();
 
         coordinator.command_finished(dotnet_utils::ArenaId(1));
     }
@@ -705,8 +829,8 @@ mod tests {
         for _ in 0..GC_CYCLES {
             // start_collection returns None when another collection is already
             // in progress; we simply skip and yield in that case.
-            if let Some(_guard) = coordinator.start_collection() {
-                coordinator.finish_collection();
+            if let Some(session) = coordinator.begin_collection() {
+                session.finish();
             }
             thread::yield_now();
         }
@@ -768,9 +892,9 @@ mod tests {
         coordinator.register_arena(ArenaHandle::new(initiator_id));
 
         for _ in 0..ROUNDS {
-            if let Some(_guard) = coordinator.start_collection() {
-                coordinator.collect_all_arenas(initiator_id);
-                coordinator.finish_collection();
+            if let Some(session) = coordinator.begin_collection() {
+                session.collect_all_arenas(initiator_id);
+                session.finish();
             }
             thread::yield_now();
         }
@@ -780,5 +904,132 @@ mod tests {
         for h in handles {
             h.join().unwrap();
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Panic-injection: CollectionSession must restore Idle state
+    // when the caller unwinds mid-collection.
+    //
+    // Without the guard the coordinator would be stuck in an active collection
+    // forever after a mid-collection panic, making all subsequent GC
+    // attempts silently skip (`begin_collection` returns `None`).
+    // ------------------------------------------------------------------
+    #[test]
+    fn test_collection_session_cleanup_on_panic() {
+        use std::panic;
+
+        let stw_flag = Arc::new(AtomicBool::new(false));
+        let coordinator = Arc::new(GCCoordinator::new(stw_flag));
+
+        // Baseline: a clean start/finish cycle works.
+        {
+            let session = coordinator
+                .begin_collection()
+                .expect("initial session must start");
+            session.finish();
+        }
+
+        // Inject a panic mid-collection. Session drop must drive the
+        // coordinator back to Idle even though the caller never reaches
+        // the explicit `finish()` call.
+        let coordinator_clone = Arc::clone(&coordinator);
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            let _session = coordinator_clone
+                .begin_collection()
+                .expect("session must start inside catch_unwind");
+            // Simulate work that panics before finish() is called.
+            panic!("simulated mid-collection panic");
+        }));
+
+        assert!(result.is_err(), "the closure should have panicked");
+
+        // After unwind: session Drop called finish_collection_inner, which must
+        // have cleared stw_in_progress. Check this BEFORE starting a new session
+        // (which would re-set stw_in_progress).
+        assert!(
+            !coordinator.stw_in_progress.load(Ordering::Acquire),
+            "stw_in_progress must be false after guard-driven finish_collection"
+        );
+
+        // The coordinator must be back in Idle — a fresh session must succeed.
+        let session = coordinator
+            .begin_collection()
+            .expect("coordinator must be Idle after CollectionSession cleanup on unwind");
+        session.finish();
+    }
+
+    // ------------------------------------------------------------------
+    // Panic-injection: CommandCompletionGuard must deliver command_finished
+    // when the command handler unwinds.
+    //
+    // Without the guard, a panic inside `execute_gc_command` would leave the
+    // arena's command slot occupied and the GC initiator blocked forever in
+    // `wait_on_other_arenas`.
+    // ------------------------------------------------------------------
+    #[test]
+    fn test_command_completion_guard_sends_signal_on_panic() {
+        use std::panic;
+
+        // Use arena IDs unlikely to collide with other tests.
+        let initiator_id = dotnet_utils::ArenaId(800_001);
+        let worker_id = dotnet_utils::ArenaId(800_002);
+
+        let stw_flag = Arc::new(AtomicBool::new(false));
+        let coordinator = Arc::new(GCCoordinator::new(stw_flag));
+
+        coordinator.register_arena(ArenaHandle::new(initiator_id));
+        coordinator.register_arena(ArenaHandle::new(worker_id));
+
+        // Start a collection session so command dispatch is valid.
+        let session = coordinator
+            .begin_collection()
+            .expect("collection must start");
+
+        // Dispatch a command to the worker arena (but not the initiator).
+        session.send_command_to_other_arenas(initiator_id, GCCommand::Mark(MarkPhaseCommand::All));
+
+        assert!(
+            coordinator.has_command(worker_id),
+            "worker must have a pending command after send_command_to_other_arenas"
+        );
+
+        // Simulate a panic inside execute_gc_command while the guard is live.
+        // The guard's Drop must call command_finished even though the command
+        // handler never returned normally.
+        let coordinator_clone = Arc::clone(&coordinator);
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            let _guard = CommandCompletionGuard::new(worker_id, &coordinator_clone);
+            // Simulate the command handler panicking mid-execution.
+            panic!("simulated panic during GC command execution");
+        }));
+
+        assert!(result.is_err(), "the closure should have panicked");
+
+        // The guard's Drop must have called command_finished, clearing the
+        // command slot so the GC initiator would not be left hanging.
+        assert!(
+            !coordinator.has_command(worker_id),
+            "command slot must be cleared after CommandCompletionGuard drop on unwind"
+        );
+
+        // Verify the disarmed path: a normally-completing guard must NOT call
+        // command_finished a second time (which would panic due to no pending cmd).
+        session.send_command_to_other_arenas(initiator_id, GCCommand::Mark(MarkPhaseCommand::All));
+        assert!(coordinator.has_command(worker_id));
+        {
+            let guard = CommandCompletionGuard::new(worker_id, &coordinator);
+            // Normal completion: disarm before manual call.
+            let _disarmed_guard = guard.disarm();
+            coordinator.command_finished(worker_id);
+            // guard drops here — must be a no-op since it was disarmed.
+        }
+        assert!(
+            !coordinator.has_command(worker_id),
+            "command slot must be cleared by the manual command_finished call"
+        );
+
+        session.finish();
+        coordinator.unregister_arena(initiator_id);
+        coordinator.unregister_arena(worker_id);
     }
 }

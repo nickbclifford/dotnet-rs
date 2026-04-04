@@ -283,7 +283,7 @@ pub fn callvirt_constrained<
                         m.with_data(ObjectRef::SIZE, |data| {
                             ObjectRef::read_branded(
                                 data,
-                                &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+                                &ctx.gc_with_token(&ctx.no_active_borrows_token()),
                             )
                         })
                     },

@@ -1,5 +1,6 @@
 use crate::{
     StepResult,
+    error::VmError,
     stack::ops::{
         ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps, ResolutionOps, StackOps,
         ThreadOps,
@@ -7,7 +8,9 @@ use crate::{
     sync::Ordering,
 };
 use dotnet_macros::dotnet_intrinsic;
-use dotnet_types::{generics::GenericLookup, members::MethodDescription};
+use dotnet_types::{
+    error::CompareExchangeError, generics::GenericLookup, members::MethodDescription,
+};
 use dotnet_value::{StackValue, object::ObjectRef};
 use dotnetdll::prelude::{BaseType, Parameter, ParameterType};
 
@@ -41,7 +44,7 @@ pub fn intrinsic_interlocked_compare_exchange<
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let params = &method.method().signature.parameters;
     // CompareExchange(ref T, T, T) -> T
     // params[0] is 'ref T'.
@@ -75,7 +78,10 @@ pub fn intrinsic_interlocked_compare_exchange<
                     Ordering::SeqCst,
                 )
             } {
-                Ok(prev) | Err(prev) => prev as i32,
+                Ok(prev) | Err(CompareExchangeError::Mismatch(prev)) => prev as i32,
+                Err(CompareExchangeError::Bounds(e)) => {
+                    return StepResult::Error(VmError::from(e));
+                }
             };
 
             ctx.push_i32(prev);
@@ -98,7 +104,10 @@ pub fn intrinsic_interlocked_compare_exchange<
                     Ordering::SeqCst,
                 )
             } {
-                Ok(prev) | Err(prev) => prev as i64,
+                Ok(prev) | Err(CompareExchangeError::Mismatch(prev)) => prev as i64,
+                Err(CompareExchangeError::Bounds(e)) => {
+                    return StepResult::Error(VmError::from(e));
+                }
             };
 
             ctx.push_i64(prev);
@@ -122,7 +131,10 @@ pub fn intrinsic_interlocked_compare_exchange<
                     Ordering::SeqCst,
                 )
             } {
-                Ok(prev) | Err(prev) => prev as isize,
+                Ok(prev) | Err(CompareExchangeError::Mismatch(prev)) => prev as isize,
+                Err(CompareExchangeError::Bounds(e)) => {
+                    return StepResult::Error(VmError::from(e));
+                }
             };
 
             ctx.push_isize(prev);
@@ -145,7 +157,7 @@ pub fn intrinsic_interlocked_compare_exchange<
             comparand.write(&mut comp_buf);
             let comp_raw = usize::from_ne_bytes(comp_buf);
 
-            let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+            let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
             let size = ObjectRef::SIZE;
             // SAFETY: `target_ptr` is the managed `ref T` argument and `comp_raw`/`val_raw`
             // use the same tagged object representation as regular field writes.
@@ -160,7 +172,10 @@ pub fn intrinsic_interlocked_compare_exchange<
                     Ordering::SeqCst,
                 )
             } {
-                Ok(prev) | Err(prev) => prev as usize,
+                Ok(prev) | Err(CompareExchangeError::Mismatch(prev)) => prev as usize,
+                Err(CompareExchangeError::Bounds(e)) => {
+                    return StepResult::Error(VmError::from(e));
+                }
             };
 
             // Decode via read_branded so the tag bits are stripped correctly and
@@ -196,7 +211,7 @@ pub fn intrinsic_interlocked_exchange<
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let params = &method.method().signature.parameters;
     // Exchange(ref T, T) -> T
     // params[0] is 'ref T'.
@@ -331,7 +346,7 @@ pub fn intrinsic_interlocked_exchange_add<
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let params = &method.method().signature.parameters;
     let Parameter(_, first_param_type) = &params[0];
 

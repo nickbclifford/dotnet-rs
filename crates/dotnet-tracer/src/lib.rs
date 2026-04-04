@@ -1,7 +1,7 @@
 //! IO-optimized runtime state debug tracer for the .NET VM
 //!
 //! This module now provides a backward-compatible wrapper around `tracing`.
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use dotnet_metrics::RuntimeMetrics;
 use gc_arena::static_collect;
 use std::{
@@ -9,13 +9,17 @@ use std::{
     fmt::Arguments,
     fs::File,
     io::{Write, stderr, stdout},
-    sync::Once,
+    sync::{
+        Arc, Once,
+        atomic::{AtomicU64, Ordering},
+    },
     thread,
 };
-use tracing::{Level, debug, error, info, trace};
+use tracing::{Level, debug, error, info, trace, warn};
 use tracing_subscriber::{EnvFilter, Registry, fmt, prelude::*};
 
 static INIT: Once = Once::new();
+const TRACER_CHANNEL_CAPACITY: usize = 8_192;
 
 /// Trace level for filtering messages (Legacy)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -69,11 +73,13 @@ enum LogEntry {
     DumpFullStateHeader,
     DumpGcStats(usize, usize, usize, usize, usize),
     DumpRuntimeMetrics(u64, u64, u64, u64, Box<dotnet_metrics::CacheStats>),
+    DroppedByBackpressure(u64),
     Flush,
 }
 
 pub struct Tracer {
     sender: Option<Sender<LogEntry>>,
+    dropped_by_backpressure: Arc<AtomicU64>,
 }
 
 static_collect!(Tracer);
@@ -85,10 +91,13 @@ impl Tracer {
         });
 
         if !tracing::enabled!(Level::ERROR) && env::var("DOTNET_RS_TRACE").is_err() {
-            return Self { sender: None };
+            return Self {
+                sender: None,
+                dropped_by_backpressure: Arc::new(AtomicU64::new(0)),
+            };
         }
 
-        let (sender, receiver) = unbounded::<LogEntry>();
+        let (sender, receiver) = bounded::<LogEntry>(TRACER_CHANNEL_CAPACITY);
 
         thread::spawn(move || {
             Self::flusher(receiver);
@@ -96,6 +105,7 @@ impl Tracer {
 
         Self {
             sender: Some(sender),
+            dropped_by_backpressure: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -288,6 +298,13 @@ impl Tracer {
                     debug!("║   Lock Wait Total:      {:>12} μs", lock_total_us);
                     debug!("{}", *stats);
                 }
+                LogEntry::DroppedByBackpressure(dropped) => {
+                    warn!(
+                        target: "tracer",
+                        "dropped {} trace event(s) because tracer channel was full",
+                        dropped
+                    );
+                }
                 LogEntry::Flush => {
                     // Force flush if supported by subscriber (standard fmt doesn't have a flush)
                 }
@@ -295,9 +312,32 @@ impl Tracer {
         }
     }
 
+    fn try_emit_drop_report(&self, sender: &Sender<LogEntry>) {
+        let dropped = self.dropped_by_backpressure.swap(0, Ordering::Relaxed);
+        if dropped == 0 {
+            return;
+        }
+
+        if let Err(err) = sender.try_send(LogEntry::DroppedByBackpressure(dropped)) {
+            let count = match err {
+                TrySendError::Full(LogEntry::DroppedByBackpressure(count))
+                | TrySendError::Disconnected(LogEntry::DroppedByBackpressure(count)) => count,
+                _ => dropped,
+            };
+            self.dropped_by_backpressure
+                .fetch_add(count, Ordering::Relaxed);
+        }
+    }
+
     fn send(&self, entry: LogEntry) {
         if let Some(ref sender) = self.sender {
-            let _ = sender.send(entry);
+            match sender.try_send(entry) {
+                Ok(()) => self.try_emit_drop_report(sender),
+                Err(TrySendError::Full(_entry)) => {
+                    self.dropped_by_backpressure.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(TrySendError::Disconnected(_entry)) => {}
+            }
         }
     }
 
@@ -753,5 +793,62 @@ fn init_tracing() {
         Registry::default()
             .with(fmt::layer().with_writer(make_writer).with_filter(filter))
             .init();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn backpressure_drops_events_when_channel_is_full() {
+        const TOTAL: usize = 10_000;
+        let dropped = Arc::new(AtomicU64::new(0));
+        let (sender, receiver) = bounded::<LogEntry>(1);
+        let tracer = Tracer {
+            sender: Some(sender),
+            dropped_by_backpressure: dropped.clone(),
+        };
+
+        for i in 0..TOTAL {
+            tracer.send(LogEntry::Msg(TraceLevel::Info, 0, i.to_string()));
+        }
+
+        assert!(receiver.len() <= 1);
+        assert!(dropped.load(Ordering::Relaxed) > 0);
+    }
+
+    #[test]
+    fn tracer_channel_throughput_accounting_under_backpressure() {
+        const TOTAL: usize = 50_000;
+        let dropped = Arc::new(AtomicU64::new(0));
+        let (sender, receiver) = bounded::<LogEntry>(64);
+        let tracer = Tracer {
+            sender: Some(sender),
+            dropped_by_backpressure: dropped.clone(),
+        };
+
+        let worker = thread::spawn(move || {
+            let mut processed_messages = 0usize;
+            let mut reported_drops = 0u64;
+            while let Ok(entry) = receiver.recv_timeout(Duration::from_millis(100)) {
+                match entry {
+                    LogEntry::Msg(..) => processed_messages += 1,
+                    LogEntry::DroppedByBackpressure(count) => reported_drops += count,
+                    _ => {}
+                }
+            }
+            (processed_messages, reported_drops)
+        });
+
+        for i in 0..TOTAL {
+            tracer.send(LogEntry::Msg(TraceLevel::Debug, 0, i.to_string()));
+        }
+        drop(tracer);
+
+        let (processed, reported_drops) = worker.join().expect("consumer worker panicked");
+        let dropped = dropped.load(Ordering::Relaxed);
+        assert_eq!(processed as u64 + reported_drops + dropped, TOTAL as u64);
     }
 }

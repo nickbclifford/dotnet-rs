@@ -75,7 +75,7 @@ pub fn intrinsic_gc_suppress_finalize<
     let obj = ctx.pop_obj();
     if let Some(handle) = obj.0
         && let Some(o) = handle
-            .borrow_mut(&ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()))
+            .borrow_mut(&ctx.gc_with_token(&ctx.no_active_borrows_token()))
             .storage
             .as_obj_mut()
     {
@@ -99,7 +99,7 @@ pub fn intrinsic_gc_reregister_for_finalize<
         let is_obj = handle.borrow().storage.as_obj().is_some();
         if is_obj {
             handle
-                .borrow_mut(&ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()))
+                .borrow_mut(&ctx.gc_with_token(&ctx.no_active_borrows_token()))
                 .storage
                 .as_obj_mut()
                 .unwrap()

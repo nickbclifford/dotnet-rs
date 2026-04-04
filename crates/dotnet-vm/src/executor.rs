@@ -101,7 +101,7 @@ impl Executor {
     }
 
     pub fn dump_last_instructions(&self) -> String {
-        self.shared.last_instructions.lock().unwrap().dump()
+        self.shared.last_instructions.lock().dump()
     }
 
     pub fn new(shared: Arc<SharedGlobalState>) -> Self {
@@ -387,8 +387,8 @@ impl Executor {
             }
         };
 
-        // Thread unregistration is now handled by ThreadCleanupGuard::drop
-        // which runs when this function returns or panics.
+        // Thread unregistration is handled by `Executor`'s `Drop` impl,
+        // which runs when the Executor is dropped after this function returns.
         self.shared.tracer.flush();
         result
     }
@@ -402,9 +402,10 @@ impl Executor {
 
             vm_trace_gc_collection_start!(self, 0, "allocation pressure");
 
-            // 1. Mark that we are starting collection (acquires coordinator lock)
+            // 1. Enter a typestate collection session. Drop restores Idle if
+            //    we unwind before the explicit `finish()` below.
             let coordinator = Arc::clone(&self.shared.gc_coordinator);
-            let Some(_gc_lock) = coordinator.start_collection() else {
+            let Some(session) = coordinator.begin_collection() else {
                 return; // Another thread is already collecting
             };
 
@@ -419,16 +420,14 @@ impl Executor {
             let _stw_guard = thread_manager.request_stop_the_world();
 
             // 3. Perform coordinated GC across all arenas
-            self.shared
-                .gc_coordinator
-                .collect_all_arenas(self.thread_id);
+            session.collect_all_arenas(self.thread_id);
 
             // 4. Record metrics and log completion
             let duration = start_time.elapsed();
             self.shared.metrics.record_gc_pause(duration);
 
-            // Mark collection as finished (releases coordinator lock)
-            self.shared.gc_coordinator.finish_collection();
+            // Explicitly finish before recording the collection end event.
+            session.finish();
 
             vm_trace_gc_collection_end!(self, 0, 0, duration.as_micros() as u64);
 

@@ -63,7 +63,7 @@ pub(super) fn invoke_delegate<
                 unsafe {
                     ObjectRef::read_branded(
                         &v.get()[offset..],
-                        &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+                        &ctx.gc_with_token(&ctx.no_active_borrows_token()),
                     )
                 }
             });

@@ -26,7 +26,7 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let arg = ctx.peek_stack();
     let StackValue::ValueType(handle) = arg else {
         panic!(
@@ -142,7 +142,7 @@ pub fn handle_make_generic_type<
     ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let parameters = ctx.pop_obj();
     let target = ctx.pop_obj();
 

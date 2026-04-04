@@ -176,7 +176,7 @@ pub fn intrinsic_array_set_value<
             );
         }
     }
-    let mut heap = handle.borrow_mut(&ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()));
+    let mut heap = handle.borrow_mut(&ctx.gc_with_token(&ctx.no_active_borrows_token()));
     let HeapStorage::Vec(v) = &mut heap.storage else {
         panic!("Not an array");
     };

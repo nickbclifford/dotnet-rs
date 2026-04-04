@@ -19,13 +19,10 @@ use dotnetdll::{
         types::{ExternalTypeReference, ResolutionScope, TypeDefinition, UserType},
     },
 };
-use std::sync::OnceLock;
-
-static MOCK_LOADER: OnceLock<Arc<AssemblyLoader>> = OnceLock::new();
 
 fn get_mock_loader() -> Arc<AssemblyLoader> {
-    MOCK_LOADER
-        .get_or_init(|| {
+    thread_local! {
+        static MOCK_LOADER: Arc<AssemblyLoader> = {
             let loader = AssemblyLoader::new_bare("mock_root".to_string())
                 .expect("Failed to create mock AssemblyLoader");
 
@@ -71,8 +68,9 @@ fn get_mock_loader() -> Arc<AssemblyLoader> {
             system_runtime.assembly = Some(Assembly::new("System.Runtime"));
             loader.register_owned_assembly(system_runtime);
             Arc::new(loader)
-        })
-        .clone()
+        };
+    }
+    MOCK_LOADER.with(|l| l.clone())
 }
 
 fn run_tail_chain_and_measure_max_depth(tail_call: bool, chain_len: usize) -> usize {
@@ -255,11 +253,11 @@ fn run_tail_chain_and_measure_max_depth(tail_call: bool, chain_len: usize) -> us
             StepResult::Return => break,
             StepResult::Error(e) => panic!(
                 "Execution error: {e}\nLast instructions:\n{}",
-                shared.last_instructions.lock().unwrap().dump()
+                shared.last_instructions.lock().dump()
             ),
             StepResult::MethodThrew(exc) => panic!(
                 "Unexpected managed exception: {exc}\nLast instructions:\n{}",
-                shared.last_instructions.lock().unwrap().dump()
+                shared.last_instructions.lock().dump()
             ),
             _ => {}
         }

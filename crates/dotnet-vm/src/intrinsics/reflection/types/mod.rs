@@ -211,7 +211,7 @@ pub(crate) fn populate_reflection_array<'gc, T: MemoryOps<'gc> + TypedStackOps<'
     items: Vec<ObjectRef<'gc>>,
     item_type: ConcreteType,
 ) -> StepResult {
-    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let mut vector = match ctx.new_vector(item_type, items.len()) {
         Ok(v) => v,
         Err(e) => return StepResult::Error(e.into()),
@@ -234,7 +234,7 @@ pub fn runtime_type_handle_intrinsic_call<
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let method_name = &*method.method().name;
     let param_count = method.method().signature.parameters.len();
 

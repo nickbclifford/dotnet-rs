@@ -90,6 +90,13 @@ impl<T: ?Sized> ThreadSafeLock<T> {
     /// Borrow the contents mutably.
     pub fn borrow_mut<'gc>(&self, _gc: &Mutation<'gc>) -> ThreadSafeWriteGuard<'_, T> {
         ThreadSafeWriteGuard {
+            // SAFETY: `_gc` is a `&Mutation<'gc>` token which, by gc-arena's
+            // contract, can only be obtained inside a `mutate` closure.  The
+            // arena guarantees no GC cycle runs concurrently with mutation, so
+            // no other code can observe the RefLock as immutably borrowed through
+            // the GC tracing path at this point.  `unlock_unchecked` is the
+            // gc-arena-blessed way to obtain a mutable borrow on a `RefLock`
+            // inside a mutation context.
             guard: unsafe { self.inner.unlock_unchecked().borrow_mut() },
         }
     }
@@ -108,6 +115,12 @@ impl<T: ?Sized> ThreadSafeLock<T> {
     ///
     /// Returns `None` if any locks (read_unchecked or write) are currently held.
     pub fn try_borrow_mut<'gc>(&self, _gc: &Mutation<'gc>) -> Option<ThreadSafeWriteGuard<'_, T>> {
+        // SAFETY: Same invariant as `borrow_mut`: holding a `&Mutation<'gc>`
+        // token guarantees we are inside a mutation context where the arena's
+        // GC cycle cannot run.  `unlock_unchecked` is the gc-arena-prescribed
+        // way to access a `RefLock` mutably within a mutation context.  If
+        // another borrow is already active `try_borrow_mut` returns `None`
+        // instead of panicking, making this safe to call speculatively.
         unsafe {
             self.inner
                 .unlock_unchecked()
@@ -215,13 +228,29 @@ impl<T: ?Sized> DerefMut for ThreadSafeWriteGuard<'_, T> {
     }
 }
 
-// The lock itself is Send and Sync if the inner type is Send
+// SAFETY: `ThreadSafeLock<T>` can be sent to another thread as long as `T`
+// itself can be sent.  Under both backends (parking_lot `RwLock` and
+// gc-arena `RefLock`) ownership transfer is safe when `T: Send`.
 unsafe impl<T: Send> Send for ThreadSafeLock<T> {}
-unsafe impl<T: Send> Sync for ThreadSafeLock<T> {}
+
+// SAFETY: `ThreadSafeLock<T>` allows `&ThreadSafeLock<T>` to be used from
+// multiple threads concurrently.  Read-borrows hand out `&T` references that
+// may be observed by many threads at once, so `T: Sync` is required.
+// Write-borrows hand out `&mut T` which may be sent across a thread boundary,
+// so `T: Send` is also required.  These bounds mirror the requirements of
+// `parking_lot::RwLock<T>` (the multithreading backend) and make the
+// single-threaded (`RefLock`) path equally strict, preventing `!Sync` types
+// from being incorrectly shared.
+unsafe impl<T: Send + Sync> Sync for ThreadSafeLock<T> {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use static_assertions::assert_impl_all;
+
+    // Compile-time: ThreadSafeLock<i32> must be Send + Sync under every
+    // feature configuration (i32 satisfies the T: Send + Sync bound).
+    assert_impl_all!(ThreadSafeLock<i32>: Send, Sync);
 
     #[test]
     fn test_basic_borrow() {

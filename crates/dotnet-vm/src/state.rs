@@ -20,7 +20,7 @@ use dotnet_types::{
     resolution::ResolutionS,
     runtime::RuntimeType,
 };
-use dotnet_utils::sync::{Arc, AtomicBool, Ordering};
+use dotnet_utils::sync::{Arc, AtomicBool, Mutex, Ordering};
 use dotnet_value::{
     layout::{FieldLayoutManager, LayoutManager},
     object::ObjectRef,
@@ -40,7 +40,7 @@ pub use crate::statics::StaticStorageManager;
 /// Grouped caches for type resolution and layout computation.
 /// This struct reduces the API surface area of ResolutionContext.
 pub struct GlobalCaches {
-    /// Cache for type layouts: ConcreteType -> Arc<LayoutManager>
+    /// Cache for type layouts: ConcreteType -> Arc<[`LayoutManager`]>
     pub layout_cache: DashMap<ConcreteType, Arc<LayoutManager>>,
     /// Cache for instance field layouts: (TypeDescription, GenericLookup) -> FieldLayoutManager
     pub instance_field_layout_cache:
@@ -105,7 +105,7 @@ pub struct SharedGlobalState {
     /// Grouped caches for type resolution and layout computation
     pub caches: Arc<GlobalCaches>,
     pub statics: Arc<StaticStorageManager>,
-    pub last_instructions: std::sync::Arc<std::sync::Mutex<InstructionRingBuffer>>,
+    pub last_instructions: Arc<Mutex<InstructionRingBuffer>>,
     pub abort_requested: Arc<AtomicBool>,
     pub gc_coordinator: Arc<GCCoordinator>,
     /// Cache for shared reflection objects: RuntimeType -> index
@@ -187,9 +187,7 @@ impl SharedGlobalState {
             empty_generics: GenericLookup::default(),
             caches,
             statics: Arc::new(StaticStorageManager::new()),
-            last_instructions: std::sync::Arc::new(std::sync::Mutex::new(
-                InstructionRingBuffer::new(),
-            )),
+            last_instructions: Arc::new(Mutex::new(InstructionRingBuffer::new())),
             abort_requested: Arc::new(AtomicBool::new(false)),
             gc_coordinator: Arc::new(GCCoordinator::new(stw_in_progress.clone())),
             #[cfg(feature = "multithreading")]

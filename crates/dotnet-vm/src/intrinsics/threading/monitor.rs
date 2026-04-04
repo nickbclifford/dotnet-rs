@@ -60,7 +60,7 @@ pub fn intrinsic_monitor_exit<
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let obj_ref = ctx.pop_obj();
 
     if obj_ref.0.is_some() {
@@ -137,7 +137,7 @@ pub fn intrinsic_monitor_enter_obj<
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let obj_ref = ctx.peek_stack_at(0).as_object_ref();
 
     if obj_ref.0.is_some() {
@@ -189,7 +189,7 @@ pub fn intrinsic_monitor_reliable_enter<
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let success_ptr = ctx.peek_stack_at(0).as_managed_ptr();
     let obj_ref = ctx.peek_stack_at(1).as_object_ref();
 
@@ -262,7 +262,7 @@ pub fn intrinsic_monitor_try_enter_fast_path<
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let obj_ref = ctx.pop_obj();
 
     if obj_ref.0.is_some() {
@@ -300,7 +300,7 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let success_ptr = ctx.peek_stack_at(0).as_managed_ptr();
     let timeout_ms = ctx.peek_stack_at(1).as_i32();
     let obj_ref = ctx.peek_stack_at(2).as_object_ref();
@@ -383,7 +383,7 @@ pub fn intrinsic_monitor_try_enter_timeout<
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let timeout_ms = ctx.peek_stack_at(0).as_i32();
     let obj_ref = ctx.peek_stack_at(1).as_object_ref();
 

@@ -8,6 +8,7 @@
 //!   and `Monitor` synchronization primitives. Pulls in `parking_lot`.
 //! - `multithreading`: Enables stop-the-world coordinated garbage collection across
 //!   multiple thread-local arenas. Depends on `multithreading`.
+#![allow(clippy::arc_with_non_send_sync)]
 use clap::Parser;
 use dotnet_types::{TypeDescription, members::MethodDescription};
 use dotnet_vm::{self as vm, ExecutorResult};

@@ -22,11 +22,9 @@ mod tests {
             types::{ExternalTypeReference, ResolutionScope, TypeDefinition},
         },
     };
-    use std::sync::OnceLock;
-    static MOCK_LOADER: OnceLock<Arc<AssemblyLoader>> = OnceLock::new();
     fn get_mock_loader() -> Arc<AssemblyLoader> {
-        MOCK_LOADER
-            .get_or_init(|| {
+        thread_local! {
+            static MOCK_LOADER: Arc<AssemblyLoader> = {
                 let loader = AssemblyLoader::new_bare("mock_root_jmp".to_string())
                     .expect("Failed to create mock AssemblyLoader");
                 let mut mscorlib = Resolution::new(Module::new("mscorlib.dll"));
@@ -42,8 +40,9 @@ mod tests {
                 system_runtime.push_type_definition(obj2);
                 loader.register_owned_assembly(system_runtime);
                 Arc::new(loader)
-            })
-            .clone()
+            };
+        }
+        MOCK_LOADER.with(|l| l.clone())
     }
     #[test]
     fn test_jmp_instruction() {

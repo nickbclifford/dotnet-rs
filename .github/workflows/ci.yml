@@ -15,6 +15,14 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  doc-lint:
+    name: Documentation Drift Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check doc-to-code drift
+        run: bash scripts/check_doc_drift.sh
+
   format:
     name: Format Check
     runs-on: ubuntu-latest

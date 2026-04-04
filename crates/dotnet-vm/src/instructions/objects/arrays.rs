@@ -388,7 +388,7 @@ pub fn newarr<
 
     let v = vm_try!(ctx.new_vector(elem_type, length));
     let o = ObjectRef::new(
-        ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+        ctx.gc_with_token(&ctx.no_active_borrows_token()),
         HeapStorage::Vec(v),
     );
     ctx.register_new_object(&o);

@@ -1,7 +1,7 @@
 use crate::{
     gc::coordinator::GCCoordinator,
     metrics::RuntimeMetrics,
-    sync::{Arc, LockResult, Mutex, SyncBlockOps, SyncManagerOps},
+    sync::{Arc, LockResult, Mutex},
     threading::ThreadManagerOps,
 };
 use dotnet_utils::ArenaId;
@@ -23,7 +23,7 @@ impl SyncBlock {
     }
 }
 
-impl SyncBlockOps for SyncBlock {
+impl super::SyncBlockBackend for SyncBlock {
     fn try_enter(&self, _thread_id: ArenaId) -> bool {
         self.recursion_count.fetch_add(1, Ordering::Relaxed);
         true
@@ -112,7 +112,7 @@ impl SyncBlockManager {
     }
 }
 
-impl SyncManagerOps for SyncBlockManager {
+impl super::SyncManagerBackend for SyncBlockManager {
     type Block = SyncBlock;
 
     fn get_or_create_sync_block(
@@ -148,12 +148,104 @@ impl SyncManagerOps for SyncBlockManager {
         thread_id: ArenaId,
         _metrics: &RuntimeMetrics,
     ) -> bool {
-        block.try_enter(thread_id)
+        super::SyncBlockBackend::try_enter(block.as_ref(), thread_id)
     }
 }
 
 impl Default for SyncBlockManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gc::coordinator::GCCoordinator;
+    use crate::metrics::RuntimeMetrics;
+    use crate::sync::{LockResult, SyncBlockOps};
+    use crate::threading::ThreadManagerOps;
+    use dotnet_utils::ArenaId;
+    use std::sync::Arc as StdArc;
+    use std::sync::atomic::AtomicBool;
+
+    const THREAD_A: ArenaId = ArenaId(1);
+
+    struct MockSTWGuard;
+    impl crate::threading::STWGuardOps for MockSTWGuard {
+        fn elapsed_micros(&self) -> u64 {
+            0
+        }
+    }
+
+    struct MockThreadManager;
+    impl ThreadManagerOps for MockThreadManager {
+        type Guard<'a> = MockSTWGuard;
+        fn register_thread(&self) -> ArenaId {
+            THREAD_A
+        }
+        fn register_thread_traced(&self, _: &mut crate::tracer::Tracer, _: &str) -> ArenaId {
+            THREAD_A
+        }
+        fn unregister_thread(&self, _: ArenaId) {}
+        fn unregister_thread_traced(&self, _: ArenaId, _: &mut crate::tracer::Tracer) {}
+        fn current_thread_id(&self) -> Option<ArenaId> {
+            Some(THREAD_A)
+        }
+        fn thread_count(&self) -> usize {
+            1
+        }
+        fn is_gc_stop_requested(&self) -> bool {
+            false
+        }
+        fn safe_point(&self, _: ArenaId, _: &GCCoordinator) {}
+        fn execute_gc_command(&self, _: crate::gc::coordinator::GCCommand, _: &GCCoordinator) {}
+        fn safe_point_traced(
+            &self,
+            _: ArenaId,
+            _: &GCCoordinator,
+            _: &mut crate::tracer::Tracer,
+            _: &str,
+        ) {
+        }
+        fn request_stop_the_world(&self) -> Self::Guard<'_> {
+            MockSTWGuard
+        }
+        fn request_stop_the_world_traced(&self, _: &mut crate::tracer::Tracer) -> Self::Guard<'_> {
+            MockSTWGuard
+        }
+    }
+
+    #[test]
+    fn test_single_threaded_monitor_recursion() {
+        let block = SyncBlock::new();
+
+        // Successive entries should succeed (recursion)
+        assert!(block.try_enter(THREAD_A));
+        assert!(block.try_enter(THREAD_A));
+        assert_eq!(block.recursion_count.load(Ordering::Relaxed), 2);
+
+        // Successive exits should succeed
+        assert!(block.exit(THREAD_A));
+        assert!(block.exit(THREAD_A));
+        assert_eq!(block.recursion_count.load(Ordering::Relaxed), 0);
+
+        // Extra exit should fail
+        assert!(!block.exit(THREAD_A));
+    }
+
+    #[test]
+    fn test_single_threaded_enter_safe() {
+        let block = SyncBlock::new();
+        let metrics = RuntimeMetrics::new();
+        let tm = MockThreadManager;
+        let gc = GCCoordinator::new(StdArc::new(AtomicBool::new(false)));
+
+        assert_eq!(
+            block.enter_safe(THREAD_A, &metrics, &tm, &gc),
+            LockResult::Success
+        );
+        assert_eq!(block.recursion_count.load(Ordering::Relaxed), 1);
+        assert!(block.exit(THREAD_A));
     }
 }

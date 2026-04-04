@@ -137,6 +137,23 @@ pub enum MemoryAccessError {
     CrossArenaViolation,
 }
 
+/// Error type returned by compare-and-exchange atomic operations.
+///
+/// Distinguishes a CAS mismatch (the expected value did not match — the current
+/// value is returned so the caller can retry or report it) from a hard
+/// memory-access error (e.g. a bounds violation) that prevents the operation
+/// from proceeding at all.
+#[derive(Debug, Error, Clone, PartialEq)]
+#[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
+pub enum CompareExchangeError {
+    /// The expected value did not match; contains the actual current value.
+    #[error("CAS mismatch: current value is {0}")]
+    Mismatch(u64),
+    /// A memory-access error occurred before the exchange could be attempted.
+    #[error("Atomic bounds check failed: {0}")]
+    Bounds(MemoryAccessError),
+}
+
 #[derive(Debug, Error, Clone, PartialEq)]
 #[cfg_attr(feature = "fuzzing", derive(Arbitrary))]
 pub enum IntrinsicError {

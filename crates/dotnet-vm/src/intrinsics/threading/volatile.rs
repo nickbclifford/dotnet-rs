@@ -45,7 +45,7 @@ pub fn intrinsic_volatile_read<
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let params = &method.method().signature.parameters;
     let Parameter(_, first_param_type) = &params[0];
 
@@ -187,7 +187,7 @@ pub fn intrinsic_volatile_write<
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let value = ctx.pop();
     let target_ptr = ctx.pop_managed_ptr();
 

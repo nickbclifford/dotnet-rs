@@ -31,7 +31,7 @@ pub fn intrinsic_assembly_get_custom_attributes<
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let num_args = _method.method().signature.parameters.len()
         + if _method.method().signature.instance {
             1
@@ -63,7 +63,7 @@ pub fn intrinsic_attribute_get_custom_attributes<
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let num_args = _method.method().signature.parameters.len()
         + if _method.method().signature.instance {
             1
@@ -91,7 +91,7 @@ pub fn handle_get_assembly<
     ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let obj = ctx.pop_obj();
 
     let target_type = ctx.resolve_runtime_type(obj);

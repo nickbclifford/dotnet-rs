@@ -158,13 +158,13 @@ pub fn delegate_equals<
                     let t1 = this_ref.as_vector(|v| unsafe {
                         ObjectRef::read_branded(
                             &v.get()[i * ObjectRef::SIZE..],
-                            &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+                            &ctx.gc_with_token(&ctx.no_active_borrows_token()),
                         )
                     });
                     let t2 = other_ref.as_vector(|v| unsafe {
                         ObjectRef::read_branded(
                             &v.get()[i * ObjectRef::SIZE..],
-                            &ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+                            &ctx.gc_with_token(&ctx.no_active_borrows_token()),
                         )
                     });
                     // We should probably call Equals recursively or compare info
@@ -254,24 +254,21 @@ pub fn delegate_combine<
     let delegate_concrete = ConcreteType::from(delegate_type);
     let array_v = vm_try!(ctx.new_vector(delegate_concrete, combined.len()));
     let array_obj = ObjectRef::new(
-        ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+        ctx.gc_with_token(&ctx.no_active_borrows_token()),
         HeapStorage::Vec(array_v),
     );
     ctx.register_new_object(&array_obj);
 
-    array_obj.as_vector_mut(
-        ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
-        |v| {
-            for (i, &el) in combined.iter().enumerate() {
-                el.write(&mut v.get_mut()[i * ObjectRef::SIZE..]);
-            }
-        },
-    );
+    array_obj.as_vector_mut(ctx.gc_with_token(&ctx.no_active_borrows_token()), |v| {
+        for (i, &el) in combined.iter().enumerate() {
+            el.write(&mut v.get_mut()[i * ObjectRef::SIZE..]);
+        }
+    });
 
     // Set 'targets' field on new_delegate
     let multicast_type = vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
     new_delegate.as_object_mut(
-        ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+        ctx.gc_with_token(&ctx.no_active_borrows_token()),
         |instance| {
             array_obj.write(
                 &mut instance
@@ -350,23 +347,20 @@ pub fn delegate_remove<
             let delegate_concrete = ConcreteType::from(delegate_type);
             let array_v = vm_try!(ctx.new_vector(delegate_concrete, new_list.len()));
             let array_obj = ObjectRef::new(
-                ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+                ctx.gc_with_token(&ctx.no_active_borrows_token()),
                 dotnet_value::object::HeapStorage::Vec(array_v),
             );
             ctx.register_new_object(&array_obj);
 
-            array_obj.as_vector_mut(
-                ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
-                |v| {
-                    for (i, &el) in new_list.iter().enumerate() {
-                        el.write(&mut v.get_mut()[i * ObjectRef::SIZE..]);
-                    }
-                },
-            );
+            array_obj.as_vector_mut(ctx.gc_with_token(&ctx.no_active_borrows_token()), |v| {
+                for (i, &el) in new_list.iter().enumerate() {
+                    el.write(&mut v.get_mut()[i * ObjectRef::SIZE..]);
+                }
+            });
 
             let multicast_type = vm_try!(ctx.loader().corlib_type("System.MulticastDelegate"));
             new_delegate.as_object_mut(
-                ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+                ctx.gc_with_token(&ctx.no_active_borrows_token()),
                 |instance| {
                     array_obj.write(
                         &mut instance

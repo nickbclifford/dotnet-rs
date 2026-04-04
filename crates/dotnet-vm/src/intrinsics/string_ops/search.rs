@@ -7,7 +7,7 @@ use crate::{
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
-use dotnet_utils::{BorrowGuardHandle, NoActiveBorrows};
+use dotnet_utils::GcScopeGuard;
 use dotnet_value::{
     StackValue,
     object::{HeapStorage, ObjectRef},
@@ -130,8 +130,10 @@ pub fn intrinsic_string_substring<
             while offset < l {
                 let current_chunk = std::cmp::min(l - offset, CHUNK_SIZE);
                 {
-                    let (_active, _guard) =
-                        BorrowGuardHandle::new(ctx.as_borrow_scope(), NoActiveBorrows::new());
+                    let _gc_scope = GcScopeGuard::enter(
+                        ctx.as_borrow_scope(),
+                        ctx.as_borrow_scope().gc_ready_token(),
+                    );
                     let inner = handle.borrow();
                     match &inner.storage {
                         HeapStorage::Str(s) => {
@@ -262,8 +264,10 @@ pub fn intrinsic_string_is_null_or_white_space<
             while offset < len {
                 let current_chunk_size = std::cmp::min(len - offset, CHUNK_SIZE);
                 {
-                    let (_active, _guard) =
-                        BorrowGuardHandle::new(ctx.as_borrow_scope(), NoActiveBorrows::new());
+                    let _gc_scope = GcScopeGuard::enter(
+                        ctx.as_borrow_scope(),
+                        ctx.as_borrow_scope().gc_ready_token(),
+                    );
                     let inner = handle.borrow();
                     match &inner.storage {
                         HeapStorage::Str(s) => {

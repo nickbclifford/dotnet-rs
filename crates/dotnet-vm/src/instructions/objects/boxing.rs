@@ -319,7 +319,7 @@ pub fn unbox<
 
         // Wrap the manufactured Nullable<T> into a boxed object on the heap.
         let boxed_nullable = ObjectRef::new(
-            ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+            ctx.gc_with_token(&ctx.no_active_borrows_token()),
             HeapStorage::Boxed(instance),
         );
         ctx.register_new_object(&boxed_nullable);

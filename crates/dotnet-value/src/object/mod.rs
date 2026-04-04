@@ -110,15 +110,37 @@ pub struct ObjectPtr(NonNull<ThreadSafeLock<ObjectInner<'static>>>);
 impl<'a> Arbitrary<'a> for ObjectPtr {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let ptr_val: usize = u.arbitrary()?;
+        // SAFETY: Used only for fuzzing corpus deserialization.  The resulting
+        // pointer must NOT be dereferenced; it is only compared against the
+        // fuzzing object registry (`is_valid_object_ptr`) before use.
         Ok(unsafe { std::mem::transmute::<usize, ObjectPtr>(ptr_val) })
     }
 }
 
-// SAFETY: ObjectPtr is a transparent wrapper around a NonNull pointer to an ObjectInner.
-// ObjectInner is managed by the VM and thread-safety is handled via ThreadSafeLock.
-// This type is used primarily for cross-arena references where raw pointers are required.
-unsafe impl Send for ObjectPtr {}
-unsafe impl Sync for ObjectPtr {}
+// SAFETY: `ObjectPtr` is a raw-pointer wrapper (`NonNull`) so Rust does not
+// automatically inherit `Send`/`Sync` from the pointee.  We restore those
+// marker impls here, but only under the same conditions that
+// `ThreadSafeLock<ObjectInner<'static>>` itself satisfies `Send`/`Sync`.
+//
+// * `Send`: transferring ownership of an `ObjectPtr` to another thread is
+//   safe as long as the underlying `ThreadSafeLock<ObjectInner<'static>>`
+//   can also be sent — i.e. `ObjectInner<'static>: Send`.  The where-clause
+//   enforces this at compile time and automatically tightens if
+//   `ThreadSafeLock`'s own `Send` bound ever changes.
+unsafe impl Send for ObjectPtr where ThreadSafeLock<ObjectInner<'static>>: Send {}
+
+// SAFETY: Sharing `&ObjectPtr` across threads gives concurrent read access to
+// the underlying `ThreadSafeLock`.  That is safe under the same conditions
+// `ThreadSafeLock` requires for its own `Sync` impl — concretely,
+// `ObjectInner<'static>: Send + Sync` (Step 1.1 tightened this bound).
+// The where-clause propagates any future tightening automatically.
+//
+// This impl is gated on `multithreading` because under the single-threaded
+// backend `ThreadSafeLock` wraps `gc_arena::lock::RefLock` (a `RefCell`),
+// which is provably `!Sync`.  In single-threaded mode there is only one
+// thread, so `ObjectPtr: Sync` is neither needed nor sound.
+#[cfg(feature = "multithreading")]
+unsafe impl Sync for ObjectPtr where ThreadSafeLock<ObjectInner<'static>>: Sync {}
 
 impl ObjectPtr {
     pub(crate) fn from_handle<'gc>(handle: ObjectHandle<'gc>) -> Self {
@@ -137,10 +159,19 @@ impl ObjectPtr {
     }
 
     pub fn owner_id(&self) -> ArenaId {
+        // SAFETY: `self.0` is a `NonNull` pointer to a live `ThreadSafeLock`.
+        // `as_ref()` yields a shared reference; `as_ptr()` gives a raw pointer
+        // to the interior `ObjectInner` without acquiring the lock.  Reading
+        // `owner_id` is safe because it is written once at construction and is
+        // thereafter immutable.
         unsafe { (*self.0.as_ref().as_ptr()).owner_id }
     }
 
     pub fn with_data<T>(&self, f: impl FnOnce(&[u8]) -> T) -> T {
+        // SAFETY: `self.0` is a valid, non-null `ThreadSafeLock` pointer kept
+        // alive by the GC arena for the duration of this call.  `as_ref()` is
+        // sound because the pointer is non-null and aligned.  `borrow()` acquires
+        // a shared read lock, preventing concurrent mutable access.
         let inner = unsafe { self.0.as_ref().borrow() };
         inner.storage.with_data(f)
     }
@@ -154,7 +185,14 @@ impl ObjectPtr {
     }
 
     pub fn as_heap_storage<T>(&self, f: impl FnOnce(&HeapStorage<'static>) -> T) -> T {
+        // SAFETY: `self.0` is a valid, non-null `ThreadSafeLock` pointer.
+        // `as_ref()` is sound because the pointer is non-null and aligned.
+        // `borrow()` acquires a shared read lock, preventing concurrent writes.
+        // The `'static` lifetime on `HeapStorage` is deliberately erased; the
+        // closure `f` must not let any returned reference escape.
         let inner = unsafe { self.0.as_ref().borrow() };
+        inner.validate_magic();
+        inner.validate_arena_id();
         f(&inner.storage)
     }
 }
@@ -185,6 +223,10 @@ unsafe impl<'gc> Collect<'gc> for ObjectRef<'gc> {
                     // DANGER: lock_ptr might be dangling if the arena exited.
                     // But in STW, we assume it's either local or the other arena is also stopped.
                     // All threads MUST be at a safepoint during finish_marking.
+                    // SAFETY: During STW all mutator threads are at safe points,
+                    // so the owning arena cannot be freed.  `owner_id` is
+                    // immutable after construction, so reading it without the
+                    // lock is safe even under concurrent observation.
                     let owner_id = unsafe { (*(*lock_ptr).as_ptr()).owner_id };
                     if owner_id != tracing_id {
                         let ptr = Gc::as_ptr(h) as usize;
@@ -365,6 +407,10 @@ impl<'gc> ObjectRef<'gc> {
                         }
 
                         // Verify magic number
+                        // SAFETY: `ptr` was reconstructed from a tagged cross-arena
+                        // pointer.  We hold an arena lease (`_lease`) which guarantees
+                        // the owning arena — and therefore this allocation — has not
+                        // been freed.  Alignment was verified by `is_multiple_of` above.
                         let inner = &*(*ptr).as_ptr();
                         inner
                             .magic
@@ -394,6 +440,10 @@ impl<'gc> ObjectRef<'gc> {
                     }
 
                     // Verify magic number to ensure we are pointing to a valid object
+                    // SAFETY: `ptr` was cast from a raw `usize` stored in `source`.
+                    // Alignment was verified by `is_multiple_of` above.  The caller
+                    // guarantees `source` contains a live `Gc` pointer, so the
+                    // allocation is valid for the lifetime of this call.
                     let inner = &*(*ptr).as_ptr();
                     inner.magic.validate(OBJECT_MAGIC, "ObjectRef::read");
                 }
@@ -573,10 +623,17 @@ impl<'gc> ObjectRef<'gc> {
         match &inner.storage {
             HeapStorage::Vec(v) => f(&v.storage),
             HeapStorage::Obj(o) => o.instance_storage.with_data(f),
-            HeapStorage::Str(s) => unsafe {
-                let bytes = std::slice::from_raw_parts(s.as_ptr() as *const u8, s.len() * 2);
+            HeapStorage::Str(s) => {
+                // SAFETY: `CLRString` stores UTF-16 `u16` code units.  Casting
+                // to `*const u8` is valid (u8 alignment ≤ u16 alignment).
+                // `s.len() * 2` gives the correct byte length; the multiplication
+                // cannot overflow because `s.len()` is bounded by the allocation
+                // size, which fits in `usize`.  The slice lifetime is bounded by
+                // the `inner` borrow that holds the lock, preventing data races.
+                let bytes =
+                    unsafe { std::slice::from_raw_parts(s.as_ptr() as *const u8, s.len() * 2) };
                 f(bytes)
-            },
+            }
             HeapStorage::Boxed(o) => o.instance_storage.with_data(f),
         }
     }
@@ -757,6 +814,11 @@ mod tests {
         register_arena(arena_id, Arc::new(AtomicBool::new(false)));
 
         let arena_handle_owner = dotnet_utils::gc::ArenaHandle::new(arena_id);
+        // SAFETY: `arena_handle_owner` is a local that outlives the entire
+        // `arena.mutate(...)` closure below.  We extend the lifetime to
+        // `'static` only for use within that closure; the closure completes
+        // before `arena_handle_owner` is dropped, so the extended lifetime is
+        // sound for the duration of this test.
         let arena_handle = unsafe {
             std::mem::transmute::<
                 &dotnet_utils::gc::ArenaHandleInner,
@@ -786,6 +848,11 @@ mod tests {
                 "encoded arena id must match owner"
             );
 
+            // SAFETY: `bytes` was produced by `ObjectRef::write`, which
+            // encodes a valid live `Gc` pointer with a Tag 5 owner marker.
+            // The owning arena is still registered at this point
+            // (`unregister_arena` is called only after the closure returns),
+            // so `read_unchecked` will find a live arena and decode safely.
             let roundtrip = unsafe { ObjectRef::read_unchecked(&bytes) };
             assert!(
                 roundtrip.0.is_some(),
@@ -794,5 +861,82 @@ mod tests {
         });
 
         unregister_arena(arena_id);
+    }
+
+    /// Verify that `ObjectPtr::as_heap_storage` panics when the magic number is
+    /// corrupt.  `validate_magic` is active under `debug_assertions` (always
+    /// true for `cargo test`), so no feature gate is needed here.
+    #[test]
+    fn test_object_ptr_as_heap_storage_corrupt_magic_panics() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        // Build an ObjectInner with a deliberately wrong magic value.
+        let corrupt = Box::new(ThreadSafeLock::new(ObjectInner {
+            magic: ValidationTag::new(0xDEAD_BEEF_1234_5678),
+            owner_id: ArenaId::INVALID,
+            storage: HeapStorage::Str(crate::string::CLRString::from("bad")),
+        }));
+        let raw = Box::into_raw(corrupt);
+
+        // SAFETY: `raw` was produced by `Box::into_raw` immediately above and
+        // has not been freed.  The `ObjectPtr` is only used inside this test
+        // and is never sent to another thread.
+        let ptr = unsafe { ObjectPtr::from_raw(raw).expect("non-null") };
+
+        // validate_magic fires under debug_assertions and panics on mismatch.
+        let result = catch_unwind(AssertUnwindSafe(|| ptr.as_heap_storage(|_| ())));
+
+        // Reclaim the allocation regardless of the panic outcome.
+        // SAFETY: `raw` was produced by `Box::into_raw` above; no other owner
+        // of the allocation exists at this point.
+        let _ = unsafe { Box::from_raw(raw) };
+
+        assert!(
+            result.is_err(),
+            "as_heap_storage must panic when magic is corrupt"
+        );
+    }
+
+    /// Verify that `ObjectPtr::as_heap_storage` panics when the object's
+    /// `owner_id` does not match the current arena and the arena is not live.
+    /// `validate_arena_id` is only active under `feature = "memory-validation"`.
+    #[cfg(feature = "memory-validation")]
+    #[test]
+    fn test_object_ptr_as_heap_storage_cross_arena_id_panics() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        // Pick a foreign arena that is definitely not the current thread's and
+        // is not registered in the global arena table.
+        let foreign_arena = ArenaId::new(0x0000_CAFE_BABE_0001);
+        #[cfg(feature = "multithreading")]
+        // Ensure the ID is absent from the registry; `unregister_arena` is a
+        // no-op when the ID is already absent.
+        unregister_arena(foreign_arena);
+
+        // Build an ObjectInner with a valid magic but a foreign owner_id.
+        let obj = Box::new(ThreadSafeLock::new(ObjectInner {
+            magic: ValidationTag::new(OBJECT_MAGIC),
+            owner_id: foreign_arena,
+            storage: HeapStorage::Str(crate::string::CLRString::from("cross")),
+        }));
+        let raw = Box::into_raw(obj);
+
+        // SAFETY: `raw` was produced by `Box::into_raw` immediately above and
+        // has not been freed.  The `ObjectPtr` is used only inside this test.
+        let ptr = unsafe { ObjectPtr::from_raw(raw).expect("non-null") };
+
+        // validate_arena_id fires because owner_id != current thread id and
+        // owner_id != INVALID.  Under not(multithreading) it panics directly;
+        // under multithreading it panics because the arena is not registered.
+        let result = catch_unwind(AssertUnwindSafe(|| ptr.as_heap_storage(|_| ())));
+
+        // SAFETY: `raw` was produced by `Box::into_raw` above; no other owner
+        // of the allocation exists at this point.
+        let _ = unsafe { Box::from_raw(raw) };
+
+        assert!(
+            result.is_err(),
+            "as_heap_storage must panic on uncoordinated cross-arena access"
+        );
     }
 }

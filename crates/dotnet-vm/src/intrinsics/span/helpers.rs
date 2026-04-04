@@ -6,7 +6,7 @@ use crate::{
     },
 };
 use dotnet_types::TypeDescription;
-use dotnet_utils::{BorrowGuardHandle, NoActiveBorrows};
+use dotnet_utils::GcScopeGuard;
 use dotnet_value::{
     StackValue,
     layout::{FieldLayoutManager, HasLayout},
@@ -69,7 +69,10 @@ pub fn read_span_reference_from_ptr<
 
     // Deserialize the ManagedPtrInfo from bytes
     let info = unsafe {
-        ManagedPtr::read_branded(&ptr_bytes, &ctx.gc_with_token(&NoActiveBorrows::new()))
+        ManagedPtr::read_branded(
+            &ptr_bytes,
+            &ctx.gc_with_token(&ctx.no_active_borrows_token()),
+        )
     }
     .map_err(|e| {
         IntrinsicError::Message(format!("Failed to deserialize span _reference: {:?}", e))
@@ -182,7 +185,10 @@ pub fn with_span_data<
     element_size: usize,
     f: impl FnOnce(&[u8]) -> R,
 ) -> Result<R, IntrinsicError> {
-    let (_active, _borrow) = BorrowGuardHandle::new(ctx.as_borrow_scope(), NoActiveBorrows::new());
+    let _gc_scope = GcScopeGuard::enter(
+        ctx.as_borrow_scope(),
+        ctx.as_borrow_scope().gc_ready_token(),
+    );
     let info = read_span_reference(&span)?;
     let len = read_span_length(&span)? as usize;
 

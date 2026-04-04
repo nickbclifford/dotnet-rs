@@ -48,75 +48,114 @@ pub fn validate_alignment(_ptr: *const u8, _align: usize) {}
 
 use std::marker::PhantomData;
 
+/// Operations that track whether the current execution context is inside a
+/// GC-critical scope where safepoint parking is not allowed.
 pub trait BorrowScopeOps {
-    fn enter_borrow_scope(&self);
-    fn exit_borrow_scope(&self);
+    /// Enter a GC-critical scope.
+    fn enter_gc_scope(&self);
+    /// Exit a GC-critical scope.
+    fn exit_gc_scope(&self);
+    /// Number of currently active GC-critical scopes in this context.
+    fn active_gc_scope_depth(&self) -> usize;
+
+    /// Legacy name retained for compatibility.
+    fn enter_borrow_scope(&self) {
+        self.enter_gc_scope();
+    }
+
+    /// Legacy name retained for compatibility.
+    fn exit_borrow_scope(&self) {
+        self.exit_gc_scope();
+    }
+
+    /// Returns a token proving the context is currently GC-safe (scope depth 0).
+    fn gc_ready_token(&self) -> NoActiveBorrows<'_> {
+        NoActiveBorrows::new(self)
+    }
+
+    /// Legacy name retained for compatibility.
+    fn no_active_borrows(&self) -> NoActiveBorrows<'_> {
+        self.gc_ready_token()
+    }
 }
 
-/// Proof that no borrows are active. Required for allocation.
+/// Proof that no GC-critical scope is active. Required for allocation.
 pub struct NoActiveBorrows<'ctx> {
+    owner: *const (),
     _marker: PhantomData<&'ctx mut ()>,
 }
 
-impl<'ctx> Default for NoActiveBorrows<'ctx> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<'ctx> NoActiveBorrows<'ctx> {
-    pub fn new() -> Self {
+    fn new<T: BorrowScopeOps + ?Sized>(ctx: &'ctx T) -> Self {
+        let depth = ctx.active_gc_scope_depth();
+        assert_eq!(
+            depth, 0,
+            "Cannot issue a GC-ready token while {} GC scope(s) are active",
+            depth
+        );
         Self {
+            owner: std::ptr::from_ref(ctx).cast::<()>(),
             _marker: PhantomData,
         }
     }
+
+    pub fn belongs_to(&self, ctx: &dyn BorrowScopeOps) -> bool {
+        std::ptr::eq(self.owner, std::ptr::from_ref(ctx).cast::<()>())
+    }
 }
 
-/// Proof that borrows ARE active. Prevents allocation at compile time.
-pub struct ActiveBorrow<'ctx, 'guard> {
-    _ctx: PhantomData<&'ctx ()>,
-    _guard: PhantomData<&'guard ()>,
-}
+/// Clarity alias for `NoActiveBorrows`.
+pub type GcReadyToken<'ctx> = NoActiveBorrows<'ctx>;
 
-pub struct BorrowGuardHandle<'ctx> {
+/// RAII guard for a GC-critical scope.
+///
+/// While this guard is alive, `check_gc_safe_point` should treat the current
+/// context as not parkable.
+pub struct GcScopeGuard<'ctx> {
     ctx: *const (dyn BorrowScopeOps + 'ctx),
     _marker: PhantomData<&'ctx ()>,
 }
 
-impl<'ctx> Drop for BorrowGuardHandle<'ctx> {
+impl<'ctx> Drop for GcScopeGuard<'ctx> {
     fn drop(&mut self) {
-        // SAFETY: `ctx` comes from `BorrowGuardHandle::new` and remains valid for `'ctx`.
-        // Drop runs at most once for this handle and balances `enter_borrow_scope`.
-        unsafe { (*self.ctx).exit_borrow_scope() };
+        // SAFETY: `ctx` comes from `GcScopeGuard::enter` and remains valid for `'ctx`.
+        // Drop runs at most once for this handle and balances `enter_gc_scope`.
+        unsafe { (*self.ctx).exit_gc_scope() };
     }
 }
 
-impl<'ctx> BorrowGuardHandle<'ctx> {
-    pub fn new(
-        ctx: &'ctx dyn BorrowScopeOps,
-        _token: NoActiveBorrows<'ctx>,
-    ) -> (ActiveBorrow<'ctx, 'ctx>, Self) {
-        ctx.enter_borrow_scope();
-        (
-            ActiveBorrow {
-                _ctx: PhantomData,
-                _guard: PhantomData,
-            },
-            Self {
-                ctx: ctx as *const (dyn BorrowScopeOps + 'ctx),
-                _marker: PhantomData,
-            },
-        )
+impl<'ctx> GcScopeGuard<'ctx> {
+    /// Enter a GC-critical scope.
+    pub fn enter(ctx: &'ctx dyn BorrowScopeOps, token: NoActiveBorrows<'ctx>) -> Self {
+        assert!(
+            token.belongs_to(ctx),
+            "GC-ready token must be issued by the same context that enters the GC scope",
+        );
+        ctx.enter_gc_scope();
+        Self {
+            ctx: ctx as *const (dyn BorrowScopeOps + 'ctx),
+            _marker: PhantomData,
+        }
     }
 
-    /// Exiting the borrow scope returns the NoActiveBorrows token
+    /// Legacy constructor retained for compatibility.
+    pub fn new(ctx: &'ctx dyn BorrowScopeOps, token: NoActiveBorrows<'ctx>) -> Self {
+        Self::enter(ctx, token)
+    }
+
+    /// Exit the GC-critical scope and return a new GC-ready token.
     pub fn exit(self) -> NoActiveBorrows<'ctx> {
-        // SAFETY: `ctx` comes from `BorrowGuardHandle::new` and is valid for `'ctx`.
+        // SAFETY: `ctx` comes from `GcScopeGuard::enter` and is valid for `'ctx`.
         // `mem::forget(self)` prevents Drop from running, so this remains a single balanced exit.
-        unsafe { (*self.ctx).exit_borrow_scope() };
+        unsafe { (*self.ctx).exit_gc_scope() };
+        let owner = self.ctx.cast::<()>();
         std::mem::forget(self);
         NoActiveBorrows {
+            owner,
             _marker: PhantomData,
         }
     }
 }
+
+/// Legacy alias retained for compatibility with older call sites.
+pub type BorrowGuardHandle<'ctx> = GcScopeGuard<'ctx>;

@@ -40,6 +40,8 @@
 //! `is_stw_in_progress`, and `record_cross_arena_ref` retain their existing
 //! signatures and semantics so that legacy call sites continue to compile
 //! unchanged while adopting `ArenaLease`.
+#[cfg(doc)]
+use crate::newtypes::ArenaId;
 use crate::sync::{Arc, AtomicBool, Ordering, RwLock};
 use std::{
     cell::{Cell, RefCell},
@@ -121,7 +123,7 @@ pub struct ArenaLease {
 impl ArenaLease {
     /// Returns the generation of the arena at the time this lease was acquired.
     ///
-    /// Two leases for the same [`ArenaId`] with different generations indicate
+    /// Two leases for the same [`crate::ArenaId`] with different generations indicate
     /// that the arena was unregistered and re-registered between the two
     /// acquisitions.  Any cross-arena pointer recorded under the old
     /// generation must be considered invalid.
@@ -360,7 +362,7 @@ pub fn take_found_cross_arena_refs_with_generation() -> Vec<(crate::ArenaId, usi
 /// has already exited.
 ///
 /// When called during a GC tracing phase the reference is pushed to the
-/// thread-local [`FOUND_CROSS_ARENA_REFS`] list together with the arena's
+/// thread-local `FOUND_CROSS_ARENA_REFS` list together with the arena's
 /// current **generation** (captured via [`try_acquire_lease`]).  This closes
 /// the recording-side TOCTOU window: the arena is pinned by the lease while
 /// the push occurs, so the generation stored in the list is guaranteed to

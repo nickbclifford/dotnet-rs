@@ -1,6 +1,6 @@
 use crate::{
     gc::coordinator::{GCCommand, GCCoordinator},
-    threading::{STWGuardOps, ThreadManagerOps},
+    threading::STWGuardOps,
     tracer::Tracer,
 };
 use dotnet_utils::ArenaId;
@@ -16,7 +16,7 @@ impl ThreadManager {
     pub fn set_coordinator(&self, _coordinator: std::sync::Weak<GCCoordinator>) {}
 }
 
-impl ThreadManagerOps for ThreadManager {
+impl super::ThreadManagerBackend for ThreadManager {
     type Guard<'a> = StopTheWorldGuard;
 
     fn register_thread(&self) -> ArenaId {

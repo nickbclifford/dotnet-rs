@@ -28,7 +28,7 @@ pub fn intrinsic_get_from_handle<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc>>(
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let handle = ctx.pop_value_type();
     let target = handle
         .instance_storage
@@ -592,7 +592,7 @@ pub fn handle_get_generic_arguments<
     ctx: &mut T,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let obj = ctx.pop_obj();
     let target_type = ctx.resolve_runtime_type(obj);
     let args = match target_type {

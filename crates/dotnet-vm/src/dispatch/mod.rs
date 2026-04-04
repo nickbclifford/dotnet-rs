@@ -145,17 +145,13 @@ impl<'gc> ExecutionEngine<'gc> {
         loop {
             if self.stack.shared.abort_requested.load(Ordering::Relaxed) {
                 // Final snapshot before aborting to ensures correct dump in test harness
-                if let Ok(mut shared_rb) = self.stack.shared.last_instructions.lock() {
-                    *shared_rb = self.ring_buffer.clone();
-                }
+                *self.stack.shared.last_instructions.lock() = self.ring_buffer.clone();
                 return StepResult::Yield;
             }
 
             if self.stack.shared.thread_manager.is_gc_stop_requested() {
                 // Snapshot before yielding
-                if let Ok(mut shared_rb) = self.stack.shared.last_instructions.lock() {
-                    *shared_rb = self.ring_buffer.clone();
-                }
+                *self.stack.shared.last_instructions.lock() = self.ring_buffer.clone();
                 return StepResult::Yield;
             }
             let res = match self.stack.execution.exception_mode {
@@ -191,10 +187,8 @@ impl<'gc> ExecutionEngine<'gc> {
                     // Snapshot the ring buffer only on non-normal exits or periodically
                     // for timeout diagnostics. Normal Continue paths skip the snapshot
                     // to avoid mutex + clone overhead on every batch.
-                    if last_res != StepResult::Continue
-                        && let Ok(mut shared_rb) = self.stack.shared.last_instructions.lock()
-                    {
-                        *shared_rb = self.ring_buffer.clone();
+                    if last_res != StepResult::Continue {
+                        *self.stack.shared.last_instructions.lock() = self.ring_buffer.clone();
                     }
 
                     last_res

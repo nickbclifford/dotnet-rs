@@ -9,7 +9,7 @@ use crate::{
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{TypeDescription, generics::GenericLookup, members::MethodDescription};
-use dotnet_utils::{BorrowGuardHandle, NoActiveBorrows};
+use dotnet_utils::GcScopeGuard;
 use dotnet_value::{
     StackValue,
     object::{HeapStorage, Object, ObjectRef},
@@ -233,8 +233,10 @@ pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<
             while offset < len {
                 let chunk_len = std::cmp::min(CHUNK_SIZE, len - offset);
                 {
-                    let (_active, _guard) =
-                        BorrowGuardHandle::new(ctx.as_borrow_scope(), NoActiveBorrows::new());
+                    let _gc_scope = GcScopeGuard::enter(
+                        ctx.as_borrow_scope(),
+                        ctx.as_borrow_scope().gc_ready_token(),
+                    );
                     let inner = handle.borrow();
                     match &inner.storage {
                         HeapStorage::Str(s) => {
@@ -311,8 +313,10 @@ pub fn intrinsic_string_copy_string_content<
         let chunk_len = std::cmp::min(CHUNK_SIZE, src_len - offset);
         let mut chunk_buf = Vec::with_capacity(chunk_len);
         {
-            let (_active, _guard) =
-                BorrowGuardHandle::new(ctx.as_borrow_scope(), NoActiveBorrows::new());
+            let _gc_scope = GcScopeGuard::enter(
+                ctx.as_borrow_scope(),
+                ctx.as_borrow_scope().gc_ready_token(),
+            );
             let src_heap = src_handle.borrow();
             match &src_heap.storage {
                 HeapStorage::Str(s) => {
@@ -324,10 +328,12 @@ pub fn intrinsic_string_copy_string_content<
 
         let mut err = false;
         {
-            let (_active, _guard) =
-                BorrowGuardHandle::new(ctx.as_borrow_scope(), NoActiveBorrows::new());
-            let mut dest_heap =
-                dest_handle.borrow_mut(ctx.gc_with_token(&NoActiveBorrows::new()).mutation());
+            let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
+            let _gc_scope = GcScopeGuard::enter(
+                ctx.as_borrow_scope(),
+                ctx.as_borrow_scope().gc_ready_token(),
+            );
+            let mut dest_heap = dest_handle.borrow_mut(gc.mutation());
             match &mut dest_heap.storage {
                 HeapStorage::Str(dest) => {
                     let d_pos = dest_pos + offset;

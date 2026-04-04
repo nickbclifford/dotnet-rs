@@ -14,7 +14,7 @@ use dotnet_types::{
     members::MethodDescription,
     runtime::RuntimeType,
 };
-use dotnet_utils::{gc::GCHandle, sync::Ordering};
+use dotnet_utils::{BorrowScopeOps, gc::GCHandle, sync::Ordering};
 use dotnet_value::{
     StackValue,
     object::{HeapStorage, ObjectRef},
@@ -467,7 +467,16 @@ impl<'a, 'gc> dotnet_vm_ops::ops::StackOps<'gc> for VesContext<'a, 'gc> {}
 
 impl<'a, 'gc> BaseMemoryOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
-    fn gc_with_token(&self, _token: &dotnet_utils::NoActiveBorrows<'_>) -> GCHandle<'gc> {
+    fn no_active_borrows_token(&self) -> dotnet_utils::NoActiveBorrows<'_> {
+        self.gc_ready_token()
+    }
+
+    #[inline]
+    fn gc_with_token(&self, token: &dotnet_utils::NoActiveBorrows<'_>) -> GCHandle<'gc> {
+        assert!(
+            token.belongs_to(self),
+            "gc_with_token requires a token issued by this VesContext",
+        );
         self.gc
     }
 

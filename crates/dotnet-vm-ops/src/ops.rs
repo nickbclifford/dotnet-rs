@@ -12,7 +12,7 @@ use dotnet_assemblies::AssemblyLoader;
 use dotnet_tracer::Tracer;
 use dotnet_types::{
     TypeDescription,
-    error::{MemoryAccessError, TypeResolutionError, VmError},
+    error::{CompareExchangeError, MemoryAccessError, TypeResolutionError, VmError},
     members::MethodDescription,
 };
 use dotnet_utils::{
@@ -224,7 +224,7 @@ pub trait RawMemoryOps<'gc>: BorrowScopeOps {
         size: usize,
         success: dotnet_utils::sync::Ordering,
         failure: dotnet_utils::sync::Ordering,
-    ) -> Result<u64, u64>;
+    ) -> Result<u64, CompareExchangeError>;
 
     /// Atomically exchanges a value in memory.
     ///
@@ -310,6 +310,8 @@ pub trait CallOps<'gc> {
 }
 
 pub trait MemoryOps<'gc> {
+    fn no_active_borrows_token(&self) -> dotnet_utils::NoActiveBorrows<'_>;
+
     fn gc_with_token(
         &self,
         _token: &dotnet_utils::NoActiveBorrows<'_>,

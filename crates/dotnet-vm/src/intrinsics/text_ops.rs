@@ -15,7 +15,7 @@ pub fn intrinsic_unicode_utility_is_ascii_code_point<
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let val = ctx.pop();
     let is_ascii = match val {
         StackValue::Int32(i) => (0..=0x7F).contains(&i),
@@ -36,7 +36,7 @@ pub fn intrinsic_unicode_utility_is_in_range_inclusive<
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let high = ctx.pop();
     let low = ctx.pop();
     let value = ctx.pop();

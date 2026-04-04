@@ -1,6 +1,8 @@
 use crate::{
-    gc::coordinator::{GCCommand, GCCoordinator},
-    threading::{IS_PERFORMING_GC, STWGuardOps, ThreadManagerOps, ThreadState},
+    gc::coordinator::{
+        CommandCompletionGuard, GCCommand, GCCoordinator, MarkPhaseCommand, SweepPhaseCommand,
+    },
+    threading::{IS_PERFORMING_GC, STWGuardOps, ThreadState},
     tracer::Tracer,
 };
 use dotnet_utils::{
@@ -11,13 +13,12 @@ use dotnet_utils::{
     },
     sync::{
         Arc, AtomicBool, AtomicU64, AtomicUsize, Condvar, MANAGED_THREAD_ID, Mutex, MutexGuard,
-        Ordering, get_current_thread_id,
+        Ordering, Weak, get_current_thread_id,
     },
 };
 use dotnet_value::object::ObjectPtr;
 use std::{
     collections::HashMap,
-    sync,
     thread::{self, ThreadId},
     time::{Duration, Instant},
 };
@@ -48,14 +49,8 @@ impl ManagedThread {
     }
 
     #[allow(dead_code)] // Useful for debugging thread states
-    pub(super) fn get_state(&self) -> ThreadState {
-        match self.state.load(Ordering::Acquire) {
-            0 => ThreadState::Running,
-            1 => ThreadState::AtSafePoint,
-            2 => ThreadState::Suspended,
-            3 => ThreadState::Exited,
-            _ => ThreadState::Running, // Fallback
-        }
+    pub(super) fn get_state(&self) -> Result<ThreadState, u64> {
+        ThreadState::try_from(self.state.load(Ordering::Acquire))
     }
 
     pub(super) fn set_state(&self, state: ThreadState) {
@@ -77,7 +72,7 @@ pub struct ThreadManager {
     /// Flag indicating if a stop-the-world pause is in progress
     stw_in_progress: Arc<AtomicBool>,
     /// Reference to the GC coordinator for resume signaling
-    coordinator: Mutex<Option<sync::Weak<GCCoordinator>>>,
+    coordinator: Mutex<Option<Weak<GCCoordinator>>>,
 }
 
 impl ThreadManager {
@@ -107,18 +102,18 @@ impl ThreadManager {
         }
     }
 
-    pub fn set_coordinator(&self, coordinator: sync::Weak<GCCoordinator>) {
+    pub fn set_coordinator(&self, coordinator: Weak<GCCoordinator>) {
         let mut guard = self.coordinator.lock();
         *guard = Some(coordinator);
     }
 
-    fn get_coordinator(&self) -> Option<sync::Arc<GCCoordinator>> {
+    fn get_coordinator(&self) -> Option<Arc<GCCoordinator>> {
         let guard = self.coordinator.lock();
         guard.as_ref()?.upgrade()
     }
 }
 
-impl ThreadManagerOps for ThreadManager {
+impl super::ThreadManagerBackend for ThreadManager {
     type Guard<'a> = StopTheWorldGuard<'a>;
 
     /// Register a new thread with the thread manager.
@@ -245,7 +240,13 @@ impl ThreadManagerOps for ThreadManager {
             while let Some(command) =
                 coordinator.wait_for_command_or_resume(managed_id, &self.gc_stop_requested)
             {
+                // Arm the guard before executing so that a panic inside
+                // `execute_gc_command` still delivers the finish signal to the
+                // GC initiator, preventing it from blocking in
+                // `wait_on_other_arenas` forever.
+                let completion_guard = CommandCompletionGuard::new(managed_id, coordinator);
                 self.execute_gc_command(command, coordinator);
+                let _disarmed_guard = completion_guard.disarm();
                 coordinator.command_finished(managed_id);
             }
 
@@ -284,22 +285,8 @@ impl ThreadManagerOps for ThreadManager {
 
         // Panic guard: if anything below panics before we hand ownership to
         // `StopTheWorldGuard`, resume threads so they are never left hanging.
-        // `armed` is set to false only on the successful return path.
-        struct ResumeOnPanic<'m> {
-            manager: &'m ThreadManager,
-            armed: bool,
-        }
-        impl Drop for ResumeOnPanic<'_> {
-            fn drop(&mut self) {
-                if self.armed {
-                    self.manager.resume_threads();
-                }
-            }
-        }
-        let mut panic_guard = ResumeOnPanic {
-            manager: self,
-            armed: true,
-        };
+        // Disarmed only on the successful return path via `panic_guard.disarm()`.
+        let mut panic_guard = ResumeOnPanic::new(self);
 
         let mut guard = loop {
             if let Some(g) = self.gc_coordination.try_lock() {
@@ -340,7 +327,7 @@ impl ThreadManagerOps for ThreadManager {
                 let threads = self.threads.lock();
                 warn!("  Threads not at safe point:");
                 for (tid, thread) in threads.iter() {
-                    if thread.get_state() != ThreadState::AtSafePoint {
+                    if thread.get_state() != Ok(ThreadState::AtSafePoint) {
                         warn!(
                             "    - Thread ID {}: {:?} (native: {:?})",
                             tid,
@@ -375,7 +362,7 @@ impl ThreadManagerOps for ThreadManager {
         }
 
         // Disarm: StopTheWorldGuard takes over responsibility for resume.
-        panic_guard.armed = false;
+        panic_guard.disarm();
         StopTheWorldGuard::new(self, guard, start_time)
     }
 
@@ -419,6 +406,9 @@ impl Drop for StopTheWorldGuard<'_> {
     fn drop(&mut self) {
         // Ensure IS_PERFORMING_GC is always cleared even if resume_threads
         // panics, so the thread-local flag is never left in a stale "true" state.
+        // GcFlagGuard is declared before the resume call so it is dropped last
+        // (reverse declaration order), guaranteeing the flag is cleared on both
+        // the normal path and any panic unwind from resume_threads.
         struct GcFlagGuard;
         impl Drop for GcFlagGuard {
             fn drop(&mut self) {
@@ -428,6 +418,50 @@ impl Drop for StopTheWorldGuard<'_> {
         let _flag_guard = GcFlagGuard;
         self.manager.resume_threads();
         // _flag_guard drops here (or on unwind), clearing IS_PERFORMING_GC.
+    }
+}
+
+/// RAII panic guard used inside [`ThreadManager::request_stop_the_world`].
+///
+/// Calls [`ThreadManager::resume_threads`] on drop unless explicitly
+/// [`disarm`](Self::disarm)ed, ensuring threads are never left suspended if the
+/// caller unwinds before handing responsibility to [`StopTheWorldGuard`].
+///
+/// # Composition
+/// This guard intentionally mirrors the `disarm()`-before-handover discipline
+/// used by other panic-safe GC drop guards in the codebase.
+pub(super) struct ResumeOnPanic<'m> {
+    manager: &'m ThreadManager,
+    /// `true` once [`Self::disarm`] has been called; `Drop` is a no-op when set.
+    disarmed: bool,
+}
+
+impl<'m> ResumeOnPanic<'m> {
+    /// Create a new armed guard for `manager`.
+    pub(super) fn new(manager: &'m ThreadManager) -> Self {
+        Self {
+            manager,
+            disarmed: false,
+        }
+    }
+
+    /// Disarm the guard so that `Drop` does **not** call `resume_threads`.
+    ///
+    /// Call this on the normal completion path once [`StopTheWorldGuard`] has
+    /// taken over responsibility for resuming threads.
+    pub(super) fn disarm(&mut self) {
+        self.disarmed = true;
+    }
+}
+
+impl Drop for ResumeOnPanic<'_> {
+    fn drop(&mut self) {
+        if !self.disarmed {
+            // Scope exited without a `disarm()` call — either the caller
+            // panicked or forgot to transfer ownership to StopTheWorldGuard.
+            // Resume threads so none are left hanging at a safe point forever.
+            self.manager.resume_threads();
+        }
     }
 }
 
@@ -460,76 +494,81 @@ fn record_found_cross_arena_refs(coordinator: &GCCoordinator) {
 pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &GCCoordinator) {
     use crate::gc::arena::THREAD_ARENA;
     match command {
-        GCCommand::MarkAll => {
-            THREAD_ARENA.with(|cell| {
-                let mut arena_opt = cell.try_borrow_mut().expect("Nested arena borrow detected during GC command execution! This is a violation of safe-point invariants.");
-                if let Some(arena) = arena_opt.as_mut() {
-                    let thread_id = get_current_thread_id();
-                    set_currently_tracing(Some(thread_id));
+        GCCommand::Mark(mark_command) => match mark_command {
+            MarkPhaseCommand::All => {
+                THREAD_ARENA.with(|cell| {
+                    let mut arena_opt = cell.try_borrow_mut().expect("Nested arena borrow detected during GC command execution! This is a violation of safe-point invariants.");
+                    if let Some(arena) = arena_opt.as_mut() {
+                        let thread_id = get_current_thread_id();
+                        set_currently_tracing(Some(thread_id));
 
-                    arena.mutate(|_, c| {
-                        c.stack.local.heap.cross_arena_roots.borrow_mut().clear();
-                    });
+                        arena.mutate(|_, c| {
+                            c.stack.local.heap.cross_arena_roots.borrow_mut().clear();
+                        });
 
-                    let _ = arena.finish_marking();
-                    // Do not finalize or sweep yet.
+                        let _ = arena.finish_marking();
+                        // Do not finalize or sweep yet.
 
-                    set_currently_tracing(None);
+                        set_currently_tracing(None);
 
-                    record_found_cross_arena_refs(coordinator);
-                }
-            });
-        }
-        GCCommand::MarkObjects(ptrs) => {
-            THREAD_ARENA.with(|cell| {
-                let mut arena_opt = cell.try_borrow_mut().expect("Nested arena borrow detected during GC command execution! This is a violation of safe-point invariants.");
-                if let Some(arena) = arena_opt.as_mut() {
-                    let thread_id = get_current_thread_id();
-                    set_currently_tracing(Some(thread_id));
-
-                    arena.mutate(|_, c| {
-                        let mut roots = c.stack.local.heap.cross_arena_roots.borrow_mut();
-                        for ptr_usize in ptrs {
-                            // SAFETY: `ptrs` originates from coordinator-owned object pointers
-                            // captured during marking. They are only consumed during the same
-                            // collection cycle while arenas are stopped.
-                            let ptr =
-                                unsafe { ObjectPtr::from_raw(ptr_usize as *const _) }.unwrap();
-                            roots.insert(ptr);
-                        }
-                    });
-
-                    let _ = arena.finish_marking();
-                    // Do not finalize or sweep yet.
-
-                    set_currently_tracing(None);
-
-                    record_found_cross_arena_refs(coordinator);
-                }
-            });
-        }
-        GCCommand::Finalize => {
-            THREAD_ARENA.with(|cell| {
-                let mut arena_opt = cell.try_borrow_mut().expect("Nested arena borrow detected during GC command execution! This is a violation of safe-point invariants.");
-                if let Some(arena) = arena_opt.as_mut() {
-                    // Ensure we are in Marked phase
-                    let marked = arena.finish_marking();
-
-                    if let Some(marked) = marked {
-                        crate::gc::finalize_arena(marked);
+                        record_found_cross_arena_refs(coordinator);
                     }
-                }
-            });
-        }
-        GCCommand::Sweep => {
-            THREAD_ARENA.with(|cell| {
-                let mut arena_opt = cell.try_borrow_mut().expect("Nested arena borrow detected during GC command execution! This is a violation of safe-point invariants.");
-                if let Some(arena) = arena_opt.as_mut() {
-                    // Finish the collection (finalize and sweep)
-                    arena.finish_cycle();
-                }
-            });
-        }
+                });
+            }
+            MarkPhaseCommand::Objects(ptrs) => {
+                THREAD_ARENA.with(|cell| {
+                    let mut arena_opt = cell.try_borrow_mut().expect("Nested arena borrow detected during GC command execution! This is a violation of safe-point invariants.");
+                    if let Some(arena) = arena_opt.as_mut() {
+                        let thread_id = get_current_thread_id();
+                        set_currently_tracing(Some(thread_id));
+
+                        arena.mutate(|_, c| {
+                            let mut roots = c.stack.local.heap.cross_arena_roots.borrow_mut();
+                            for ptr in ptrs {
+                                // SAFETY: `ptrs` originates from coordinator-owned object
+                                // pointers captured during marking. They are only consumed
+                                // during the same collection cycle while arenas are stopped.
+                                let ptr =
+                                    unsafe { ObjectPtr::from_raw(ptr.as_ptr() as *const _) }
+                                        .unwrap();
+                                roots.insert(ptr);
+                            }
+                        });
+
+                        let _ = arena.finish_marking();
+                        // Do not finalize or sweep yet.
+
+                        set_currently_tracing(None);
+
+                        record_found_cross_arena_refs(coordinator);
+                    }
+                });
+            }
+        },
+        GCCommand::Sweep(sweep_command) => match sweep_command {
+            SweepPhaseCommand::Finalize => {
+                THREAD_ARENA.with(|cell| {
+                    let mut arena_opt = cell.try_borrow_mut().expect("Nested arena borrow detected during GC command execution! This is a violation of safe-point invariants.");
+                    if let Some(arena) = arena_opt.as_mut() {
+                        // Ensure we are in Marked phase
+                        let marked = arena.finish_marking();
+
+                        if let Some(marked) = marked {
+                            crate::gc::finalize_arena(marked);
+                        }
+                    }
+                });
+            }
+            SweepPhaseCommand::Sweep => {
+                THREAD_ARENA.with(|cell| {
+                    let mut arena_opt = cell.try_borrow_mut().expect("Nested arena borrow detected during GC command execution! This is a violation of safe-point invariants.");
+                    if let Some(arena) = arena_opt.as_mut() {
+                        // Finish the collection (finalize and sweep)
+                        arena.finish_cycle();
+                    }
+                });
+            }
+        },
     }
 }
 
@@ -540,23 +579,9 @@ mod tests {
     use std::{sync::mpsc, thread, time::Duration};
 
     // ---------------------------------------------------------------------------
-    // Helpers
+    // Helpers — `ResumeOnPanic` is defined at module level (above) and is
+    // available here via `use super::*`.
     // ---------------------------------------------------------------------------
-
-    /// A minimal armed resume-on-panic guard that mirrors the one inside
-    /// `request_stop_the_world`.  Used in tests to verify the RAII pattern
-    /// without going through the full STW machinery.
-    struct ResumeOnPanic<'m> {
-        manager: &'m ThreadManager,
-        armed: bool,
-    }
-    impl Drop for ResumeOnPanic<'_> {
-        fn drop(&mut self) {
-            if self.armed {
-                self.manager.resume_threads();
-            }
-        }
-    }
 
     #[test]
     fn stw_guard_drop_resets_gc_flags() {
@@ -635,10 +660,7 @@ mod tests {
         assert!(manager.is_gc_stop_requested());
 
         {
-            let _guard = ResumeOnPanic {
-                manager: &manager,
-                armed: true,
-            };
+            let _guard = ResumeOnPanic::new(&manager);
             // Drop without disarming → resume_threads() is called.
         }
 
@@ -657,12 +679,9 @@ mod tests {
         manager.gc_stop_requested.store(true, Ordering::Release);
 
         {
-            let mut guard = ResumeOnPanic {
-                manager: &manager,
-                armed: true,
-            };
-            guard.armed = false; // disarm — StopTheWorldGuard takes ownership
-            // Drop: armed=false, so resume_threads is NOT called.
+            let mut guard = ResumeOnPanic::new(&manager);
+            guard.disarm(); // disarm — StopTheWorldGuard takes ownership
+            // Drop: disarmed=true, so resume_threads is NOT called.
         }
 
         // gc_stop_requested is still true: the guard was correctly disarmed and
@@ -694,6 +713,32 @@ mod tests {
             !IS_PERFORMING_GC.get(),
             "IS_PERFORMING_GC must be false after StopTheWorldGuard drop"
         );
+    }
+
+    #[test]
+    fn test_managed_thread_get_state_valid_and_invalid() {
+        let native_id = thread::current().id();
+        let managed_id = ArenaId::new(1);
+        let thread = ManagedThread::new(native_id, managed_id);
+
+        // Initial state should be Running (0)
+        assert_eq!(thread.get_state(), Ok(ThreadState::Running));
+
+        // Set to AtSafePoint (1)
+        thread.set_state(ThreadState::AtSafePoint);
+        assert_eq!(thread.get_state(), Ok(ThreadState::AtSafePoint));
+
+        // Set to Exited (2)
+        thread.set_state(ThreadState::Exited);
+        assert_eq!(thread.get_state(), Ok(ThreadState::Exited));
+
+        // Manually set to an invalid value (e.g., 3, which was Exited before refactor)
+        thread.state.store(3, Ordering::Release);
+        assert_eq!(thread.get_state(), Err(3));
+
+        // Manually set to another invalid value
+        thread.state.store(255, Ordering::Release);
+        assert_eq!(thread.get_state(), Err(255));
     }
 
     // ------------------------------------------------------------------

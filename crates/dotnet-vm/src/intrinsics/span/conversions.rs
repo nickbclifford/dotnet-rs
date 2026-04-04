@@ -15,7 +15,6 @@ use dotnet_types::{
     generics::{ConcreteType, GenericLookup},
     members::MethodDescription,
 };
-use dotnet_utils::NoActiveBorrows;
 use dotnet_value::{
     ByteOffset, StackValue,
     layout::{HasLayout, LayoutManager},
@@ -82,7 +81,7 @@ pub fn intrinsic_as_span<
     method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc_with_token(&NoActiveBorrows::new());
+    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let param_count = method.method().signature.parameters.len();
 
     // AsSpan can have 1, 2, or 3 parameters:
@@ -287,7 +286,7 @@ pub fn intrinsic_runtime_helpers_create_span<
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc_with_token(&NoActiveBorrows::new());
+    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let element_type = &generics.method_generics[0];
     let res_ctx = ctx.with_generics(generics);
     let element_size = vm_try!(type_layout(element_type.clone(), &res_ctx)).size();
@@ -424,7 +423,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc_with_token(&NoActiveBorrows::new());
+    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let length_ref = ctx.pop_managed_ptr();
     let type_handle = ctx.pop_value_type();
     let field_handle = ctx.pop_value_type();
@@ -556,7 +555,7 @@ pub fn intrinsic_internal_get_array_data<
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc_with_token(&NoActiveBorrows::new());
+    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let array_ref = ctx.pop_obj();
 
     let element_type = if !generics.method_generics.is_empty() {
@@ -620,7 +619,7 @@ pub fn intrinsic_span_get_pinnable_reference<
     _method: MethodDescription,
     generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc_with_token(&NoActiveBorrows::new());
+    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let span = ctx.pop_managed_ptr();
 
     let element_type = &generics.type_generics[0];

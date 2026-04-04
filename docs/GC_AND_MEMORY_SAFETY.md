@@ -10,7 +10,7 @@ This document describes the garbage collection subsystem, memory safety invarian
 - **`dotnet-vm/src/memory/`**: Heap manager, raw memory access, memory ops
 - **`dotnet-value/src/object/`**: Heap object representation (`mod.rs`, `heap_storage.rs`, `types.rs`)
 - **`dotnet-value/src/storage.rs`**: Field storage with atomic capabilities
-- **`dotnet-utils/src/lib.rs`**: `BorrowGuardHandle<'ctx>` and `BorrowScopeOps`
+- **`dotnet-utils/src/lib.rs`**: `GcScopeGuard<'ctx>` (legacy alias: `BorrowGuardHandle<'ctx>`) and `BorrowScopeOps`
 - **`dotnet-utils/src/gc/`**: GC utility types (`mod.rs`), `GCCommand`, `ThreadSafeLock` (`thread_safe_lock.rs`), arena helpers (`arena.rs`), and cross-arena refs (`cross_arena.rs`)
 
 ## Arena Architecture
@@ -54,23 +54,28 @@ Two implementations are selected via the `multithreading` feature flag:
 **Multi-threaded (`cfg(feature = "multithreading")`)**:
 - Tracks all arena handles via `register_arena`/`unregister_arena`.
 - Monitors allocation pressure via `ArenaHandleInner::record_allocation`. If `allocation_counter + size > ALLOCATION_THRESHOLD`, sets a `needs_collection` flag. The coordinator checks this flag in `should_collect`.
-- Enforces a two-state coordinator model (`CollectionState::Idle` / `CollectionState::Collecting`) with assertions around `start_collection` and `finish_collection`.
-- Orchestrates STW collection via `collect_all_arenas` using a phase-based approach:
-  1. **Phase 1 (MarkAll)**: Acquires collection lock, clears cross-arena references table, and sends `MarkAll` to all arenas.
-  2. **Phase 2 (Fixed-point MarkObjects)**: Repeatedly sends `MarkObjects` commands for cross-arena references discovered during marking. Iterates until no new cross-arena references are found.
-  3. **Phase 3 (Finalize)**: Sends `Finalize` command to run finalizers on unreachable objects.
-  4. **Phase 4 (Sweep)**: Sends `Sweep` to all arenas to reclaim dead objects.
+- Uses a lock-backed RAII session model:
+  - `begin_collection()` acquires the coordinator lock and yields `CollectionSession`.
+  - While `CollectionSession` is alive, collecting-only operations (command dispatch / wait / fixed-point marking) flow through the session.
+  - `finish()` ends the session; dropping a still-live `CollectionSession` also restores Idle state (`stw_in_progress=false`, lock released).
+- Orchestrates STW collection via `CollectionSession::collect_all_arenas` using a phase-based approach:
+  1. **Phase 1 (MarkAll)**: Acquires collection lock, clears cross-arena references table, and sends `GCCommand::Mark(MarkPhaseCommand::All)` to all arenas.
+  2. **Phase 2 (Fixed-point MarkObjects)**: Repeatedly sends `GCCommand::Mark(MarkPhaseCommand::Objects(…))` for cross-arena references discovered during marking. Iterates until no new cross-arena references are found.
+  3. **Phase 3 (Finalize)**: Sends `GCCommand::Sweep(SweepPhaseCommand::Finalize)` to run finalizers on unreachable objects.
+  4. **Phase 4 (Sweep)**: Sends `GCCommand::Sweep(SweepPhaseCommand::Sweep)` to all arenas to reclaim dead objects.
 
 **Single-threaded (`cfg(not(feature = "multithreading"))`)**:
 - Stub implementation — `should_collect` always returns false (relies on `gc-arena`'s own local collection).
 - No cross-arena tracking needed.
 
 ### `GCCommand` enum
-Defined in `dotnet_utils::gc::GCCommand`:
-- `MarkAll`: Start marking phase, trace all local roots in the arena.
-- `MarkObjects(HashSet<usize>)`: Trace specific opaque object pointers (cross-arena refs).
-- `Finalize`: Run finalizers for dead objects.
-- `Sweep`: Reclaim unreachable objects.
+Defined in `dotnet_utils::gc::GCCommand`, split into two phase-typed inner enums:
+- `Mark(MarkPhaseCommand)`:
+  - `MarkPhaseCommand::All` — start marking phase, trace all local roots in the arena.
+  - `MarkPhaseCommand::Objects(MarkObjectPointers)` — trace specific typed cross-arena object pointers.
+- `Sweep(SweepPhaseCommand)`:
+  - `SweepPhaseCommand::Finalize` — run finalizers for dead objects.
+  - `SweepPhaseCommand::Sweep` — reclaim unreachable objects.
 
 ```mermaid
 sequenceDiagram
@@ -80,18 +85,18 @@ sequenceDiagram
 
     T->>C: trigger GC (should_collect == true)
     C->>C: Lock collection_lock
-    C->>W: Send GCCommand::MarkAll
+    C->>W: Send GCCommand::Mark(MarkPhaseCommand::All)
     W-->>C: Finished MarkAll
     
     loop Fixed Point Iteration
-        C->>W: Send GCCommand::MarkObjects(cross_refs)
+        C->>W: Send GCCommand::Mark(MarkPhaseCommand::Objects(ptrs))
         W-->>C: Found new cross_refs?
     end
     
-    C->>W: Send GCCommand::Finalize
+    C->>W: Send GCCommand::Sweep(SweepPhaseCommand::Finalize)
     W-->>C: Finished Finalize
     
-    C->>W: Send GCCommand::Sweep
+    C->>W: Send GCCommand::Sweep(SweepPhaseCommand::Sweep)
     W-->>C: Finished Sweep
     
     C->>C: Unlock collection_lock
@@ -126,27 +131,34 @@ The VM supports `GCHandleType::Weak` and `WeakTrackResurrection` (§I.8.2.4).
 - **BCL Support**: `System.WeakReference<T>` is currently not in the BCL support library and must be defined by the user or added to `support.dll`.
 - **Cross-Arena Limitation**: The current `GCCoordinator` fixed-point iteration only resurrects strong references. Weak references across arenas are not currently tracked or zeroed correctly by the global coordinator. This is a known limitation for multi-threaded scenarios.
 
-## BorrowGuardHandle and Deadlock Prevention
+## GcScopeGuard and Deadlock Prevention
 
 ### The Problem
 `gc-arena` requires exclusive access to an arena for collection. If a thread holds a borrow on a heap object (via `Gc::borrow`) when STW is requested, it cannot release the arena, leading to a deadlock. Furthermore, traversing the heap during a STW pause while mutator threads hold locks can also cause deadlocks.
 
-### The Solution: `BorrowGuardHandle<'ctx>` (`dotnet-utils/src/lib.rs`)
-- `BorrowScopeOps` trait: `enter_borrow_scope()` / `exit_borrow_scope()`
-- `BorrowGuardHandle<'ctx>` is an owner-carrying RAII guard. The lifetime parameter `'ctx` ties the guard to the lifetime of the `BorrowScopeOps` context, preventing use-after-free at compile time.
-- Construct via `BorrowGuardHandle::new(ctx, token)` — increments the borrow counter; when `counter > 0`, `check_gc_safe_point` immediately returns `false` without blocking or polling the thread manager.
+### The Solution: `GcScopeGuard<'ctx>` (`dotnet-utils/src/lib.rs`)
+- `BorrowScopeOps` trait (GC scope API): `enter_gc_scope()` / `exit_gc_scope()` / `active_gc_scope_depth()`.
+- `GcScopeGuard<'ctx>` is an owner-carrying RAII guard (legacy alias: `BorrowGuardHandle<'ctx>`). The lifetime parameter `'ctx` ties the guard to the lifetime of the `BorrowScopeOps` context, preventing use-after-free at compile time.
+- Construct via `GcScopeGuard::enter(ctx, token)` — increments the GC scope counter; when `counter > 0`, `check_gc_safe_point` immediately returns `false` without blocking or polling the thread manager.
 - RAII — `Drop` decrements the counter.
 - **`data_ptr()` Tracing**: During the STW pause, `gc-arena` tracing callbacks use `raw_data_ptr()` or `data_ptr()` to read object fields, directly bypassing `ThreadSafeLock` checks. This is safe because all mutator threads are suspended.
 
 ### Rules (enforced by convention, not compiler)
 1. Never call `check_gc_safe_point()` while holding a heap borrow.
 2. Never allocate while holding a heap borrow (allocation may trigger GC).
-3. Always use `BorrowGuardHandle::new(ctx, token)` when borrowing heap objects in instruction handlers/intrinsics.
-4. Chunk large operations — e.g., in `string_ops/`, `span/`, or `unsafe_ops/`, long loops check `ctx.check_gc_safe_point()` periodically (e.g. every 1024 iterations or similar block size), dropping and re-acquiring `BorrowGuardHandle` between iterations.
+3. Always use `GcScopeGuard::enter(ctx, token)` when holding heap borrows in instruction handlers/intrinsics.
+4. Chunk large operations — e.g., in `string_ops/`, `span/`, or `unsafe_ops/`, long loops check `ctx.check_gc_safe_point()` periodically (e.g. every 1024 iterations or similar block size), dropping and re-acquiring `GcScopeGuard` between iterations.
 
 ## Panic-Safety Guarantees During STW
 
-`ThreadManager::request_stop_the_world` uses a panic guard that calls `resume_threads()` if any panic occurs before ownership is handed to `StopTheWorldGuard`. This prevents mutator threads from being left permanently paused.
+`ThreadManager::request_stop_the_world` uses a `ResumeOnPanic` guard (`crates/dotnet-vm/src/threading/basic.rs`) that calls `resume_threads()` if any panic occurs before ownership is handed to `StopTheWorldGuard`. This prevents mutator threads from being left permanently paused.
+
+`CommandCompletionGuard` in `crates/dotnet-vm/src/gc/coordinator.rs` is typestated (`Armed`/`Disarmed`):
+- In `Armed` state, `Drop` calls `command_finished`.
+- `disarm(self)` consumes the guard and returns `Disarmed`, whose `Drop` is a no-op.
+- This guarantees exactly one completion signal on panic paths and avoids duplicate completion on normal paths.
+
+Write-barrier TLS buffers are drained on unwind by `WriteBarrierFlushGuard` (`crates/dotnet-vm/src/memory/access.rs`), a zero-sized RAII guard placed at each write-barrier drain site. Its `Drop` impl flushes `WB_LOCAL_BUF` regardless of whether the enclosing operation completes normally or unwinds.
 
 ## HeapManager (`memory/heap.rs` & `memory/ops.rs`)
 
@@ -163,7 +175,7 @@ A critical abstraction (~1090 lines) providing memory safety over unsafe heap st
 - **Bounds checking**: `check_bounds_internal` validates pointer arithmetic against `base` and `len`.
 - **Reference integrity**: `validate_ref_integrity` ensures GC reference slots aren't partially overwritten (e.g. by overlapping struct copies).
 - **Cross-arena tracking**: Checks all reference stores.
-- **`MemoryOwner`**: Enum over `Local(ObjectRef<'gc>)` and `CrossArena(ObjectPtr, ArenaId)` — dynamically routes read/writes through `gc-arena` mutations or thread-safe atomic views.
+- **`MemoryOwner`**: Enum over `Local(ObjectRef<'gc>)` and `CrossArena(ObjectPtr, ArenaId, GcLifetime<'gc>)` — dynamically routes read/writes through `gc-arena` mutations or thread-safe atomic views. The `GcLifetime<'gc>` token in `CrossArena` ties the owner to a real GC context, preventing weaker-lifetime construction.
 
 ## FieldStorage (`dotnet-value/src/storage.rs`)
 
@@ -187,3 +199,27 @@ All types stored in the GC heap or referenced by the VES stack must implement `g
 - **`#[derive(Collect)]`**: Used for types where automatic tracing of all fields is sufficient (e.g., `ObjectInner`). The `#[collect(no_drop)]` attribute is often used to ensure safety.
 - **`static_collect!`**: Used for leaf types that contain no further GC references (e.g. primitive wrappers, basic configs).
 - **Manual Implementations**: Complex types with specialized tracing logic (like cross-arena reference tracking in `ObjectRef`) or those requiring custom validation manually implement the `trace<Tr: Trace<'gc>>(&self, cc: &mut Tr)` method. The `Collect` implementations iterate through all child elements, calling `.trace(cc)` recursively to maintain the GC reachability graph.
+
+## Upstream Crate Contributor Notes
+
+### `gc-arena`: Mutation Token and `'gc` Branding Guarantees
+
+**Source reference:** `gc-arena` (pinned rev `75671ae`), `src/arena.rs:163-187`.
+
+`gc-arena` enforces memory safety through two complementary mechanisms that every contributor working near the GC boundary must understand:
+
+#### Mutation Token (`&Mutation<'gc>`)
+All GC-managed allocation and reference writes require a `&Mutation<'gc>` token, which is only issued inside an `Arena::mutate(|mutation, root| { ... })` closure. This token proves that the arena is not currently being collected and that it is valid to allocate into or update `Gc<'gc, T>` handles.
+
+Rules:
+- **Never store the `&Mutation<'gc>` token or any value derived from it outside the `mutate` closure.** The `'gc` lifetime is invariant and is scoped to the closure; Rust enforces this for safe code. Unsafe cross-arena paths must compensate manually.
+- **`ThreadSafeLock<T>` and the mutation token**: In single-threaded mode, `ThreadSafeLock<T>` wraps `gc_arena::RefLock<T>` — `borrow_mut` requires a `&Mutation<'gc>` witness. In multi-threaded mode it wraps `parking_lot::RwLock<T>` and does not require the token for locking, but the caller is still responsible for ensuring no collection is in progress (enforced structurally by the STW protocol). The two code paths are gated by `#[cfg(feature = "multithreading")]` in `crates/dotnet-utils/src/gc/thread_safe_lock.rs`.
+- **STW tracing callbacks** bypass `ThreadSafeLock` checks and read object fields via `raw_data_ptr()` / `data_ptr()` directly. This is safe only because all mutator threads are suspended at a safe point before tracing begins.
+
+#### `'gc` Lifetime Branding
+Every `Gc<'gc, T>` handle is branded with the invariant `'gc` lifetime of the arena that owns it. This prevents handles from outliving their arena or being compared across different arenas at compile time.
+
+Rules:
+- **Cross-arena references cannot be expressed as `Gc<'gc, T>`.** They are represented as `ObjectPtr` (a raw pointer) paired with an `ArenaId` and a `GcLifetime<'gc>` token (see `MemoryOwner::CrossArena` in `crates/dotnet-vm/src/memory/access.rs`). The `GcLifetime<'gc>` token can only be minted from a live `GCHandle<'gc>`, preserving the `'gc` branding invariant for cross-arena owners.
+- **`GcLifetime<'gc>` forgery is prohibited.** The token has a private constructor and is only issued by `GCHandle::lifetime()` (`crates/dotnet-utils/src/gc/mod.rs`). Any code that needs to construct a `MemoryOwner::CrossArena` must obtain a real `GCHandle<'gc>` first.
+- **Unsafe cross-arena dereferences** must call `validate_magic()` and `validate_arena_id()` on `ObjectInner` before reading any fields (enforced in `ObjectPtr::as_heap_storage` and `ObjectRef::as_heap_storage`). These checks are always active in debug builds and selectively active under the `memory-validation` feature in release builds.

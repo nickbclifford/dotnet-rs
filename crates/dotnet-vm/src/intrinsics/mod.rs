@@ -447,10 +447,7 @@ fn object_to_string<
 
     let str_val = CLRString::from(type_name);
     let storage = HeapStorage::Str(str_val);
-    let obj_ref = ObjectRef::new(
-        ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
-        storage,
-    );
+    let obj_ref = ObjectRef::new(ctx.gc_with_token(&ctx.no_active_borrows_token()), storage);
     ctx.push_obj(obj_ref);
     StepResult::Continue
 }

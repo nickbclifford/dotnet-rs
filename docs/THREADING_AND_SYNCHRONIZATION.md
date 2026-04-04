@@ -83,6 +83,8 @@ sequenceDiagram
 3. **Execution**: Returns a `StopTheWorldGuard`. The coordinator now has exclusive access to the heap and issues commands via `execute_gc_command_for_current_thread`.
 4. **Resumption**: When the `StopTheWorldGuard` is dropped, `gc_stop_requested` is cleared, and `resume_threads()` is called, which broadcasts a condition variable to wake all threads stuck in `safe_point`. The guard's `elapsed_micros()` provides the total pause timing.
 
+**Panic guards**: `request_stop_the_world` arms a `ResumeOnPanic` guard before acquiring the thread lock; if a panic unwinds before `StopTheWorldGuard` is returned, `ResumeOnPanic::drop` calls `resume_threads()` so mutator threads are never permanently paused. During command execution inside `safe_point`, `CommandCompletionGuard` is typestated (`Armed`/`Disarmed`): armed drop signals `command_finished`, while `disarm(self)` transitions to a no-op drop state after the explicit manual completion signal.
+
 ### Stub Implementation (`stub.rs`)
 - All operations are no-ops or return fixed values
 - `is_gc_stop_requested` always returns `false`
@@ -96,12 +98,13 @@ Safe points are checked at:
 - **Method calls**: Before pushing a new frame
 - **Explicit checks**: `CallStack::check_gc_safe_point` in `dispatch/mod.rs`
 
-### Safe Point ↔ BorrowGuardHandle Interaction
-When a `BorrowGuardHandle` is active (borrow scope counter > 0), `check_gc_safe_point` returns early without blocking. This prevents deadlocks when a thread holds a GC borrow but the coordinator requests STW.
+### Safe Point ↔ GcScopeGuard Interaction
+When a `GcScopeGuard` is active (GC scope counter > 0), `check_gc_safe_point` returns early without blocking. This prevents deadlocks when a thread holds GC-managed borrows but the coordinator requests STW.
+`BorrowGuardHandle` remains a compatibility alias for `GcScopeGuard`.
 
 The path to thread suspension:
 1. `check_gc_safe_point()` evaluates `ThreadManager::is_gc_stop_requested()`.
-   - If a `BorrowGuardHandle` is active (borrow scope counter > 0), it returns `false` to prevent deadlocks (since the thread cannot safely park while holding GC locks).
+   - If a `GcScopeGuard` is active (GC scope counter > 0), it returns `false` to prevent deadlocks (since the thread cannot safely park while holding GC locks).
 2. If `true`, the loop or instruction handler exits early (often returning `StepResult::Continue` without advancing IP, or completing a chunk of work).
 3. The main execution loop in `crates/dotnet-vm/src/executor.rs` catches this, drops any transient locks, and explicitly calls `ThreadManagerOps::safe_point(thread_id, coordinator)`.
 4. In `basic.rs`, `safe_point()` sets the thread state to `AtSafePoint`, notifies the STW coordinator, and blocks on a condition variable.
@@ -129,11 +132,11 @@ Implements .NET's `Monitor.Enter`/`Monitor.Exit` semantics (the `lock` keyword) 
 
 ### Threaded Implementation (`sync/threaded.rs`, ~320 lines)
 
-- **`SyncBlockManager` Data Structure**: Uses a `Mutex<HashMap<usize, Arc<SyncBlock>>>` mapping a unique index to a sync block, and an `AtomicUsize` for index generation.
+- **`SyncBlockManager` Data Structure**: Uses a `Mutex<HashMap<usize, Arc<SyncBlock>>>` mapping a unique index to a sync block, and a `Mutex<usize>` for index generation.
 - **`SyncBlock` Data Structure**: Contains a `Mutex<SyncBlockState>` and a `Condvar`.
 - **`SyncBlockState`**: Tracks the `owner_thread_id` (`ArenaId`) and `recursion_count` to support re-entrant locking by the same thread.
 - Objects are identified by their sync block index, stored in the object's header/layout.
-- `enter_safe` uses a `loop` with a configurable yield interval (default 10ms). Periodically, it wakes up, drops the lock, and calls `thread_manager.is_gc_stop_requested()` and `safe_point()` if necessary, preventing deadlocks when a thread waiting for a monitor lock is asked to suspend by the GC.
+- `enter_safe` uses a `loop` with a configurable yield interval (default 10ms). Periodically, it wakes up, drops the lock, and checks `thread_manager.is_gc_stop_requested()`. If a STW pause is pending, it returns `LockResult::Yield` without calling `safe_point()` directly — the caller converts this to `StepResult::Yield`, and the executor's main loop drives the safe-point handshake on the next iteration. This prevents deadlocks when a thread waiting for a monitor lock is asked to suspend by the GC.
 
 ### Configuration
 
@@ -178,7 +181,7 @@ Monitor locks are keyed by a lazily allocated sync block index stored in the obj
 ## Subsystem Details
 
 ### GC Command Processing (`execute_gc_command_for_current_thread`)
-During a STW pause, the coordinator issues commands (like `MarkAll`, `MarkObjects`, `Finalize`, `Sweep`). Suspended threads briefly wake up to execute these commands locally via `execute_gc_command_for_current_thread` in `basic.rs`. They access their own heap using the thread-local `THREAD_ARENA` without needing global locks. Once the local arena command completes, the thread goes back to the `AtSafePoint` suspended state.
+During a STW pause, the coordinator issues commands (like `MarkAll`, `MarkObjects`, `Finalize`, `Sweep`). Suspended threads briefly wake up to execute these commands locally via `execute_gc_command_for_current_thread` in `basic.rs`. They access their own heap using the thread-local `THREAD_ARENA` without needing global locks. Once the local arena command completes, the thread goes back to the `AtSafePoint` suspended state. `CommandCompletionGuard<Armed>` wraps each command dispatch so panic paths still signal `command_finished`; normal paths call `disarm(self)` and then explicitly signal completion once.
 
 ### Cross-Arena References (`record_found_cross_arena_refs`)
 In a multi-arena GC, objects in one thread's arena might reference objects in another. During the `MarkAll` or `MarkObjects` phase, when a thread discovers a reference pointing outside its own arena, it logs it. `record_found_cross_arena_refs` takes these accumulated references and registers them with the central `GCCoordinator` so they can be pushed to the owning arena's root set in a subsequent marking iteration.
@@ -219,3 +222,73 @@ Following the direction of modern .NET (.NET 5+ and .NET Core), `dotnet-rs` **do
 
 - **Status**: Unlike `Thread.Abort`, `Thread.Interrupt` is still supported in modern .NET for waking threads from waiting states (e.g., `Wait`, `Sleep`, `Join`). However, it has been omitted from the current implementation to maintain a simpler thread state machine.
 - **Future Work**: Implementation would require tracking "interruptible" states and injecting a `ThreadInterruptedException` when the thread next enters or is already in a waiting state.
+
+## Upstream Crate Contributor Notes
+
+### `dashmap`: Deadlock Caveats (`len` / `iter_mut` / shard references)
+
+**Source reference:** `dashmap 6.1.0`, `src/lib.rs:565-567, 723-725, 838-844`.
+
+`DashMap` shards its data across a fixed set of `RwLock`-protected buckets. Several operations lock **all** shards simultaneously, which interacts dangerously with live shard references:
+
+#### Self-deadlock rules
+- **`DashMap::len()`** acquires a read lock on every shard in order to sum their lengths. If the calling thread already holds **any** shard reference on the same map (from `get()`, `get_mut()`, `entry()`, or a live iterator), calling `len()` will deadlock.
+- **`DashMap::iter_mut()`** holds write locks on all shards for the duration of the iterator. No concurrent read or write to the map can proceed while the iterator is live. Do not hold an `iter_mut()` iterator across an `await` point or across a scope that calls back into the same map.
+- **Shard reference lifetimes**: `Ref<'_, K, V>` and `RefMut<'_, K, V>` guards returned by `get()`/`get_mut()` hold a shard read/write lock. Always drop these guards before calling any full-map-locking method on the same `DashMap`.
+
+#### Usage rules in this codebase
+- All `DashMap` accesses in the VM (reflection caches, static storage, arena registry) use `get` / `insert` / `entry` and release the guard before any subsequent operation on the same map.
+- **Never call `len()` while holding a `Ref` or `RefMut` from the same map.** If a count is needed for metrics or logging inside a code path that already holds a shard guard, capture the count before entering the guarded scope or use a separate `AtomicUsize` counter.
+- When iterating with `iter()` or `iter_mut()`, complete the iteration and drop the iterator before calling `insert`, `remove`, `get`, or `len` on the same map.
+
+---
+
+### `crossbeam-channel`: Bounded vs Unbounded Behavior
+
+**Source reference:** `crossbeam-channel 0.5.15`, `src/channel.rs:45-54, 106-126, 435-445, 812-838`.
+
+`crossbeam-channel` offers two channel flavors with fundamentally different backpressure properties:
+
+#### Unbounded channels (`unbounded()`)
+- The sender **never blocks** and the channel grows without limit.
+- Risk: a producer that outpaces the consumer will cause unbounded heap growth, eventually leading to OOM.
+- **Do not introduce new unbounded channels** in hot VM paths (execution dispatch, GC, or tracing) without an explicit justification and a documented drop/trim policy.
+
+#### Bounded channels (`bounded(n)`)
+- The sender blocks on `send()` when the channel is at capacity, providing natural backpressure.
+- `try_send()` returns `Err(TrySendError::Full(_))` immediately when full; the caller is responsible for the drop/retry policy.
+- `try_recv()` returns `Err(TryRecvError::Empty)` immediately when the channel is empty.
+
+#### Current usage in this codebase
+- The tracer (`crates/dotnet-tracer/src/lib.rs`) uses a **bounded** channel with `TRACER_CHANNEL_CAPACITY = 8_192` and `try_send` on the hot path. Events dropped due to a full channel are counted in `dropped_by_backpressure` (`AtomicU64`) and reported as a `LogEntry::DroppedByBackpressure(u64)` summary entry in the flusher, so loss is always visible in logs.
+- Any new diagnostic or inter-thread channel must use `bounded` with an explicit capacity and a documented policy for `TrySendError::Full` (drop-newest, drop-oldest, or block).
+- **Never use `send()` (blocking) on a channel from the VM execution thread** — this stalls managed code execution and can interact with the STW safe-point protocol, potentially causing a deadlock if the receiver thread is itself waiting at a safe point.
+- **`select!` with multiple bounded channels**: if all branches are full and no receiver is draining, the `select!` macro will block indefinitely. Prefer `try_send`/`try_recv` variants (`select!` with `default`) in hot paths.
+
+---
+
+### `parking_lot`: Condvar One-Mutex Rule and Fairness
+
+**Source reference:** `parking_lot` (current pinned version), `Condvar` docs.
+
+#### One-mutex rule (enforced at runtime)
+`parking_lot::Condvar::wait(&self, guard: MutexGuard<'_, T>)` records the address of the mutex that issued the guard on the first `wait` call. **Every subsequent `wait` on the same `Condvar` must supply a guard from that exact same mutex.** Violating this rule causes an unconditional panic at runtime:
+
+```
+attempted to use a condition variable with two mutexes
+```
+
+Rules in this codebase:
+- Each `Condvar` must be declared alongside its paired `Mutex` as a logical unit (e.g., in the same struct or adjacent `static`/field slots).
+- **Never pass a guard from mutex A to a `Condvar` that was previously used with mutex B**, even if the types are identical. The coordinator's `collection_condvar` is permanently bound to `collection_lock`; the thread manager's `state_condvar` is permanently bound to `state_lock`.
+- When refactoring: if a `Condvar` is moved to a new mutex, also reset (replace) the `Condvar` itself.
+
+#### Fairness and notification semantics
+`parking_lot::Mutex` uses a **fair** (queue-based) scheduling algorithm:
+- Threads that have been waiting longer receive priority. This prevents starvation but slightly increases average lock-acquisition latency compared to an unfair spinlock.
+- `Condvar::notify_one()` wakes the **longest-waiting** thread in the wait set, not an arbitrary one.
+- `Condvar::notify_all()` wakes **all** waiting threads; each then races to re-acquire the paired mutex. Use this for broadcast scenarios (e.g., resuming all threads after a STW pause via `resume_threads()`).
+- `parking_lot` mutexes do **not** support lock poisoning (unlike `std::sync::Mutex`). A thread that panics while holding a `parking_lot` mutex simply drops the guard normally; the mutex is released without poisoning. This is intentional — it matches the codebase's use of RAII cleanup guards and means `lock()` always returns a `MutexGuard` directly (no `LockResult` unwrapping needed).
+
+#### Deadlock detection
+`parking_lot` does **not** detect deadlocks by default. For debugging suspected deadlock scenarios, enable the `deadlock_detection` cargo feature of `parking_lot` locally and call `parking_lot::deadlock::check_deadlock()` from a background thread. Do not enable `deadlock_detection` in production or CI builds — it adds per-lock overhead.

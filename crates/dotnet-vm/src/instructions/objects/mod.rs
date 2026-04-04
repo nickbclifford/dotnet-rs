@@ -124,7 +124,7 @@ pub fn new_object<'gc, T: VesOps<'gc>>(ctx: &mut T, ctor: &UserMethod) -> StepRe
                     dims,
                 );
                 let o = ObjectRef::new(
-                    ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new()),
+                    ctx.gc_with_token(&ctx.no_active_borrows_token()),
                     HeapStorage::Vec(vec_obj),
                 );
                 ctx.register_new_object(&o);
@@ -287,7 +287,7 @@ pub fn ldobj<'gc, T: VesOps<'gc>>(ctx: &mut T, param0: &MethodType) -> StepResul
     let value = vm_try!(res_ctx.read_cts_value(
         &load_type,
         &source_vec,
-        ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new())
+        ctx.gc_with_token(&ctx.no_active_borrows_token())
     ))
     .into_stack();
 

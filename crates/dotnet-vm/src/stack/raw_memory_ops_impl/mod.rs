@@ -1,6 +1,6 @@
 use crate::{
     ByteOffset,
-    error::MemoryAccessError,
+    error::{CompareExchangeError, MemoryAccessError},
     memory::access::MemoryOwner,
     stack::{
         context::VesContext,
@@ -9,24 +9,28 @@ use crate::{
     threading::ThreadManagerOps,
 };
 use dotnet_types::TypeDescription;
-use dotnet_utils::{BorrowGuardHandle, BorrowScopeOps, NoActiveBorrows};
+use dotnet_utils::{BorrowScopeOps, GcScopeGuard};
 use dotnet_value::{StackValue, layout::HasLayout, pointer::PointerOrigin};
 use sptr::Strict;
 use std::ptr::NonNull;
 
 impl<'a, 'gc> BorrowScopeOps for VesContext<'a, 'gc> {
-    fn enter_borrow_scope(&self) {
+    fn enter_gc_scope(&self) {
         self.local
             .active_borrows
             .set(self.local.active_borrows.get() + 1);
     }
 
-    fn exit_borrow_scope(&self) {
+    fn exit_gc_scope(&self) {
         let current = self.local.active_borrows.get();
         if current == 0 {
             panic!("Exiting borrow scope when none are active");
         }
         self.local.active_borrows.set(current - 1);
+    }
+
+    fn active_gc_scope_depth(&self) -> usize {
+        self.local.active_borrows.get()
     }
 }
 
@@ -57,7 +61,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
     }
 
     fn resolve_address(&self, origin: PointerOrigin<'gc>, offset: ByteOffset) -> NonNull<u8> {
-        let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
+        let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
             PointerOrigin::Stack(idx) => {
                 let slot = self.evaluation_stack.get_slot_ref(idx);
@@ -109,7 +113,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         value: StackValue<'gc>,
         layout: &dotnet_value::layout::LayoutManager,
     ) -> Result<(), MemoryAccessError> {
-        let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
+        let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
@@ -159,7 +163,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     use crate::memory::access::HeapWriteTarget;
                     memory.write_to_heap(
                         self.gc,
-                        HeapWriteTarget(MemoryOwner::CrossArena(ptr, tid)),
+                        HeapWriteTarget(MemoryOwner::cross_arena(self.gc, ptr, tid)),
                         offset,
                         value,
                         layout,
@@ -195,7 +199,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         layout: &dotnet_value::layout::LayoutManager,
         type_desc: Option<TypeDescription>,
     ) -> Result<StackValue<'gc>, MemoryAccessError> {
-        let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
+        let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
@@ -244,7 +248,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe {
                     memory.read_unaligned(
                         self.gc,
-                        Some(MemoryOwner::CrossArena(ptr, tid)),
+                        Some(MemoryOwner::cross_arena(self.gc, ptr, tid)),
                         offset,
                         layout,
                         type_desc,
@@ -273,7 +277,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         offset: dotnet_utils::ByteOffset,
         data: &[u8],
     ) -> Result<(), MemoryAccessError> {
-        let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
+        let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
@@ -321,7 +325,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe {
                     memory.write_bytes(
                         self.gc,
-                        Some(MemoryOwner::CrossArena(ptr, tid)),
+                        Some(MemoryOwner::cross_arena(self.gc, ptr, tid)),
                         offset,
                         data,
                     )
@@ -348,7 +352,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         offset: dotnet_utils::ByteOffset,
         dest: &mut [u8],
     ) -> Result<(), MemoryAccessError> {
-        let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
+        let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
@@ -391,7 +395,13 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 let heap = &self.local.heap;
                 let memory = crate::memory::RawMemoryAccess::new(heap);
-                unsafe { memory.read_bytes(Some(MemoryOwner::CrossArena(ptr, tid)), offset, dest) }
+                unsafe {
+                    memory.read_bytes(
+                        Some(MemoryOwner::cross_arena(self.gc, ptr, tid)),
+                        offset,
+                        dest,
+                    )
+                }
             }
             PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|obj_data| {
                 if offset.as_usize() + dest.len() > obj_data.len() {
@@ -417,8 +427,8 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         size: usize,
         success: dotnet_utils::sync::Ordering,
         failure: dotnet_utils::sync::Ordering,
-    ) -> Result<u64, u64> {
-        let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
+    ) -> Result<u64, CompareExchangeError> {
+        let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
@@ -503,7 +513,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe {
                     memory.compare_exchange_atomic(
                         self.gc,
-                        Some(MemoryOwner::CrossArena(ptr, tid)),
+                        Some(MemoryOwner::cross_arena(self.gc, ptr, tid)),
                         offset,
                         expected,
                         new,
@@ -525,7 +535,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
     ) -> Result<u64, MemoryAccessError> {
-        let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
+        let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
@@ -598,7 +608,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe {
                     memory.exchange_atomic(
                         self.gc,
-                        Some(MemoryOwner::CrossArena(ptr, tid)),
+                        Some(MemoryOwner::cross_arena(self.gc, ptr, tid)),
                         offset,
                         value,
                         size,
@@ -618,7 +628,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
     ) -> Result<u64, MemoryAccessError> {
-        let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
+        let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
@@ -691,7 +701,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe {
                     memory.exchange_add_atomic(
                         self.gc,
-                        Some(MemoryOwner::CrossArena(ptr, tid)),
+                        Some(MemoryOwner::cross_arena(self.gc, ptr, tid)),
                         offset,
                         value,
                         size,
@@ -710,7 +720,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
     ) -> Result<u64, MemoryAccessError> {
-        let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
+        let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
@@ -769,7 +779,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let memory = crate::memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.load_atomic(
-                        Some(MemoryOwner::CrossArena(ptr, tid)),
+                        Some(MemoryOwner::cross_arena(self.gc, ptr, tid)),
                         offset,
                         size,
                         ordering,
@@ -788,7 +798,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         size: usize,
         ordering: dotnet_utils::sync::Ordering,
     ) -> Result<(), MemoryAccessError> {
-        let (_active, _guard) = BorrowGuardHandle::new(self, NoActiveBorrows::new());
+        let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
@@ -861,7 +871,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 unsafe {
                     memory.store_atomic(
                         self.gc,
-                        Some(MemoryOwner::CrossArena(ptr, tid)),
+                        Some(MemoryOwner::cross_arena(self.gc, ptr, tid)),
                         offset,
                         value,
                         size,

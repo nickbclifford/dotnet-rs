@@ -93,7 +93,7 @@ pub fn runtime_method_info_intrinsic_call<
     method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let method_name = &*method.method().name;
     let param_count = method.method().signature.parameters.len();
 
@@ -294,7 +294,7 @@ pub fn intrinsic_method_handle_get_function_pointer<
     _method: MethodDescription,
     _generics: &GenericLookup,
 ) -> StepResult {
-    let _gc = ctx.gc_with_token(&dotnet_utils::NoActiveBorrows::new());
+    let _gc = ctx.gc_with_token(&ctx.no_active_borrows_token());
     let handle = ctx.pop_value_type();
     let method_obj = handle
         .instance_storage

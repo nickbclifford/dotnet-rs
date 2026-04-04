@@ -30,7 +30,7 @@ dotnet-cli               # CLI entry point, TestHarness, integration tests, feat
         │   ├── dotnet-assemblies    # Assembly loading, resolution, bundled support library (.cs stubs)
         │   ├── dotnet-value         # StackValue, Managed/Unmanaged Pointers, Heap Objects, FieldStorage, Layout
         │   ├── dotnet-types         # Type/Method/Field descriptors, Generics, TypeComparer, RuntimeType, Error types
-        │   ├── dotnet-utils         # GC utilities, ThreadSafeLock, AtomicAccess, Sync primitives, Newtypes, BorrowGuardHandle
+        │   ├── dotnet-utils         # GC utilities, ThreadSafeLock, AtomicAccess, Sync primitives, Newtypes, GcScopeGuard
         │   ├── dotnet-metrics       # RuntimeMetrics, CacheStats (standalone, serde)
         │   └── dotnet-tracer        # Tracer, LogEntry, structured logging (standalone)
         ├── dotnet-macros        # Proc-macros: #[dotnet_intrinsic], #[dotnet_instruction], #[dotnet_intrinsic_field]
@@ -63,7 +63,7 @@ dotnet-cli               # CLI entry point, TestHarness, integration tests, feat
 - **Heap Management**: `HeapManager` handles the allocation of objects. Each thread typically has its own arena for allocation to minimize contention.
 - **GC Roots**: The evaluation stack, local variables, and static fields serve as the primary roots for GC.
 - **STW Coordination**: When a GC is triggered, all threads are brought to a "Safe Point" (e.g., at a loop back-edge or method call). Once all threads are paused, the collector traces all reachable objects across all arenas.
-- **BorrowGuardHandle**: To prevent deadlocks during STW, `BorrowGuardHandle` must be used when holding a reference to heap-allocated data. It informs the GC that the thread is currently "busy" and cannot safely pause until the guard is dropped.
+- **GcScopeGuard**: To prevent deadlocks during STW, `GcScopeGuard` (legacy alias: `BorrowGuardHandle`) must be used when holding a reference to heap-allocated data. It informs the GC that the thread is currently "busy" and cannot safely pause until the guard is dropped.
 - **Collect Trait**: Every type stored on the heap or containing GC references must implement the `Collect` trait to allow the tracer to find nested references.
 
 ## Threading Model
