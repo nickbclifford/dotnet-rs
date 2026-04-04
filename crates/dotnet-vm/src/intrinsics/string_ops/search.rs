@@ -1,9 +1,6 @@
 use crate::{
     StepResult,
-    stack::ops::{
-        CallOps, EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps,
-        ResolutionOps, ThreadOps, TypedStackOps,
-    },
+    stack::ops::{ExceptionOps, RawMemoryOps, TypedStackOps},
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
@@ -23,16 +20,7 @@ const NULL_REF_MSG: &str = "Object reference not set to an instance of an object
 #[dotnet_intrinsic("int System.String::IndexOf(char, int)")]
 pub fn intrinsic_string_index_of<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + MemoryOps<'gc>
-        + CallOps<'gc>
-        + ResolutionOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ThreadOps
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
 >(
     ctx: &mut T,
     method: MethodDescription,
@@ -63,16 +51,7 @@ pub fn intrinsic_string_index_of<
 #[dotnet_intrinsic("string System.String::Substring(int, int)")]
 pub fn intrinsic_string_substring<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + MemoryOps<'gc>
-        + CallOps<'gc>
-        + ResolutionOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ThreadOps
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
 >(
     ctx: &mut T,
     method: MethodDescription,
@@ -176,16 +155,7 @@ pub fn intrinsic_string_substring<
 #[dotnet_intrinsic("static bool System.String::IsNullOrEmpty(string)")]
 pub fn intrinsic_string_is_null_or_empty<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + MemoryOps<'gc>
-        + CallOps<'gc>
-        + ResolutionOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ThreadOps
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -219,16 +189,7 @@ pub fn intrinsic_string_is_null_or_empty<
 #[dotnet_intrinsic("static bool System.String::IsNullOrWhiteSpace(string)")]
 pub fn intrinsic_string_is_null_or_white_space<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + MemoryOps<'gc>
-        + CallOps<'gc>
-        + ResolutionOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ThreadOps
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + RawMemoryOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,

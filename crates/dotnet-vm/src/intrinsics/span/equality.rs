@@ -203,14 +203,9 @@ pub fn intrinsic_memory_extensions_sequence_equal<
 #[dotnet_intrinsic("int System.ReadOnlySpan<T>::get_Length()")]
 pub fn intrinsic_span_get_length<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
+     T: TypedStackOps<'gc>
         + ResolutionOps<'gc>
-        + LoaderOps
-        + ExceptionOps<'gc>
-        + RawMemoryOps<'gc>
-        + MemoryOps<'gc>
-        + ReflectionOps<'gc>,
+        + RawMemoryOps<'gc>,
 >(
     ctx: &mut T,
     method: MethodDescription,
@@ -253,14 +248,12 @@ pub fn intrinsic_span_get_length<
 #[dotnet_intrinsic("T& System.ReadOnlySpan<T>::get_Item(int)")]
 pub fn intrinsic_span_get_item<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + ResolutionOps<'gc>
-        + LoaderOps
+     T: TypedStackOps<'gc>
         + ExceptionOps<'gc>
+        + LoaderOps
+        + ResolutionOps<'gc>
         + RawMemoryOps<'gc>
-        + MemoryOps<'gc>
-        + ReflectionOps<'gc>,
+        + MemoryOps<'gc>,
 >(
     ctx: &mut T,
     method: MethodDescription,

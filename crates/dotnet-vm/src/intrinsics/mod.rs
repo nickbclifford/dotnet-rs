@@ -455,7 +455,7 @@ fn object_to_string<
 #[dotnet_intrinsic("System.Type System.Object::GetType()")]
 fn object_get_type<
     'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + ReflectionOps<'gc> + LoaderOps,
+     T: TypedStackOps<'gc> + ExceptionOps<'gc> + ReflectionOps<'gc> + LoaderOps,
 >(
     ctx: &mut T,
     _method: MethodDescription,

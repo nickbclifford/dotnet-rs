@@ -62,11 +62,7 @@ pub fn intrinsic_array_get_rank<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc>>(
 #[dotnet_intrinsic("object System.Array::GetValue(int[])")]
 pub fn intrinsic_array_get_value<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + ExceptionOps<'gc>
-        + MemoryOps<'gc>
-        + ResolutionOps<'gc>,
+     T: EvalStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -124,11 +120,7 @@ pub fn intrinsic_array_get_value<
 #[dotnet_intrinsic("void System.Array::SetValue(object, int[])")]
 pub fn intrinsic_array_set_value<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + ExceptionOps<'gc>
-        + MemoryOps<'gc>
-        + ResolutionOps<'gc>,
+     T: EvalStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc> + ResolutionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,

@@ -1,8 +1,8 @@
 use crate::{
     StackSlotIndex, StepResult,
     stack::ops::{
-        ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps, ResolutionOps, StackOps,
-        ThreadOps,
+        EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, StackOps, ThreadOps,
+        TypedStackOps,
     },
     sync::{Arc, LockResult, SyncBlockOps, SyncManagerOps},
 };
@@ -47,14 +47,7 @@ const NULL_REF_MSG: &str = "Object reference not set to an instance of an object
 #[dotnet_intrinsic("static void System.Threading.Monitor::Exit(object)")]
 pub fn intrinsic_monitor_exit<
     'gc,
-    T: StackOps<'gc>
-        + ThreadOps
-        + MemoryOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ResolutionOps<'gc>
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + MemoryOps<'gc> + ThreadOps + LoaderOps,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -124,14 +117,7 @@ fn find_success_flag_index<'gc, T: RawMemoryOps<'gc>>(
 #[dotnet_intrinsic("static void System.Threading.Monitor::Enter(object)")]
 pub fn intrinsic_monitor_enter_obj<
     'gc,
-    T: StackOps<'gc>
-        + ThreadOps
-        + MemoryOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ResolutionOps<'gc>
-        + ReflectionOps<'gc>,
+     T: EvalStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc> + LoaderOps + ThreadOps,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -176,14 +162,7 @@ pub fn intrinsic_monitor_enter_obj<
 #[dotnet_intrinsic("static void System.Threading.Monitor::Enter(object, bool&)")]
 pub fn intrinsic_monitor_reliable_enter<
     'gc,
-    T: StackOps<'gc>
-        + ThreadOps
-        + MemoryOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ResolutionOps<'gc>
-        + ReflectionOps<'gc>,
+     T: StackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc> + RawMemoryOps<'gc> + LoaderOps + ThreadOps,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -249,14 +228,7 @@ pub fn intrinsic_monitor_reliable_enter<
 #[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter_FastPath(object)")]
 pub fn intrinsic_monitor_try_enter_fast_path<
     'gc,
-    T: StackOps<'gc>
-        + ThreadOps
-        + MemoryOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ResolutionOps<'gc>
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc> + LoaderOps + ThreadOps,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -287,14 +259,7 @@ pub fn intrinsic_monitor_try_enter_fast_path<
 #[dotnet_intrinsic("static void System.Threading.Monitor::TryEnter(object, int, bool&)")]
 pub fn intrinsic_monitor_try_enter_timeout_ref<
     'gc,
-    T: StackOps<'gc>
-        + ThreadOps
-        + MemoryOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ResolutionOps<'gc>
-        + ReflectionOps<'gc>,
+     T: StackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc> + RawMemoryOps<'gc> + LoaderOps + ThreadOps,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -370,14 +335,7 @@ pub fn intrinsic_monitor_try_enter_timeout_ref<
 #[dotnet_intrinsic("static bool System.Threading.Monitor::TryEnter(object, int)")]
 pub fn intrinsic_monitor_try_enter_timeout<
     'gc,
-    T: StackOps<'gc>
-        + ThreadOps
-        + MemoryOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ResolutionOps<'gc>
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc> + LoaderOps + ThreadOps,
 >(
     ctx: &mut T,
     _method: MethodDescription,

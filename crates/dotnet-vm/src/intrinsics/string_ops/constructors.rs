@@ -1,9 +1,6 @@
 use crate::{
     StepResult,
-    stack::ops::{
-        CallOps, EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps,
-        ResolutionOps, ThreadOps, TypedStackOps,
-    },
+    stack::ops::{ExceptionOps, RawMemoryOps, TypedStackOps},
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
@@ -24,16 +21,7 @@ const NULL_REF_MSG: &str = "Object reference not set to an instance of an object
 #[dotnet_intrinsic("static string System.String::FastAllocateString(IntPtr, IntPtr)")]
 pub fn intrinsic_string_fast_allocate_string<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + MemoryOps<'gc>
-        + CallOps<'gc>
-        + ResolutionOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ThreadOps
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
 >(
     ctx: &mut T,
     method: MethodDescription,
@@ -97,16 +85,7 @@ pub fn intrinsic_string_fast_allocate_string<
 #[dotnet_intrinsic("void System.String::.ctor(char[])")]
 pub fn intrinsic_string_ctor_char_array<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + MemoryOps<'gc>
-        + CallOps<'gc>
-        + ResolutionOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ThreadOps
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + RawMemoryOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -168,16 +147,7 @@ pub fn intrinsic_string_ctor_char_array<
 #[dotnet_intrinsic("void System.String::.ctor(char*)")]
 pub fn intrinsic_string_ctor_char_ptr<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + MemoryOps<'gc>
-        + CallOps<'gc>
-        + ResolutionOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ThreadOps
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + RawMemoryOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,

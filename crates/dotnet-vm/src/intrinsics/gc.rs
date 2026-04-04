@@ -17,7 +17,7 @@ use dotnet_value::{
 #[dotnet_intrinsic("static void System.ArgumentNullException::ThrowIfNull(object, string)")]
 pub fn intrinsic_argument_null_exception_throw_if_null<
     'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc>,
+     T: TypedStackOps<'gc> + ExceptionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -66,7 +66,7 @@ pub fn intrinsic_gc_keep_alive<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>(
 #[dotnet_intrinsic("static void System.GC::SuppressFinalize(object)")]
 pub fn intrinsic_gc_suppress_finalize<
     'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + RawMemoryOps<'gc>,
+     T: TypedStackOps<'gc> + MemoryOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -88,7 +88,7 @@ pub fn intrinsic_gc_suppress_finalize<
 #[dotnet_intrinsic("static void System.GC::ReRegisterForFinalize(object)")]
 pub fn intrinsic_gc_reregister_for_finalize<
     'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + RawMemoryOps<'gc>,
+     T: TypedStackOps<'gc> + MemoryOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -283,7 +283,7 @@ pub fn intrinsic_gchandle_internal_get<
 )]
 pub fn intrinsic_gchandle_internal_set<
     'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc> + MemoryOps<'gc> + RawMemoryOps<'gc>,
+     T: TypedStackOps<'gc> + MemoryOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,

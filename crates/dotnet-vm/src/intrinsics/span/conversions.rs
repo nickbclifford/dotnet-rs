@@ -273,14 +273,7 @@ pub fn intrinsic_as_span<
 )]
 pub fn intrinsic_runtime_helpers_create_span<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + ResolutionOps<'gc>
-        + LoaderOps
-        + ExceptionOps<'gc>
-        + RawMemoryOps<'gc>
-        + MemoryOps<'gc>
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + ExceptionOps<'gc> + LoaderOps + ResolutionOps<'gc> + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -542,14 +535,7 @@ pub fn intrinsic_runtime_helpers_get_span_data_from<
 #[dotnet_intrinsic("static byte& DotnetRs.Internal::GetArrayData(System.Array)")]
 pub fn intrinsic_internal_get_array_data<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + ResolutionOps<'gc>
-        + LoaderOps
-        + ExceptionOps<'gc>
-        + RawMemoryOps<'gc>
-        + MemoryOps<'gc>
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + MemoryOps<'gc> + LoaderOps,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -606,14 +592,11 @@ pub fn intrinsic_internal_get_array_data<
 #[dotnet_intrinsic("T& System.ReadOnlySpan<T>::GetPinnableReference()")]
 pub fn intrinsic_span_get_pinnable_reference<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + ResolutionOps<'gc>
-        + LoaderOps
-        + ExceptionOps<'gc>
-        + RawMemoryOps<'gc>
+     T: TypedStackOps<'gc>
         + MemoryOps<'gc>
-        + ReflectionOps<'gc>,
+        + LoaderOps
+        + ResolutionOps<'gc>
+        + RawMemoryOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,

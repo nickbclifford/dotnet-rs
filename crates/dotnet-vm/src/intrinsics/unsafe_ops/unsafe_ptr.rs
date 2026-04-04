@@ -58,7 +58,7 @@ pub fn intrinsic_unsafe_as_pointer<
 #[dotnet_intrinsic("static void* System.Runtime.CompilerServices.Unsafe::Add<T>(void*, int)")]
 pub fn intrinsic_unsafe_add<
     'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + ResolutionOps<'gc>,
+     T: EvalStackOps<'gc> + ExceptionOps<'gc> + ResolutionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -93,7 +93,7 @@ pub fn intrinsic_unsafe_add<
 )]
 pub fn intrinsic_unsafe_add_byte_offset<
     'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc>,
+     T: EvalStackOps<'gc> + ExceptionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -124,7 +124,7 @@ pub fn intrinsic_unsafe_add_byte_offset<
 #[dotnet_intrinsic("static void* System.Runtime.CompilerServices.Unsafe::Subtract<T>(void*, int)")]
 pub fn intrinsic_unsafe_subtract<
     'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc> + ResolutionOps<'gc>,
+     T: EvalStackOps<'gc> + ExceptionOps<'gc> + ResolutionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -159,7 +159,7 @@ pub fn intrinsic_unsafe_subtract<
 )]
 pub fn intrinsic_unsafe_subtract_byte_offset<
     'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc>,
+     T: EvalStackOps<'gc> + ExceptionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -213,7 +213,7 @@ pub fn intrinsic_unsafe_as<T: ?Sized>(
 #[dotnet_intrinsic("static TTo& System.Runtime.CompilerServices.Unsafe::As<TFrom, TTo>(TFrom&)")]
 pub fn intrinsic_unsafe_as_generic<
     'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc> + LoaderOps + ResolutionOps<'gc>,
+     T: EvalStackOps<'gc> + LoaderOps + ResolutionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -374,7 +374,7 @@ pub fn intrinsic_unsafe_as_ref_ptr<
 }
 
 #[dotnet_intrinsic("static void System.Runtime.CompilerServices.Unsafe::SkipInit<T>(T&)")]
-pub fn intrinsic_unsafe_skip_init<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>(
+pub fn intrinsic_unsafe_skip_init<'gc,  T: EvalStackOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -420,12 +420,7 @@ pub fn intrinsic_unsafe_byte_offset<'gc, T: EvalStackOps<'gc> + TypedStackOps<'g
 #[dotnet_intrinsic("static T System.Runtime.CompilerServices.Unsafe::ReadUnaligned<T>(byte&)")]
 pub fn intrinsic_unsafe_read_unaligned<
     'gc,
-    T: StackOps<'gc>
-        + LoaderOps
-        + ResolutionOps<'gc>
-        + ExceptionOps<'gc>
-        + RawMemoryOps<'gc>
-        + MemoryOps<'gc>,
+     T: StackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc> + LoaderOps + ResolutionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,

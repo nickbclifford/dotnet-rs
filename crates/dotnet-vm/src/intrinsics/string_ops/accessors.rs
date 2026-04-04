@@ -19,16 +19,7 @@ const NULL_REF_MSG: &str = "Object reference not set to an instance of an object
 #[dotnet_intrinsic("char System.String::get_Chars(int)")]
 pub fn intrinsic_string_get_chars<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + MemoryOps<'gc>
-        + CallOps<'gc>
-        + ResolutionOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ThreadOps
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -59,16 +50,7 @@ pub fn intrinsic_string_get_chars<
 #[dotnet_intrinsic("int System.String::get_Length()")]
 pub fn intrinsic_string_get_length<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + MemoryOps<'gc>
-        + CallOps<'gc>
-        + ResolutionOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ThreadOps
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -86,16 +68,7 @@ pub fn intrinsic_string_get_length<
 #[dotnet_intrinsic("char& System.String::GetRawStringData()")]
 pub fn intrinsic_string_get_raw_data<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + MemoryOps<'gc>
-        + CallOps<'gc>
-        + ResolutionOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ThreadOps
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + ExceptionOps<'gc> + LoaderOps,
 >(
     ctx: &mut T,
     _method: MethodDescription,

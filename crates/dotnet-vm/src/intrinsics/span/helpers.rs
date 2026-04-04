@@ -1,9 +1,6 @@
 use crate::{
     error::{IntrinsicError, MemoryAccessError},
-    stack::ops::{
-        EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps,
-        ResolutionOps, TypedStackOps,
-    },
+    stack::ops::{MemoryOps, RawMemoryOps},
 };
 use dotnet_types::TypeDescription;
 use dotnet_utils::GcScopeGuard;
@@ -36,14 +33,7 @@ pub fn read_span_length(span: &Object) -> Result<i32, IntrinsicError> {
 /// Read the _reference ManagedPtr from a ManagedPtr that points to a Span.
 pub fn read_span_reference_from_ptr<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + ResolutionOps<'gc>
-        + LoaderOps
-        + ExceptionOps<'gc>
-        + RawMemoryOps<'gc>
-        + MemoryOps<'gc>
-        + ReflectionOps<'gc>,
+    T: RawMemoryOps<'gc> + MemoryOps<'gc>,
 >(
     span_ptr: &ManagedPtr<'gc>,
     layout: &FieldLayoutManager,
@@ -89,14 +79,7 @@ pub fn read_span_reference_from_ptr<
 /// Read the _length from a ManagedPtr that points to a Span.
 pub fn read_span_length_from_ptr<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + ResolutionOps<'gc>
-        + LoaderOps
-        + ExceptionOps<'gc>
-        + RawMemoryOps<'gc>
-        + MemoryOps<'gc>
-        + ReflectionOps<'gc>,
+    T: RawMemoryOps<'gc>,
 >(
     span_ptr: &ManagedPtr<'gc>,
     layout: &FieldLayoutManager,
@@ -120,14 +103,7 @@ pub fn read_span_length_from_ptr<
 /// Write a ManagedPtr + length into a Span/ReadOnlySpan value type.
 pub fn write_span_fields<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + ResolutionOps<'gc>
-        + LoaderOps
-        + ExceptionOps<'gc>
-        + RawMemoryOps<'gc>
-        + MemoryOps<'gc>
-        + ReflectionOps<'gc>,
+    T: RawMemoryOps<'gc>,
 >(
     span_ptr: &ManagedPtr<'gc>,
     managed: &ManagedPtr<'gc>,
@@ -170,14 +146,7 @@ pub fn write_span_fields<
 pub fn with_span_data<
     'gc,
     R,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + ResolutionOps<'gc>
-        + LoaderOps
-        + ExceptionOps<'gc>
-        + RawMemoryOps<'gc>
-        + MemoryOps<'gc>
-        + ReflectionOps<'gc>,
+    T: RawMemoryOps<'gc>,
 >(
     ctx: &T,
     span: Object,

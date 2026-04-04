@@ -3,8 +3,8 @@ use crate::{
     error::IntrinsicError,
     intrinsics::span::{intrinsic_as_span, with_span_data},
     stack::ops::{
-        CallOps, EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps,
-        ResolutionOps, StackOps, ThreadOps, TypedStackOps,
+        ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps, ResolutionOps, StackOps,
+        TypedStackOps,
     },
 };
 use dotnet_macros::dotnet_intrinsic;
@@ -27,16 +27,7 @@ const NULL_REF_MSG: &str = "Object reference not set to an instance of an object
 #[dotnet_intrinsic("bool System.String::Equals(object)")]
 pub fn intrinsic_string_equals<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + MemoryOps<'gc>
-        + CallOps<'gc>
-        + ResolutionOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ThreadOps
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + RawMemoryOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -127,16 +118,7 @@ pub fn intrinsic_string_equals<
 )]
 pub fn intrinsic_string_concat_three_spans<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + MemoryOps<'gc>
-        + CallOps<'gc>
-        + ResolutionOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ThreadOps
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc> + LoaderOps + ResolutionOps<'gc> + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -194,16 +176,7 @@ pub fn intrinsic_string_concat_three_spans<
 #[dotnet_intrinsic("int System.String::GetHashCodeOrdinalIgnoreCase()")]
 pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + MemoryOps<'gc>
-        + CallOps<'gc>
-        + ResolutionOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ThreadOps
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + RawMemoryOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -267,16 +240,7 @@ pub fn intrinsic_string_get_hash_code_ordinal_ignore_case<
 #[dotnet_intrinsic("static void System.String::CopyStringContent(string, int, string)")]
 pub fn intrinsic_string_copy_string_content<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + MemoryOps<'gc>
-        + CallOps<'gc>
-        + ResolutionOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ThreadOps
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + ExceptionOps<'gc> + MemoryOps<'gc> + RawMemoryOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -364,15 +328,7 @@ pub fn intrinsic_string_copy_string_content<
 #[dotnet_intrinsic("static System.ReadOnlySpan<char> System.String::op_Implicit(string)")]
 pub fn intrinsic_string_implicit_to_span<
     'gc,
-    T: StackOps<'gc>
-        + MemoryOps<'gc>
-        + CallOps<'gc>
-        + ResolutionOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ThreadOps
-        + ReflectionOps<'gc>,
+     T: StackOps<'gc> + ExceptionOps<'gc> + RawMemoryOps<'gc> + LoaderOps + ResolutionOps<'gc> + ReflectionOps<'gc>,
 >(
     ctx: &mut T,
     method: MethodDescription,

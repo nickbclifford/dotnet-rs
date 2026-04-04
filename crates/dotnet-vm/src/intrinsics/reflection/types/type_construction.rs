@@ -20,7 +20,7 @@ use dotnetdll::prelude::{MethodMemberIndex, TypeSource};
 )]
 pub fn intrinsic_runtime_helpers_run_class_constructor<
     'gc,
-    T: EvalStackOps<'gc> + TypedStackOps<'gc> + ReflectionOps<'gc> + LoaderOps + StaticsOps<'gc>,
+     T: EvalStackOps<'gc> + LoaderOps + ReflectionOps<'gc> + StaticsOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -60,12 +60,7 @@ pub fn intrinsic_runtime_helpers_run_class_constructor<
 #[dotnet_intrinsic("static object System.Activator::CreateInstance()")]
 pub fn intrinsic_activator_create_instance<
     'gc,
-    T: TypedStackOps<'gc>
-        + LoaderOps
-        + ResolutionOps<'gc>
-        + MemoryOps<'gc>
-        + CallOps<'gc>
-        + ExceptionOps<'gc>,
+     T: TypedStackOps<'gc> + MemoryOps<'gc> + LoaderOps + ResolutionOps<'gc> + CallOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,

@@ -1,9 +1,6 @@
 use crate::{
     StepResult,
-    stack::ops::{
-        ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps, ResolutionOps, StackOps,
-        ThreadOps,
-    },
+    stack::ops::TypedStackOps,
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
@@ -17,14 +14,7 @@ use std::time::Duration;
 #[dotnet_intrinsic("static void System.Threading.Thread::Sleep(int)")]
 pub fn intrinsic_thread_sleep<
     'gc,
-    T: StackOps<'gc>
-        + ThreadOps
-        + MemoryOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ResolutionOps<'gc>
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,

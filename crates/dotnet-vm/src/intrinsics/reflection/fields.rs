@@ -1,6 +1,6 @@
 use crate::{
     StepResult,
-    stack::ops::{ExceptionOps, LoaderOps, MemoryOps, ReflectionOps, TypedStackOps},
+    stack::ops::{LoaderOps, MemoryOps, ReflectionOps, TypedStackOps},
 };
 use dotnet_macros::dotnet_intrinsic;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription, runtime::RuntimeType};
@@ -34,7 +34,7 @@ pub fn intrinsic_field_info_get_declaring_type<'gc, T: TypedStackOps<'gc> + Refl
 #[dotnet_intrinsic("System.RuntimeFieldHandle DotnetRs.FieldInfo::GetFieldHandle()")]
 pub fn intrinsic_field_info_get_field_handle<
     'gc,
-    T: TypedStackOps<'gc> + LoaderOps + MemoryOps<'gc> + ExceptionOps<'gc>,
+     T: TypedStackOps<'gc> + MemoryOps<'gc> + LoaderOps,
 >(
     ctx: &mut T,
     _method: MethodDescription,

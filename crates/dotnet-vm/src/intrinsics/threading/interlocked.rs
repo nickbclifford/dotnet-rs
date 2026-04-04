@@ -1,10 +1,7 @@
 use crate::{
     StepResult,
     error::VmError,
-    stack::ops::{
-        ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps, ResolutionOps, StackOps,
-        ThreadOps,
-    },
+    stack::ops::{LoaderOps, MemoryOps, RawMemoryOps, TypedStackOps},
     sync::Ordering,
 };
 use dotnet_macros::dotnet_intrinsic;
@@ -31,14 +28,7 @@ const NULL_REF_MSG: &str = "Object reference not set to an instance of an object
 #[dotnet_intrinsic("static T System.Threading.Interlocked::CompareExchange<T>(T&, T, T)")]
 pub fn intrinsic_interlocked_compare_exchange<
     'gc,
-    T: StackOps<'gc>
-        + ThreadOps
-        + MemoryOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ResolutionOps<'gc>
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + MemoryOps<'gc> + RawMemoryOps<'gc> + LoaderOps,
 >(
     ctx: &mut T,
     method: MethodDescription,
@@ -198,14 +188,7 @@ pub fn intrinsic_interlocked_compare_exchange<
 #[dotnet_intrinsic("static T System.Threading.Interlocked::Exchange<T>(T&, T)")]
 pub fn intrinsic_interlocked_exchange<
     'gc,
-    T: StackOps<'gc>
-        + ThreadOps
-        + MemoryOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ResolutionOps<'gc>
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + MemoryOps<'gc> + RawMemoryOps<'gc> + LoaderOps,
 >(
     ctx: &mut T,
     method: MethodDescription,
@@ -333,14 +316,7 @@ pub fn intrinsic_interlocked_exchange<
 #[dotnet_intrinsic("static long System.Threading.Interlocked::Add(long&, long)")]
 pub fn intrinsic_interlocked_exchange_add<
     'gc,
-    T: StackOps<'gc>
-        + ThreadOps
-        + MemoryOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ResolutionOps<'gc>
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + MemoryOps<'gc> + RawMemoryOps<'gc> + LoaderOps,
 >(
     ctx: &mut T,
     method: MethodDescription,

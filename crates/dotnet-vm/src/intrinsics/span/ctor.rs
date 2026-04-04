@@ -4,8 +4,7 @@ use crate::{
     intrinsics::span::helpers::*,
     layout::type_layout,
     stack::ops::{
-        EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps,
-        ResolutionOps, TypedStackOps,
+        ExceptionOps, LoaderOps, RawMemoryOps, ResolutionOps, TypedStackOps,
     },
 };
 use dotnet_macros::dotnet_intrinsic;
@@ -25,14 +24,11 @@ use std::ptr::NonNull;
 #[dotnet_intrinsic("void System.ReadOnlySpan<T>::.ctor(void*, int)")]
 pub fn intrinsic_span_ctor_from_pointer<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + ResolutionOps<'gc>
-        + LoaderOps
+     T: TypedStackOps<'gc>
         + ExceptionOps<'gc>
-        + RawMemoryOps<'gc>
-        + MemoryOps<'gc>
-        + ReflectionOps<'gc>,
+        + LoaderOps
+        + ResolutionOps<'gc>
+        + RawMemoryOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,

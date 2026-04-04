@@ -362,7 +362,7 @@ pub fn runtime_type_handle_intrinsic_call<
 )]
 pub fn intrinsic_runtime_helpers_get_method_table<
     'gc,
-    T: TypedStackOps<'gc> + LoaderOps + ReflectionOps<'gc> + ResolutionOps<'gc> + ExceptionOps<'gc>,
+     T: TypedStackOps<'gc> + ExceptionOps<'gc> + LoaderOps,
 >(
     ctx: &mut T,
     method: MethodDescription,

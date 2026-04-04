@@ -2,8 +2,7 @@ use crate::{
     StepResult,
     resolution::{TypeResolutionExt, ValueResolution},
     stack::ops::{
-        CallOps, EvalStackOps, ExceptionOps, LoaderOps, MemoryOps, ReflectionOps, ResolutionOps,
-        TypedStackOps, VesInternals,
+        CallOps, LoaderOps, MemoryOps, ReflectionOps, ResolutionOps, TypedStackOps, VesInternals,
     },
 };
 use dotnet_macros::dotnet_intrinsic;
@@ -79,15 +78,7 @@ use dotnetdll::prelude::ParameterType;
 #[dotnet_intrinsic("System.Reflection.ParameterInfo[] DotnetRs.ConstructorInfo::GetParameters()")]
 pub fn runtime_method_info_intrinsic_call<
     'gc,
-    T: EvalStackOps<'gc>
-        + TypedStackOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + MemoryOps<'gc>
-        + ReflectionOps<'gc>
-        + ResolutionOps<'gc>
-        + VesInternals<'gc>
-        + CallOps<'gc>,
+     T: TypedStackOps<'gc> + LoaderOps + ResolutionOps<'gc> + ReflectionOps<'gc> + CallOps<'gc> + VesInternals<'gc>,
 >(
     ctx: &mut T,
     method: MethodDescription,

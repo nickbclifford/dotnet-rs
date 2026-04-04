@@ -26,7 +26,7 @@ const NOT_SUPPORTED_MSG: &str = "BeginInvoke and EndInvoke are not supported.";
 use super::helpers::*;
 
 #[dotnet_intrinsic("object System.Delegate::get_Target()")]
-pub fn delegate_get_target<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + LoaderOps>(
+pub fn delegate_get_target<'gc,  T: TypedStackOps<'gc> + ExceptionOps<'gc> + LoaderOps>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -55,7 +55,7 @@ pub fn delegate_get_target<'gc, T: TypedStackOps<'gc> + ExceptionOps<'gc> + Load
 #[dotnet_intrinsic("System.Reflection.MethodInfo System.Delegate::get_Method()")]
 pub fn delegate_get_method<
     'gc,
-    T: TypedStackOps<'gc> + ExceptionOps<'gc> + LoaderOps + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + ExceptionOps<'gc> + ReflectionOps<'gc> + LoaderOps,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -287,7 +287,7 @@ pub fn delegate_combine<
 )]
 pub fn delegate_remove<
     'gc,
-    T: TypedStackOps<'gc> + LoaderOps + ResolutionOps<'gc> + MemoryOps<'gc> + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + MemoryOps<'gc> + LoaderOps + ResolutionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,

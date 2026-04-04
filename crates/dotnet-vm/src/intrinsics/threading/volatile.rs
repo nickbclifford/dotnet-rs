@@ -1,9 +1,6 @@
 use crate::{
     StepResult,
-    stack::ops::{
-        ExceptionOps, LoaderOps, MemoryOps, RawMemoryOps, ReflectionOps, ResolutionOps, StackOps,
-        ThreadOps,
-    },
+    stack::ops::{LoaderOps, MemoryOps, RawMemoryOps, TypedStackOps},
     sync::Ordering,
 };
 use dotnet_macros::dotnet_intrinsic;
@@ -32,14 +29,7 @@ const NULL_REF_MSG: &str = "Object reference not set to an instance of an object
 #[dotnet_intrinsic("static double System.Threading.Volatile::Read(double&)")]
 pub fn intrinsic_volatile_read<
     'gc,
-    T: StackOps<'gc>
-        + ThreadOps
-        + MemoryOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ResolutionOps<'gc>
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + MemoryOps<'gc> + RawMemoryOps<'gc> + LoaderOps,
 >(
     ctx: &mut T,
     method: MethodDescription,
@@ -174,14 +164,7 @@ pub fn intrinsic_volatile_read<
 #[dotnet_intrinsic("static void System.Threading.Volatile::Write(double&, double)")]
 pub fn intrinsic_volatile_write<
     'gc,
-    T: StackOps<'gc>
-        + ThreadOps
-        + MemoryOps<'gc>
-        + RawMemoryOps<'gc>
-        + ExceptionOps<'gc>
-        + LoaderOps
-        + ResolutionOps<'gc>
-        + ReflectionOps<'gc>,
+     T: TypedStackOps<'gc> + MemoryOps<'gc> + RawMemoryOps<'gc> + LoaderOps,
 >(
     ctx: &mut T,
     method: MethodDescription,

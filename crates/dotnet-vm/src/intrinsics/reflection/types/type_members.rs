@@ -25,7 +25,7 @@ use dotnetdll::prelude::{Accessibility, MemberAccessibility, MethodMemberIndex, 
 #[dotnet_intrinsic("object[] System.Reflection.Assembly::GetCustomAttributes(System.Type, bool)")]
 pub fn intrinsic_assembly_get_custom_attributes<
     'gc,
-    T: MemoryOps<'gc> + LoaderOps + EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc>,
+     T: TypedStackOps<'gc> + MemoryOps<'gc> + LoaderOps,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -57,7 +57,7 @@ pub fn intrinsic_assembly_get_custom_attributes<
 )]
 pub fn intrinsic_attribute_get_custom_attributes<
     'gc,
-    T: MemoryOps<'gc> + LoaderOps + EvalStackOps<'gc> + TypedStackOps<'gc> + ExceptionOps<'gc>,
+     T: TypedStackOps<'gc> + MemoryOps<'gc> + LoaderOps,
 >(
     ctx: &mut T,
     _method: MethodDescription,
