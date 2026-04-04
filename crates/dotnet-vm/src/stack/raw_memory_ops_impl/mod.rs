@@ -61,7 +61,6 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
     }
 
     fn resolve_address(&self, origin: PointerOrigin<'gc>, offset: ByteOffset) -> NonNull<u8> {
-        let _gc_scope = GcScopeGuard::enter(self, self.gc_ready_token());
         match origin {
             PointerOrigin::Stack(idx) => {
                 let slot = self.evaluation_stack.get_slot_ref(idx);
