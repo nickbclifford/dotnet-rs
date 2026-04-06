@@ -1,12 +1,12 @@
 use crate::{
     StepResult,
-    exceptions::{
-        ExceptionState, HandlerAddress, HandlerKind, SearchState, UnwindState, UnwindTarget,
-    },
     stack::{
         context::VesContext,
         ops::{BaseMemoryOps, ExceptionOps, StackOps},
     },
+};
+use dotnet_exceptions::{
+    ExceptionState, HandlerAddress, HandlerKind, SearchState, UnwindState, UnwindTarget,
 };
 use dotnet_value::{
     StackValue,

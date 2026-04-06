@@ -1,9 +1,9 @@
 use crate::{
     gc::coordinator::GCCoordinator,
-    metrics::RuntimeMetrics,
     sync::{Arc, Condvar, LockResult, Mutex},
     threading::ThreadManagerOps,
 };
+use dotnet_metrics::RuntimeMetrics;
 use dotnet_utils::ArenaId;
 use std::{collections::HashMap, time::Instant};
 
@@ -310,11 +310,11 @@ mod tests {
     use super::*;
     use crate::{
         gc::coordinator::{GCCommand, GCCoordinator},
-        metrics::RuntimeMetrics,
         sync::{LockResult, SyncBlockOps},
         threading::{STWGuardOps, ThreadManagerOps},
-        tracer::Tracer,
     };
+    use dotnet_metrics::RuntimeMetrics;
+    use dotnet_tracer::Tracer;
     use dotnet_utils::ArenaId;
     use std::{
         sync::{

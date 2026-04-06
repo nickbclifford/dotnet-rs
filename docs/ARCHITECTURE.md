@@ -7,10 +7,20 @@
 The project is divided into several crates, each with a focused responsibility:
 
 - **dotnet-cli**: The entry point. It provides the command-line interface, test harness, and integration tests.
-- **dotnet-vm**: The core of the virtual machine. It includes the execution engine (executor), instruction handlers, native intrinsics (BCL), memory management (heap and GC), and threading support. Re-exports several extracted sub-crates for backward compatibility.
-- **dotnet-vm-ops**: Foundational VES operation traits (`EvalStackOps`, `TypedStackOps`, `ExceptionOps`, `RawMemoryOps`, etc.), execution data types (`StepResult`, `MethodInfo`, `MethodState`), exception data types (`ExceptionState`, `ProtectedSection`, `Handler`, etc.), and stack types (`EvaluationStack`, `FrameStack`, `StackFrame`). Depends only on `dotnet-value`, `dotnet-types`, `dotnet-utils`, and `dotnetdll` — no circular dependency on `dotnet-vm`.
+- **dotnet-vm**: The core VM crate. It owns the execution engine, instruction handlers/dispatch generation, GC coordinator, threading/sync runtime, and VM-local intrinsic infrastructure.
+- **dotnet-vm-ops**: Foundational VES operation traits (`EvalStackOps`, `TypedStackOps`, `ExceptionOps`, `RawMemoryOps`, etc.). It is trait-focused and re-exports runtime data from `dotnet-vm-data` for compatibility.
+- **dotnet-vm-data**: Shared runtime data model (`StepResult`, `MethodInfo`, method/frame state, stack and exception data structures).
 - **dotnet-exceptions**: Exception handling logic extracted from `dotnet-vm`. Contains the `ExceptionHandlingSystem` with the two-pass search/unwind state machine. Depends on `dotnet-vm-ops` for base traits and types.
 - **dotnet-pinvoke**: P/Invoke marshalling extracted from `dotnet-vm`. Uses `libffi` and `libloading` for native interop. Depends on `dotnet-vm-ops` for base traits.
+- **dotnet-runtime-resolver**: Type/method/field resolution services and layout factory implementation, consumed from `dotnet-vm` via adapters.
+- **dotnet-runtime-memory**: Runtime memory access/heap services and validation helpers, consumed from `dotnet-vm` via adapters.
+- **dotnet-intrinsics-core**: Core intrinsic handlers (`math`, `array_ops`).
+- **dotnet-intrinsics-delegates**: Delegate intrinsic handlers and delegate invoke host seams.
+- **dotnet-intrinsics-span**: Span/ReadOnlySpan intrinsic handlers and span host seams.
+- **dotnet-intrinsics-string**: String intrinsic handlers and string-span host seams.
+- **dotnet-intrinsics-threading**: Monitor/interlocked/threading intrinsic handlers and host seams.
+- **dotnet-intrinsics-reflection**: Reflection intrinsic handlers and reflection host seams.
+- **dotnet-intrinsics-unsafe**: Unsafe/marshalling intrinsic handlers and host seams.
 - **dotnet-metrics**: Standalone crate for `RuntimeMetrics` with per-cache hit/miss tracking (`CacheStats`, `CacheStat`), serializable via `serde`.
 - **dotnet-tracer**: Standalone crate for the `Tracer` subsystem. Provides structured logging via the `tracing` crate with configurable levels (`DOTNET_LOG` env), a `LogEntry` enum for structured trace events, and an async flusher thread via `crossbeam-channel`.
 - **dotnet-assemblies**: Handles loading and resolving .NET assemblies. It also includes a support library of C# stubs for core types.
@@ -22,19 +32,29 @@ The project is divided into several crates, each with a focused responsibility:
 ### Crate Dependency Hierarchy
 
 ```
-dotnet-cli               # CLI entry point, TestHarness, integration tests, feature config tests
-    └── dotnet-vm            # Core VM: Executor, Instruction Set, Intrinsics, GC, Threading
-        ├── dotnet-exceptions    # Exception handling system (ExceptionHandlingSystem, two-pass SEH)
-        ├── dotnet-pinvoke       # P/Invoke marshalling (libffi, libloading)
-        ├── dotnet-vm-ops        # Base VES traits, StepResult, MethodInfo, EvaluationStack, ExceptionState
-        │   ├── dotnet-assemblies    # Assembly loading, resolution, bundled support library (.cs stubs)
-        │   ├── dotnet-value         # StackValue, Managed/Unmanaged Pointers, Heap Objects, FieldStorage, Layout
-        │   ├── dotnet-types         # Type/Method/Field descriptors, Generics, TypeComparer, RuntimeType, Error types
-        │   ├── dotnet-utils         # GC utilities, ThreadSafeLock, AtomicAccess, Sync primitives, Newtypes, GcScopeGuard
-        │   ├── dotnet-metrics       # RuntimeMetrics, CacheStats (standalone, serde)
-        │   └── dotnet-tracer        # Tracer, LogEntry, structured logging (standalone)
-        ├── dotnet-macros        # Proc-macros: #[dotnet_intrinsic], #[dotnet_instruction], #[dotnet_intrinsic_field]
-        └── dotnet-macros-core   # Shared logic for macro expansion
+dotnet-cli
+  └── dotnet-vm
+      ├── dotnet-vm-ops
+      │   └── dotnet-vm-data
+      ├── dotnet-exceptions
+      ├── dotnet-pinvoke
+      ├── dotnet-runtime-resolver
+      ├── dotnet-runtime-memory
+      ├── dotnet-intrinsics-core
+      ├── dotnet-intrinsics-delegates
+      ├── dotnet-intrinsics-span
+      ├── dotnet-intrinsics-string
+      ├── dotnet-intrinsics-threading
+      ├── dotnet-intrinsics-reflection
+      ├── dotnet-intrinsics-unsafe
+      ├── dotnet-assemblies
+      ├── dotnet-value
+      ├── dotnet-types
+      ├── dotnet-utils
+      ├── dotnet-metrics
+      ├── dotnet-tracer
+      ├── dotnet-macros
+      └── dotnet-macros-core
 ```
 
 ## Data Flow
@@ -47,12 +67,12 @@ dotnet-cli               # CLI entry point, TestHarness, integration tests, feat
     - Dispatches the instruction to its handler.
     - Updates the `EvaluationStack` with results.
     - Handles flow control (jumps, calls, returns).
-5. **Instruction Set and Dispatch**: CIL instructions are categorized (arithmetic, flow, objects, etc.) and handled in `crates/dotnet-vm/src/instructions/`. The `dispatch/` subsystem manages instruction execution, including an auto-generated dispatch table in `registry.rs` and a high-performance `ring_buffer.rs` for execution tracing.
+5. **Instruction Set and Dispatch**: CIL instructions are categorized (arithmetic, flow, objects, etc.) and handled in `crates/dotnet-vm/src/instructions/`. The `dispatch/` subsystem manages instruction execution with an auto-generated dispatch table in `dispatch/registry.rs` and a `dispatch/ring_buffer.rs` instruction trace buffer.
 6. **Method Calls and Intrinsics**:
     - Static calls resolve the target method and push a new `StackFrame`.
     - Virtual calls use the object's vtable (computed via the layout system) to find the correct method implementation.
     - Tail calls (`tail.`) are supported in a guarded manner: when the prefix is present and the call is in a valid tail position (immediately followed by `ret`, eval stack otherwise empty, not inside an exception region, etc.), the VM replaces the current frame before dispatching the callee; otherwise it falls back to a normal call.
-    - Intrinsic calls are intercepted and handled by native Rust code in `crates/dotnet-vm/src/intrinsics/`, including core BCL logic and `constants.rs` for intrinsic metadata. Similar to instructions, intrinsics use a monomorphic ID-based dispatch system to ensure high performance.
+    - Intrinsic calls are intercepted and handled by native Rust code split across `dotnet-intrinsics-*` crates, with VM-local metadata/registry code in `crates/dotnet-vm/src/intrinsics/`. Similar to instructions, intrinsics use a monomorphic ID-based dispatch system.
     
     (See [Delegates and Dispatch](DELEGATES_AND_DISPATCH.md) for more details on invocation paths).
 
@@ -80,7 +100,7 @@ The VM supports multi-threading (feature-gated via `multithreading`). For detail
 - **State Machine**: Exception processing is modeled as a state machine (`Throwing` → `Searching` → `Unwinding` → `ExecutingHandler`).
 - **Filter Clauses**: Support for dynamic `filter` blocks that run user CIL code during the search phase.
 - **Unwinding**: The `leave` instruction and exception unwinding properly execute `finally` and `fault` blocks.
-- **Extracted Crate**: The exception handling system (`ExceptionHandlingSystem`) lives in `dotnet-exceptions`, while the exception data types (`ExceptionState`, `ProtectedSection`, `Handler`, etc.) live in `dotnet-vm-ops/src/exceptions.rs`.
+- **Extracted Crate**: The exception handling system (`ExceptionHandlingSystem`) lives in `dotnet-exceptions`, while the exception/stack data model lives in `dotnet-vm-data` (re-exported by `dotnet-vm-ops`).
 
 See [Exception Handling](EXCEPTION_HANDLING.md) for full details on the state machine and unwinding process.
 

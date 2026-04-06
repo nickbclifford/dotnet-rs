@@ -1,8 +1,8 @@
 use crate::{
     gc::coordinator::{GCCommand, GCCoordinator},
     threading::STWGuardOps,
-    tracer::Tracer,
 };
+use dotnet_tracer::Tracer;
 use dotnet_utils::ArenaId;
 use std::sync::Arc;
 

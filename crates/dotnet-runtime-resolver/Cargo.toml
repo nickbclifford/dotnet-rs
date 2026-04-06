@@ -1,0 +1,21 @@
+[package]
+name = "dotnet-runtime-resolver"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dotnet-assemblies = { workspace = true }
+dotnet-types = { workspace = true }
+dotnet-utils = { workspace = true, default-features = false }
+dotnet-value = { workspace = true, default-features = false }
+dotnetdll = { workspace = true }
+sptr = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+default = ["multithreading"]
+generic-constraint-validation = ["dotnet-types/generic-constraint-validation"]
+multithreading = [
+    "dotnet-utils/multithreading",
+    "dotnet-value/multithreading",
+]

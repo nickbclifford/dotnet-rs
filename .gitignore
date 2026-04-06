@@ -17,8 +17,10 @@ crates/*/target
 **/fuzz/artifacts/
 *.profraw
 
-# Junie
+# AI agents
 .junie/
+.claude/
+AGENTS.md
 .output.txt
 
 rustc-ice-*.txt

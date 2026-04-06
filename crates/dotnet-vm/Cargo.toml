@@ -6,7 +6,16 @@ edition = "2024"
 [dependencies]
 dashmap = { workspace = true }
 dotnet-assemblies = { workspace = true }
+dotnet-runtime-resolver = { workspace = true, default-features = false }
+dotnet-runtime-memory = { workspace = true, default-features = false }
 dotnet-exceptions = { path = "../dotnet-exceptions", default-features = false }
+dotnet-intrinsics-core = { workspace = true, default-features = false }
+dotnet-intrinsics-delegates = { workspace = true, default-features = false }
+dotnet-intrinsics-span = { workspace = true, default-features = false }
+dotnet-intrinsics-string = { workspace = true, default-features = false }
+dotnet-intrinsics-threading = { workspace = true, default-features = false }
+dotnet-intrinsics-reflection = { workspace = true, default-features = false }
+dotnet-intrinsics-unsafe = { workspace = true, default-features = false }
 dotnet-metrics = { workspace = true }
 dotnet-pinvoke = { path = "../dotnet-pinvoke", default-features = false }
 dotnet-vm-ops = { workspace = true, default-features = false }
@@ -29,20 +38,23 @@ arbitrary = { version = "1.3", features = ["derive"], optional = true }
 
 [features]
 default = ["multithreading"]
-generic-constraint-validation = ["dotnet-types/generic-constraint-validation"]
+generic-constraint-validation = [
+    "dotnet-types/generic-constraint-validation",
+    "dotnet-runtime-resolver/generic-constraint-validation",
+    "dotnet-intrinsics-reflection/generic-constraint-validation",
+]
 multithreading = [
+    "dotnet-runtime-resolver/multithreading",
+    "dotnet-runtime-memory/multithreading",
     "dotnet-utils/multithreading",
     "dotnet-value/multithreading",
     "dotnet-tracer/multithreading",
-    "dotnet-vm-ops/multithreading",
-    "dotnet-exceptions/multithreading",
     "dotnet-pinvoke/multithreading",
 ]
 memory-validation = [
+    "dotnet-runtime-memory/memory-validation",
+    "dotnet-utils/memory-validation",
     "dotnet-value/memory-validation",
-    "dotnet-vm-ops/memory-validation",
-    "dotnet-exceptions/memory-validation",
-    "dotnet-pinvoke/memory-validation",
 ]
 metadata-validation = ["dotnet-assemblies/metadata-validation"]
 validation-all = [
@@ -55,8 +67,6 @@ fuzzing = [
     "dotnet-value/fuzzing",
     "dotnet-types/fuzzing",
     "dotnet-utils/fuzzing",
-    "dotnet-vm-ops/fuzzing",
-    "dotnet-exceptions/fuzzing",
     "dotnet-pinvoke/fuzzing",
 ]
 

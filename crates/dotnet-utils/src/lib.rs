@@ -58,24 +58,9 @@ pub trait BorrowScopeOps {
     /// Number of currently active GC-critical scopes in this context.
     fn active_gc_scope_depth(&self) -> usize;
 
-    /// Legacy name retained for compatibility.
-    fn enter_borrow_scope(&self) {
-        self.enter_gc_scope();
-    }
-
-    /// Legacy name retained for compatibility.
-    fn exit_borrow_scope(&self) {
-        self.exit_gc_scope();
-    }
-
     /// Returns a token proving the context is currently GC-safe (scope depth 0).
     fn gc_ready_token(&self) -> NoActiveBorrows<'_> {
         NoActiveBorrows::new(self)
-    }
-
-    /// Legacy name retained for compatibility.
-    fn no_active_borrows(&self) -> NoActiveBorrows<'_> {
-        self.gc_ready_token()
     }
 }
 
@@ -138,11 +123,6 @@ impl<'ctx> GcScopeGuard<'ctx> {
         }
     }
 
-    /// Legacy constructor retained for compatibility.
-    pub fn new(ctx: &'ctx dyn BorrowScopeOps, token: NoActiveBorrows<'ctx>) -> Self {
-        Self::enter(ctx, token)
-    }
-
     /// Exit the GC-critical scope and return a new GC-ready token.
     pub fn exit(self) -> NoActiveBorrows<'ctx> {
         // SAFETY: `ctx` comes from `GcScopeGuard::enter` and is valid for `'ctx`.
@@ -157,5 +137,3 @@ impl<'ctx> GcScopeGuard<'ctx> {
     }
 }
 
-/// Legacy alias retained for compatibility with older call sites.
-pub type BorrowGuardHandle<'ctx> = GcScopeGuard<'ctx>;

@@ -18,7 +18,7 @@ use std::{
 pub use dotnet_utils::gc::{
     ALLOCATION_THRESHOLD, ArenaHandle, GCCommand, MarkObjectPointers, MarkPhaseCommand,
     OpaqueObjectPtr, SweepPhaseCommand, clear_tracing_state, get_currently_tracing,
-    set_currently_tracing, take_found_cross_arena_refs,
+    set_currently_tracing,
 };
 
 #[cfg(feature = "multithreading")]

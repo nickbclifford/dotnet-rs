@@ -187,11 +187,24 @@ fn main() {
         let is_multithreading_enabled = std::env::var("CARGO_FEATURE_MULTITHREADING").is_ok();
         let is_generic_constraint_validation_enabled =
             std::env::var("CARGO_FEATURE_GENERIC_CONSTRAINT_VALIDATION").is_ok();
+        let is_fuzzing_enabled = std::env::var("CARGO_FEATURE_FUZZING").is_ok();
+        let is_pinvoke_fixture = relative_path
+            .components()
+            .next()
+            .and_then(|c| c.as_os_str().to_str())
+            .is_some_and(|c| c == "pinvoke");
 
         if !dll_path.exists() {
             if use_prebuilt_fixtures() {
                 missing_prebuilt_dlls.push(dll_path.display().to_string());
             }
+            ignore_prefix = "#[ignore] ".to_string();
+        } else if is_fuzzing_enabled
+            && (is_pinvoke_fixture || test_name == "memory_nullable_boxing_42")
+        {
+            // Fuzzing mode hardens native interop paths by denying P/Invoke, so
+            // fixtures that rely on libc/libm entry points (and console code paths
+            // that transitively use them) are expected to fail.
             ignore_prefix = "#[ignore] ".to_string();
         } else if (file_name == "monitor_try_enter_timeout_42"
             || file_name == "circular_init_mt_42")

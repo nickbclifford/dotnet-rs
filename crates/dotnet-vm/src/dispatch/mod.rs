@@ -4,8 +4,7 @@
 //! which orchestrates the fetch-decode-execute cycle. It also provides
 //! the [`InstructionRegistry`] for looking up instruction handlers.
 use crate::{
-    ResolutionContext, StackSlotIndex, StepResult,
-    exceptions::ExceptionState,
+    ExceptionState, ResolutionContext, StackSlotIndex, StepResult,
     stack::{CallStack, ops::*},
     threading::ThreadManagerOps,
 };
@@ -242,14 +241,14 @@ impl<'gc> ExecutionEngine<'gc> {
             crate::intrinsics::intrinsic_call(&mut ctx, method, &lookup)
         } else if method.method().pinvoke.is_some() {
             let shared = ctx.shared().clone();
-            crate::pinvoke::external_call(&mut ctx, method, &shared.pinvoke)
+            dotnet_pinvoke::external_call(&mut ctx, method, &shared.pinvoke)
         } else {
             if method.method().internal_call {
                 panic!("intrinsic not found: {:?}", method);
             }
 
             if method.method().body.is_none() {
-                if let Some(result) = crate::intrinsics::delegates::try_delegate_dispatch(
+                if let Some(result) = dotnet_intrinsics_delegates::try_delegate_dispatch(
                     &mut ctx,
                     method.clone(),
                     &lookup,

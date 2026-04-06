@@ -206,10 +206,10 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
             crate::intrinsics::dispatch_method_intrinsic(metadata.handler, self, method, &lookup)
         } else if method.method().pinvoke.is_some() {
             let shared = self.shared.clone();
-            crate::pinvoke::external_call(self, method, &shared.pinvoke)
+            dotnet_pinvoke::external_call(self, method, &shared.pinvoke)
         } else {
             if method.method().body.is_none() {
-                if let Some(result) = crate::intrinsics::delegates::try_delegate_dispatch(
+                if let Some(result) = dotnet_intrinsics_delegates::try_delegate_dispatch(
                     self,
                     method.clone(),
                     &lookup,
@@ -397,7 +397,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         }
         if method.method().pinvoke.is_some() {
             let shared = self.shared.clone();
-            return crate::pinvoke::external_call(self, method, &shared.pinvoke);
+            return dotnet_pinvoke::external_call(self, method, &shared.pinvoke);
         }
 
         if method.method().body.is_none() {

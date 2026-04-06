@@ -1,13 +1,13 @@
 use crate::{
     ByteOffset,
     error::{CompareExchangeError, MemoryAccessError},
-    memory::access::MemoryOwner,
     stack::{
         context::VesContext,
         ops::{BaseVesInternals, RawMemoryOps, StaticsOps},
     },
     threading::ThreadManagerOps,
 };
+use dotnet_runtime_memory::access::MemoryOwner;
 use dotnet_types::TypeDescription;
 use dotnet_utils::{BorrowScopeOps, GcScopeGuard};
 use dotnet_value::{StackValue, layout::HasLayout, pointer::PointerOrigin};
@@ -112,7 +112,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         match origin {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
-                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe { memory.write_to_unmanaged(self.gc, ptr.as_ptr(), value, layout) }
             }
             PointerOrigin::Static(static_type, lookup) => {
@@ -126,15 +126,15 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                         });
                     }
                     let ptr = unsafe { data.as_mut_ptr().add(offset.as_usize()) };
-                    let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                    let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                     unsafe { memory.write_to_unmanaged(self.gc, ptr, value, layout) }
                 })
             }
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
-                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe {
-                    use crate::memory::access::HeapWriteTarget;
+                    use dotnet_runtime_memory::access::HeapWriteTarget;
                     memory.write_to_heap(
                         self.gc,
                         HeapWriteTarget(MemoryOwner::Local(owner)),
@@ -146,16 +146,16 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             }
             PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
-                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 let ptr = sptr::from_exposed_addr_mut::<u8>(offset.0);
                 unsafe { memory.write_to_unmanaged(self.gc, ptr, value, layout) }
             }
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 let heap = &self.local.heap;
-                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe {
-                    use crate::memory::access::HeapWriteTarget;
+                    use dotnet_runtime_memory::access::HeapWriteTarget;
                     memory.write_to_heap(
                         self.gc,
                         HeapWriteTarget(MemoryOwner::cross_arena(self.gc, ptr, tid)),
@@ -175,7 +175,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                         });
                     }
                     let ptr = unsafe { data.as_mut_ptr().add(offset.as_usize()) };
-                    let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                    let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                     unsafe { memory.write_to_unmanaged(self.gc, ptr, value, layout) }
                 })
             }
@@ -198,7 +198,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         match origin {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
-                let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.read_value_internal(self.gc, ptr.as_ptr(), None, layout, type_desc)
                 }
@@ -214,13 +214,13 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                         });
                     }
                     let ptr = unsafe { data.as_ptr().add(offset.as_usize()) };
-                    let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                    let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                     unsafe { memory.read_value_internal(self.gc, ptr, None, layout, type_desc) }
                 })
             }
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
-                let memory = crate::memory::RawMemoryAccess::new(heap);
+                let memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.read_unaligned(
                         self.gc,
@@ -233,13 +233,13 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             }
             PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
-                let memory = crate::memory::RawMemoryAccess::new(heap);
+                let memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe { memory.read_unaligned(self.gc, None, offset, layout, type_desc) }
             }
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 let heap = &self.local.heap;
-                let memory = crate::memory::RawMemoryAccess::new(heap);
+                let memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.read_unaligned(
                         self.gc,
@@ -259,7 +259,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                     });
                 }
                 let ptr = unsafe { data.as_ptr().add(offset.as_usize()) };
-                let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe { memory.read_value_internal(self.gc, ptr, None, layout, type_desc) }
             }),
         }
@@ -276,7 +276,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         match origin {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
-                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.write_bytes(self.gc, None, ByteOffset(ptr.as_ptr().expose_addr()), data)
                 }
@@ -298,20 +298,20 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             }
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
-                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.write_bytes(self.gc, Some(MemoryOwner::Local(owner)), offset, data)
                 }
             }
             PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
-                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe { memory.write_bytes(self.gc, None, offset, data) }
             }
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 let heap = &self.local.heap;
-                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.write_bytes(
                         self.gc,
@@ -346,7 +346,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         match origin {
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
-                let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe { memory.read_bytes(None, ByteOffset(ptr.as_ptr().expose_addr()), dest) }
             }
             PointerOrigin::Static(type_desc, lookup) => {
@@ -367,18 +367,18 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             }
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
-                let memory = crate::memory::RawMemoryAccess::new(heap);
+                let memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe { memory.read_bytes(Some(MemoryOwner::Local(owner)), offset, dest) }
             }
             PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
-                let memory = crate::memory::RawMemoryAccess::new(heap);
+                let memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe { memory.read_bytes(None, offset, dest) }
             }
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 let heap = &self.local.heap;
-                let memory = crate::memory::RawMemoryAccess::new(heap);
+                let memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.read_bytes(
                         Some(MemoryOwner::cross_arena(self.gc, ptr, tid)),
@@ -416,7 +416,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         match origin {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
-                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.compare_exchange_atomic(
                         self.gc,
@@ -434,7 +434,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let storage = self.statics().get(static_type, &lookup);
                 let base_ptr = unsafe { storage.storage.raw_data_ptr() };
                 let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
-                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.compare_exchange_atomic(
                         self.gc,
@@ -450,7 +450,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             }
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
-                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.compare_exchange_atomic(
                         self.gc,
@@ -467,7 +467,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| {
                 let base_ptr = data.as_ptr();
                 let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
-                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.compare_exchange_atomic(
                         self.gc,
@@ -483,7 +483,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             }),
             PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
-                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.compare_exchange_atomic(
                         self.gc, None, offset, expected, new, size, success, failure,
@@ -493,7 +493,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 let heap = &self.local.heap;
-                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.compare_exchange_atomic(
                         self.gc,
@@ -523,7 +523,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         match origin {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
-                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.exchange_atomic(
                         self.gc,
@@ -539,7 +539,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let storage = self.statics().get(static_type, &lookup);
                 let base_ptr = unsafe { storage.storage.raw_data_ptr() };
                 let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
-                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.exchange_atomic(
                         self.gc,
@@ -553,7 +553,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             }
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
-                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.exchange_atomic(
                         self.gc,
@@ -568,7 +568,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| {
                 let base_ptr = data.as_ptr();
                 let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
-                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.exchange_atomic(
                         self.gc,
@@ -582,13 +582,13 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             }),
             PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
-                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe { memory.exchange_atomic(self.gc, None, offset, value, size, ordering) }
             }
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 let heap = &self.local.heap;
-                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.exchange_atomic(
                         self.gc,
@@ -616,7 +616,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         match origin {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
-                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.exchange_add_atomic(
                         self.gc,
@@ -632,7 +632,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let storage = self.statics().get(static_type, &lookup);
                 let base_ptr = unsafe { storage.storage.raw_data_ptr() };
                 let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
-                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.exchange_add_atomic(
                         self.gc,
@@ -646,7 +646,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             }
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
-                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.exchange_add_atomic(
                         self.gc,
@@ -661,7 +661,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| {
                 let base_ptr = data.as_ptr();
                 let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
-                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.exchange_add_atomic(
                         self.gc,
@@ -675,13 +675,13 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             }),
             PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
-                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe { memory.exchange_add_atomic(self.gc, None, offset, value, size, ordering) }
             }
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 let heap = &self.local.heap;
-                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.exchange_add_atomic(
                         self.gc,
@@ -708,7 +708,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         match origin {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
-                let memory = crate::memory::RawMemoryAccess::new(heap);
+                let memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.load_atomic(Some(MemoryOwner::Local(owner)), offset, size, ordering)
                 }
@@ -717,14 +717,14 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let storage = self.statics().get(static_type, &lookup);
                 let base_ptr = unsafe { storage.storage.raw_data_ptr() };
                 let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
-                let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.load_atomic(None, ByteOffset(abs_ptr.expose_addr()), size, ordering)
                 }
             }
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
-                let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.load_atomic(None, ByteOffset(ptr.as_ptr().expose_addr()), size, ordering)
                 }
@@ -732,20 +732,20 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| {
                 let base_ptr = data.as_ptr();
                 let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
-                let memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.load_atomic(None, ByteOffset(abs_ptr.expose_addr()), size, ordering)
                 }
             }),
             PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
-                let memory = crate::memory::RawMemoryAccess::new(heap);
+                let memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe { memory.load_atomic(None, offset, size, ordering) }
             }
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 let heap = &self.local.heap;
-                let memory = crate::memory::RawMemoryAccess::new(heap);
+                let memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.load_atomic(
                         Some(MemoryOwner::cross_arena(self.gc, ptr, tid)),
@@ -771,7 +771,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
         match origin {
             PointerOrigin::Heap(owner) => {
                 let heap = &self.local.heap;
-                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.store_atomic(
                         self.gc,
@@ -787,7 +787,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
                 let storage = self.statics().get(static_type, &lookup);
                 let base_ptr = unsafe { storage.storage.raw_data_ptr() };
                 let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
-                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.store_atomic(
                         self.gc,
@@ -801,7 +801,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             }
             PointerOrigin::Stack(_idx) => {
                 let ptr = self.resolve_address(origin, offset);
-                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.store_atomic(
                         self.gc,
@@ -816,7 +816,7 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             PointerOrigin::Transient(obj) => obj.instance_storage.with_data(|data| {
                 let base_ptr = data.as_ptr();
                 let abs_ptr = unsafe { base_ptr.add(offset.as_usize()) };
-                let mut memory = crate::memory::RawMemoryAccess::new(&self.local.heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
                 unsafe {
                     memory.store_atomic(
                         self.gc,
@@ -830,13 +830,13 @@ impl<'a, 'gc> RawMemoryOps<'gc> for VesContext<'a, 'gc> {
             }),
             PointerOrigin::Unmanaged => {
                 let heap = &self.local.heap;
-                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe { memory.store_atomic(self.gc, None, offset, value, size, ordering) }
             }
             #[cfg(feature = "multithreading")]
             PointerOrigin::CrossArenaObjectRef(ptr, tid) => {
                 let heap = &self.local.heap;
-                let mut memory = crate::memory::RawMemoryAccess::new(heap);
+                let mut memory = dotnet_runtime_memory::RawMemoryAccess::new(heap);
                 unsafe {
                     memory.store_atomic(
                         self.gc,

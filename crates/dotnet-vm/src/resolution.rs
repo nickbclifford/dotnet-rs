@@ -1,117 +1,28 @@
-use crate::context::ResolutionContext;
-use dotnet_types::{TypeDescription, error::TypeResolutionError, generics::ConcreteType};
-use dotnet_utils::gc::GCHandle;
-use dotnet_value::{
-    StackValue,
-    object::{CTSValue, Object, ValueType, Vector},
-    storage::FieldStorage,
+use crate::{
+    context::ResolutionContext,
+    resolver::{ResolverService, VmResolverCaches, VmResolverLayout},
 };
 
-pub trait TypeResolutionExt {
-    fn is_value_type(&self, ctx: &ResolutionContext) -> Result<bool, TypeResolutionError>;
-    fn has_finalizer(&self, ctx: &ResolutionContext) -> Result<bool, TypeResolutionError>;
-}
+pub use dotnet_runtime_resolver::resolution::{TypeResolutionExt, ValueResolution};
 
-pub trait ValueResolution {
-    fn stack_value_type(&self, val: &StackValue) -> Result<TypeDescription, TypeResolutionError>;
-    fn new_object<'gc>(&self, td: TypeDescription) -> Result<Object<'gc>, TypeResolutionError>;
-    fn new_instance_fields(&self, td: TypeDescription)
-    -> Result<FieldStorage, TypeResolutionError>;
-    fn new_static_fields(&self, td: TypeDescription) -> Result<FieldStorage, TypeResolutionError>;
-    fn new_value_type<'gc>(
-        &self,
-        t: &ConcreteType,
-        data: StackValue<'gc>,
-    ) -> Result<ValueType<'gc>, TypeResolutionError>;
-    fn value_type_description<'gc>(
-        &self,
-        vt: &ValueType<'gc>,
-    ) -> Result<TypeDescription, TypeResolutionError>;
-    fn new_cts_value<'gc>(
-        &self,
-        t: &ConcreteType,
-        data: StackValue<'gc>,
-    ) -> Result<CTSValue<'gc>, TypeResolutionError>;
-    fn read_cts_value<'gc>(
-        &self,
-        t: &ConcreteType,
-        data: &[u8],
-        gc: GCHandle<'gc>,
-    ) -> Result<CTSValue<'gc>, TypeResolutionError>;
-    fn new_vector<'gc>(
-        &self,
-        element: ConcreteType,
-        size: usize,
-    ) -> Result<Vector<'gc>, TypeResolutionError>;
-}
-
-impl<'a> ValueResolution for ResolutionContext<'a> {
-    fn stack_value_type(&self, val: &StackValue) -> Result<TypeDescription, TypeResolutionError> {
-        self.resolver().stack_value_type(val)
+impl dotnet_runtime_resolver::ResolverExecutionContext for ResolutionContext<'_> {
+    fn generics(&self) -> &dotnet_types::generics::GenericLookup {
+        self.generics
     }
 
-    fn new_object<'gc>(&self, td: TypeDescription) -> Result<Object<'gc>, TypeResolutionError> {
-        self.resolver().new_object(td, self)
-    }
-
-    fn new_instance_fields(
-        &self,
-        td: TypeDescription,
-    ) -> Result<FieldStorage, TypeResolutionError> {
-        self.resolver().new_instance_fields(td, self)
-    }
-
-    fn new_static_fields(&self, td: TypeDescription) -> Result<FieldStorage, TypeResolutionError> {
-        self.resolver().new_static_fields(td, self)
-    }
-
-    fn new_value_type<'gc>(
-        &self,
-        t: &ConcreteType,
-        data: StackValue<'gc>,
-    ) -> Result<ValueType<'gc>, TypeResolutionError> {
-        self.resolver().new_value_type(t, data, self)
-    }
-
-    fn value_type_description<'gc>(
-        &self,
-        vt: &ValueType<'gc>,
-    ) -> Result<TypeDescription, TypeResolutionError> {
-        self.resolver().value_type_description(vt)
-    }
-
-    fn new_cts_value<'gc>(
-        &self,
-        t: &ConcreteType,
-        data: StackValue<'gc>,
-    ) -> Result<CTSValue<'gc>, TypeResolutionError> {
-        self.resolver().new_cts_value(t, data, self)
-    }
-
-    fn read_cts_value<'gc>(
-        &self,
-        t: &ConcreteType,
-        data: &[u8],
-        gc: GCHandle<'gc>,
-    ) -> Result<CTSValue<'gc>, TypeResolutionError> {
-        self.resolver().read_cts_value(t, data, gc, self)
-    }
-
-    fn new_vector<'gc>(
-        &self,
-        element: ConcreteType,
-        size: usize,
-    ) -> Result<Vector<'gc>, TypeResolutionError> {
-        self.resolver().new_vector(element, size, self)
+    fn resolution(&self) -> &dotnet_types::resolution::ResolutionS {
+        &self.resolution
     }
 }
 
-impl TypeResolutionExt for TypeDescription {
-    fn is_value_type(&self, ctx: &ResolutionContext) -> Result<bool, TypeResolutionError> {
-        ctx.resolver().is_value_type(self.clone())
-    }
+impl dotnet_runtime_resolver::ResolverProvider for ResolutionContext<'_> {
+    type Caches = VmResolverCaches;
+    type Layout = VmResolverLayout;
 
-    fn has_finalizer(&self, ctx: &ResolutionContext) -> Result<bool, TypeResolutionError> {
-        ctx.resolver().has_finalizer(self.clone())
+    fn resolver_service(
+        &self,
+    ) -> &dotnet_runtime_resolver::ResolverService<Self::Caches, Self::Layout> {
+        let resolver: &ResolverService = self.resolver();
+        resolver
     }
 }

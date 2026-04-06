@@ -3,21 +3,21 @@ use crate::{
     resolution::{TypeResolutionExt, ValueResolution},
     stack::ops::*,
     state::{ArenaLocalState, SharedGlobalState},
-    sync::Arc,
-    tracer::Tracer,
+    sync::{Arc, LockResult, SyncBlockOps, SyncManagerOps},
 };
+use dotnet_tracer::Tracer;
 use dotnet_types::{
     TypeDescription,
     comparer::decompose_type_source,
-    error::TypeResolutionError,
+    error::{IntrinsicError, TypeResolutionError},
     generics::{ConcreteType, GenericLookup},
-    members::MethodDescription,
+    members::{FieldDescription, MethodDescription},
     runtime::RuntimeType,
 };
 use dotnet_utils::{BorrowScopeOps, gc::GCHandle, sync::Ordering};
 use dotnet_value::{
     StackValue,
-    object::{HeapStorage, ObjectRef},
+    object::{HeapStorage, Object, ObjectRef},
     storage::FieldStorage,
 };
 use dotnetdll::prelude::*;
@@ -273,7 +273,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
     #[inline]
     pub(crate) fn handle_exception(&mut self) -> StepResult {
         let gc = self.gc;
-        crate::exceptions::ExceptionHandlingSystem.handle_exception(self, gc)
+        dotnet_exceptions::ExceptionHandlingSystem.handle_exception(self, gc)
     }
 
     pub(crate) fn unwind_frame(&mut self) {
@@ -571,6 +571,284 @@ impl<'a, 'gc> BaseReflectionOps<'gc> for VesContext<'a, 'gc> {
         } else {
             self.shared.loader.corlib_type("System.Object")
         }
+    }
+}
+
+impl<'a, 'gc> dotnet_intrinsics_delegates::DelegateInvokeHost<'gc> for VesContext<'a, 'gc> {
+    fn delegate_method_info(
+        &self,
+        method: MethodDescription,
+        lookup: &GenericLookup,
+    ) -> Result<dotnet_vm_ops::MethodInfo<'static>, TypeResolutionError> {
+        self.shared
+            .caches
+            .get_method_info(method, lookup, self.shared.clone())
+    }
+
+    #[inline]
+    fn delegate_call_frame(
+        &mut self,
+        method: dotnet_vm_ops::MethodInfo<'static>,
+        generic_inst: GenericLookup,
+    ) -> Result<(), TypeResolutionError> {
+        self.call_frame(method, generic_inst)
+    }
+
+    #[inline]
+    fn delegate_lookup_method_by_index(&self, index: usize) -> (MethodDescription, GenericLookup) {
+        self.lookup_method_by_index(index)
+    }
+
+    #[inline]
+    fn delegate_runtime_method_obj(
+        &mut self,
+        method: MethodDescription,
+        lookup: GenericLookup,
+    ) -> ObjectRef<'gc> {
+        self.get_runtime_method_obj(method, lookup)
+    }
+
+    #[inline]
+    fn delegate_dispatch_method(
+        &mut self,
+        method: MethodDescription,
+        lookup: GenericLookup,
+    ) -> StepResult {
+        self.dispatch_method(method, lookup)
+    }
+}
+
+impl<'a, 'gc> dotnet_intrinsics_string::IntrinsicStringHost<'gc> for VesContext<'a, 'gc> {
+    #[inline]
+    fn string_intrinsic_as_span(
+        &mut self,
+        method: MethodDescription,
+        generics: &GenericLookup,
+    ) -> StepResult {
+        dotnet_intrinsics_span::conversions::intrinsic_as_span(self, method, generics)
+    }
+
+    #[inline]
+    fn string_with_span_data<'span, R, F: FnOnce(&[u8]) -> R>(
+        &self,
+        span: Object<'span>,
+        element_type: TypeDescription,
+        element_size: usize,
+        f: F,
+    ) -> Result<R, IntrinsicError> {
+        dotnet_intrinsics_span::helpers::with_span_data(self, span, element_type, element_size, f)
+    }
+}
+
+impl<'a, 'gc> dotnet_intrinsics_span::LayoutQueryHost for VesContext<'a, 'gc> {
+    #[inline]
+    fn span_type_layout(
+        &self,
+        t: ConcreteType,
+    ) -> Result<std::sync::Arc<dotnet_value::layout::LayoutManager>, TypeResolutionError> {
+        crate::layout::type_layout(t, &self.current_context())
+    }
+}
+
+impl<'a, 'gc> dotnet_intrinsics_span::SpanPointerIntrospectionHost<'gc> for VesContext<'a, 'gc> {
+    #[inline]
+    fn span_ptr_info(
+        &mut self,
+        val: &StackValue<'gc>,
+    ) -> Result<
+        (
+            dotnet_value::pointer::PointerOrigin<'gc>,
+            dotnet_utils::ByteOffset,
+        ),
+        StepResult,
+    > {
+        crate::instructions::objects::get_ptr_info(self, val)
+    }
+}
+
+impl<'a, 'gc> dotnet_intrinsics_span::SpanObjectFactoryHost<'gc> for VesContext<'a, 'gc> {
+    #[inline]
+    fn span_new_object_with_type_generics(
+        &self,
+        td: TypeDescription,
+        type_generics: Vec<ConcreteType>,
+    ) -> Result<Object<'gc>, TypeResolutionError> {
+        let lookup = GenericLookup::new(type_generics);
+        let current = self.current_context();
+        current.with_generics(&lookup).new_object(td)
+    }
+}
+
+impl<'a, 'gc> dotnet_intrinsics_span::SpanRuntimeHost<'gc> for VesContext<'a, 'gc> {
+    #[inline]
+    fn span_resolve_runtime_field(&self, obj: ObjectRef<'gc>) -> (FieldDescription, GenericLookup) {
+        self.resolve_runtime_field(obj)
+    }
+
+    #[inline]
+    fn span_resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> RuntimeType {
+        self.resolve_runtime_type(obj)
+    }
+
+    #[inline]
+    fn span_dispatch_method(
+        &mut self,
+        method: MethodDescription,
+        lookup: GenericLookup,
+    ) -> StepResult {
+        self.dispatch_method(method, lookup)
+    }
+}
+
+impl<'a, 'gc> dotnet_intrinsics_threading::MonitorHost<'gc> for VesContext<'a, 'gc> {
+    type SyncBlock = Arc<crate::sync::SyncBlock>;
+
+    #[inline]
+    fn monitor_get_sync_block_for_object(&self, object: ObjectRef<'gc>) -> Option<Self::SyncBlock> {
+        object
+            .as_object(|o| o.sync_block_index)
+            .and_then(|index| self.shared().sync_blocks.get_sync_block(index))
+    }
+
+    #[inline]
+    fn monitor_get_or_create_sync_block_for_object(
+        &self,
+        object: ObjectRef<'gc>,
+        gc: GCHandle<'gc>,
+    ) -> Self::SyncBlock {
+        let (_index, sync_block) = self.shared().sync_blocks.get_or_create_sync_block(
+            || object.as_object(|o| o.sync_block_index),
+            |new_index| {
+                object.as_object_mut(gc, |o| {
+                    o.sync_block_index = Some(new_index);
+                });
+            },
+        );
+        sync_block
+    }
+
+    #[inline]
+    fn monitor_try_enter(
+        &self,
+        sync_block: &Self::SyncBlock,
+        thread_id: dotnet_utils::ArenaId,
+    ) -> bool {
+        sync_block.try_enter(thread_id)
+    }
+
+    #[inline]
+    fn monitor_enter_safe(
+        &self,
+        sync_block: &Self::SyncBlock,
+        thread_id: dotnet_utils::ArenaId,
+    ) -> dotnet_intrinsics_threading::MonitorLockResult {
+        match sync_block.enter_safe(
+            thread_id,
+            &self.shared().metrics,
+            self.shared().thread_manager.as_ref(),
+            &self.shared().gc_coordinator,
+        ) {
+            LockResult::Success => dotnet_intrinsics_threading::MonitorLockResult::Success,
+            LockResult::Timeout => dotnet_intrinsics_threading::MonitorLockResult::Timeout,
+            LockResult::Yield => dotnet_intrinsics_threading::MonitorLockResult::Yield,
+        }
+    }
+
+    #[inline]
+    fn monitor_enter_with_timeout_safe(
+        &self,
+        sync_block: &Self::SyncBlock,
+        thread_id: dotnet_utils::ArenaId,
+        deadline: std::time::Instant,
+    ) -> dotnet_intrinsics_threading::MonitorLockResult {
+        match sync_block.enter_with_timeout_safe(
+            thread_id,
+            deadline,
+            &self.shared().metrics,
+            self.shared().thread_manager.as_ref(),
+            &self.shared().gc_coordinator,
+        ) {
+            LockResult::Success => dotnet_intrinsics_threading::MonitorLockResult::Success,
+            LockResult::Timeout => dotnet_intrinsics_threading::MonitorLockResult::Timeout,
+            LockResult::Yield => dotnet_intrinsics_threading::MonitorLockResult::Yield,
+        }
+    }
+
+    #[inline]
+    fn monitor_exit(&self, sync_block: &Self::SyncBlock, thread_id: dotnet_utils::ArenaId) -> bool {
+        sync_block.exit(thread_id)
+    }
+}
+
+impl<'a, 'gc> dotnet_intrinsics_threading::StackSlotWriteHost<'gc> for VesContext<'a, 'gc> {
+    #[inline]
+    fn threading_set_stack_slot(&mut self, index: crate::StackSlotIndex, value: StackValue<'gc>) {
+        self.set_slot(index, value);
+    }
+}
+
+impl<'a, 'gc> dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc> for VesContext<'a, 'gc> {
+    #[inline]
+    fn unsafe_type_layout(
+        &self,
+        t: ConcreteType,
+    ) -> Result<std::sync::Arc<dotnet_value::layout::LayoutManager>, TypeResolutionError> {
+        crate::layout::type_layout(t, &self.current_context())
+    }
+
+    #[inline]
+    fn unsafe_check_read_safety(
+        &self,
+        result_layout: &dotnet_value::layout::LayoutManager,
+        src_layout: Option<&dotnet_value::layout::LayoutManager>,
+        src_ptr_offset: usize,
+    ) -> Result<(), dotnet_types::error::MemoryAccessError> {
+        dotnet_runtime_memory::check_read_safety(result_layout, src_layout, src_ptr_offset)
+    }
+
+    #[inline]
+    fn unsafe_lookup_owner_layout_and_base(
+        &self,
+        ptr: *mut u8,
+        origin: &dotnet_value::pointer::PointerOrigin<'gc>,
+    ) -> (Option<dotnet_value::layout::LayoutManager>, Option<usize>) {
+        let memory = dotnet_runtime_memory::RawMemoryAccess::new(&self.local.heap);
+        let owner = match origin {
+            dotnet_value::pointer::PointerOrigin::Heap(o) => Some(*o),
+            _ => self.local.heap.find_object(ptr as usize),
+        };
+
+        if let Some(owner) = owner {
+            let layout =
+                memory.get_layout_from_owner(dotnet_runtime_memory::MemoryOwner::Local(owner));
+            let (base, _) = memory.get_storage_base(owner);
+            let base_addr = if base.is_null() {
+                None
+            } else {
+                Some(base as usize)
+            };
+            (layout, base_addr)
+        } else {
+            (None, None)
+        }
+    }
+
+    #[inline]
+    fn unsafe_get_last_pinvoke_error(&self) -> i32 {
+        unsafe { dotnet_pinvoke::LAST_ERROR }
+    }
+
+    #[inline]
+    fn unsafe_set_last_pinvoke_error(&mut self, value: i32) {
+        unsafe {
+            dotnet_pinvoke::LAST_ERROR = value;
+        }
+    }
+
+    #[inline]
+    fn unsafe_resolve_runtime_type(&self, obj: ObjectRef<'gc>) -> ConcreteType {
+        self.resolve_runtime_type(obj)
+            .to_concrete(self.loader().as_ref())
     }
 }
 
@@ -970,4 +1248,103 @@ pub struct ThreadContext<'gc> {
     pub current_intrinsic: Option<crate::CollectableMethodDescription>,
     pub original_ip: usize,
     pub original_stack_height: crate::StackSlotIndex,
+}
+
+#[cfg(test)]
+mod host_adapter_trait_tests {
+    use super::VesContext;
+    use crate::StepResult;
+    use crate::stack::ops as vm_stack_ops;
+    use dotnet_types::{
+        generics::{ConcreteType, GenericLookup},
+        members::{FieldDescription, MethodDescription},
+    };
+    use dotnet_vm_ops::ops as vm_ops;
+    use std::sync::Arc;
+
+    #[test]
+    fn ves_context_implements_vm_ops_host_traits() {
+        fn assert_impls()
+        where
+            for<'a, 'gc> VesContext<'a, 'gc>: vm_ops::StringIntrinsicHost<'gc>
+                + dotnet_intrinsics_string::IntrinsicStringHost<'gc>
+                + vm_ops::DelegateIntrinsicHost<'gc>
+                + vm_ops::SpanIntrinsicHost<'gc>
+                + dotnet_intrinsics_span::SpanIntrinsicHost<'gc>
+                + vm_ops::UnsafeIntrinsicHost<'gc>
+                + dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc>
+                + vm_ops::ThreadingIntrinsicHost<'gc>
+                + dotnet_intrinsics_threading::ThreadingIntrinsicHost<'gc>
+                + dotnet_intrinsics_reflection::ReflectionIntrinsicHost<'gc>
+                + vm_ops::ReflectionIntrinsicHost<'gc>,
+        {
+        }
+
+        assert_impls();
+    }
+
+    #[test]
+    fn ves_context_implements_dotnet_vm_host_adapters() {
+        fn assert_impls()
+        where
+            for<'a, 'gc> VesContext<'a, 'gc>: vm_stack_ops::StringIntrinsicHost<'gc>
+                + vm_stack_ops::DelegateIntrinsicHost<'gc>
+                + vm_stack_ops::SpanIntrinsicHost<'gc>
+                + vm_stack_ops::UnsafeIntrinsicHost<'gc>
+                + vm_stack_ops::ThreadingIntrinsicHost<'gc>
+                + vm_stack_ops::ReflectionIntrinsicHost<'gc>,
+        {
+        }
+
+        assert_impls();
+    }
+
+    #[test]
+    fn host_adapters_cover_intrinsic_handler_bounds() {
+        fn assert_string_handler<'gc, T: vm_stack_ops::StringIntrinsicHost<'gc>>() {
+            let _handler: fn(&mut T, FieldDescription, Arc<[ConcreteType]>, bool) -> StepResult =
+                dotnet_intrinsics_string::accessors::intrinsic_field_string_empty::<T>;
+        }
+
+        fn assert_delegate_handler<
+            'gc,
+            T: vm_stack_ops::DelegateIntrinsicHost<'gc>
+                + dotnet_intrinsics_delegates::DelegateInvokeHost<'gc>,
+        >() {
+            let _handler: fn(&mut T, MethodDescription, &GenericLookup) -> Option<StepResult> =
+                dotnet_intrinsics_delegates::helpers::try_delegate_dispatch::<T>;
+        }
+
+        fn assert_span_handler<'gc, T: vm_stack_ops::SpanIntrinsicHost<'gc>>() {
+            let _handler: fn(&mut T, MethodDescription, &GenericLookup) -> StepResult =
+                dotnet_intrinsics_span::equality::intrinsic_memory_extensions_sequence_equal::<T>;
+        }
+
+        fn assert_unsafe_handler<
+            'gc,
+            T: vm_stack_ops::UnsafeIntrinsicHost<'gc>
+                + dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc>,
+        >() {
+            let _handler: fn(&mut T, MethodDescription, &GenericLookup) -> StepResult =
+                dotnet_intrinsics_unsafe::marshal::intrinsic_marshal_offset_of::<T>;
+        }
+
+        fn assert_threading_handler<'gc, T: vm_stack_ops::ThreadingIntrinsicHost<'gc>>() {
+            let _handler: fn(&mut T, MethodDescription, &GenericLookup) -> StepResult =
+                dotnet_intrinsics_threading::monitor::intrinsic_monitor_reliable_enter::<T>;
+        }
+
+        fn assert_reflection_handler<'gc, T: vm_stack_ops::ReflectionIntrinsicHost<'gc>>() {
+            let _handler: fn(&mut T, MethodDescription, &GenericLookup) -> StepResult =
+                dotnet_intrinsics_reflection::methods::runtime_method_info_intrinsic_call::<T>;
+        }
+
+        type TestContext = VesContext<'static, 'static>;
+        assert_string_handler::<'static, TestContext>();
+        assert_delegate_handler::<'static, TestContext>();
+        assert_span_handler::<'static, TestContext>();
+        assert_unsafe_handler::<'static, TestContext>();
+        assert_threading_handler::<'static, TestContext>();
+        assert_reflection_handler::<'static, TestContext>();
+    }
 }

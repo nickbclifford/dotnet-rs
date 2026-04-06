@@ -134,31 +134,24 @@ use dotnet_value::{
 };
 use std::sync::Arc;
 
-pub mod array_ops;
 pub mod constants;
 pub mod cpu_intrinsics;
-pub mod delegates;
 pub mod diagnostics;
 pub mod exceptions;
 pub mod gc;
-pub mod math;
 pub mod metadata;
 pub mod object_ops;
-pub mod reflection;
-pub mod span;
 pub mod static_registry;
-pub mod string_ops;
 
 include!(concat!(env!("OUT_DIR"), "/intrinsics_dispatch.rs"));
 include!(concat!(env!("OUT_DIR"), "/intrinsics_phf.rs"));
 
 pub mod text_ops;
-pub mod threading;
-pub mod unsafe_ops;
 
 pub use metadata::{IntrinsicKind, IntrinsicMetadata, classify_intrinsic};
 
-use super::{StepResult, context::ResolutionContext, tracer::Tracer};
+use super::{StepResult, context::ResolutionContext};
+use dotnet_tracer::Tracer;
 
 pub const INTRINSIC_ATTR: &str = "System.Runtime.CompilerServices.IntrinsicAttribute";
 
@@ -455,7 +448,7 @@ fn object_to_string<
 #[dotnet_intrinsic("System.Type System.Object::GetType()")]
 fn object_get_type<
     'gc,
-     T: TypedStackOps<'gc> + ExceptionOps<'gc> + ReflectionOps<'gc> + LoaderOps,
+    T: TypedStackOps<'gc> + ExceptionOps<'gc> + ReflectionOps<'gc> + LoaderOps,
 >(
     ctx: &mut T,
     _method: MethodDescription,

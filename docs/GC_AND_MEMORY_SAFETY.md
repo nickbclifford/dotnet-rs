@@ -7,7 +7,7 @@ This document describes the garbage collection subsystem, memory safety invarian
 `dotnet-rs` uses `gc-arena` as its underlying GC, extended with a custom **Stop-The-World (STW) coordinator** for multi-arena (multi-threaded) collection. The GC subsystem spans multiple crates:
 
 - **`dotnet-vm/src/gc/`**: Coordinator and arena management
-- **`dotnet-vm/src/memory/`**: Heap manager, raw memory access, memory ops
+- **`dotnet-runtime-memory/src/`**: Heap manager, raw memory access, and memory ops
 - **`dotnet-value/src/object/`**: Heap object representation (`mod.rs`, `heap_storage.rs`, `types.rs`)
 - **`dotnet-value/src/storage.rs`**: Field storage with atomic capabilities
 - **`dotnet-utils/src/lib.rs`**: `GcScopeGuard<'ctx>` (legacy alias: `BorrowGuardHandle<'ctx>`) and `BorrowScopeOps`
@@ -120,7 +120,7 @@ This closes the dereference TOCTOU window because in-flight dereferences hold a 
 Recorded cross-arena references are generation-stamped as `(arena_id, raw_ptr, generation)`. At harvest, callers reacquire a lease and compare `lease.generation()` with the recorded generation; mismatches are discarded as stale pointers after unregister/re-register cycles.
 
 ### How References Are Recorded
-- Memory mutations occur through `RawMemoryAccess` (`memory/access.rs`).
+- Memory mutations occur through `RawMemoryAccess` (`dotnet-runtime-memory/src/access.rs`).
 - `RawMemoryAccess::write_value_internal` (and unaligned/atomic equivalents) checks the `ArenaId` of the written `ObjectRef` or `ManagedPtr` against the destination `MemoryOwner`.
 - If a cross-arena scenario is detected, it calls `record_objref_cross_arena` or `record_managedptr_cross_arena`.
 - Bulk operations like block copying (`initblk`, `cpblk`) use `record_refs_recursive` and `record_refs_in_range` to scan the layout's GC descriptor and record any contained references.
@@ -147,7 +147,7 @@ The VM supports `GCHandleType::Weak` and `WeakTrackResurrection` (§I.8.2.4).
 1. Never call `check_gc_safe_point()` while holding a heap borrow.
 2. Never allocate while holding a heap borrow (allocation may trigger GC).
 3. Always use `GcScopeGuard::enter(ctx, token)` when holding heap borrows in instruction handlers/intrinsics.
-4. Chunk large operations — e.g., in `string_ops/`, `span/`, or `unsafe_ops/`, long loops check `ctx.check_gc_safe_point()` periodically (e.g. every 1024 iterations or similar block size), dropping and re-acquiring `GcScopeGuard` between iterations.
+4. Chunk large operations — e.g., in string/span/unsafe intrinsic handlers (`dotnet-intrinsics-string`, `dotnet-intrinsics-span`, `dotnet-intrinsics-unsafe`) — and check `ctx.check_gc_safe_point()` periodically, dropping and re-acquiring `GcScopeGuard` between chunks.
 
 ## Panic-Safety Guarantees During STW
 
@@ -158,16 +158,16 @@ The VM supports `GCHandleType::Weak` and `WeakTrackResurrection` (§I.8.2.4).
 - `disarm(self)` consumes the guard and returns `Disarmed`, whose `Drop` is a no-op.
 - This guarantees exactly one completion signal on panic paths and avoids duplicate completion on normal paths.
 
-Write-barrier TLS buffers are drained on unwind by `WriteBarrierFlushGuard` (`crates/dotnet-vm/src/memory/access.rs`), a zero-sized RAII guard placed at each write-barrier drain site. Its `Drop` impl flushes `WB_LOCAL_BUF` regardless of whether the enclosing operation completes normally or unwinds.
+Write-barrier TLS buffers are drained on unwind by `WriteBarrierFlushGuard` (`crates/dotnet-runtime-memory/src/access.rs`), a zero-sized RAII guard placed at each write-barrier drain site. Its `Drop` impl flushes `WB_LOCAL_BUF` regardless of whether the enclosing operation completes normally or unwinds.
 
-## HeapManager (`memory/heap.rs` & `memory/ops.rs`)
+## HeapManager (`dotnet-runtime-memory/src/heap.rs` & `dotnet-runtime-memory/src/ops.rs`)
 
 The `HeapManager` tracks object lifetimes, registration, and finalization:
 - **Finalization**: Scans registered objects during `finalize_check` and queues unreachable ones with finalizers to a finalizer thread/queue.
-- Coordinates with `memory/ops.rs` (`MemoryOps` trait) which abstracts concrete allocation paths (`new_object`, `new_vector`, `box_value`).
+- Coordinates with `dotnet-runtime-memory/src/ops.rs` (`MemoryOps` trait) which abstracts concrete allocation paths (`new_object`, `new_vector`, `box_value`).
 - Maintains an `OBJECT_REGISTRY` of known heap objects, facilitating robust pointer validation.
 
-## RawMemoryAccess (`memory/access.rs`)
+## RawMemoryAccess (`dotnet-runtime-memory/src/access.rs`)
 
 A critical abstraction (~1090 lines) providing memory safety over unsafe heap storage. The core implementations are `read_value_internal` and `write_value_internal`, which handle the actual data transfer and reference tracking. Higher-level APIs like `write_to_heap` and `write_to_unmanaged` provide additional safety checks and bounds validation. Operations include:
 - **Unaligned reads/writes**: Validates reads/writes matching the `unaligned.` CIL prefix against `LayoutManager` invariants.
@@ -220,6 +220,6 @@ Rules:
 Every `Gc<'gc, T>` handle is branded with the invariant `'gc` lifetime of the arena that owns it. This prevents handles from outliving their arena or being compared across different arenas at compile time.
 
 Rules:
-- **Cross-arena references cannot be expressed as `Gc<'gc, T>`.** They are represented as `ObjectPtr` (a raw pointer) paired with an `ArenaId` and a `GcLifetime<'gc>` token (see `MemoryOwner::CrossArena` in `crates/dotnet-vm/src/memory/access.rs`). The `GcLifetime<'gc>` token can only be minted from a live `GCHandle<'gc>`, preserving the `'gc` branding invariant for cross-arena owners.
+- **Cross-arena references cannot be expressed as `Gc<'gc, T>`.** They are represented as `ObjectPtr` (a raw pointer) paired with an `ArenaId` and a `GcLifetime<'gc>` token (see `MemoryOwner::CrossArena` in `crates/dotnet-runtime-memory/src/access.rs`). The `GcLifetime<'gc>` token can only be minted from a live `GCHandle<'gc>`, preserving the `'gc` branding invariant for cross-arena owners.
 - **`GcLifetime<'gc>` forgery is prohibited.** The token has a private constructor and is only issued by `GCHandle::lifetime()` (`crates/dotnet-utils/src/gc/mod.rs`). Any code that needs to construct a `MemoryOwner::CrossArena` must obtain a real `GCHandle<'gc>` first.
 - **Unsafe cross-arena dereferences** must call `validate_magic()` and `validate_arena_id()` on `ObjectInner` before reading any fields (enforced in `ObjectPtr::as_heap_storage` and `ObjectRef::as_heap_storage`). These checks are always active in debug builds and selectively active under the `memory-validation` feature in release builds.

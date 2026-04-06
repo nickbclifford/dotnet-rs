@@ -17,7 +17,7 @@ use dotnet_value::{
 #[dotnet_intrinsic("static void System.ArgumentNullException::ThrowIfNull(object, string)")]
 pub fn intrinsic_argument_null_exception_throw_if_null<
     'gc,
-     T: TypedStackOps<'gc> + ExceptionOps<'gc>,
+    T: TypedStackOps<'gc> + ExceptionOps<'gc>,
 >(
     ctx: &mut T,
     _method: MethodDescription,
@@ -64,10 +64,7 @@ pub fn intrinsic_gc_keep_alive<'gc, T: EvalStackOps<'gc> + TypedStackOps<'gc>>(
 
 /// System.GC::SuppressFinalize(object)
 #[dotnet_intrinsic("static void System.GC::SuppressFinalize(object)")]
-pub fn intrinsic_gc_suppress_finalize<
-    'gc,
-     T: TypedStackOps<'gc> + MemoryOps<'gc>,
->(
+pub fn intrinsic_gc_suppress_finalize<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -86,10 +83,7 @@ pub fn intrinsic_gc_suppress_finalize<
 
 /// System.GC::ReRegisterForFinalize(object)
 #[dotnet_intrinsic("static void System.GC::ReRegisterForFinalize(object)")]
-pub fn intrinsic_gc_reregister_for_finalize<
-    'gc,
-     T: TypedStackOps<'gc> + MemoryOps<'gc>,
->(
+pub fn intrinsic_gc_reregister_for_finalize<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,
@@ -281,10 +275,7 @@ pub fn intrinsic_gchandle_internal_get<
 #[dotnet_intrinsic(
     "static void System.Runtime.InteropServices.GCHandle::InternalSet(IntPtr, object)"
 )]
-pub fn intrinsic_gchandle_internal_set<
-    'gc,
-     T: TypedStackOps<'gc> + MemoryOps<'gc>,
->(
+pub fn intrinsic_gchandle_internal_set<'gc, T: TypedStackOps<'gc> + MemoryOps<'gc>>(
     ctx: &mut T,
     _method: MethodDescription,
     _generics: &GenericLookup,

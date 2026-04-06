@@ -1,3 +1,4 @@
+//! Runtime and cache metric counters used across the VM.
 use serde::Serialize;
 use std::{
     sync::atomic::{AtomicU64, Ordering},

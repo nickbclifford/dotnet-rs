@@ -1,384 +1,42 @@
-use crate::{
-    ByteOffset, context::ResolutionContext, metrics::RuntimeMetrics, resolution::TypeResolutionExt,
-    sync::Arc,
-};
-use dotnet_types::{
-    TypeDescription,
-    error::TypeResolutionError,
-    generics::{ConcreteType, GenericLookup},
-    members::FieldDescription,
-};
-use dotnet_value::{
-    layout::{
-        ArrayLayoutManager, FieldKey, FieldLayout, FieldLayoutManager, GcDesc, HasLayout,
-        LayoutManager, Scalar, align_up,
-    },
-    object::ObjectRef,
-};
-use dotnetdll::prelude::*;
-use tracing::trace;
+use crate::{context::ResolutionContext, sync::Arc};
+use dotnet_metrics::RuntimeMetrics;
+use dotnet_types::{TypeDescription, error::TypeResolutionError, generics::ConcreteType};
+use dotnet_value::layout::{ArrayLayoutManager, FieldLayoutManager, LayoutManager};
+
+#[cfg(test)]
+use dotnet_value::layout::GcDesc;
 
 pub struct LayoutFactory;
 
 impl LayoutFactory {
-    fn populate_gc_desc(layout: &LayoutManager, base_offset: usize, desc: &mut GcDesc) {
-        let ptr_size = ObjectRef::SIZE;
-        match layout {
-            LayoutManager::Scalar(Scalar::ObjectRef) => {
-                desc.set_offset(base_offset);
-            }
-            LayoutManager::Field(m) => {
-                for word_idx in m.gc_desc.bitmap.iter_ones() {
-                    desc.set_offset(base_offset + (word_idx * ptr_size));
-                }
-                for offset in &m.gc_desc.unaligned_offsets {
-                    desc.set_offset(base_offset + *offset);
-                }
-            }
-            LayoutManager::Array(arr) => {
-                let elem_size = arr.element_layout.size();
-                // Optimization: if element has no refs, skip
-                if arr.element_layout.is_or_contains_refs() {
-                    for i in 0..arr.length {
-                        Self::populate_gc_desc(
-                            &arr.element_layout,
-                            base_offset + (elem_size * i).as_usize(),
-                            desc,
-                        );
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    pub(crate) fn create_field_layout<'a>(
-        fields: impl IntoIterator<Item = (TypeDescription, &'a str, Option<usize>, Arc<LayoutManager>)>,
-        layout: Layout,
-        base_size: usize,
-        base_alignment: usize,
-    ) -> Result<FieldLayoutManager, TypeResolutionError> {
-        let mut mapping = std::collections::HashMap::new();
-        let mut gc_desc = GcDesc::default();
-        let mut has_ref_fields = false;
-        let total_size;
-        let mut max_alignment = base_alignment.max(1);
-
-        let fields: Vec<_> = fields.into_iter().collect();
-
-        match layout {
-            Layout::Automatic => {
-                // Preserve metadata order for auto layout. Reordering can break
-                // runtime assumptions in framework code that depend on field positions.
-                // Start after base class fields
-                let mut offset = base_size;
-
-                for (owner, name, _, layout) in fields {
-                    let field_align = layout.alignment();
-                    max_alignment = max_alignment.max(field_align);
-
-                    let aligned_offset = align_up(offset, field_align);
-
-                    Self::populate_gc_desc(&layout, aligned_offset, &mut gc_desc);
-                    if layout.has_managed_ptrs() {
-                        has_ref_fields = true;
-                    }
-
-                    mapping.insert(
-                        FieldKey {
-                            owner,
-                            name: name.to_string(),
-                        },
-                        FieldLayout {
-                            position: ByteOffset(aligned_offset),
-                            layout: layout.clone(),
-                        },
-                    );
-                    offset = aligned_offset + layout.size().as_usize();
-                }
-
-                total_size = align_up(offset, max_alignment);
-            }
-            Layout::Sequential(s) => {
-                let (packing_size, class_size) = match s {
-                    None => (8, 0),
-                    Some(SequentialLayout {
-                        packing_size,
-                        class_size,
-                    }) => (if packing_size == 0 { 8 } else { packing_size }, class_size),
-                };
-
-                // Start after base class fields
-                let mut offset = base_size;
-
-                for (owner, name, _, layout) in fields {
-                    let field_align = layout.alignment().min(packing_size);
-                    max_alignment = max_alignment.max(field_align);
-
-                    let aligned_offset = align_up(offset, field_align);
-
-                    Self::populate_gc_desc(&layout, aligned_offset, &mut gc_desc);
-                    if layout.has_managed_ptrs() {
-                        has_ref_fields = true;
-                    }
-
-                    mapping.insert(
-                        FieldKey {
-                            owner,
-                            name: name.to_string(),
-                        },
-                        FieldLayout {
-                            position: ByteOffset(aligned_offset),
-                            layout: layout.clone(),
-                        },
-                    );
-                    offset = aligned_offset + layout.size().as_usize();
-                }
-
-                total_size = align_up(offset, max_alignment).max(base_size + class_size);
-            }
-            Layout::Explicit(e) => {
-                // For explicit layout, offsets are relative to the current type's fields
-                // We need to add base_size to these offsets
-                let mut offset = base_size;
-                // Keep track of fields to check for overlaps: (start, end, layout)
-                let mut placed_fields: Vec<(usize, usize, Arc<LayoutManager>)> = Vec::new();
-
-                for (owner, name, o, layout) in fields {
-                    max_alignment = max_alignment.max(layout.alignment());
-                    if layout.has_managed_ptrs() {
-                        has_ref_fields = true;
-                    }
-                    match o {
-                        None => {
-                            return Err(TypeResolutionError::InvalidLayout(
-                                "explicit field layout requires all fields to have defined offsets"
-                                    .to_string(),
-                            ));
-                        }
-                        Some(o) => {
-                            // Add base size to the explicit offset
-                            let actual_offset = base_size + o;
-                            let size = layout.size();
-                            let actual_end = actual_offset + size.as_usize();
-
-                            // Validation: Check for overlaps with existing fields if refs are involved
-                            for (prev_start, prev_end, prev_layout) in &placed_fields {
-                                let overlap = actual_offset < *prev_end && *prev_start < actual_end;
-                                if overlap
-                                    && (layout.is_or_contains_refs()
-                                        || prev_layout.is_or_contains_refs())
-                                {
-                                    // ECMA-335 §II.10.7: "offsets occupied by an object reference shall not overlap
-                                    // with offsets occupied by a built-in value type or a part of another object reference.
-                                    // While one object reference can completely overlap another, this is unverifiable."
-                                    let same_range =
-                                        actual_offset == *prev_start && actual_end == *prev_end;
-                                    let both_gc_ptrs =
-                                        layout.is_gc_ptr() && prev_layout.is_gc_ptr();
-
-                                    if same_range && both_gc_ptrs {
-                                        // Complete overlap of two GC pointers is allowed but unverifiable
-                                        continue;
-                                    }
-
-                                    let type_name = owner.type_name();
-                                    // Bypass check for System.Runtime.CompilerServices.MethodTable which has overlapping fields
-                                    // This is an internal runtime type and we assume it's handled correctly by the runtime/GC or not allocated on GC heap.
-                                    if type_name
-                                        .contains("System.Runtime.CompilerServices.MethodTable")
-                                    {
-                                        trace!(
-                                            "WARNING: Explicit field layout overlaps reference type fields in type '{}'. Field '{}' (offset {}) overlaps with previous field (range {}-{}). Ignoring.",
-                                            type_name, name, actual_offset, prev_start, prev_end
-                                        );
-                                    } else {
-                                        return Err(TypeResolutionError::InvalidLayout(format!(
-                                            "explicit field layout overlaps reference type fields in type '{}'. Field '{}' (offset {}) overlaps with previous field (range {}-{}).",
-                                            type_name, name, actual_offset, prev_start, prev_end
-                                        )));
-                                    }
-                                }
-                            }
-                            placed_fields.push((actual_offset, actual_end, layout.clone()));
-
-                            Self::populate_gc_desc(&layout, actual_offset, &mut gc_desc);
-
-                            mapping.insert(
-                                FieldKey {
-                                    owner,
-                                    name: name.to_string(),
-                                },
-                                FieldLayout {
-                                    position: ByteOffset(actual_offset),
-                                    layout: layout.clone(),
-                                },
-                            );
-                            offset = offset.max(actual_end);
-                        }
-                    };
-                }
-                total_size = match e {
-                    Some(ExplicitLayout { class_size }) => {
-                        // ECMA-335 §II.10.7: .size is relative to the type's own fields
-                        (base_size + class_size).max(offset)
-                    }
-                    None => offset,
-                };
-            }
-        }
-
-        if total_size > 0x1000_0000 {
-            return Err(TypeResolutionError::MassiveAllocation(format!(
-                "massive field layout detected: {} bytes",
-                total_size
-            )));
-        }
-
-        Ok(FieldLayoutManager {
-            fields: mapping,
-            total_size,
-            alignment: max_alignment,
-            gc_desc,
-            has_ref_fields,
-        })
-    }
-
-    fn collect_fields(
-        td: TypeDescription,
-        context: &ResolutionContext,
-        predicate: &mut dyn FnMut(&Field) -> bool,
-        metrics: Option<&RuntimeMetrics>,
-        include_base: bool,
-    ) -> Result<FieldLayoutManager, TypeResolutionError> {
-        let ancestors: Vec<_> = context.get_ancestors(td.clone()).collect();
-
-        // Build layout hierarchically: first compute base class layout, then add derived fields
-        let base_layout = if include_base && ancestors.len() > 1 {
-            // We have a base class - compute its layout first
-            let (base_td, base_generics) = &ancestors[1];
-            let base_res = base_td.resolution.clone();
-
-            let new_lookup = GenericLookup::new(
-                base_generics
-                    .iter()
-                    .map(|t| context.make_concrete(*t))
-                    .collect::<Result<Vec<_>, _>>()?,
-            );
-            let base_ctx = ResolutionContext {
-                generics: &new_lookup,
-                resolution: base_res,
-                state: context.state.clone(),
-                type_owner: Some(base_td.clone()),
-                method_owner: None,
-            };
-
-            // Recursively compute base layout
-            Some(Self::collect_fields(
-                base_td.clone(),
-                &base_ctx,
-                predicate,
-                metrics,
-                include_base,
-            )?)
-        } else {
-            None
-        };
-
-        let (base_size, base_alignment) = base_layout
-            .as_ref()
-            .map(|l| (l.total_size, l.alignment))
-            .unwrap_or((0, 1));
-
-        // Now lay out this type's fields on top of the base
-        let mut current_type_fields = vec![];
-
-        for (i, f) in td.definition().fields.iter().enumerate() {
-            if !predicate(f) {
-                continue;
-            }
-
-            let layout = if f.by_ref {
-                Arc::new(Scalar::ManagedPtr.into())
-            } else {
-                let t = context.get_field_type(FieldDescription::new(
-                    td.clone(),
-                    td.resolution.clone(),
-                    i,
-                ))?;
-                type_layout_with_metrics(t, context, metrics)?
-            };
-
-            current_type_fields.push((td.clone(), f.name.as_ref(), f.offset, layout));
-        }
-
-        // Create layout with hierarchical approach
-        let mut result = Self::create_field_layout(
-            current_type_fields,
-            td.definition().flags.layout,
-            base_size,
-            base_alignment,
-        )?;
-
-        // Add all base class fields to the result
-        if let Some(base_layout) = base_layout {
-            // Merge base fields into result
-            for (key, field_layout) in base_layout.fields.clone() {
-                result.fields.insert(key, field_layout);
-            }
-            result.gc_desc.merge(&base_layout.gc_desc);
-            result.has_ref_fields |= base_layout.has_ref_fields;
-        }
-
-        Ok(result)
-    }
-
     pub fn instance_fields(
         td: TypeDescription,
         context: &ResolutionContext,
     ) -> Result<FieldLayoutManager, TypeResolutionError> {
-        Self::instance_fields_with_metrics(td, context, None)
+        context.resolver().instance_fields(td, context)
     }
 
     pub fn instance_field_layout_cached(
         td: TypeDescription,
         context: &ResolutionContext,
-        metrics: Option<&RuntimeMetrics>,
+        _metrics: Option<&RuntimeMetrics>,
     ) -> Result<Arc<FieldLayoutManager>, TypeResolutionError> {
-        let key = (td.clone(), context.generics.clone());
-
-        if let Some(cached) = context.caches().instance_field_layout_cache.get(&key) {
-            if let Some(m) = metrics {
-                m.record_instance_field_layout_cache_hit();
-            }
-            return Ok(Arc::clone(&cached));
-        }
-
-        if let Some(m) = metrics {
-            m.record_instance_field_layout_cache_miss();
-        }
-        let result = Arc::new(Self::instance_fields_with_metrics(td, context, metrics)?);
-        context
-            .caches()
-            .instance_field_layout_cache
-            .insert(key, Arc::clone(&result));
-        Ok(result)
+        context.resolver().instance_field_layout_cached_with_lookup(
+            td,
+            context.resolution.clone(),
+            context.generics,
+        )
     }
 
     pub fn instance_fields_with_metrics(
         td: TypeDescription,
         context: &ResolutionContext,
-        metrics: Option<&RuntimeMetrics>,
+        _metrics: Option<&RuntimeMetrics>,
     ) -> Result<FieldLayoutManager, TypeResolutionError> {
-        let context = context.for_type(td.clone());
-        // Value types do not physically include System.ValueType/Object instance fields.
-        let include_base = !td.is_value_type(&context)?;
-        Self::collect_fields(
+        context.resolver().instance_fields_with_lookup(
             td,
-            &context,
-            &mut |f| !f.static_member,
-            metrics,
-            include_base,
+            context.resolution.clone(),
+            context.generics,
         )
     }
 
@@ -386,16 +44,19 @@ impl LayoutFactory {
         td: TypeDescription,
         context: &ResolutionContext,
     ) -> Result<FieldLayoutManager, TypeResolutionError> {
-        Self::static_fields_with_metrics(td, context, None)
+        context.resolver().static_fields(td, context)
     }
 
     pub fn static_fields_with_metrics(
         td: TypeDescription,
         context: &ResolutionContext,
-        metrics: Option<&RuntimeMetrics>,
+        _metrics: Option<&RuntimeMetrics>,
     ) -> Result<FieldLayoutManager, TypeResolutionError> {
-        let context = context.for_type(td.clone());
-        Self::collect_fields(td, &context, &mut |f| f.static_member, metrics, false)
+        context.resolver().static_fields_with_lookup(
+            td,
+            context.resolution.clone(),
+            context.generics,
+        )
     }
 
     pub fn create_array_layout(
@@ -403,30 +64,28 @@ impl LayoutFactory {
         length: usize,
         context: &ResolutionContext,
     ) -> Result<ArrayLayoutManager, TypeResolutionError> {
-        Self::create_array_layout_with_metrics(element, length, context, None)
+        context
+            .resolver()
+            .create_array_layout(element, length, context)
     }
 
     pub fn create_array_layout_with_metrics(
         element: ConcreteType,
         length: usize,
         context: &ResolutionContext,
-        metrics: Option<&RuntimeMetrics>,
+        _metrics: Option<&RuntimeMetrics>,
     ) -> Result<ArrayLayoutManager, TypeResolutionError> {
-        let element_layout = type_layout_with_metrics(element, context, metrics)?;
-        // Defensive check for massive allocations (e.g. from corrupted metadata/stack)
-        if length > 0x4000_0000
-            || (length > 0 && element_layout.size().as_usize() > usize::MAX / length)
-        {
-            return Err(TypeResolutionError::MassiveAllocation(format!(
-                "massive array allocation attempt: length={}, element_size={}",
-                length,
-                element_layout.size()
-            )));
-        }
-        Ok(ArrayLayoutManager {
-            element_layout,
+        context.resolver().create_array_layout_with_lookup(
+            element,
             length,
-        })
+            context.resolution.clone(),
+            context.generics,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn populate_gc_desc(layout: &LayoutManager, base_offset: usize, desc: &mut GcDesc) {
+        dotnet_runtime_resolver::LayoutFactory::populate_gc_desc(layout, base_offset, desc)
     }
 }
 
@@ -434,91 +93,19 @@ pub fn type_layout(
     t: ConcreteType,
     context: &ResolutionContext,
 ) -> Result<Arc<LayoutManager>, TypeResolutionError> {
-    type_layout_with_metrics(t, context, None)
+    context.resolver().type_layout_cached(t, context)
 }
 
 pub fn type_layout_with_metrics(
     t: ConcreteType,
     context: &ResolutionContext,
-    metrics: Option<&RuntimeMetrics>,
+    _metrics: Option<&RuntimeMetrics>,
 ) -> Result<Arc<LayoutManager>, TypeResolutionError> {
-    let t = context.normalize_type(t)?;
-
-    if let Some(cached) = context.caches().layout_cache.get(&t) {
-        if let Some(m) = metrics {
-            m.record_layout_cache_hit();
-        }
-        return Ok(Arc::clone(&cached));
-    }
-
-    if let Some(m) = metrics {
-        m.record_layout_cache_miss();
-    }
-    let result = Arc::new(type_layout_internal(t.clone(), context, metrics)?);
-    context.caches().layout_cache.insert(t, Arc::clone(&result));
-    Ok(result)
-}
-
-fn type_layout_internal(
-    t: ConcreteType,
-    context: &ResolutionContext,
-    metrics: Option<&RuntimeMetrics>,
-) -> Result<LayoutManager, TypeResolutionError> {
-    let mut context = context.clone();
-    context.resolution = t.resolution();
-    Ok(match t.get() {
-        BaseType::Boolean | BaseType::UInt8 => Scalar::UInt8.into(),
-        BaseType::Int8 => Scalar::Int8.into(),
-        BaseType::Char | BaseType::UInt16 => Scalar::UInt16.into(),
-        BaseType::Int16 => Scalar::Int16.into(),
-        BaseType::Int32 | BaseType::UInt32 => Scalar::Int32.into(),
-        BaseType::Int64 | BaseType::UInt64 => Scalar::Int64.into(),
-        BaseType::IntPtr
-        | BaseType::UIntPtr
-        | BaseType::FunctionPointer(_)
-        | BaseType::ValuePointer(_, _) => Scalar::NativeInt.into(),
-        BaseType::Float32 => Scalar::Float32.into(),
-        BaseType::Float64 => Scalar::Float64.into(),
-        BaseType::Type {
-            value_kind: Some(ValueKind::ValueType),
-            source,
-        } => {
-            let mut type_generics = vec![];
-            let t = match source {
-                TypeSource::User(u) => context.locate_type(*u)?,
-                TypeSource::Generic { base, parameters } => {
-                    type_generics = parameters.clone();
-                    context.locate_type(*base)?
-                }
-            };
-
-            // Intrinsic: System.ByReference<T> is a ManagedPtr
-            let name = t.type_name();
-            trace!("Computing layout for: {}", name);
-            if name == "System.ByReference`1"
-                || name == "System.ReadOnlyByReference`1"
-                || name == "System.ByReference"
-                || name == "System.Runtime.CompilerServices.ByReference`1"
-                || name == "System.Runtime.CompilerServices.ReadOnlyByReference`1"
-            {
-                return Ok(Scalar::ManagedPtr.into());
-            }
-
-            let new_lookup = GenericLookup::new(type_generics);
-            let ctx = context.with_generics(&new_lookup);
-
-            if let Some(inner) = t.is_enum() {
-                (*type_layout_with_metrics(ctx.make_concrete(inner)?, &ctx, metrics)?).clone()
-            } else {
-                LayoutFactory::instance_fields_with_metrics(t, &ctx, metrics)?.into()
-            }
-        }
-        BaseType::Type { .. }
-        | BaseType::Object
-        | BaseType::String
-        | BaseType::Vector(_, _)
-        | BaseType::Array(_, _) => Scalar::ObjectRef.into(),
-    })
+    context.resolver().type_layout_cached_with_lookup(
+        t,
+        context.resolution.clone(),
+        context.generics,
+    )
 }
 
 #[cfg(test)]
@@ -589,7 +176,6 @@ mod tests {
             "Nullable<int> should not contain unaligned object-reference offsets"
         );
 
-        // Sanity check that this context really represents Nullable<int>.
         let nullable_int = ConcreteType::new(
             nullable_td.resolution.clone(),
             BaseType::Type {

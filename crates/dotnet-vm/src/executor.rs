@@ -2,17 +2,17 @@ use crate::{
     StepResult,
     dispatch::ExecutionEngine,
     error::{ExecutionError, VmError},
-    exceptions::ManagedException,
     gc::coordinator::*,
-    metrics::CacheStats,
     stack::{
         CallStack, GCArena,
         ops::{CallOps, ReflectionOps, VesOps},
     },
     state::{ArenaLocalState, SharedGlobalState},
     threading::ThreadManagerOps,
-    tracer::Tracer,
 };
+use dotnet_exceptions::ManagedException;
+use dotnet_metrics::CacheStats;
+use dotnet_tracer::Tracer;
 use dotnet_types::members::MethodDescription;
 use dotnet_utils::{
     ArenaId,

@@ -60,10 +60,8 @@
 //! // Unregister when thread exits
 //! thread_manager.unregister_thread(thread_id);
 //! ```
-use crate::{
-    gc::coordinator::{GCCommand, GCCoordinator},
-    tracer::Tracer,
-};
+use crate::gc::coordinator::{GCCommand, GCCoordinator};
+use dotnet_tracer::Tracer;
 
 #[cfg(feature = "multithreading")]
 mod basic;

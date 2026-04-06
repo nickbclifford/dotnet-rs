@@ -1,9 +1,9 @@
 use crate::{
     StepResult,
-    memory::ops::MemoryOps,
     stack::ops::{ExceptionOps, TypedStackOps},
 };
 use dotnet_macros::dotnet_intrinsic;
+use dotnet_runtime_memory::ops::MemoryOps;
 use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 
 const NULL_REF_MSG: &str = "Object reference not set to an instance of an object.";

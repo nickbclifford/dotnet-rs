@@ -23,6 +23,6 @@ pub fn finalize_arena(marked: MarkedArena<'_, GCArenaRoot>) {
         c.stack
             .local
             .heap
-            .finalize_check(fc, &c.stack.shared, c.stack.indent())
+            .finalize_check(fc, c.stack.shared.as_ref(), c.stack.indent())
     });
 }

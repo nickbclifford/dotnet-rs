@@ -2,10 +2,11 @@ use dotnet_macros_core::{
     InstructionMapping, ParsedFieldSignature, ParsedInstruction, ParsedSignature,
 };
 use std::{
+    borrow::Cow,
     collections::hash_map::DefaultHasher,
     env, fs,
     hash::{Hash, Hasher},
-    path::Path,
+    path::{Path, PathBuf},
 };
 use syn::{
     Attribute, Ident, Item, ItemFn, LitStr,
@@ -17,6 +18,11 @@ struct InstructionEntry {
     variant_name: String,
     mod_path: String,
     parsed: ParsedInstruction,
+}
+
+struct SourceScanRoot {
+    directory: PathBuf,
+    module_prefix: String,
 }
 
 // --- Intrinsic registration ---
@@ -37,48 +43,170 @@ fn main() {
 
     // 1. Instruction table generation
     let mut instruction_entries = Vec::new();
-    let src_instructions_dir = Path::new("src/instructions");
-    for entry in WalkDir::new(src_instructions_dir) {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("rs") {
-            process_instruction_file(path, &mut instruction_entries);
-        }
+    let instruction_roots = instruction_source_roots();
+    for root in &instruction_roots {
+        scan_rs_files(root, |path| {
+            process_instruction_file(path, root, &mut instruction_entries)
+        });
     }
     instruction_entries.sort_by(|a, b| a.variant_name.cmp(&b.variant_name));
     generate_instruction_table(&out_dir, &instruction_entries);
 
     // 2. Intrinsic table generation
     let mut intrinsic_entries = Vec::new();
-    let src_intrinsics_dir = Path::new("src/intrinsics");
-    for entry in WalkDir::new(src_intrinsics_dir) {
+    let intrinsic_roots = intrinsic_source_roots();
+    for root in &intrinsic_roots {
+        scan_rs_files(root, |path| {
+            process_intrinsic_file(path, root, &mut intrinsic_entries)
+        });
+    }
+    generate_intrinsic_phf(&out_dir, &intrinsic_entries);
+
+    println!("cargo:rerun-if-changed=src/instructions");
+    println!("cargo:rerun-if-changed=src/intrinsics");
+    println!("cargo:rerun-if-env-changed=DOTNET_VM_EXTRA_INSTRUCTION_SOURCES");
+    println!("cargo:rerun-if-env-changed=DOTNET_VM_EXTRA_INTRINSIC_SOURCES");
+    for root in instruction_roots.iter().chain(&intrinsic_roots) {
+        println!("cargo:rerun-if-changed={}", root.directory.display());
+    }
+}
+
+fn instruction_source_roots() -> Vec<SourceScanRoot> {
+    let mut roots = vec![SourceScanRoot {
+        directory: PathBuf::from("src/instructions"),
+        module_prefix: "crate::instructions".to_string(),
+    }];
+    roots.extend(parse_extra_roots(
+        "DOTNET_VM_EXTRA_INSTRUCTION_SOURCES",
+        "crate::instructions",
+    ));
+    roots
+}
+
+fn intrinsic_source_roots() -> Vec<SourceScanRoot> {
+    let mut roots = vec![
+        SourceScanRoot {
+            directory: PathBuf::from("src/intrinsics"),
+            module_prefix: "crate::intrinsics".to_string(),
+        },
+        // Phase 2 extraction root for low-inbound intrinsic handlers.
+        SourceScanRoot {
+            directory: PathBuf::from("../dotnet-intrinsics-core/src"),
+            module_prefix: "dotnet_intrinsics_core".to_string(),
+        },
+        // Phase 2 extraction root for delegate intrinsic handlers.
+        SourceScanRoot {
+            directory: PathBuf::from("../dotnet-intrinsics-delegates/src"),
+            module_prefix: "dotnet_intrinsics_delegates".to_string(),
+        },
+        // Phase 3 extraction root for span intrinsic handlers.
+        SourceScanRoot {
+            directory: PathBuf::from("../dotnet-intrinsics-span/src"),
+            module_prefix: "dotnet_intrinsics_span".to_string(),
+        },
+        // Phase 2 extraction root for string intrinsic handlers.
+        SourceScanRoot {
+            directory: PathBuf::from("../dotnet-intrinsics-string/src"),
+            module_prefix: "dotnet_intrinsics_string".to_string(),
+        },
+        // Phase 3 extraction root for threading intrinsic handlers.
+        SourceScanRoot {
+            directory: PathBuf::from("../dotnet-intrinsics-threading/src"),
+            module_prefix: "dotnet_intrinsics_threading".to_string(),
+        },
+        // Phase 3 extraction root for reflection intrinsic handlers.
+        SourceScanRoot {
+            directory: PathBuf::from("../dotnet-intrinsics-reflection/src"),
+            module_prefix: "dotnet_intrinsics_reflection".to_string(),
+        },
+        // Phase 3 extraction root for unsafe intrinsic handlers.
+        SourceScanRoot {
+            directory: PathBuf::from("../dotnet-intrinsics-unsafe/src"),
+            module_prefix: "dotnet_intrinsics_unsafe".to_string(),
+        },
+    ];
+    roots.extend(parse_extra_roots(
+        "DOTNET_VM_EXTRA_INTRINSIC_SOURCES",
+        "crate::intrinsics",
+    ));
+    roots
+}
+
+fn parse_extra_roots(env_var: &str, default_prefix: &str) -> Vec<SourceScanRoot> {
+    // Format: `<directory>[=<module_prefix>]` entries delimited by `;`.
+    // Extraction assumption: module_prefix must be a path visible from this crate
+    // (typically a re-export like `crate::intrinsics`/`crate::instructions`).
+    let raw = match env::var(env_var) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+
+    raw.split(';')
+        .filter_map(|entry| {
+            let trimmed = entry.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+
+            let (dir, prefix): (&str, Cow<'_, str>) = match trimmed.split_once('=') {
+                Some((directory, module_prefix)) => (
+                    directory.trim(),
+                    Cow::Owned(module_prefix.trim().to_string()),
+                ),
+                None => (trimmed, Cow::Borrowed(default_prefix)),
+            };
+
+            if dir.is_empty() || prefix.trim().is_empty() {
+                panic!(
+                    "{env_var} contains an invalid entry `{trimmed}`; expected `<dir>` or `<dir>=<module_prefix>`"
+                );
+            }
+
+            Some(SourceScanRoot {
+                directory: PathBuf::from(dir),
+                module_prefix: prefix.into_owned(),
+            })
+        })
+        .collect()
+}
+
+fn scan_rs_files(root: &SourceScanRoot, mut process_file: impl FnMut(&Path)) {
+    for entry in WalkDir::new(&root.directory) {
         let entry = match entry {
             Ok(e) => e,
             Err(_) => continue,
         };
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) == Some("rs") {
-            process_intrinsic_file(path, &mut intrinsic_entries);
+            process_file(path);
         }
     }
-    generate_intrinsic_phf(&out_dir, &intrinsic_entries);
-
-    println!("cargo:rerun-if-changed=src/instructions");
-    println!("cargo:rerun-if-changed=src/intrinsics");
 }
 
-fn get_mod_path(path: &Path) -> String {
-    let mut rel_path = path.strip_prefix("src").unwrap().to_path_buf();
+fn get_mod_path(path: &Path, root: &SourceScanRoot) -> String {
+    // Extraction assumption: handler module paths are derived from filesystem layout
+    // relative to a scan root and then anchored under `module_prefix`.
+    let mut rel_path = path
+        .strip_prefix(&root.directory)
+        .unwrap_or_else(|_| {
+            panic!(
+                "Handler source `{}` must be under configured root `{}`",
+                path.display(),
+                root.directory.display()
+            )
+        })
+        .to_path_buf();
     rel_path.set_extension("");
     let components: Vec<_> = rel_path
         .components()
         .map(|c| c.as_os_str().to_str().unwrap())
         .filter(|&c| c != "mod")
         .collect();
-    format!("crate::{}", components.join("::"))
+    if components.is_empty() {
+        root.module_prefix.clone()
+    } else {
+        format!("{}::{}", root.module_prefix, components.join("::"))
+    }
 }
 
 struct MacroInstruction {
@@ -95,9 +223,13 @@ impl Parse for MacroInstruction {
     }
 }
 
-fn process_instruction_file(path: &Path, entries: &mut Vec<InstructionEntry>) {
+fn process_instruction_file(
+    path: &Path,
+    root: &SourceScanRoot,
+    entries: &mut Vec<InstructionEntry>,
+) {
     let content = fs::read_to_string(path).unwrap();
-    let mod_path = get_mod_path(path);
+    let mod_path = get_mod_path(path, root);
     let file = syn::parse_file(&content).expect("Failed to parse instruction file");
 
     for item in file.items {
@@ -220,9 +352,9 @@ fn generate_instruction_table(out_dir: &std::ffi::OsStr, entries: &[InstructionE
     fs::write(dest_path, table_code).unwrap();
 }
 
-fn process_intrinsic_file(path: &Path, entries: &mut Vec<IntrinsicEntry>) {
+fn process_intrinsic_file(path: &Path, root: &SourceScanRoot, entries: &mut Vec<IntrinsicEntry>) {
     let content = fs::read_to_string(path).unwrap();
-    let mod_path = get_mod_path(path);
+    let mod_path = get_mod_path(path, root);
     let file = syn::parse_file(&content).expect("Failed to parse file for intrinsics");
 
     for item in file.items {

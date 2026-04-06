@@ -1,3 +1,4 @@
+//! P/Invoke marshalling and native call bridge for dotnet-rs.
 use dashmap::DashMap;
 use dotnet_tracer::Tracer;
 use dotnet_types::{
@@ -21,8 +22,7 @@ use libloading::{Library, Symbol};
 use std::{ffi::c_void, marker::PhantomPinned, path::PathBuf, ptr::NonNull, sync::Arc};
 
 pub use dotnet_vm_ops::{
-    StepResult,
-    exceptions::ManagedException,
+    ManagedException, StepResult,
     ops::{MemoryOps, PInvokeContext, ResolutionOps},
 };
 

@@ -273,6 +273,91 @@ dependencies = [
 ]
 
 [[package]]
+name = "dotnet-intrinsics-core"
+version = "0.1.0"
+dependencies = [
+ "dotnet-macros",
+ "dotnet-types",
+ "dotnet-value",
+ "dotnet-vm-ops",
+ "dotnetdll",
+]
+
+[[package]]
+name = "dotnet-intrinsics-delegates"
+version = "0.1.0"
+dependencies = [
+ "dotnet-macros",
+ "dotnet-types",
+ "dotnet-value",
+ "dotnet-vm-ops",
+ "dotnetdll",
+]
+
+[[package]]
+name = "dotnet-intrinsics-reflection"
+version = "0.1.0"
+dependencies = [
+ "dotnet-assemblies",
+ "dotnet-macros",
+ "dotnet-types",
+ "dotnet-utils",
+ "dotnet-value",
+ "dotnet-vm-ops",
+ "dotnetdll",
+]
+
+[[package]]
+name = "dotnet-intrinsics-span"
+version = "0.1.0"
+dependencies = [
+ "dotnet-macros",
+ "dotnet-types",
+ "dotnet-utils",
+ "dotnet-value",
+ "dotnet-vm-ops",
+ "dotnetdll",
+]
+
+[[package]]
+name = "dotnet-intrinsics-string"
+version = "0.1.0"
+dependencies = [
+ "dotnet-macros",
+ "dotnet-types",
+ "dotnet-utils",
+ "dotnet-value",
+ "dotnet-vm-ops",
+ "dotnetdll",
+ "gc-arena",
+]
+
+[[package]]
+name = "dotnet-intrinsics-threading"
+version = "0.1.0"
+dependencies = [
+ "dotnet-macros",
+ "dotnet-types",
+ "dotnet-utils",
+ "dotnet-value",
+ "dotnet-vm-ops",
+ "dotnetdll",
+ "gc-arena",
+]
+
+[[package]]
+name = "dotnet-intrinsics-unsafe"
+version = "0.1.0"
+dependencies = [
+ "dotnet-macros",
+ "dotnet-types",
+ "dotnet-utils",
+ "dotnet-value",
+ "dotnet-vm-ops",
+ "dotnetdll",
+]
+
+[[package]]
 name = "dotnet-macros"
 version = "0.1.0"
 dependencies = [
@@ -313,6 +398,31 @@ dependencies = [
  "gc-arena",
  "libffi",
  "libloading",
+ "sptr",
+ "tracing",
+]
+
+[[package]]
+name = "dotnet-runtime-memory"
+version = "0.1.0"
+dependencies = [
+ "dotnet-types",
+ "dotnet-utils",
+ "dotnet-value",
+ "dotnet-vm-ops",
+ "gc-arena",
+ "sptr",
+]
+
+[[package]]
+name = "dotnet-runtime-resolver"
+version = "0.1.0"
+dependencies = [
+ "dotnet-assemblies",
+ "dotnet-types",
+ "dotnet-utils",
+ "dotnet-value",
+ "dotnetdll",
  "sptr",
  "tracing",
 ]
@@ -374,10 +484,19 @@ dependencies = [
  "dashmap",
  "dotnet-assemblies",
  "dotnet-exceptions",
+ "dotnet-intrinsics-core",
+ "dotnet-intrinsics-delegates",
+ "dotnet-intrinsics-reflection",
+ "dotnet-intrinsics-span",
+ "dotnet-intrinsics-string",
+ "dotnet-intrinsics-threading",
+ "dotnet-intrinsics-unsafe",
  "dotnet-macros",
  "dotnet-macros-core",
  "dotnet-metrics",
  "dotnet-pinvoke",
+ "dotnet-runtime-memory",
+ "dotnet-runtime-resolver",
  "dotnet-tracer",
  "dotnet-types",
  "dotnet-utils",
@@ -400,17 +519,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "dotnet-vm-ops"
+name = "dotnet-vm-data"
 version = "0.1.0"
 dependencies = [
- "dotnet-assemblies",
- "dotnet-metrics",
- "dotnet-tracer",
  "dotnet-types",
  "dotnet-utils",
  "dotnet-value",
  "dotnetdll",
  "gc-arena",
+]
+
+[[package]]
+name = "dotnet-vm-ops"
+version = "0.1.0"
+dependencies = [
+ "dotnet-assemblies",
+ "dotnet-tracer",
+ "dotnet-types",
+ "dotnet-utils",
+ "dotnet-value",
+ "dotnet-vm-data",
+ "dotnetdll",
 ]
 
 [[package]]

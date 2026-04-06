@@ -1,7 +1,8 @@
 use crate::{
     context::ResolutionContext, gc::coordinator::GCCoordinator, layout::LayoutFactory,
-    metrics::RuntimeMetrics, threading::ThreadManagerOps,
+    threading::ThreadManagerOps,
 };
+use dotnet_metrics::RuntimeMetrics;
 use dotnet_types::{
     TypeDescription, error::TypeResolutionError, generics::GenericLookup,
     members::MethodDescription,

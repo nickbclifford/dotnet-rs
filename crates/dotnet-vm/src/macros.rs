@@ -3,7 +3,7 @@ macro_rules! vm_msg {
     // Default to Debug level - format string with args
     ($src:expr, $($format:tt)*) => {
         if $src.tracer_enabled() {
-            $src.tracer().msg($crate::tracer::TraceLevel::Debug, $src.indent(), format_args!($($format)*))
+            $src.tracer().msg(dotnet_tracer::TraceLevel::Debug, $src.indent(), format_args!($($format)*))
         }
     }
 }
@@ -13,7 +13,7 @@ macro_rules! vm_msg {
 macro_rules! vm_error {
     ($src:expr, $($format:tt)*) => {
         if $src.tracer_enabled() {
-            $src.tracer().msg($crate::tracer::TraceLevel::Error, $src.indent(), format_args!($($format)*))
+            $src.tracer().msg(dotnet_tracer::TraceLevel::Error, $src.indent(), format_args!($($format)*))
         }
     }
 }
@@ -22,7 +22,7 @@ macro_rules! vm_error {
 macro_rules! vm_info {
     ($src:expr, $($format:tt)*) => {
         if $src.tracer_enabled() {
-            $src.tracer().msg($crate::tracer::TraceLevel::Info, $src.indent(), format_args!($($format)*))
+            $src.tracer().msg(dotnet_tracer::TraceLevel::Info, $src.indent(), format_args!($($format)*))
         }
     }
 }
@@ -31,7 +31,7 @@ macro_rules! vm_info {
 macro_rules! vm_debug {
     ($src:expr, $($format:tt)*) => {
         if $src.tracer_enabled() {
-            $src.tracer().msg($crate::tracer::TraceLevel::Debug, $src.indent(), format_args!($($format)*))
+            $src.tracer().msg(dotnet_tracer::TraceLevel::Debug, $src.indent(), format_args!($($format)*))
         }
     }
 }
@@ -40,7 +40,7 @@ macro_rules! vm_debug {
 macro_rules! vm_trace {
     ($src:expr, $($format:tt)*) => {
         if $src.tracer_enabled() {
-            $src.tracer().msg($crate::tracer::TraceLevel::Trace, $src.indent(), format_args!($($format)*))
+            $src.tracer().msg(dotnet_tracer::TraceLevel::Trace, $src.indent(), format_args!($($format)*))
         }
     }
 }

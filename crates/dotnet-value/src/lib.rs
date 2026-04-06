@@ -34,7 +34,7 @@ pub use crate::{
     validation::ValidationTag,
 };
 pub use dotnet_utils::{
-    ArenaId, ArgumentIndex, BorrowGuardHandle, BorrowScopeOps, ByteOffset, FieldIndex,
+    ArenaId, ArgumentIndex, BorrowScopeOps, ByteOffset, FieldIndex,
     GcReadyToken, GcScopeGuard, LocalIndex, NoActiveBorrows, StackSlotIndex,
 };
 pub use dotnetdll::prelude::{LoadType, NumberSign, StoreType};

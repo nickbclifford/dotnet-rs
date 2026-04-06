@@ -366,6 +366,7 @@ impl TestHarness {
     }
 
     /// Runs the CLI binary as a subprocess and captures its output.
+    #[cfg(not(feature = "fuzzing"))]
     pub fn run_cli(&self, dll_path: &Path) -> (u8, String) {
         let assemblies_path = Self::find_dotnet_app_path();
         let output = if let Some(bin_path) = std::env::var_os("CARGO_BIN_EXE_dotnet-rs") {

@@ -22,9 +22,6 @@ mod macros;
 pub mod context;
 pub mod dispatch;
 pub mod error;
-pub mod exceptions {
-    pub use dotnet_exceptions::*;
-}
 mod executor;
 #[cfg(test)]
 mod fault_tests;
@@ -36,11 +33,6 @@ pub(crate) mod intrinsics;
 #[cfg(test)]
 mod jmp_tests;
 pub mod layout;
-pub mod memory;
-pub mod metrics;
-pub mod pinvoke {
-    pub use dotnet_pinvoke::*;
-}
 pub mod resolution;
 pub mod resolver;
 mod stack;
@@ -50,7 +42,6 @@ pub mod sync;
 #[cfg(test)]
 mod tail_calls_tests;
 pub mod threading;
-pub mod tracer;
 
 pub use dotnet_types::{generics::GenericLookup, members::MethodDescription};
 pub use dotnet_utils::{
@@ -68,7 +59,7 @@ use state::SharedGlobalState;
 ///
 /// This factory function lives in `dotnet-vm` rather than `dotnet-vm-ops` because it
 /// requires access to [`ResolutionContext`], [`SharedGlobalState`], and
-/// [`exceptions::parse`] — all of which are internal to this crate.
+/// [`dotnet_exceptions::parse`] — all of which are internal to this crate.
 pub fn build_method_info(
     method: MethodDescription,
     generics: &GenericLookup,
@@ -102,7 +93,7 @@ pub fn build_method_info(
                 && method.method().signature.parameters.is_empty(),
             signature: &method.method().signature,
             locals: &body.header.local_variables,
-            exceptions: exceptions::parse(exceptions, &ctx)?
+            exceptions: dotnet_exceptions::parse(exceptions, &ctx)?
                 .into_iter()
                 .map(Arc::new)
                 .collect(),

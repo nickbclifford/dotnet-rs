@@ -67,8 +67,8 @@ use crate::{
     dispatch::ExecutionEngine,
     state::{ArenaLocalState, SharedGlobalState},
     sync::{Arc, Ordering},
-    tracer::Tracer,
 };
+use dotnet_tracer::Tracer;
 use dotnet_utils::gc::GCHandle;
 use dotnet_value::{StackValue, object::HeapStorage};
 use gc_arena::{Arena, Collect, Gc, Mutation, Rootable, collect::Trace, metrics::Metrics};

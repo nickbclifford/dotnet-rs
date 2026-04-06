@@ -5,16 +5,24 @@ edition = "2024"
 
 [dependencies]
 dotnet-assemblies = { workspace = true }
-dotnet-metrics = { workspace = true }
 dotnet-tracer = { workspace = true }
 dotnet-types = { workspace = true }
 dotnet-utils = { workspace = true, default-features = false }
 dotnet-value = { workspace = true, default-features = false }
+dotnet-vm-data = { workspace = true, default-features = false }
 dotnetdll = { workspace = true }
-gc-arena = { workspace = true }
 
 [features]
 default = ["multithreading"]
-multithreading = ["dotnet-utils/multithreading", "dotnet-value/multithreading"]
-memory-validation = ["dotnet-value/memory-validation"]
-fuzzing = ["dotnet-value/fuzzing", "dotnet-types/fuzzing", "dotnet-utils/fuzzing"]
+multithreading = [
+    "dotnet-vm-data/multithreading",
+    "dotnet-utils/multithreading",
+    "dotnet-value/multithreading",
+]
+memory-validation = ["dotnet-vm-data/memory-validation", "dotnet-value/memory-validation"]
+fuzzing = [
+    "dotnet-vm-data/fuzzing",
+    "dotnet-value/fuzzing",
+    "dotnet-types/fuzzing",
+    "dotnet-utils/fuzzing",
+]

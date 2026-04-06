@@ -1,9 +1,9 @@
 use crate::{
     gc::coordinator::GCCoordinator,
-    metrics::RuntimeMetrics,
     sync::{Arc, LockResult, Mutex},
     threading::ThreadManagerOps,
 };
+use dotnet_metrics::RuntimeMetrics;
 use dotnet_utils::ArenaId;
 use std::{
     collections::HashMap,
@@ -162,9 +162,9 @@ impl Default for SyncBlockManager {
 mod tests {
     use super::*;
     use crate::gc::coordinator::GCCoordinator;
-    use crate::metrics::RuntimeMetrics;
     use crate::sync::{LockResult, SyncBlockOps};
     use crate::threading::ThreadManagerOps;
+    use dotnet_metrics::RuntimeMetrics;
     use dotnet_utils::ArenaId;
     use std::sync::Arc as StdArc;
     use std::sync::atomic::AtomicBool;
@@ -184,11 +184,11 @@ mod tests {
         fn register_thread(&self) -> ArenaId {
             THREAD_A
         }
-        fn register_thread_traced(&self, _: &mut crate::tracer::Tracer, _: &str) -> ArenaId {
+        fn register_thread_traced(&self, _: &mut dotnet_tracer::Tracer, _: &str) -> ArenaId {
             THREAD_A
         }
         fn unregister_thread(&self, _: ArenaId) {}
-        fn unregister_thread_traced(&self, _: ArenaId, _: &mut crate::tracer::Tracer) {}
+        fn unregister_thread_traced(&self, _: ArenaId, _: &mut dotnet_tracer::Tracer) {}
         fn current_thread_id(&self) -> Option<ArenaId> {
             Some(THREAD_A)
         }
@@ -204,14 +204,14 @@ mod tests {
             &self,
             _: ArenaId,
             _: &GCCoordinator,
-            _: &mut crate::tracer::Tracer,
+            _: &mut dotnet_tracer::Tracer,
             _: &str,
         ) {
         }
         fn request_stop_the_world(&self) -> Self::Guard<'_> {
             MockSTWGuard
         }
-        fn request_stop_the_world_traced(&self, _: &mut crate::tracer::Tracer) -> Self::Guard<'_> {
+        fn request_stop_the_world_traced(&self, _: &mut dotnet_tracer::Tracer) -> Self::Guard<'_> {
             MockSTWGuard
         }
     }

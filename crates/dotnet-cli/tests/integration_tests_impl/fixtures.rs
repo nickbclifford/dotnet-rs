@@ -27,6 +27,7 @@ fn test_cache_observability() {
 }
 
 #[test]
+#[cfg(not(feature = "fuzzing"))]
 fn hello_world() {
     let harness = TestHarness::get();
     let dll_path = harness

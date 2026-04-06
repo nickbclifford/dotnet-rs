@@ -4,7 +4,7 @@ This document describes the two build-time code generation systems that wire up 
 
 ## Overview
 
-The `dotnet-vm` build script (`crates/dotnet-vm/build.rs`, ~260 lines) scans source files at compile time and generates two lookup tables:
+The `dotnet-vm` build script (`crates/dotnet-vm/build.rs`) scans source files at compile time and generates two lookup tables:
 
 1. **Instruction dispatch** — generates a monomorphic `match`-based dispatcher for CIL instructions
 2. **Intrinsic PHF lookup table** — maps string keys to native handler IDs and generates ID-based dispatchers
@@ -27,7 +27,7 @@ pub fn handle_add<'gc, T: VesOps<'gc>>(
 
 ### Build Process
 
-1. `process_instruction_file` walks all `.rs` files in `src/instructions/`
+1. `process_instruction_file` walks all configured instruction roots. By default this is `src/instructions/`, plus optional extra roots from `DOTNET_VM_EXTRA_INSTRUCTION_SOURCES`.
 2. Parses each file with `syn` looking for functions with `#[dotnet_instruction(...)]`
 3. Extracts the opcode variant name and the module path of the handler function
 4. `generate_instruction_table` creates `instruction_dispatch.rs` containing the `dispatch_monomorphic` function.
@@ -51,7 +51,9 @@ pub fn dispatch<'gc, T: VesOps<'gc>>(
 
 ### Source: `#[dotnet_intrinsic("Signature")]` and `#[dotnet_intrinsic_field("Signature")]`
 
-Intrinsic implementations are annotated in `src/intrinsics/**/*.rs`:
+Intrinsic implementations are annotated in VM-local and extracted intrinsic crates:
+- `src/intrinsics/**/*.rs` (`dotnet-vm` local intrinsic registry/metadata helpers)
+- `../dotnet-intrinsics-*/src/**/*.rs` (handler crates)
 
 ```rust
 #[dotnet_intrinsic("System.Math::Abs(System.Int32)")]
@@ -60,7 +62,16 @@ fn math_abs_i32<T: VesOps<'gc>>(ctx: &mut T, ...) -> StepResult { ... }
 
 ### Build Process
 
-1. `process_intrinsic_file` walks all `.rs` files in `src/intrinsics/`
+1. `process_intrinsic_file` walks all configured intrinsic roots:
+   - `src/intrinsics`
+   - `../dotnet-intrinsics-core/src`
+   - `../dotnet-intrinsics-delegates/src`
+   - `../dotnet-intrinsics-span/src`
+   - `../dotnet-intrinsics-string/src`
+   - `../dotnet-intrinsics-threading/src`
+   - `../dotnet-intrinsics-reflection/src`
+   - `../dotnet-intrinsics-unsafe/src`
+   - Optional extras from `DOTNET_VM_EXTRA_INTRINSIC_SOURCES`
 2. Parses `#[dotnet_intrinsic("...")]` attributes using `ParsedSignature` from `dotnet-macros-core`
 3. Extracts: type name, member name, arity, is_static, handler path
 4. Also handles `#[dotnet_intrinsic_field("...")]` for field intrinsics
@@ -127,10 +138,13 @@ Similarly, for methods explicitly marked as `internal_call` in their IL metadata
 
 ### Incremental Compilation (`cargo:rerun-if-changed`)
 
-The build script emits the following directives:
+The build script emits stable and dynamic directives:
 ```rust
 println!("cargo:rerun-if-changed=src/instructions");
 println!("cargo:rerun-if-changed=src/intrinsics");
+println!("cargo:rerun-if-env-changed=DOTNET_VM_EXTRA_INSTRUCTION_SOURCES");
+println!("cargo:rerun-if-env-changed=DOTNET_VM_EXTRA_INTRINSIC_SOURCES");
+// and one cargo:rerun-if-changed=<root> per configured source root
 ```
 These tell Cargo to skip re-running `build.rs` unless files within those directories are modified. Because parsing hundreds of source files with `syn` is computationally expensive, this ensures fast incremental builds when working on core VM components (like the GC or type system) outside the instruction and intrinsic directories.
 
@@ -166,7 +180,7 @@ pub fn dispatch_method_intrinsic<'gc, T: VesOps<'gc>>(
     // ...
 ) -> StepResult {
     match id {
-        MethodIntrinsicId::System_Math_Abs_1a2b3c4d => crate::intrinsics::math::math_abs_i32(ctx, ...),
+        MethodIntrinsicId::System_Math_Abs_1a2b3c4d => dotnet_intrinsics_core::math::math_abs_i32(ctx, ...),
         // ...
     }
 }

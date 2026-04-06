@@ -1,0 +1,17 @@
+[package]
+name = "dotnet-vm-data"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dotnet-types = { workspace = true }
+dotnet-utils = { workspace = true, default-features = false }
+dotnet-value = { workspace = true, default-features = false }
+dotnetdll = { workspace = true }
+gc-arena = { workspace = true }
+
+[features]
+default = ["multithreading"]
+multithreading = ["dotnet-utils/multithreading", "dotnet-value/multithreading"]
+memory-validation = ["dotnet-value/memory-validation"]
+fuzzing = ["dotnet-value/fuzzing", "dotnet-types/fuzzing", "dotnet-utils/fuzzing"]

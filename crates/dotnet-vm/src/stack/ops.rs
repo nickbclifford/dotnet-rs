@@ -40,14 +40,19 @@ use dotnet_value::{
 };
 use dotnetdll::prelude::{FieldSource, MethodSource, MethodType};
 
-pub use crate::memory::ops::MemoryOps;
+pub use dotnet_runtime_memory::ops::MemoryOps;
 pub use dotnet_vm_ops::ops::{
-    AllStackOps, ArgumentOps, CallOps as BaseCallOps, EvalStackOps,
+    AllStackOps, ArgumentOps, CallOps as BaseCallOps,
+    DelegateIntrinsicHost as BaseDelegateIntrinsicHost, EvalStackOps,
     ExceptionContext as BaseExceptionContext, ExceptionOps, LoaderOps as BaseLoaderOps, LocalOps,
     MemoryOps as BaseMemoryOps, PInvokeContext as BasePInvokeContext, RawMemoryOps,
-    ReflectionOps as BaseReflectionOps, ResolutionOps as BaseResolutionOps,
-    StackOps as BaseStackOps, StaticsOps as BaseStaticsOps, ThreadOps, TypedStackOps, VariableOps,
-    VesBaseOps as BaseVesBaseOps, VesInternals as BaseVesInternals,
+    ReflectionIntrinsicHost as BaseReflectionIntrinsicHost, ReflectionOps as BaseReflectionOps,
+    ResolutionOps as BaseResolutionOps, SpanIntrinsicHost as BaseSpanIntrinsicHost,
+    StackOps as BaseStackOps, StaticsOps as BaseStaticsOps,
+    StringIntrinsicHost as BaseStringIntrinsicHost, ThreadOps,
+    ThreadingIntrinsicHost as BaseThreadingIntrinsicHost, TypedStackOps,
+    UnsafeIntrinsicHost as BaseUnsafeIntrinsicHost, VariableOps, VesBaseOps as BaseVesBaseOps,
+    VesInternals as BaseVesInternals,
 };
 
 pub trait StackOps<'gc>: BaseStackOps<'gc> + AllStackOps<'gc> {
@@ -170,6 +175,165 @@ pub trait CallOps<'gc>: BaseCallOps<'gc> {
     ) -> StepResult;
 }
 
+/// `dotnet-vm` adapter for string intrinsics.
+///
+/// This preserves existing `stack::ops` extension methods (`resolver`, `shared`,
+/// reflection lookup helpers) while exposing the stable `dotnet-vm-ops` host seam.
+pub trait StringIntrinsicHost<'gc>:
+    BaseStringIntrinsicHost<'gc>
+    + dotnet_intrinsics_string::IntrinsicStringHost<'gc>
+    + CallOps<'gc>
+    + LoaderOps
+    + MemoryOps<'gc>
+    + ReflectionOps<'gc>
+    + ResolutionOps<'gc>
+    + StackOps<'gc>
+{
+}
+impl<
+    'gc,
+    T: BaseStringIntrinsicHost<'gc>
+        + dotnet_intrinsics_string::IntrinsicStringHost<'gc>
+        + CallOps<'gc>
+        + LoaderOps
+        + MemoryOps<'gc>
+        + ReflectionOps<'gc>
+        + ResolutionOps<'gc>
+        + StackOps<'gc>
+        + ?Sized,
+> StringIntrinsicHost<'gc> for T
+{
+}
+
+/// `dotnet-vm` adapter for delegate intrinsics.
+pub trait DelegateIntrinsicHost<'gc>:
+    BaseDelegateIntrinsicHost<'gc>
+    + CallOps<'gc>
+    + LoaderOps
+    + MemoryOps<'gc>
+    + ReflectionOps<'gc>
+    + ResolutionOps<'gc>
+    + VesInternals<'gc>
+{
+}
+impl<
+    'gc,
+    T: BaseDelegateIntrinsicHost<'gc>
+        + CallOps<'gc>
+        + LoaderOps
+        + MemoryOps<'gc>
+        + ReflectionOps<'gc>
+        + ResolutionOps<'gc>
+        + VesInternals<'gc>
+        + ?Sized,
+> DelegateIntrinsicHost<'gc> for T
+{
+}
+
+/// `dotnet-vm` adapter for span intrinsics.
+pub trait SpanIntrinsicHost<'gc>:
+    BaseSpanIntrinsicHost<'gc>
+    + dotnet_intrinsics_span::SpanIntrinsicHost<'gc>
+    + CallOps<'gc>
+    + LoaderOps
+    + MemoryOps<'gc>
+    + ReflectionOps<'gc>
+    + ResolutionOps<'gc>
+    + StackOps<'gc>
+{
+}
+impl<
+    'gc,
+    T: BaseSpanIntrinsicHost<'gc>
+        + dotnet_intrinsics_span::SpanIntrinsicHost<'gc>
+        + CallOps<'gc>
+        + LoaderOps
+        + MemoryOps<'gc>
+        + ReflectionOps<'gc>
+        + ResolutionOps<'gc>
+        + StackOps<'gc>
+        + ?Sized,
+> SpanIntrinsicHost<'gc> for T
+{
+}
+
+/// `dotnet-vm` adapter for unsafe intrinsics.
+pub trait UnsafeIntrinsicHost<'gc>:
+    BaseUnsafeIntrinsicHost<'gc>
+    + dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc>
+    + LoaderOps
+    + MemoryOps<'gc>
+    + ReflectionOps<'gc>
+    + ResolutionOps<'gc>
+    + StackOps<'gc>
+{
+}
+impl<
+    'gc,
+    T: BaseUnsafeIntrinsicHost<'gc>
+        + dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc>
+        + LoaderOps
+        + MemoryOps<'gc>
+        + ReflectionOps<'gc>
+        + ResolutionOps<'gc>
+        + StackOps<'gc>
+        + ?Sized,
+> UnsafeIntrinsicHost<'gc> for T
+{
+}
+
+/// `dotnet-vm` adapter for threading intrinsics.
+pub trait ThreadingIntrinsicHost<'gc>:
+    BaseThreadingIntrinsicHost<'gc>
+    + dotnet_intrinsics_threading::ThreadingIntrinsicHost<'gc>
+    + LoaderOps
+    + MemoryOps<'gc>
+    + StackOps<'gc>
+    + ThreadOps
+{
+}
+impl<
+    'gc,
+    T: BaseThreadingIntrinsicHost<'gc>
+        + dotnet_intrinsics_threading::ThreadingIntrinsicHost<'gc>
+        + LoaderOps
+        + MemoryOps<'gc>
+        + StackOps<'gc>
+        + ThreadOps
+        + ?Sized,
+> ThreadingIntrinsicHost<'gc> for T
+{
+}
+
+/// `dotnet-vm` adapter for reflection intrinsics.
+pub trait ReflectionIntrinsicHost<'gc>:
+    BaseReflectionIntrinsicHost<'gc>
+    + dotnet_intrinsics_reflection::ReflectionIntrinsicHost<'gc>
+    + CallOps<'gc>
+    + LoaderOps
+    + MemoryOps<'gc>
+    + ReflectionOps<'gc>
+    + ResolutionOps<'gc>
+    + StaticsOps<'gc>
+    + VesInternals<'gc>
+{
+}
+impl<
+    'gc,
+    T: BaseReflectionIntrinsicHost<'gc>
+        + dotnet_intrinsics_reflection::ReflectionIntrinsicHost<'gc>
+        + CallOps<'gc>
+        + LoaderOps
+        + MemoryOps<'gc>
+        + ReflectionOps<'gc>
+        + ResolutionOps<'gc>
+        + StaticsOps<'gc>
+        + VesInternals<'gc>
+        + ?Sized,
+> ReflectionIntrinsicHost<'gc> for T
+{
+}
+
 pub trait VesInternals<'gc>: BaseVesInternals<'gc> {}
 
 pub trait VesBaseOps: BaseVesBaseOps {}
@@ -200,7 +364,17 @@ pub trait PInvokeContext<'gc>:
 }
 
 pub trait VesOps<'gc>:
-    ExceptionContext<'gc> + PInvokeContext<'gc> + StaticsOps<'gc> + ThreadOps + CallOps<'gc>
+    ExceptionContext<'gc>
+    + PInvokeContext<'gc>
+    + StaticsOps<'gc>
+    + ThreadOps
+    + CallOps<'gc>
+    + dotnet_intrinsics_string::IntrinsicStringHost<'gc>
+    + dotnet_intrinsics_delegates::DelegateInvokeHost<'gc>
+    + dotnet_intrinsics_reflection::ReflectionIntrinsicHost<'gc>
+    + dotnet_intrinsics_span::SpanIntrinsicHost<'gc>
+    + dotnet_intrinsics_threading::ThreadingIntrinsicHost<'gc>
+    + dotnet_intrinsics_unsafe::UnsafeIntrinsicHost<'gc>
 {
     fn run(&mut self) -> StepResult;
     fn handle_return(&mut self) -> StepResult;

@@ -6,10 +6,10 @@ This document describes the type/method/field resolution pipeline, the multi-lev
 
 Resolution converts metadata tokens (from parsed .NET assemblies) into runtime descriptors used by the execution engine. This is a lazy, cached process that spans several modules:
 
-- **`dotnet-vm/src/resolver/`**: `ResolverService` facade with sub-modules for types, methods, layout, and factory
+- **`dotnet-runtime-resolver/src/`**: `ResolverService` implementation with sub-modules for types, methods, layout, and factory
 - **`dotnet-vm/src/context.rs`**: `ResolutionContext` for scoped resolution with generic parameters
 - **`dotnet-vm/src/resolution.rs`**: Resolution traits and helpers
-- **`dotnet-vm/src/layout.rs`**: `LayoutFactory` for computing object memory layouts (~493 lines)
+- **`dotnet-vm/src/layout.rs`**: compatibility wrapper delegating to resolver-owned layout code
 - **`dotnet-value/src/layout.rs`**: `LayoutManager`, `FieldLayoutManager`, `ArrayLayoutManager` (~497 lines)
 - **`dotnet-vm/src/state.rs`**: `GlobalCaches` and `SharedGlobalState`
 - **`dotnet-types/src/`**: Type descriptors, generics, comparer
@@ -27,7 +27,7 @@ Descriptors are owner-tied and index-based:
 
 This keeps metadata lifetime explicit while preserving stable, hashable descriptor keys for caches.
 
-### Type Resolution (`resolver/types.rs`)
+### Type Resolution (`dotnet-runtime-resolver/src/types.rs`)
 
 1. Metadata token (`UserType`: `TypeDefOrRef`, `TypeSpec`, `TypeRef`) arrives from a CIL instruction.
 2. The `ResolutionContext` encapsulates the current assembly scope (`ResolutionS`) and generic parameters via `GenericLookup`.
@@ -35,7 +35,7 @@ This keeps metadata lifetime explicit while preserving stable, hashable descript
 4. For generic types or arrays/pointers, `ResolverService::make_concrete()` substitutes type parameters with concrete arguments using `GenericLookup::make_concrete()`.
 5. The result is a `ConcreteType` (representing a specialized type) or a `TypeDescription` (identifying a type definition in a specific assembly).
 
-### Method Resolution (`resolver/methods.rs`)
+### Method Resolution (`dotnet-runtime-resolver/src/methods.rs`)
 
 Multi-phase process:
 1. **Token → descriptor**: `ResolverService::locate_method()` maps a metadata token (`UserMethod`) to a `MethodDescription`, applying generic substitutions.
@@ -47,7 +47,7 @@ Multi-phase process:
 
 Fields resolve to `FieldDescription` with computed byte offsets within their containing type. Value type field access requires layout calculation to determine offsets.
 
-### Layout Computation (`resolver/layout.rs`, `layout.rs`)
+### Layout Computation (`dotnet-runtime-resolver/src/layout.rs`)
 
 `LayoutFactory` computes the physical memory layout of objects and value types:
 - **Field offsets**: `create_field_layout()` computes offsets respecting alignment requirements of the host architecture. It recursively resolves field types and computes their sub-layouts.
@@ -130,7 +130,7 @@ While waiting for another thread's `.cctor` to complete, the waiting thread must
 ## Non-Obvious Connections
 
 ### Resolution ↔ Intrinsics
-The resolver checks the intrinsic cache before dispatching a method call. If a method is intrinsic, execution bypasses CIL interpretation entirely. Instead, the `IntrinsicRegistry` uses a Perfect Hash Function (PHF) to map the method signature to a stable `MethodIntrinsicId`. This ID is then passed to a monomorphic dispatcher that calls the native Rust handler. This pipeline ensures that intrinsic lookups are fast and that the final call is a direct, inlinable function call. This check happens in `resolver/methods.rs` and is cached in `GlobalCaches`.
+The resolver checks the intrinsic cache before dispatching a method call. If a method is intrinsic, execution bypasses CIL interpretation entirely. Instead, the `IntrinsicRegistry` uses a Perfect Hash Function (PHF) to map the method signature to a stable `MethodIntrinsicId`. This ID is then passed to a monomorphic dispatcher that calls the native Rust handler. This pipeline ensures that intrinsic lookups are fast and that the final call is a direct, inlinable function call. This check happens in `dotnet-runtime-resolver/src/methods.rs` and is cached in `GlobalCaches`.
 
 ### Resolution ↔ Layout ↔ GC
 Layout computation produces `GcDesc` which the GC uses during tracing to know which bytes in an object are managed references. This connects the type system to the garbage collector.
@@ -138,9 +138,10 @@ Layout computation produces `GcDesc` which the GC uses during tracing to know wh
 ### Resolution ↔ Reflection
 `ReflectionRegistry` (in `state.rs`) maps `RuntimeType` → `ObjectRef`, creating heap-allocated reflection objects. These are per-arena (not shared globally) because they contain GC references.
 
-### Two Layout Crates
-Layout logic is split across two crates:
-- `dotnet-value/src/layout.rs`: `LayoutManager` (runtime data structure for field access)
-- `dotnet-vm/src/layout.rs`: `LayoutFactory` (computes layouts using type resolution)
+### Layout Ownership
+Layout representation and layout computation are split:
+- `dotnet-value/src/layout.rs`: runtime layout data model (`LayoutManager`, `FieldLayoutManager`, `ArrayLayoutManager`)
+- `dotnet-runtime-resolver/src/layout.rs`: `LayoutFactory` and layout algorithms
+- `dotnet-vm/src/layout.rs`: compatibility surface that delegates to resolver-owned layout code
 
-This split exists because `dotnet-value` cannot depend on `dotnet-vm`.
+This split keeps layout algorithms reusable outside `dotnet-vm` while preserving existing VM call sites.

@@ -3,8 +3,8 @@ use crate::{
         CommandCompletionGuard, GCCommand, GCCoordinator, MarkPhaseCommand, SweepPhaseCommand,
     },
     threading::{IS_PERFORMING_GC, STWGuardOps, ThreadState},
-    tracer::Tracer,
 };
+use dotnet_tracer::Tracer;
 use dotnet_utils::{
     ArenaId,
     gc::{

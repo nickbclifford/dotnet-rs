@@ -1,3 +1,4 @@
+//! Exception handling runtime for two-pass ECMA-335 style SEH.
 use dotnet_types::{
     error::{TypeResolutionError, VmError},
     members::MethodDescription,
@@ -12,8 +13,8 @@ use dotnetdll::prelude::*;
 use std::{cmp::Reverse, collections::HashMap, ops::Range};
 
 pub use dotnet_vm_ops::{
-    StepResult,
-    exceptions::*,
+    ExceptionState, FilterState, Handler, HandlerAddress, HandlerKind, ManagedException,
+    ProtectedSection, SearchState, StepResult, UnwindState, UnwindTarget,
     ops::{ExceptionContext, ResolutionOps},
 };
 

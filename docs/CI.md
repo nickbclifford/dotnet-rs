@@ -26,7 +26,12 @@ Jobs:
    - `--no-default-features`
    - `--no-default-features --features multithreading`
    - `--no-default-features --features generic-constraint-validation`
-3. `test`: same feature matrix as clippy
+   - `--no-default-features --features memory-validation`
+   - `--no-default-features --features metadata-validation`
+   - `--no-default-features --features multithreading,memory-validation`
+   - `--no-default-features --features multithreading,validation-all`
+   - `--no-default-features --features fuzzing`
+3. `test`: same matrix except the `fuzzing` leg
 4. `hang-probe integration tests`: run only on the `multithreading` test leg
 
 Hang probes use tighter timeouts and run these filters individually:
@@ -35,6 +40,16 @@ Hang probes use tighter timeouts and run these filters individually:
 - `integration_tests_impl::fixtures::test_gc_coordinator`
 - `integration_tests_impl::fixtures::test_multiple_arenas`
 - `integration_tests_impl::fixtures::test_stw_stress`
+
+### Feature Ownership (Post-Extraction)
+
+Feature forwarding in `dotnet-vm` is intentionally limited to crates that actually gate source code on that feature:
+
+| Feature | Crates Owning `#[cfg(feature = ...)]` Code |
+|---|---|
+| `multithreading` | `dotnet-vm`, `dotnet-runtime-resolver`, `dotnet-runtime-memory`, `dotnet-pinvoke`, `dotnet-tracer`, `dotnet-utils`, `dotnet-value` |
+| `memory-validation` | `dotnet-vm`, `dotnet-runtime-memory`, `dotnet-utils`, `dotnet-value` |
+| `fuzzing` | `dotnet-vm`, `dotnet-pinvoke`, `dotnet-types`, `dotnet-utils`, `dotnet-value` |
 
 ## Local Equivalent
 
@@ -73,6 +88,7 @@ cargo clippy --all-targets --no-default-features --features memory-validation --
 cargo clippy --all-targets --no-default-features --features metadata-validation -- -D warnings
 cargo clippy --all-targets --no-default-features --features multithreading,memory-validation -- -D warnings
 cargo clippy --all-targets --no-default-features --features multithreading,validation-all -- -D warnings
+cargo clippy --all-targets --no-default-features --features fuzzing -- -D warnings
 
 # Test matrix
 DOTNET_TEST_TIMEOUT_SECS=180 cargo test --no-default-features -- --nocapture --test-threads=1

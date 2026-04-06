@@ -1,4 +1,5 @@
-use crate::{gc::coordinator::GCCoordinator, metrics::RuntimeMetrics, threading::ThreadManagerOps};
+use crate::{gc::coordinator::GCCoordinator, threading::ThreadManagerOps};
+use dotnet_metrics::RuntimeMetrics;
 use dotnet_utils::ArenaId;
 use std::{sync::OnceLock, time::Duration};
 

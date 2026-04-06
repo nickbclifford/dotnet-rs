@@ -9,7 +9,7 @@ dotnet-tracer = { workspace = true }
 dotnet-types = { workspace = true }
 dotnet-utils = { workspace = true, default-features = false }
 dotnet-value = { workspace = true, default-features = false }
-dotnet-vm-ops = { path = "../dotnet-vm-ops", default-features = false }
+dotnet-vm-ops = { workspace = true, default-features = false }
 dotnetdll = { workspace = true }
 gc-arena = { workspace = true }
 tracing = { workspace = true }

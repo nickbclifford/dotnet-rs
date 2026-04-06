@@ -1,0 +1,16 @@
+[package]
+name = "dotnet-intrinsics-string"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dotnet-macros = { workspace = true }
+dotnet-types = { workspace = true }
+dotnet-utils = { workspace = true, default-features = false }
+dotnet-value = { workspace = true, default-features = false }
+dotnet-vm-ops = { workspace = true, default-features = false }
+dotnetdll = { workspace = true }
+gc-arena = { workspace = true }
+
+[features]
+default = []

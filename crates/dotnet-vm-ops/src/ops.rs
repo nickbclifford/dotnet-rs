@@ -439,3 +439,220 @@ pub trait StaticsOps<'gc> {
 }
 
 pub trait StackOps<'gc>: TypedStackOps<'gc> + LocalOps<'gc> + ArgumentOps<'gc> {}
+
+/// Host contract for string intrinsic handlers.
+///
+/// Required capabilities used by current handlers:
+/// - stack reads/writes (`push`, `pop`, `peek_stack_at`)
+/// - exception throws (`throw_by_name_with_message`)
+/// - raw/string memory access (`read_unaligned`, `write_unaligned`, `check_gc_safe_point`)
+/// - allocation/boxing helpers (`new_object`, `new_vector`, `box_value`)
+/// - method dispatch and type resolution (`return_frame`, `make_concrete`, `get_heap_description`)
+pub trait StringIntrinsicHost<'gc>:
+    EvalStackOps<'gc>
+    + TypedStackOps<'gc>
+    + ExceptionOps<'gc>
+    + RawMemoryOps<'gc>
+    + LoaderOps
+    + MemoryOps<'gc>
+    + CallOps<'gc>
+    + ResolutionOps<'gc>
+    + ReflectionOps<'gc>
+    + StackOps<'gc>
+    + ThreadOps
+{
+}
+impl<
+    'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + ExceptionOps<'gc>
+        + RawMemoryOps<'gc>
+        + LoaderOps
+        + MemoryOps<'gc>
+        + CallOps<'gc>
+        + ResolutionOps<'gc>
+        + ReflectionOps<'gc>
+        + StackOps<'gc>
+        + ThreadOps
+        + ?Sized,
+> StringIntrinsicHost<'gc> for T
+{
+}
+
+/// Host contract for delegate intrinsic handlers.
+///
+/// Required capabilities used by current handlers:
+/// - delegate argument stack handling (`pop_multiple`, `push`)
+/// - exception throws for unsupported paths
+/// - runtime method lookup/dispatch (`dispatch_method`, `lookup_method_by_index`)
+/// - runtime state access for multicast frames (`frame_stack_mut`)
+pub trait DelegateIntrinsicHost<'gc>:
+    EvalStackOps<'gc>
+    + ExceptionOps<'gc>
+    + LoaderOps
+    + MemoryOps<'gc>
+    + CallOps<'gc>
+    + VesInternals<'gc>
+    + ReflectionOps<'gc>
+    + ResolutionOps<'gc>
+{
+}
+impl<
+    'gc,
+    T: EvalStackOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps
+        + MemoryOps<'gc>
+        + CallOps<'gc>
+        + VesInternals<'gc>
+        + ReflectionOps<'gc>
+        + ResolutionOps<'gc>
+        + ?Sized,
+> DelegateIntrinsicHost<'gc> for T
+{
+}
+
+/// Host contract for span intrinsic handlers.
+///
+/// Required capabilities used by current handlers:
+/// - stack and local access (`peek_stack`, `get_local`, `set_local`)
+/// - pointer/data reads and writes (`read_unaligned`, `write_unaligned`)
+/// - allocation and reflection helpers (`new_object`, `get_heap_description`)
+/// - element type/layout resolution (`make_concrete`, `instance_field_layout`)
+pub trait SpanIntrinsicHost<'gc>:
+    EvalStackOps<'gc>
+    + TypedStackOps<'gc>
+    + ExceptionOps<'gc>
+    + LoaderOps
+    + MemoryOps<'gc>
+    + RawMemoryOps<'gc>
+    + ReflectionOps<'gc>
+    + ResolutionOps<'gc>
+    + CallOps<'gc>
+    + StackOps<'gc>
+{
+}
+impl<
+    'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps
+        + MemoryOps<'gc>
+        + RawMemoryOps<'gc>
+        + ReflectionOps<'gc>
+        + ResolutionOps<'gc>
+        + CallOps<'gc>
+        + StackOps<'gc>
+        + ?Sized,
+> SpanIntrinsicHost<'gc> for T
+{
+}
+
+/// Host contract for unsafe intrinsic handlers.
+///
+/// Required capabilities used by current handlers:
+/// - raw pointer stack conversions (`pop`, `push_ptr`, `push_managed_ptr`)
+/// - memory safety checks and raw reads/writes (`read_bytes`, `write_bytes`)
+/// - runtime type sizing/layout (`make_concrete`, `instance_field_layout`)
+/// - object/reference helpers (`new_object`, `get_heap_description`)
+pub trait UnsafeIntrinsicHost<'gc>:
+    EvalStackOps<'gc>
+    + TypedStackOps<'gc>
+    + ExceptionOps<'gc>
+    + LoaderOps
+    + MemoryOps<'gc>
+    + RawMemoryOps<'gc>
+    + ReflectionOps<'gc>
+    + ResolutionOps<'gc>
+    + StackOps<'gc>
+{
+}
+impl<
+    'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps
+        + MemoryOps<'gc>
+        + RawMemoryOps<'gc>
+        + ReflectionOps<'gc>
+        + ResolutionOps<'gc>
+        + StackOps<'gc>
+        + ?Sized,
+> UnsafeIntrinsicHost<'gc> for T
+{
+}
+
+/// Host contract for threading intrinsic handlers.
+///
+/// Required capabilities used by current handlers:
+/// - monitor/interlocked stack operations (`pop`, `push`, `peek`)
+/// - exception throws for invalid synchronization inputs
+/// - atomic/raw memory operations (`compare_exchange_atomic`, `load_atomic`, `store_atomic`)
+/// - thread identity queries (`thread_id`)
+pub trait ThreadingIntrinsicHost<'gc>:
+    EvalStackOps<'gc>
+    + TypedStackOps<'gc>
+    + ExceptionOps<'gc>
+    + LoaderOps
+    + MemoryOps<'gc>
+    + RawMemoryOps<'gc>
+    + StackOps<'gc>
+    + ThreadOps
+{
+}
+impl<
+    'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps
+        + MemoryOps<'gc>
+        + RawMemoryOps<'gc>
+        + StackOps<'gc>
+        + ThreadOps
+        + ?Sized,
+> ThreadingIntrinsicHost<'gc> for T
+{
+}
+
+/// Host contract for reflection intrinsic handlers.
+///
+/// Required capabilities used by current handlers:
+/// - runtime type/member stack plumbing (`push_obj`, `pop_obj`, `pop_multiple`)
+/// - reflection lookup and resolution (`get_heap_description`, `make_concrete`, `is_a`)
+/// - method construction/invocation (`return_frame`, frame state via `VesInternals`)
+/// - static storage initialization for constructed generic types
+pub trait ReflectionIntrinsicHost<'gc>:
+    EvalStackOps<'gc>
+    + TypedStackOps<'gc>
+    + ExceptionOps<'gc>
+    + LoaderOps
+    + MemoryOps<'gc>
+    + RawMemoryOps<'gc>
+    + ReflectionOps<'gc>
+    + ResolutionOps<'gc>
+    + CallOps<'gc>
+    + VesInternals<'gc>
+    + StaticsOps<'gc>
+{
+}
+impl<
+    'gc,
+    T: EvalStackOps<'gc>
+        + TypedStackOps<'gc>
+        + ExceptionOps<'gc>
+        + LoaderOps
+        + MemoryOps<'gc>
+        + RawMemoryOps<'gc>
+        + ReflectionOps<'gc>
+        + ResolutionOps<'gc>
+        + CallOps<'gc>
+        + VesInternals<'gc>
+        + StaticsOps<'gc>
+        + ?Sized,
+> ReflectionIntrinsicHost<'gc> for T
+{
+}

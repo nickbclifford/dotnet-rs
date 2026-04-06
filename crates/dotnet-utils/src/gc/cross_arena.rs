@@ -326,22 +326,6 @@ pub fn get_currently_tracing() -> Option<ArenaId> {
     CURRENTLY_TRACING_THREAD_ID.get()
 }
 
-/// Take all found cross-arena references and clear the local list.
-///
-/// Returns `(arena_id, raw_ptr_usize)` pairs.  Generation information is
-/// stripped for backward compatibility with callers not yet migrated to the
-/// generation-aware API.  Prefer [`take_found_cross_arena_refs_with_generation`]
-/// for new code.
-pub fn take_found_cross_arena_refs() -> Vec<(ArenaId, usize)> {
-    FOUND_CROSS_ARENA_REFS.with(|refs| {
-        let mut r = refs.borrow_mut();
-        mem::take(&mut *r)
-            .into_iter()
-            .map(|(id, ptr, _gen)| (id, ptr))
-            .collect()
-    })
-}
-
 /// Take all found cross-arena references including their recorded generation,
 /// and clear the local list.
 ///
@@ -604,10 +588,10 @@ mod lease_tests {
     }
 
     // ------------------------------------------------------------------
-    // is_valid_cross_arena_ref backward compat still works
+    // is_valid_cross_arena_ref reflects registration state
     // ------------------------------------------------------------------
     #[test]
-    fn backward_compat_is_valid_still_works() {
+    fn is_valid_cross_arena_ref_reflects_registration_state() {
         let id = ArenaId(10_007);
         assert!(!is_valid_cross_arena_ref(id));
         register_arena(id, stw_flag());
@@ -720,25 +704,6 @@ mod lease_tests {
             ref_gen, expected_gen,
             "stored generation must match arena generation at record time"
         );
-
-        unregister_arena(id);
-    }
-
-    // ------------------------------------------------------------------
-    // take_found_cross_arena_refs (compat) strips generation
-    // ------------------------------------------------------------------
-    #[test]
-    fn take_found_cross_arena_refs_compat_strips_generation() {
-        let id = ArenaId(10_013);
-        register_arena(id, stw_flag());
-
-        set_currently_tracing(Some(id));
-        record_cross_arena_ref(id, 0x1234);
-        set_currently_tracing(None);
-
-        let refs = take_found_cross_arena_refs();
-        assert_eq!(refs.len(), 1);
-        assert_eq!(refs[0], (id, 0x1234));
 
         unregister_arena(id);
     }

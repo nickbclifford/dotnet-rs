@@ -15,7 +15,6 @@ mod tests {
         binary::signature::kinds::CallingConvention,
         prelude::*,
         resolved::{
-            self as resolved_mod,
             assembly::ExternalAssemblyReference,
             members::{Method, MethodSource, UserMethod},
             signature::ReturnType,

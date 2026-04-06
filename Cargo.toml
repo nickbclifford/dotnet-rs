@@ -4,10 +4,22 @@ members = [
     "crates/dotnet-utils",
     "crates/dotnet-value",
     "crates/dotnet-assemblies",
+    "crates/dotnet-runtime-resolver",
+    "crates/dotnet-runtime-memory",
+    "crates/dotnet-intrinsics-core",
+    "crates/dotnet-intrinsics-delegates",
+    "crates/dotnet-intrinsics-span",
+    "crates/dotnet-intrinsics-string",
+    "crates/dotnet-intrinsics-threading",
+    "crates/dotnet-intrinsics-reflection",
+    "crates/dotnet-intrinsics-unsafe",
     "crates/dotnet-metrics",
     "crates/dotnet-tracer",
+    "crates/dotnet-vm-data",
     "crates/dotnet-vm-ops",
     "crates/dotnet-vm",
+    "crates/dotnet-exceptions",
+    "crates/dotnet-pinvoke",
     "crates/dotnet-cli",
     "crates/dotnet-macros",
     "crates/dotnet-macros-core",
@@ -19,11 +31,24 @@ dotnet-types = { path = "crates/dotnet-types" }
 dotnet-utils = { path = "crates/dotnet-utils", default-features = false }
 dotnet-value = { path = "crates/dotnet-value", default-features = false }
 dotnet-assemblies = { path = "crates/dotnet-assemblies" }
+dotnet-runtime-resolver = { path = "crates/dotnet-runtime-resolver", default-features = false }
+dotnet-runtime-memory = { path = "crates/dotnet-runtime-memory", default-features = false }
+dotnet-intrinsics-core = { path = "crates/dotnet-intrinsics-core", default-features = false }
+dotnet-intrinsics-delegates = { path = "crates/dotnet-intrinsics-delegates", default-features = false }
+dotnet-intrinsics-span = { path = "crates/dotnet-intrinsics-span", default-features = false }
+dotnet-intrinsics-string = { path = "crates/dotnet-intrinsics-string", default-features = false }
+dotnet-intrinsics-threading = { path = "crates/dotnet-intrinsics-threading", default-features = false }
+dotnet-intrinsics-reflection = { path = "crates/dotnet-intrinsics-reflection", default-features = false }
+dotnet-intrinsics-unsafe = { path = "crates/dotnet-intrinsics-unsafe", default-features = false }
+dotnet-macros = { path = "crates/dotnet-macros" }
 dotnet-macros-core = { path = "crates/dotnet-macros-core" }
 dotnet-metrics = { path = "crates/dotnet-metrics" }
 dotnet-tracer = { path = "crates/dotnet-tracer", default-features = false }
+dotnet-vm-data = { path = "crates/dotnet-vm-data", default-features = false }
 dotnet-vm-ops = { path = "crates/dotnet-vm-ops", default-features = false }
 dotnet-vm = { path = "crates/dotnet-vm", default-features = false }
+dotnet-exceptions = { path = "crates/dotnet-exceptions", default-features = false }
+dotnet-pinvoke = { path = "crates/dotnet-pinvoke", default-features = false }
 dotnetdll = { git = "https://github.com/nickbclifford/dotnetdll" }
 gc-arena = { git = "https://github.com/kyren/gc-arena.git", rev = "75671ae03f53718357b741ed4027560f14e90836" }
 parking_lot = "0.12"

@@ -1,18 +1,14 @@
 use crate::{
-    MethodInfo,
-    dispatch::ring_buffer::InstructionRingBuffer,
-    error::TypeResolutionError,
-    gc::GCCoordinator,
-    intrinsics::IntrinsicRegistry,
-    memory::HeapManager,
-    metrics::{CacheSizes, CacheStats, RuntimeMetrics},
-    pinvoke::NativeLibraries,
-    sync::SyncBlockManager,
+    MethodInfo, dispatch::ring_buffer::InstructionRingBuffer, error::TypeResolutionError,
+    gc::GCCoordinator, intrinsics::IntrinsicRegistry, sync::SyncBlockManager,
     threading::ThreadManager,
-    tracer::{TraceLevel, Tracer},
 };
 use dashmap::DashMap;
 use dotnet_assemblies::AssemblyLoader;
+use dotnet_metrics::{CacheSizes, CacheStats, RuntimeMetrics};
+use dotnet_pinvoke::NativeLibraries;
+use dotnet_runtime_memory::HeapManager;
+use dotnet_tracer::{TraceLevel, Tracer};
 use dotnet_types::{
     TypeDescription,
     generics::{ConcreteType, GenericLookup},
@@ -175,7 +171,7 @@ impl SharedGlobalState {
             pinvoke: {
                 let p = NativeLibraries::new(loader.get_root());
                 #[cfg(feature = "fuzzing")]
-                let p = p.with_sandbox(Arc::new(crate::pinvoke::DenySandbox));
+                let p = p.with_sandbox(Arc::new(dotnet_pinvoke::DenySandbox));
                 p
             },
             loader,
@@ -266,6 +262,19 @@ impl SharedGlobalState {
                 ))
             })
             .clone()
+    }
+}
+
+impl dotnet_runtime_memory::MemoryOrderingHost for SharedGlobalState {
+    fn tracer_enabled_relaxed(&self) -> bool {
+        self.tracer_enabled.load(Ordering::Relaxed)
+    }
+}
+
+impl dotnet_runtime_memory::MemorySharedStateHost for SharedGlobalState {
+    fn trace_gc_resurrection(&self, indent: usize, obj_type_name: &str, addr: usize) {
+        self.tracer
+            .trace_gc_resurrection(indent, obj_type_name, addr);
     }
 }
 

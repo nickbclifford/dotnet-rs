@@ -1,0 +1,25 @@
+[package]
+name = "dotnet-runtime-memory"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dotnet-types = { workspace = true }
+dotnet-utils = { workspace = true, default-features = false }
+dotnet-value = { workspace = true, default-features = false }
+dotnet-vm-ops = { workspace = true, default-features = false }
+gc-arena = { workspace = true }
+sptr = { workspace = true }
+
+[features]
+default = ["multithreading"]
+multithreading = [
+    "dotnet-utils/multithreading",
+    "dotnet-value/multithreading",
+    "dotnet-vm-ops/multithreading",
+]
+memory-validation = [
+    "dotnet-utils/memory-validation",
+    "dotnet-value/memory-validation",
+    "dotnet-vm-ops/memory-validation",
+]

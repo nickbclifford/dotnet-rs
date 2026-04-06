@@ -103,7 +103,7 @@ pub fn dotnet_intrinsic(attr: TokenStream, item: TokenStream) -> TokenStream {
     );
 
     let filter_fn = quote! {
-        pub(crate) fn #filter_name(method: &dotnet_types::members::MethodDescription) -> bool {
+        pub fn #filter_name(method: &dotnet_types::members::MethodDescription) -> bool {
             #(#param_checks)*
             true
         }
