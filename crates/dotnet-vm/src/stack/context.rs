@@ -464,12 +464,12 @@ impl<'a, 'gc> dotnet_vm_ops::ops::StackOps<'gc> for VesContext<'a, 'gc> {}
 
 impl<'a, 'gc> BaseMemoryOps<'gc> for VesContext<'a, 'gc> {
     #[inline]
-    fn no_active_borrows_token(&self) -> dotnet_utils::NoActiveBorrows<'_> {
+    fn no_active_borrows_token(&self) -> dotnet_utils::GcReadyToken<'_> {
         self.gc_ready_token()
     }
 
     #[inline]
-    fn gc_with_token(&self, token: &dotnet_utils::NoActiveBorrows<'_>) -> GCHandle<'gc> {
+    fn gc_with_token(&self, token: &dotnet_utils::GcReadyToken<'_>) -> GCHandle<'gc> {
         assert!(
             token.belongs_to(self),
             "gc_with_token requires a token issued by this VesContext",

@@ -59,18 +59,18 @@ pub trait BorrowScopeOps {
     fn active_gc_scope_depth(&self) -> usize;
 
     /// Returns a token proving the context is currently GC-safe (scope depth 0).
-    fn gc_ready_token(&self) -> NoActiveBorrows<'_> {
-        NoActiveBorrows::new(self)
+    fn gc_ready_token(&self) -> GcReadyToken<'_> {
+        GcReadyToken::new(self)
     }
 }
 
 /// Proof that no GC-critical scope is active. Required for allocation.
-pub struct NoActiveBorrows<'ctx> {
+pub struct GcReadyToken<'ctx> {
     owner: *const (),
     _marker: PhantomData<&'ctx mut ()>,
 }
 
-impl<'ctx> NoActiveBorrows<'ctx> {
+impl<'ctx> GcReadyToken<'ctx> {
     fn new<T: BorrowScopeOps + ?Sized>(ctx: &'ctx T) -> Self {
         let depth = ctx.active_gc_scope_depth();
         assert_eq!(
@@ -88,9 +88,6 @@ impl<'ctx> NoActiveBorrows<'ctx> {
         std::ptr::eq(self.owner, std::ptr::from_ref(ctx).cast::<()>())
     }
 }
-
-/// Clarity alias for `NoActiveBorrows`.
-pub type GcReadyToken<'ctx> = NoActiveBorrows<'ctx>;
 
 /// RAII guard for a GC-critical scope.
 ///
@@ -111,7 +108,7 @@ impl<'ctx> Drop for GcScopeGuard<'ctx> {
 
 impl<'ctx> GcScopeGuard<'ctx> {
     /// Enter a GC-critical scope.
-    pub fn enter(ctx: &'ctx dyn BorrowScopeOps, token: NoActiveBorrows<'ctx>) -> Self {
+    pub fn enter(ctx: &'ctx dyn BorrowScopeOps, token: GcReadyToken<'ctx>) -> Self {
         assert!(
             token.belongs_to(ctx),
             "GC-ready token must be issued by the same context that enters the GC scope",
@@ -124,16 +121,15 @@ impl<'ctx> GcScopeGuard<'ctx> {
     }
 
     /// Exit the GC-critical scope and return a new GC-ready token.
-    pub fn exit(self) -> NoActiveBorrows<'ctx> {
+    pub fn exit(self) -> GcReadyToken<'ctx> {
         // SAFETY: `ctx` comes from `GcScopeGuard::enter` and is valid for `'ctx`.
         // `mem::forget(self)` prevents Drop from running, so this remains a single balanced exit.
         unsafe { (*self.ctx).exit_gc_scope() };
         let owner = self.ctx.cast::<()>();
         std::mem::forget(self);
-        NoActiveBorrows {
+        GcReadyToken {
             owner,
             _marker: PhantomData,
         }
     }
 }
-

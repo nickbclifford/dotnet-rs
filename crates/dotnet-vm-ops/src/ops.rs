@@ -310,11 +310,11 @@ pub trait CallOps<'gc> {
 }
 
 pub trait MemoryOps<'gc> {
-    fn no_active_borrows_token(&self) -> dotnet_utils::NoActiveBorrows<'_>;
+    fn no_active_borrows_token(&self) -> dotnet_utils::GcReadyToken<'_>;
 
     fn gc_with_token(
         &self,
-        _token: &dotnet_utils::NoActiveBorrows<'_>,
+        _token: &dotnet_utils::GcReadyToken<'_>,
     ) -> dotnet_utils::gc::GCHandle<'gc>;
     fn new_vector(
         &self,
