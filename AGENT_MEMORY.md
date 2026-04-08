@@ -668,3 +668,312 @@
 ### Next Steps
 - Keep jump-table and super-instruction prototype features disabled by default due regressions in this benchmark environment.
 - Proceed to Step `2e` (Intrinsic dispatch fast path), then revisit jump-table/super variants after 2e/4a changes to reassess interaction with call-heavy workloads.
+---
+## Session: 2026-04-08T18:06:09-05:00
+### Context
+- Phase/Step: Phase 2 / Step 2e (Intrinsic dispatch fast path)
+- Goal: Cache intrinsic classification/lookup work on resolved methods, unify duplicate intrinsic dispatch checks into a canonical path, and measure impact on `json` + `generics` workloads.
+- Outcome: Implementation was benchmarked, showed significant regression in local Criterion comparisons, then was manually reverted and Step `2e` was marked manually reverted in `CHECKLIST.md`.
+### Actions Taken
+- Read required context before editing:
+  - `AGENTS.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/TYPE_RESOLUTION_AND_CACHING.md`
+  - `docs/BUILD_TIME_CODE_GENERATION.md`
+  - `docs/DELEGATES_AND_DISPATCH.md`
+  - Step targets in `CHECKLIST.md` and `REVIEW.md`
+  - Relevant files listed for Step `2e`
+- Implemented Step `2e` candidate changes (later reverted):
+  - added per-method intrinsic classification cache in `IntrinsicRegistry` to avoid repeated PHF key normalization + lookup per `MethodDescription`,
+  - routed `ExecutionEngine::dispatch_method` through canonical `VesContext::dispatch_method` path to remove duplicate engine-side intrinsic dispatch logic,
+  - updated resolver-side intrinsic compute path to use cached metadata lookup.
+- Ran verification before revert:
+  - `cargo fmt`
+  - `cargo clippy --all-targets -- -D warnings`
+  - `cargo test -- --nocapture`
+- Ran Step `2e` benchmark workloads:
+  - `cargo bench -p dotnet-benchmarks --bench end_to_end -- json --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - `cargo bench -p dotnet-benchmarks --bench end_to_end -- generics --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - `cargo bench -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- json --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - `cargo bench -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- generics --sample-size 10 --measurement-time 5 --warm-up-time 1`
+- Captured instrumentation snapshots at:
+  - `target/release/dotnet-bench-metrics/json.json`
+  - `target/release/dotnet-bench-metrics/generics.json`
+- Manual rollback:
+  - reverted the Step `2e` code changes,
+  - marked Step `2e` as manually reverted in `CHECKLIST.md`.
+### Findings
+- Measured medians during the candidate run:
+  - default `json`: `290.36 ms`
+  - default `generics`: `17.705 s`
+  - instrumented `json`: `382.54 ms`
+  - instrumented `generics`: `21.530 s`
+- Criterion local change output during candidate run reported regressions for instrumented workloads:
+  - instrumented `json`: `+31.75%` (regression)
+  - instrumented `generics`: `+21.60%` (regression)
+- Instrumentation snapshots still reported `bench.intrinsic_call_total = 0` for `json` and `generics`; intrinsic cache counters remained low-cardinality (`intrinsic` cache size 0-3), indicating this candidate did not materially improve measured intrinsic-call hot counters in these workloads.
+### Blockers
+- none
+### Next Steps
+- Keep Step `2e` in reverted state.
+- Re-scope Step `2e` around lower-risk deltas only (for example: dispatch-path deduplication without registry behavior change, or targeted microbench focused on intrinsic-heavy fixtures before broad workload runs).
+---
+## Session: 2026-04-08T18:22:58-05:00
+### Context
+- Phase/Step: Recovery planning after reverted Steps `2e` and `2f`
+- Goal: Decide whether to re-attempt or defer `2e`/`2f`, update planning/docs to remove limbo state, and validate current workspace health.
+### Actions Taken
+- Read required files in full before edits:
+  - `AGENTS.md`
+  - `REVIEW.md`
+  - `CHECKLIST.md`
+  - `AGENT_MEMORY.md`
+- Re-ran targeted benchmark slice (Criterion `--sample-size 10 --measurement-time 5 --warm-up-time 1`) on current reverted code:
+  - `cargo bench -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - `cargo bench -p dotnet-benchmarks --features "bench-instrumentation segmented-eval-stack-prototype" --bench end_to_end -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - `cargo bench -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- json --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - `cargo bench -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- generics --sample-size 10 --measurement-time 5 --warm-up-time 1`
+- Collected instrumentation snapshots from `target/release/dotnet-bench-metrics/{dispatch,json,generics}.json`.
+- Updated planning docs:
+  - `CHECKLIST.md`
+    - marked `2f` and `2e` as deliberately deferred with explicit rationale and reopen criteria,
+    - updated `2e` task list to require intrinsic-heavy fixture baselining first,
+    - updated `4a` dependency note to `2d, 3c` with `2e` optional for intrinsic-specific tuning.
+  - `REVIEW.md`
+    - replaced `2f` and `2e` proposed-only sections with defer decisions, rollback rationale, and current measurements,
+    - updated dependency ordering and recommended sequence to move directly to Phase 3,
+    - updated risk summary to mark `2e`/`2f` as deferred.
+- Ran required verification matrix after edits:
+  - `cargo clippy --all-targets -- -D warnings && cargo test -- --nocapture`
+  - `cargo clippy --all-targets --no-default-features -- -D warnings`
+  - `cargo test --no-default-features -- --nocapture --test-threads=1`
+### Findings
+- Step `2f` (segmented stack) remains low ROI relative to risk:
+  - contiguous instrumented `dispatch`: `eval_stack_reallocations=2`, `eval_stack_pointer_fixup_total_ns=490`, median point estimate `1.1364 s`.
+  - segmented prototype instrumented `dispatch`: `eval_stack_reallocations=1`, `eval_stack_pointer_fixup_total_ns=300`, median point estimate `1.1330 s`.
+  - runtime delta (prototype vs contiguous): about `-0.30%` (Criterion: no significant change).
+  - conclusion: remaining pointer-fixup time is negligible at workload scale; architectural segmentation is not justified now.
+- Step `2e` (intrinsic fast path) lacks benchmark signal:
+  - current instrumented `json` and `generics` still report `intrinsic_call_total=0`.
+  - prior attempted implementation had already regressed instrumented workloads (`json +31.75%`, `generics +21.60%`) and was reverted.
+  - conclusion: defer optimization work until intrinsic-heavy fixtures exist with non-zero intrinsic counters.
+- Phase-0 baseline context for current instrumented reruns:
+  - `dispatch`: `-5.36%` vs phase0 instrumented baseline median.
+  - `json`: `-4.88%` vs phase0 instrumented baseline median.
+  - `generics`: `-2.55%` vs phase0 instrumented baseline median.
+- Verification status:
+  - default and `--no-default-features` clippy/test matrices passed.
+### Blockers
+- none
+### Next Steps
+- Proceed to Phase 3 in sequence: `3a -> 3b -> 3c`.
+- Keep `2e` and `2f` parked unless reopen criteria are met.
+- Optional side track: add intrinsic-heavy benchmark fixture(s), baseline intrinsic counters, then re-test a lightweight `2e` candidate.
+---
+## Session: 2026-04-08T20:10:00-05:00
+### Context
+- Phase/Step: Phase 3 / Step 3a (Trace-cost and cross-arena profiling)
+- Goal: Add bench-instrumented profiling for GC fixed-point behavior, trace-root timing, and high-cost layout traversal; benchmark allocation-pressure and capture STW quantiles.
+### Actions Taken
+- Read required context before edits:
+  - `AGENTS.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/GC_AND_MEMORY_SAFETY.md`
+  - `docs/THREADING_AND_SYNCHRONIZATION.md`
+  - `CHECKLIST.md`
+  - `REVIEW.md`
+  - Relevant files listed for Step `3a`
+- Implemented Step `3a` instrumentation changes:
+  - `crates/dotnet-metrics/src/lib.rs`
+    - extended `BenchInstrumentationSnapshot` with GC pause quantiles, fixed-point/cross-arena counters, trace-root timing maps, and layout-scan timing maps,
+    - added `RuntimeMetrics` counters/maps and record methods for fixed-point iterations/cycles, trace-root timing, and layout-scan timing,
+    - added active-runtime helper functions for new counters.
+  - `crates/dotnet-vm/src/gc/coordinator.rs`
+    - recorded fixed-point iteration number and per-iteration cross-arena object volume,
+    - recorded per-cycle fixed-point iteration count.
+  - `crates/dotnet-vm/src/threading/basic.rs`
+    - timed major mark-phase root operations and recorded them via active metrics helpers.
+  - `crates/dotnet-runtime-memory/src/access.rs`
+    - timed high-cost layout traversal entry paths (`record_refs_recursive_with_recorder`, `record_refs_in_range_with_recorder`).
+  - Feature propagation:
+    - `crates/dotnet-runtime-memory/Cargo.toml`: added optional `dotnet-metrics` dependency and `bench-instrumentation` feature,
+    - `crates/dotnet-vm/Cargo.toml`: forwarded `bench-instrumentation` to `dotnet-runtime-memory`.
+- Updated planning/docs:
+  - `CHECKLIST.md`: marked Step `3a` completed and all atomic tasks checked.
+  - `REVIEW.md`: replaced Step `3a` proposed section with implemented measurements and verification results.
+- Ran verification matrix:
+  - `cargo fmt`
+  - `cargo clippy --all-targets -- -D warnings`
+  - `cargo test -- --nocapture`
+  - `cargo clippy --all-targets --no-default-features -- -D warnings`
+  - `cargo test --no-default-features -- --nocapture --test-threads=1`
+- Ran benchmark workload:
+  - `cargo bench -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- gc --sample-size 10 --measurement-time 5 --warm-up-time 1`
+- Captured instrumentation snapshot:
+  - `target/release/dotnet-bench-metrics/gc.json`
+### Findings
+- Allocation-pressure benchmark (`gc`) post-change:
+  - Criterion estimate: `598.04 ms` (CI `[595.89, 600.83]`).
+- Phase-0 instrumented baseline median for `gc` (`crates/dotnet-benchmarks/baselines/phase0/baseline.json`, `results.instrumented_default.gc.median_ns`): `608.923 ms`.
+- Delta vs phase-0 instrumented baseline median: `-1.79%` (faster).
+- New STW quantiles (from `target/release/dotnet-bench-metrics/gc.json`):
+  - `gc_pause_p50_us=28`, `gc_pause_p95_us=32`, `gc_pause_p99_us=34`, `gc_pause_max_us=34`.
+- Fixed-point/cross-arena profile:
+  - `gc_fixed_point_cycle_count=169`
+  - `gc_fixed_point_iteration_total=169`
+  - `gc_fixed_point_max_iterations_per_cycle=1`
+  - `gc_fixed_point_cross_arena_objects_total=1012`
+  - `gc_fixed_point_cross_arena_objects_max_per_iteration=8`
+  - `gc_fixed_point_cross_arena_objects_by_iteration={"1":1012}`
+- Trace root timing totals (ns):
+  - dominant: `mark_all.finish_marking=568331`
+  - next: `mark_all.harvest_cross_arena_refs=71149`
+- Layout traversal timing maps were empty for this fixture (`layout_scan_count_by_path={}`, `layout_scan_total_ns_by_path={}`).
+### Blockers
+- none
+### Next Steps
+- Proceed to Step `3b` using Step `3a` metrics as guardrails:
+  - prioritize changes that reduce allocation pressure without increasing `gc_pause_p95/p99`,
+  - use trace-root and fixed-point counters to validate no regressions in cross-arena GC behavior.
+---
+## Session: 2026-04-08T18:52:05-05:00
+### Context
+- Phase/Step: Phase 3 / Step 3b (Allocation-rate reduction in runtime paths)
+- Goal: Reduce allocation churn in call/local-init hot paths, add an optional string interning experiment, and validate JSON/generics benchmark impact against phase-0 baseline.
+### Actions Taken
+- Read required context before edits:
+  - `AGENTS.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/GC_AND_MEMORY_SAFETY.md`
+  - `docs/THREADING_AND_SYNCHRONIZATION.md`
+  - `CHECKLIST.md`
+  - `REVIEW.md`
+  - Full contents of step files:
+    - `crates/dotnet-vm/src/stack/context.rs`
+    - `crates/dotnet-vm/src/stack/call_ops_impl.rs`
+    - `crates/dotnet-vm-data/src/stack.rs`
+    - `crates/dotnet-value/src/string.rs`
+- Implemented Step `3b` runtime changes:
+  - `crates/dotnet-vm/src/stack/context.rs`
+    - rewrote `init_locals` to write local defaults directly to eval-stack slots,
+    - added reusable call-argument buffer helpers (`pop_call_args_into_buffer`, `copy_slots_into_call_args_buffer`),
+    - extended `VesContext` to carry a mutable reference to thread-local `call_args_buffer`.
+  - `crates/dotnet-vm/src/stack/call_ops_impl.rs`
+    - switched constructor/tail/jmp argument staging to thread-local reusable buffer,
+    - updated frame setup paths to use direct local-slot initialization output.
+  - `crates/dotnet-vm-data/src/stack.rs`
+    - added reusable helpers (`pop_multiple_into`, `copy_slots_into`) for allocation-free slot staging in callers,
+    - kept existing `pop_multiple` semantics by delegating to reusable helper.
+  - `crates/dotnet-vm/src/stack/mod.rs`
+    - added `ThreadContext.call_args_buffer` and wired it into `VesContext` construction.
+  - `crates/dotnet-value/src/string.rs`
+    - added optional env-gated interning experiment with bounded cache:
+      - `DOTNET_STRING_INTERN_EXPERIMENT` enables,
+      - `DOTNET_STRING_INTERN_MAX_ENTRIES` caps entries (default `4096`),
+    - kept default non-interned storage path (`Owned(Vec<u16>)`) to avoid default-path overhead.
+- Updated planning/docs:
+  - `CHECKLIST.md`: marked Step `3b` complete and checked all atomic tasks.
+  - `REVIEW.md`: replaced Step `3b` proposal text with implemented changes, benchmarks, counter deltas, and verification.
+- Ran verification matrix:
+  - `cargo fmt`
+  - `cargo clippy --all-targets -- -D warnings`
+  - `cargo test -- --nocapture`
+  - `cargo clippy --all-targets --no-default-features -- -D warnings`
+  - `cargo test --no-default-features -- --nocapture --test-threads=1`
+- Ran Step `3b` benchmark workloads:
+  - `cargo bench -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- json --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - `cargo bench -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- generics --sample-size 10 --measurement-time 5 --warm-up-time 1`
+- Captured instrumentation snapshots:
+  - `target/release/dotnet-bench-metrics/json.json`
+  - `target/release/dotnet-bench-metrics/generics.json`
+### Findings
+- Benchmark medians (Criterion point estimates):
+  - `json`: `399.7157975 ms`
+  - `generics`: `22.673594735 s`
+- Phase-0 instrumented baseline medians (`crates/dotnet-benchmarks/baselines/phase0/baseline.json`):
+  - `json`: `412.761822 ms`
+  - `generics`: `23.2292185985 s`
+- Delta vs phase-0 instrumented baseline medians:
+  - `json`: `-3.16%`
+  - `generics`: `-2.39%`
+- Allocation/counter deltas vs phase-0 instrumented baseline:
+  - `json`: `eval_stack_reallocations 4 -> 3` (`-25%`), `eval_stack_pointer_fixup_total_ns 601 -> 672` (`+11.8%`)
+  - `generics`: `eval_stack_reallocations 4 -> 3` (`-25%`), `eval_stack_pointer_fixup_total_ns 841 -> 1213` (`+44.2%`)
+- Intrinsic signal remains unchanged on these workloads:
+  - `intrinsic_call_total=0` for both `json` and `generics`.
+- Step `3a` guardrail metrics remained stable in these runs:
+  - `json`: `gc_pause_p95_us=6`, `gc_pause_p99_us=7`
+  - `generics`: `gc_pause_p95_us=7`, `gc_pause_p99_us=9`
+### Blockers
+- none
+### Next Steps
+- Proceed to Step `3c` (stack-frame locality/pooling), using current `json`/`generics` numbers as new guardrail references for frame-allocation changes.
+- If string-heavy duplication workloads are added, run A/B with `DOTNET_STRING_INTERN_EXPERIMENT=1` to evaluate interning ROI separately from default-path performance.
+## Session: 2026-04-08T22:35:00-05:00
+### Context
+- Phase/Step: Phase 3 / Step 3c (StackFrame pooling and locality)
+- Goal: Reduce call-path allocator churn by improving `StackFrame` locality and introducing safe per-thread frame reuse.
+### Actions Taken
+- Read required context before edits:
+  - `AGENTS.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/THREADING_AND_SYNCHRONIZATION.md`
+  - `CHECKLIST.md`
+  - `REVIEW.md`
+  - Relevant stack files (`crates/dotnet-vm-data/src/stack.rs`, `crates/dotnet-vm/src/stack/mod.rs`, `crates/dotnet-vm/src/stack/call_ops_impl.rs`) plus `crates/dotnet-vm/src/stack/context.rs` for return/unwind lifecycle wiring.
+- Implemented Step `3c` changes:
+  - `crates/dotnet-vm-data/src/stack.rs`
+    - replaced `StackFrame.exception_stack` and `StackFrame.pinned_locals` with `SmallVec`-backed types,
+    - added `PinnedLocals`/`ExceptionStack` aliases and inline-capacity constants,
+    - added frame reset/cleanup helpers (`reset_for_call`, `prepare_for_pool`),
+    - added bounded per-thread frame pool in `FrameStack` (`pooled_frames`, `push_frame`, `recycle_frame`),
+    - ensured pooled frames clear GC-bearing state before reuse.
+  - `crates/dotnet-vm/src/stack/call_ops_impl.rs`
+    - switched frame construction call sites to `frame_stack.push_frame(...)`,
+    - recycled popped frames in tail-call and `jmp` replacement paths.
+  - `crates/dotnet-vm/src/stack/context.rs`
+    - switched local-pin tracking builder to `PinnedLocals` (`SmallVec`),
+    - recycled frames in `return_frame` and `unwind_frame` after cleanup logic.
+  - Re-export and dependency plumbing:
+    - `crates/dotnet-vm-data/Cargo.toml`: added `smallvec` dependency,
+    - `crates/dotnet-vm-data/src/lib.rs` and `crates/dotnet-vm-ops/src/lib.rs`: re-exported new stack types.
+  - `crates/dotnet-metrics/src/lib.rs`
+    - added bench counters: `frame_pool_hit_count`, `frame_pool_miss_count`, `frame_pool_recycle_count`,
+    - added active-runtime helpers used from frame-pool paths.
+- Updated planning/docs:
+  - `CHECKLIST.md`: marked Step `3c` completed and checked all atomic tasks.
+  - `REVIEW.md`: replaced Step `3c` proposal text with implemented details, metrics, and verification.
+- Ran verification matrix:
+  - `cargo fmt`
+  - `cargo clippy --all-targets -- -D warnings`
+  - `cargo test -- --nocapture`
+  - `cargo clippy --all-targets --no-default-features -- -D warnings`
+  - `cargo test --no-default-features -- --nocapture --test-threads=1`
+- Ran Step `3c` benchmark workloads:
+  - `cargo bench -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- dispatch --sample-size 10 --measurement-time 5 --warm-up-time 1`
+  - `cargo bench -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- generics --sample-size 10 --measurement-time 5 --warm-up-time 1`
+- Captured instrumentation snapshots:
+  - `target/release/dotnet-bench-metrics/dispatch.json`
+  - `target/release/dotnet-bench-metrics/generics.json`
+### Findings
+- Benchmark medians (criterion point estimates):
+  - `dispatch`: `1.1201492835 s`
+  - `generics`: `22.432503621 s`
+- Phase-0 instrumented baseline medians (`crates/dotnet-benchmarks/baselines/phase0/baseline.json`):
+  - `dispatch`: `1.2007179425 s`
+  - `generics`: `23.2292185985 s`
+- Delta vs phase-0 instrumented baseline medians:
+  - `dispatch`: `-6.71%`
+  - `generics`: `-3.43%`
+- Frame-pool allocator-activity counters:
+  - `dispatch`: `frame_pool_hit_count=200008`, `frame_pool_miss_count=3`, `frame_pool_recycle_count=200011` (hit ratio `99.9985%`)
+  - `generics`: `frame_pool_hit_count=2560008`, `frame_pool_miss_count=4`, `frame_pool_recycle_count=2560012` (hit ratio `99.9998%`)
+- Related guardrails/counters:
+  - `eval_stack_reallocations`: `dispatch 3 -> 2`, `generics 4 -> 3` (vs phase-0 instrumented)
+  - GC pause quantiles in this run stayed stable: `dispatch p95/p99 = 4/4 us`, `generics p95/p99 = 7/9 us`.
+### Blockers
+- none
+### Next Steps
+- Proceed to Step `4a` (hot-path inlining and monomorphization audit) using new `dispatch`/`generics` medians and frame-pool counters as the post-3c baseline.
+- If additional call-specific ROI is needed, add a dedicated micro fixture for direct call/ret chains and compare against current pooled-frame counters.
+---

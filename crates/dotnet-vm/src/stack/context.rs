@@ -24,7 +24,9 @@ use dotnetdll::prelude::*;
 use gc_arena::Collect;
 use std::ptr::NonNull;
 
-pub use dotnet_vm_ops::{BasePointer, EvaluationStack, ExceptionState, FrameStack, StackFrame};
+pub use dotnet_vm_ops::{
+    BasePointer, EvaluationStack, ExceptionState, FrameStack, PinnedLocals,
+};
 
 pub struct VesContext<'a, 'gc> {
     pub(crate) gc: GCHandle<'gc>,
@@ -37,6 +39,7 @@ pub struct VesContext<'a, 'gc> {
     pub(crate) thread_id: &'a std::cell::Cell<dotnet_utils::ArenaId>,
     pub(crate) original_ip: &'a mut usize,
     pub(crate) original_stack_height: &'a mut crate::StackSlotIndex,
+    pub(crate) call_args_buffer: &'a mut Vec<StackValue<'gc>>,
 }
 
 impl<'a, 'gc> VesContext<'a, 'gc> {
@@ -100,17 +103,24 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         method: MethodDescription,
         locals: &[LocalVariable],
         generics: &GenericLookup,
-    ) -> Result<(Vec<StackValue<'gc>>, Vec<bool>), TypeResolutionError> {
-        let mut values = vec![];
-        let mut pinned_locals = vec![];
+        locals_base: crate::StackSlotIndex,
+    ) -> Result<PinnedLocals, TypeResolutionError> {
+        let mut pinned_locals = PinnedLocals::with_capacity(locals.len());
+        let ctx = ResolutionContext {
+            generics,
+            state: self.shared.resolution_shared(),
+            resolution: method.resolution(),
+            type_owner: Some(method.parent.clone()),
+            method_owner: Some(method),
+        };
 
-        for l in locals {
+        for (i, l) in locals.iter().enumerate() {
             use BaseType::*;
             use LocalVariable::*;
-            match l {
+            let value = match l {
                 TypedReference => {
-                    values.push(StackValue::null());
                     pinned_locals.push(false);
+                    StackValue::null()
                 }
                 Variable {
                     by_ref: _,
@@ -119,15 +129,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                     ..
                 } => {
                     pinned_locals.push(*pinned);
-                    let ctx = ResolutionContext {
-                        generics,
-                        state: self.shared.resolution_shared(),
-                        resolution: method.resolution(),
-                        type_owner: Some(method.parent.clone()),
-                        method_owner: Some(method.clone()),
-                    };
-
-                    let v = match ctx.make_concrete(var_type)?.get() {
+                    match ctx.make_concrete(var_type)?.get() {
                         Type { source, .. } => {
                             let (ut, type_generics) = decompose_type_source::<ConcreteType>(source);
                             let desc = ctx.locate_type(ut)?;
@@ -135,7 +137,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                             if desc.is_value_type(&ctx)? {
                                 let new_lookup = GenericLookup {
                                     type_generics: type_generics.into(),
-                                    ..generics.clone()
+                                    method_generics: generics.method_generics.clone(),
                                 };
                                 let new_ctx = ctx.with_generics(&new_lookup);
                                 let instance = new_ctx.new_object(desc)?;
@@ -145,12 +147,33 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                             }
                         }
                         _ => StackValue::null(),
-                    };
-                    values.push(v);
+                    }
                 }
-            }
+            };
+            self.evaluation_stack.set_slot_at(locals_base + i, value);
         }
-        Ok((values, pinned_locals))
+        Ok(pinned_locals)
+    }
+
+    #[inline]
+    pub(crate) fn pop_call_args_into_buffer(&mut self, count: usize) {
+        self.call_args_buffer.clear();
+        self.call_args_buffer.reserve(count);
+        for _ in 0..count {
+            let value = self.pop();
+            self.call_args_buffer.push(value);
+        }
+        self.call_args_buffer.reverse();
+    }
+
+    #[inline]
+    pub(crate) fn copy_slots_into_call_args_buffer(
+        &mut self,
+        start: crate::StackSlotIndex,
+        count: usize,
+    ) {
+        self.evaluation_stack
+            .copy_slots_into(start, count, self.call_args_buffer);
     }
 
     pub(crate) fn handle_return(&mut self) -> StepResult {
@@ -210,7 +233,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         }
 
         if frame.state.info_handle.is_cctor {
-            let type_desc = frame.state.info_handle.source.parent;
+            let type_desc = frame.state.info_handle.source.parent.clone();
             self.shared
                 .statics
                 .mark_initialized(type_desc, &frame.generic_inst);
@@ -240,7 +263,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             self.push(return_value);
         }
 
-        if let Some(return_type) = frame.awaiting_invoke_return {
+        if let Some(return_type) = frame.awaiting_invoke_return.clone() {
             let is_void = matches!(return_type, RuntimeType::Void);
             if is_void {
                 self.push(StackValue::null());
@@ -267,6 +290,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
             }
         }
 
+        self.frame_stack.recycle_frame(frame);
         StepResult::Continue
     }
 
@@ -323,6 +347,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                 .set_slot(crate::StackSlotIndex(i), StackValue::null());
         }
         self.evaluation_stack.truncate(frame.base.arguments);
+        self.frame_stack.recycle_frame(frame);
     }
 
     #[inline]
@@ -1240,6 +1265,7 @@ pub struct ThreadContext<'gc> {
     pub current_intrinsic: Option<crate::CollectableMethodDescription>,
     pub original_ip: usize,
     pub original_stack_height: crate::StackSlotIndex,
+    pub call_args_buffer: Vec<StackValue<'gc>>,
 }
 
 #[cfg(test)]

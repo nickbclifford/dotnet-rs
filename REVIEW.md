@@ -262,27 +262,26 @@ Risk notes:
 
 ### 2f. Segmented stack architecture integration
 
-Evidence:
+Update (2026-04-08): deliberately deferred.
 
-- Step `2a` prototype reduced realloc/fixup events (`eval_stack_reallocations: 3 -> 2`, prototype run to `1`) but is still a growth-policy shim over contiguous `Vec` storage.
-- Stack operations throughout the VM still assume contiguous backing (`stack[index]`, `split_off`, direct `truncate`) in evaluation-stack and frame/exception flows.
-- Full pointer-fixup machinery remains in the hot path whenever contiguous storage moves.
+What was attempted and why it was reverted:
 
-Proposed change:
+- A true segmented eval-stack backend was implemented and then reverted (`b642b40`) after integration failures across suspend/restore, truncate/unwind, and exception flows.
+- Root cause: broad VM assumptions of contiguous stack storage (`stack[index]`, `split_off`, direct `truncate`) made the segmented integration high-risk and cross-cutting.
 
-1. Implement a true segmented evaluation-stack backend with stable slot addresses across growth.
-2. Introduce an explicit stack-storage abstraction consumed by `VesContext`/stack ops instead of direct `Vec` access.
-3. Keep contiguous backend as default/fallback; select segmented backend via feature flag for rollout.
-4. Rework suspend/restore and unwind/truncate flows to be segment-aware without changing externally visible stack semantics.
+Current evidence on reverted baseline (`2a` contiguous reserve model):
 
-Expected impact:
+- Previous `2a` counters already reduced growth/fixup substantially (`eval_stack_reallocations: 3 -> 2`, `pointer_fixup_total_ns: 711 -> 331`).
+- Current confirmation run (`dispatch`, instrumented, Criterion `--sample-size 10 --measurement-time 5 --warm-up-time 1`):
+  - contiguous: `eval_stack_reallocations=2`, `pointer_fixup_total_ns=490`
+  - prototype (`segmented-eval-stack-prototype` growth policy): `eval_stack_reallocations=1`, `pointer_fixup_total_ns=300`
+  - runtime delta (prototype vs contiguous): `-0.30%` (no meaningful throughput change).
 
-- Eliminates relocation-driven full-stack pointer fixup in segmented mode.
-- Improves worst-case latency for deep stack and byref-heavy workloads.
+Decision:
 
-Risk:
-
-- High: stack-slot identity and exception/suspension correctness are cross-cutting invariants.
+- Do not pursue full segmented-stack architecture in the current phase.
+- Keep Step `2a` reserve-ahead approach as the production path.
+- Reopen only with new evidence that pointer-fixup is a material runtime share on relevant workloads, or with a materially lower-complexity design.
 
 ### 2b. HeapManager structures
 
@@ -488,24 +487,29 @@ Risk notes and mitigation:
 
 ### 2e. Intrinsic dispatch optimization
 
-Evidence:
+Update (2026-04-08): deliberately deferred.
 
-- Method dispatch path still has a hot `is_intrinsic_cached(method.clone())` route in `ExecutionEngine::dispatch_method`: `crates/dotnet-vm/src/dispatch/mod.rs:227-242`.
-- Intrinsic key build performs canonicalization + `replace('/', '+')` + formatted write each lookup: `crates/dotnet-vm/src/intrinsics/mod.rs:258-300`.
+What was attempted and why it was reverted:
 
-Proposed change:
+- A method-level intrinsic classification cache plus dispatch-path unification was implemented, benchmarked, and then reverted (`c557aef`) after regressions.
+- Reverted-run Criterion change outputs (instrumented):
+  - `json`: `+31.75%`
+  - `generics`: `+21.60%`
 
-1. Add resolved-method flag/enum for intrinsic status to avoid repeated map lookups where possible.
-2. Cache normalized intrinsic key (or pre-hashed form) per method descriptor.
-3. Reconcile duplicate dispatch paths (`ExecutionEngine::dispatch_method` vs `VesContext::dispatch_method`) to avoid drift and redundant checks.
+Current workload signal:
 
-Expected impact:
+- Instrumented confirmation runs on current code still show no intrinsic activity in these benchmark paths:
+  - `json`: `intrinsic_call_total=0`
+  - `generics`: `intrinsic_call_total=0`
+- With zero intrinsic calls, these workloads are not valid for intrinsic fast-path optimization decisions.
 
-- Lower overhead on call-heavy intrinsic workloads.
+Decision:
 
-Risk:
-
-- Medium: method-resolution invariants and generic specialization correctness.
+- Defer Step `2e` implementation work until intrinsic-heavy benchmark fixtures are added and baselined.
+- Re-entry plan:
+  1. Add intrinsic-heavy fixture(s) and capture non-zero intrinsic counters.
+  2. Try lightweight dispatch-path deduplication first (without new registry caching).
+  3. Add method-level intrinsic classification caching only if intrinsic-heavy measurements justify it.
 
 ---
 
@@ -513,67 +517,188 @@ Risk:
 
 ### 3a. gc-arena tracing and cross-arena overhead
 
-Evidence:
+Status: implemented
 
-- Coordinated GC fixed-point cross-arena marking loop can iterate until convergence: `crates/dotnet-vm/src/gc/coordinator.rs:349-413`.
-- Memory writes recursively record references based on layout descriptors: `crates/dotnet-runtime-memory/src/access.rs:1094-1180`.
+Changes:
 
-Current measurement sample:
+1. Added bench-instrumentation GC profiling counters and snapshot fields in `dotnet-metrics`:
+   - STW pause sample quantiles (`p50/p95/p99/max`),
+   - fixed-point cycle/iteration counters,
+   - cross-arena object volume totals and per-iteration distribution,
+   - named trace-root timing/count maps,
+   - named layout-scan timing/count maps.
+2. Instrumented fixed-point loop in `GCCoordinator::collect_all_arenas` to record:
+   - iteration count per GC cycle,
+   - cross-arena object volume per iteration.
+3. Instrumented major mark-phase tracing roots in `threading/basic.rs`:
+   - `mark_all.clear_cross_arena_roots`,
+   - `mark_all.finish_marking`,
+   - `mark_all.harvest_cross_arena_refs`,
+   - `mark_objects.install_cross_arena_roots`,
+   - `mark_objects.finish_marking`,
+   - `mark_objects.harvest_cross_arena_refs`.
+4. Instrumented high-cost layout traversal entry points in `dotnet-runtime-memory`:
+   - `record_refs_recursive_with_recorder`,
+   - `record_refs_in_range_with_recorder`.
+5. Plumbed `bench-instrumentation` feature from `dotnet-vm` to `dotnet-runtime-memory` so memory access profiling is available in benchmark snapshots.
 
-- `cache_test_0` triggered one GC pause (`52us`) in multithreaded mode.
+Measurements (`cargo bench -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- gc --sample-size 10 --measurement-time 5 --warm-up-time 1`):
 
-Proposed change:
+- Criterion time estimate: `598.04 ms` (CI `[595.89, 600.83]`).
+- Phase-0 instrumented baseline median (`results.instrumented_default.gc.median_ns`): `608.923 ms`.
+- Delta vs phase-0 instrumented baseline median: `-1.79%` (faster).
+- New STW pause quantiles from `target/release/dotnet-bench-metrics/gc.json`:
+  - `gc_pause_p50_us = 28`
+  - `gc_pause_p95_us = 32`
+  - `gc_pause_p99_us = 34`
+  - `gc_pause_max_us = 34`
+- Fixed-point/cross-arena profile:
+  - `gc_fixed_point_cycle_count = 169`
+  - `gc_fixed_point_iteration_total = 169`
+  - `gc_fixed_point_max_iterations_per_cycle = 1`
+  - `gc_fixed_point_cross_arena_objects_total = 1012`
+  - `gc_fixed_point_cross_arena_objects_max_per_iteration = 8`
+  - `gc_fixed_point_cross_arena_objects_by_iteration = { "1": 1012 }`
+- Trace-root timing totals (ns) identified `mark_all.finish_marking` as dominant in this workload:
+  - `mark_all.finish_marking = 568331ns`,
+  - next highest `mark_all.harvest_cross_arena_refs = 71149ns`.
+- Layout-scan timing maps were empty for this workload (`{}`), indicating these write-barrier traversal paths were not significant on this fixture.
 
-1. Add per-type/per-layout tracing counters and durations under `bench-instrumentation`.
-2. Measure fixed-point iteration counts and cross-arena object counts per GC cycle.
-3. Optimize/refactor hot reference-recording loops based on observed distributions.
+Verification:
 
-Expected impact:
-
-- Reduced STW pause variance and better GC scalability under cross-arena references.
+- `cargo clippy --all-targets -- -D warnings`
+- `cargo test -- --nocapture`
+- `cargo clippy --all-targets --no-default-features -- -D warnings`
+- `cargo test --no-default-features -- --nocapture --test-threads=1`
 
 Risk:
 
-- High: GC correctness and safety invariants.
+- High (unchanged): GC correctness and safety invariants. Current stress/integration suites remained green.
 
 ### 3b. Heap allocation patterns
 
-Evidence:
+Status: implemented
 
-- Local initialization allocates `Vec<StackValue>` and `Vec<bool>` per frame setup: `crates/dotnet-vm/src/stack/context.rs:98-154`, `crates/dotnet-vm/src/stack/call_ops_impl.rs:88-96`.
+Changes:
 
-Proposed change:
+1. Removed per-call local-value staging allocations in frame setup:
+   - `VesContext::init_locals` now writes local defaults directly into evaluation stack slots and returns only `pinned_locals`.
+   - `call_frame` / `entrypoint_frame` now consume this direct-initialization path, eliminating transient `Vec<StackValue>` allocation on each frame push.
+2. Added reusable argument scratch buffering for hot call paths:
+   - `ThreadContext` now carries `call_args_buffer: Vec<StackValue>`,
+   - `constructor_frame`, tail-call dispatch, and `jmp` dispatch now reuse this buffer instead of allocating temporary argument vectors each call.
+3. Reduced clone churn in local initialization context:
+   - hoisted `ResolutionContext` creation out of the locals loop,
+   - replaced repeated `GenericLookup` cloning in value-type-local initialization with targeted `method_generics` cloning only.
+4. Added optional string interning experiment (`dotnet-value/src/string.rs`):
+   - new env-gated interning path with bounded cache:
+     - `DOTNET_STRING_INTERN_EXPERIMENT=1|true|yes|on` enables interning,
+     - `DOTNET_STRING_INTERN_MAX_ENTRIES=<N>` controls cache size (default `4096`),
+   - default behavior remains non-interned (`Owned(Vec<u16>)`) to avoid runtime overhead when the experiment is off.
 
-1. Introduce pooled/small-vector strategies for common local counts.
-2. Evaluate fixed-size locals containers where method metadata allows static sizing.
-3. Audit high-frequency `Arc` cloning in resolver/type paths and reduce where lifetimes permit.
+Measurements (`cargo bench -p dotnet-benchmarks --features bench-instrumentation --bench end_to_end -- <workload> --sample-size 10 --measurement-time 5 --warm-up-time 1`):
 
-Expected impact:
+- `json`:
+  - Criterion median point estimate: `399.716 ms`
+  - Phase-0 instrumented baseline median: `412.762 ms`
+  - Delta vs phase-0 instrumented baseline: `-3.16%`
+- `generics`:
+  - Criterion median point estimate: `22.674 s`
+  - Phase-0 instrumented baseline median: `23.229 s`
+  - Delta vs phase-0 instrumented baseline: `-2.39%`
 
-- Lower allocation rate and improved frame setup times.
+Allocation/counter deltas from bench snapshots:
+
+- `json` (`target/release/dotnet-bench-metrics/json.json`) vs phase-0 instrumented:
+  - `eval_stack_reallocations`: `4 -> 3` (`-25.0%`)
+  - `eval_stack_pointer_fixup_total_ns`: `601 -> 672` (`+11.8%`)
+  - `intrinsic_call_total`: still `0` (unchanged workload characteristic)
+- `generics` (`target/release/dotnet-bench-metrics/generics.json`) vs phase-0 instrumented:
+  - `eval_stack_reallocations`: `4 -> 3` (`-25.0%`)
+  - `eval_stack_pointer_fixup_total_ns`: `841 -> 1213` (`+44.2%`)
+  - `intrinsic_call_total`: still `0` (unchanged workload characteristic)
+
+GC guardrails from Step `3a` stayed stable on these workloads:
+
+- `json`: `gc_pause_p95_us=6`, `gc_pause_p99_us=7`
+- `generics`: `gc_pause_p95_us=7`, `gc_pause_p99_us=9`
+
+Verification:
+
+- `cargo fmt`
+- `cargo clippy --all-targets -- -D warnings`
+- `cargo test -- --nocapture`
+- `cargo clippy --all-targets --no-default-features -- -D warnings`
+- `cargo test --no-default-features -- --nocapture --test-threads=1`
 
 Risk:
 
-- Medium: borrow/lifetime complexity and object ownership semantics.
+- Medium (unchanged): call/frame setup and stack slot addressing remain sensitive; full default and no-default integration matrices passed after changes.
 
 ### 3c. Stack frame allocation
 
 Evidence:
 
-- `StackFrame` carries heap-allocated vectors for exception/pin tracking: `crates/dotnet-vm-data/src/stack.rs:46-57`.
+- `StackFrame` previously used `Vec` for both `exception_stack` and `pinned_locals`, and frame lifetimes dropped/reallocated these buffers on high-frequency call/return paths (`crates/dotnet-vm-data/src/stack.rs`, `crates/dotnet-vm/src/stack/context.rs`, `crates/dotnet-vm/src/stack/call_ops_impl.rs`).
 
-Proposed change:
+Implemented:
 
-1. Replace per-frame `Vec` fields with `SmallVec` where empirical distributions are small.
-2. Consider frame object pooling per executor thread.
+1. Replaced per-frame vectors with `SmallVec`:
+   - `exception_stack`: `SmallVec<[ObjectRef; 2]>`
+   - `pinned_locals`: `SmallVec<[bool; 8]>`
+2. Added per-thread bounded frame pooling in `FrameStack`:
+   - new `pooled_frames` free-list,
+   - `push_frame(...)` reuses pooled entries before allocating,
+   - `recycle_frame(...)` clears GC-bearing fields and returns frames to pool (limit: `64`).
+3. Wired lifecycle boundaries in all frame-pop paths:
+   - normal returns/unwind (`context.rs`),
+   - tail-call replacement and `jmp` frame replacement (`call_ops_impl.rs`).
+4. Added bench-instrumentation counters for pool activity in `dotnet-metrics`:
+   - `frame_pool_hit_count`
+   - `frame_pool_miss_count`
+   - `frame_pool_recycle_count`
 
-Expected impact:
+Benchmark and allocator-activity results (`criterion`, `--features bench-instrumentation`, sample-size 10, measurement-time 5s, warm-up 1s):
 
-- Less allocator churn during heavy call/return workloads.
+- `dispatch` (call/return-heavy workload):
+  - median point estimate: `1.120149 s`
+  - phase-0 instrumented baseline median: `1.200718 s`
+  - delta vs phase-0 instrumented baseline: `-6.71%`
+  - frame-pool counters (`target/release/dotnet-bench-metrics/dispatch.json`):
+    - `frame_pool_hit_count=200008`
+    - `frame_pool_miss_count=3`
+    - `frame_pool_recycle_count=200011`
+    - hit ratio: `99.9985%`
+- `generics` (high call-depth workload):
+  - median point estimate: `22.432504 s`
+  - phase-0 instrumented baseline median: `23.229219 s`
+  - delta vs phase-0 instrumented baseline: `-3.43%`
+  - frame-pool counters (`target/release/dotnet-bench-metrics/generics.json`):
+    - `frame_pool_hit_count=2560008`
+    - `frame_pool_miss_count=4`
+    - `frame_pool_recycle_count=2560012`
+    - hit ratio: `99.9998%`
+
+Additional counters:
+
+- `eval_stack_reallocations` reduced vs phase-0 instrumented baseline:
+  - `dispatch`: `3 -> 2`
+  - `generics`: `4 -> 3`
+- GC pause guardrails remained in expected ranges for these runs:
+  - `dispatch`: `gc_pause_p95_us=4`, `gc_pause_p99_us=4`
+  - `generics`: `gc_pause_p95_us=7`, `gc_pause_p99_us=9`
+
+Verification:
+
+- `cargo fmt`
+- `cargo clippy --all-targets -- -D warnings`
+- `cargo test -- --nocapture`
+- `cargo clippy --all-targets --no-default-features -- -D warnings`
+- `cargo test --no-default-features -- --nocapture --test-threads=1`
 
 Risk:
 
-- Medium: reentrancy and frame lifecycle correctness.
+- Medium (unchanged): frame pooling adds lifecycle state transitions; validated by full default/no-default suites including exception fixtures and recursion-sensitive tail-call depth tests.
 
 ---
 
@@ -641,8 +766,8 @@ Risk:
 
 ## Risk Assessment Summary
 
-- High risk: `1a`, `1b`, `2a`, `2f`, `3a` (layout/GC correctness critical)
-- Medium risk: `1c`, `2b`, `2c`, `2d`, `2e`, `3b`, `3c`, `4a`, `4c`
+- High risk: `1a`, `1b`, `2a`, `3a` (layout/GC correctness critical)
+- Medium risk: `1c`, `2b`, `2c`, `2d`, `2e` (deferred), `2f` (deferred), `3b`, `3c`, `4a`, `4c`
 - Low/Medium risk: `4b`
 
 Potential public API breakage:
@@ -655,17 +780,19 @@ Potential public API breakage:
 1. `0a` + `0b` (benchmark + instrumentation) unlock trustworthy measurement for all other phases.
 2. `1a`/`1b` should precede `2a` because stack/fixup redesign depends on final byref/value representation.
 3. `1c` can run in parallel with `2b` once validation constraints are pinned down.
-4. `2f` should follow `2a` before dispatch tuning so segmented-stack semantics are settled.
-5. `2c` should start before `2d`/`2e` to establish cache pressure and intrinsic call baselines.
+4. `2a` is sufficient for current stack growth behavior; `2f` is deferred unless new evidence shows fixup as a meaningful bottleneck.
+5. `2c` should precede any renewed `2e` attempt to keep cache-path baselines stable.
 6. `3a` should run before deeper GC algorithm changes (`3b`/`3c`).
-7. `4a`/`4b`/`4c` should be last after structural changes stabilize.
+7. `4a` can proceed after `2d` + `3c`; `2e` is optional and only gates intrinsic-specific call-path tuning.
+8. `4b`/`4c` should remain last after structural changes stabilize.
 
 ## Recommended Implementation Sequence
 
 1. Phase 0 (`0a`, `0b`, `0c`)
 2. `1a` -> `1b` -> `1c`
-3. `2a` -> `2f` -> `2b` -> `2c` -> `2e` -> `2d`
-4. `3a` -> `3b` -> `3c`
-5. `4a` -> `4b` -> `4c`
+3. `2a` -> `2b` -> `2c` -> `2d` (completed); keep `2e`/`2f` deferred
+4. `3a` -> `3b` -> `3c` (active next phase)
+5. Optional side track: intrinsic-heavy benchmark fixture(s), then reassess `2e`
+6. `4a` -> `4b` -> `4c`
 
 This order minimizes rework and ensures each optimization is benchmarked against a stable baseline.

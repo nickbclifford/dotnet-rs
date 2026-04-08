@@ -501,16 +501,37 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                         let thread_id = get_current_thread_id();
                         set_currently_tracing(Some(thread_id));
 
+                        #[cfg(feature = "bench-instrumentation")]
+                        let clear_cross_arena_roots_start = Instant::now();
                         arena.mutate(|_, c| {
                             c.stack.local.heap.cross_arena_roots.borrow_mut().clear();
                         });
+                        #[cfg(feature = "bench-instrumentation")]
+                        dotnet_metrics::record_active_gc_trace_root_timing(
+                            "mark_all.clear_cross_arena_roots",
+                            clear_cross_arena_roots_start.elapsed(),
+                        );
 
+                        #[cfg(feature = "bench-instrumentation")]
+                        let finish_marking_start = Instant::now();
                         let _ = arena.finish_marking();
                         // Do not finalize or sweep yet.
+                        #[cfg(feature = "bench-instrumentation")]
+                        dotnet_metrics::record_active_gc_trace_root_timing(
+                            "mark_all.finish_marking",
+                            finish_marking_start.elapsed(),
+                        );
 
                         set_currently_tracing(None);
 
+                        #[cfg(feature = "bench-instrumentation")]
+                        let harvest_cross_arena_refs_start = Instant::now();
                         record_found_cross_arena_refs(coordinator);
+                        #[cfg(feature = "bench-instrumentation")]
+                        dotnet_metrics::record_active_gc_trace_root_timing(
+                            "mark_all.harvest_cross_arena_refs",
+                            harvest_cross_arena_refs_start.elapsed(),
+                        );
                     }
                 });
             }
@@ -521,6 +542,8 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                         let thread_id = get_current_thread_id();
                         set_currently_tracing(Some(thread_id));
 
+                        #[cfg(feature = "bench-instrumentation")]
+                        let install_roots_start = Instant::now();
                         arena.mutate(|_, c| {
                             let mut roots = c.stack.local.heap.cross_arena_roots.borrow_mut();
                             for ptr in ptrs {
@@ -533,13 +556,32 @@ pub fn execute_gc_command_for_current_thread(command: GCCommand, coordinator: &G
                                 roots.insert(ptr);
                             }
                         });
+                        #[cfg(feature = "bench-instrumentation")]
+                        dotnet_metrics::record_active_gc_trace_root_timing(
+                            "mark_objects.install_cross_arena_roots",
+                            install_roots_start.elapsed(),
+                        );
 
+                        #[cfg(feature = "bench-instrumentation")]
+                        let finish_marking_start = Instant::now();
                         let _ = arena.finish_marking();
                         // Do not finalize or sweep yet.
+                        #[cfg(feature = "bench-instrumentation")]
+                        dotnet_metrics::record_active_gc_trace_root_timing(
+                            "mark_objects.finish_marking",
+                            finish_marking_start.elapsed(),
+                        );
 
                         set_currently_tracing(None);
 
+                        #[cfg(feature = "bench-instrumentation")]
+                        let harvest_cross_arena_refs_start = Instant::now();
                         record_found_cross_arena_refs(coordinator);
+                        #[cfg(feature = "bench-instrumentation")]
+                        dotnet_metrics::record_active_gc_trace_root_timing(
+                            "mark_objects.harvest_cross_arena_refs",
+                            harvest_cross_arena_refs_start.elapsed(),
+                        );
                     }
                 });
             }

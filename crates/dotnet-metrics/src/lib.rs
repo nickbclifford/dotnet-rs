@@ -171,6 +171,24 @@ pub struct BenchInstrumentationSnapshot {
     pub eval_stack_reallocations: u64,
     pub eval_stack_pointer_fixup_count: u64,
     pub eval_stack_pointer_fixup_total_ns: u64,
+    pub frame_pool_hit_count: u64,
+    pub frame_pool_miss_count: u64,
+    pub frame_pool_recycle_count: u64,
+    pub gc_pause_samples: u64,
+    pub gc_pause_p50_us: u64,
+    pub gc_pause_p95_us: u64,
+    pub gc_pause_p99_us: u64,
+    pub gc_pause_max_us: u64,
+    pub gc_fixed_point_cycle_count: u64,
+    pub gc_fixed_point_iteration_total: u64,
+    pub gc_fixed_point_max_iterations_per_cycle: u64,
+    pub gc_fixed_point_cross_arena_objects_total: u64,
+    pub gc_fixed_point_cross_arena_objects_max_per_iteration: u64,
+    pub gc_fixed_point_cross_arena_objects_by_iteration: BTreeMap<String, u64>,
+    pub gc_trace_root_count_by_root: BTreeMap<String, u64>,
+    pub gc_trace_root_total_ns_by_root: BTreeMap<String, u64>,
+    pub layout_scan_count_by_path: BTreeMap<String, u64>,
+    pub layout_scan_total_ns_by_path: BTreeMap<String, u64>,
     pub opcode_dispatch_total: u64,
     pub opcode_dispatch_by_category: BTreeMap<String, u64>,
     pub intrinsic_call_total: u64,
@@ -233,6 +251,34 @@ pub struct RuntimeMetrics {
     #[cfg(feature = "bench-instrumentation")]
     eval_stack_pointer_fixup_total_ns: AtomicU64,
     #[cfg(feature = "bench-instrumentation")]
+    frame_pool_hit_count: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    frame_pool_miss_count: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    frame_pool_recycle_count: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    gc_pause_samples_us: Mutex<Vec<u64>>,
+    #[cfg(feature = "bench-instrumentation")]
+    gc_fixed_point_cycle_count: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    gc_fixed_point_iteration_total: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    gc_fixed_point_max_iterations_per_cycle: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    gc_fixed_point_cross_arena_objects_total: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    gc_fixed_point_cross_arena_objects_max_per_iteration: AtomicU64,
+    #[cfg(feature = "bench-instrumentation")]
+    gc_fixed_point_cross_arena_objects_by_iteration: Mutex<BTreeMap<u64, u64>>,
+    #[cfg(feature = "bench-instrumentation")]
+    gc_trace_root_count_by_root: Mutex<BTreeMap<String, u64>>,
+    #[cfg(feature = "bench-instrumentation")]
+    gc_trace_root_total_ns_by_root: Mutex<BTreeMap<String, u64>>,
+    #[cfg(feature = "bench-instrumentation")]
+    layout_scan_count_by_path: Mutex<BTreeMap<String, u64>>,
+    #[cfg(feature = "bench-instrumentation")]
+    layout_scan_total_ns_by_path: Mutex<BTreeMap<String, u64>>,
+    #[cfg(feature = "bench-instrumentation")]
     opcode_dispatch_total: AtomicU64,
     #[cfg(feature = "bench-instrumentation")]
     opcode_dispatch_arithmetic: AtomicU64,
@@ -286,9 +332,18 @@ impl RuntimeMetrics {
     }
 
     pub fn record_gc_pause(&self, duration: Duration) {
+        let duration_us = duration.as_micros() as u64;
         self.gc_pause_total_us
-            .fetch_add(duration.as_micros() as u64, Ordering::Relaxed);
+            .fetch_add(duration_us, Ordering::Relaxed);
         self.gc_pause_count.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "bench-instrumentation")]
+        {
+            let mut samples = self
+                .gc_pause_samples_us
+                .lock()
+                .expect("gc pause samples lock poisoned");
+            samples.push(duration_us);
+        }
     }
 
     pub fn record_lock_contention(&self, duration: Duration) {
@@ -436,6 +491,37 @@ impl RuntimeMetrics {
 
     #[cfg(feature = "bench-instrumentation")]
     #[inline]
+    pub fn record_frame_pool_hit(&self) {
+        self.frame_pool_hit_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[cfg(not(feature = "bench-instrumentation"))]
+    #[inline]
+    pub fn record_frame_pool_hit(&self) {}
+
+    #[cfg(feature = "bench-instrumentation")]
+    #[inline]
+    pub fn record_frame_pool_miss(&self) {
+        self.frame_pool_miss_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[cfg(not(feature = "bench-instrumentation"))]
+    #[inline]
+    pub fn record_frame_pool_miss(&self) {}
+
+    #[cfg(feature = "bench-instrumentation")]
+    #[inline]
+    pub fn record_frame_pool_recycle(&self) {
+        self.frame_pool_recycle_count
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[cfg(not(feature = "bench-instrumentation"))]
+    #[inline]
+    pub fn record_frame_pool_recycle(&self) {}
+
+    #[cfg(feature = "bench-instrumentation")]
+    #[inline]
     pub fn record_opcode_dispatch(&self, category: OpcodeCategory) {
         self.opcode_dispatch_total.fetch_add(1, Ordering::Relaxed);
         match category {
@@ -496,6 +582,79 @@ impl RuntimeMetrics {
 
     #[cfg(not(feature = "bench-instrumentation"))]
     pub fn record_intrinsic_signature_call(&self, _signature: impl Into<String>) {}
+
+    #[cfg(feature = "bench-instrumentation")]
+    pub fn record_gc_fixed_point_iteration(&self, iteration: u64, object_count: u64) {
+        self.gc_fixed_point_iteration_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.gc_fixed_point_cross_arena_objects_total
+            .fetch_add(object_count, Ordering::Relaxed);
+        update_atomic_max(
+            &self.gc_fixed_point_cross_arena_objects_max_per_iteration,
+            object_count,
+        );
+
+        let mut by_iteration = self
+            .gc_fixed_point_cross_arena_objects_by_iteration
+            .lock()
+            .expect("gc fixed-point-by-iteration lock poisoned");
+        *by_iteration.entry(iteration).or_insert(0) += object_count;
+    }
+
+    #[cfg(not(feature = "bench-instrumentation"))]
+    pub fn record_gc_fixed_point_iteration(&self, _iteration: u64, _object_count: u64) {}
+
+    #[cfg(feature = "bench-instrumentation")]
+    pub fn record_gc_fixed_point_cycle(&self, iterations: u64) {
+        self.gc_fixed_point_cycle_count
+            .fetch_add(1, Ordering::Relaxed);
+        update_atomic_max(&self.gc_fixed_point_max_iterations_per_cycle, iterations);
+    }
+
+    #[cfg(not(feature = "bench-instrumentation"))]
+    pub fn record_gc_fixed_point_cycle(&self, _iterations: u64) {}
+
+    #[cfg(feature = "bench-instrumentation")]
+    pub fn record_gc_trace_root_timing(&self, root: impl Into<String>, duration: Duration) {
+        let root = root.into();
+        let duration_ns = duration.as_nanos() as u64;
+        {
+            let mut count_by_root = self
+                .gc_trace_root_count_by_root
+                .lock()
+                .expect("gc trace root count lock poisoned");
+            *count_by_root.entry(root.clone()).or_insert(0) += 1;
+        }
+        let mut total_ns_by_root = self
+            .gc_trace_root_total_ns_by_root
+            .lock()
+            .expect("gc trace root timing lock poisoned");
+        *total_ns_by_root.entry(root).or_insert(0) += duration_ns;
+    }
+
+    #[cfg(not(feature = "bench-instrumentation"))]
+    pub fn record_gc_trace_root_timing(&self, _root: impl Into<String>, _duration: Duration) {}
+
+    #[cfg(feature = "bench-instrumentation")]
+    pub fn record_layout_scan_timing(&self, path: impl Into<String>, duration: Duration) {
+        let path = path.into();
+        let duration_ns = duration.as_nanos() as u64;
+        {
+            let mut count_by_path = self
+                .layout_scan_count_by_path
+                .lock()
+                .expect("layout scan count lock poisoned");
+            *count_by_path.entry(path.clone()).or_insert(0) += 1;
+        }
+        let mut total_ns_by_path = self
+            .layout_scan_total_ns_by_path
+            .lock()
+            .expect("layout scan timing lock poisoned");
+        *total_ns_by_path.entry(path).or_insert(0) += duration_ns;
+    }
+
+    #[cfg(not(feature = "bench-instrumentation"))]
+    pub fn record_layout_scan_timing(&self, _path: impl Into<String>, _duration: Duration) {}
 
     #[cfg(feature = "bench-instrumentation")]
     #[inline]
@@ -689,6 +848,18 @@ impl RuntimeMetrics {
 
     #[cfg(feature = "bench-instrumentation")]
     pub fn bench_snapshot(&self, cache_sizes: CacheSizes) -> BenchInstrumentationSnapshot {
+        let mut gc_pause_samples = self
+            .gc_pause_samples_us
+            .lock()
+            .expect("gc pause samples lock poisoned")
+            .clone();
+        gc_pause_samples.sort_unstable();
+        let gc_pause_sample_count = gc_pause_samples.len() as u64;
+        let gc_pause_p50_us = percentile_sorted(&gc_pause_samples, 50);
+        let gc_pause_p95_us = percentile_sorted(&gc_pause_samples, 95);
+        let gc_pause_p99_us = percentile_sorted(&gc_pause_samples, 99);
+        let gc_pause_max_us = gc_pause_samples.last().copied().unwrap_or(0);
+
         let mut opcode_dispatch_by_category = BTreeMap::new();
         opcode_dispatch_by_category.insert(
             OpcodeCategory::Arithmetic.as_key().to_string(),
@@ -738,6 +909,33 @@ impl RuntimeMetrics {
             .intrinsic_calls_by_signature
             .lock()
             .expect("intrinsic metric lock poisoned")
+            .clone();
+        let gc_fixed_point_cross_arena_objects_by_iteration = self
+            .gc_fixed_point_cross_arena_objects_by_iteration
+            .lock()
+            .expect("gc fixed-point-by-iteration lock poisoned")
+            .iter()
+            .map(|(iteration, count)| (iteration.to_string(), *count))
+            .collect();
+        let gc_trace_root_count_by_root = self
+            .gc_trace_root_count_by_root
+            .lock()
+            .expect("gc trace root count lock poisoned")
+            .clone();
+        let gc_trace_root_total_ns_by_root = self
+            .gc_trace_root_total_ns_by_root
+            .lock()
+            .expect("gc trace root timing lock poisoned")
+            .clone();
+        let layout_scan_count_by_path = self
+            .layout_scan_count_by_path
+            .lock()
+            .expect("layout scan count lock poisoned")
+            .clone();
+        let layout_scan_total_ns_by_path = self
+            .layout_scan_total_ns_by_path
+            .lock()
+            .expect("layout scan timing lock poisoned")
             .clone();
         let mut cache_key_clones_by_cache = BTreeMap::new();
         let method_info_key_clones = self.method_info_key_clones.load(Ordering::Relaxed);
@@ -821,6 +1019,32 @@ impl RuntimeMetrics {
             eval_stack_pointer_fixup_total_ns: self
                 .eval_stack_pointer_fixup_total_ns
                 .load(Ordering::Relaxed),
+            frame_pool_hit_count: self.frame_pool_hit_count.load(Ordering::Relaxed),
+            frame_pool_miss_count: self.frame_pool_miss_count.load(Ordering::Relaxed),
+            frame_pool_recycle_count: self.frame_pool_recycle_count.load(Ordering::Relaxed),
+            gc_pause_samples: gc_pause_sample_count,
+            gc_pause_p50_us,
+            gc_pause_p95_us,
+            gc_pause_p99_us,
+            gc_pause_max_us,
+            gc_fixed_point_cycle_count: self.gc_fixed_point_cycle_count.load(Ordering::Relaxed),
+            gc_fixed_point_iteration_total: self
+                .gc_fixed_point_iteration_total
+                .load(Ordering::Relaxed),
+            gc_fixed_point_max_iterations_per_cycle: self
+                .gc_fixed_point_max_iterations_per_cycle
+                .load(Ordering::Relaxed),
+            gc_fixed_point_cross_arena_objects_total: self
+                .gc_fixed_point_cross_arena_objects_total
+                .load(Ordering::Relaxed),
+            gc_fixed_point_cross_arena_objects_max_per_iteration: self
+                .gc_fixed_point_cross_arena_objects_max_per_iteration
+                .load(Ordering::Relaxed),
+            gc_fixed_point_cross_arena_objects_by_iteration,
+            gc_trace_root_count_by_root,
+            gc_trace_root_total_ns_by_root,
+            layout_scan_count_by_path,
+            layout_scan_total_ns_by_path,
             opcode_dispatch_total: self.opcode_dispatch_total.load(Ordering::Relaxed),
             opcode_dispatch_by_category,
             intrinsic_call_total: self.intrinsic_call_total.load(Ordering::Relaxed),
@@ -888,4 +1112,102 @@ pub fn record_active_eval_stack_reallocation(pointer_fixup_duration: Duration) {
             metrics.record_eval_stack_reallocation(pointer_fixup_duration);
         }
     });
+}
+
+#[cfg(feature = "bench-instrumentation")]
+pub fn record_active_frame_pool_hit() {
+    ACTIVE_RUNTIME_METRICS.with(|slot| {
+        if let Some(metrics_ptr) = slot.get() {
+            // SAFETY: The guard guarantees the pointed RuntimeMetrics outlives this scope.
+            let metrics = unsafe { &*metrics_ptr };
+            metrics.record_frame_pool_hit();
+        }
+    });
+}
+
+#[cfg(feature = "bench-instrumentation")]
+pub fn record_active_frame_pool_miss() {
+    ACTIVE_RUNTIME_METRICS.with(|slot| {
+        if let Some(metrics_ptr) = slot.get() {
+            // SAFETY: The guard guarantees the pointed RuntimeMetrics outlives this scope.
+            let metrics = unsafe { &*metrics_ptr };
+            metrics.record_frame_pool_miss();
+        }
+    });
+}
+
+#[cfg(feature = "bench-instrumentation")]
+pub fn record_active_frame_pool_recycle() {
+    ACTIVE_RUNTIME_METRICS.with(|slot| {
+        if let Some(metrics_ptr) = slot.get() {
+            // SAFETY: The guard guarantees the pointed RuntimeMetrics outlives this scope.
+            let metrics = unsafe { &*metrics_ptr };
+            metrics.record_frame_pool_recycle();
+        }
+    });
+}
+
+#[cfg(feature = "bench-instrumentation")]
+pub fn record_active_gc_fixed_point_iteration(iteration: u64, object_count: u64) {
+    ACTIVE_RUNTIME_METRICS.with(|slot| {
+        if let Some(metrics_ptr) = slot.get() {
+            // SAFETY: The guard guarantees the pointed RuntimeMetrics outlives this scope.
+            let metrics = unsafe { &*metrics_ptr };
+            metrics.record_gc_fixed_point_iteration(iteration, object_count);
+        }
+    });
+}
+
+#[cfg(feature = "bench-instrumentation")]
+pub fn record_active_gc_fixed_point_cycle(iterations: u64) {
+    ACTIVE_RUNTIME_METRICS.with(|slot| {
+        if let Some(metrics_ptr) = slot.get() {
+            // SAFETY: The guard guarantees the pointed RuntimeMetrics outlives this scope.
+            let metrics = unsafe { &*metrics_ptr };
+            metrics.record_gc_fixed_point_cycle(iterations);
+        }
+    });
+}
+
+#[cfg(feature = "bench-instrumentation")]
+pub fn record_active_gc_trace_root_timing(root: impl Into<String>, duration: Duration) {
+    ACTIVE_RUNTIME_METRICS.with(|slot| {
+        if let Some(metrics_ptr) = slot.get() {
+            // SAFETY: The guard guarantees the pointed RuntimeMetrics outlives this scope.
+            let metrics = unsafe { &*metrics_ptr };
+            metrics.record_gc_trace_root_timing(root, duration);
+        }
+    });
+}
+
+#[cfg(feature = "bench-instrumentation")]
+pub fn record_active_layout_scan_timing(path: impl Into<String>, duration: Duration) {
+    ACTIVE_RUNTIME_METRICS.with(|slot| {
+        if let Some(metrics_ptr) = slot.get() {
+            // SAFETY: The guard guarantees the pointed RuntimeMetrics outlives this scope.
+            let metrics = unsafe { &*metrics_ptr };
+            metrics.record_layout_scan_timing(path, duration);
+        }
+    });
+}
+
+#[cfg(feature = "bench-instrumentation")]
+fn update_atomic_max(target: &AtomicU64, candidate: u64) {
+    let mut current = target.load(Ordering::Relaxed);
+    while candidate > current {
+        match target.compare_exchange_weak(current, candidate, Ordering::Relaxed, Ordering::Relaxed)
+        {
+            Ok(_) => return,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+#[cfg(feature = "bench-instrumentation")]
+fn percentile_sorted(samples: &[u64], percentile: u64) -> u64 {
+    if samples.is_empty() {
+        return 0;
+    }
+    let idx = ((samples.len() - 1) * percentile as usize) / 100;
+    samples[idx]
 }

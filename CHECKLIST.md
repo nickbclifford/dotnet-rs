@@ -89,10 +89,18 @@
   - [x] Verify: run deep-stack fixtures and confirm managed pointer semantics remain correct.
 
 ### Step 2f: Segmented stack architecture integration
-- **Status**: [ ] Started but deliberately reverted
+- **Status**: [~] Deliberately deferred (low ROI after measurement)
 - **Files**: crates/dotnet-vm-data/src/stack.rs, crates/dotnet-vm-data/src/lib.rs, crates/dotnet-vm/src/stack/mod.rs, crates/dotnet-vm/src/stack/context.rs, crates/dotnet-vm/src/stack/ops.rs, crates/dotnet-vm/src/stack/call_ops_impl.rs, crates/dotnet-vm/src/stack/exception_ops_impl.rs
 - **Depends on**: 2a
 - **Risk**: high
+- **Decision**: Keep contiguous `Vec` backend from Step `2a`; do not pursue true segmented backend in the current phase.
+- **Rationale**:
+  - Current instrumented `dispatch`: `eval_stack_reallocations=2`, `eval_stack_pointer_fixup_total_ns=490`.
+  - Segmented prototype (`segmented-eval-stack-prototype`): `eval_stack_reallocations=1`, `eval_stack_pointer_fixup_total_ns=300`, runtime delta `-0.30%` vs contiguous (no meaningful throughput gain).
+  - Full segmented integration previously broke suspend/restore and unwind/truncate assumptions and materially increased complexity risk.
+- **Reopen criteria**:
+  - New evidence of fixup-driven bottlenecks (for example, intrinsic/deep-stack workloads with non-trivial fixup time share), or
+  - A low-complexity design that preserves current contiguous stack invariants at call/exception boundaries.
 - **Tasks**:
   - [ ] Replace prototype reserve-only behavior with a real segmented evaluation-stack backend that guarantees stable stack-slot addresses across growth.
   - [ ] Introduce a clear stack-storage abstraction (backend trait or equivalent) so `VesContext` and stack ops do not depend on raw `Vec` internals.
@@ -138,60 +146,66 @@
   - [x] Verify: run instruction dispatch tests and confirm opcode behavior parity.
 
 ### Step 2e: Intrinsic dispatch fast path
-- **Status**: [ ] Not started
+- **Status**: [~] Deliberately deferred (missing workload signal)
 - **Files**: crates/dotnet-vm/src/intrinsics/mod.rs, crates/dotnet-runtime-resolver/src/methods.rs, crates/dotnet-vm/src/dispatch/mod.rs, crates/dotnet-vm/src/stack/call_ops_impl.rs
 - **Depends on**: 0c, 2c
 - **Risk**: medium
+- **Decision**: Defer implementation work until intrinsic-heavy benchmark coverage exists.
+- **Rationale**:
+  - Current instrumented runs still report `intrinsic_call_total=0` for `json` and `generics`.
+  - Prior candidate implementation regressed instrumented runtime (`json +31.75%`, `generics +21.60%`) while targeting a path these workloads did not execute.
+- **Reopen criteria**:
+  - Add at least one intrinsic-heavy benchmark fixture that shows non-zero `intrinsic_call_total`, then re-evaluate with a scoped candidate (dispatch-path dedup only, no registry-cache redesign first).
 - **Tasks**:
-  - [ ] Add cached intrinsic classification metadata on resolved methods to skip repeated lookup.
-  - [ ] Cache normalized intrinsic keys or pre-hash them once per method descriptor.
-  - [ ] Reconcile duplicate method-dispatch intrinsic checks to one canonical fast path.
-  - [ ] Benchmark generics and JSON workloads and compare intrinsic call overhead.
+  - [ ] Add intrinsic-heavy fixture(s) and baseline intrinsic metrics (`intrinsic_call_total`, per-signature counts) in Criterion runs.
+  - [ ] Prototype lightweight dispatch-path deduplication only (no new registry cache) and benchmark against intrinsic-heavy fixture(s).
+  - [ ] Re-evaluate method-level intrinsic classification caching only if intrinsic-heavy fixture data shows repeated lookup overhead.
+  - [ ] Benchmark JSON/generics plus intrinsic-heavy fixture(s) and compare intrinsic-call-path overhead.
   - [ ] Verify: run intrinsic-related fixtures and confirm identical behavior.
 
 ## Phase 3: Memory Management and GC
 
 ### Step 3a: Trace-cost and cross-arena profiling
-- **Status**: [ ] Not started
+- **Status**: [x] Completed
 - **Files**: crates/dotnet-vm/src/gc/coordinator.rs, crates/dotnet-vm/src/threading/basic.rs, crates/dotnet-runtime-memory/src/access.rs, crates/dotnet-metrics/src/lib.rs
 - **Depends on**: 0b
 - **Risk**: high
 - **Tasks**:
-  - [ ] Add counters for GC fixed-point iteration count and per-iteration cross-arena object volume.
-  - [ ] Add timing for major `Collect::trace` roots and high-cost layout traversal paths.
-  - [ ] Surface GC metrics snapshot API for benchmark consumption.
-  - [ ] Benchmark allocation-pressure workload and record STW p50/p95/p99.
-  - [ ] Verify: run multithreading stress fixtures and confirm no deadlocks or missing roots.
+  - [x] Add counters for GC fixed-point iteration count and per-iteration cross-arena object volume.
+  - [x] Add timing for major `Collect::trace` roots and high-cost layout traversal paths.
+  - [x] Surface GC metrics snapshot API for benchmark consumption.
+  - [x] Benchmark allocation-pressure workload and record STW p50/p95/p99.
+  - [x] Verify: run multithreading stress fixtures and confirm no deadlocks or missing roots.
 
 ### Step 3b: Allocation-rate reduction in runtime paths
-- **Status**: [ ] Not started
+- **Status**: [x] Completed
 - **Files**: crates/dotnet-vm/src/stack/context.rs, crates/dotnet-vm/src/stack/call_ops_impl.rs, crates/dotnet-vm-data/src/stack.rs, crates/dotnet-value/src/string.rs
 - **Depends on**: 3a
 - **Risk**: medium
 - **Tasks**:
-  - [ ] Replace repeated per-call `Vec` allocations in local initialization with reusable buffers or `SmallVec`.
-  - [ ] Add optional string interning experiment for high-duplication string workloads.
-  - [ ] Audit and reduce unnecessary `Arc` clones in hot resolver and dispatch paths.
-  - [ ] Benchmark JSON and generics workloads and record allocation deltas.
-  - [ ] Verify: run string and generics fixture suites for functional parity.
+  - [x] Replace repeated per-call `Vec` allocations in local initialization with reusable buffers or `SmallVec`.
+  - [x] Add optional string interning experiment for high-duplication string workloads.
+  - [x] Audit and reduce unnecessary `Arc` clones in hot resolver and dispatch paths.
+  - [x] Benchmark JSON and generics workloads and record allocation deltas.
+  - [x] Verify: run string and generics fixture suites for functional parity.
 
 ### Step 3c: StackFrame pooling and locality
-- **Status**: [ ] Not started
+- **Status**: [x] Completed
 - **Files**: crates/dotnet-vm-data/src/stack.rs, crates/dotnet-vm/src/stack/mod.rs, crates/dotnet-vm/src/stack/call_ops_impl.rs
 - **Depends on**: 3b
 - **Risk**: medium
 - **Tasks**:
-  - [ ] Add `SmallVec` for `exception_stack` and `pinned_locals` in `StackFrame`.
-  - [ ] Prototype frame pooling per executor thread with clear lifecycle boundaries.
-  - [ ] Benchmark tight call/return fixture and compare allocator activity.
-  - [ ] Verify: run exception and recursion-related fixtures and confirm no frame reuse bugs.
+  - [x] Add `SmallVec` for `exception_stack` and `pinned_locals` in `StackFrame`.
+  - [x] Prototype frame pooling per executor thread with clear lifecycle boundaries.
+  - [x] Benchmark tight call/return fixture and compare allocator activity.
+  - [x] Verify: run exception and recursion-related fixtures and confirm no frame reuse bugs.
 
 ## Phase 4: Compiler Optimization Enablement
 
 ### Step 4a: Hot-path inlining and monomorphization audit
 - **Status**: [ ] Not started
 - **Files**: crates/dotnet-vm/src/dispatch/mod.rs, crates/dotnet-vm/src/stack/ops.rs, crates/dotnet-runtime-resolver/src/methods.rs, Cargo.toml
-- **Depends on**: 2d, 2e, 3c
+- **Depends on**: 2d, 3c (2e optional; required only for intrinsic-specific call-path tuning)
 - **Risk**: medium
 - **Tasks**:
   - [ ] Capture profile-guided hot call graph and identify top generic call boundaries.

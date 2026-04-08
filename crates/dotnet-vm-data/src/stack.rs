@@ -12,7 +12,8 @@ use dotnet_value::{
     object::{Object as ObjectInstance, ObjectHandle, ObjectRef},
     pointer::{ManagedPtr, PointerOrigin},
 };
-use gc_arena::Collect;
+use gc_arena::{Collect, collect::Trace};
+use smallvec::SmallVec;
 use std::ptr::NonNull;
 #[cfg(feature = "bench-instrumentation")]
 use std::time::Instant;
@@ -43,8 +44,13 @@ pub struct MulticastState<'gc> {
     pub args: Vec<StackValue<'gc>>,
 }
 
-#[derive(Collect)]
-#[collect(no_drop)]
+pub const STACKFRAME_EXCEPTION_INLINE_CAPACITY: usize = 2;
+pub const STACKFRAME_PINNED_LOCALS_INLINE_CAPACITY: usize = 8;
+pub const STACKFRAME_POOL_LIMIT: usize = 64;
+
+pub type ExceptionStack<'gc> = SmallVec<[ObjectRef<'gc>; STACKFRAME_EXCEPTION_INLINE_CAPACITY]>;
+pub type PinnedLocals = SmallVec<[bool; STACKFRAME_PINNED_LOCALS_INLINE_CAPACITY]>;
+
 pub struct StackFrame<'gc> {
     pub stack_height: StackSlotIndex,
     pub base: BasePointer,
@@ -52,8 +58,8 @@ pub struct StackFrame<'gc> {
     pub generic_inst: GenericLookup,
     pub source_resolution: ResolutionS,
     /// The exceptions currently being handled by catch blocks in this frame (required for rethrow).
-    pub exception_stack: Vec<ObjectRef<'gc>>,
-    pub pinned_locals: Vec<bool>,
+    pub exception_stack: ExceptionStack<'gc>,
+    pub pinned_locals: PinnedLocals,
     pub is_finalizer: bool,
     pub multicast_state: Option<MulticastState<'gc>>,
     pub awaiting_invoke_return: Option<RuntimeType>,
@@ -64,7 +70,7 @@ impl<'gc> StackFrame<'gc> {
         base_pointer: BasePointer,
         method: MethodInfo<'static>,
         generic_inst: GenericLookup,
-        pinned_locals: Vec<bool>,
+        pinned_locals: PinnedLocals,
     ) -> Self {
         Self {
             stack_height: StackSlotIndex(0),
@@ -72,12 +78,52 @@ impl<'gc> StackFrame<'gc> {
             source_resolution: method.source.resolution(),
             state: MethodState::new(method),
             generic_inst,
-            exception_stack: Vec::new(),
+            exception_stack: SmallVec::new(),
             pinned_locals,
             is_finalizer: false,
             multicast_state: None,
             awaiting_invoke_return: None,
         }
+    }
+
+    pub fn reset_for_call(
+        &mut self,
+        base_pointer: BasePointer,
+        method: MethodInfo<'static>,
+        generic_inst: GenericLookup,
+        pinned_locals: PinnedLocals,
+    ) {
+        self.stack_height = StackSlotIndex(0);
+        self.base = base_pointer;
+        self.source_resolution = method.source.resolution();
+        self.state = MethodState::new(method);
+        self.generic_inst = generic_inst;
+        self.exception_stack.clear();
+        self.pinned_locals = pinned_locals;
+        self.is_finalizer = false;
+        self.multicast_state = None;
+        self.awaiting_invoke_return = None;
+    }
+
+    pub fn prepare_for_pool(&mut self) {
+        self.stack_height = StackSlotIndex(0);
+        self.base = BasePointer::default();
+        self.exception_stack.clear();
+        self.pinned_locals.clear();
+        self.is_finalizer = false;
+        self.multicast_state = None;
+        self.awaiting_invoke_return = None;
+    }
+}
+
+// SAFETY: `StackFrame` traces all GC-managed fields it can contain:
+// `exception_stack` entries and optional `multicast_state`.
+unsafe impl<'gc> Collect<'gc> for StackFrame<'gc> {
+    fn trace<Tr: Trace<'gc>>(&self, cc: &mut Tr) {
+        for exception in &self.exception_stack {
+            exception.trace(cc);
+        }
+        self.multicast_state.trace(cc);
     }
 }
 
@@ -310,11 +356,31 @@ impl<'gc> EvaluationStack<'gc> {
 
     pub fn pop_multiple(&mut self, count: usize) -> Vec<StackValue<'gc>> {
         let mut values = Vec::with_capacity(count);
-        for _ in 0..count {
-            values.push(self.stack.pop().expect("Evaluation stack underflow"));
-        }
-        values.reverse();
+        self.pop_multiple_into(count, &mut values);
         values
+    }
+
+    pub fn pop_multiple_into(&mut self, count: usize, out: &mut Vec<StackValue<'gc>>) {
+        out.clear();
+        out.reserve(count);
+        for _ in 0..count {
+            out.push(self.stack.pop().expect("Evaluation stack underflow"));
+        }
+        out.reverse();
+    }
+
+    pub fn copy_slots_into(
+        &self,
+        start: StackSlotIndex,
+        count: usize,
+        out: &mut Vec<StackValue<'gc>>,
+    ) {
+        out.clear();
+        out.reserve(count);
+        let start = start.as_usize();
+        for i in 0..count {
+            out.push(self.stack[start + i].clone());
+        }
     }
 
     pub fn peek_multiple(&self, count: usize) -> Vec<StackValue<'gc>> {
@@ -405,6 +471,7 @@ impl<'gc> EvaluationStack<'gc> {
 pub struct FrameStack<'gc> {
     pub frames: Vec<StackFrame<'gc>>,
     pub suspended_frames: Vec<StackFrame<'gc>>,
+    pub pooled_frames: Vec<StackFrame<'gc>>,
 }
 
 impl<'gc> FrameStack<'gc> {
@@ -416,8 +483,41 @@ impl<'gc> FrameStack<'gc> {
         self.frames.push(frame);
     }
 
+    pub fn push_frame(
+        &mut self,
+        base_pointer: BasePointer,
+        method: MethodInfo<'static>,
+        generic_inst: GenericLookup,
+        pinned_locals: PinnedLocals,
+    ) {
+        if let Some(mut frame) = self.pooled_frames.pop() {
+            frame.reset_for_call(base_pointer, method, generic_inst, pinned_locals);
+            self.frames.push(frame);
+            #[cfg(feature = "bench-instrumentation")]
+            dotnet_metrics::record_active_frame_pool_hit();
+        } else {
+            self.frames.push(StackFrame::new(
+                base_pointer,
+                method,
+                generic_inst,
+                pinned_locals,
+            ));
+            #[cfg(feature = "bench-instrumentation")]
+            dotnet_metrics::record_active_frame_pool_miss();
+        }
+    }
+
     pub fn pop(&mut self) -> Option<StackFrame<'gc>> {
         self.frames.pop()
+    }
+
+    pub fn recycle_frame(&mut self, mut frame: StackFrame<'gc>) {
+        frame.prepare_for_pool();
+        if self.pooled_frames.len() < STACKFRAME_POOL_LIMIT {
+            self.pooled_frames.push(frame);
+            #[cfg(feature = "bench-instrumentation")]
+            dotnet_metrics::record_active_frame_pool_recycle();
+        }
     }
 
     pub fn current_frame(&self) -> &StackFrame<'gc> {
@@ -468,6 +568,7 @@ impl<'gc> FrameStack<'gc> {
     pub fn clear(&mut self) {
         self.frames.clear();
         self.suspended_frames.clear();
+        self.pooled_frames.clear();
     }
 
     pub fn clear_suspended(&mut self) {

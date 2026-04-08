@@ -13,6 +13,8 @@ use dotnet_value::{
     pointer::ManagedPtr,
     storage::FieldStorage,
 };
+#[cfg(feature = "bench-instrumentation")]
+use std::time::Instant;
 use std::{cell::RefCell, marker::PhantomData, ptr, sync::Arc};
 
 #[cfg(feature = "multithreading")]
@@ -385,6 +387,8 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                             // storage (held mutably for the duration of this closure).
                             // The range `[offset, offset+data.len())` was just
                             // bounds-checked above; `ptr.add` within that range is valid.
+                            #[cfg(feature = "bench-instrumentation")]
+                            let layout_scan_start = Instant::now();
                             unsafe {
                                 self.record_refs_in_range_with_recorder(
                                     gc,
@@ -395,6 +399,11 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
                                     &mut _recorder,
                                 );
                             }
+                            #[cfg(feature = "bench-instrumentation")]
+                            dotnet_metrics::record_active_layout_scan_timing(
+                                "record_refs_in_range_with_recorder",
+                                layout_scan_start.elapsed(),
+                            );
                         }
                     }
                     Ok(())
@@ -1098,7 +1107,14 @@ impl<'a, 'gc> RawMemoryAccess<'a, 'gc> {
 
                         #[cfg(feature = "multithreading")]
                         if owner.is_some() {
+                            #[cfg(feature = "bench-instrumentation")]
+                            let layout_scan_start = Instant::now();
                             self.record_refs_recursive_with_recorder(gc, ptr, layout, _recorder);
+                            #[cfg(feature = "bench-instrumentation")]
+                            dotnet_metrics::record_active_layout_scan_timing(
+                                "record_refs_recursive_with_recorder",
+                                layout_scan_start.elapsed(),
+                            );
                         }
                     } else {
                         return Err(MemoryAccessError::TypeMismatch(

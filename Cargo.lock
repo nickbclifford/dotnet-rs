@@ -498,6 +498,7 @@ dependencies = [
 name = "dotnet-runtime-memory"
 version = "0.1.0"
 dependencies = [
+ "dotnet-metrics",
  "dotnet-types",
  "dotnet-utils",
  "dotnet-value",
@@ -622,6 +623,7 @@ dependencies = [
  "dotnet-value",
  "dotnetdll",
  "gc-arena",
+ "smallvec",
 ]
 
 [[package]]

@@ -348,6 +348,8 @@ impl CollectionSession<'_> {
 
         // Fixed-point iteration for cross-arena resurrection.
         // Keep iterating until no new cross-arena references are found
+        #[cfg(feature = "bench-instrumentation")]
+        let mut fixed_point_iterations = 0u64;
         loop {
             let cross_refs = {
                 let refs = self.coordinator.cross_arena_refs.lock();
@@ -358,6 +360,18 @@ impl CollectionSession<'_> {
                 // Take a snapshot of current cross-arena refs
                 refs.clone()
             };
+            #[cfg(feature = "bench-instrumentation")]
+            {
+                fixed_point_iterations += 1;
+                let cross_arena_object_volume = cross_refs
+                    .values()
+                    .map(std::collections::HashSet::len)
+                    .sum::<usize>() as u64;
+                dotnet_metrics::record_active_gc_fixed_point_iteration(
+                    fixed_point_iterations,
+                    cross_arena_object_volume,
+                );
+            }
 
             // Clear the global table for the next iteration
             {
@@ -411,6 +425,8 @@ impl CollectionSession<'_> {
                 break;
             }
         }
+        #[cfg(feature = "bench-instrumentation")]
+        dotnet_metrics::record_active_gc_fixed_point_cycle(fixed_point_iterations);
 
         // Run finalizers.
         self.send_command_to_all_and_wait(

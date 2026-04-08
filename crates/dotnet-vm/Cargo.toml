@@ -71,6 +71,7 @@ fuzzing = [
 ]
 bench-instrumentation = [
     "dotnet-metrics/bench-instrumentation",
+    "dotnet-runtime-memory/bench-instrumentation",
     "dotnet-vm-ops/bench-instrumentation",
 ]
 heap-diagnostics = ["dotnet-runtime-memory/heap-diagnostics"]

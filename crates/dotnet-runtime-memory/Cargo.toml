@@ -8,6 +8,7 @@ dotnet-types = { workspace = true }
 dotnet-utils = { workspace = true, default-features = false }
 dotnet-value = { workspace = true, default-features = false }
 dotnet-vm-ops = { workspace = true, default-features = false }
+dotnet-metrics = { workspace = true, optional = true }
 gc-arena = { workspace = true }
 sptr = { workspace = true }
 smallvec = { workspace = true }
@@ -26,3 +27,4 @@ memory-validation = [
     "dotnet-value/memory-validation",
     "dotnet-vm-ops/memory-validation",
 ]
+bench-instrumentation = ["dep:dotnet-metrics", "dotnet-metrics/bench-instrumentation"]

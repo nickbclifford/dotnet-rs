@@ -13,7 +13,10 @@ pub use dotnet_vm_data::{
         ExceptionState, FilterState, HandlerAddress, ManagedException, ProtectedSection,
         SearchState, UnwindState, UnwindTarget, *,
     },
-    stack::{BasePointer, EvaluationStack, FrameStack, MulticastState, StackFrame},
+    stack::{
+        BasePointer, EvaluationStack, ExceptionStack, FrameStack, MulticastState, PinnedLocals,
+        StackFrame,
+    },
 };
 pub use ops::{
     AllStackOps, ArgumentOps, CallOps, DelegateIntrinsicHost, EvalStackOps, ExceptionContext,

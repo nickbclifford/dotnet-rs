@@ -1,7 +1,9 @@
 use gc_arena::static_collect;
 use std::{
+    collections::HashMap,
     fmt::{Debug, Formatter},
     ops::Deref,
+    sync::{Arc, LazyLock, Mutex},
 };
 
 #[macro_export]
@@ -61,33 +63,96 @@ macro_rules! with_string_mut {
     }};
 }
 
-#[derive(Clone, PartialEq)]
-pub struct CLRString(Vec<u16>);
+#[derive(Clone)]
+enum StringStorage {
+    Owned(Vec<u16>),
+    Interned(Arc<[u16]>),
+}
+
+#[derive(Clone)]
+pub struct CLRString(StringStorage);
 static_collect!(CLRString);
+
+struct InternConfig {
+    enabled: bool,
+    max_entries: usize,
+}
+
+type StringInternerMap = HashMap<Arc<[u16]>, Arc<[u16]>>;
+
+static INTERN_CONFIG: LazyLock<InternConfig> = LazyLock::new(|| {
+    let enabled = std::env::var("DOTNET_STRING_INTERN_EXPERIMENT")
+        .map(|raw| {
+            let trimmed = raw.trim();
+            trimmed.eq_ignore_ascii_case("1")
+                || trimmed.eq_ignore_ascii_case("true")
+                || trimmed.eq_ignore_ascii_case("yes")
+                || trimmed.eq_ignore_ascii_case("on")
+        })
+        .unwrap_or(false);
+
+    let max_entries = std::env::var("DOTNET_STRING_INTERN_MAX_ENTRIES")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(4096);
+
+    InternConfig {
+        enabled,
+        max_entries,
+    }
+});
+
+static STRING_INTERNER: LazyLock<Mutex<StringInternerMap>> =
+    LazyLock::new(|| Mutex::new(StringInternerMap::new()));
+
+fn maybe_intern(chars: Vec<u16>) -> StringStorage {
+    if !INTERN_CONFIG.enabled {
+        return StringStorage::Owned(chars);
+    }
+
+    let mut interner = STRING_INTERNER
+        .lock()
+        .expect("string interner lock poisoned");
+    if let Some(existing) = interner.get(chars.as_slice()) {
+        return StringStorage::Interned(Arc::clone(existing));
+    }
+
+    if interner.len() >= INTERN_CONFIG.max_entries {
+        interner.clear();
+    }
+
+    let interned = Arc::<[u16]>::from(chars.into_boxed_slice());
+    interner.insert(Arc::clone(&interned), Arc::clone(&interned));
+    StringStorage::Interned(interned)
+}
 
 impl CLRString {
     pub fn new(chars: Vec<u16>) -> Self {
-        Self(chars)
+        Self(maybe_intern(chars))
     }
 
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.deref().len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.deref().is_empty()
     }
 
     pub fn size_bytes(&self) -> usize {
-        size_of::<CLRString>() + self.0.len() * 2
+        size_of::<CLRString>() + self.len() * 2
     }
 
     pub fn as_string(&self) -> String {
-        String::from_utf16(&self.0).unwrap()
+        String::from_utf16(self.deref()).unwrap()
     }
 
     pub fn as_mut_slice(&mut self) -> &mut [u16] {
-        &mut self.0
+        match &mut self.0 {
+            StringStorage::Owned(chars) => chars.as_mut_slice(),
+            StringStorage::Interned(chars) => Arc::make_mut(chars),
+        }
     }
 }
 
@@ -95,7 +160,16 @@ impl Deref for CLRString {
     type Target = [u16];
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        match &self.0 {
+            StringStorage::Owned(chars) => chars.as_slice(),
+            StringStorage::Interned(chars) => chars.as_ref(),
+        }
+    }
+}
+
+impl PartialEq for CLRString {
+    fn eq(&self, other: &Self) -> bool {
+        self.deref() == other.deref()
     }
 }
 

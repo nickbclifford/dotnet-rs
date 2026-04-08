@@ -20,7 +20,10 @@ pub use exceptions::{
     ExceptionState, FilterState, HandlerAddress, ManagedException, ProtectedSection, SearchState,
     UnwindState, UnwindTarget,
 };
-pub use stack::{BasePointer, EvaluationStack, FrameStack, MulticastState, StackFrame};
+pub use stack::{
+    BasePointer, EvaluationStack, ExceptionStack, FrameStack, MulticastState, PinnedLocals,
+    StackFrame,
+};
 
 // I.12.3.2
 #[derive(Clone)]

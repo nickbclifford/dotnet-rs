@@ -1,8 +1,8 @@
 use crate::{
-    ByteOffset, MethodInfo, ResolutionContext, StepResult,
+    BasePointer, ByteOffset, MethodInfo, ResolutionContext, StepResult,
     resolution::TypeResolutionExt,
     stack::{
-        context::{BasePointer, StackFrame, VesContext},
+        context::VesContext,
         ops::{
             BaseLoaderOps, BaseStaticsOps, CallOps, EvalStackOps, LoaderOps, RawMemoryOps,
             ResolutionOps,
@@ -39,7 +39,8 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
         };
 
         let num_params = method.signature.parameters.len();
-        let args = self.pop_multiple(num_params);
+        self.pop_call_args_into_buffer(num_params);
+        let mut args = std::mem::take(self.call_args_buffer);
 
         if desc.is_value_type(&self.current_context())? {
             self.push(value);
@@ -57,9 +58,10 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
             self.push(value);
         }
 
-        for arg in args {
+        for arg in args.drain(..) {
             self.push(arg);
         }
+        *self.call_args_buffer = args;
         self.call_frame(method, generic_inst)
     }
 
@@ -89,12 +91,12 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
         let local_slot_count = method.locals.len();
         self.evaluation_stack
             .reserve_slots(locals_base.as_usize() + local_slot_count + method.max_stack);
-        let (local_values, pinned_locals) =
-            self.init_locals(method.source.clone(), method.locals, &generic_inst)?;
-
-        for (i, v) in local_values.into_iter().enumerate() {
-            self.evaluation_stack.set_slot_at(locals_base + i, v);
-        }
+        let pinned_locals = self.init_locals(
+            method.source.clone(),
+            method.locals,
+            &generic_inst,
+            locals_base,
+        )?;
 
         let stack_base = locals_base + pinned_locals.len();
 
@@ -135,7 +137,7 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
             frame.stack_height -= num_args;
         }
 
-        self.frame_stack.push(StackFrame::new(
+        self.frame_stack.push_frame(
             BasePointer {
                 arguments: argument_base,
                 locals: locals_base,
@@ -144,7 +146,7 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
             method,
             generic_inst,
             pinned_locals,
-        ));
+        );
         Ok(())
     }
 
@@ -167,14 +169,15 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
             self.push(a);
         }
         let locals_base = self.evaluation_stack.top_of_stack();
-        let (local_values, pinned_locals) =
-            self.init_locals(method.source.clone(), method.locals, &generic_inst)?;
-        for v in local_values {
-            self.push(v);
-        }
-        let stack_base = self.evaluation_stack.top_of_stack();
+        let pinned_locals = self.init_locals(
+            method.source.clone(),
+            method.locals,
+            &generic_inst,
+            locals_base,
+        )?;
+        let stack_base = locals_base + pinned_locals.len();
 
-        self.frame_stack.push(StackFrame::new(
+        self.frame_stack.push_frame(
             BasePointer {
                 arguments: argument_base,
                 locals: locals_base,
@@ -183,7 +186,7 @@ impl<'a, 'gc> CallOps<'gc> for VesContext<'a, 'gc> {
             method,
             generic_inst,
             pinned_locals,
-        ));
+        );
         Ok(())
     }
 
@@ -438,10 +441,8 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                 self.evaluation_stack.top_of_stack(),
             )
         };
-        let mut args = Vec::with_capacity(arg_count);
-        for i in 0..arg_count {
-            args.push(self.evaluation_stack.get_slot(args_base + i));
-        }
+        self.copy_slots_into_call_args_buffer(args_base, arg_count);
+        let mut args = std::mem::take(self.call_args_buffer);
 
         // Pop/discard the current frame and clear its stack slots.
         let frame = self
@@ -454,6 +455,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                 .tracer
                 .trace_method_exit(self.frame_stack.len(), &method_name);
         }
+        self.frame_stack.recycle_frame(frame);
 
         for i in clear_from.as_usize()..old_top.as_usize() {
             self.evaluation_stack
@@ -464,14 +466,15 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         // Re-push arguments onto the (now) caller stack, or directly onto the eval stack if this
         // was the last frame.
         if self.frame_stack.current_frame_opt_mut().is_some() {
-            for a in args {
+            for a in args.drain(..) {
                 self.push(a);
             }
         } else {
-            for a in args {
+            for a in args.drain(..) {
                 self.evaluation_stack.push(a);
             }
         }
+        *self.call_args_buffer = args;
 
         vm_try!(self.call_frame(info, lookup));
         StepResult::FramePushed
@@ -482,72 +485,74 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         method: MethodDescription,
         lookup: GenericLookup,
     ) -> StepResult {
-        let frame = self.frame_stack.current_frame();
+        let target_sig = &method.method().signature;
+        let (arg_count, args_base, clear_from) = {
+            let frame = self.frame_stack.current_frame();
 
-        // ECMA-335: evaluation stack shall be empty.
-        if frame.stack_height != crate::StackSlotIndex(0) {
-            return StepResult::Error(crate::error::VmError::Execution(
-                crate::error::ExecutionError::Aborted(
-                    "jmp requires empty evaluation stack".to_string(),
-                ),
-            ));
-        }
-
-        // ECMA-335: cannot be used to transfer control out of try/filter/catch/fault/finally blocks.
-        let ip = frame.state.ip;
-        for sec in frame.state.info_handle.exceptions.iter() {
-            if sec.instructions.contains(&ip) {
+            // ECMA-335: evaluation stack shall be empty.
+            if frame.stack_height != crate::StackSlotIndex(0) {
                 return StepResult::Error(crate::error::VmError::Execution(
                     crate::error::ExecutionError::Aborted(
-                        "jmp out of try/catch/finally block".to_string(),
+                        "jmp requires empty evaluation stack".to_string(),
                     ),
                 ));
             }
-            for handler in &sec.handlers {
-                if handler.instructions.contains(&ip) {
+
+            // ECMA-335: cannot be used to transfer control out of
+            // try/filter/catch/fault/finally blocks.
+            let ip = frame.state.ip;
+            for sec in frame.state.info_handle.exceptions.iter() {
+                if sec.instructions.contains(&ip) {
                     return StepResult::Error(crate::error::VmError::Execution(
                         crate::error::ExecutionError::Aborted(
-                            "jmp out of exception handler".to_string(),
+                            "jmp out of try/catch/finally block".to_string(),
                         ),
                     ));
                 }
+                for handler in &sec.handlers {
+                    if handler.instructions.contains(&ip) {
+                        return StepResult::Error(crate::error::VmError::Execution(
+                            crate::error::ExecutionError::Aborted(
+                                "jmp out of exception handler".to_string(),
+                            ),
+                        ));
+                    }
+                }
             }
-        }
 
-        // Signature matching check
-        let current_sig = &frame.state.info_handle.signature;
-        let target_sig = &method.method().signature;
+            // Signature matching check
+            let current_sig = &frame.state.info_handle.signature;
 
-        let loader = self.loader_arc();
-        let comparer = dotnet_types::comparer::TypeComparer::new(loader.as_ref());
-        let res_ctx = self.current_context();
-        let res_s = res_ctx.resolution.clone();
+            let loader = self.loader_arc();
+            let comparer = dotnet_types::comparer::TypeComparer::new(loader.as_ref());
+            let res_ctx = self.current_context();
+            let res_s = res_ctx.resolution.clone();
 
-        if !comparer.signatures_equal(
-            res_s.clone(),
-            current_sig,
-            Some(res_ctx.generics), // Current generics
-            res_s,
-            target_sig,
-            Some(&lookup), // Target generics
-        ) {
-            return StepResult::Error(crate::error::VmError::Execution(
-                crate::error::ExecutionError::Aborted("jmp signature mismatch".to_string()),
-            ));
-        }
+            if !comparer.signatures_equal(
+                res_s.clone(),
+                current_sig,
+                Some(res_ctx.generics), // Current generics
+                res_s,
+                target_sig,
+                Some(&lookup), // Target generics
+            ) {
+                return StepResult::Error(crate::error::VmError::Execution(
+                    crate::error::ExecutionError::Aborted("jmp signature mismatch".to_string()),
+                ));
+            }
 
-        // Prepare arguments by copying from the current frame's base
-        let arg_count = target_sig.instance as usize + target_sig.parameters.len();
-        let args_base = frame.base.arguments;
+            (
+                target_sig.instance as usize + target_sig.parameters.len(),
+                frame.base.arguments,
+                frame.base.arguments,
+            )
+        };
 
-        let mut args = Vec::with_capacity(arg_count);
-        for i in 0..arg_count {
-            args.push(self.evaluation_stack.get_slot(args_base + i));
-        }
+        self.copy_slots_into_call_args_buffer(args_base, arg_count);
+        let mut args = std::mem::take(self.call_args_buffer);
 
         // Discard the current frame and its locals/eval stack
         let old_top = self.evaluation_stack.top_of_stack();
-        let clear_from = frame.base.arguments;
 
         let popped_frame = self
             .frame_stack
@@ -559,6 +564,7 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
                 .tracer
                 .trace_method_exit(self.frame_stack.len(), &method_name);
         }
+        self.frame_stack.recycle_frame(popped_frame);
 
         for i in clear_from.as_usize()..old_top.as_usize() {
             self.evaluation_stack
@@ -567,9 +573,10 @@ impl<'a, 'gc> VesContext<'a, 'gc> {
         self.evaluation_stack.truncate(clear_from);
 
         // Push arguments back onto the stack for the new call
-        for a in args {
+        for a in args.drain(..) {
             self.push(a);
         }
+        *self.call_args_buffer = args;
 
         // Push new frame
         let info = match self
